@@ -445,6 +445,41 @@ llvm::Value* lower(const Expression& expr,
             return checked_signed_arithmetic(builder, llvm::Intrinsic::smul_with_overflow,
                 left, right, "mul");
         }
+        case Expression::Kind::ShiftLeft:
+        case Expression::Kind::ShiftRight:
+        case Expression::Kind::ShiftUnsignedRight: {
+            if (!expr.left || !expr.right)
+                throw std::runtime_error("native shift AST missing operand");
+            llvm::Value* left = lower(*expr.left, builder, i64, storage,
+                                      field_storage, functions, moves);
+            llvm::Value* distance = lower(*expr.right, builder, i64, storage,
+                                          field_storage, functions, moves);
+            // Java/Graal accepts shift distances only in 0..63. Unlike Java
+            // bytecode, LLVM shifts with a distance >= bit width are poison,
+            // and blindly masking to 63 would incorrectly admit 64, -1, etc.
+            // The unsigned comparison rejects negatives and oversized i64
+            // distances in one check BEFORE constructing any shift instruction.
+            auto* module = builder.GetInsertBlock()->getModule();
+            auto* parent = builder.GetInsertBlock()->getParent();
+            auto* invalid = llvm::BasicBlock::Create(
+                builder.getContext(), "shift.distance.invalid", parent);
+            auto* valid = llvm::BasicBlock::Create(
+                builder.getContext(), "shift.distance.valid", parent);
+            builder.CreateCondBr(builder.CreateICmpULT(
+                distance, llvm::ConstantInt::get(i64, 64)), valid, invalid);
+            builder.SetInsertPoint(invalid);
+            // Native target currently uses a trap for typed runtime errors.
+            // This is fail-closed rather than Java's exception-class parity.
+            builder.CreateCall(
+                llvm::Intrinsic::getDeclaration(module, llvm::Intrinsic::trap));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(valid);
+            if (expr.kind == Expression::Kind::ShiftLeft)
+                return builder.CreateShl(left, distance, "shift.left");
+            if (expr.kind == Expression::Kind::ShiftRight)
+                return builder.CreateAShr(left, distance, "shift.signed.right");
+            return builder.CreateLShr(left, distance, "shift.unsigned.right");
+        }
         case Expression::Kind::Remainder: {
             // The frontend normalizes syntactically signed literal divisors.
             // Never trust an externally supplied AST to skip this proof gate.
