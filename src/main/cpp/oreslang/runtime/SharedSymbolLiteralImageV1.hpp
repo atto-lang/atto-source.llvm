@@ -42,7 +42,10 @@ public:
         std::size_t size() const noexcept { return values_.size(); }
         std::size_t payload_bytes() const noexcept { return payload_bytes_; }
 
-        const Key& at(std::size_t ordinal) const { return values_.at(ordinal); }
+        // Return an owned nominal value: returning a reference here would
+        // dangle for expressions such as store.pin_latest()->at(0), once
+        // the temporary pin is destroyed.
+        Key at(std::size_t ordinal) const { return values_.at(ordinal); }
 
         std::size_t require_ordinal(const Key& logical) const {
             auto found = ordinals_.find(logical);
@@ -146,9 +149,17 @@ public:
 
     void close() {
         std::lock_guard<std::mutex> guard(lock_);
+        if (closed_) return;
+        // Keep weak observational metadata for pinned images after closing.
+        // Otherwise live_generation_count() would report zero while callers
+        // still hold real memory. Strong data lifetime remains pin-owned.
+        retired_.erase(std::remove_if(retired_.begin(), retired_.end(),
+                                     [](const auto& old) { return old.expired(); }),
+                       retired_.end());
+        if (current_ && current_.use_count() > 1)
+            retired_.push_back(current_);
         closed_ = true;
         current_.reset();
-        retired_.clear();
     }
 
 private:
