@@ -62,10 +62,13 @@ set(expected_literal-argument "GPU-LAUNCH-002")
 foreach(case_name IN LISTS cases)
   # Every rejected source gets an isolated directory. No prior positive
   # compilation artifact can conceal a same-name overwrite.
-  set(case_dir "${WORKDIR}/${case_name}")
-  # Do not carry stale binaries between retries: an earlier artifact must
-  # never be accepted as part of the next run's initial directory listing.
-  file(REMOVE_RECURSE "${case_dir}")
+  # Use a fresh directory per invocation: never delete an existing tree,
+  # and never let a stale same-name artifact be part of the baseline.
+  string(RANDOM LENGTH 20 ALPHABET "0123456789abcdef" case_nonce)
+  set(case_dir "${WORKDIR}/case-${case_name}-${case_nonce}")
+  if(EXISTS "${case_dir}")
+    message(FATAL_ERROR "${case_name}: random case workspace already exists")
+  endif()
   file(MAKE_DIRECTORY "${case_dir}")
   set(input "${case_dir}/${case_name}.ores")
   file(WRITE "${input}" "${source_${case_name}}")
