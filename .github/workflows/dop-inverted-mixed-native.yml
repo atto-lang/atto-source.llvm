@@ -235,6 +235,13 @@ jobs:
               raise SystemExit('FAIL: 2/3-column fixture inventory changed')
           if hashlib.sha256(xml_path.read_bytes()).hexdigest() != verified_digest:
               raise SystemExit('FAIL: verified JUnit mutated while issuing the receipt')
+          certificate=(root/'build-evidence/mixed-ctest-certifier.txt').read_text()
+          expected_certificate=(
+              'DOP_MIXED_JUNIT_VERIFIED tests=5 guest_receipt_requires_independent_run_job_attestation=YES\n'
+              'DOP_MIXED_JUNIT_SHA256=' + verified_digest + '\n'
+          )
+          if certificate != expected_certificate:
+              raise SystemExit('FAIL: certifier output differs from exact GitHub step digest')
           receipt=dict(head=head,tree=source_tree,run=os.environ['GITHUB_RUN_ID'],
                        attempt=os.environ['GITHUB_RUN_ATTEMPT'],
                        evidence='COMPILER_BACKED_MIXED_ATTO_GUEST_EXECUTED',
