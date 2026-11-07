@@ -3829,6 +3829,8 @@ private:
         require("gpu");
         require("fnc");
         const auto name = gpu_launch_symbol("GPU-LAUNCH-001", "invalid GPU kernel name");
+        if (gpu_kernel_source_signatures_.size() >= 512)
+            gpu_launch_parse_error("GPU-LAUNCH-001", "GPU kernel declaration budget exceeded", token_.offset);
         if (!accept("("))
             gpu_launch_parse_error("GPU-LAUNCH-001", "GPU kernel needs parameter list", token_.offset);
         gpu::source_link::Signature sig;
@@ -3840,6 +3842,8 @@ private:
                 gpu::typed_ir::Parameter type;
                 if (accept("f32")) {
                     type = gpu::typed_ir::Parameter::F32;
+                } else if (accept("int") || accept("i64")) {
+                    type = gpu::typed_ir::Parameter::I64;
                 } else if (accept("u64")) {
                     type = gpu::typed_ir::Parameter::U64;
                 } else {
@@ -3848,7 +3852,7 @@ private:
                     const bool array = !ro && !wo && accept("GpuArray");
                     if (!ro && !wo && !array)
                         gpu_launch_parse_error("GPU-LAUNCH-002",
-                            "unsupported GPU parameter type (requires f32, u64 or f32 device view)",
+                            "unsupported GPU parameter type (requires f32, int/i64, u64 or f32 device view)",
                             token_.offset);
                     if (!accept("<") || !accept("f32") || !accept(">"))
                         gpu_launch_parse_error("GPU-LAUNCH-002", "device views require f32 element", token_.offset);
