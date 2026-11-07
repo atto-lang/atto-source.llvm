@@ -90,6 +90,7 @@ static SourceActorGroup group = { .mutex = PTHREAD_MUTEX_INITIALIZER };
 static _Atomic uint64_t next_actor_id = 4100;
 static _Thread_local OresNativeExecutionHandle current_source_execution;
 static _Thread_local SourceActor* current_source_frame_actor;
+static void ensure(int condition);
 
 /*
  * The C ABI for compiler-owned scalar actor frame places. The native heap
