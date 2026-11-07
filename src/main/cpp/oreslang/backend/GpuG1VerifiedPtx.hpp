@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -123,6 +124,7 @@ public:
     GpuG1VerifiedPtxModule(const GpuG1VerifiedPtxModule&) = delete;
     GpuG1VerifiedPtxModule& operator=(const GpuG1VerifiedPtxModule&) = delete;
     KernelToken token() const {
+        std::lock_guard<std::mutex> guard(mutex_);
         if (!state_ || !state_->loaded)
             throw std::invalid_argument("GPU-G1-MODULE-005: module not loaded");
         return KernelToken{state_};
@@ -130,6 +132,7 @@ public:
     const PinnedG1Ptx& pins() const noexcept { return pins_; }
     template<class EventProvider>
     void close_after_quiescence(const EventProvider& provider) {
+        std::lock_guard<std::mutex> guard(mutex_);
         if (!state_ || !state_->loaded)
             throw std::invalid_argument("GPU-G1-MODULE-006: duplicate module unload");
         provider.require_quiescent_shutdown();
@@ -144,6 +147,7 @@ private:
     Loader& loader_;
     PinnedG1Ptx pins_;
     std::shared_ptr<State> state_;
+    mutable std::mutex mutex_;
 };
 
 } // namespace oreslang::gpu::g1
