@@ -42,17 +42,17 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp)" = "bc7d5de14204ebd0ec4c45798f012b06b2b93494"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp)" = "d8da3cd331fc5b9b353179d251a8ea5dc44ad642"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp)" = "7b79138951aa878fe2ee43cfcef21277cb68b256"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp)" = "bcecb54e7750fca7ef84010a2fa3f66e6bf61902"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h)" = "cfd0e7f1d8fbd125a0ca20c7907432fc0407635c"
-          test "$(git hash-object tests/native_request_context_local_v1_test.cpp)" = "39c1c043de30f0b75aafa8d61cc21a1bc66f3cbd"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalSchedulerTurnV1.hpp)" = "48125664994126787a0dcc27fdc9923189e37fcc"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = "5e2a2cc4522ac14305b11e3c0c3490ac748910a1"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.h)" = "5f80e91ae45f3f82659abb36f1170a7873c96d53"
+          test "$(git hash-object tests/native_request_context_local_v1_test.cpp)" = "1a9faffae8412ca2a46e817757cc65f606d76839"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalSchedulerTurnV1.hpp)" = "08f21c4a37aa9836e1343d9a513acb2d9a8614b3"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = "684cb08fc30bad29bcf615e46321dbec23878d96"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.h)" = "4fd6636d5fbc1b4c13150bb14d1657119debf5b1"
           test "$(git hash-object src/main/cpp/oreslang/runtime/TaskCancellation.hpp)" = "7eafa420e92ba10e552dade1846f3862cb79aec7"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextHandoffV1.hpp)" = "dd7250cff4ab0a1f4c598e264b9786d5635f6b4b"
-          test "$(git hash-object tests/native_request_context_handoff_v1_test.cpp)" = "e44887a5fc125cd64961065bc172f84dd487c436"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextHandoffV1.hpp)" = "1e35b95aae47d2e52d8802544a7cf4158cab5634"
+          test "$(git hash-object tests/native_request_context_handoff_v1_test.cpp)" = "2be4c484c3d943ea68c40beeedf7df774b8c327a"
       - name: Compile and execute real actor two-request isolation
         shell: bash
         env:
