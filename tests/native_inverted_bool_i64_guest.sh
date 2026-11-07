@@ -152,7 +152,9 @@ for fixture in positive-bool-write.atto positive-swap-tail.atto; do
     done
     for level in -O0 -O2; do
         "$clang" "$level" -x ir "$tmp/native.ll" -o "$tmp/native"
+        require_tools_unchanged
         run_process "$tmp/native" exit42 "$fixture" "$level"
+        require_tools_unchanged
     done
 done
 bounds_source="$fixtures/negative-bounds-trap.atto"
@@ -172,7 +174,9 @@ grep -Fq 'icmp ult i64 1, ' "$tmp/bounds.ll" || {
 }
 for level in -O0 -O2; do
     "$clang" "$level" -x ir "$tmp/bounds.ll" -o "$tmp/bounds"
+    require_tools_unchanged
     run_process "$tmp/bounds" signal negative-bounds-trap.atto "$level"
+    require_tools_unchanged
 done
 
 while IFS='|' read -r fixture diagnostic; do
@@ -200,4 +204,5 @@ negative-immutable-bool-set.atto|immutable inverted field
 negative-bool-write-int.atto|requires true or false literal
 negative-f64-unimplemented.atto|precisely two i64 fields or bool/i64 fields
 NEGATIVES
+require_tools_unchanged
 echo 'INVERTED_BOOL_I64_NATIVE_GUEST_PASS exit42=4 signals=2 source_rejects=5'
