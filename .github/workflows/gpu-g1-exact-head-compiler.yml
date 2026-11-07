@@ -47,6 +47,7 @@ jobs:
           sha256sum src/main/cpp/oreslang/backend/GpuG1VerifiedPtx.hpp \
             src/main/cpp/oreslang/backend/GpuG1CudaModuleLoader.hpp \
             tests/gpu_g1_verified_ptx_test.cpp tests/gpu_g1_cuda_module_compile_test.cpp
+          sha256sum tests/gpu_g1_verified_ptx_negative_mutations.py
       - name: Compile and execute typed frontend source tests
         shell: bash
         run: |
@@ -83,6 +84,7 @@ jobs:
           /tmp/gpu-g1-proof/provider-ledger
           /tmp/gpu-g1-proof/event-provider-host
           /tmp/gpu-g1-proof/verified-ptx-host
+          CXX=clang++ python3 tests/gpu_g1_verified_ptx_negative_mutations.py
           /tmp/gpu-g1-proof/source-compiler tests/fixtures/gpu-g1-saxpy.atto \
             > /tmp/gpu-g1-proof/source.ll
           clang -x ir -S -emit-llvm -Wno-override-module \
