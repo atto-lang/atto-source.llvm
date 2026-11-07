@@ -123,10 +123,21 @@ fn known_llvm_intrinsic(name: &str) -> bool {
         "llvm.fshl.", "llvm.fshr.", "llvm.abs.",
         "llvm.smax.", "llvm.smin.", "llvm.umax.", "llvm.umin.",
     ];
-    EXACT.contains(&name) || TYPED.iter().any(|prefix| name.starts_with(prefix)
-        && name.len() > prefix.len()
-        && name[prefix.len()..].bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_'))
+    EXACT.contains(&name) || TYPED.iter().any(|prefix| {
+        if let Some(suffix) = name.strip_prefix(prefix) {
+            // Core v1 uses only scalar integer and opaque-pointer intrinsic
+            // types (i32, i64, p0, etc.). Arbitrary alphanumeric suffixes
+            // could alias a forged llvm.memcpy.host_escape declaration.
+            !suffix.is_empty() && suffix.split('.').all(|piece| {
+                let raw = piece.as_bytes();
+                raw.len() > 1
+                    && (raw[0] == b'i' || raw[0] == b'p')
+                    && raw[1..].iter().all(u8::is_ascii_digit)
+            })
+        } else {
+            false
+        }
+    })
 }
 
 /// Names of functions the IR declares but does not define, excluding known
@@ -265,6 +276,30 @@ declare void @"ores_actor_send"(ptr)
         );
         assert_eq!(ir_external_declarations(ir),
             vec!["llvm.ores_actor_send", "llvm.allocator"]);
+    }
+
+    #[test]
+    fn forged_typed_intrinsic_suffix_cannot_hide_as_llvm_builtin() {
+        let ir = concat!(
+            "declare void @llvm.memcpy.host_escape()\n",
+            "declare void @llvm.smul.with.overflow.i64.backdoor()\n",
+            "declare void @llvm.ctpop.i64_payload()\n",
+        );
+        assert_eq!(ir_external_declarations(ir), vec![
+            "llvm.memcpy.host_escape",
+            "llvm.smul.with.overflow.i64.backdoor",
+            "llvm.ctpop.i64_payload",
+        ]);
+    }
+
+    #[test]
+    fn scalar_and_pointer_intrinsic_type_suffixes_are_allowed_only_as_ir_builtins() {
+        let ir = concat!(
+            "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n",
+            "declare i64 @llvm.ctpop.i64(i64)\n",
+            "declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)\n",
+        );
+        assert!(ir_external_declarations(ir).is_empty());
     }
 
     #[test]
