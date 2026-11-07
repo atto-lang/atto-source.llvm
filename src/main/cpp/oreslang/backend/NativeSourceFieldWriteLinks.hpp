@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -69,38 +70,59 @@ public:
         if (census.source_module != &module || sites_.size() > 4096)
             throw std::runtime_error(
                 "ownership violation: field write link refers to foreign IR module");
+        // One bounded module readback, not one full module scan per source
+        // write. A naive per-site scan could require 4096 * 2,000,000
+        // instruction visits (resource-exhaustion attack surface).
+        // Index only LIVE StoreInsts; never dereference a stale claim.
+        using LiveStore = std::pair<const llvm::Function*, const ActualStore*>;
+        std::map<const llvm::StoreInst*, LiveStore> live_stores;
+        std::uint64_t ordinal = 0;
+        std::size_t store_index = 0;
+        for (const auto& function : module) {
+            if (function.isDeclaration()) continue;
+            for (const auto& block : function) {
+                for (const auto& instruction : block) {
+                    ++ordinal;
+                    if (const auto* actual =
+                            llvm::dyn_cast<llvm::StoreInst>(&instruction)) {
+                        if (store_index >= census.stores.size())
+                            throw std::runtime_error(
+                                "ownership violation: inserted native store invalidates source write snapshot");
+                        const auto& snapshot = census.stores[store_index++];
+                        if (snapshot.instruction != actual ||
+                                snapshot.instruction_ordinal != ordinal ||
+                                snapshot.pointer != actual->getPointerOperand() ||
+                                snapshot.value != actual->getValueOperand() ||
+                                !live_stores.emplace(actual,
+                                    std::make_pair(&function, &snapshot)).second)
+                            throw std::runtime_error(
+                                "ownership violation: modified physical store invalidates source write snapshot");
+                    }
+                }
+            }
+        }
+        if (ordinal != census.instructions ||
+                store_index != census.stores.size())
+            throw std::runtime_error(
+                "ownership violation: stale native instruction census");
+
         std::set<const llvm::StoreInst*> used;
-        std::set<std::uint64_t> site_ids;
         std::size_t count = 0;
         for (const auto& link : sites_) {
-            bool owning_function = false;
-            for (const auto& fn : module)
-                if (&fn == link.function) owning_function = true;
+            const auto live = live_stores.find(link.store);
             if (!link.emission_site || link.emission_site != count + 1 ||
-                    !site_ids.insert(link.emission_site).second ||
-                    !owning_function || !link.function || !link.store ||
+                    !link.function || !link.store ||
                     !link.destination || !link.value ||
                     link.place.empty() || link.place.size() > 256 ||
                     link.place.front() == '.' || link.place.back() == '.' ||
                     link.place.find("..") != std::string::npos ||
                     !used.insert(link.store).second ||
-                    !census.contains_store(link.store, link.destination, link.value))
+                    live == live_stores.end() ||
+                    live->second.first != link.function ||
+                    live->second.second->pointer != link.destination ||
+                    live->second.second->value != link.value)
                 throw std::runtime_error(
                     "ownership violation: source field write lacks matching live LLVM StoreInst");
-            // contains_store scans the whole module. Check the physical
-            // StoreInst was emitted in the function attributed by the source
-            // compiler; never dereference a stale link.store pointer.
-            bool in_function = false;
-            for (const auto& fn : module) {
-                if (&fn != link.function) continue;
-                for (const auto& block : fn)
-                    for (const auto& instruction : block)
-                        if (&instruction == link.store)
-                            in_function = true;
-            }
-            if (!in_function)
-                throw std::runtime_error(
-                    "ownership violation: source field write belongs to wrong LLVM function");
             ++count;
         }
         return {false, false, count};
