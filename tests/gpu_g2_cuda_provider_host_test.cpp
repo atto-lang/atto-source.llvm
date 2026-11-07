@@ -83,6 +83,39 @@ int main(){
      rejects<std::invalid_argument>([&]{op.submit(ptx,1,{1,2},{2,3});});
      check(d.buffers.empty());rejects<std::logic_error>([&]{(void)op.poll();});
      rejects<std::logic_error>([&]{op.request_cancel();});}
+    {Fake d;SaxpyOperation first(d,"first-tenant",1300,4096);
+     SaxpyOperation second(d,"second-tenant",1400,4096);
+     first.submit(ptx,1,{1},{2});
+     rejects<std::logic_error>([&]{second.submit(ptx,2,{3},{4});});
+     check(second.state()==State::Ready && d.launches==1 && d.buffers.size()==3);
+     d.ready=true;check(first.poll() && first.state()==State::Completed);first.close();
+     second.submit(ptx,2,{3},{4});check(d.launches==2);
+     check(second.poll() && second.output()==std::vector<float>({10}));second.close();}
+    {Fake d;d.fail_upload=true;
+     SaxpyOperation unsafe(d,"tenant-a",1500,4096);
+     SaxpyOperation pending(d,"tenant-b",1600,4096);
+     rejects<std::runtime_error>([&]{unsafe.submit(ptx,1,{1},{2});});
+     check(unsafe.state()==State::Quarantined);
+     d.fail_upload=false;
+     rejects<std::logic_error>([&]{pending.submit(ptx,1,{5},{6});});
+     check(!unsafe.poll() && d.frees==0);
+     d.stream_idle=true;check(unsafe.poll() && unsafe.state()==State::Failed);unsafe.close();
+     pending.submit(ptx,1,{5},{6});d.ready=true;check(pending.poll());
+     check(pending.output()==std::vector<float>({11}));pending.close();}
+    {Fake d;SaxpyOperation first(d,"tenant-a",1700,4096);
+     SaxpyOperation second(d,"tenant-b",1800,4096);
+     first.submit(ptx,1,{1},{2});d.ready=true;d.fail_free=true;
+     rejects<std::runtime_error>([&]{(void)first.poll();});
+     check(first.state()==State::ReleaseFailed);
+     rejects<std::logic_error>([&]{second.submit(ptx,1,{1},{2});});
+     d.fail_free=false;check(first.poll());first.close();
+     second.submit(ptx,1,{1},{2});check(second.poll());second.close();}
+    {Fake d;SaxpyOperation first(d,"tenant-a",1900,4096);
+     SaxpyOperation second(d,"tenant-b",2000,4096);
+     first.submit(ptx,1,{1},{2});first.request_cancel();
+     rejects<std::logic_error>([&]{second.submit(ptx,1,{1},{2});});
+     d.ready=true;d.stream_idle=true;check(first.poll());first.close();
+     second.submit(ptx,1,{1},{2});d.ready=true;check(second.poll());second.close();}
     rejects<std::invalid_argument>([]{Fake d;SaxpyOperation op(d,"tenant",std::numeric_limits<std::uint64_t>::max(),4096);});
     rejects<std::invalid_argument>([]{Fake d;SaxpyOperation op(d,"",100,4096);});
     rejects<std::invalid_argument>([]{Fake d;SaxpyOperation op(d,"tenant",0,4096);});
