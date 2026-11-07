@@ -110,6 +110,7 @@ int main(int argc, char** argv) {
         Shared overflow_shared;
         Actor overflow_actor{};
         overflow_actor.shared = &overflow_shared;
+        overflow_actor.is_a = true;
         MultiActorCarrier overflow_carrier(32);
         overflow_actor.owner = overflow_carrier.register_actor(
             &overflow_actor, compiled_actor, cancel_actor);
@@ -154,7 +155,7 @@ int main(int argc, char** argv) {
         return a.done.load(std::memory_order_acquire) == 1 &&
                b.done.load(std::memory_order_acquire) == 1;
     }));
-    REQUIRE(a.last.load() == 8 && b.last.load() == 13);
+    REQUIRE(a.last.load() == 9 && b.last.load() == 14);
     REQUIRE(shared.errors.load() == 0);
 
     // STOP A and physically free A's heap while B's actor stack and heap
@@ -166,10 +167,10 @@ int main(int argc, char** argv) {
     REQUIRE(!sender.try_send(a.owner, {2, 999}));
     REQUIRE(sender.try_send(b.owner, {2, 8}));
     REQUIRE(until([&] { return b.done.load() == 2; }));
-    REQUIRE(b.last.load() == 21);
+    REQUIRE(b.last.load() == 22);
     REQUIRE(sender.try_send(b.owner, {3, 9}));
     REQUIRE(until([&] { return b.done.load() == 3; }));
-    REQUIRE(b.last.load() == 34);
+    REQUIRE(b.last.load() == 35);
 
     REQUIRE(sender.request_cancel(b.owner));
     REQUIRE(until([&] { return carrier.actor_stats(b.owner).retired; }));
