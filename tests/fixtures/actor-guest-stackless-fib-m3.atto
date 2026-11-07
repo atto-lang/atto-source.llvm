@@ -1,0 +1,12 @@
+// M3: genuine actor + source scalar recursion, no C++ guest recursion.
+// Every fib invocation consumes an actor-owned logical frame (PC/operands).
+fnc fib(int n): int {
+  return n <= 1 ? n : fib(n - 1) + fib(n - 2);
+}
+define actor Counter as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = fib(n);
+    return total;
+  }
+}
