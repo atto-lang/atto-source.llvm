@@ -5,6 +5,7 @@
 #include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/types/OwnershipChecker.hpp"
 #include "oreslang/frontend/GpuLaunchSourceMir.hpp"
+#include "oreslang/frontend/GpuKernelSourceLink.hpp"
 #include "oreslang/frontend/MethodResolver.hpp"
 #include "oreslang/types/NativeScalarTypes.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
@@ -734,6 +735,11 @@ public:
                 type_only_declaration(program);
                 continue;
             }
+            if ((token_.text == "pub" && peek_next().text == "gpu") ||
+                    (token_.text == "gpu" && peek_next().text == "fnc")) {
+                gpu_kernel_source_declaration();
+                continue;
+            }
             if (token_.text == "gen" || token_.text == "generator" ||
                     (token_.text == "pub" &&
                      (peek_next().text == "gen" || peek_next().text == "generator"))) {
@@ -826,6 +832,11 @@ public:
                  !program.classes.empty() || !program.module.empty())) {
             fail("first AOT continuation slice requires exactly one standalone suspend function");
         }
+        if (!gpu_kernel_source_signatures_.empty())
+            throw std::runtime_error(
+                "GPU-LAUNCH-008: GPU source declarations and signatures are "
+                "checked, but device body lowering, host value types and "
+                "completion fences are not executable; no implicit CPU fallback");
         program.sum_types = std::move(sum_types_);
         return program;
     }
@@ -833,6 +844,7 @@ public:
     static void validate_complete(const Program& program) { validate(program); }
 
 private:
+    std::vector<gpu::source_link::Signature> gpu_kernel_source_signatures_;
     std::vector<NativeSumType> sum_types_;
     bool is_sum_name(const std::string& name) const {
         return name.rfind("Option<", 0) == 0 || name.rfind("Result<", 0) == 0;
@@ -3806,6 +3818,92 @@ private:
         return axes;
     }
 
+
+    // Compile-time source-signature admission only. The kernel body is a
+    // bounded balanced-token envelope, NOT a validated executable GPU HIR.
+    // Any compilation unit containing gpu fnc remains closed at parse end.
+    void gpu_kernel_source_declaration() {
+        accept("pub");
+        require("gpu");
+        require("fnc");
+        const auto name = gpu_launch_symbol("GPU-LAUNCH-001", "invalid GPU kernel name");
+        if (!accept("("))
+            gpu_launch_parse_error("GPU-LAUNCH-001", "GPU kernel needs parameter list", token_.offset);
+        gpu::source_link::Signature sig;
+        sig.symbol = name;
+        if (!accept(")")) {
+            do {
+                if (sig.parameters.size() >= 64)
+                    gpu_launch_parse_error("GPU-LAUNCH-001", "GPU kernel has more than 64 parameters", token_.offset);
+                gpu::typed_ir::Parameter type;
+                if (accept("f32")) {
+                    type = gpu::typed_ir::Parameter::F32;
+                } else if (accept("u64")) {
+                    type = gpu::typed_ir::Parameter::U64;
+                } else {
+                    const bool ro = accept("GpuReadBuffer");
+                    const bool wo = !ro && accept("GpuWriteBuffer");
+                    const bool array = !ro && !wo && accept("GpuArray");
+                    if (!ro && !wo && !array)
+                        gpu_launch_parse_error("GPU-LAUNCH-002",
+                            "unsupported GPU parameter type (requires f32, u64 or f32 device view)",
+                            token_.offset);
+                    if (!accept("<") || !accept("f32") || !accept(">"))
+                        gpu_launch_parse_error("GPU-LAUNCH-002", "device views require f32 element", token_.offset);
+                    const bool mutable_view = accept("mut");
+                    if ((ro && mutable_view) || (wo && mutable_view))
+                        gpu_launch_parse_error("GPU-LAUNCH-002", "buffer mutability is encoded in view type", token_.offset);
+                    type = (wo || (array && mutable_view))
+                        ? gpu::typed_ir::Parameter::WriteF32
+                        : gpu::typed_ir::Parameter::ReadF32;
+                }
+                if (token_.kind != Kind::Identifier || reserved(token_.text))
+                    gpu_launch_parse_error("GPU-LAUNCH-001", "GPU parameter needs name", token_.offset);
+                std::string param(token_.text);
+                advance();
+                sig.parameters.push_back({std::move(param), type});
+            } while (accept(","));
+            if (!accept(")"))
+                gpu_launch_parse_error("GPU-LAUNCH-001", "unterminated GPU parameter list", token_.offset);
+        }
+        if (!accept(":")) {
+            if (!accept("=") || !accept(">"))
+                gpu_launch_parse_error("GPU-LAUNCH-001", "GPU kernel must return void", token_.offset);
+        }
+        if (!accept("void"))
+            gpu_launch_parse_error("GPU-LAUNCH-001", "GPU kernel must return void", token_.offset);
+        if (!accept("{"))
+            gpu_launch_parse_error("GPU-LAUNCH-001", "GPU kernel requires braced body", token_.offset);
+        std::size_t depth = 1;
+        std::size_t count = 0;
+        while (depth > 0) {
+            if (token_.kind == Kind::End)
+                gpu_launch_parse_error("GPU-LAUNCH-001", "unterminated GPU kernel body", token_.offset);
+            if (++count > 16384 || depth > 64)
+                gpu_launch_parse_error("GPU-LAUNCH-001", "GPU kernel body token/depth budget", token_.offset);
+            if (token_.kind == Kind::Identifier &&
+                    (token_.text == "await" || token_.text == "spawn" ||
+                     token_.text == "critical" || token_.text == "suspends" ||
+                     token_.text == "yield" || token_.text == "actor" ||
+                     token_.text == "new"))
+                gpu_launch_parse_error("GPU-LAUNCH-006", "effectful operation in GPU kernel source", token_.offset);
+            if (token_.text == "{") ++depth;
+            else if (token_.text == "}") --depth;
+            advance();
+        }
+        try {
+            sig = gpu::source_link::checked_signature(std::move(sig));
+            for (const auto& existing : gpu_kernel_source_signatures_)
+                if (existing.symbol == sig.symbol)
+                    gpu_launch_parse_error("GPU-LAUNCH-001",
+                        "duplicate GPU source kernel declaration", token_.offset);
+        } catch (const std::invalid_argument& malformed) {
+            throw std::runtime_error(std::string(malformed.what()) +
+                    "; no implicit CPU fallback at byte " + std::to_string(token_.offset));
+        }
+        gpu_kernel_source_signatures_.push_back(std::move(sig));
+    }
+
     gpu::source_mir::Candidate gpu_launch_source_candidate() {
         advance();  // contextual launch; launch(...) remains a normal function call
         auto kernel = gpu_launch_symbol("GPU-LAUNCH-001", "expected statically named kernel");
@@ -3862,6 +3960,18 @@ private:
                 const auto candidate = gpu_launch_source_candidate();
                 if (candidate.executable() || candidate.type_checked())
                     gpu_launch_parse_error("GPU-LAUNCH-008", "forged source execution authority", offset);
+                // A declaration seen earlier in this compilation unit yields a
+                // checked typed *signature shape* and arity, never host values
+                // or an executable GPU token. Legacy launch-only negative
+                // fixture syntax stays at source-shape admission until G1d.
+                if (!gpu_kernel_source_signatures_.empty()) {
+                    const auto linked = gpu::source_link::link(
+                        gpu_kernel_source_signatures_, candidate);
+                    if (linked.executable() || linked.host_arguments_typed() ||
+                            linked.kernel_body_verified())
+                        gpu_launch_parse_error("GPU-LAUNCH-008",
+                            "forged GPU source-link authority", offset);
+                }
             } catch (const std::invalid_argument& malformed) {
                 throw std::runtime_error(std::string(malformed.what()) +
                         "; no implicit CPU fallback at byte " + std::to_string(offset));
