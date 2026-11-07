@@ -40,6 +40,10 @@ export function inspectOwnershipWorkflowShape(source) {
      !once(source,"\n      - 'audit/llvm-source-physical-fieldwrite-link-*'") ||
      !once(source,"\n      - 'audit/llvm-restore-witness-to-store-*'") ||
      !once(source,"\n      - 'audit/llvm-source-restoration-cfg-dom-v1-*'") ||
+     !once(source,"\n      - 'audit/llvm-source-cfg-50-guests-and-regressions-*'") ||
+     !once(source,"\n      - 'tests/contracts/atto_ownership_source_cfg_50.json'") ||
+     !once(source,"\n      - 'tests/ownership_source_cfg_compiler_matrix.py'") ||
+     !once(source,"\n      - 'tests/test_ownership_source_cfg_compiler_matrix.py'") ||
      !once(source,"\n      - 'tests/native_source_field_cfg_96_test.cpp'") ||
      !once(source,"\n      - 'src/main/cpp/oreslang/types/OwnershipSourceFieldFlow.hpp'") ||
      !once(source,"\n      - 'tests/native_reinitialize_store_witness_48_test.cpp'") ||
@@ -92,6 +96,15 @@ export function inspectOwnershipWorkflowShape(source) {
      !source.includes('atto_ownership_place_mir_real_compiler_50') ||
      !source.includes('--output-junit /tmp/atto-real-compiler-50.xml'))
     return fail('MISSING_REAL_COMPILER_MATRIX_RECEIPT');
+  if(!once(source,'ATTO_SOURCE_CFG_REAL_COMPILER_FIXTURES=50/50_EXECUTED') ||
+     !once(source,'ATTO_LLVM_SOURCE_CFG_GUEST=50/50_REAL_COMPILER_EXECUTED') ||
+     !once(source,'--output-junit /tmp/atto-source-cfg-50.xml') ||
+     !once(source,'native_ownership_source_cfg_manifest_18_mutations$') ||
+     !source.includes('atto_ownership_source_cfg_real_compiler_50') ||
+     !source.includes("observed != ['atto_ownership_source_cfg_real_compiler_50']") ||
+     !source.includes("int(root.get('skipped', '1'))") ||
+     !source.includes("int(root.get('failures', '1'))"))
+    return fail('MISSING_SOURCE_CFG_REAL_GUEST_EVIDENCE');
   if(!source.includes('test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"') ||
      !source.includes('git diff --cached --quiet --exit-code'))
     return fail('MISSING_EXACT_HEAD_CHECK');
