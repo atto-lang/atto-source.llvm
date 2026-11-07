@@ -46,6 +46,19 @@ jobs:
           python3 tests/ctest_manifest_gate.py --build-dir build --min-tests 250
       - name: Verify parser, IR and native execution
         run: ctest --test-dir build --output-on-failure --timeout 240 --parallel 2
+      - name: Symbol immutable image native memory safety (ASan / UBSan)
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O1 -g -pthread -fno-omit-frame-pointer \
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -fsanitize=address,undefined \
+            -I src/main/cpp \
+            tests/native_shared_symbol_literal_image_v1_test.cpp \
+            -o build/native-shared-symbol-image-sanitized
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+          UBSAN_OPTIONS=halt_on_error=1 \
+            ./build/native-shared-symbol-image-sanitized
+
       - name: Repeat actor stress and cancellation races
         run: ctest --test-dir build -R hungry_carrier_async_bounded_cancel --repeat until-fail:12 --output-on-failure
       - name: Repeat per-payload send-stop exactly-once races
