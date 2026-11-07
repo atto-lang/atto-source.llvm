@@ -10,7 +10,7 @@
 // lifetime fence installed before it can be published.
 //
 // A dedicated external CONTROL worker observes revocations, closes owned
-// request stores, waits their in-flight leases, and joins actor DONE. The
+// request stores, polls their in-flight leases and actor DONE independently. The
 // worker is never a scheduler carrier. Its progress requires scheduling and
 // termination of admitted work; this is not a hard-real-time guarantee.
 // Physical actor slot reuse and generation reactivation are fail-closed.
@@ -233,42 +233,62 @@ private:
     void sweep_loop() {
         for (;;) {
             bool progressed = false;
+            // Independently process every revoked actor on each pass. Never
+            // block waiting for one actor's pinned operation or DONE barrier:
+            // one stalled actor must not starve an unrelated actor's cleanup.
             for (std::size_t i = 0; i < actor_slots_; ++i) {
                 Slot& slot = slots_[i];
                 if (slot.live->load(std::memory_order_acquire)) continue;
                 std::array<RequestContextLocalV1::Ptr,
                            max_requests_per_actor> pinned{};
                 std::size_t count = 0;
+                bool issue_close = false;
                 OresNativeActorRef actor{};
                 {
                     std::lock_guard<std::mutex> guard(mutex_);
-                    if (slot.sweep_claimed) continue;
-                    slot.sweep_claimed = true;
+                    if (slot.sweep_done) continue;
                     count = slot.count;
-                    slot.count = 0;
                     actor = {slot.terminated_domain.load(
                                  std::memory_order_relaxed),
                              static_cast<std::uint64_t>(i),
                              slot.terminated_generation.load(
                                  std::memory_order_relaxed)};
+                    if (!slot.sweep_claimed) {
+                        slot.sweep_claimed = true;
+                        issue_close = true;
+                    }
+                    // Copy bounded strong refs while protected by the short
+                    // registry lock; never destroy request data under it.
                     for (std::size_t k = 0; k < count; ++k)
-                        pinned[k] = std::move(slot.requests[k]);
+                        pinned[k] = slot.requests[k];
                 }
-                // All user values / destructors execute OUTSIDE scheduler,
-                // registry, request, and cancellation graph locks.
+                if (issue_close) {
+                    for (std::size_t k = 0; k < count; ++k)
+                        if (pinned[k]) pinned[k]->close();
+                    progressed = true;
+                }
+                bool quiescent = true;
                 for (std::size_t k = 0; k < count; ++k)
-                    if (pinned[k]) pinned[k]->close();
-                bool ok = true;
-                for (std::size_t k = 0; k < count; ++k)
-                    if (pinned[k] &&
-                        !pinned[k]->wait_closed_quiescent()) ok = false;
-                if (!ores_native_actor_scheduler_wait_done(scheduler_, actor))
-                    ok = false;
+                    if (pinned[k] && !pinned[k]->closed_quiescent_now())
+                        quiescent = false;
+                // Nonblocking DONE query avoids head-of-line blocking while
+                // a different actor has outstanding operations or wake loans.
+                if (!quiescent ||
+                    !ores_native_actor_scheduler_poll_done(scheduler_, actor))
+                    continue;
+
+                std::array<RequestContextLocalV1::Ptr,
+                           max_requests_per_actor> released{};
                 {
                     std::lock_guard<std::mutex> guard(mutex_);
-                    slot.sweep_ok = ok;
+                    if (slot.sweep_done) continue;
+                    for (std::size_t k = 0; k < count; ++k)
+                        released[k] = std::move(slot.requests[k]);
+                    slot.count = 0;
+                    slot.sweep_ok = true;
                     slot.sweep_done = true;
                 }
+                // Both released and pinned refs retire outside all locks.
                 reaped_count_.fetch_add(1, std::memory_order_release);
                 reaped_.notify_all();
                 progressed = true;
