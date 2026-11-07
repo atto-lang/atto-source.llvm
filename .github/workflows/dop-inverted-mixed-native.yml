@@ -157,6 +157,16 @@ jobs:
           source_tree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip()
           if head != os.environ['EXPECTED_HEAD']:
               raise SystemExit('FAIL: source head changed')
+          identity=json.loads((root/'build-evidence/identity.json').read_text())
+          expected_identity={
+              'head': head, 'tree': source_tree,
+              'run': os.environ['GITHUB_RUN_ID'],
+              'attempt': os.environ['GITHUB_RUN_ATTEMPT']
+          }
+          if identity != expected_identity:
+              raise SystemExit('FAIL: initial source identity differs from final receipt')
+          if os.environ.get('GITHUB_JOB')!='compiler-mixed-native' or not os.environ.get('RUNNER_NAME'):
+              raise SystemExit('FAIL: missing expected allocated runner or job identity')
           if subprocess.run(['git','diff','--exit-code','HEAD','--'],
                             check=False,stdout=subprocess.DEVNULL).returncode != 0:
               raise SystemExit('FAIL: source worktree or tracked tests changed during build')
@@ -185,7 +195,18 @@ jobs:
                        ctest_cases=observed,
                        native_success_marker=exact_marker,
                        legacy_success_marker=legacy_marker,
-                       files={p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in paths})
+                       job=os.environ['GITHUB_JOB'],
+                       runner_name=os.environ['RUNNER_NAME'],
+                       toolchains={
+                         tool:subprocess.check_output(
+                           [tool,'--version'],text=True).splitlines()[0]
+                         for tool in ('clang','clang++','cmake','rustc')
+                       },
+                       files={p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in paths},
+                       ctest_xml_sha256=hashlib.sha256(
+                         (root/'build-evidence/mixed-ctest.xml').read_bytes()).hexdigest(),
+                       inventory_sha256=hashlib.sha256(
+                         (root/'build-evidence/inventory.txt').read_bytes()).hexdigest())
           out=root/'build-evidence/mixed-native-receipt.json'
           out.write_text(json.dumps(receipt,sort_keys=True,indent=2)+'\n')
           print(out.read_text())
