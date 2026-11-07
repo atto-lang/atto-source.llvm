@@ -3413,7 +3413,7 @@ private:
 
     std::unique_ptr<Expression> logical_or() {
         auto left = logical_xor();
-        while (token_.text == "||") {
+        while (token_.text == "||" || token_.text == "or") {
             const auto offset = token_.offset;
             advance();
             auto expr = make_expression(Expression::Kind::LogicalOr, offset);
@@ -3426,15 +3426,23 @@ private:
 
     std::unique_ptr<Expression> logical_xor() {
         auto left = logical_and();
+        while (token_.text == "xor") {
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::LogicalXor, offset);
+            expr->left = std::move(left);
+            expr->right = logical_and();
+            left = std::move(expr);
+        }
         if (token_.text == "^" || token_.text == "^^")
             fail("removed scalar operator '" + token_.text +
-                 "'; use an explicit named operation supported by the target profile");
+                 "'; use the logical keyword 'xor'");
         return left;
     }
 
     std::unique_ptr<Expression> logical_and() {
         auto left = equality();
-        while (token_.text == "&&") {
+        while (token_.text == "&&" || token_.text == "and") {
             const auto offset = token_.offset;
             advance();
             auto expr = make_expression(Expression::Kind::LogicalAnd, offset);
