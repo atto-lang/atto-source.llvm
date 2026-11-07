@@ -83,7 +83,10 @@ else:
     raise SystemExit("FAIL: unknown native outcome")
 PY
 }
-for file in positive-mixed-swap.atto positive-permuted-columns.atto; do
+for file in positive-mixed-swap.atto positive-permuted-columns.atto \
+    positive-f64-compare-after-swap.atto \
+    positive-f64-compare-false-branch.atto \
+    positive-f64-compare-signed-zero.atto; do
     "$compiler" "$fixtures/$file" > "$tmp/guest.ll"
     audit_ir "$tmp/guest.ll"
     # The optimizer must see genuine field-separated LLVM arrays, typed loads
@@ -94,31 +97,49 @@ for file in positive-mixed-swap.atto positive-permuted-columns.atto; do
     done
     # Source-typed f64 payload must survive AST->MIR->LLVM IR as exact bits;
     # a correct i64 exit alone would not observe a silently dropped f64 store.
-    if [[ "$file" == "positive-mixed-swap.atto" ]]; then
-        required_f64='0x400E000000000000' # 3.75, mutable set
-    else
-        required_f64='0x4002000000000000' # 2.25, second row
-    fi
+    case "$file" in
+        positive-mixed-swap.atto|positive-f64-compare-after-swap.atto|positive-f64-compare-false-branch.atto)
+            required_f64='0x400E000000000000' ;; # 3.75, mutable set
+        positive-permuted-columns.atto)
+            required_f64='0x4002000000000000' ;; # 2.25, second row
+        positive-f64-compare-signed-zero.atto)
+            required_f64='0x8000000000000000' ;; # active -0.0
+        *) echo "FAIL: unapproved mixed guest fixture $file" >&2; exit 1 ;;
+    esac
     grep -Fq "$required_f64" "$tmp/guest.ll" ||
         { echo "FAIL: mixed f64 source payload lost in native IR: $file" >&2; exit 1; }
-    if [[ "$file" == "positive-permuted-columns.atto" ]]; then
+    if [[ "$file" == "positive-permuted-columns.atto" || "$file" == "positive-f64-compare-signed-zero.atto" ]]; then
         # A real -0.0 source literal must retain the IEEE sign bit when
         # assigned to an active f64 column. Only *inactive* -0.0 is forbidden.
         grep -Fq '0x8000000000000000' "$tmp/guest.ll" ||
             { echo 'FAIL: active f64 negative-zero sign bit lost in LLVM IR' >&2; exit 1; }
+    fi
+    if [[ "$file" == positive-f64-compare-* ]]; then
+        # The loaded f64 column must control the native return value.
+        # Merely containing a double constant or dead store is insufficient.
+        grep -Fq ' = load double, ptr ' "$tmp/guest.ll" &&
+        grep -Fq ' = fcmp oeq double ' "$tmp/guest.ll" &&
+        grep -Fq ' = select i1 ' "$tmp/guest.ll" ||
+            { echo "FAIL: $file does not observe stored f64 at runtime" >&2; exit 1; }
     fi
     for opt in -O0 -O2; do
         "$clang" "$opt" -x ir "$tmp/guest.ll" -o "$tmp/guest"
         native_status "$tmp/guest" exit42
     done
 done
-"$compiler" "$fixtures/negative-stale-dense-index.atto" > "$tmp/trap.ll"
-audit_ir "$tmp/trap.ll"
-grep -Fq 'call void @llvm.trap()' "$tmp/trap.ll" ||
-    { echo 'FAIL: missing out-of-bounds trap in mixed guest IR' >&2; exit 1; }
-for opt in -O0 -O2; do
-    "$clang" "$opt" -x ir "$tmp/trap.ll" -o "$tmp/trap"
-    native_status "$tmp/trap" trap
+for trap_source in negative-stale-dense-index.atto negative-f64-compare-stale-row.atto; do
+    "$compiler" "$fixtures/$trap_source" > "$tmp/trap.ll"
+    audit_ir "$tmp/trap.ll"
+    grep -Fq 'call void @llvm.trap()' "$tmp/trap.ll" ||
+        { echo "FAIL: no runtime index trap in $trap_source" >&2; exit 1; }
+    if [[ "$trap_source" == "negative-f64-compare-stale-row.atto" ]]; then
+        grep -Fq ' = load double, ptr ' "$tmp/trap.ll" ||
+            { echo 'FAIL: missing checked f64 read' >&2; exit 1; }
+    fi
+    for opt in -O0 -O2; do
+        "$clang" "$opt" -x ir "$tmp/trap.ll" -o "$tmp/trap"
+        native_status "$tmp/trap" trap
+    done
 done
 # Every unsupported source rejects without writing any IR: no partial codegen.
 for item in \
@@ -126,7 +147,9 @@ for item in \
   'negative-f64-from-int.atto|mixed inverted f64 column' \
   'negative-immutable-bool-write.atto|immutable inverted field' \
   'negative-f64-return.atto|mixed inverted int main' \
-  'negative-f64-infinite.atto|mixed inverted f64 literal'; do
+  'negative-f64-infinite.atto|mixed inverted f64 literal' \
+  'negative-f64-compare-int-literal.atto|mixed inverted f64 column requires a real literal' \
+  'negative-f64-compare-bool-field.atto|mixed inverted int main cannot return bool field'; do
     file="${item%%|*}"; diagnostic="${item#*|}"
     if "$compiler" "$fixtures/$file" >"$tmp/denied.ll" 2>"$tmp/denied.err"; then
         echo "FAIL: admitted negative mixed source $file" >&2
@@ -141,4 +164,4 @@ done
 [[ "$(hash_file "$compiler")" == "$compiler_sha" &&
    "$(hash_file "$auditor")" == "$auditor_sha" ]] ||
     { echo 'FAIL: compiler/auditor changed during native evidence run' >&2; exit 1; }
-printf '%s\n' 'MIXED_ATTO_NATIVE_GUEST_PASS: 4 exit42, 2 trap signals, 5 rejects; IR no-GC screened (not linked/FFI proof)'
+printf '%s\n' 'MIXED_ATTO_NATIVE_GUEST_PASS: 10 exit42, 4 trap signals, 7 rejects; IR no-GC screened (not linked/FFI proof)'
