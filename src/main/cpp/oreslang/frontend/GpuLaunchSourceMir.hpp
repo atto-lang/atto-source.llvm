@@ -12,6 +12,8 @@
 
 namespace oreslang::gpu::source_mir {
 
+inline bool source_symbol(const std::string& value);
+
 // Source-expression IR, never a typed device-program IR or a launch permit.
 // Aggregate fields are public for compiler interchange, so every producer
 // (including tests and future IR adapters) MUST use source_candidate() before
@@ -30,13 +32,19 @@ struct I64 {
         return {Kind::Constant, n, {}, {}, {}};
     }
     static I64 named(std::string name) {
-        if (name.empty() || name.size() > 256)
+        if (!source_symbol(name))
             throw std::invalid_argument("GPU-LAUNCH-003: malformed geometry symbol");
         return {Kind::Symbol, 0, std::move(name), {}, {}};
     }
     static I64 ceil_div(I64 a, I64 b) {
-        if ((a.kind == Kind::Constant && a.value < 0) ||
-                (b.kind == Kind::Constant && b.value <= 0))
+        // Prevent folding an aggregate-forged, noncanonical constant and
+        // thereby laundering unchecked source payload into a fresh constant.
+        const auto malformed = [](const I64& n) {
+            return n.kind == Kind::Constant &&
+                (n.value < 0 || !n.symbol.empty() || n.left || n.right);
+        };
+        if (malformed(a) || malformed(b) ||
+                (b.kind == Kind::Constant && b.value == 0))
             throw std::invalid_argument("GPU-LAUNCH-003: invalid ceil_div operand");
         if (a.kind == Kind::Constant && b.kind == Kind::Constant)
             return constant(a.value / b.value + (a.value % b.value != 0));
