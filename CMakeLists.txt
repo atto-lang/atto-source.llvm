@@ -46,6 +46,20 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Native frontend-source MIR is deliberately non-executable; the actual
+    # compiler admission test below also verifies source diagnostics.
+    add_executable(oreslang-native-gpu-source-mir-test
+        tests/gpu_source_launch_mir_test.cpp)
+    target_include_directories(oreslang-native-gpu-source-mir-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-gpu-source-mir-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-gpu-source-mir-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_atto_gpu_source_mir_host_only
+        COMMAND oreslang-native-gpu-source-mir-test)
+    set_tests_properties(native_atto_gpu_source_mir_host_only
+        PROPERTIES TIMEOUT 20)
+
     # Host-only typed GPU IR v1: checks ordered ABI arguments, device effects,
     # queue scope, byte extents and mutable-loan aliasing. No physical dispatch.
     add_executable(oreslang-native-gpu-typed-launch-ir-test
