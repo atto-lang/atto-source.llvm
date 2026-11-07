@@ -180,7 +180,14 @@ jobs:
             negative_status=$?
             set -e
             test "$negative_status" -ne 0
-            grep -q '^INGRESS_SUPERVISOR_CASE_FAILED ' "$tmp/negative-$mutation.log"
+            case "$mutation" in
+              capacity) expected_case=03_undersized_registry_rejected ;;
+              skip_admit|raw_gate) expected_case=24_unregistered_raw_set_bypass_denied ;;
+              stop_signal) expected_case=28_lifecycle_stop_committed ;;
+              *) exit 2 ;;
+            esac
+            grep -Fxq "INGRESS_SUPERVISOR_CASE_FAILED $expected_case" \
+              "$tmp/negative-$mutation.log"
             printf 'REQUEST_INGRESS_NEGATIVE_MUTATION_KILLED %s\n' "$mutation"
           done
           printf 'REQUEST_CONTEXT_LOCAL_EXACT_SOURCE_HOST_PASS compiler=%s mode=%s\n' "$CC" "$MODE"
