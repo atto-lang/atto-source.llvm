@@ -82,6 +82,10 @@ void bootstrap_and_registration() {
           !w.registry->wait_reaped(w.b));
     RequestLocalKeyV1<int> key;
     check("06_admitted_write", a->set(key, 7, w.scheduler));
+    check("registered_raw_write_denied", !a->set(key, 8));
+    check("registered_raw_erase_denied", !a->erase(key));
+    check("registered_raw_mail_binding_denied",
+          !a->bind_original_mail_once(123));
     check("07_admitted_copy", a->get_copy(key) == 7);
     check("08_direct_STOP", ores_native_actor_scheduler_stop(w.scheduler, w.a));
     check("09_immediate_atomic_revocation", !a->active());
@@ -256,7 +260,7 @@ int main() {
     carrier_must_not_wait();
     registration_STOP_races();
     cancellation_STOP_races();
-    check("47_all_60_coordinated_races_executed", passes == 106);
+    check("47_all_60_coordinated_races_executed", passes == 109);
     std::printf("REQUEST_TERMINATION_REGISTRY_HOST_PASS total=%d race_trials=60\n",
                 passes);
 }
