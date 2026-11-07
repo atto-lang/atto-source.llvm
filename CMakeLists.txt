@@ -1247,6 +1247,10 @@ if(BUILD_TESTING)
     # for native ownership transfer; require a semantic denial, not syntax.
     oreslang_contract_test(atto_take_computed_untracked_rejected
         atto-take-computed-untracked.atto --diagnostic "E_TAKE_UNTRACKED_PLACE")
+    # A named borrowed scalar is a loan, not a Share-capable owner.
+    # This is an actual source compiler negative, not a host-only model.
+    oreslang_contract_test(atto_share_borrowed_parameter_rejected
+        atto-share-borrowed-parameter-reject.atto --diagnostic "E_SHARE_BORROW")
     # Copy scalars retain parity with Java rt share Copy semantics.
     # Require real compiler IR, Clang link and native process exit.
     if(ORE_CLANG)
