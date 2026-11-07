@@ -172,6 +172,25 @@ capacity257_sha="$(hash_file "$contracts/capacity-257-rejected.atto")" || exit 1
 capacity0_sha="$(hash_file "$contracts/capacity-zero-rejected.atto")" || exit 1
 immutable_fixture_sha="$(hash_file "$contracts/immutable-write-rejected.atto")" || exit 1
 trap_fixture_sha="$(hash_file "$contracts/removed-index-trap.atto")" || exit 1
+# Independently pin raw Git blob identities of the exact same .atto files
+# in Java and LLVM. Sha256+HEAD receipts alone do not prove *cross-repo*
+# byte identity if another agent changes only one repository's fixture.
+for shared_case in capacity-256-42.atto capacity-257-rejected.atto capacity-zero-rejected.atto; do
+    case "$shared_case" in
+        capacity-256-42.atto)
+            shared_blob_expected=5392eed2f33be3c8c69809f0521efe9c7a20440f ;;
+        capacity-257-rejected.atto)
+            shared_blob_expected=e052544a6cde137cabe0db6bc7f73b1e072db174 ;;
+        capacity-zero-rejected.atto)
+            shared_blob_expected=793b29a0e190124137aebe293629d18c82ae5f08 ;;
+    esac
+    if ! shared_blob_actual="$(git hash-object --no-filters -- "$contracts/$shared_case")" ||
+       [[ "$shared_blob_actual" != "$shared_blob_expected" ]]; then
+        echo "FAIL: shared Java/LLVM capacity fixture identity drifted: $shared_case" >&2
+        exit 1
+    fi
+    printf 'DOP_SHARED_CAPACITY_GIT_BLOB=%s SHA1=%s\n' "$shared_case" "$shared_blob_actual"
+done
 # The exact same column-write source blob is committed to the Java compiler
 # fixture corpus. This is a native guest test, not a Java backend pass.
 for canonical in swap-reuse.atto column-write-42.atto capacity-256-42.atto; do
