@@ -47,13 +47,22 @@ fi
 # the existing quota-policy test. Reject a moved head or modified test bytes.
 files=(
   "src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp:3ee0121b59927b9a0b40a4bce73e0902c7d1a2bc"
+  "src/main/cpp/oreslang/runtime/ActorLocalSchedulerTurnV1.hpp:e3d7826945390ce0e89f11d73764cf2351a59683"
   "src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp:7b79138951aa878fe2ee43cfcef21277cb68b256"
   "src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp:bcecb54e7750fca7ef84010a2fa3f66e6bf61902"
   "tests/native_context_domains_v1_test.cpp:c9fd993bd78e4a6b2bd27c384fff43276ca915dd"
+  "tests/native_actorlocal_stop_during_copy_v1_test.cpp:d21b6c525819c277038f2c5f0d393c3b82cf2f35"
   "tests/native_local_read_revocation_v1_test.cpp:cf49e51bed5834fae1d76a1191ec18e41f379656"
   "tests/native_local_payload_budget_v1_test.cpp:25dec8d5f15bafbc6d28d73f94c9027f21ca9ac5"
   "tests/native_local_read_revocation_mutation_witness.sh:0d256fe89fd963e520226f7207f434b9e6477be7"
 )
+# Live scheduler/authority dependencies are pinned by the exact HEAD
+# tree, not a floating branch name. Check their working blobs below.
+for dep in src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+           src/main/cpp/oreslang/runtime/NativeActorScheduler.h \
+           src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h; do
+  files+=("$dep:$(git rev-parse "HEAD:$dep")")
+done
 for entry in "${files[@]}"; do
   path="${entry%%:*}"
   expected="${entry#*:}"
@@ -85,10 +94,28 @@ tests=(
   native_context_domains_v1_test
   native_local_read_revocation_v1_test
   native_local_payload_budget_v1_test
+  native_actorlocal_stop_during_copy_v1_test
 )
+case "$CXX" in
+  g++) CC=gcc ;;
+  clang++) CC=clang ;;
+  *) echo "REFUSED: expected a supported GCC/Clang C++ compiler" >&2; exit 2 ;;
+esac
 "$CXX" --version > "$out/compiler-version.txt"
+"$CC" --version > "$out/c-compiler-version.txt"
+"$CC" -std=c11 "${flags[@]:1}" -Isrc/main/cpp \
+  -c src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+  -o "$work/scheduler.o" >"$out/scheduler.compile.log" 2>&1 || {
+    cat "$out/scheduler.compile.log" >&2
+    echo "HOST_ONLY_COMPILE_FAIL: native scheduler" >&2
+    exit 1
+  }
 for name in "${tests[@]}"; do
-  "$CXX" "${flags[@]}" -Isrc/main/cpp "tests/$name.cpp" \
+  linked=()
+  if [[ "$name" == native_actorlocal_stop_during_copy_v1_test ]]; then
+    linked=("$work/scheduler.o")
+  fi
+  "$CXX" "${flags[@]}" -Isrc/main/cpp "tests/$name.cpp" "${linked[@]}" \
     -o "$work/$name" >"$out/$name.compile.log" 2>&1 || {
        cat "$out/$name.compile.log" >&2
        echo "HOST_ONLY_COMPILE_FAIL: $name" >&2
@@ -121,7 +148,7 @@ import datetime, hashlib, json, pathlib, sys
 out, work, head, tree, compiler, mode, *pins = sys.argv[1:]
 out, work = pathlib.Path(out), pathlib.Path(work)
 tests = ["native_context_domains_v1_test", "native_local_read_revocation_v1_test",
-         "native_local_payload_budget_v1_test"]
+         "native_local_payload_budget_v1_test", "native_actorlocal_stop_during_copy_v1_test"]
 logs = {}
 for path in sorted(out.glob("*.log")):
     logs[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
