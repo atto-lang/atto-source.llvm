@@ -41,6 +41,19 @@
 
 namespace oreslang::runtime {
 
+// Deterministic, arithmetic-only ticket generation rule. The helper has no
+// access to envelopes or scheduler authority; tests can exercise exhaustion
+// without performing 2^48 handoffs or exposing a mutation backdoor.
+namespace detail {
+inline constexpr std::uint64_t handoff_max_generation_v1 =
+    (~std::uint64_t{0}) >> 16;
+inline constexpr std::optional<std::uint64_t> handoff_next_generation_v1(
+    std::uint64_t previous) noexcept {
+    if (previous >= handoff_max_generation_v1) return std::nullopt;
+    return previous + 1;
+}
+} // namespace detail
+
 // Authenticated current actor turn (same checks as the RequestLocal adapter,
 // without requiring a request bound to that actor).
 inline bool actor_turn_authenticated_v1(OresNativeActorScheduler* scheduler,
@@ -181,8 +194,9 @@ public:
             // Never recycle a ticket generation: wrapping would eventually
             // let an ancient mailbox payload authorize a different envelope.
             // Exhausted slots are permanently retired instead.
-            if (s.generation >= kMaxGeneration) continue;
-            ++s.generation;
+            const auto next_generation = detail::handoff_next_generation_v1(s.generation);
+            if (!next_generation) continue;
+            s.generation = *next_generation;
             s.envelope = std::make_unique<Envelope>(std::move(env));
             ++pending_;
             return (s.generation << kSlotBits) | static_cast<std::uint64_t>(i);
@@ -262,7 +276,6 @@ public:
 private:
     static constexpr unsigned kSlotBits = 16;
     static constexpr std::uint64_t kSlotMask = (1u << kSlotBits) - 1;
-    static constexpr std::uint64_t kMaxGeneration = (~std::uint64_t{0}) >> kSlotBits;
 
     struct Envelope {
         RequestIdentityV1 identity{};
