@@ -22,3 +22,7 @@ This branch is a **review-only, host-native hardening companion** to LLVM PR #13
 Local compiler-backed execution has **not** been verified in this change. The source organization's GitHub Actions have recently reported `steps=null` / no executed jobs; classify these as runner-admission failures, not native compiler failures. Exact head and tree receipts, stepful native host tests, the two compiled `.atto` TaskLocal positives, 14 compiler negatives, and independent review remain required before merging or claiming parity.
 
 This PR deliberately targets the current #1389 development branch rather than `main`, to keep the semantic diff small and avoid racing the existing #1389/#1391 integration. Port or merge only after conflict-aware revalidation of the new target head.
+
+## M5 pinned-cell replacement regression
+
+A separate 24-iteration handshaked test now erases and replaces a TaskLocal slot while a host copy constructor is paused. The in-flight reader is allowed to return the **old pinned snapshot** (the read linearizes when the old cell was pinned), while the next read must return the replacement. In contrast, a scope **close during the copy** must suppress the returned value by the post-copy open check. These two semantics are intentionally different. The old shared cell stays alive through the copy, avoiding dangling data. This is host-only model/runtime code; a true guest read also requires authenticated scheduler ownership and generation checks. The added regression is authored but not yet executed under stepful source-owned CI.
