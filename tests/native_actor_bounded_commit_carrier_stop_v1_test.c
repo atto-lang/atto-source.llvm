@@ -77,6 +77,9 @@ int main(void) {
     atomic_init(&s.completed[1], 0);
     atomic_init(&s.stopped_actor_entered, 0);
     atomic_init(&s.release_stopped_actor, 0);
+    // The scheduler callback must never enter a libatomic fallback mutex.
+    assert(atomic_is_lock_free(&s.commits[0]));
+    assert(atomic_is_lock_free(&s.commits[1]));
     s.scheduler = ores_native_actor_scheduler_open(2, 8, 2, on_message, &s);
     assert(s.scheduler);
     for (size_t i = 0; i < 2; i++) {
