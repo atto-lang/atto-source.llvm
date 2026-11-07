@@ -1545,6 +1545,16 @@ int ores_native_actor_scheduler_commit_if_running_v1(
     unlock(s);
     return ok;
 }
+
+int ores_native_actor_scheduler_is_stopping_v1(
+        OresNativeActorScheduler* s, OresNativeActorRef actor) {
+    if (!s) return 0;
+    lock(s);
+    const int stopping = matching(s, actor)
+        && s->actors[actor.actor_slot].retired;
+    unlock(s);
+    return stopping;
+}
 /* Actor-specific authority, not merely membership in the same worker pool. */
 int ores_native_actor_scheduler_is_current_actor(
         OresNativeActorScheduler* s, OresNativeActorRef actor) {
