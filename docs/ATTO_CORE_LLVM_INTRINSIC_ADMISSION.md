@@ -24,3 +24,15 @@ is classified as an external import and rejected. Scalar and pointer
 positive controls guard the actual allowed ABI. Vector/non-scalar or
 future LLVM typed families require explicit compiler review; this
 gate cannot substitute for the separate compiled-object and ELF checks.
+
+## IR whitespace and malformed-declaration denial
+
+The import auditor now recognizes `declare\t` and other whitespace
+following LLVM's `declare` keyword; it no longer relies on exactly one
+ASCII space. It also refuses to silently drop a declaration missing a
+parseable `@name`: such lines become a nonempty unparseable-external
+diagnostic and cannot certify a freestanding image. Three additional
+Rust regression groups cover tabs, repeated spaces, malformed import
+rows and quoted intrinsic spoofing. This is a compiler IR safety check;
+object and ELF audits remain mandatory, and hosted execution evidence is
+still blocked by GitHub runner admission.

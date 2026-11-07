@@ -145,8 +145,16 @@ fn known_llvm_intrinsic(name: &str) -> bool {
 pub fn ir_external_declarations(ir: &str) -> Vec<String> {
     ir.lines()
         .map(str::trim_start)
-        .filter(|line| line.starts_with("declare "))
-        .filter_map(declared_name)
+        // LLVM IR admits whitespace after the declaration keyword. Filtering
+        // only literal "declare " silently missed tab-separated declarations.
+        .filter(|line| line.strip_prefix("declare").is_some_and(|tail| {
+            tail.chars().next().is_some_and(char::is_whitespace)
+        }))
+        // A malformed declaration may otherwise disappear from the verifier
+        // with filter_map; fail closed rather than dropping it.
+        .map(|line| declared_name(line).unwrap_or_else(|| {
+            "<unparseable-external-declaration>".to_string()
+        }))
         .filter(|name| !known_llvm_intrinsic(name))
         .collect()
 }
@@ -265,6 +273,35 @@ declare void @"ores_actor_send"(ptr)
         assert_eq!(ir_external_declarations(ir), vec!["malloc", "ores_actor_send"]);
     }
 
+
+    #[test]
+    fn tab_and_multiple_space_ir_declarations_are_not_invisible() {
+        let ir = concat!(
+            "declare\tvoid @malloc(i64)\n",
+            "declare    ptr @pthread_create(ptr)\n",
+            "declare\tvoid @llvm.trap()\n",
+        );
+        assert_eq!(ir_external_declarations(ir),
+            vec!["malloc", "pthread_create"]);
+    }
+
+    #[test]
+    fn unparseable_declaration_cannot_disappear_from_external_audit() {
+        for ir in [
+            "declare void missing_at_sign()\n",
+            "declare #0\n",
+            "declare\tvoid no_symbol_here(ptr)\n",
+        ] {
+            assert_eq!(ir_external_declarations(ir),
+                vec!["<unparseable-external-declaration>"]);
+        }
+    }
+
+    #[test]
+    fn quoted_intrinsic_spoofing_with_tabs_is_still_external() {
+        let ir = "  declare\tvoid @\"llvm.ores_actor_send\"(ptr)\n";
+        assert_eq!(ir_external_declarations(ir), vec!["llvm.ores_actor_send"]);
+    }
 
     #[test]
     fn forged_llvm_names_are_never_implicitly_whitelisted() {
