@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  const invalid: bool = true xor 1;
+  return invalid ? 42 : 7;
+}
