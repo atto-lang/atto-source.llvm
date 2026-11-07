@@ -46,6 +46,24 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Host-executed actor-owned logical guest frame storage (not LLVM guest
+    # codegen and not independent physical C/OS stacks).
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-actor-guest-frame-stack-test
+        tests/native_actor_guest_frame_stack_test.cpp
+        src/main/cpp/oreslang/runtime/MultiActorCarrier.cpp)
+    target_include_directories(oreslang-native-actor-guest-frame-stack-test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-guest-frame-stack-test
+        PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-native-actor-guest-frame-stack-test
+        PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-guest-frame-stack-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_actor_guest_frame_stack_host_only
+        COMMAND oreslang-native-actor-guest-frame-stack-test)
+    set_tests_properties(native_actor_guest_frame_stack_host_only
+        PROPERTIES TIMEOUT 15)
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
     add_executable(oreslang-native-sum-payload-admission-test
