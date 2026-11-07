@@ -60,20 +60,8 @@ jobs:
           test "$(git hash-object tests/native_request_context_handoff_v1_test.cpp)" = "e7e909861262df0d062350d1d309e91abafe66f6"
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalStopGroupV1.hpp)" = "31e456a02ae6bf3039a4a617c62d04b31d765639"
           test "$(git hash-object tests/native_request_stop_cancel_v1_test.cpp)" = "d41874ea2adb7d69c47a855ae4f1a7cce51ee775"
-      - name: Verify supplemental lifecycle file source blob
-        shell: bash
-        run: |
-          set -euo pipefail
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestDataMailGateV1.hpp)" = "6affba5e1b021bf9f4e5b54584241d873f245451"
-      - name: Verify supplemental lifecycle file source blob
-        shell: bash
-        run: |
-          set -euo pipefail
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestWakeGateV1.hpp)" = "03c6978398bde37ab5260aabb93697dabb60740a"
-      - name: Verify supplemental lifecycle file source blob
-        shell: bash
-        run: |
-          set -euo pipefail
           test "$(git hash-object tests/native_request_actor_lifecycle_guard_v1_test.cpp)" = "95909d7557fd8d613ed5235c3cb77bd91002cd90"
       - name: Compile and execute real actor two-request isolation
         shell: bash
