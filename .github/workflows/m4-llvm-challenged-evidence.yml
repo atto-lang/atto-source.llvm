@@ -1,0 +1,118 @@
+name: LLVM M4 signed challenge protocol (SIGNING UNCONFIGURED)
+on:
+  push:
+    branches: [ci/m4-llvm-challenged-evidence-20261107]
+  workflow_dispatch:
+    inputs:
+      challenge_json_base64:
+        description: "verifier-issued JSON, base64"
+        required: true
+        type: string
+      challenge_signature_base64:
+        description: "Ed25519 signature, base64"
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  protocol-negative-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Rust challenge delivery negative tests
+        run: |
+          set -euo pipefail
+          rustc --edition=2021 --test ci/evidence/accept_m4_challenge.rs -o "$RUNNER_TEMP/challenge-tests"
+          "$RUNNER_TEMP/challenge-tests"
+  llvm-challenged-guest:
+    if: github.event_name == 'workflow_dispatch'
+    environment: atto-private-guest-challenge-approval
+    runs-on: ubuntu-24.04
+    timeout-minutes: 85
+    env:
+      ATTO_BUILD_JOBS: "2"
+      LLVM_DIR: /usr/lib/llvm-18/lib/cmake/llvm
+      ATTO_E2E_EXPECTED_HEAD_SHA: ${{ github.sha }}
+      EXPECTED_CARRIER_HEAD_SHA: ${{ github.sha }}
+      ATTO_APPROVED_CHALLENGE_KEY_SHA256: ${{ vars.ATTO_M4_CHALLENGE_PUBLIC_SHA256 }}
+      ATTO_APPROVED_PUBLIC_PEM_B64: ${{ vars.ATTO_M4_CHALLENGE_PUBLIC_PEM_B64 }}
+      ATTO_PAYLOAD_B64: ${{ inputs.challenge_json_base64 }}
+      ATTO_SIGNATURE_B64: ${{ inputs.challenge_signature_base64 }}
+    steps:
+      - name: Exact source checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify independent Ed25519 challenge before any guest build
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "atto-lang/atto-source.llvm"
+          test "$GITHUB_REF" = "refs/heads/ci/m4-llvm-challenged-evidence-20261107"
+          test -n "$ATTO_APPROVED_CHALLENGE_KEY_SHA256"
+          test -n "$ATTO_APPROVED_PUBLIC_PEM_B64"
+          test -n "$ATTO_PAYLOAD_B64"
+          test -n "$ATTO_SIGNATURE_B64"
+          printf '%s' "$ATTO_APPROVED_PUBLIC_PEM_B64" | base64 --decode > "$RUNNER_TEMP/atto-approved.pem"
+          printf '%s' "$ATTO_PAYLOAD_B64" | base64 --decode > "$RUNNER_TEMP/atto-challenge.json"
+          printf '%s' "$ATTO_SIGNATURE_B64" | base64 --decode > "$RUNNER_TEMP/atto-challenge.sig"
+          rustc --edition=2021 -O ci/evidence/accept_m4_challenge.rs -o "$RUNNER_TEMP/challenge-accept"
+          "$RUNNER_TEMP/challenge-accept" "$RUNNER_TEMP/atto-challenge.json" \
+            "$RUNNER_TEMP/atto-challenge.sig" "$RUNNER_TEMP/atto-approved.pem" \
+            > "$RUNNER_TEMP/atto-nonce"
+          test "$(wc -c < "$RUNNER_TEMP/atto-nonce")" -eq 65
+      - name: Original exact Git blobs verified
+        run: python3 ci/verify-source-subset.py
+      - name: Install LLVM 18 and native runtime prerequisites
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang-18 lld-18 llvm-18-dev libzstd-dev wabt cmake python3 file jq
+          sudo ln -sf /usr/bin/clang-18 /usr/local/bin/clang
+          sudo ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++
+          sudo ln -sf /usr/bin/wasm-ld-18 /usr/local/bin/wasm-ld
+      - name: Compile native LLVM guest from original Atto source
+        run: bash tools/tenant-vm/verify-atto-e2e.sh
+      - name: Execute identical M4 native tenant guest
+        run: bash ci/m4/verify-shared-counter.sh
+      - name: Revalidate challenge TTL and emit receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          export ATTO_GUEST_NONCE="$("$RUNNER_TEMP/challenge-accept" \
+            "$RUNNER_TEMP/atto-challenge.json" "$RUNNER_TEMP/atto-challenge.sig" \
+            "$RUNNER_TEMP/atto-approved.pem")"
+          gh api --hostname github.com -X GET \
+            "/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" \
+            > "$RUNNER_TEMP/atto-jobs.json"
+          job_id="$(jq -er --arg sha "$GITHUB_SHA" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
+            'if .total_count == (.jobs|length) and .total_count < 100 then
+              [.jobs[] | select(.name=="llvm-challenged-guest" and .run_attempt==$attempt and .head_sha==$sha)]
+              | if length==1 then .[0].id else error("ambiguous job identity") end
+             else error("jobs page truncated") end' "$RUNNER_TEMP/atto-jobs.json")"
+          test "$job_id" -gt 0
+          export ATTO_NUMERIC_JOB_ID="$job_id"
+          rustc --edition=2021 -O ci/evidence/emit_m4_guest_receipt.rs -o "$RUNNER_TEMP/atto-emit"
+          "$RUNNER_TEMP/atto-emit"
+      - name: Upload unsigned challenged observation ZIP
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: llvm-m4-challenged-observation-unsigned
+          path: |
+            ci/guest-evidence/guest-receipt.json
+            ci/guest-evidence/guest-stdout.bin
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+      - name: Fail-closed release scope
+        run: |
+          echo 'CHALLENGE_DELIVERY=SIGNED_IF_DISPATCHED'
+          echo 'ARTIFACT_SIGNING=NOT_CONFIGURED'
+          echo 'RUNNER_TRUST=NOT_INDEPENDENTLY_VERIFIED'
+          echo 'RELEASE_CERTIFICATION=NOT_CERTIFIED'
