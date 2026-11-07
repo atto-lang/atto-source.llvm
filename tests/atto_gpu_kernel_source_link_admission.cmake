@@ -30,7 +30,7 @@ set(source_read-mut "pub gpu fnc saxpy(GpuReadBuffer<f32> mut input): void { ret
 set(source_wrong-scalar-name "pub gpu fnc saxpy(f32 gpu): void { return; }\n")
 set(source_signed-int "pub gpu fnc saxpy(int n): void { return; }\n")
 set(source_string-body "pub gpu fnc saxpy(): void { const val = \"}\"; return; }\n")
-set(source_template-body "pub gpu fnc saxpy(): void { const val = \`hello\`; return; }\n")
+set(source_template-body "pub gpu fnc saxpy(): void { const val = `hello`; return; }\n")
 set(source_defer-body "pub gpu fnc saxpy(): void { defer cleanup(); }\n")
 set(expected_gpu-only "GPU-LAUNCH-008")
 set(expected_source-linked "GPU-LAUNCH-008")
