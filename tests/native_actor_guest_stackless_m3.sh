@@ -48,6 +48,12 @@ grep -Fq "call i64 @oreslang_actor_guest_frame_i64_read" "$tmp/actor.ll"
 grep -Fq "call void @oreslang_actor_guest_frame_i64_leave" "$tmp/actor.ll"
 grep -Fq "call i64 @oreslang_actor_guest_stackless_i64_execute" "$tmp/actor.ll"
 grep -Fq "atto.actor.stackless.m3.Counter.0" "$tmp/actor.ll"
+# M3 pure helpers MUST NOT be emitted as recursively callable LLVM/C
+# functions; compiled guest recursion must use only actor-owned VM frames.
+if grep -Eq '^define .*@(fib|score|add_one)\\(' "$tmp/actor.ll"; then
+  echo "FAIL: source helper emitted as native C-stack function in M3" >&2
+  exit 1
+fi
 if grep -Eq 'llvm\.gcroot|llvm\.experimental\.gc\.statepoint|gc "' "$tmp/actor.ll"; then
   echo "FAIL: unexpected tracing-GC IR marker" >&2
   exit 1
