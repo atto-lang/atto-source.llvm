@@ -13,6 +13,7 @@ static atomic_int quota_processed;
 static atomic_int sibling_processed;
 static atomic_int sibling_after_failure;
 static atomic_int observed_quota_error;
+static atomic_int malformed_processed;
 
 #define OP(x, y) { x, y }
 /* tail(n) = n <= 0 ? 0 : tail(n-1). Executes 100k recursive guest
@@ -136,6 +137,8 @@ static int64_t malformed_message(
     int64_t out = -1;
     check(oreslang_source_actor_scalar_vm_execute(
         &invalid_program, 0, &out) == ORES_SCALAR_INVALID_PROGRAM && out == 0);
+    atomic_fetch_add_explicit(
+        &malformed_processed, 1, memory_order_release);
     return 0;
 }
 
@@ -179,6 +182,7 @@ int main(void) {
         init, malformed_message, 1);
     check(malformed);
     oreslang_source_actor_send(malformed, 1);
+    check(wait_for(&malformed_processed, 1));
     /* wait_done is trusted host-only; malformed actor must automatically
      * terminalize and never park a carrier on its own STOP. */
     oreslang_source_actor_request_stop(malformed);
