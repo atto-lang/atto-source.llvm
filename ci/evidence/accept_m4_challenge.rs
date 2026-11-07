@@ -157,6 +157,44 @@ fn main(){
         assert!(check(&v,&"f".repeat(40),&"b".repeat(40),
             &"c".repeat(64),1_800_000_001).is_err());
     }
+    #[test]fn actual_ed25519_signature_and_pin_verified_without_production_keys(){
+        let unique=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let dir=env::temp_dir().join(format!("atto-m4-signature-fixture-{}-{unique}",std::process::id()));
+        fs::create_dir(&dir).unwrap();
+        let privkey=dir.join("private.pem");
+        let pubkey=dir.join("public.pem");
+        let json_file=dir.join("challenge.json");
+        let sig=dir.join("signature.bin");
+        let tampered=dir.join("tampered.json");
+        let other=dir.join("other-public.pem");
+        assert!(Command::new("openssl").args(["genpkey","-algorithm","ED25519","-out"])
+            .arg(&privkey).status().unwrap().success());
+        assert!(Command::new("openssl").arg("pkey").arg("-in").arg(&privkey)
+            .args(["-pubout","-out"]).arg(&pubkey).status().unwrap().success());
+        fs::write(&json_file,payload()).unwrap();
+        assert!(Command::new("openssl").args(["pkeyutl","-sign","-rawin","-inkey"])
+            .arg(&privkey).arg("-in").arg(&json_file).arg("-out")
+            .arg(&sig).status().unwrap().success());
+        let pin_output=cmd(&["sha256sum",pubkey.to_str().unwrap()]).unwrap();
+        let pin=pin_output.split_whitespace().next().unwrap();
+        let head="a".repeat(40);let tree="b".repeat(40);let fixture="c".repeat(64);
+        let verify_files=|path:&std::path::Path,key:&std::path::Path,key_pin:&str|{
+            verify(path.to_str().unwrap(),sig.to_str().unwrap(),key.to_str().unwrap(),
+                key_pin,&head,&tree,&fixture,1_800_000_001)
+        };
+        assert_eq!(verify_files(&json_file,&pubkey,pin).unwrap(),"d".repeat(64));
+        assert!(verify_files(&json_file,&pubkey,&"f".repeat(64)).is_err());
+        fs::write(&tampered,payload().replace("actor.m4.identical_counter","actor.evil")).unwrap();
+        assert!(verify_files(&tampered,&pubkey,pin).is_err());
+        // A malicious actor cannot change the signed JSON while retaining the signature.
+        fs::write(&tampered,payload().replace("1800000600","1800000599")).unwrap();
+        assert!(verify_files(&tampered,&pubkey,pin).is_err());
+        fs::write(&other,b"-----BEGIN PUBLIC KEY-----\ninvalid\n-----END PUBLIC KEY-----\n").unwrap();
+        assert!(verify_files(&json_file,&other,pin).is_err());
+        let mut fake=fs::read(&sig).unwrap();fake[0]^=0x80;fs::write(&sig,fake).unwrap();
+        assert!(verify_files(&json_file,&pubkey,pin).is_err());
+        let _=fs::remove_dir_all(dir);
+    }
     #[test]fn absent_signature_or_key_fails_closed(){
         let fake_pin="e".repeat(64);
         assert!(verify("/nonexistent","/nonexistent","/nonexistent",&fake_pin,
