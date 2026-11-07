@@ -1,0 +1,47 @@
+# Execute the restricted real .atto -> checked G1 IR compiler, then validate
+# emitted IR with a real LLVM IR parser and negative mutations. HOST ONLY.
+foreach(key IN ITEMS G1_COMPILER G1_SOURCE G1_EMITTER G1_CLANG G1_WORK)
+    if(NOT DEFINED ${key} OR "${${key}}" STREQUAL "")
+        message(FATAL_ERROR "GPU-G1-SOURCE-TEST-001: missing ${key}")
+    endif()
+endforeach()
+file(MAKE_DIRECTORY "${G1_WORK}")
+set(ir_path "${G1_WORK}/source-g1.ll")
+set(parsed_path "${G1_WORK}/source-g1-checked.ll")
+file(REMOVE "${ir_path}" "${parsed_path}")
+execute_process(COMMAND "${G1_COMPILER}" "${G1_SOURCE}"
+    OUTPUT_VARIABLE actual ERROR_VARIABLE compile_error RESULT_VARIABLE compile_rc)
+if(NOT compile_rc EQUAL 0 OR actual STREQUAL "")
+    message(FATAL_ERROR "GPU-G1-SOURCE-TEST-002: source compilation failed: ${compile_error}")
+endif()
+execute_process(COMMAND "${G1_EMITTER}" --emit-llvm-ir
+    OUTPUT_VARIABLE reference ERROR_VARIABLE emit_error RESULT_VARIABLE emit_rc)
+if(NOT emit_rc EQUAL 0 OR NOT actual STREQUAL reference)
+    message(FATAL_ERROR "GPU-G1-SOURCE-TEST-003: .atto source IR disagrees with checked G1 IR backend")
+endif()
+file(WRITE "${ir_path}" "${actual}")
+execute_process(COMMAND "${G1_CLANG}" -x ir -S -emit-llvm -Wno-override-module
+    -o "${parsed_path}" "${ir_path}"
+    RESULT_VARIABLE clang_rc ERROR_VARIABLE clang_error)
+if(NOT clang_rc EQUAL 0 OR NOT EXISTS "${parsed_path}")
+    message(FATAL_ERROR "GPU-G1-SOURCE-TEST-004: LLVM IR parser rejected compiled .atto kernel: ${clang_error}")
+endif()
+file(READ "${G1_SOURCE}" source)
+string(REPLACE "if i >= n" "if i > n" mutated "${source}")
+if(mutated STREQUAL source)
+    message(FATAL_ERROR "GPU-G1-SOURCE-TEST-005: bounds mutation did not apply")
+endif()
+set(invalid_path "${G1_WORK}/invalid-g1.atto")
+file(WRITE "${invalid_path}" "${mutated}")
+execute_process(COMMAND "${G1_COMPILER}" "${invalid_path}"
+    OUTPUT_VARIABLE rejected_stdout ERROR_VARIABLE rejected_stderr RESULT_VARIABLE rejected_rc)
+if(rejected_rc EQUAL 0 OR NOT rejected_stdout STREQUAL "")
+    message(FATAL_ERROR "GPU-G1-SOURCE-TEST-006: invalid bounds accepted or emitted LLVM IR")
+endif()
+file(WRITE "${invalid_path}" "${source}\nsuspends fnc hostile() => void {}\n")
+execute_process(COMMAND "${G1_COMPILER}" "${invalid_path}"
+    OUTPUT_VARIABLE trailing_stdout ERROR_VARIABLE trailing_stderr RESULT_VARIABLE trailing_rc)
+if(trailing_rc EQUAL 0 OR NOT trailing_stdout STREQUAL "")
+    message(FATAL_ERROR "GPU-G1-SOURCE-TEST-007: extra executable source accepted")
+endif()
+message(STATUS "PASS G1 .atto source -> canonical checked LLVM IR -> Clang; two invalid source mutations rejected without artifact (NO PTX OR GPU)")
