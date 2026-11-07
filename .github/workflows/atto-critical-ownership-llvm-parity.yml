@@ -18,6 +18,7 @@ on:
       - 'audit/llvm-nll-closed-world-*'
       - 'audit/llvm-loan-write-ticket-domain-*'
       - 'audit/llvm-typed-mir-receipt-fence-*'
+      - 'audit/llvm-mir-opaque-effects-hardening-*'
   pull_request:
     paths:
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
@@ -35,6 +36,7 @@ on:
       - 'tests/native_ownership_opaque_loan_metadata_10_test.cpp'
       - 'tests/native_ownership_loan_write_domain_6_test.cpp'
       - 'tests/native_ownership_mir_receipts_30_test.cpp'
+      - 'tests/native_ownership_mir_opaque_effects_18_test.cpp'
       - 'src/main/cpp/oreslang/types/OwnershipMirEvidence.hpp'
       - 'tests/contracts/atto_ownership_place_mir_50.json'
       - 'tests/ownership_compiler_fixture_matrix.py'
@@ -97,12 +99,12 @@ jobs:
           test -s /tmp/atto-ownership-join.xml
           echo "ATTO_LLVM_JOIN_PROOF=HOST_CPP17_EXECUTED"
 
-      - name: Execute eleven source-owned place, identity and NLL integrity CTests
+      - name: Execute twelve source-owned place, identity and NLL integrity CTests
         shell: bash
         run: |
           set -euo pipefail
-          cmake --build build --parallel 2 --target oreslang-native-ownership-place-test oreslang-native-share-place-authority-test oreslang-native-share-projection-root-test oreslang-native-compiler-place-origin-test oreslang-native-ownership-identity-inventory-30-test oreslang-native-ownership-nll-partial-move-30-test oreslang-native-ownership-nll-closed-world-16-test oreslang-native-derived-last-use-12-test oreslang-native-ownership-opaque-loan-metadata-10-test oreslang-native-loan-write-domain-6-test oreslang-native-mir-receipts-30-test
-          ctest --test-dir build -N -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30|nll_partial_move_30|nll_closed_world_16|derived_last_use_12|opaque_loan_metadata_10|loan_write_domain_6|mir_receipts_30)$' > /tmp/atto-place-inventory.txt
+          cmake --build build --parallel 2 --target oreslang-native-ownership-place-test oreslang-native-share-place-authority-test oreslang-native-share-projection-root-test oreslang-native-compiler-place-origin-test oreslang-native-ownership-identity-inventory-30-test oreslang-native-ownership-nll-partial-move-30-test oreslang-native-ownership-nll-closed-world-16-test oreslang-native-derived-last-use-12-test oreslang-native-ownership-opaque-loan-metadata-10-test oreslang-native-loan-write-domain-6-test oreslang-native-mir-receipts-30-test oreslang-native-mir-opaque-effects-18-test
+          ctest --test-dir build -N -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30|nll_partial_move_30|nll_closed_world_16|derived_last_use_12|opaque_loan_metadata_10|loan_write_domain_6|mir_receipts_30|mir_opaque_effects_18)$' > /tmp/atto-place-inventory.txt
           grep -Eq 'Test +#[0-9]+: native_ownership_take_place_classification$' /tmp/atto-place-inventory.txt
           grep -Eq 'Test +#[0-9]+: native_ownership_share_place_authority$' /tmp/atto-place-inventory.txt
           grep -Eq 'Test +#[0-9]+: native_ownership_share_projection_root$' /tmp/atto-place-inventory.txt
@@ -113,8 +115,324 @@ jobs:
           grep -Eq 'Test +#[0-9]+: native_ownership_derived_last_use_12$' /tmp/atto-place-inventory.txt
           grep -Eq 'Test +#[0-9]+: native_ownership_opaque_loan_metadata_10$' /tmp/atto-place-inventory.txt
           grep -Eq 'Test +#[0-9]+: native_ownership_loan_write_domain_6$' /tmp/atto-place-inventory.txt
-          grep -Eq 'Test +#[0-9]+: native_ownership_mir_receipts_30$' /tmp/atto-place-inventory.txt
-          ctest --test-dir build -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30|nll_partial_move_30|nll_closed_world_16|derived_last_use_12|opaque_loan_metadata_10|loan_write_domain_6|mir_receipts_30)$' --output-on-failure --timeout 60 --output-junit /tmp/atto-ownership-place.xml
+          grep -Eq 'Test +#[0-9]+: native_ownership_mir_receipts_30
+          ctest --test-dir build -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30|nll_partial_move_30|nll_closed_world_16|derived_last_use_12|opaque_loan_metadata_10|loan_write_domain_6|mir_receipts_30|mir_opaque_effects_18)$' --output-on-failure --timeout 60 --output-junit /tmp/atto-ownership-place.xml
+          test -s /tmp/atto-ownership-place.xml
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-ownership-place.xml').getroot()
+          expected = {
+              'native_ownership_take_place_classification',
+              'native_ownership_share_place_authority',
+              'native_ownership_share_projection_root',
+              'native_ownership_compiler_resolved_place_origin',
+              'native_ownership_identity_inventory_30',
+              'native_ownership_nll_partial_move_30',
+              'native_ownership_nll_closed_world_16',
+              'native_ownership_derived_last_use_12',
+              'native_ownership_opaque_loan_metadata_10',
+              'native_ownership_loan_write_domain_6',
+              'native_ownership_mir_receipts_30',
+              'native_ownership_mir_opaque_effects_18',
+          }
+          observed = [case.get('name') for case in root.iter('testcase')]
+          if (int(root.get('tests', '-1')) != 12 or
+                  int(root.get('failures', '1')) or
+                  int(root.get('errors', '0')) or
+                  int(root.get('skipped', '1')) or
+                  len(observed) != 12 or len(set(observed)) != 12 or
+                  set(observed) != expected):
+              raise SystemExit(f'focused ownership CTest evidence mismatch: {observed!r}')
+          PY
+          echo "ATTO_LLVM_RESOLVED_PLACE_PROVENANCE=HOST_CPP17_EXECUTED"
+
+      - name: Prove twenty scoped compiler CTest cases are registered
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -N > /tmp/atto-parity-inventory.txt
+          cat /tmp/atto-parity-inventory.txt
+          for name in \
+            atto_critical_suspends_fnc_rejected \
+            atto_suspends_critical_routine_rejected \
+            atto_critical_suspends_class_method_rejected \
+            atto_suspends_critical_class_method_rejected \
+            atto_critical_suspends_actor_method_rejected \
+            atto_critical_suspends_comment_trivia_rejected \
+            atto_suspends_critical_line_trivia_rejected \
+            atto_critical_only_remains_unlowered \
+            atto_suspends_only_remains_unlowered \
+            atto_critical_read_remains_unlowered \
+            atto_share_move_only_array_rejected \
+            atto_share_move_only_class_rejected \
+            atto_take_conditional_untracked_rejected \
+            atto_take_computed_untracked_rejected \
+            atto_share_borrowed_parameter_rejected \
+            atto_share_borrowed_class_field_rejected \
+            atto_protected_state_requires_typed_lowering \
+            atto_copyable_share_native_execution \
+            atto_copyable_copy_native_execution \
+            atto_copyable_take_native_execution
+          do
+            grep -Eq "Test +#[0-9]+: ${name}$" /tmp/atto-parity-inventory.txt
+          done
+      - name: Require compiler diagnostics and Clang-linked native guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build \
+            -R '^(atto_critical_suspends_fnc_rejected|atto_suspends_critical_routine_rejected|atto_critical_suspends_class_method_rejected|atto_suspends_critical_class_method_rejected|atto_critical_suspends_actor_method_rejected|atto_critical_suspends_comment_trivia_rejected|atto_suspends_critical_line_trivia_rejected|atto_critical_only_remains_unlowered|atto_suspends_only_remains_unlowered|atto_critical_read_remains_unlowered|atto_share_move_only_array_rejected|atto_share_move_only_class_rejected|atto_take_conditional_untracked_rejected|atto_take_computed_untracked_rejected|atto_share_borrowed_parameter_rejected|atto_share_borrowed_class_field_rejected|atto_protected_state_requires_typed_lowering|atto_copyable_share_native_execution|atto_copyable_copy_native_execution|atto_copyable_take_native_execution)$' \
+            --output-on-failure --timeout 180 --output-junit /tmp/atto-llvm-parity.xml
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-llvm-parity.xml').getroot()
+          tests = int(root.get('tests', '0'))
+          failures = int(root.get('failures', '0'))
+          skipped = int(root.get('skipped', '0'))
+          if tests != 20 or failures or skipped:
+              raise SystemExit(f'LLVM CTest evidence invalid: {tests=} {failures=} {skipped=}')
+          names = {x.get('name') for x in root.iter('testcase')}
+          if len(names) != 20:
+              raise SystemExit(f'LLVM distinct CTest cases invalid: {names=}')
+          print('ATTO_LLVM_PARITY_SCOPED=PASS executed_ctests=20')
+          print('ATTO_LLVM_PROTECTED_OBJECT_MIR=NOT_IMPLEMENTED')
+          print('ATTO_LLVM_LRU_FULL_FIXTURES=NOT_EXECUTED')
+          PY
+      - name: Execute 50 real compiler fixtures and fail-closed matrix mutations
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Both tests must have been registered at CMake configure time.
+          ctest --test-dir build -N -R '^(native_ownership_place_mir_manifest_19_mutations|atto_ownership_place_mir_real_compiler_50)$' > /tmp/atto-mir-fixture-inventory.txt
+          grep -Eq 'Test +#[0-9]+: native_ownership_place_mir_manifest_19_mutations$' /tmp/atto-mir-fixture-inventory.txt
+          grep -Eq 'Test +#[0-9]+: atto_ownership_place_mir_real_compiler_50$' /tmp/atto-mir-fixture-inventory.txt
+          # The manifest unit suite cannot replace compiler execution.
+          ctest --test-dir build -V -R '^native_ownership_place_mir_manifest_19_mutations$' --timeout 90
+          ctest --test-dir build -V -R '^atto_ownership_place_mir_real_compiler_50$' \
+            --output-junit /tmp/atto-real-compiler-50.xml --timeout 1000 | tee /tmp/atto-real-compiler-50.log
+          grep -Fq 'ATTO_OWNERSHIP_REAL_COMPILER_FIXTURES=50/50_EXECUTED' /tmp/atto-real-compiler-50.log
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-real-compiler-50.xml').getroot()
+          tests = int(root.get('tests', '-1'))
+          failures = int(root.get('failures', '1'))
+          skipped = int(root.get('skipped', '1'))
+          if tests != 1 or failures or skipped:
+              raise SystemExit(f'50-compiler fixture CTest invalid: {tests=} {failures=} {skipped=}')
+          print('ATTO_LLVM_MIR_PLACE_SOURCE_COMPILER=REAL_50_CASES_EXECUTED')
+          PY
+
+      - name: Reverify checkout head and clean tracked source
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          echo "ATTO_LLVM_FINAL_HEAD=$(git rev-parse HEAD)"
+          echo "ATTO_LLVM_FINAL_TREE=$(git rev-parse 'HEAD^{tree}')"
+ /tmp/atto-place-inventory.txt
+          grep -Eq 'Test +#[0-9]+: native_ownership_loan_write_domain_6
+          ctest --test-dir build -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30|nll_partial_move_30|nll_closed_world_16|derived_last_use_12|opaque_loan_metadata_10|loan_write_domain_6|mir_receipts_30|mir_opaque_effects_18)$' --output-on-failure --timeout 60 --output-junit /tmp/atto-ownership-place.xml
+          test -s /tmp/atto-ownership-place.xml
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-ownership-place.xml').getroot()
+          if int(root.get('tests', '-1')) != 9 or int(root.get('failures', '1')) or int(root.get('skipped', '1')):
+              raise SystemExit('native place/Share CTest evidence missing, failed or skipped')
+          PY
+          echo "ATTO_LLVM_RESOLVED_PLACE_PROVENANCE=HOST_CPP17_EXECUTED"
+
+      - name: Prove twenty scoped compiler CTest cases are registered
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -N > /tmp/atto-parity-inventory.txt
+          cat /tmp/atto-parity-inventory.txt
+          for name in \
+            atto_critical_suspends_fnc_rejected \
+            atto_suspends_critical_routine_rejected \
+            atto_critical_suspends_class_method_rejected \
+            atto_suspends_critical_class_method_rejected \
+            atto_critical_suspends_actor_method_rejected \
+            atto_critical_suspends_comment_trivia_rejected \
+            atto_suspends_critical_line_trivia_rejected \
+            atto_critical_only_remains_unlowered \
+            atto_suspends_only_remains_unlowered \
+            atto_critical_read_remains_unlowered \
+            atto_share_move_only_array_rejected \
+            atto_share_move_only_class_rejected \
+            atto_take_conditional_untracked_rejected \
+            atto_take_computed_untracked_rejected \
+            atto_share_borrowed_parameter_rejected \
+            atto_share_borrowed_class_field_rejected \
+            atto_protected_state_requires_typed_lowering \
+            atto_copyable_share_native_execution \
+            atto_copyable_copy_native_execution \
+            atto_copyable_take_native_execution
+          do
+            grep -Eq "Test +#[0-9]+: ${name}$" /tmp/atto-parity-inventory.txt
+          done
+      - name: Require compiler diagnostics and Clang-linked native guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build \
+            -R '^(atto_critical_suspends_fnc_rejected|atto_suspends_critical_routine_rejected|atto_critical_suspends_class_method_rejected|atto_suspends_critical_class_method_rejected|atto_critical_suspends_actor_method_rejected|atto_critical_suspends_comment_trivia_rejected|atto_suspends_critical_line_trivia_rejected|atto_critical_only_remains_unlowered|atto_suspends_only_remains_unlowered|atto_critical_read_remains_unlowered|atto_share_move_only_array_rejected|atto_share_move_only_class_rejected|atto_take_conditional_untracked_rejected|atto_take_computed_untracked_rejected|atto_share_borrowed_parameter_rejected|atto_share_borrowed_class_field_rejected|atto_protected_state_requires_typed_lowering|atto_copyable_share_native_execution|atto_copyable_copy_native_execution|atto_copyable_take_native_execution)$' \
+            --output-on-failure --timeout 180 --output-junit /tmp/atto-llvm-parity.xml
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-llvm-parity.xml').getroot()
+          tests = int(root.get('tests', '0'))
+          failures = int(root.get('failures', '0'))
+          skipped = int(root.get('skipped', '0'))
+          if tests != 20 or failures or skipped:
+              raise SystemExit(f'LLVM CTest evidence invalid: {tests=} {failures=} {skipped=}')
+          names = {x.get('name') for x in root.iter('testcase')}
+          if len(names) != 20:
+              raise SystemExit(f'LLVM distinct CTest cases invalid: {names=}')
+          print('ATTO_LLVM_PARITY_SCOPED=PASS executed_ctests=20')
+          print('ATTO_LLVM_PROTECTED_OBJECT_MIR=NOT_IMPLEMENTED')
+          print('ATTO_LLVM_LRU_FULL_FIXTURES=NOT_EXECUTED')
+          PY
+      - name: Execute 50 real compiler fixtures and fail-closed matrix mutations
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Both tests must have been registered at CMake configure time.
+          ctest --test-dir build -N -R '^(native_ownership_place_mir_manifest_19_mutations|atto_ownership_place_mir_real_compiler_50)$' > /tmp/atto-mir-fixture-inventory.txt
+          grep -Eq 'Test +#[0-9]+: native_ownership_place_mir_manifest_19_mutations$' /tmp/atto-mir-fixture-inventory.txt
+          grep -Eq 'Test +#[0-9]+: atto_ownership_place_mir_real_compiler_50$' /tmp/atto-mir-fixture-inventory.txt
+          # The manifest unit suite cannot replace compiler execution.
+          ctest --test-dir build -V -R '^native_ownership_place_mir_manifest_19_mutations$' --timeout 90
+          ctest --test-dir build -V -R '^atto_ownership_place_mir_real_compiler_50$' \
+            --output-junit /tmp/atto-real-compiler-50.xml --timeout 1000 | tee /tmp/atto-real-compiler-50.log
+          grep -Fq 'ATTO_OWNERSHIP_REAL_COMPILER_FIXTURES=50/50_EXECUTED' /tmp/atto-real-compiler-50.log
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-real-compiler-50.xml').getroot()
+          tests = int(root.get('tests', '-1'))
+          failures = int(root.get('failures', '1'))
+          skipped = int(root.get('skipped', '1'))
+          if tests != 1 or failures or skipped:
+              raise SystemExit(f'50-compiler fixture CTest invalid: {tests=} {failures=} {skipped=}')
+          print('ATTO_LLVM_MIR_PLACE_SOURCE_COMPILER=REAL_50_CASES_EXECUTED')
+          PY
+
+      - name: Reverify checkout head and clean tracked source
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          echo "ATTO_LLVM_FINAL_HEAD=$(git rev-parse HEAD)"
+          echo "ATTO_LLVM_FINAL_TREE=$(git rev-parse 'HEAD^{tree}')"
+ /tmp/atto-place-inventory.txt
+          ctest --test-dir build -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30|nll_partial_move_30|nll_closed_world_16|derived_last_use_12|opaque_loan_metadata_10|loan_write_domain_6|mir_receipts_30|mir_opaque_effects_18)$' --output-on-failure --timeout 60 --output-junit /tmp/atto-ownership-place.xml
+          test -s /tmp/atto-ownership-place.xml
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-ownership-place.xml').getroot()
+          if int(root.get('tests', '-1')) != 9 or int(root.get('failures', '1')) or int(root.get('skipped', '1')):
+              raise SystemExit('native place/Share CTest evidence missing, failed or skipped')
+          PY
+          echo "ATTO_LLVM_RESOLVED_PLACE_PROVENANCE=HOST_CPP17_EXECUTED"
+
+      - name: Prove twenty scoped compiler CTest cases are registered
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -N > /tmp/atto-parity-inventory.txt
+          cat /tmp/atto-parity-inventory.txt
+          for name in \
+            atto_critical_suspends_fnc_rejected \
+            atto_suspends_critical_routine_rejected \
+            atto_critical_suspends_class_method_rejected \
+            atto_suspends_critical_class_method_rejected \
+            atto_critical_suspends_actor_method_rejected \
+            atto_critical_suspends_comment_trivia_rejected \
+            atto_suspends_critical_line_trivia_rejected \
+            atto_critical_only_remains_unlowered \
+            atto_suspends_only_remains_unlowered \
+            atto_critical_read_remains_unlowered \
+            atto_share_move_only_array_rejected \
+            atto_share_move_only_class_rejected \
+            atto_take_conditional_untracked_rejected \
+            atto_take_computed_untracked_rejected \
+            atto_share_borrowed_parameter_rejected \
+            atto_share_borrowed_class_field_rejected \
+            atto_protected_state_requires_typed_lowering \
+            atto_copyable_share_native_execution \
+            atto_copyable_copy_native_execution \
+            atto_copyable_take_native_execution
+          do
+            grep -Eq "Test +#[0-9]+: ${name}$" /tmp/atto-parity-inventory.txt
+          done
+      - name: Require compiler diagnostics and Clang-linked native guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build \
+            -R '^(atto_critical_suspends_fnc_rejected|atto_suspends_critical_routine_rejected|atto_critical_suspends_class_method_rejected|atto_suspends_critical_class_method_rejected|atto_critical_suspends_actor_method_rejected|atto_critical_suspends_comment_trivia_rejected|atto_suspends_critical_line_trivia_rejected|atto_critical_only_remains_unlowered|atto_suspends_only_remains_unlowered|atto_critical_read_remains_unlowered|atto_share_move_only_array_rejected|atto_share_move_only_class_rejected|atto_take_conditional_untracked_rejected|atto_take_computed_untracked_rejected|atto_share_borrowed_parameter_rejected|atto_share_borrowed_class_field_rejected|atto_protected_state_requires_typed_lowering|atto_copyable_share_native_execution|atto_copyable_copy_native_execution|atto_copyable_take_native_execution)$' \
+            --output-on-failure --timeout 180 --output-junit /tmp/atto-llvm-parity.xml
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-llvm-parity.xml').getroot()
+          tests = int(root.get('tests', '0'))
+          failures = int(root.get('failures', '0'))
+          skipped = int(root.get('skipped', '0'))
+          if tests != 20 or failures or skipped:
+              raise SystemExit(f'LLVM CTest evidence invalid: {tests=} {failures=} {skipped=}')
+          names = {x.get('name') for x in root.iter('testcase')}
+          if len(names) != 20:
+              raise SystemExit(f'LLVM distinct CTest cases invalid: {names=}')
+          print('ATTO_LLVM_PARITY_SCOPED=PASS executed_ctests=20')
+          print('ATTO_LLVM_PROTECTED_OBJECT_MIR=NOT_IMPLEMENTED')
+          print('ATTO_LLVM_LRU_FULL_FIXTURES=NOT_EXECUTED')
+          PY
+      - name: Execute 50 real compiler fixtures and fail-closed matrix mutations
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Both tests must have been registered at CMake configure time.
+          ctest --test-dir build -N -R '^(native_ownership_place_mir_manifest_19_mutations|atto_ownership_place_mir_real_compiler_50)$' > /tmp/atto-mir-fixture-inventory.txt
+          grep -Eq 'Test +#[0-9]+: native_ownership_place_mir_manifest_19_mutations$' /tmp/atto-mir-fixture-inventory.txt
+          grep -Eq 'Test +#[0-9]+: atto_ownership_place_mir_real_compiler_50$' /tmp/atto-mir-fixture-inventory.txt
+          # The manifest unit suite cannot replace compiler execution.
+          ctest --test-dir build -V -R '^native_ownership_place_mir_manifest_19_mutations$' --timeout 90
+          ctest --test-dir build -V -R '^atto_ownership_place_mir_real_compiler_50$' \
+            --output-junit /tmp/atto-real-compiler-50.xml --timeout 1000 | tee /tmp/atto-real-compiler-50.log
+          grep -Fq 'ATTO_OWNERSHIP_REAL_COMPILER_FIXTURES=50/50_EXECUTED' /tmp/atto-real-compiler-50.log
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-real-compiler-50.xml').getroot()
+          tests = int(root.get('tests', '-1'))
+          failures = int(root.get('failures', '1'))
+          skipped = int(root.get('skipped', '1'))
+          if tests != 1 or failures or skipped:
+              raise SystemExit(f'50-compiler fixture CTest invalid: {tests=} {failures=} {skipped=}')
+          print('ATTO_LLVM_MIR_PLACE_SOURCE_COMPILER=REAL_50_CASES_EXECUTED')
+          PY
+
+      - name: Reverify checkout head and clean tracked source
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          echo "ATTO_LLVM_FINAL_HEAD=$(git rev-parse HEAD)"
+          echo "ATTO_LLVM_FINAL_TREE=$(git rev-parse 'HEAD^{tree}')"
+ /tmp/atto-place-inventory.txt
+          grep -Eq 'Test +#[0-9]+: native_ownership_mir_opaque_effects_18
+          ctest --test-dir build -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30|nll_partial_move_30|nll_closed_world_16|derived_last_use_12|opaque_loan_metadata_10|loan_write_domain_6|mir_receipts_30|mir_opaque_effects_18)$' --output-on-failure --timeout 60 --output-junit /tmp/atto-ownership-place.xml
           test -s /tmp/atto-ownership-place.xml
           python3 - <<'PY'
           from xml.etree import ElementTree
@@ -213,7 +531,7 @@ jobs:
           echo "ATTO_LLVM_FINAL_TREE=$(git rev-parse 'HEAD^{tree}')"
  /tmp/atto-place-inventory.txt
           grep -Eq 'Test +#[0-9]+: native_ownership_loan_write_domain_6
-          ctest --test-dir build -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30|nll_partial_move_30|nll_closed_world_16|derived_last_use_12|opaque_loan_metadata_10|loan_write_domain_6|mir_receipts_30)$' --output-on-failure --timeout 60 --output-junit /tmp/atto-ownership-place.xml
+          ctest --test-dir build -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30|nll_partial_move_30|nll_closed_world_16|derived_last_use_12|opaque_loan_metadata_10|loan_write_domain_6|mir_receipts_30|mir_opaque_effects_18)$' --output-on-failure --timeout 60 --output-junit /tmp/atto-ownership-place.xml
           test -s /tmp/atto-ownership-place.xml
           python3 - <<'PY'
           from xml.etree import ElementTree
@@ -311,7 +629,302 @@ jobs:
           echo "ATTO_LLVM_FINAL_HEAD=$(git rev-parse HEAD)"
           echo "ATTO_LLVM_FINAL_TREE=$(git rev-parse 'HEAD^{tree}')"
  /tmp/atto-place-inventory.txt
-          ctest --test-dir build -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30|nll_partial_move_30|nll_closed_world_16|derived_last_use_12|opaque_loan_metadata_10|loan_write_domain_6|mir_receipts_30)$' --output-on-failure --timeout 60 --output-junit /tmp/atto-ownership-place.xml
+          ctest --test-dir build -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30|nll_partial_move_30|nll_closed_world_16|derived_last_use_12|opaque_loan_metadata_10|loan_write_domain_6|mir_receipts_30|mir_opaque_effects_18)$' --output-on-failure --timeout 60 --output-junit /tmp/atto-ownership-place.xml
+          test -s /tmp/atto-ownership-place.xml
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-ownership-place.xml').getroot()
+          if int(root.get('tests', '-1')) != 9 or int(root.get('failures', '1')) or int(root.get('skipped', '1')):
+              raise SystemExit('native place/Share CTest evidence missing, failed or skipped')
+          PY
+          echo "ATTO_LLVM_RESOLVED_PLACE_PROVENANCE=HOST_CPP17_EXECUTED"
+
+      - name: Prove twenty scoped compiler CTest cases are registered
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -N > /tmp/atto-parity-inventory.txt
+          cat /tmp/atto-parity-inventory.txt
+          for name in \
+            atto_critical_suspends_fnc_rejected \
+            atto_suspends_critical_routine_rejected \
+            atto_critical_suspends_class_method_rejected \
+            atto_suspends_critical_class_method_rejected \
+            atto_critical_suspends_actor_method_rejected \
+            atto_critical_suspends_comment_trivia_rejected \
+            atto_suspends_critical_line_trivia_rejected \
+            atto_critical_only_remains_unlowered \
+            atto_suspends_only_remains_unlowered \
+            atto_critical_read_remains_unlowered \
+            atto_share_move_only_array_rejected \
+            atto_share_move_only_class_rejected \
+            atto_take_conditional_untracked_rejected \
+            atto_take_computed_untracked_rejected \
+            atto_share_borrowed_parameter_rejected \
+            atto_share_borrowed_class_field_rejected \
+            atto_protected_state_requires_typed_lowering \
+            atto_copyable_share_native_execution \
+            atto_copyable_copy_native_execution \
+            atto_copyable_take_native_execution
+          do
+            grep -Eq "Test +#[0-9]+: ${name}$" /tmp/atto-parity-inventory.txt
+          done
+      - name: Require compiler diagnostics and Clang-linked native guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build \
+            -R '^(atto_critical_suspends_fnc_rejected|atto_suspends_critical_routine_rejected|atto_critical_suspends_class_method_rejected|atto_suspends_critical_class_method_rejected|atto_critical_suspends_actor_method_rejected|atto_critical_suspends_comment_trivia_rejected|atto_suspends_critical_line_trivia_rejected|atto_critical_only_remains_unlowered|atto_suspends_only_remains_unlowered|atto_critical_read_remains_unlowered|atto_share_move_only_array_rejected|atto_share_move_only_class_rejected|atto_take_conditional_untracked_rejected|atto_take_computed_untracked_rejected|atto_share_borrowed_parameter_rejected|atto_share_borrowed_class_field_rejected|atto_protected_state_requires_typed_lowering|atto_copyable_share_native_execution|atto_copyable_copy_native_execution|atto_copyable_take_native_execution)$' \
+            --output-on-failure --timeout 180 --output-junit /tmp/atto-llvm-parity.xml
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-llvm-parity.xml').getroot()
+          tests = int(root.get('tests', '0'))
+          failures = int(root.get('failures', '0'))
+          skipped = int(root.get('skipped', '0'))
+          if tests != 20 or failures or skipped:
+              raise SystemExit(f'LLVM CTest evidence invalid: {tests=} {failures=} {skipped=}')
+          names = {x.get('name') for x in root.iter('testcase')}
+          if len(names) != 20:
+              raise SystemExit(f'LLVM distinct CTest cases invalid: {names=}')
+          print('ATTO_LLVM_PARITY_SCOPED=PASS executed_ctests=20')
+          print('ATTO_LLVM_PROTECTED_OBJECT_MIR=NOT_IMPLEMENTED')
+          print('ATTO_LLVM_LRU_FULL_FIXTURES=NOT_EXECUTED')
+          PY
+      - name: Execute 50 real compiler fixtures and fail-closed matrix mutations
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Both tests must have been registered at CMake configure time.
+          ctest --test-dir build -N -R '^(native_ownership_place_mir_manifest_19_mutations|atto_ownership_place_mir_real_compiler_50)$' > /tmp/atto-mir-fixture-inventory.txt
+          grep -Eq 'Test +#[0-9]+: native_ownership_place_mir_manifest_19_mutations$' /tmp/atto-mir-fixture-inventory.txt
+          grep -Eq 'Test +#[0-9]+: atto_ownership_place_mir_real_compiler_50$' /tmp/atto-mir-fixture-inventory.txt
+          # The manifest unit suite cannot replace compiler execution.
+          ctest --test-dir build -V -R '^native_ownership_place_mir_manifest_19_mutations$' --timeout 90
+          ctest --test-dir build -V -R '^atto_ownership_place_mir_real_compiler_50$' \
+            --output-junit /tmp/atto-real-compiler-50.xml --timeout 1000 | tee /tmp/atto-real-compiler-50.log
+          grep -Fq 'ATTO_OWNERSHIP_REAL_COMPILER_FIXTURES=50/50_EXECUTED' /tmp/atto-real-compiler-50.log
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-real-compiler-50.xml').getroot()
+          tests = int(root.get('tests', '-1'))
+          failures = int(root.get('failures', '1'))
+          skipped = int(root.get('skipped', '1'))
+          if tests != 1 or failures or skipped:
+              raise SystemExit(f'50-compiler fixture CTest invalid: {tests=} {failures=} {skipped=}')
+          print('ATTO_LLVM_MIR_PLACE_SOURCE_COMPILER=REAL_50_CASES_EXECUTED')
+          PY
+
+      - name: Reverify checkout head and clean tracked source
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          echo "ATTO_LLVM_FINAL_HEAD=$(git rev-parse HEAD)"
+          echo "ATTO_LLVM_FINAL_TREE=$(git rev-parse 'HEAD^{tree}')"
+ /tmp/atto-place-inventory.txt
+          ctest --test-dir build -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30|nll_partial_move_30|nll_closed_world_16|derived_last_use_12|opaque_loan_metadata_10|loan_write_domain_6|mir_receipts_30|mir_opaque_effects_18)$' --output-on-failure --timeout 60 --output-junit /tmp/atto-ownership-place.xml
+          test -s /tmp/atto-ownership-place.xml
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-ownership-place.xml').getroot()
+          if int(root.get('tests', '-1')) != 11 or int(root.get('failures', '1')) or int(root.get('skipped', '1')):
+              raise SystemExit('native place/Share CTest evidence missing, failed or skipped')
+          PY
+          echo "ATTO_LLVM_RESOLVED_PLACE_PROVENANCE=HOST_CPP17_EXECUTED"
+
+      - name: Prove twenty scoped compiler CTest cases are registered
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -N > /tmp/atto-parity-inventory.txt
+          cat /tmp/atto-parity-inventory.txt
+          for name in \
+            atto_critical_suspends_fnc_rejected \
+            atto_suspends_critical_routine_rejected \
+            atto_critical_suspends_class_method_rejected \
+            atto_suspends_critical_class_method_rejected \
+            atto_critical_suspends_actor_method_rejected \
+            atto_critical_suspends_comment_trivia_rejected \
+            atto_suspends_critical_line_trivia_rejected \
+            atto_critical_only_remains_unlowered \
+            atto_suspends_only_remains_unlowered \
+            atto_critical_read_remains_unlowered \
+            atto_share_move_only_array_rejected \
+            atto_share_move_only_class_rejected \
+            atto_take_conditional_untracked_rejected \
+            atto_take_computed_untracked_rejected \
+            atto_share_borrowed_parameter_rejected \
+            atto_share_borrowed_class_field_rejected \
+            atto_protected_state_requires_typed_lowering \
+            atto_copyable_share_native_execution \
+            atto_copyable_copy_native_execution \
+            atto_copyable_take_native_execution
+          do
+            grep -Eq "Test +#[0-9]+: ${name}$" /tmp/atto-parity-inventory.txt
+          done
+      - name: Require compiler diagnostics and Clang-linked native guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build \
+            -R '^(atto_critical_suspends_fnc_rejected|atto_suspends_critical_routine_rejected|atto_critical_suspends_class_method_rejected|atto_suspends_critical_class_method_rejected|atto_critical_suspends_actor_method_rejected|atto_critical_suspends_comment_trivia_rejected|atto_suspends_critical_line_trivia_rejected|atto_critical_only_remains_unlowered|atto_suspends_only_remains_unlowered|atto_critical_read_remains_unlowered|atto_share_move_only_array_rejected|atto_share_move_only_class_rejected|atto_take_conditional_untracked_rejected|atto_take_computed_untracked_rejected|atto_share_borrowed_parameter_rejected|atto_share_borrowed_class_field_rejected|atto_protected_state_requires_typed_lowering|atto_copyable_share_native_execution|atto_copyable_copy_native_execution|atto_copyable_take_native_execution)$' \
+            --output-on-failure --timeout 180 --output-junit /tmp/atto-llvm-parity.xml
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-llvm-parity.xml').getroot()
+          tests = int(root.get('tests', '0'))
+          failures = int(root.get('failures', '0'))
+          skipped = int(root.get('skipped', '0'))
+          if tests != 20 or failures or skipped:
+              raise SystemExit(f'LLVM CTest evidence invalid: {tests=} {failures=} {skipped=}')
+          names = {x.get('name') for x in root.iter('testcase')}
+          if len(names) != 20:
+              raise SystemExit(f'LLVM distinct CTest cases invalid: {names=}')
+          print('ATTO_LLVM_PARITY_SCOPED=PASS executed_ctests=20')
+          print('ATTO_LLVM_PROTECTED_OBJECT_MIR=NOT_IMPLEMENTED')
+          print('ATTO_LLVM_LRU_FULL_FIXTURES=NOT_EXECUTED')
+          PY
+      - name: Execute 50 real compiler fixtures and fail-closed matrix mutations
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Both tests must have been registered at CMake configure time.
+          ctest --test-dir build -N -R '^(native_ownership_place_mir_manifest_19_mutations|atto_ownership_place_mir_real_compiler_50)$' > /tmp/atto-mir-fixture-inventory.txt
+          grep -Eq 'Test +#[0-9]+: native_ownership_place_mir_manifest_19_mutations$' /tmp/atto-mir-fixture-inventory.txt
+          grep -Eq 'Test +#[0-9]+: atto_ownership_place_mir_real_compiler_50$' /tmp/atto-mir-fixture-inventory.txt
+          # The manifest unit suite cannot replace compiler execution.
+          ctest --test-dir build -V -R '^native_ownership_place_mir_manifest_19_mutations$' --timeout 90
+          ctest --test-dir build -V -R '^atto_ownership_place_mir_real_compiler_50$' \
+            --output-junit /tmp/atto-real-compiler-50.xml --timeout 1000 | tee /tmp/atto-real-compiler-50.log
+          grep -Fq 'ATTO_OWNERSHIP_REAL_COMPILER_FIXTURES=50/50_EXECUTED' /tmp/atto-real-compiler-50.log
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-real-compiler-50.xml').getroot()
+          tests = int(root.get('tests', '-1'))
+          failures = int(root.get('failures', '1'))
+          skipped = int(root.get('skipped', '1'))
+          if tests != 1 or failures or skipped:
+              raise SystemExit(f'50-compiler fixture CTest invalid: {tests=} {failures=} {skipped=}')
+          print('ATTO_LLVM_MIR_PLACE_SOURCE_COMPILER=REAL_50_CASES_EXECUTED')
+          PY
+
+      - name: Reverify checkout head and clean tracked source
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          echo "ATTO_LLVM_FINAL_HEAD=$(git rev-parse HEAD)"
+          echo "ATTO_LLVM_FINAL_TREE=$(git rev-parse 'HEAD^{tree}')"
+ /tmp/atto-place-inventory.txt
+          grep -Eq 'Test +#[0-9]+: native_ownership_loan_write_domain_6
+          ctest --test-dir build -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30|nll_partial_move_30|nll_closed_world_16|derived_last_use_12|opaque_loan_metadata_10|loan_write_domain_6|mir_receipts_30|mir_opaque_effects_18)$' --output-on-failure --timeout 60 --output-junit /tmp/atto-ownership-place.xml
+          test -s /tmp/atto-ownership-place.xml
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-ownership-place.xml').getroot()
+          if int(root.get('tests', '-1')) != 9 or int(root.get('failures', '1')) or int(root.get('skipped', '1')):
+              raise SystemExit('native place/Share CTest evidence missing, failed or skipped')
+          PY
+          echo "ATTO_LLVM_RESOLVED_PLACE_PROVENANCE=HOST_CPP17_EXECUTED"
+
+      - name: Prove twenty scoped compiler CTest cases are registered
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -N > /tmp/atto-parity-inventory.txt
+          cat /tmp/atto-parity-inventory.txt
+          for name in \
+            atto_critical_suspends_fnc_rejected \
+            atto_suspends_critical_routine_rejected \
+            atto_critical_suspends_class_method_rejected \
+            atto_suspends_critical_class_method_rejected \
+            atto_critical_suspends_actor_method_rejected \
+            atto_critical_suspends_comment_trivia_rejected \
+            atto_suspends_critical_line_trivia_rejected \
+            atto_critical_only_remains_unlowered \
+            atto_suspends_only_remains_unlowered \
+            atto_critical_read_remains_unlowered \
+            atto_share_move_only_array_rejected \
+            atto_share_move_only_class_rejected \
+            atto_take_conditional_untracked_rejected \
+            atto_take_computed_untracked_rejected \
+            atto_share_borrowed_parameter_rejected \
+            atto_share_borrowed_class_field_rejected \
+            atto_protected_state_requires_typed_lowering \
+            atto_copyable_share_native_execution \
+            atto_copyable_copy_native_execution \
+            atto_copyable_take_native_execution
+          do
+            grep -Eq "Test +#[0-9]+: ${name}$" /tmp/atto-parity-inventory.txt
+          done
+      - name: Require compiler diagnostics and Clang-linked native guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build \
+            -R '^(atto_critical_suspends_fnc_rejected|atto_suspends_critical_routine_rejected|atto_critical_suspends_class_method_rejected|atto_suspends_critical_class_method_rejected|atto_critical_suspends_actor_method_rejected|atto_critical_suspends_comment_trivia_rejected|atto_suspends_critical_line_trivia_rejected|atto_critical_only_remains_unlowered|atto_suspends_only_remains_unlowered|atto_critical_read_remains_unlowered|atto_share_move_only_array_rejected|atto_share_move_only_class_rejected|atto_take_conditional_untracked_rejected|atto_take_computed_untracked_rejected|atto_share_borrowed_parameter_rejected|atto_share_borrowed_class_field_rejected|atto_protected_state_requires_typed_lowering|atto_copyable_share_native_execution|atto_copyable_copy_native_execution|atto_copyable_take_native_execution)$' \
+            --output-on-failure --timeout 180 --output-junit /tmp/atto-llvm-parity.xml
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-llvm-parity.xml').getroot()
+          tests = int(root.get('tests', '0'))
+          failures = int(root.get('failures', '0'))
+          skipped = int(root.get('skipped', '0'))
+          if tests != 20 or failures or skipped:
+              raise SystemExit(f'LLVM CTest evidence invalid: {tests=} {failures=} {skipped=}')
+          names = {x.get('name') for x in root.iter('testcase')}
+          if len(names) != 20:
+              raise SystemExit(f'LLVM distinct CTest cases invalid: {names=}')
+          print('ATTO_LLVM_PARITY_SCOPED=PASS executed_ctests=20')
+          print('ATTO_LLVM_PROTECTED_OBJECT_MIR=NOT_IMPLEMENTED')
+          print('ATTO_LLVM_LRU_FULL_FIXTURES=NOT_EXECUTED')
+          PY
+      - name: Execute 50 real compiler fixtures and fail-closed matrix mutations
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Both tests must have been registered at CMake configure time.
+          ctest --test-dir build -N -R '^(native_ownership_place_mir_manifest_19_mutations|atto_ownership_place_mir_real_compiler_50)$' > /tmp/atto-mir-fixture-inventory.txt
+          grep -Eq 'Test +#[0-9]+: native_ownership_place_mir_manifest_19_mutations$' /tmp/atto-mir-fixture-inventory.txt
+          grep -Eq 'Test +#[0-9]+: atto_ownership_place_mir_real_compiler_50$' /tmp/atto-mir-fixture-inventory.txt
+          # The manifest unit suite cannot replace compiler execution.
+          ctest --test-dir build -V -R '^native_ownership_place_mir_manifest_19_mutations$' --timeout 90
+          ctest --test-dir build -V -R '^atto_ownership_place_mir_real_compiler_50$' \
+            --output-junit /tmp/atto-real-compiler-50.xml --timeout 1000 | tee /tmp/atto-real-compiler-50.log
+          grep -Fq 'ATTO_OWNERSHIP_REAL_COMPILER_FIXTURES=50/50_EXECUTED' /tmp/atto-real-compiler-50.log
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-real-compiler-50.xml').getroot()
+          tests = int(root.get('tests', '-1'))
+          failures = int(root.get('failures', '1'))
+          skipped = int(root.get('skipped', '1'))
+          if tests != 1 or failures or skipped:
+              raise SystemExit(f'50-compiler fixture CTest invalid: {tests=} {failures=} {skipped=}')
+          print('ATTO_LLVM_MIR_PLACE_SOURCE_COMPILER=REAL_50_CASES_EXECUTED')
+          PY
+
+      - name: Reverify checkout head and clean tracked source
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          echo "ATTO_LLVM_FINAL_HEAD=$(git rev-parse HEAD)"
+          echo "ATTO_LLVM_FINAL_TREE=$(git rev-parse 'HEAD^{tree}')"
+ /tmp/atto-place-inventory.txt
+          ctest --test-dir build -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30|nll_partial_move_30|nll_closed_world_16|derived_last_use_12|opaque_loan_metadata_10|loan_write_domain_6|mir_receipts_30|mir_opaque_effects_18)$' --output-on-failure --timeout 60 --output-junit /tmp/atto-ownership-place.xml
           test -s /tmp/atto-ownership-place.xml
           python3 - <<'PY'
           from xml.etree import ElementTree
