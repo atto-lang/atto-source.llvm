@@ -1,5 +1,6 @@
 #include "oreslang/backend/NativeIrFieldWriteLedger.hpp"
 #include "oreslang/backend/NativeIrReinitializeWriteBridge.hpp"
+#include "oreslang/backend/NativeIrSourceCheckedReinitialize.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -184,6 +185,28 @@ bool safe_candidate(CandidateReinitializeAudit result) {
         !result.guest_verified;
 }
 
+// Synthetic host mutation of a checker-issued flag. Real production
+// authorization is minted by validate_i64_ownership, never by this fixture.
+// This only tests the sealed identity + live StoreInst verifier.
+void seal_direct_write(Fixture& f, bool reinitialize) {
+    f.primary->compiler_checked_field_reinitialization = reinitialize;
+    oreslang::source_identity::seal_validated_program(f.program);
+    f.ledger = FieldWriteLedger(f.program);
+    f.bind_primary();
+}
+oreslang::native_ir::SourceCheckedReinitializeAudit direct_reinit(Fixture& f) {
+    return oreslang::native_ir::verify_source_checked_reinitialize_stores(
+        f.ledger, f.program, f.module, f.function_map());
+}
+bool bounded_only(oreslang::native_ir::SourceCheckedReinitializeAudit a) {
+    return a.checked_moved_field_writes == 1 &&
+        a.bounded_source_checked_stores_bound &&
+        !a.full_typed_mir_complete &&
+        !a.full_loan_use_coverage &&
+        !a.optimized_code_verified &&
+        !a.guest_verified;
+}
+
 bool denied(const std::function<void()>& action) {
     try {action();}
     catch(const std::runtime_error& error) {
@@ -315,8 +338,48 @@ int main() {
         check([]{ Fixture f; f.bind_primary(); auto a=candidate(f,candidate_graph()); return a.candidate_write_id_store_bound && !a.full_loan_use_coverage && !a.guest_verified; }(), "existing source store certificate not full NLL proof", n);
         check([]{ Fixture f; f.bind_primary(); auto& other=f.add(*f.source_function); f.bind(other,f.another()); auto g=candidate_graph(2,"owner.y"); return safe_candidate(candidate(f,g)); }(), "valid reinitialization from second store ticket", n);
         check([]{ Fixture f; f.bind_primary(); return !candidate(f,candidate_graph()).optimized_code_verified; }(), "checked candidate retains optimization proof false", n);
-        if(n != 114) throw std::runtime_error("wrong test inventory");
-        std::cout<<"PASS 114/114 direct source FieldWrite + candidate Reinitialize bridge cases "
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.primary->compiler_reinitialize_write_id=0; direct_reinit(f); }), "source reinit ID reset after sealing rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.primary->compiler_reinitialize_write_id=98; direct_reinit(f); }), "source reinit ID substituted after sealing rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.primary->compiler_checked_field_reinitialization=false; direct_reinit(f); }), "source reinit claimed marker erased after sealing rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,false); f.primary->compiler_checked_field_reinitialization=true; direct_reinit(f); }), "ordinary source upgraded to reinit after sealing rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.primary->kind=Statement::Kind::Call; direct_reinit(f); }), "non-field write forged as reinit rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.primary->compiler_source_node_id=0; direct_reinit(f); }), "erased source node identity rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.primary->compiler_source_path="f1/e0"; direct_reinit(f); }), "reparented source identity rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.source_function->compiler_source_function_id=9; direct_reinit(f); }), "relabelled source function identity rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.source_function->name="wrong"; direct_reinit(f); }), "renamed source function rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); ++f.program.compiler_source_unit_id; direct_reinit(f); }), "forged source unit epoch rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.source_function->statements.clear(); direct_reinit(f); }), "source node removed after emission rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.primary->field="y"; direct_reinit(f); }), "field changed after emission rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.primary->receiver="other"; direct_reinit(f); }), "source receiver changed after emission rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.primary->offset=100; direct_reinit(f); }), "source byte offset changed after emission rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.store->eraseFromParent(); direct_reinit(f); }), "physical emitted StoreInst removed rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.store->setOperand(1,f.alternate); direct_reinit(f); }), "physical emitted store destination mutated rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.store->setOperand(0,llvm::ConstantInt::get(f.builder.getInt64Ty(),999)); direct_reinit(f); }), "physical emitted store value mutated rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.store->setMetadata("atto.ownership.reinitialize.source.v1",nullptr); direct_reinit(f); }), "reinit LLVM metadata removed rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.store->setMetadata("atto.ownership.reinitialize.source.v1",llvm::MDNode::get(f.context,{llvm::MDString::get(f.context,"forged")})); direct_reinit(f); }), "reinit LLVM metadata malformed arity rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.store->setMetadata("atto.ownership.reinitialize.source.v1",llvm::MDNode::get(f.context,{llvm::MDString::get(f.context,"wrong"),llvm::MDString::get(f.context,"wrong")})); direct_reinit(f); }), "reinit LLVM metadata noninteger rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); auto* i64=f.builder.getInt64Ty(); f.store->setMetadata("atto.ownership.reinitialize.source.v1",llvm::MDNode::get(f.context,{llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(i64,900)),llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(i64,1))})); direct_reinit(f); }), "reinit LLVM metadata forged unit ID rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); auto* i64=f.builder.getInt64Ty(); f.store->setMetadata("atto.ownership.reinitialize.source.v1",llvm::MDNode::get(f.context,{llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(i64,f.program.compiler_source_unit_id)),llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(i64,900))})); direct_reinit(f); }), "reinit LLVM metadata forged write ID rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); auto* i32=f.builder.getInt32Ty(); f.store->setMetadata("atto.ownership.reinitialize.source.v1",llvm::MDNode::get(f.context,{llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(i32,1)),llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(i32,1))})); direct_reinit(f); }), "reinit LLVM metadata forged 32-bit integer rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); auto* extra=f.another(); extra->setMetadata("atto.ownership.reinitialize.source.v1",f.store->getMetadata("atto.ownership.reinitialize.source.v1")); direct_reinit(f); }), "cloned reinitialization tag on unpaired store rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); auto* extra=f.another(f.destination); extra->setMetadata("atto.ownership.reinitialize.source.v1",f.store->getMetadata("atto.ownership.reinitialize.source.v1")); direct_reinit(f); }), "reinit tag copied onto another untagged store rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,false); f.store->setMetadata("atto.ownership.reinitialize.source.v1",llvm::MDNode::get(f.context,{llvm::MDString::get(f.context,"forged")})); direct_reinit(f); }), "reinit LLVM tag on unmarked ordinary field write rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); f.primary->compiler_checked_field_reinitialization=false; f.primary->compiler_reinitialize_write_id=0; direct_reinit(f); }), "unmarked source after record mutation rejected", n);
+        check(denied([]{ Fixture f; seal_direct_write(f,true); auto* extra=f.another(); extra->setMetadata("atto.ownership.field_write.source.v1",f.store->getMetadata("atto.ownership.field_write.source.v1")); direct_reinit(f); }), "extra emitted tagged store from unrelated source rejected", n);
+        check([]{ Fixture f; seal_direct_write(f,true); return bounded_only(direct_reinit(f)); }(), "checker-flagged source bound to real LLVM store", n);
+        check([]{ Fixture f; seal_direct_write(f,true); return f.primary->compiler_reinitialize_write_id==f.primary->compiler_source_node_id && bounded_only(direct_reinit(f)); }(), "source write ID corresponds to minted node ID", n);
+        check([]{ Fixture f; seal_direct_write(f,true); auto* md=f.store->getMetadata("atto.ownership.reinitialize.source.v1"); return md && md->getNumOperands()==2 && bounded_only(direct_reinit(f)); }(), "source unit epoch persists in the reinit StoreInst", n);
+        check([]{ Fixture f; seal_direct_write(f,true); return !direct_reinit(f).full_typed_mir_complete; }(), "source audit never grants full typed MIR completeness", n);
+        check([]{ Fixture f; seal_direct_write(f,true); return !direct_reinit(f).full_loan_use_coverage; }(), "source audit never grants full LoanId completeness", n);
+        check([]{ Fixture f; seal_direct_write(f,true); return !direct_reinit(f).optimized_code_verified; }(), "source audit never grants optimized code correctness", n);
+        check([]{ Fixture f; seal_direct_write(f,true); return !direct_reinit(f).guest_verified; }(), "source audit never grants guest correctness", n);
+        check([]{ Fixture f; seal_direct_write(f,false); auto a=direct_reinit(f); return a.checked_moved_field_writes==0 && !a.bounded_source_checked_stores_bound && !f.store->getMetadata("atto.ownership.reinitialize.source.v1"); }(), "ordinary field write gets no reinitialization metadata", n);
+        check([]{ Fixture f; seal_direct_write(f,false); return f.primary->compiler_source_node_id!=0 && f.primary->compiler_reinitialize_write_id==0 && !direct_reinit(f).guest_verified; }(), "ordinary write receives source identity but not write ID", n);
+        check([]{ Fixture f; seal_direct_write(f,true); (void)f.another(); return bounded_only(direct_reinit(f)); }(), "untagged housekeeping stores allowed with verified reinit", n);
+        check([]{ Fixture f; seal_direct_write(f,true); auto* extra=f.another(f.alternate); return extra && bounded_only(direct_reinit(f)); }(), "ordinary unrelated LLVM housekeeping store with reinit allowed", n);
+        check([]{ Fixture f; seal_direct_write(f,true); auto a=f.ledger.verify_source_coverage(f.program,f.module,f.function_map()); return a.immutable_source_identity_bound && !a.ownership_complete && bounded_only(direct_reinit(f)); }(), "verified source ledger and reinit proof remain separate", n);
+        if(n != 154) throw std::runtime_error("wrong test inventory");
+        std::cout<<"PASS 154/154 source FieldWrite + reinit candidate and checked-store cases "
                     "(REAL LLVM IR HOST TEST; NOT NLL/GUEST VERIFIED)\n";
         return 0;
     } catch(const std::exception& error) {

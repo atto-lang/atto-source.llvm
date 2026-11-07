@@ -306,6 +306,13 @@ struct Statement {
     // Immutable structural route: f<index>/s<index>/t<index>/e<index>.
     // A moved AST node cannot reuse its earlier branch evidence.
     std::string compiler_source_path;
+    // Produced only by successful native OwnershipChecker analysis, not
+    // inferred from the code emitter. Only straight-line scalar field
+    // restoration after a definite rt take qualifies for v1.
+    bool compiler_checked_field_reinitialization = false;
+    // Minted at validated-AST sealing; equals this Statement's immutable
+    // compiler_source_node_id for a verified reinit, otherwise zero.
+    std::uint64_t compiler_reinitialize_write_id = 0;
 };
 
 // Side-effect-free equality guard with return-only taken branch.

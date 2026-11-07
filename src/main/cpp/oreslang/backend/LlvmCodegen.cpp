@@ -1,6 +1,7 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/backend/NativeIrOwnershipCensus.hpp"
 #include "oreslang/backend/NativeIrFieldWriteLedger.hpp"
+#include "oreslang/backend/NativeIrSourceCheckedReinitialize.hpp"
 #include "oreslang/backend/NativeFlatClasses.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
@@ -2967,6 +2968,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         field_write_ledger.verify_source_coverage(
             source, module, source_native_declarations);
     (void)source_field_write_audit;
+    // The checker independently recorded direct moved-field restoration
+    // before codegen; the validated AST sealed its source WriteId. Validate
+    // those facts against actual emitted LLVM stores. This remains a bounded
+    // straight-line operation proof, NOT a whole-function typed MIR graph.
+    const auto checked_reinit_audit =
+        native_ir::verify_source_checked_reinitialize_stores(
+            field_write_ledger, source, module, source_native_declarations);
+    (void)checked_reinit_audit;
     // General source LoanId completeness, optimization survival and guest
     // execution remain explicitly unproven and non-promoting.
     std::string result;

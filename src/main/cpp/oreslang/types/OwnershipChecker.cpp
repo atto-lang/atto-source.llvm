@@ -569,6 +569,19 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
 } // namespace
 
 void validate_i64_ownership(Program& program) {
+    // Discard every previous compiler-issued straight-line reinit claim on
+    // revalidation, including nested statements; never retain permission from
+    // a failed or stale earlier ownership pass.
+    const auto clear_claims = [&](const auto& self, Statement& stmt) -> void {
+        stmt.compiler_checked_field_reinitialization = false;
+        stmt.compiler_reinitialize_write_id = 0;
+        for (auto& child : stmt.then_statements) self(self, child);
+        for (auto& child : stmt.else_statements) self(self, child);
+    };
+    for (auto& fn : program.functions) {
+        for (auto& stmt : fn.statements) clear_claims(clear_claims, stmt);
+        for (auto& stmt : fn.caught_throw_defers) clear_claims(clear_claims, stmt);
+    }
     // A re-validation attempt must revoke every stale lowering authorization
     // before checking anything. Failed ownership admission therefore cannot
     // leave executable Future-pipeline authority from an earlier pass.
@@ -914,11 +927,25 @@ void validate_i64_ownership(Program& program) {
             function.statements.end(), [](const Statement& stmt) {
                 return stmt.kind == Statement::Kind::Conditional;
             });
+        // Only the direct, straight-line scalar field-write slice can mint
+        // source-to-native reinitialization evidence in v1. Nested control
+        // flow, cleanup and loop effects need a full typed-MIR CFG first.
+        const bool straight_line_reinit_surface =
+            !conditional_effects && !function.caught_throw_value &&
+            function.caught_throw_defers.empty() &&
+            std::none_of(function.statements.begin(), function.statements.end(),
+                [](const Statement& stmt) {
+                    return stmt.kind == Statement::Kind::ForEach ||
+                        stmt.kind == Statement::Kind::ForIndex ||
+                        stmt.kind == Statement::Kind::Conditional ||
+                        stmt.kind == Statement::Kind::ScopedLocal ||
+                        stmt.kind == Statement::Kind::Return;
+                });
         std::vector<Locals> structured_exits;
         std::unordered_set<std::string> root_names;
         for (const auto& item : locals) root_names.insert(item.first);
         std::unordered_map<std::string, unsigned> iteration_loans;
-        std::function<void(const Statement&, Locals&)> check_effect;
+        std::function<void(Statement&, Locals&)> check_effect;
         auto scoped_entry = [&](const LocalBinding& binding) {
             LocalOwnership entry;
             if (next_binding_id == 0)
@@ -941,12 +968,12 @@ void validate_i64_ownership(Program& program) {
             }
             return entry;
         };
-        auto scoped_effects = [&](const std::vector<Statement>& body, Locals& state) {
-            for (const auto& action : body) check_effect(action, state);
+        auto scoped_effects = [&](std::vector<Statement>& body, Locals& state) {
+            for (auto& action : body) check_effect(action, state);
             for (const auto& action : body) if (action.kind == Statement::Kind::ScopedLocal)
                 state.erase(action.branch_local->name);
         };
-        check_effect = [&](const Statement& stmt, Locals& state) {
+        check_effect = [&](Statement& stmt, Locals& state) {
             if (stmt.kind == Statement::Kind::ScalarWrite) {
                 const auto found = state.find(stmt.receiver);
                 if (found == state.end()) throw std::runtime_error("assignment requires a visible scalar slot");
@@ -1087,7 +1114,16 @@ void validate_i64_ownership(Program& program) {
                     throw std::runtime_error("ownership violation: class mutation requires let mut owner");
                 if (recv.exclusive_loan || recv.shared_loans != 0)
                     throw std::runtime_error("ownership violation: class field write conflicts with active borrow");
+                const bool definitively_moved_before_write =
+                    recv.moved_fields.count(stmt.field) != 0;
                 check_value(*stmt.expression, state, functions);
+                if (definitively_moved_before_write && straight_line_reinit_surface &&
+                        !recv.class_array_fields.count(stmt.field) &&
+                        !recv.subobjects.count(stmt.field)) {
+                    // Recorded by the actual ownership checker after value
+                    // validation, never invented by LLVM lowering.
+                    stmt.compiler_checked_field_reinitialization = true;
+                }
                 recv.moved_fields.erase(stmt.field);
             } else if (stmt.kind == Statement::Kind::Call) {
                 const Expression& call = *stmt.expression;
@@ -1111,7 +1147,7 @@ void validate_i64_ownership(Program& program) {
                 throw std::runtime_error("ownership violation: unsupported conditional arm effect");
             }
         };
-        for (const auto& stmt : function.statements) {
+        for (auto& stmt : function.statements) {
             if (stmt.kind == Statement::Kind::Defer) {
                 if (!structured_exits.empty()) throw std::runtime_error("defer after structured return requires path-specific registration");
                 deferred_effects.push_back(&stmt);
