@@ -1761,6 +1761,31 @@ if(BUILD_TESTING)
         COMMAND oreslang-source-actor-await-trace-runtime-test)
     set_tests_properties(source_actor_await_trace_runtime PROPERTIES TIMEOUT 30)
 
+    # Real native source scheduler: two simultaneously live actor frame stores,
+    # zeroed successor turns, and stale generation refusal after restart.
+    # Host/runtime CTest; compiled .atto values are checked separately below.
+    add_executable(oreslang-source-actor-frame-isolation-runtime-test
+        tests/source_actor_frame_isolation_runtime_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+    target_include_directories(oreslang-source-actor-frame-isolation-runtime-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-source-actor-frame-isolation-runtime-test PRIVATE
+        Threads::Threads)
+    target_compile_options(oreslang-source-actor-frame-isolation-runtime-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME source_actor_frame_isolation_restart_and_denial
+        COMMAND oreslang-source-actor-frame-isolation-runtime-test)
+    set_tests_properties(source_actor_frame_isolation_restart_and_denial
+        PROPERTIES TIMEOUT 30)
+
     if(ORE_CLANG)
         add_test(NAME source_actor_compiled_native_lifecycle
             COMMAND "${Python3_EXECUTABLE}"
