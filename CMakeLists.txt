@@ -253,6 +253,19 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_ownership_source_field_cfg_96
         COMMAND oreslang-native-source-field-cfg-96-test)
+    # Whole-module exact IR readback denies changed non-store SSA/CFG,
+    # PHI, metadata and attributes without claiming typed-loan completeness.
+    add_executable(oreslang-native-whole-module-ir-snapshot-58-test
+        tests/native_whole_module_ir_snapshot_58_test.cpp)
+    target_include_directories(oreslang-native-whole-module-ir-snapshot-58-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_compile_options(oreslang-native-whole-module-ir-snapshot-58-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-whole-module-ir-snapshot-58-test PRIVATE
+        ${ORE_LLVM_LIBS})
+    add_test(NAME native_ownership_whole_module_ir_snapshot_58
+        COMMAND oreslang-native-whole-module-ir-snapshot-58-test)
 
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
