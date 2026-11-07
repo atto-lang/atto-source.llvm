@@ -171,7 +171,8 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::SumAccess: {
             const auto& type = native_sum(*moves->sum_program, expr.sum_type);
             auto* handle = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
-            llvm::Value* fallback = expr.arguments.empty() ? nullptr : lower(*expr.arguments[0], builder, i64, storage, field_storage, functions, moves);
+            const bool expect = expr.name == "expect";
+            llvm::Value* fallback = expr.arguments.empty() || expect ? nullptr : lower(*expr.arguments[0], builder, i64, storage, field_storage, functions, moves);
             const auto schema = moves->record_schemas->at(expr.sum_type);
             auto* tag = checked_sum_tag(builder, i64, handle, schema, type.kind == NativeSumType::Kind::Option ? 2 : 3, moves->sum_check, moves->record_get);
             const bool option = type.kind == NativeSumType::Kind::Option;
@@ -188,6 +189,18 @@ llvm::Value* lower(const Expression& expr,
             auto* value = builder.CreateCall(moves->record_get, {handle, llvm::ConstantInt::get(i64, schema), llvm::ConstantInt::get(i64, 1)});
             if (!fallback) {
                 builder.SetInsertPoint(absent);
+                auto flush = function->getParent()->getOrInsertFunction("ores_string_panic_flush",
+                    llvm::FunctionType::get(builder.getVoidTy(), false));
+                builder.CreateCall(flush);
+                if (expect) {
+                    // Literal message (enforced by the sum resolver) to stderr, then the
+                    // same abort path as unwrap. Java appends ": <payload>"; this slice does not.
+                    const std::string message = expr.arguments[0]->name + "\n";
+                    auto* text = builder.CreateGlobalStringPtr(message, "expect.message");
+                    auto write = function->getParent()->getOrInsertFunction("write", llvm::FunctionType::get(
+                        i64, {builder.getInt32Ty(), builder.getPtrTy(), i64}, false));
+                    builder.CreateCall(write, {builder.getInt32(2), text, llvm::ConstantInt::get(i64, message.size())});
+                }
                 auto panic = function->getParent()->getOrInsertFunction("abort", llvm::FunctionType::get(builder.getVoidTy(), false));
                 builder.CreateCall(panic); builder.CreateUnreachable(); builder.SetInsertPoint(present); return value;
             }
@@ -249,6 +262,15 @@ llvm::Value* lower(const Expression& expr,
         }
         case Expression::Kind::Console: {
             auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            auto* module = builder.GetInsertBlock()->getModule();
+            if (expr.resolved_type == ScalarType::I64) {
+                // Decimal text, matching Java's rendering of an int.
+                auto format = module->getOrInsertFunction("ores_string_from_i64", llvm::FunctionType::get(i64, {i64}, false));
+                value = builder.CreateCall(format, {value}, "console.int.text");
+            } else if (expr.resolved_type == ScalarType::Bool) {
+                auto format = module->getOrInsertFunction("ores_string_from_bool", llvm::FunctionType::get(i64, {i64}, false));
+                value = builder.CreateCall(format, {value}, "console.bool.text");
+            }
             auto runtime = builder.GetInsertBlock()->getModule()->getOrInsertFunction("ores_string_print",
                 llvm::FunctionType::get(i64, {i64, i64}, false));
             return builder.CreateCall(runtime, {value, llvm::ConstantInt::get(i64, expr.name == "println")}, "console.status");
