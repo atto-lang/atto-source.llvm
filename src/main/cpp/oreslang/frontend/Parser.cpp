@@ -4,6 +4,7 @@
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/types/OwnershipChecker.hpp"
+#include "oreslang/frontend/GpuLaunchSourceMir.hpp"
 #include "oreslang/frontend/MethodResolver.hpp"
 #include "oreslang/types/NativeScalarTypes.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
@@ -3728,22 +3729,148 @@ private:
         return result;
     }
 
+
+    [[noreturn]] void gpu_launch_parse_error(const char* code,
+                                              const char* detail,
+                                              std::size_t at) const {
+        throw std::runtime_error(std::string(code) + ": " + detail +
+                "; no implicit CPU fallback at byte " + std::to_string(at));
+    }
+
+    // G1c: actual native lexer tokens -> immutable source launch MIR.
+    // Compiler/codegen remains closed until kernel types, capabilities,
+    // ownership, and completion events have been proven independently.
+    std::string gpu_launch_symbol(const char* code, const char* what) {
+        if (token_.kind != Kind::Identifier || reserved(token_.text))
+            gpu_launch_parse_error(code, what, token_.offset);
+        std::string symbol(token_.text);
+        advance();
+        while (accept(".")) {
+            if (token_.kind != Kind::Identifier || reserved(token_.text))
+                gpu_launch_parse_error(code, "malformed qualified symbol", token_.offset);
+            symbol += ".";
+            symbol += token_.text;
+            advance();
+        }
+        if (symbol.size() > 256)
+            gpu_launch_parse_error(code, "GPU symbol exceeds 256 bytes", token_.offset);
+        return symbol;
+    }
+
+    gpu::source_mir::I64 gpu_launch_i64(unsigned depth = 0) {
+        if (depth > 16)
+            gpu_launch_parse_error("GPU-LAUNCH-003", "geometry expression too deep", token_.offset);
+        if (token_.text == "-" || token_.text == "await" || token_.text == "gpu")
+            gpu_launch_parse_error("GPU-LAUNCH-003", "negative/effectful geometry", token_.offset);
+        if (token_.kind == Kind::Integer) {
+            std::string digits(token_.text);
+            if (digits.empty() || digits.front() == '_' || digits.back() == '_' ||
+                    digits.find("__") != std::string::npos)
+                gpu_launch_parse_error("GPU-LAUNCH-003", "invalid integer separators", token_.offset);
+            digits.erase(std::remove(digits.begin(), digits.end(), '_'), digits.end());
+            std::int64_t result = 0;
+            const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), result);
+            if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size())
+                gpu_launch_parse_error("GPU-LAUNCH-003", "signed i64 geometry overflow", token_.offset);
+            advance();
+            return gpu::source_mir::I64::constant(result);
+        }
+        if (token_.kind != Kind::Identifier || reserved(token_.text))
+            gpu_launch_parse_error("GPU-LAUNCH-003", "geometry needs i64 symbol/constant", token_.offset);
+        const auto symbol = std::string(token_.text);
+        advance();
+        if (accept("(")) {
+            if (symbol != "ceil_div")
+                gpu_launch_parse_error("GPU-LAUNCH-003", "host calls forbidden in geometry", token_.offset);
+            auto first = gpu_launch_i64(depth + 1);
+            if (!accept(",")) gpu_launch_parse_error("GPU-LAUNCH-003", "ceil_div needs 2 args", token_.offset);
+            auto second = gpu_launch_i64(depth + 1);
+            if (!accept(")")) gpu_launch_parse_error("GPU-LAUNCH-003", "ceil_div missing ')'", token_.offset);
+            return gpu::source_mir::I64::ceil_div(std::move(first), std::move(second));
+        }
+        return gpu::source_mir::I64::named(symbol);
+    }
+
+    std::vector<gpu::source_mir::I64> gpu_launch_axes(bool logical) {
+        if (!accept("[")) gpu_launch_parse_error("GPU-LAUNCH-003", "geometry needs '['", token_.offset);
+        std::vector<gpu::source_mir::I64> axes;
+        do {
+            if (axes.size() >= 3)
+                gpu_launch_parse_error("GPU-LAUNCH-003", "too many geometry axes", token_.offset);
+            axes.push_back(gpu_launch_i64());
+        } while (accept(","));
+        if (!accept("]")) gpu_launch_parse_error("GPU-LAUNCH-003", "geometry missing ']'", token_.offset);
+        if (!logical && axes.size() != 3)
+            gpu_launch_parse_error("GPU-LAUNCH-003", "physical grid/block needs exactly 3 axes", token_.offset);
+        while (axes.size() < 3) axes.push_back(gpu::source_mir::I64::constant(1));
+        return axes;
+    }
+
+    gpu::source_mir::Candidate gpu_launch_source_candidate() {
+        advance();  // contextual launch; launch(...) remains a normal function call
+        auto kernel = gpu_launch_symbol("GPU-LAUNCH-001", "expected statically named kernel");
+        if (!accept("(")) gpu_launch_parse_error("GPU-LAUNCH-001", "expected kernel argument list", token_.offset);
+        std::vector<std::string> args;
+        if (!accept(")")) {
+            do {
+                if (args.size() >= 64)
+                    gpu_launch_parse_error("GPU-LAUNCH-002", "too many kernel arguments", token_.offset);
+                if (token_.kind != Kind::Identifier || reserved(token_.text))
+                    gpu_launch_parse_error("GPU-LAUNCH-002", "kernel arg needs a bound symbol", token_.offset);
+                args.push_back(std::string(token_.text));
+                advance();
+            } while (accept(","));
+            if (!accept(")")) gpu_launch_parse_error("GPU-LAUNCH-002", "invalid kernel argument", token_.offset);
+        }
+        if (!accept("on") || !accept("gpu") || !accept("("))
+            gpu_launch_parse_error("GPU-LAUNCH-004", "explicit GPU placement required", token_.offset);
+        auto device = gpu_launch_symbol("GPU-LAUNCH-004", "expected device symbol");
+        if (!accept(")") || !accept("{"))
+            gpu_launch_parse_error("GPU-LAUNCH-004", "invalid device placement/config", token_.offset);
+        const bool logical = token_.text == "over";
+        if (!accept(logical ? "over" : "grid") || !accept(":"))
+            gpu_launch_parse_error("GPU-LAUNCH-003", "expected grid or over", token_.offset);
+        auto extent = gpu_launch_axes(logical);
+        if (!accept(",") || !accept(logical ? "group" : "block") || !accept(":"))
+            gpu_launch_parse_error("GPU-LAUNCH-003", "expected block/group", token_.offset);
+        auto group = gpu_launch_axes(logical);
+        if (!accept(",") || !accept("queue") || !accept(":"))
+            gpu_launch_parse_error("GPU-LAUNCH-003", "expected queue", token_.offset);
+        auto queue = gpu_launch_symbol("GPU-LAUNCH-004", "expected queue symbol");
+        auto shared = gpu::source_mir::I64::constant(0);
+        if (accept(",")) {
+            if (!accept("shared_bytes") || !accept(":"))
+                gpu_launch_parse_error("GPU-LAUNCH-003", "unknown launch field", token_.offset);
+            shared = gpu_launch_i64();
+        }
+        if (!accept("}")) gpu_launch_parse_error("GPU-LAUNCH-003", "unexpected launch fields", token_.offset);
+        return gpu::source_mir::source_candidate({std::move(kernel), std::move(args),
+            std::move(device), std::move(queue),
+            {logical ? gpu::source_mir::Mode::LogicalOverGroup :
+                gpu::source_mir::Mode::PhysicalGridBlock,
+                std::move(extent), std::move(group)}, std::move(shared)});
+    }
+
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
 
-        // The new AttoLang spelling is contextual; launch(x) remains a
-        // legitimate ordinary callable. A new `launch kernel(...) on gpu`
-        // must fail before native scalar IR emission until the typed launch
-        // AST, ownership/fence proof and physical provider have landed.
-        // Do not reinterpret it as a host function or CUDA chevron call.
+        // Source-to-MIR analysis runs inside the real compiler parser, but
+        // never publishes an executable AST or LLVM scalar fallback.
         if (token_.text == "launch" &&
                 peek_next().kind == Kind::Identifier) {
+            try {
+                const auto candidate = gpu_launch_source_candidate();
+                if (candidate.executable() || candidate.type_checked())
+                    gpu_launch_parse_error("GPU-LAUNCH-008", "forged source execution authority", offset);
+            } catch (const std::invalid_argument& malformed) {
+                throw std::runtime_error(std::string(malformed.what()) +
+                        "; no implicit CPU fallback at byte " + std::to_string(offset));
+            }
             throw std::runtime_error(
-                    "GPU-LAUNCH-008: explicit AttoLang GPU launch requires "
-                    "validated grid/block/device/queue effects, owned device "
-                    "loans, fence quiescence and physical GPU lowering; "
-                    "no implicit CPU fallback at byte " +
-                    std::to_string(token_.offset));
+                    "GPU-LAUNCH-008: source MIR created, but typed kernel ABI, "
+                    "owned device loans, completion fence and physical GPU "
+                    "lowering are absent; no implicit CPU fallback at byte " +
+                    std::to_string(offset));
         }
 
         // nb is a nonblocking channel/select modifier. It is never permission
