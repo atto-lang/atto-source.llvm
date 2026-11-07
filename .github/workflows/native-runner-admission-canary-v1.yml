@@ -1,3 +1,5 @@
+# Admission witness for current scoped-local lifecycle registry PR head.
+# Intentionally no source checkout, no secrets, no third-party actions.
 name: Native runner admission canary (NO SOURCE CHECKOUT)
 on:
   pull_request:
