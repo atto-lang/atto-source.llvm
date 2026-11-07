@@ -37,7 +37,12 @@ inline bool actor_local_current_turn_v1(
         execution.allocation.domain == actor.scheduler_domain &&
         execution.allocation.owner == actor.actor_slot &&
         execution.allocation.generation == actor.generation &&
-        ores_native_actor_scheduler_is_current_actor(scheduler, actor);
+        ores_native_actor_scheduler_is_current_actor(scheduler, actor) &&
+        // A physical owner may continue cleanup in STOPPING. Ownership
+        // alone is therefore NOT authorization to read/write ActorLocal.
+        // poll_ready() samples the exact live actor incarnation under the
+        // scheduler lifecycle mutex and rejects STOP, retire and stale refs.
+        ores_native_actor_scheduler_poll_ready(scheduler, actor);
 }
 
 template <class T>
@@ -60,7 +65,15 @@ std::optional<T> actor_local_get_on_turn_v1(
     const ActorLocalKeyV1<T>& key) {
     if (!actor_local_current_turn_v1(scheduler, actor, stamp))
         return std::nullopt;
-    return scope.get_copy(stamp, key);
+    // A host value copy runs outside the scope mutex and may suspend its
+    // physical carrier long enough for STOP or actor retirement to win.
+    // Recheck the *scheduler* after the copy, not just the scope's open flag.
+    // A final check is a bounded linearization point, not a lease against
+    // cancellation that follows the check. Guest lowering remains denied.
+    auto snapshot = scope.get_copy(stamp, key);
+    if (!snapshot || !actor_local_current_turn_v1(scheduler, actor, stamp))
+        return std::nullopt;
+    return snapshot;
 }
 
 template <class T>
