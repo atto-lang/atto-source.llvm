@@ -725,6 +725,17 @@ if(BUILD_TESTING)
                 "${ORE_CLANG}")
         set_tests_properties(native_inline_self_receiver_arity_aot PROPERTIES TIMEOUT 90)
     endif()
+    # Java-parity syntax as .atto guests: if/then, stdio.stdout.write/println
+    # of String/int/bool, Result.expect, and `import fnc` named imports.
+    if(ORE_CLANG)
+        add_test(NAME native_atto_parity_syntax
+            COMMAND "${CMAKE_COMMAND}"
+                "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+                "-DBUILD=${CMAKE_CURRENT_BINARY_DIR}"
+                "-DCLANG=${ORE_CLANG}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_parity_syntax.cmake")
+        set_tests_properties(native_atto_parity_syntax PROPERTIES TIMEOUT 240)
+    endif()
     # Positive compiler-only contracts must assemble the emitted IR, not just
     # accept an expected substring after the textual ModuleID header.
     if(ORE_CLANG)

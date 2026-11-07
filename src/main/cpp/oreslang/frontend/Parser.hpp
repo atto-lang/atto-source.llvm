@@ -444,6 +444,8 @@ struct ScalarGenerator {
 
 struct ModuleImport {
     bool selected_class = false;
+    // `import fnc name [as alias] from "path";` binds one pub function by name.
+    bool selected_function = false;
     std::string selected_module;
     std::string local_name;
     std::string path;
