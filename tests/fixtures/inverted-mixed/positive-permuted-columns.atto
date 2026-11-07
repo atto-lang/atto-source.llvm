@@ -6,7 +6,7 @@ define inverted struct Particle as
 end
 fnc main(): int {
     let rows = InvertedArray<Particle>.with_capacity(2);
-    rows.push(true, 1.5, 7);
+    rows.push(true, -0.0, 7);
     rows.push(false, 2.25, 42);
     rows.erase_swap(0);
     return rows.get(0, id);
