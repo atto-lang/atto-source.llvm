@@ -206,7 +206,7 @@ test('40 second compiled guest matrix JUnit cannot be suppressed',()=>{
 });
 test('41 second independent manifest mutation inventory mandatory',()=>{
   denied(workflow.replace(
-    "          grep -Eq 'Test +#[0-9]+: native_ownership_source_cfg_manifest_28_mutations$' /tmp/atto-source-cfg-fixture-inventory.txt",
+    "          grep -Eq 'Test +#[0-9]+: native_ownership_source_cfg_manifest_29_mutations$' /tmp/atto-source-cfg-fixture-inventory.txt",
     ()=>"          grep -Eq 'Test +#[0-9]+: native_ownership_source_cfg_manifest_INERT$' /tmp/atto-source-cfg-fixture-inventory.txt"),'MISSING_SOURCE_CFG_REAL_GUEST_EVIDENCE');
 });
 test('42 source CFG matrix branch must trigger exact-head CI',()=>{
@@ -226,14 +226,14 @@ test('44 second matrix guest execution receipt cannot be forged',()=>{
 });
 test('45 source CFG manifest mutation JUnit receipt cannot be removed',()=>{
   denied(workflow.replace(
-    '--output-junit /tmp/atto-source-cfg-mut-28.xml',
+    '--output-junit /tmp/atto-source-cfg-mut-29.xml',
     '--output-junit /tmp/forged-mut.xml'),
     'MISSING_SOURCE_CFG_REAL_GUEST_EVIDENCE');
 });
 test('46 source CFG manifest mutation must prove twenty-eight executed tests',()=>{
   denied(workflow.replace(
-    "grep -Eq 'Ran 28 tests' /tmp/atto-source-cfg-mut-28.log",
-    "grep -Eq 'Ran 0 tests' /tmp/atto-source-cfg-mut-28.log"),
+    "grep -Eq 'Ran 29 tests' /tmp/atto-source-cfg-mut-29.log",
+    "grep -Eq 'Ran 0 tests' /tmp/atto-source-cfg-mut-29.log"),
     'MISSING_SOURCE_CFG_REAL_GUEST_EVIDENCE');
 });
 test('47 loss of the exact new manifest path trigger is denied',()=>{
@@ -253,7 +253,7 @@ test('49 loss of 28-mutation host test source trigger is denied',()=>{
 });
 test('50 source-mutation result cannot be replaced by a zero-test receipt',()=>{
   denied(workflow.replace(
-    "grep -Eq 'Ran 28 tests' /tmp/atto-source-cfg-mut-28.log",
-    "grep -Eq 'Ran 0 tests' /tmp/atto-source-cfg-mut-28.log"),
+    "grep -Eq 'Ran 29 tests' /tmp/atto-source-cfg-mut-29.log",
+    "grep -Eq 'Ran 0 tests' /tmp/atto-source-cfg-mut-29.log"),
     'MISSING_SOURCE_CFG_REAL_GUEST_EVIDENCE');
 });
