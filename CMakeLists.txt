@@ -109,6 +109,19 @@ if(BUILD_TESTING)
         COMMAND oreslang-gpu-g2-provider-host-test)
     set_tests_properties(native_atto_gpu_g2_cuda_provider_HOST_ONLY
         PROPERTIES TIMEOUT 30)
+    # The selected hardware test must reject stale artifact reuse, even when
+    # a caller runs ctest -R and excludes the standalone offline PTX producer.
+    # This regression runs on host CI with NO CUDA SDK, device, or NVPTX llc.
+    add_test(NAME native_atto_gpu_g2_ptx_provenance_HOST_ONLY
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCOMPILER=$<TARGET_FILE:oreslang-gpu-g1-ir>"
+            "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/gpu_g1_saxpy_kernel.atto"
+            "-DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/atto-gpu-g2-stale-negatives"
+            "-DCHAIN_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_gpu_g2_physical_chain.cmake"
+            "-DOFFLINE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_gpu_g1_ptx_offline.cmake"
+            "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_gpu_g2_chain_negative.cmake")
+    set_tests_properties(native_atto_gpu_g2_ptx_provenance_HOST_ONLY
+        PROPERTIES TIMEOUT 75)
 
     # Physical CUDA execution is a separately governed, opt-in runner lane.
     # Never claim hardware validation just because a CUDA SDK was installed.
