@@ -261,6 +261,10 @@ int ores_native_actor_scheduler_drain(OresNativeActorScheduler* scheduler);
 /* Whether this OS thread is currently executing a callback from scheduler.
  * Only intended for immediate deadlock prevention in VM teardown. */
 int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* scheduler);
+/* Nonblocking global native carrier check for trusted CONTROL-only APIs.
+ * A carrier from ANY native scheduler (not just the supplied domain) must
+ * never call blocking request retirement or quiescence barriers. */
+int ores_native_actor_scheduler_is_any_current_carrier_v1(void);
 /* Exact live actor identity for trusted callback/FFI bridges only. */
 int ores_native_actor_scheduler_is_current_actor(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
