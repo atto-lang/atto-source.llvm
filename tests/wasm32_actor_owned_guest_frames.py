@@ -58,8 +58,8 @@ assert "declare void @oreslang_actor_guest_frame" not in ir
 # The currently admitted scalar handler is deliberately NOT a recursive guest
 # function ABI. Native call-graph containment must be implemented before
 # recursive actor source can be accepted, even if its parser recognizes calls.
-recursive = atto.replace(b"    total = total + increment;\\n    return total;\\n",
-    b"    return on_message(increment);\\n")
+recursive = atto.replace(b"    total = total + increment;\n    return total;\n",
+    b"    return on_message(increment);\n")
 assert recursive != atto, "recursive negative fixture did not mutate source"
 with tempfile.TemporaryDirectory(prefix="atto-wasm-actor-recursion-deny-") as folder:
     source_negative = Path(folder) / "recursive-actor.atto"
