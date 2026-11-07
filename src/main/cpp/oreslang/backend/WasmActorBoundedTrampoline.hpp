@@ -3,6 +3,7 @@
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <vector>
