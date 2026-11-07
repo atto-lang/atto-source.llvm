@@ -24,6 +24,19 @@ static void receive(void* userdata, size_t actor_index, uint64_t payload) {
         &s->seen[actor_index], UINT64_C(1), memory_order_relaxed) + UINT64_C(1);
     if (!admitted || original != expected || original == 0)
         atomic_store_explicit(&s->valid, 0, memory_order_relaxed);
+    uint64_t actual_payload = UINT64_MAX;
+    if (!ores_native_actor_scheduler_current_data_payload(
+            s->scheduler, actor, &actual_payload) ||
+            actual_payload != payload)
+        atomic_store_explicit(&s->valid, 0, memory_order_relaxed);
+    // Caller-supplied output is never overwritten on denial.
+    uint64_t unchanged = UINT64_C(0xbadcafe);
+    if (ores_native_actor_scheduler_current_data_payload(
+            s->scheduler, s->actors[1 - actor_index], &unchanged) ||
+        unchanged != UINT64_C(0xbadcafe) ||
+        ores_native_actor_scheduler_current_data_payload(
+            s->scheduler, actor, NULL))
+        atomic_store_explicit(&s->valid, 0, memory_order_relaxed);
 
     // Identical user payloads must carry DIFFERENT immutable admission IDs.
     // A guest-controlled payload must never determine original_mail_sequence.
@@ -64,6 +77,9 @@ int main(void) {
     // receipt. Old actor identities and foreign threads cannot recover it.
     uint64_t sentinel = UINT64_C(0xbeef);
     assert(!ores_native_actor_scheduler_current_data_mail_sequence(
+        s.scheduler, s.actors[0], &sentinel));
+    assert(sentinel == UINT64_C(0xbeef));
+    assert(!ores_native_actor_scheduler_current_data_payload(
         s.scheduler, s.actors[0], &sentinel));
     assert(sentinel == UINT64_C(0xbeef));
     assert(ores_native_actor_scheduler_stop(s.scheduler, s.actors[0]));
