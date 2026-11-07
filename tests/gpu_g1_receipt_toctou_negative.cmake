@@ -39,6 +39,7 @@ function(expect_identity_failure phase expected)
     execute_process(COMMAND "${CMAKE_COMMAND}"
         "-DG1_GIT=${G1_NEGATIVE_GIT}" "-DG1_REPO=${repo}"
         "-DG1_HEAD=${head}" "-DG1_EMITTER=${CMAKE_COMMAND}"
+        "-DG1_SOURCE=${repo}/fixture.atto"
         "-DG1_LLC=${CMAKE_COMMAND}" "-DG1_PROBE=${probe}"
         "-DG1_WORK=${work}" "-DG1_PTX_GATE=${gate}"
         -P "${G1_NEGATIVE_GATE}"
