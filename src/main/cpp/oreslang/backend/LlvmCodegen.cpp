@@ -1132,8 +1132,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // same-module functions; no unsound conversion to i64 is permitted.
     // Unique free functions retain their ABI symbol, overloaded families use arity slots.
     std::unordered_map<std::string, std::size_t> family_sizes;
-    for (const auto& fn : source.functions) ++family_sizes[fn.name];
+    if (!actor_stackless_calls)
+        for (const auto& fn : source.functions) ++family_sizes[fn.name];
     for (const auto& fn : source.functions) {
+        // M3 helpers are ONLY bytecode entries. Never emit a native helper
+        // definition that can recurse on the carrier's physical C stack.
+        if (actor_stackless_calls) continue;
         const std::string base_symbol = cortex_m_target && fn.name == "main"
             ? "oreslang_cortexm_bootstrap"
             : (native_main && source.module.empty() && fn.name == "main"
@@ -1166,7 +1170,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             argument_types, false);
         llvm::Function* declaration = llvm::Function::Create(
             signature,
-            (fn.native_internal || actor_stackless_calls || fn.async_source_i64 ||
+            (fn.native_internal || fn.async_source_i64 ||
              !fn.c_export_u32_symbol.empty())
                 ? llvm::Function::InternalLinkage
                 : llvm::Function::ExternalLinkage,
@@ -1183,6 +1187,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         declarations.emplace(native_function_slot(fn.name, fn.parameters.size()), declaration);
     }
     for (const auto& fn : source.functions) {
+        if (actor_stackless_calls) continue; // only M3 bytecode, no LLVM helper body
         llvm::Function* function = declarations.at(native_function_slot(fn.name, fn.parameters.size()));
         llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", function);
         llvm::IRBuilder<> builder(entry);
