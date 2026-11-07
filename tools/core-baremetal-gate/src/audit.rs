@@ -125,14 +125,34 @@ pub fn ir_escape_hatches(ir: &str) -> Vec<String> {
             found.push(format!("module-level assembly: {line}"));
         } else if line.contains(" asm ") || line.contains(" asm sideeffect ") {
             found.push(format!("inline assembly: {line}"));
-        } else if line.starts_with('@')
-            && (line.contains("= external global") || line.contains("= external constant")
-                || line.contains("= extern_weak global"))
-        {
+        } else if is_external_global_declaration(line) {
             found.push(format!("external global: {line}"));
         }
     }
     found
+}
+
+/// LLVM IR permits qualifiers between the linkage and the global kind, e.g.
+/// \`@g = external thread_local addrspace(1) global i32\`. Do not infer
+/// externality from a fixed substring: an external global may carry TLS,
+/// address-space, visibility or other modifiers.
+fn is_external_global_declaration(line: &str) -> bool {
+    let Some((name, rest)) = line.split_once('=') else {
+        return false;
+    };
+    if !name.trim().starts_with('@') {
+        return false;
+    }
+    let mut external = false;
+    for word in rest.split_whitespace() {
+        if matches!(word, "external" | "extern_weak") {
+            external = true;
+        }
+        if matches!(word, "global" | "constant") {
+            return external;
+        }
+    }
+    false
 }
 
 fn declared_name(line: &str) -> Option<String> {
@@ -313,6 +333,26 @@ declare void @"ores_actor_send"(ptr)
         assert!(found[0].starts_with("module-level assembly"));
         assert!(found[1].starts_with("external global"));
         assert!(found[3].starts_with("inline assembly"));
+    }
+
+    #[test]
+    fn ir_external_global_modifiers_cannot_bypass_gate() {
+        let variants = [
+            "@tls = external thread_local global i32",
+            "@tls_weak = extern_weak thread_local(localexec) global i64",
+            "@as = external addrspace(3) global i8",
+            "@const = external dso_local unnamed_addr constant i32",
+            "@weak_const = extern_weak hidden constant i32",
+        ];
+        for ir in variants {
+            let errors = ir_escape_hatches(ir);
+            assert_eq!(errors.len(), 1, "{ir}: {errors:?}");
+            assert!(errors[0].starts_with("external global:"), "{ir}: {errors:?}");
+        }
+        // Fully defined globals, including the similarly named internal
+        // \`externally_initialized\` modifier, are not host references.
+        assert!(ir_escape_hatches("@counter = global i32 0").is_empty());
+        assert!(ir_escape_hatches("@counter = externally_initialized global i32 0").is_empty());
     }
 
     #[test]
