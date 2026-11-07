@@ -21,6 +21,7 @@ on:
       - "src/main/cpp/oreslang/runtime/NativeRequestWakeGateV1.hpp"
       - "tests/native_request_actor_lifecycle_guard_v1_test.cpp"
       - "tests/native_request_actor_termination_registry_v1_test.cpp"
+      - "tests/native_request_ingress_supervisor_v1_test.cpp"
       - ".github/workflows/native-request-context-local-v1.yml"
   workflow_dispatch:
 permissions:
@@ -57,8 +58,8 @@ jobs:
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h)" = "cfd0e7f1d8fbd125a0ca20c7907432fc0407635c"
           test "$(git hash-object tests/native_request_context_local_v1_test.cpp)" = "05f071f911650a53b7158135d07f22b2650ea64b"
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalSchedulerTurnV1.hpp)" = "813d1f3be2ab90825e6bee4deb31b7a7f74e3796"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = "7541ccfeff1a6fa3e17df31cb63c225d7eeafa39"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.h)" = "8a0c2339015e5550e52f7c73d9051da6ac4d4ccc"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = "0c62b60b5b8b344836fb07e165c016f4f655c6f7"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.h)" = "f4aea5f2e594e34eaf4ec717a20c455225186a5a"
           test "$(git hash-object src/main/cpp/oreslang/runtime/TaskCancellation.hpp)" = "7eafa420e92ba10e552dade1846f3862cb79aec7"
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextHandoffV1.hpp)" = "80d03fe85c406d2b67898d890bc174850e2a54be"
           test "$(git hash-object tests/native_request_context_handoff_v1_test.cpp)" = "4d66bc7b520d34148b49eb726962819557a6ba74"
@@ -69,8 +70,9 @@ jobs:
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestDataMailGateV1.hpp)" = "6affba5e1b021bf9f4e5b54584241d873f245451"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestWakeGateV1.hpp)" = "03c6978398bde37ab5260aabb93697dabb60740a"
           test "$(git hash-object tests/native_request_actor_lifecycle_guard_v1_test.cpp)" = "ebba397307a27451492d0c3aa20d8b259807d80f"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalActorTerminationRegistryV1.hpp)" = "bc7866aabc7faf814c4d579d1112e0f5c748c530"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalActorTerminationRegistryV1.hpp)" = "f905735fd1b78c441f3b2b9382a972264b97dc29"
           test "$(git hash-object tests/native_request_actor_termination_registry_v1_test.cpp)" = "bb8661b028dbc740e1a501325755a32b8e866953"
+          test "$(git hash-object tests/native_request_ingress_supervisor_v1_test.cpp)" = "8254ff9f07e8d43a2020279c5b1c5f4ada452abb"
       - name: Compile and execute real actor two-request isolation
         shell: bash
         env:
@@ -131,4 +133,10 @@ jobs:
           "$tmp/actor-request-registry" | tee "$tmp/registry-cases.log"
           test "$(grep -c '^REQUEST_REGISTRY_CASE_PASS ' "$tmp/registry-cases.log")" = "118"
           grep -qx 'REQUEST_TERMINATION_REGISTRY_HOST_PASS total=118 race_trials=60' "$tmp/registry-cases.log"
+          "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp tests/native_request_ingress_supervisor_v1_test.cpp \
+            "$tmp/scheduler.o" -o "$tmp/request-ingress-supervisor"
+          "$tmp/request-ingress-supervisor" | tee "$tmp/ingress-cases.log"
+          test "$(grep -c '^INGRESS_SUPERVISOR_CASE_PASS ' "$tmp/ingress-cases.log")" = "207"
+          grep -qx 'REQUEST_INGRESS_SUPERVISOR_HOST_PASS total=207 races=60' "$tmp/ingress-cases.log"
           printf 'REQUEST_CONTEXT_LOCAL_EXACT_SOURCE_HOST_PASS compiler=%s mode=%s\n' "$CC" "$MODE"
