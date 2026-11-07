@@ -546,6 +546,16 @@ int oreslang_source_actor_ready_status(void* opaque) {
         &instance->startup_state, memory_order_acquire);
 }
 
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+uint64_t oreslang_source_actor_test_processed(void* opaque) {
+    SourceActor* instance = (SourceActor*)opaque;
+    if (!instance || instance->magic != SOURCE_ACTOR_MAGIC)
+        return UINT64_MAX;
+    return atomic_load_explicit(
+        &instance->processed, memory_order_acquire);
+}
+#endif
+
 typedef struct {
     OresNativeActorFuture* future;
     int status;
