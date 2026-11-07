@@ -2,6 +2,11 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <atomic>
+#include <memory>
+#include <random>
+#include <thread>
+#include <array>
 #include <limits>
 #include <map>
 #include <stdexcept>
@@ -19,25 +24,29 @@ struct Fake final:Driver {
     Handle serial=1;
     Handle live_module=0,live_event=0;
     bool ready=false,fail_upload=false,fail_load=false,fail_record=false,fail_free=false,fail_event_query=false,stream_idle=false;
+    bool fail_kernel=false,fail_download=false,fail_destroy_event=false,fail_unload=false;
+    int fail_allocate_at=0, allocation_count=0;
     std::size_t launches=0,frees=0,uploads=0,downloads=0,unloads=0;
     std::vector<std::string> order;
     const std::string& device_identity()const override{return device;}
     const Limits& device_limits()const override{return limits;}
     Handle load_ptx(std::string_view s)override{if(fail_load)throw std::runtime_error("load failed");check(s.find(".entry saxpy")!=s.npos);return live_module=++serial;}
     Handle kernel(Handle h,const char* entry)override{check(h==live_module&&std::string(entry)=="saxpy");return ++serial;}
-    Handle allocate(std::size_t n)override{check(n>0);const auto h=++serial;buffers[h].resize(n/sizeof(float));return h;}
+    Handle allocate(std::size_t n)override{check(n>0);if(++allocation_count==fail_allocate_at)throw std::runtime_error("injected allocation failure");const auto h=++serial;buffers[h].resize(n/sizeof(float));return h;}
     void upload(Handle d,const float* src,std::size_t n)override{order.push_back("upload");if(fail_upload)throw std::runtime_error("enqueue failure");check(buffers.count(d)==1);std::memcpy(buffers.at(d).data(),src,n);++uploads;}
     void launch(Handle fn,std::uint32_t grid,std::uint32_t block,float a,Handle x,Handle y,Handle out,std::uint64_t n)override{
+        if(fail_kernel)throw std::runtime_error("injected launch failure");
         check(fn!=0&&grid!=0&&block!=0&&static_cast<std::uint64_t>(grid)*block>=n);++launches;order.push_back("kernel");
         for(std::size_t i=0;i<n;++i) buffers.at(out)[i]=a*buffers.at(x)[i]+buffers.at(y)[i];
     }
-    void download(float* dst,Handle src,std::size_t n)override{check(buffers.count(src)==1);order.push_back("download");std::memcpy(dst,buffers.at(src).data(),n);++downloads;}
+    void download(float* dst,Handle src,std::size_t n)override{if(fail_download)throw std::runtime_error("injected download failure");
+        check(buffers.count(src)==1);order.push_back("download");std::memcpy(dst,buffers.at(src).data(),n);++downloads;}
     Handle record_event()override{if(fail_record)throw std::runtime_error("no event");order.push_back("event");return live_event=++serial;}
     EventResult event_result(Handle e)override{check(e==live_event);if(fail_event_query)throw std::runtime_error("query unavailable");return ready?EventResult::Complete:EventResult::Pending;}
     bool stream_quiescent()override{return stream_idle;}
-    void destroy_event(Handle e)override{check(e==live_event);live_event=0;}
+    void destroy_event(Handle e)override{if(fail_destroy_event)throw std::runtime_error("injected event-release failure");check(e==live_event);live_event=0;}
     void free_buffer(Handle p)override{if(fail_free)throw std::runtime_error("release failure");check(buffers.erase(p)==1);++frees;}
-    void unload(Handle m)override{check(m==live_module);live_module=0;++unloads;}
+    void unload(Handle m)override{if(fail_unload)throw std::runtime_error("injected module-release failure");check(m==live_module);live_module=0;++unloads;}
 };
 static std::string ptx=".version 7.0\n.visible .entry saxpy() { ret; }";
 int main(){
@@ -119,5 +128,83 @@ int main(){
     rejects<std::invalid_argument>([]{Fake d;SaxpyOperation op(d,"tenant",std::numeric_limits<std::uint64_t>::max(),4096);});
     rejects<std::invalid_argument>([]{Fake d;SaxpyOperation op(d,"",100,4096);});
     rejects<std::invalid_argument>([]{Fake d;SaxpyOperation op(d,"tenant",0,4096);});
+    // Fault injection before any physical enqueue must reclaim reservations.
+    for (int nth=1;nth<=3;++nth) {
+        Fake d;d.fail_allocate_at=nth;SaxpyOperation op(d,"allocation-fail",2500+nth*3,4096);
+        rejects<std::runtime_error>([&]{op.submit(ptx,1,{1},{2});});
+        check(op.state()==State::Failed&&d.buffers.empty()&&d.live_module==0);
+        check(!op.has_live_device_handles());op.close();
+    }
+    // Faults after a possible enqueue may never release until stream proof.
+    for (int mode=0;mode<2;++mode) {
+        Fake d;d.fail_kernel=mode==0;d.fail_download=mode==1;
+        SaxpyOperation op(d,"submit-fault",2600+mode*3,4096);
+        rejects<std::runtime_error>([&]{op.submit(ptx,1,{1},{2});});
+        check(op.state()==State::Quarantined&&d.buffers.size()==3&&d.frees==0);
+        check(!op.poll()&&d.frees==0);d.stream_idle=true;
+        check(op.poll()&&op.state()==State::Failed&&d.buffers.empty());op.close();
+    }
+    // Cleanup failures must preserve the stream lease and allow safe retry.
+    for (int mode=0;mode<2;++mode) {
+        Fake d;SaxpyOperation first(d,"release-fault",2700+mode*3,4096);
+        SaxpyOperation second(d,"contender",2800+mode*3,4096);
+        first.submit(ptx,1,{1},{2});d.ready=true;
+        d.fail_destroy_event=mode==0;d.fail_unload=mode==1;
+        rejects<std::runtime_error>([&]{(void)first.poll();});
+        check(first.state()==State::ReleaseFailed);
+        rejects<std::logic_error>([&]{second.submit(ptx,1,{1},{2});});
+        d.fail_destroy_event=false;d.fail_unload=false;
+        check(first.poll()&&first.output()==std::vector<float>({3}));first.close();
+        second.submit(ptx,2,{3},{4});check(second.poll());second.close();
+        check(d.buffers.empty()&&d.live_module==0);
+    }
+    // Four separate operations may race to acquire one driver-owned stream.
+    // Simultaneous gate release exercises the real mutex-protected claim.
+    for (int trial=0;trial<128;++trial) {
+        Fake d;std::array<std::unique_ptr<SaxpyOperation>,4> ops;
+        for (int j=0;j<4;++j)
+            ops[j]=std::make_unique<SaxpyOperation>(d,"tenant"+std::to_string(j),3000+trial*12+j*3,4096);
+        std::array<bool,4> accepted{};
+        std::array<std::exception_ptr,4> errors{};
+        std::atomic<int> ready{0};std::atomic<bool> go{false};
+        std::array<std::thread,4> workers;
+        for (int j=0;j<4;++j)workers[j]=std::thread([&,j]{
+            ready.fetch_add(1,std::memory_order_release);
+            while(!go.load(std::memory_order_acquire))std::this_thread::yield();
+            try{ops[j]->submit(ptx,2.0f,{float(j+1)},{10.0f});accepted[j]=true;}
+            catch(const std::logic_error&){}catch(...){errors[j]=std::current_exception();}
+        });
+        while(ready.load(std::memory_order_acquire)!=4)std::this_thread::yield();
+        go.store(true,std::memory_order_release);
+        for(auto& worker:workers)worker.join();
+        for(const auto& err:errors)if(err)std::rethrow_exception(err);
+        int winners=0;for(bool b:accepted)winners+=b?1:0;
+        check(winners==1&&d.launches==1&&d.buffers.size()==3);
+        d.ready=true;
+        for(int j=0;j<4;++j){
+            if(accepted[j]){
+                check(ops[j]->poll()&&ops[j]->output()==std::vector<float>({float(2*(j+1)+10)}));
+                ops[j]->close();
+            }else check(ops[j]->state()==State::Ready&&!ops[j]->has_live_device_handles());
+        }
+        check(d.buffers.empty()&&d.live_module==0);
+    }
+    // Deterministic property tests: mixed workgroup sizes, padded lanes,
+    // n=0, full float vectors and CPU numerical oracle across 300 shapes.
+    std::mt19937_64 rng(0xa7700026ULL);
+    for(int trial=0;trial<300;++trial){
+        Fake d;const auto n=static_cast<std::size_t>(rng()%2050);
+        const auto group=static_cast<std::uint32_t>(1u<<(rng()%9));
+        const auto scale=static_cast<float>(int(rng()%9)-4);
+        std::vector<float> x(n),y(n);
+        for(std::size_t i=0;i<n;++i){x[i]=float(int(rng()%511)-255);y[i]=float(int(rng()%511)-255);}
+        SaxpyOperation op(d,"fuzz",50000+trial*3,1u<<20);
+        op.submit(ptx,scale,x,y,group);
+        if(n==0)check(d.launches==0&&op.state()==State::Completed);
+        else{check(!op.poll());d.ready=true;check(op.poll());}
+        const auto& out=op.output();check(out.size()==n);
+        for(std::size_t i=0;i<n;++i)check(out[i]==scale*x[i]+y[i]);
+        check(d.buffers.empty()&&d.live_module==0);op.close();
+    }
     std::cout<<"PASS "<<count<<" GPU-G2 host-only driver lifecycle assertions\n";
 }
