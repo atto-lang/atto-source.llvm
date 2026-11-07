@@ -1692,9 +1692,13 @@ int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
     if (ready) {
         for (size_t i = 0; i < s->actor_count; ++i) {
             ActorLane* lane = &s->actors[i];
-            if (lane->spawned
+            // A registered STOP notice owns a borrowed observer pointer.
+            // Destroying this scheduler before unregister would let a live
+            // lifecycle registry call back into freed scheduler memory.
+            if (lane->stop_notice ||
+                (lane->spawned
                 && (ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED
-                    || !lane->terminal_valid)) {
+                    || !lane->terminal_valid))) {
                 ready = 0;
                 break;
             }
