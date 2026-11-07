@@ -44,9 +44,15 @@ public:
 
     bool authorized() const {
         std::uint64_t authenticated_mail = 0;
-        return ores_native_actor_scheduler_current_data_mail_sequence(
+        // A registry-terminated scope must be denied BEFORE dereferencing
+        // its raw scheduler pointer. Recheck after the scheduler query so
+        // STOP cannot authorize a stale request result. Concurrent scheduler
+        // destruction still requires the host's external lifetime barrier.
+        return request_->active()
+            && ores_native_actor_scheduler_current_data_mail_sequence(
                     scheduler_, actor_, &authenticated_mail)
-            && authenticated_mail == original_mail_ && request_->active();
+            && authenticated_mail == original_mail_
+            && request_->active();
     }
 
     template <typename T>
