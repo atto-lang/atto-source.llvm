@@ -324,6 +324,7 @@ struct ScalarWhileLoop {
 
 struct Function {
     std::string name;
+    bool direct_only_routine = false; // never admit recursive routine through fnc TCO
     std::vector<GenericParameter> generic_parameters;
     std::unique_ptr<ScalarWhileLoop> scalar_while;
     std::vector<Parameter> parameters;
