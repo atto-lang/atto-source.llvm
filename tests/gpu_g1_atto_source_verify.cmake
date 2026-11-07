@@ -52,10 +52,26 @@ execute_process(COMMAND "${G1_COMPILER}" "${invalid_path}"
 if(rejected_rc EQUAL 0 OR NOT rejected_stdout STREQUAL "")
     message(FATAL_ERROR "GPU-G1-SOURCE-TEST-006: invalid bounds accepted or emitted LLVM IR")
 endif()
+if(DEFINED G1_MAIN_COMPILER AND NOT G1_MAIN_COMPILER STREQUAL "")
+    execute_process(COMMAND "${G1_MAIN_COMPILER}" --gpu-g1-kernel-ir "${invalid_path}"
+        OUTPUT_VARIABLE main_negative_stdout ERROR_VARIABLE main_negative_error
+        RESULT_VARIABLE main_negative_rc)
+    if(main_negative_rc EQUAL 0 OR NOT main_negative_stdout STREQUAL "")
+        message(FATAL_ERROR "GPU-G1-SOURCE-TEST-010: native main compiler admitted mutated bounds")
+    endif()
+endif()
 file(WRITE "${invalid_path}" "${source}\nsuspends fnc hostile() => void {}\n")
 execute_process(COMMAND "${G1_COMPILER}" "${invalid_path}"
     OUTPUT_VARIABLE trailing_stdout ERROR_VARIABLE trailing_stderr RESULT_VARIABLE trailing_rc)
 if(trailing_rc EQUAL 0 OR NOT trailing_stdout STREQUAL "")
     message(FATAL_ERROR "GPU-G1-SOURCE-TEST-007: extra executable source accepted")
+endif()
+if(DEFINED G1_MAIN_COMPILER AND NOT G1_MAIN_COMPILER STREQUAL "")
+    execute_process(COMMAND "${G1_MAIN_COMPILER}" --gpu-g1-kernel-ir "${invalid_path}"
+        OUTPUT_VARIABLE trailing_main_stdout ERROR_VARIABLE trailing_main_error
+        RESULT_VARIABLE trailing_main_rc)
+    if(trailing_main_rc EQUAL 0 OR NOT trailing_main_stdout STREQUAL "")
+        message(FATAL_ERROR "GPU-G1-SOURCE-TEST-011: native main compiler accepted hidden host source")
+    endif()
 endif()
 message(STATUS "PASS G1 .atto source -> canonical checked LLVM IR -> Clang; two invalid source mutations rejected without artifact (NO PTX OR GPU)")
