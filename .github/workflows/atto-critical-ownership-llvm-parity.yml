@@ -24,6 +24,7 @@ on:
       - 'audit/llvm-source-physical-fieldwrite-link-*'
       - 'audit/llvm-restore-witness-to-store-*'
       - 'audit/llvm-source-restoration-cfg-dom-v1-*'
+      - 'audit/llvm-source-cfg-50-guests-and-regressions-*'
   pull_request:
     paths:
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
@@ -57,6 +58,9 @@ on:
       - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
       - 'src/main/cpp/oreslang/types/OwnershipMirEvidence.hpp'
       - 'tests/contracts/atto_ownership_place_mir_50.json'
+      - 'tests/contracts/atto_ownership_source_cfg_50.json'
+      - 'tests/ownership_source_cfg_compiler_matrix.py'
+      - 'tests/test_ownership_source_cfg_compiler_matrix.py'
       - 'tests/ownership_compiler_fixture_matrix.py'
       - 'tests/test_ownership_compiler_fixture_matrix.py'
       - 'src/main/cpp/oreslang/types/NativeOwnershipJoin.hpp'
@@ -258,6 +262,28 @@ jobs:
           if tests != 1 or failures or skipped:
               raise SystemExit(f'50-compiler fixture CTest invalid: {tests=} {failures=} {skipped=}')
           print('ATTO_LLVM_MIR_PLACE_SOURCE_COMPILER=REAL_50_CASES_EXECUTED')
+          PY
+          # Independently execute 50 *new* class-field CFG programs. Static
+          # manifests and source-only checks cannot substitute for a compiler,
+          # Clang linker, and the positive guest exit / negative diagnostic.
+          ctest --test-dir build -N -R '^(native_ownership_source_cfg_manifest_18_mutations|atto_ownership_source_cfg_real_compiler_50)$' > /tmp/atto-source-cfg-fixture-inventory.txt
+          grep -Eq 'Test +#[0-9]+: native_ownership_source_cfg_manifest_18_mutations$' /tmp/atto-source-cfg-fixture-inventory.txt
+          grep -Eq 'Test +#[0-9]+: atto_ownership_source_cfg_real_compiler_50$' /tmp/atto-source-cfg-fixture-inventory.txt
+          ctest --test-dir build -V -R '^native_ownership_source_cfg_manifest_18_mutations$' --timeout 90
+          ctest --test-dir build -V -R '^atto_ownership_source_cfg_real_compiler_50$' \
+            --output-junit /tmp/atto-source-cfg-50.xml --timeout 1100 | tee /tmp/atto-source-cfg-50.log
+          grep -Fq 'ATTO_SOURCE_CFG_REAL_COMPILER_FIXTURES=50/50_EXECUTED' /tmp/atto-source-cfg-50.log
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-source-cfg-50.xml').getroot()
+          observed = [x.get('name') for x in root.iter('testcase')]
+          if (int(root.get('tests', '-1')) != 1 or
+                  int(root.get('failures', '1')) or
+                  int(root.get('errors', '1')) or
+                  int(root.get('skipped', '1')) or
+                  observed != ['atto_ownership_source_cfg_real_compiler_50']):
+              raise SystemExit('source CFG real compiler fixture receipts invalid')
+          print('ATTO_LLVM_SOURCE_CFG_GUEST=50/50_REAL_COMPILER_EXECUTED')
           PY
 
       - name: Reverify checkout head and clean tracked source
