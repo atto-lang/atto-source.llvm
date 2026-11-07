@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <stdexcept>
 #include <vector>
@@ -70,6 +71,19 @@ int main(){
     {Fake d;SaxpyOperation op(d,"tenant",900,4096);op.submit(ptx,1,{1},{2});d.ready=true;d.fail_free=true;
      rejects<std::runtime_error>([&]{(void)op.poll();});check(op.state()==State::ReleaseFailed&&op.has_live_device_handles());
      d.fail_free=false;check(op.poll());check(op.output()==std::vector<float>({3}));op.close();}
+    {Fake d;SaxpyOperation op(d,"tenant",1000,4096);op.submit(ptx,1,{1},{2});
+     d.fail_event_query=true;check(!op.poll()&&op.state()==State::Quarantined&&d.frees==0);
+     d.fail_event_query=false;d.ready=true;check(!op.poll()&&d.frees==0);
+     d.stream_idle=true;check(op.poll()&&op.state()==State::Failed&&d.frees==3);op.close();}
+    {Fake d;d.limits.max_block=Dim3(32,1,1);SaxpyOperation op(d,"tenant",1100,4096);
+     rejects<std::invalid_argument>([&]{op.submit(ptx,1,{1},{2},256);});
+     check(d.buffers.empty()&&d.launches==0);op.submit(ptx,1,{1},{2},32);
+     d.ready=true;check(op.poll()&&op.output()==std::vector<float>({3}));op.close();}
+    {Fake d;SaxpyOperation op(d,"tenant",1200,4);
+     rejects<std::invalid_argument>([&]{op.submit(ptx,1,{1,2},{2,3});});
+     check(d.buffers.empty());rejects<std::logic_error>([&]{(void)op.poll();});
+     rejects<std::logic_error>([&]{op.request_cancel();});}
+    rejects<std::invalid_argument>([]{Fake d;SaxpyOperation op(d,"tenant",std::numeric_limits<std::uint64_t>::max(),4096);});
     rejects<std::invalid_argument>([]{Fake d;SaxpyOperation op(d,"",100,4096);});
     rejects<std::invalid_argument>([]{Fake d;SaxpyOperation op(d,"tenant",0,4096);});
     std::cout<<"PASS "<<count<<" GPU-G2 host-only driver lifecycle assertions\n";
