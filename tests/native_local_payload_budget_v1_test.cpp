@@ -8,6 +8,15 @@
 #include <array>
 #include <variant>
 using namespace oreslang::runtime;
+
+static_assert(!LocalUnboundedPayloadV1<std::tuple<int, int>>::value);
+static_assert(!LocalUnboundedPayloadV1<std::variant<int, double>>::value);
+static_assert(LocalUnboundedPayloadV1<std::tuple<int, std::string>>::value);
+static_assert(LocalUnboundedPayloadV1<std::variant<int, std::string>>::value);
+static_assert(LocalUnboundedPayloadV1<std::vector<int>>::value);
+static_assert(LocalUnboundedPayloadV1<std::optional<std::string>>::value);
+static_assert(!LocalUnboundedPayloadV1<std::array<int, 4>>::value);
+
 int main() {
     const std::string emoji = "\xf0\x9f\x98\x80";
     assert(local_valid_utf8_scalars_v1(emoji));
