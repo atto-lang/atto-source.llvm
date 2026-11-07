@@ -31,12 +31,19 @@ PY
   -o "$work/unguarded-host-local"
 status=0
 ("$work/unguarded-host-local") >"$work/mutation.log" 2>&1 || status=$?
-if [[ "$status" -eq 0 ]]; then
-  echo "MUTATION_UNDETECTED: unguarded read unexpectedly passed" >&2
+# A compiler crash, SIGSEGV (139), timeout (124), or arbitrary failing
+# command is NOT proof that deleting the fence was detected. The expected
+# source assertion terminates via SIGABRT (128 + 6 = 134 on this Linux CI).
+if [[ "$status" -ne 134 ]]; then
+  echo "MUTATION_INVALID_EXIT: expected revoked-read SIGABRT(134), observed $status" >&2
+  cat "$work/mutation.log" >&2
   exit 1
 fi
-if ! grep -Fq '!returned' "$work/mutation.log"; then
-  echo "MUTATION_INVALID: failed for a reason other than revoked read assertion" >&2
+# Require all three markers on the same assertion line. A generic log that
+# happens to mention '!returned' must never count as negative mutation proof.
+if ! grep -F 'native_local_read_revocation_v1_test.cpp:' "$work/mutation.log" \
+    | grep -F 'Assertion' | grep -Fq '!returned'; then
+  echo "MUTATION_INVALID_DIAGNOSTIC: missing exact revoked-read assertion" >&2
   cat "$work/mutation.log" >&2
   exit 1
 fi
