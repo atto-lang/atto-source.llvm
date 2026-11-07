@@ -409,3 +409,21 @@ of LoanId use-def closure, exception/overflow exit paths, optimized binary
 behavior, or actor lifetime. All broad proof flags remain false. The
 new assertions have been AUTHORED but not executed while Actions reports
 steps=null. Do not merge on source/host declaration-only evidence.
+
+### Additional fail-closed effect qualification
+
+The bounded source-MIR whitelist now additionally excludes generic functions,
+pending actor ready/future tokens, sum-value returns, declared effect
+contracts, explicit/parameterized class constructors, local class-move
+origins, sum types and record-array fields. These are not silently
+treated as ordinary scalar effects. The source effect fingerprint includes
+generic parameter identities, ready-future tokens, return-sum/effect
+metadata and native-internal source attributes, so post-validation
+changes cannot convert previously unsupported functions into admitted
+restricted-source traces without invalidating the source seal.
+
+Host suite increased 58 to 74 authored assertions (4 post-seal metadata
+mutation rejections plus 12 unsupported-source controls). CTest count
+remains 17 with unchanged exact-name JUnit gate; 50 compiler-backed
+fixtures and separate real native guests are still required. All
+additional checks remain NOT_EXECUTED pending runner admission.

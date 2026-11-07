@@ -57,7 +57,8 @@ inline std::optional<StraightLineTrace> build_checked_straight_line_trace(
     if (function.return_type == ScalarType::String ||
             function.compiler_straight_line_effect_fingerprint == 0)
         return std::nullopt;
-    if (!function.parameters.empty() || !function.early_returns.empty() ||
+    if (!function.generic_parameters.empty() ||
+            !function.parameters.empty() || !function.early_returns.empty() ||
             !function.actor_spawns.empty() || !function.actor_actions.empty() ||
             !function.actor_sends.empty() || !function.actor_stops.empty() ||
             !function.actor_field_writes.empty() || !function.source_tasks.empty() ||
@@ -66,7 +67,11 @@ inline std::optional<StraightLineTrace> build_checked_straight_line_trace(
             !function.caught_throw_defers.empty() ||
             !function.ready_await_actor.empty() ||
             !function.done_await_actor.empty() ||
+            !function.ready_future_name.empty() ||
+            !function.ready_future_actor.empty() ||
+            function.ready_await_form != NativeAwaitForm::None ||
             !function.method_owner.empty() || !function.return_class.empty() ||
+            !function.return_sum.empty() || function.has_declared_effects ||
             function.returns_void || !function.result ||
             function.locals.size() > 64 || function.statements.size() > 128)
         return std::nullopt;
@@ -83,6 +88,8 @@ inline std::optional<StraightLineTrace> build_checked_straight_line_trace(
     for (const auto& local : function.locals) {
         if (local.name.empty() || !names.insert(local.name).second ||
                 local.scalar_type == ScalarType::String ||
+                !local.sum_type.empty() || !local.array_record_class.empty() ||
+                !local.move_source.empty() ||
                 local.heap_owned || local.int_array || local.record_view ||
                 local.move_class || !local.task_await_name.empty() ||
                 !local.future_await_name.empty() ||
@@ -98,6 +105,8 @@ inline std::optional<StraightLineTrace> build_checked_straight_line_trace(
                     return c.name == local.class_name;
                 });
             if (cls == program.classes.end() || cls->fields.empty() ||
+                    cls->explicit_constructor ||
+                    !cls->constructor_parameters.empty() ||
                     cls->fields.size() > 16)
                 return std::nullopt;
             auto& fields = class_fields[local.name];
@@ -105,6 +114,8 @@ inline std::optional<StraightLineTrace> build_checked_straight_line_trace(
                 if (field.name.empty() || field.name.find('.') != std::string::npos ||
                         field.int_array || !field.class_name.empty() ||
                         field.scalar_type == ScalarType::String ||
+                        !field.sum_type.empty() ||
+                        !field.array_record_class.empty() ||
                         field.final_field || field.constructor_argument ||
                         !field.initializer_expression ||
                         (field.initializer_expression->kind != Expression::Kind::Integer &&

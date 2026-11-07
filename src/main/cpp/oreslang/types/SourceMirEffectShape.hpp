@@ -139,9 +139,17 @@ inline std::optional<std::uint64_t> straight_line_effect_shape(
     }
 
     hash.str(function.name);
+    hash.u64(function.generic_parameters.size());
+    for (const auto& param : function.generic_parameters) {
+        hash.str(param.name);
+        hash.str(param.default_type);
+    }
     hash.u64(static_cast<std::uint64_t>(function.return_type));
     hash.u64(function.returns_void ? 1 : 0);
     hash.str(function.return_class);
+    hash.str(function.return_sum);
+    hash.u64(function.has_declared_effects ? 1 : 0);
+    hash.u64(function.native_internal ? 1 : 0);
     hash.u64(function.locals.size());
     for (const auto& local : function.locals) {
         hash.str(local.name);
@@ -199,6 +207,8 @@ inline std::optional<std::uint64_t> straight_line_effect_shape(
     hash.u64(function.ready_await_form == NativeAwaitForm::None ? 0 : 1);
     hash.str(function.ready_await_actor);
     hash.str(function.done_await_actor);
+    hash.str(function.ready_future_name);
+    hash.str(function.ready_future_actor);
     hash.u64(function.async_source_i64 ? 1 : 0);
 
     if (!valid)

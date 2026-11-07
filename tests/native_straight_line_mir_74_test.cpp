@@ -176,8 +176,24 @@ int main() {
         check([]{ Fixture f; auto previous=f.function().compiler_straight_line_effect_fingerprint; oreslang::source_identity::prune_and_reseal_validated_functions(f.program,{1}); auto t=f.trace(); return t && previous==f.function().compiler_straight_line_effect_fingerprint && t->supported_source_effects_complete; }(), "trusted tree shake reissues source shape epoch", n);
         check([]{ Fixture f; auto a=f.function().compiler_straight_line_effect_fingerprint; oreslang::source_identity::validate_program_identity(f.program); return a!=0 && a==f.function().compiler_straight_line_effect_fingerprint && f.trace().has_value(); }(), "same source shape remains stable across validation", n);
         check([]{ Fixture f; auto t=f.trace(); return t && !t->full_loan_use_coverage && !t->guest_verified && !t->optimized_code_verified; }(), "scoped trace remains nonpromoting after shape fence", n);
-        if(n!=58) throw std::runtime_error("source MIR test count changed");
-        std::cout<<"PASS 58/58 compiler-source straight-line MIR and shape-fence host cases "
+        check(denied([]{ Fixture f; f.function().generic_parameters.emplace_back(); (void)f.trace(); }), "post-seal generics added denied", n);
+        check(denied([]{ Fixture f; f.function().ready_future_name="ready"; (void)f.trace(); }), "post-seal actor ready token altered denied", n);
+        check(denied([]{ Fixture f; f.function().return_sum="Option"; (void)f.trace(); }), "post-seal sum return type altered denied", n);
+        check(denied([]{ Fixture f; f.function().has_declared_effects=true; (void)f.trace(); }), "post-seal effect contract toggle denied", n);
+        check([]{ Fixture f(true,false); f.function().generic_parameters.emplace_back(); f.seal(); return !f.trace().has_value(); }(), "generic functions outside restricted MIR", n);
+        check([]{ Fixture f(true,false); f.function().ready_future_name="ready"; f.seal(); return !f.trace().has_value(); }(), "ready Future token outside restricted MIR", n);
+        check([]{ Fixture f(true,false); f.function().ready_future_actor="worker"; f.seal(); return !f.trace().has_value(); }(), "ready Future actor outside restricted MIR", n);
+        check([]{ Fixture f(true,false); f.function().has_declared_effects=true; f.seal(); return !f.trace().has_value(); }(), "declared effect contract outside restricted MIR", n);
+        check([]{ Fixture f(true,false); f.function().return_sum="Option"; f.seal(); return !f.trace().has_value(); }(), "sum return outside restricted MIR", n);
+        check([]{ Fixture f(true,false); f.program.classes.front().explicit_constructor=true; f.seal(); return !f.trace().has_value(); }(), "explicit class constructor outside restricted MIR", n);
+        check([]{ Fixture f(true,false); f.program.classes.front().constructor_parameters.push_back("left"); f.seal(); return !f.trace().has_value(); }(), "class constructor parameters outside restricted MIR", n);
+        check([]{ Fixture f(true,false); f.former().sum_type="Option"; f.seal(); return !f.trace().has_value(); }(), "local sum type outside restricted MIR", n);
+        check([]{ Fixture f(true,false); f.former().array_record_class="Record"; f.seal(); return !f.trace().has_value(); }(), "local record-array hint outside restricted MIR", n);
+        check([]{ Fixture f(true,false); f.former().move_source="pair"; f.seal(); return !f.trace().has_value(); }(), "local class-move origin outside restricted MIR", n);
+        check([]{ Fixture f(true,false); f.program.classes.front().fields.front().sum_type="Option"; f.seal(); return !f.trace().has_value(); }(), "sum-typed class field outside restricted MIR", n);
+        check([]{ Fixture f(true,false); f.program.classes.front().fields.front().array_record_class="Record"; f.seal(); return !f.trace().has_value(); }(), "record-array class field outside restricted MIR", n);
+        if(n!=74) throw std::runtime_error("source MIR test count changed");
+        std::cout<<"PASS 74/74 compiler-source straight-line MIR and shape-fence host cases "
                     "(NOT LLVM GUEST PROOF)\n";
         return 0;
     } catch(const std::exception& error) {
