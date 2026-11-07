@@ -186,8 +186,12 @@ public:
                 throw std::runtime_error("SAXPY driver returned null output buffer");
             if (operation->x_device_ == operation->y_device_
                     || operation->x_device_ == operation->output_device_
-                    || operation->y_device_ == operation->output_device_)
+                    || operation->y_device_ == operation->output_device_) {
+                // Unexpected alias provenance cannot be blindly released
+                // three times or treated as exclusive memory.
+                operation->attempted_enqueue_ = true;
                 throw std::runtime_error("SAXPY driver returned aliased physical buffers");
+            }
             operation->attempted_enqueue_ = true;
             operation->event_ = api_.enqueue_upload(
                     operation->x_device_,
@@ -370,12 +374,19 @@ private:
                 operation.event_ = nullptr;
             }
             if (operation.x_device_) {
-                api_.release_buffer(operation.x_device_);
+                const auto physical = operation.x_device_;
+                api_.release_buffer(physical);
                 operation.x_device_ = nullptr;
+                // Even a faulty adapter reporting duplicate raw handles
+                // cannot induce a second physical release.
+                if (operation.y_device_ == physical) operation.y_device_ = nullptr;
+                if (operation.output_device_ == physical) operation.output_device_ = nullptr;
             }
             if (operation.y_device_) {
-                api_.release_buffer(operation.y_device_);
+                const auto physical = operation.y_device_;
+                api_.release_buffer(physical);
                 operation.y_device_ = nullptr;
+                if (operation.output_device_ == physical) operation.output_device_ = nullptr;
             }
             if (operation.output_device_) {
                 api_.release_buffer(operation.output_device_);
