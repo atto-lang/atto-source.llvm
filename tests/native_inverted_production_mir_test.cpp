@@ -296,5 +296,11 @@ int main() {
         reject([&]{ (void)verify_production_inverted_i64(forged); },
                "contains mixed operands");
     }
+    {
+        auto forged = make_source();
+        forged.inverted_main->operations[4].mixed_value.floating = -0.0;
+        reject([&]{ (void)verify_production_inverted_i64(forged); },
+               "contains mixed operands");
+    }
     return 0;
 }
