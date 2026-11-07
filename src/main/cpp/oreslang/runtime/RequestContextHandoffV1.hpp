@@ -100,12 +100,12 @@ private:
 class RequestContextHandoffTableV1 final {
     struct EntryBase {
         virtual ~EntryBase() = default;
-        virtual bool apply(RequestContextLocalV1& target) const = 0;
+        virtual bool apply(RequestContextLocalV1& target, OresNativeActorScheduler* scheduler) const = 0;
     };
     template <typename T>
     struct Entry final : EntryBase {
         Entry(const RequestLocalKeyV1<T>& k, T v) : key(k), value(std::move(v)) {}
-        bool apply(RequestContextLocalV1& target) const override { return target.set(key, value); }
+        bool apply(RequestContextLocalV1& target, OresNativeActorScheduler* scheduler) const override { return target.set(key, value, scheduler); }
         RequestLocalKeyV1<T> key;
         T value;
     };
@@ -179,16 +179,36 @@ public:
         if (!request_local_current_actor_turn_v1(
                 scheduler_, sender, source)) return std::nullopt;
 
-        std::lock_guard<std::mutex> lock(mutex_);
-        for (std::size_t i = 0; i < slots_.size(); ++i) {
-            Slot& s = slots_[i];
-            if (s.envelope) continue;
-            if (++s.generation > kMaxGeneration) s.generation = 1;
-            s.envelope = std::make_unique<Envelope>(std::move(env));
-            ++pending_;
-            return (s.generation << kSlotBits) | static_cast<std::uint64_t>(i);
+        // Allocate envelope outside both cancellation and scheduler locks.
+        // The final table insertion is bounded: no heap allocation, no
+        // guest callback and no value destruction under the lifecycle gate.
+        auto prepared = std::make_unique<Envelope>(std::move(env));
+        std::optional<std::uint64_t> published;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            source.cancellation_->with_active_authority([&] {
+                auto commit = [&]() -> bool {
+                    for (std::size_t i = 0; i < slots_.size(); ++i) {
+                        Slot& slot = slots_[i];
+                        if (slot.envelope) continue;
+                        if (++slot.generation > kMaxGeneration)
+                            slot.generation = 1;
+                        slot.envelope = std::move(prepared);
+                        ++pending_;
+                        published = (slot.generation << kSlotBits) |
+                                    static_cast<std::uint64_t>(i);
+                        return true;
+                    }
+                    return false;
+                };
+                return ores_native_actor_scheduler_commit_if_live_v1(
+                    scheduler_, sender,
+                    [](void* p) -> int {
+                        return (*static_cast<decltype(commit)*>(p))() ? 1 : 0;
+                    }, &commit) != 0;
+            });
         }
-        return std::nullopt;  // bounded: table full
+        return published; // no ticket if STOP or cancellation won
     }
 
     // Recipient side. Must run on `recipient`'s authenticated turn.
@@ -227,9 +247,9 @@ public:
         auto context = RequestContextLocalV1::open(identity, derived);
         RedeemedRequestContextV1 out(context, derived);
         if (!context || derived->is_cancelled() ||
-            !context->bind_original_mail_once(current_mail)) return std::nullopt;
+            !context->bind_original_mail_once(current_mail, scheduler_)) return std::nullopt;
         for (const auto& entry : env->entries)
-            if (!entry->apply(*context)) return std::nullopt;
+            if (!entry->apply(*context, scheduler_)) return std::nullopt;
         // Do not publish a snapshot after STOP, actor handoff, or a
         // request-cancellation race during the selected-entry copy.
         std::uint64_t final_payload = 0, final_mail = 0;

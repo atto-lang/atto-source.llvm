@@ -104,16 +104,15 @@ public:
         return true;
     }
 
-    // CONTROL-only recovery for a termination initiated outside this group:
-    // ordinary STOP, supervisor shutdown, or runtime retirement. The caller
-    // MUST have signaled scheduler STOP/retire before invoking this method.
-    // This is an explicit cleanup sweep, NOT an automatic STOP observer, and
-    // it must never run from any actor carrier. The scheduler's termination
-    // observer only publishes atomic fencing; it cannot destroy request cells.
-    bool reap_after_external_termination_and_wait() {
+    // A trusted external STOP/retire path may have signaled the scheduler
+    // before the request-owner CONTROL plane was notified. This explicit
+    // reconciliation closes its stores and joins pinned operations; it never
+    // executes on a carrier, and it never emits a second STOP.
+    // It is NOT automatic cleanup for arbitrary raw scheduler callers.
+    bool finish_after_external_stop() {
         if (!scheduler_ ||
             ores_native_actor_scheduler_is_any_current_carrier_v1() ||
-            ores_native_actor_scheduler_poll_ready(scheduler_, actor_))
+            !ores_native_actor_scheduler_is_stopping_v1(scheduler_, actor_))
             return false;
         {
             std::lock_guard<std::mutex> lock(mutex_);

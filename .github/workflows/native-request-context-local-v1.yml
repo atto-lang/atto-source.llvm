@@ -16,6 +16,9 @@ on:
       - "tests/native_actor_termination_observer_v1_test.cpp"
       - "tests/native_request_external_termination_v1_test.cpp"
       - "tests/native_request_context_handoff_v1_test.cpp"
+      - "src/main/cpp/oreslang/runtime/NativeRequestDataMailGateV1.hpp"
+      - "src/main/cpp/oreslang/runtime/NativeRequestWakeGateV1.hpp"
+      - "tests/native_request_actor_lifecycle_guard_v1_test.cpp"
       - ".github/workflows/native-request-context-local-v1.yml"
   workflow_dispatch:
 permissions:
@@ -46,21 +49,24 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp)" = "ef48f19ceadd010666823924381ac24680541b65"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp)" = "0af75d2c6041760d0d40c672e3daf62186acb419"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp)" = "7b79138951aa878fe2ee43cfcef21277cb68b256"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp)" = "bcecb54e7750fca7ef84010a2fa3f66e6bf61902"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h)" = "cfd0e7f1d8fbd125a0ca20c7907432fc0407635c"
           test "$(git hash-object tests/native_request_context_local_v1_test.cpp)" = "05f071f911650a53b7158135d07f22b2650ea64b"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalSchedulerTurnV1.hpp)" = "08f21c4a37aa9836e1343d9a513acb2d9a8614b3"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = "5b56fd562becb96724c06ed039b4dbdebdd0471d"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.h)" = "5ad4f9aeab7208e15fe581070b6462453f98a88b"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalSchedulerTurnV1.hpp)" = "813d1f3be2ab90825e6bee4deb31b7a7f74e3796"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = "7541ccfeff1a6fa3e17df31cb63c225d7eeafa39"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.h)" = "8a0c2339015e5550e52f7c73d9051da6ac4d4ccc"
           test "$(git hash-object src/main/cpp/oreslang/runtime/TaskCancellation.hpp)" = "7eafa420e92ba10e552dade1846f3862cb79aec7"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextHandoffV1.hpp)" = "b0fc4ac5f1c92e92b8aeee03204603d438e544a7"
-          test "$(git hash-object tests/native_request_context_handoff_v1_test.cpp)" = "e7e909861262df0d062350d1d309e91abafe66f6"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalStopGroupV1.hpp)" = "6242cbcf017766513a740bc83a2f8003c67330bb"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextHandoffV1.hpp)" = "80d03fe85c406d2b67898d890bc174850e2a54be"
+          test "$(git hash-object tests/native_request_context_handoff_v1_test.cpp)" = "4d66bc7b520d34148b49eb726962819557a6ba74"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalStopGroupV1.hpp)" = "41fd08efa48964297479c2fb1a2e4a8b3e950367"
           test "$(git hash-object tests/native_request_stop_cancel_v1_test.cpp)" = "d41874ea2adb7d69c47a855ae4f1a7cce51ee775"
           test "$(git hash-object tests/native_actor_termination_observer_v1_test.cpp)" = "d0949ec9130de08777a8ad307b2eacbab9fd12e6"
-          test "$(git hash-object tests/native_request_external_termination_v1_test.cpp)" = "ab63f8586b5a27b1d9ef5691365bcb7bf41cb14a"
+          test "$(git hash-object tests/native_request_external_termination_v1_test.cpp)" = "1ed3ef424dc5cedd2e23174994608930dbb4dd6e"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestDataMailGateV1.hpp)" = "6affba5e1b021bf9f4e5b54584241d873f245451"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestWakeGateV1.hpp)" = "03c6978398bde37ab5260aabb93697dabb60740a"
+          test "$(git hash-object tests/native_request_actor_lifecycle_guard_v1_test.cpp)" = "ebba397307a27451492d0c3aa20d8b259807d80f"
       - name: Compile and execute real actor two-request isolation
         shell: bash
         env:
@@ -91,6 +97,12 @@ jobs:
             -Isrc/main/cpp tests/native_request_context_handoff_v1_test.cpp \
             "$tmp/scheduler.o" -o "$tmp/request-handoff"
           "$tmp/request-handoff"
+          "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp tests/native_request_actor_lifecycle_guard_v1_test.cpp \
+            "$tmp/scheduler.o" -o "$tmp/request-lifecycle"
+          "$tmp/request-lifecycle" | tee "$tmp/request-lifecycle-cases.log"
+          test "$(grep -c '^ACTOR_LIFECYCLE_PASS ' "$tmp/request-lifecycle-cases.log")" = "49"
+          grep -qx 'ACTOR_LIFECYCLE_GUARD_49_HOST_CASES_PASS' "$tmp/request-lifecycle-cases.log"
           "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
             -Isrc/main/cpp tests/native_request_stop_cancel_v1_test.cpp \
             "$tmp/scheduler.o" -o "$tmp/request-stop-cancel"

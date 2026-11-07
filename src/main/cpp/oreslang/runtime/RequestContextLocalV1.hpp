@@ -132,15 +132,24 @@ public:
     // Trusted-ingress one-shot binding to scheduler-minted original DATA mail.
     // This identity is immutable once set; neither a later pooled-actor mail
     // nor a wake callback may silently rebind an existing request.
-    bool bind_original_mail_once(std::uint64_t admitted_mail) {
+    bool bind_original_mail_once(std::uint64_t admitted_mail,
+                                 OresNativeActorScheduler* scheduler = nullptr) {
         if (!admitted_mail) return false;
         std::lock_guard<std::mutex> lock(mutex_);
         // This tiny mutation is serialized with cancellation and retirement
         // by the cancellation graph's authority mutex. No user callbacks.
         return cancellation_->with_active_authority([&] {
-            if (!open_) return false;
-            if (!original_mail_sequence_) original_mail_sequence_ = admitted_mail;
-            return original_mail_sequence_ == admitted_mail;
+            auto commit = [&]() -> bool {
+                if (!open_) return false;
+                if (!original_mail_sequence_) original_mail_sequence_ = admitted_mail;
+                return original_mail_sequence_ == admitted_mail;
+            };
+            return !scheduler ? commit()
+                : ores_native_actor_scheduler_commit_if_live_v1(
+                    scheduler, identity_.actor,
+                    [](void* ptr) -> int {
+                        return (*static_cast<decltype(commit)*>(ptr))() ? 1 : 0;
+                    }, &commit) != 0;
         });
     }
 
@@ -162,7 +171,8 @@ public:
     }
 
     template <typename T>
-    bool set(const RequestLocalKeyV1<T>& key, T value) {
+    bool set(const RequestLocalKeyV1<T>& key, T value,
+             OresNativeActorScheduler* scheduler = nullptr) {
         auto operation = begin_operation();
         if (!operation) return false;
         // Host-only measured payload limit; composite deep-size descriptors
@@ -193,22 +203,32 @@ public:
             // earlier commit finishes before cancellation can become visible.
             // No guest copy/move/dtor or user callback runs under graph lock.
             committed = cancellation_->with_active_authority([&] {
-                if (!open_) return false;
-                auto found = slots_.find(key.id_);
-                const std::size_t old =
-                    found == slots_.end() ? 0 : found->second->bytes;
-                if ((found == slots_.end() && slots_.size() >= max_slots) ||
-                    bytes > max_bytes - (used_bytes_ - old)) return false;
-                if (found == slots_.end()) {
-                    // Preallocated node, existing bucket array: no allocator
-                    // or guest callback while cancellation authority is held.
-                    slots_.insert(std::move(staged_node));
-                } else {
-                    previous.swap(found->second);
-                    found->second = std::move(next);
-                }
-                used_bytes_ = used_bytes_ - old + bytes;
-                return true;
+                auto commit = [&]() -> bool {
+                    if (!open_) return false;
+                    auto found = slots_.find(key.id_);
+                    const std::size_t old =
+                        found == slots_.end() ? 0 : found->second->bytes;
+                    if ((found == slots_.end() && slots_.size() >= max_slots) ||
+                        bytes > max_bytes - (used_bytes_ - old)) return false;
+                    if (found == slots_.end()) {
+                        // Node and bucket array allocated before the gate.
+                        slots_.insert(std::move(staged_node));
+                    } else {
+                        previous.swap(found->second);
+                        found->second = std::move(next);
+                    }
+                    used_bytes_ = used_bytes_ - old + bytes;
+                    return true;
+                };
+                // TRUSTED ADAPTER ONLY: this bounded commit executes while
+                // scheduler STOP/retire holds the same lifecycle mutex.
+                // Compiler/guest APIs must always supply the scheduler.
+                return !scheduler ? commit()
+                    : ores_native_actor_scheduler_commit_if_live_v1(
+                        scheduler, identity_.actor,
+                        [](void* ptr) -> int {
+                            return (*static_cast<decltype(commit)*>(ptr))() ? 1 : 0;
+                        }, &commit) != 0;
             });
         }
         previous.reset(); // reentrant destructors never run with the scope locked
@@ -250,7 +270,8 @@ public:
     // destructor must not execute under the request lock, since it may
     // synchronously close/cancel/inspect this same request.
     template <typename T>
-    bool erase(const RequestLocalKeyV1<T>& key) {
+    bool erase(const RequestLocalKeyV1<T>& key,
+               OresNativeActorScheduler* scheduler = nullptr) {
         auto operation = begin_operation();
         if (!operation) return false;
         std::shared_ptr<CellBase> retired;
@@ -262,15 +283,22 @@ public:
             // Deletion and quota return linearize against the graph's
             // cancellation and retirement state, without running T::~T.
             committed = cancellation_->with_active_authority([&] {
-                if (!open_) return false;
-                const auto found = slots_.find(key.id_);
-                if (found == slots_.end()) return false;
-                retired = std::move(found->second);
-                used_bytes_ -= retired->bytes;
-                // Extract the allocated node; its allocator/dtor runs only
-                // once this authority section has been exited.
-                retired_node = slots_.extract(found);
-                return true;
+                auto commit = [&]() -> bool {
+                    if (!open_) return false;
+                    const auto found = slots_.find(key.id_);
+                    if (found == slots_.end()) return false;
+                    retired = std::move(found->second);
+                    used_bytes_ -= retired->bytes;
+                    // No deallocation under graph/scheduler lifecycle lock.
+                    retired_node = slots_.extract(found);
+                    return true;
+                };
+                return !scheduler ? commit()
+                    : ores_native_actor_scheduler_commit_if_live_v1(
+                        scheduler, identity_.actor,
+                        [](void* ptr) -> int {
+                            return (*static_cast<decltype(commit)*>(ptr))() ? 1 : 0;
+                        }, &commit) != 0;
             });
         }
         retired.reset();

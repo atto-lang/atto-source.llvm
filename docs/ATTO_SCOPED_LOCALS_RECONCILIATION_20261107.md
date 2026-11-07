@@ -236,48 +236,69 @@ scheduler domain, not just the actor's owning scheduler. The scheduler
 source/header blobs are pinned in both affected workflows. A three-case
 cross-scheduler negative fixture exercises this guard; it is not yet executed.
 
+## Native scheduler STOP admission and handoff-ticket arbitration (2026-11-07)
 
-## P0 stacked hardening: scheduler-wide termination observer and external sweep
+NativeActorScheduler now offers a **trusted-host-only** bounded commit
+operation under the SAME scheduler mutex used by ordinary stop(),
+stop_sealed(), and whole-runtime retire(). It accepts an exact-generation
+actor whose phase is READY, RUNNING, or SUSPENDED and denies STOPPING,
+TERMINATED, stale/foreign generations, and globally retired schedulers.
+An earlier implementation incorrectly required phase RUNNING even for a
+newly spawned READY actor; this was corrected before declaring any tests.
 
-**Status: authored host source, execution NOT VERIFIED; not automatic full RequestLocal reclamation.**
+RequestContextLocalV1 set/erase/original-mail binding now take an optional
+scheduler pointer used by privileged adapters. All privileged DATA-mail,
+READY-wake, legacy actor-turn and cross-actor handoff write paths provide
+that pointer, so mutations that STOP wins before their final commit are
+rejected. Raw two-argument C++ store calls remain HOST ONLY and must NEVER
+be lowered to source-level guest operations. The C callback may do ONLY
+bounded, allocation-free bookkeeping: no guest code, callbacks, locks,
+blocking, suspension, or arbitrary value destruction under scheduler lock.
 
-- Added `ores_native_actor_scheduler_configure_termination_observer_v1`, a
-  bootstrap-only, one-time host registration. Its callback executes under the
-  scheduler's lifecycle mutex in each successful **ordinary STOP**, **sealed
-  STOP**, or **whole-runtime retire**. These paths share the same lock as
-  DATA admission. Duplicate STOP/retire and invalid ActorRef never notify.
-- The observer is an **atomic fence publisher only**. It may not acquire an
-  external lock, allocate, invoke the scheduler, cancel a Task, close request
-  cells, run guest code, or block a carrier. Its context must outlive the
-  scheduler. An actual production registry must bind these fences to each
-  actor's request scopes before it can close the universal STOP bypass.
-- `RequestLocalStopGroupV1` now rejects new registrations once
-  `poll_ready` reports the actor stopped. It offers CONTROL-only
-  `reap_after_external_termination_and_wait`: a privileged caller first
-  initiates STOP/retire, then seals registration, closes pinned request stores,
-  waits their operation leases, and waits for actor DONE. It rejects callers
-  on *any* native actor carrier and does not wait before STOP is signaled.
-  This external sweep is **not automatic**; a terminated actor still needs a
-  correctly owned registry and guaranteed CONTROL cleanup invocation.
-- `native_actor_termination_observer_v1_test.cpp` authors 40 named observer
-  checks plus 30 separate two-thread race rounds (STOP vs STOP, STOP vs
-  sealed STOP, sealed STOP vs sealed STOP, STOP vs retire, sealed STOP vs
-  retire, retire vs retire). Each round verifies exactly one notification,
-  winner-consistent termination kind, and a scheduler terminal receipt.
-- `native_request_external_termination_v1_test.cpp` authors 41 named
-  external cleanup/ABA/cancel/sibling tests plus 20 two-thread STOP-versus-
-  cancellation race rounds with an after-STOP sweep. RequestLocal's older 38
-  STOP/cancellation host tests remain unchanged.
-- The RequestLocal workflow builds the two new host test binaries on
-  GCC/Clang optimized, GCC/Clang ASan/UBSan, and GCC TSan, with **exact blob
-  pins updated** for the scheduler files, STOP group and both new fixtures.
-  The companion mail workflow's stale scheduler pins were also corrected.
-  Both workflow pin sets have been read back against the branch blobs.
+RequestContextHandoffV1::seal allocates its envelope before entering
+the cancellation + scheduler gate. It creates a one-shot ticket only
+after winning both cancellation authority and actor lifecycle admission.
+This prevents source cancellation or direct STOP from winning before a
+fresh ticket is published. A deterministic test stops actor A during
+selected-value copy and asserts no ticket is created.
 
-**Remaining blocking work:** lifecycle issuance for actual request registries
-and Task/actor generation fences; compiler-owned tenant/isolate admission;
-supervisor panic/restart, hot-reload migration and cancellation hooks;
-guaranteed nonblocking CONTROL cleanup scheduling; no retained request-owned
-cells after actor retirement; and exact-head stepful native sanitizer plus
-compiled `.atto` guest receipts. Current host-only observer and external
-sweep do not satisfy the universal termination guarantee on their own.
+RequestLocalStopGroupV1 adds explicit finish_after_external_stop() for
+trusted host CONTROL repair after direct STOP or global retirement.
+The cleanup path checks a new exact-generation is_stopping predicate;
+not-ready alone is insufficient evidence because invalid actor handles
+are also not-ready. After validation it closes registered stores, waits
+for pinned operations and joins actor DONE without blocking carriers.
+
+New native_request_actor_lifecycle_guard_v1_test.cpp has **49 named
+host assertions** for live READY commits, both STOP modes, runtime retire,
+wrong generation/slot/domain, cancellation, late precommit, and explicit
+cleanup of direct STOP. Existing 38 host STOP/cancel tests plus 45 scoped
+local host checks remain. The RequestLocal CI matrix now executes the
+new cases and an additional STOP-during-handoff-copy fixture. All sources
+are SHA-pinned to their Git blob identities.
+
+SECURITY HOLD: direct scheduler STOP/retire does not automatically call
+the host RequestLocalStopGroup close/quiescence method. The guarded
+privileged write path denies commits after STOP; raw host request stores
+may remain allocated until explicit control-plane reconciliation. This
+must be integrated with supervisor/panic/restart/hot-reload ownership and
+all scheduling teardown paths before claiming universal heap reclamation.
+Tenant/isolate provenance, guest-safe owned value descriptors, full native
+sanitizer executions and compiled .atto parity also remain open.
+Zero-step hosted workflows are runner-admission failures, NOT passing
+or failing native/guest evidence.
+
+## Stacked P0 lifecycle observer follow-up (source-authored, not executed)
+The scheduler provides a bootstrap-only bounded atomic termination observer
+for direct STOP, sealed STOP, and runtime-wide retirement. It is invoked
+under the lifecycle lock and cannot perform request destruction, wait,
+allocation, external locking, scheduler reentry, or guest calls.
+RequestLocalStopGroup rejects registration once the scheduler reports the
+actor stopped and reuses the main branch's `finish_after_external_stop`
+CONTROL-only reconciliation (no competing second sweep API).
+Thirty STOP/sealed/retire two-thread trial rounds and twenty STOP/cancellation
+trial rounds plus fixed negative/adversarial assertions are attached as
+host-only tests. These tests and the five native/sanitizer workflow jobs are
+**authored, not executed**. Actual scheduler-owned request-registry hookup,
+guaranteed CONTROL sweeps, panic/restart/hot-reload lifecycle proof, and
+compiled `.atto` receipts remain unverified blockers.

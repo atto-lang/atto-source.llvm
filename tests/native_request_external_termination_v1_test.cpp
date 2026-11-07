@@ -56,18 +56,18 @@ void ordinary_stop_then_sweep() {
     check("01_register_live_request_a", a.register_request(ra));
     check("02_register_live_request_b", b.register_request(rb));
     check("03_live_actor_cannot_be_reaped",
-          !a.reap_after_external_termination_and_wait());
+          !a.finish_after_external_stop());
     check("04_failed_pre_stop_reap_preserves_request",
           !a.sealed() && ra->active() && ra->set(key, std::uint64_t{11}));
     check("05_direct_scheduler_stop", ores_native_actor_scheduler_stop(f.s, f.a));
     check("06_post_stop_registration_denied", !a.register_request(ra));
     check("07_cleanup_after_direct_STOP",
-          a.reap_after_external_termination_and_wait());
+          a.finish_after_external_stop());
     check("08_exact_request_revoked",
           !ra->active() && !ra->get_copy(key));
     check("09_group_sealed_and_completed", a.sealed() && a.completed());
     check("10_repeated_sweep_denied",
-          !a.reap_after_external_termination_and_wait());
+          !a.finish_after_external_stop());
     check("11_no_repeat_stop_after_external_sweep",
           !a.stop_sealed_and_wait());
     check("12_sibling_group_unaffected",
@@ -94,7 +94,7 @@ void cancel_and_sealed_stop() {
     check("20_external_sealed_STOP",
           ores_native_actor_scheduler_stop_sealed(f.s, f.a));
     check("21_sealed_STOP_reap",
-          group.reap_after_external_termination_and_wait());
+          group.finish_after_external_stop());
     check("22_cancelled_and_live_request_both_closed",
           !ra->active() && !rb->active());
     check("23_cancel_idempotence_after_STOP",
@@ -117,9 +117,9 @@ void runtime_retire_and_fence() {
     check("27_runtime_retire_denies_readmission",
           !a.register_request(ra) && !b.register_request(rb));
     check("28_runtime_retire_reaps_first_actor",
-          a.reap_after_external_termination_and_wait());
+          a.finish_after_external_stop());
     check("29_runtime_retire_reaps_second_actor",
-          b.reap_after_external_termination_and_wait());
+          b.finish_after_external_stop());
     check("30_both_requests_closed", !ra->active() && !rb->active());
     OresNativeActorTerminalState ta{}, tb{};
     check("31_runtime_retire_terminal_receipt",
@@ -128,7 +128,7 @@ void runtime_retire_and_fence() {
           ta.kind == ORES_NATIVE_TERMINATION_RUNTIME_RETIRED &&
           tb.kind == ORES_NATIVE_TERMINATION_RUNTIME_RETIRED);
     check("32_double_retirement_sweep_denied",
-          !a.reap_after_external_termination_and_wait());
+          !a.finish_after_external_stop());
     ca->retire();
     cb->retire();
 }
@@ -146,7 +146,7 @@ void generation_and_slot_aba() {
     check("35_wrong_generation_STOP_denied",
           !ores_native_actor_scheduler_stop(f.s, stale));
     check("36_wrong_generation_not_reapable",
-          !wrong_generation.reap_after_external_termination_and_wait());
+          !wrong_generation.finish_after_external_stop());
     check("37_original_actor_survives_stale_STOP",
           ores_native_actor_scheduler_poll_ready(f.s, f.a) && ra->active());
     check("38_stop_current_incarnation",
@@ -156,7 +156,7 @@ void generation_and_slot_aba() {
     check("40_stale_request_rejected_after_STOP",
           !current.register_request(ra));
     check("41_current_generation_cleanup",
-          current.reap_after_external_termination_and_wait() && !ra->active());
+          current.finish_after_external_stop() && !ra->active());
     ca->retire();
 }
 void stop_vs_cancel_race() {
@@ -185,7 +185,7 @@ void stop_vs_cancel_race() {
         char name[96];
         std::snprintf(name, sizeof(name),
                       "race_%02d_stop_vs_cancellation_reaped", i);
-        check(name, group.reap_after_external_termination_and_wait() &&
+        check(name, group.finish_after_external_stop() &&
               group.completed() && !req->active());
         cancel->retire();
     }

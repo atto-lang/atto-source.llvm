@@ -101,26 +101,20 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
 /* Compatibility API: 1 iff accepted, 0 otherwise. Prefer typed try_send. */
 int ores_native_actor_scheduler_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
-/* Bootstrap-only trusted host termination fence. Installed before the first
- * actor spawn or carrier start. Called exactly once for each actor incarnation
- * on ordinary STOP, sealed STOP, or scheduler-wide retirement, while the same
- * lifecycle mutex serializes admission and STOP. The callback MUST be bounded,
- * allocation-free, nonblocking and lock-free: it may only publish atomic
- * revocation tokens. In particular it MUST NOT call scheduler APIs, request
- * close(), cancellation, a guest function, or a destructor. Request cleanup
- * and quiescence waits belong to an external CONTROL-plane sweeper AFTER this
- * callback. The observer context must outlive the scheduler.
- *
- * This is a host-only fencing primitive, NOT completed RequestLocal teardown
- * and NOT an authorized guest interface.
+/* Bootstrap-only host lifecycle fence: one termination notice per actor
+ * incarnation on ordinary STOP, sealed STOP and scheduler-wide retirement.
+ * Called under the scheduler lifecycle mutex. Callback MUST only publish
+ * bounded lock-free atomic revocation state; no allocation, external lock,
+ * scheduler calls, RequestLocal close, guest code, blocking or destruction.
+ * Its context must outlive the scheduler. A CONTROL sweeper must separately
+ * close request scopes and join their operation leases. NOT a guest ABI.
  */
 typedef void (*OresNativeActorTerminationObserverV1)(
     void* context, OresNativeActorRef actor,
     OresNativeActorTerminationKind kind);
 int ores_native_actor_scheduler_configure_termination_observer_v1(
     OresNativeActorScheduler* scheduler,
-    OresNativeActorTerminationObserverV1 observer,
-    void* context);
+    OresNativeActorTerminationObserverV1 observer, void* context);
 int ores_native_actor_scheduler_stop(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
 /* Seal user DATA immediately while preserving an already-active turn and
@@ -294,9 +288,16 @@ int ores_native_actor_scheduler_is_any_current_carrier_v1(void);
 // APIs, suspend, block, acquire external mutexes, or run destructors.
 // This is NOT a guest-callable API or a generic executor.
 typedef int (*OresNativeActorBoundedCommitV1)(void* opaque);
-int ores_native_actor_scheduler_commit_if_running_v1(
+int ores_native_actor_scheduler_commit_if_live_v1(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
     OresNativeActorBoundedCommitV1 commit, void* opaque);
+
+// Exact-incarnation STOP/retire readback for host CONTROL reconciliation.
+// Unlike !poll_ready, 0 here also denies forged/stale handles and a live
+// actor. A true result does not by itself prove DONE or quiescence.
+int ores_native_actor_scheduler_is_stopping_v1(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+
 
 /* Exact live actor identity for trusted callback/FFI bridges only. */
 int ores_native_actor_scheduler_is_current_actor(

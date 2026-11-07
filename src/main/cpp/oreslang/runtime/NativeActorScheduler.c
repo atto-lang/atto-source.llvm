@@ -1389,8 +1389,8 @@ uint64_t ores_native_actor_scheduler_control_completed(OresNativeActorScheduler*
     unlock(s);
     return n;
 }
-/* Only bootstrap may install a trusted nonblocking lifecycle observer.
- * Never replace a callback while another thread could still use its context.
+/* Only bootstrap may install an observer. Never replace it once a
+ * potentially live observer context could be reached from STOP/retire.
  */
 int ores_native_actor_scheduler_configure_termination_observer_v1(
         OresNativeActorScheduler* s,
@@ -1401,10 +1401,7 @@ int ores_native_actor_scheduler_configure_termination_observer_v1(
         && !s->started_workers && !s->outstanding;
     if (ok) {
         for (size_t i = 0; i < s->actor_count; ++i) {
-            if (s->actors[i].spawned) {
-                ok = 0;
-                break;
-            }
+            if (s->actors[i].spawned) { ok = 0; break; }
         }
     }
     if (ok) {
@@ -1425,10 +1422,7 @@ static int stop_locked(
     ActorLane* lane = &s->actors[actor.actor_slot];
     lane->requested_terminal_kind = ORES_NATIVE_TERMINATION_STOPPED;
     lane->retired = 1;
-
-    /* Publish an atomic revocation fence while admission is excluded.
-     * The observer MUST NOT acquire any other lock or close request values.
-     */
+    /* Atomic-only termination fence under admission/STOP arbitration. */
     if (s->termination_observer)
         s->termination_observer(s->termination_observer_context,
             actor, ORES_NATIVE_TERMINATION_STOPPED);
@@ -1572,18 +1566,32 @@ int ores_native_actor_scheduler_is_any_current_carrier_v1(void) {
 // This lock is the same lifecycle arbitration lock used by ordinary STOP,
 // sealed STOP, and global runtime retirement. Only a bounded, nonallocating
 // trusted-host callback may execute here. It MUST NOT reenter the scheduler.
-int ores_native_actor_scheduler_commit_if_running_v1(
+int ores_native_actor_scheduler_commit_if_live_v1(
         OresNativeActorScheduler* s, OresNativeActorRef actor,
         OresNativeActorBoundedCommitV1 commit, void* opaque) {
     if (!s || !commit) return 0;
     lock(s);
-    const int live = !s->retired && matching(s, actor)
-        && !s->actors[actor.actor_slot].retired
-        && ores_execution_phase(
-            &s->actors[actor.actor_slot].authority) == ORES_EXEC_RUNNING;
+    int live = !s->retired && matching(s, actor)
+        && !s->actors[actor.actor_slot].retired;
+    if (live) {
+        const OresExecutionPhase phase = ores_execution_phase(
+            &s->actors[actor.actor_slot].authority);
+        live = phase == ORES_EXEC_READY || phase == ORES_EXEC_RUNNING
+            || phase == ORES_EXEC_SUSPENDED;
+    }
     const int ok = live ? (commit(opaque) != 0) : 0;
     unlock(s);
     return ok;
+}
+
+int ores_native_actor_scheduler_is_stopping_v1(
+        OresNativeActorScheduler* s, OresNativeActorRef actor) {
+    if (!s) return 0;
+    lock(s);
+    const int stopping = matching(s, actor)
+        && s->actors[actor.actor_slot].retired;
+    unlock(s);
+    return stopping;
 }
 /* Actor-specific authority, not merely membership in the same worker pool. */
 int ores_native_actor_scheduler_is_current_actor(

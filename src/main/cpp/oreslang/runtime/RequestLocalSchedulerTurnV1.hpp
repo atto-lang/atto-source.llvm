@@ -54,7 +54,7 @@ bool request_local_set_on_actor_turn_v1(
     T value) {
     if (!request_local_current_actor_turn_v1(scheduler, actor, request))
         return false;
-    return request.set(key, std::move(value));
+    return request.set(key, std::move(value), scheduler);
 }
 
 template <typename T>
