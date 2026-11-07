@@ -5873,18 +5873,19 @@ void resolve_and_validate_program(Program& program) {
     validate_i64_ownership(program);
     try {
         validate_native_scalar_types(program);
+        // An identity-seal failure is also a failed compiler admission:
+        // revoke every published Future pipeline authority in the same
+        // fail-closed boundary as scalar type/shape validation.
+        source_identity::seal_validated_program(program);
     } catch (...) {
-        // Preserve the established diagnostic/check ordering for the native
-        // compiler while ensuring a later scalar-type failure revokes every
-        // lowering authorization published by the ownership pass.
+        // Preserve diagnostic/check ordering and ensure every failure after
+        // ownership admission revokes all previously published lowering
+        // authorizations. No half-sealed Program may reach codegen.
         for (auto& function : program.functions)
             for (auto& pipeline : function.future_pipelines)
                 pipeline.ownership_admitted = false;
         throw;
     }
-    // This boundary executes only after source/ownership/type validation.
-    // Mint immutable compiler identities before exposing Program to codegen.
-    source_identity::seal_validated_program(program);
 }
 
 Program parse_program(std::string_view source, bool experimental_owned_int,
