@@ -17,7 +17,7 @@ template <typename F> static void rejects(F f) {
     check(rejected);
 }
 int main() {
-    const Ledger::Limits limits{4096, 8, 32, 8, 1024};
+    const Ledger::Limits limits{4096, 8, 32, 8, 1024, 16, 16};
     Ledger ledger(limits);
     const auto queue=ledger.provider_register_queue(1,2,3);
     const auto alternate=ledger.provider_register_queue(1,2,4);
@@ -80,6 +80,31 @@ int main() {
     rejects([&]{(void)ledger.provider_submit(foreignQueue,{rx});});
     const auto foreignAllocation=separate.provider_register_allocation(1,2,10,256);
     rejects([&]{(void)ledger.provider_submit(newQueue,{{foreignAllocation,0,128,Ledger::Access::Read}});});
+    // Tombstoned identities remain bounded even after repeated retire/recreate.
+    Ledger bounded({512,1,2,2,128,1,1});
+    const auto bq=bounded.provider_register_queue(8,8,8);
+    const auto ba=bounded.provider_register_allocation(8,8,8,64);
+    rejects([&]{(void)bounded.provider_register_queue(8,8,9);});
+    rejects([&]{(void)bounded.provider_register_allocation(8,8,9,64);});
+    auto br=Ledger::View{ba,0,64,Ledger::Access::Read};
+    auto bw=Ledger::View{ba,0,64,Ledger::Access::Write};
+    rejects([&]{(void)bounded.provider_submit(bq,{br,bw});});
+    const auto inflight1=bounded.provider_submit(bq,{br});
+    const auto inflight2=bounded.provider_submit(bq,{br});
+    rejects([&]{(void)bounded.provider_submit(bq,{br});});
+    rejects([&]{bounded.provider_retire_queue(bq);});
+    bounded.provider_ack_event(bq,inflight1,Ledger::Event::Completed);
+    bounded.provider_ack_event(bq,inflight2,Ledger::Event::Completed);
+    bounded.provider_retire_allocation(ba);
+    bounded.provider_retire_queue(bq);
+    const auto bq2=bounded.provider_register_queue(8,8,8);
+    const auto ba2=bounded.provider_register_allocation(8,8,8,64);
+    check(bq2.generation()==2 && ba2.generation()==2);
+    rejects([&]{(void)bounded.provider_submit(bq2,{br});});
+    check(bounded.snapshot().tracked_queue_ids==1);
+    check(bounded.snapshot().tracked_allocation_ids==1);
+    rejects([&]{(void)bounded.provider_register_queue(8,8,9);});
+    rejects([&]{(void)bounded.provider_register_allocation(8,8,9,64);});
     // Resident quota is tenant-scoped and maintained on retirement.
     rejects([&]{(void)ledger.provider_register_allocation(1,2,50,4096);});
     check(ledger.snapshot().resident_bytes==1024);
