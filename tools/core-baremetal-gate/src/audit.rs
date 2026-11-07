@@ -101,14 +101,42 @@ pub fn forbidden_reason(symbol: &str) -> Option<&'static str> {
         .map(|(_, reason)| *reason)
 }
 
-/// Names of functions the IR declares but does not define, excluding LLVM
-/// intrinsics. A provider-free `ores.core` module should have none.
+/// Only documented compiler intrinsics are exempt from IR external-import
+/// admission. Blanket llvm.* exemptions permit forged host-dependent names.
+/// The independent compiled-object undefined-symbol audit remains mandatory.
+fn known_llvm_intrinsic(name: &str) -> bool {
+    const EXACT: &[&str] = &[
+        "llvm.trap", "llvm.debugtrap", "llvm.assume",
+        "llvm.donothing", "llvm.sideeffect",
+        "llvm.dbg.declare", "llvm.dbg.value", "llvm.dbg.assign",
+        "llvm.stacksave", "llvm.stackrestore",
+    ];
+    const TYPED: &[&str] = &[
+        "llvm.sadd.with.overflow.", "llvm.ssub.with.overflow.",
+        "llvm.smul.with.overflow.", "llvm.uadd.with.overflow.",
+        "llvm.usub.with.overflow.", "llvm.umul.with.overflow.",
+        "llvm.memcpy.", "llvm.memmove.", "llvm.memset.",
+        "llvm.lifetime.start.", "llvm.lifetime.end.",
+        "llvm.expect.", "llvm.objectsize.",
+        "llvm.invariant.start.", "llvm.invariant.end.",
+        "llvm.bswap.", "llvm.ctpop.", "llvm.ctlz.", "llvm.cttz.",
+        "llvm.fshl.", "llvm.fshr.", "llvm.abs.",
+        "llvm.smax.", "llvm.smin.", "llvm.umax.", "llvm.umin.",
+    ];
+    EXACT.contains(&name) || TYPED.iter().any(|prefix| name.starts_with(prefix)
+        && name.len() > prefix.len()
+        && name[prefix.len()..].bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_'))
+}
+
+/// Names of functions the IR declares but does not define, excluding known
+/// LLVM intrinsics. Unknown llvm.* names must not bypass Core admission.
 pub fn ir_external_declarations(ir: &str) -> Vec<String> {
     ir.lines()
         .map(str::trim_start)
         .filter(|line| line.starts_with("declare "))
         .filter_map(declared_name)
-        .filter(|name| !name.starts_with("llvm."))
+        .filter(|name| !known_llvm_intrinsic(name))
         .collect()
 }
 
@@ -224,6 +252,46 @@ declare ptr @malloc(i64)
 declare void @"ores_actor_send"(ptr)
 "#;
         assert_eq!(ir_external_declarations(ir), vec!["malloc", "ores_actor_send"]);
+    }
+
+
+    #[test]
+    fn forged_llvm_names_are_never_implicitly_whitelisted() {
+        let ir = concat!(
+            "declare void @llvm.ores_actor_send(ptr)\n",
+            "declare ptr @llvm.allocator()\n",
+            "declare void @llvm.trap()\n",
+            "declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)\n",
+        );
+        assert_eq!(ir_external_declarations(ir),
+            vec!["llvm.ores_actor_send", "llvm.allocator"]);
+    }
+
+    #[test]
+    fn typed_intrinsic_prefix_without_suffix_stays_external() {
+        let ir = "declare void @llvm.memcpy.()\n";
+        assert_eq!(ir_external_declarations(ir), vec!["llvm.memcpy."]);
+    }
+
+    #[test]
+    fn unrecognized_debug_intrinsics_stay_external() {
+        let ir = "declare void @llvm.dbg.untrusted()\n";
+        assert_eq!(ir_external_declarations(ir), vec!["llvm.dbg.untrusted"]);
+    }
+
+    #[test]
+    fn quoted_unknown_llvm_import_stays_external() {
+        let ir = "declare void @\"llvm.pthread_create\"(ptr)\n";
+        assert_eq!(ir_external_declarations(ir), vec!["llvm.pthread_create"]);
+    }
+
+    #[test]
+    fn allowlisted_aeabi_helper_requires_exact_name() {
+        assert!(audit_guest_object(&[sym('U', "__aeabi_uldivmod")]).is_empty());
+        for name in ["__aeabi_uldivmod_extra", "__aeabi_surprise_helper",
+            "__aeabi_unwind_cpp_pr0", "malloc", "__tls_get_addr"] {
+            assert_eq!(audit_guest_object(&[sym('U', name)]).len(), 1, "{name}");
+        }
     }
 
     #[test]
