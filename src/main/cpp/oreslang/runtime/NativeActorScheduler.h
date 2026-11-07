@@ -284,6 +284,28 @@ int ores_native_actor_scheduler_commit_if_live_v1(
 int ores_native_actor_scheduler_is_stopping_v1(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
 
+/*
+ * Host CONTROL lifecycle notification. One observer per exact actor
+ * generation, pre-registered before request ingress. Called ONCE under the
+ * scheduler lifecycle mutex when ordinary STOP, sealed STOP or runtime retire
+ * wins. The callback MUST do ONLY an atomic flag store; no locks, allocation,
+ * guest code, destructor, scheduler call, blocking or condition-variable work.
+ * It cannot close RequestLocal directly. An external CONTROL worker must
+ * handle subsequent closure/quiescence outside the scheduler mutex.
+ *
+ * unregister waits for any in-progress callback via the scheduler mutex,
+ * so caller may then free its notice storage. The scheduler MUST outlive the
+ * observer, and must not be destroyed before unregister returns.
+ */
+typedef void (*OresNativeActorStopNoticeV1)(void* opaque);
+int ores_native_actor_scheduler_register_stop_notice_v1(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
+    OresNativeActorStopNoticeV1 notice, void* opaque);
+int ores_native_actor_scheduler_unregister_stop_notice_v1(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
+    OresNativeActorStopNoticeV1 notice, void* opaque);
+
+
 
 /* Exact live actor identity for trusted callback/FFI bridges only. */
 int ores_native_actor_scheduler_is_current_actor(
