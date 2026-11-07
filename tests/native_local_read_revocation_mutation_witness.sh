@@ -3,7 +3,7 @@
 # A missing post-copy lifetime fence must be detected by the real C++ test.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
-CXX="\${CXX:-g++}"
+CXX="${CXX:-g++}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 ulimit -c 0 || true
