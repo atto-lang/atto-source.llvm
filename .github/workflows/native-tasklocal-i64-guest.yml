@@ -9,6 +9,7 @@ on:
       - "src/main/cpp/oreslang/runtime/SourceTaskRuntime.h"
       - "src/main/cpp/oreslang/runtime/ActorLocalSchedulerTurnV1.hpp"
       - "src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp"
+      - "src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp"
       - "tests/native_actorlocal_scheduler_turn_test.cpp"
       - "tests/tasklocal_i64_e2e.rs"
       - "tests/fixtures/tasklocal-i64-source.atto"
