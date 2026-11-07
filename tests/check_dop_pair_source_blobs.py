@@ -29,7 +29,7 @@ def require_pair_sources(directory: Path, *, verify_git: bool = True) -> None:
         contents = file.read_bytes()
         if not contents or len(contents) > 64 * 1024:
             raise ValueError(f"empty or oversized fixture: {name}")
-        blob = b"blob " + str(len(contents)).encode("ascii") + b"\\x00" + contents
+        blob = b"blob " + str(len(contents)).encode("ascii") + b"\x00" + contents
         # Git hashes prefix the byte payload with blob <decimal-length><NUL>.
         observed_git = hashlib.sha1(blob).hexdigest()
         observed_sha256 = hashlib.sha256(contents).hexdigest()
