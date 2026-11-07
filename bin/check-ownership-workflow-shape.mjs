@@ -10,12 +10,12 @@ const source=readFileSync(
 );
 const result=inspectOwnershipWorkflowShape(source);
 if(!result.structurallyValid || result.verified || result.guestExecutionVerified ||
-   result.checkedNativeCTestCount!==14) {
+   result.checkedNativeCTestCount!==15) {
   console.error('ATTO_OWNERSHIP_WORKFLOW_SHAPE=FAILED',
     JSON.stringify(result.errors));
   process.exitCode=1;
 } else {
   console.log('ATTO_OWNERSHIP_WORKFLOW_SHAPE=PASS_STATIC_ONLY');
-  console.log('ATTO_OWNERSHIP_NATIVE_CTESTS=14_REGISTERED_NOT_EXECUTED');
+  console.log('ATTO_OWNERSHIP_NATIVE_CTESTS=15_REGISTERED_NOT_EXECUTED');
   console.log('ATTO_OWNERSHIP_GUEST_PARITY=NOT_EXECUTED');
 }
