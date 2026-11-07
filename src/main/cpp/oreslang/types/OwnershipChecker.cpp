@@ -577,6 +577,35 @@ void validate_i64_ownership(Program& program) {
             pipeline.ownership_admitted = false;
             pipeline.ownership_authority_fingerprint = 0;
         }
+    // A failed re-validation must revoke all prior source-site authority.
+    // Recursively clear branch/loop witnesses before any new ownership pass.
+    std::function<void(Statement&)> revoke_restore_sites;
+    revoke_restore_sites = [&](Statement& effect) {
+        effect.reinitialize_write_id = 0;
+        for (auto& child : effect.then_statements) revoke_restore_sites(child);
+        for (auto& child : effect.else_statements) revoke_restore_sites(child);
+    };
+    for (auto& function : program.functions) {
+        for (auto& effect : function.statements) revoke_restore_sites(effect);
+        for (auto& effect : function.caught_throw_defers)
+            revoke_restore_sites(effect);
+    }
+    // Do not leave a partially minted restoration capability on failure:
+    // another validator invocation or speculative codegen must not reuse it.
+    bool restoration_sites_admitted = false;
+    struct RestorationFailureFence {
+        Program& program;
+        std::function<void(Statement&)>& revoke;
+        bool& admitted;
+        ~RestorationFailureFence() noexcept {
+            if (admitted) return;
+            for (auto& fn : program.functions) {
+                for (auto& stmt : fn.statements) revoke(stmt);
+                for (auto& stmt : fn.caught_throw_defers) revoke(stmt);
+            }
+        }
+    } restore_failure_fence{program, revoke_restore_sites,
+                            restoration_sites_admitted};
     Functions functions;
     for (const auto& function : program.functions)
         functions.emplace(native_function_slot(function.name, function.parameters.size()), &function);
@@ -670,35 +699,6 @@ void validate_i64_ownership(Program& program) {
         if (method.result) pure(*method.result);
     }
 
-    // A failed re-validation must revoke all prior source-site authority.
-    // Recursively clear branch/loop witnesses before any new ownership pass.
-    std::function<void(Statement&)> revoke_restore_sites;
-    revoke_restore_sites = [&](Statement& effect) {
-        effect.reinitialize_write_id = 0;
-        for (auto& child : effect.then_statements) revoke_restore_sites(child);
-        for (auto& child : effect.else_statements) revoke_restore_sites(child);
-    };
-    for (auto& function : program.functions) {
-        for (auto& effect : function.statements) revoke_restore_sites(effect);
-        for (auto& effect : function.caught_throw_defers)
-            revoke_restore_sites(effect);
-    }
-    // Do not leave a partially minted restoration capability on failure:
-    // another validator invocation or speculative codegen must not reuse it.
-    bool restoration_sites_admitted = false;
-    struct RestorationFailureFence {
-        Program& program;
-        std::function<void(Statement&)>& revoke;
-        bool& admitted;
-        ~RestorationFailureFence() noexcept {
-            if (admitted) return;
-            for (auto& fn : program.functions) {
-                for (auto& stmt : fn.statements) revoke(stmt);
-                for (auto& stmt : fn.caught_throw_defers) revoke(stmt);
-            }
-        }
-    } restore_failure_fence{program, revoke_restore_sites,
-                            restoration_sites_admitted};
     std::uint64_t next_restore_write_id = 1;
     for (auto& function : program.functions) {
         Locals locals;
