@@ -7,6 +7,8 @@ on:
       - "src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp"
       - "tests/native_context_domains_v1_test.cpp"
       - "tests/native_local_payload_budget_v1_test.cpp"
+      - "src/main/cpp/oreslang/runtime/ScopedLocalStorageV1.hpp"
+      - "tests/native_scoped_local_coexistence_v1_test.cpp"
       - "CMakeLists.txt"
       - ".github/workflows/native-local-context-domains-v1.yml"
   workflow_dispatch:
@@ -37,11 +39,14 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp)" = "b217b912cff0b1e01798f4079ee31b5e1dc5da01"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp)" = "fd5a8e17402092d3e2734007b6465c18ed346321"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp)" = "7b79138951aa878fe2ee43cfcef21277cb68b256"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp)" = "bcecb54e7750fca7ef84010a2fa3f66e6bf61902"
-          test "$(git hash-object tests/native_context_domains_v1_test.cpp)" = "f73411cfba577ea54bf61c6c4225d73f34fc0a91"
+          test "$(git hash-object tests/native_context_domains_v1_test.cpp)" = "08cba6d3b390cf399f73535c044ea949263f5887"
           test "$(git hash-object tests/native_local_payload_budget_v1_test.cpp)" = "25dec8d5f15bafbc6d28d73f94c9027f21ca9ac5"
+          test "$(git hash-object CMakeLists.txt)" = "d394b917c73e901dd046013adf49a061c9941c90"
+          test "$(git hash-object tests/native_scoped_local_coexistence_v1_test.cpp)" = "63f4b28208b69fc0f68742641c9e417d2fd5a34c"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/ScopedLocalStorageV1.hpp)" = "9b6fa46743091dd4bc8dd90da1f6641633b85fde"
           printf 'source_head=%s\nsource_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
       - name: Compile and execute local-context native regression
         shell: bash
@@ -65,6 +70,12 @@ jobs:
             -Isrc/main/cpp tests/native_context_domains_v1_test.cpp \
             -o "$work/local-context-test"
           "$work/local-context-test"
+          "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp tests/native_scoped_local_coexistence_v1_test.cpp \
+            -o "$work/scoped-coexistence"
+          "$work/scoped-coexistence" | tee "$work/scoped-coexistence.log"
+          test "$(grep -c '^SCOPED_COEXIST_PASS ' "$work/scoped-coexistence.log")" = "17"
+          grep -qx 'NATIVE_SCOPED_COEXISTENCE_17_HOST_CASES_PASS' "$work/scoped-coexistence.log"
           "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
             -Isrc/main/cpp tests/native_local_payload_budget_v1_test.cpp \
             -o "$work/local-payload-test"
