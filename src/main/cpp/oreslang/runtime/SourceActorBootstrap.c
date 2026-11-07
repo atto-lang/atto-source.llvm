@@ -24,6 +24,21 @@
 #define SOURCE_SCALAR_TAG_I64 UINT64_C(1)
 #define SOURCE_SCALAR_TAG_BOOL UINT64_C(2)
 #define SOURCE_SCALAR_MAX_FUEL UINT64_C(2000000)
+
+/* Machine/layout invariants are compile-time, not runtime guesses. The
+ * shared first 32 words belong solely to the M2 scalar handler places.
+ * A typed VM frame cannot overlap them or spill outside the actor's heap. */
+_Static_assert(sizeof(OresActorScalarInstruction) == 16,
+    "LLVM/native scalar instruction ABI must be two i64 words");
+_Static_assert(offsetof(OresActorScalarProgram, function_entries)
+        == 3 * sizeof(uint64_t),
+    "LLVM/native scalar program ABI metadata layout mismatch");
+_Static_assert(SOURCE_SCALAR_FRAME_BASE
+        + ORES_SCALAR_MAX_FRAMES * SOURCE_SCALAR_FRAME_WORDS
+        <= SOURCE_ACTOR_FRAME_WORDS,
+    "bounded scalar frames exceed source actor incarnation quota");
+_Static_assert(1u + 16u + 8u + 1u <= SOURCE_SCALAR_FRAME_BASE,
+    "M2 scalar argument, cached fields and temporary local slots overlap VM frames");
 #define SOURCE_ROOT_CONTROL_SUSPEND UINT64_C(1)
 #define SOURCE_ROOT_CONTROL_RESUME UINT64_C(2)
 #define SOURCE_ROOT_CONTROL_DONE_SUSPEND UINT64_C(3)
