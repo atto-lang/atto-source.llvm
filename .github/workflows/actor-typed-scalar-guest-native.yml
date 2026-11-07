@@ -1,0 +1,147 @@
+name: LLVM actor typed scalar frame guest M3
+on:
+  pull_request:
+    paths:
+      - src/main/cpp/oreslang/backend/LlvmCodegen.cpp
+      - src/main/cpp/oreslang/backend/ActorScalarFrameLowering.hpp
+      - src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+      - src/main/cpp/oreslang/runtime/SourceActorBootstrap.h
+      - src/main/cpp/oreslang/runtime/SourceActorScalarVM.h
+      - tests/source_actor_scalar_vm_runtime_test.c
+      - tests/source_actor_scalar_vm_compiled_guest_harness.c
+      - tests/source_actor_e2e.py
+      - tests/fixtures/atto-actor-scalar-*.atto
+      - CMakeLists.txt
+      - .github/workflows/actor-typed-scalar-guest-native.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compiled-actor-typed-frame-execution:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout immutable PR source head only
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Bind compiler, runtime and canonical fixtures to exact tree
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          printf '%s\n' "$EXPECTED_HEAD" > "$RUNNER_TEMP/m3-head.txt"
+          git rev-parse 'HEAD^{tree}' > "$RUNNER_TEMP/m3-tree.txt"
+          for src in src/main/cpp/oreslang/backend/LlvmCodegen.cpp \
+              src/main/cpp/oreslang/backend/ActorScalarFrameLowering.hpp \
+              src/main/cpp/oreslang/runtime/SourceActorBootstrap.c \
+              src/main/cpp/oreslang/runtime/SourceActorBootstrap.h \
+              src/main/cpp/oreslang/runtime/SourceActorScalarVM.h \
+              tests/source_actor_scalar_vm_runtime_test.c \
+              tests/source_actor_scalar_vm_compiled_guest_harness.c \
+              tests/source_actor_e2e.py \
+              tests/fixtures/atto-actor-scalar-tail100k.atto \
+              tests/fixtures/atto-actor-scalar-mutual-tail.atto \
+              tests/fixtures/atto-actor-scalar-nontail-overflow.atto \
+              tests/fixtures/atto-actor-scalar-unsafe-nested-call-reject.atto; do
+            test "$(git hash-object "$src")" = "$(git rev-parse "HEAD:$src")"
+            printf '%s %s\n' "$(git hash-object "$src")" "$src"
+          done | tee "$RUNNER_TEMP/m3-blob-identities.txt"
+      - name: Install Clang and LLVM 19, Ninja, Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang-19 llvm-19-dev cmake ninja-build python3
+      - name: Compile real LLVM source compiler and three native actor CTests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B "$RUNNER_TEMP/m3-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON \
+            -DLLVM_DIR=/usr/lib/llvm-19/lib/cmake/llvm
+          cmake --build "$RUNNER_TEMP/m3-build" --parallel 2 --target \
+            oreslang-llvmc \
+            oreslang-source-actor-await-trace-runtime-test \
+            oreslang-source-actor-frame-isolation-runtime-test \
+            oreslang-source-actor-scalar-vm-runtime-test
+          ctest --test-dir "$RUNNER_TEMP/m3-build" --output-on-failure \
+            -R '^(source_actor_await_trace_runtime|source_actor_frame_isolation_restart_and_denial|source_actor_scalar_vm_tail_quota_sibling)$' \
+            | tee "$RUNNER_TEMP/m3-runtime-ctest.log"
+          grep -F '100% tests passed, 0 tests failed out of 3' \
+            "$RUNNER_TEMP/m3-runtime-ctest.log"
+      - name: Compile and execute full source .atto actor matrix at O1
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I tests/source_actor_e2e.py \
+            --compiler "$RUNNER_TEMP/m3-build/oreslang-llvmc" \
+            --clang /usr/bin/clang-19 --root . \
+            | tee "$RUNNER_TEMP/m3-compiled-guest-o1.log"
+          grep -F 'PASS actual compiler-backed M3 actor VM: atto-actor-scalar-tail100k.atto' \
+            "$RUNNER_TEMP/m3-compiled-guest-o1.log"
+          grep -F 'PASS actual compiler-backed M3 actor VM: atto-actor-scalar-mutual-tail.atto' \
+            "$RUNNER_TEMP/m3-compiled-guest-o1.log"
+          grep -F 'PASS actual compiler-backed M3 actor VM: atto-actor-scalar-nontail-overflow.atto' \
+            "$RUNNER_TEMP/m3-compiled-guest-o1.log"
+      - name: Execute actual source-compiled guest under ASan and UBSan
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1
+        run: |
+          set -euo pipefail
+          python3 -I tests/source_actor_e2e.py \
+            --compiler "$RUNNER_TEMP/m3-build/oreslang-llvmc" \
+            --clang /usr/bin/clang-19 --root . --sanitize \
+            | tee "$RUNNER_TEMP/m3-compiled-guest-sanitized.log"
+          grep -c 'PASS actual compiler-backed M3 actor VM:' \
+            "$RUNNER_TEMP/m3-compiled-guest-sanitized.log" \
+            | grep -Fx '3'
+      - name: Classify tested semantics and preserve executed exact-head receipt
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          {
+            printf 'evidence_class=ACTUAL_COMPILER_BACKED_GUEST_SCALAR_FRAMES\n'
+            printf 'compiled_guest_actor_callback=EXECUTED\n'
+            printf 'tail_and_mutual_tail=TESTED\n'
+            printf 'non_tail_frame_quota=TESTED\n'
+            printf 'sibling_survival=HOST_RUNTIME_TESTED\n'
+            printf 'actor_suspends_continuation_frames=NOT_VERIFIED\n'
+            printf 'native_fault_containment=NOT_VERIFIED\n'
+            printf 'java_parity=NOT_VERIFIED\n'
+            printf 'head_sha=%s\n' "$EXPECTED_HEAD"
+            printf 'tree_sha=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+            printf 'run=%s attempt=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            sha256sum "$RUNNER_TEMP/m3-build/oreslang-llvmc" \
+              "$RUNNER_TEMP/m3-runtime-ctest.log" \
+              "$RUNNER_TEMP/m3-compiled-guest-o1.log" \
+              "$RUNNER_TEMP/m3-compiled-guest-sanitized.log"
+          } | tee "$RUNNER_TEMP/m3-evidence.txt"
+      - name: Upload immutable native runtime and compiler-backed guest evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: actor-typed-scalar-m3-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/m3-head.txt
+            ${{ runner.temp }}/m3-tree.txt
+            ${{ runner.temp }}/m3-blob-identities.txt
+            ${{ runner.temp }}/m3-runtime-ctest.log
+            ${{ runner.temp }}/m3-compiled-guest-o1.log
+            ${{ runner.temp }}/m3-compiled-guest-sanitized.log
+            ${{ runner.temp }}/m3-evidence.txt
+          if-no-files-found: warn
+          retention-days: 7
