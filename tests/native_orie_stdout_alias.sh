@@ -81,7 +81,7 @@ native_reject stderr_not_stdout \
   'unsupported native stdio operation'
 native_reject unknown_stdout_field \
   'pub routine main(): int { stdio.stdout.stderr.println("bad"); return 0; }' \
-  'unsupported native stdio operation'
+  'unsupported native stdio.stdout operation'
 
 [[ "$checks" -eq 6 ]] ||
   { echo "NATIVE_STDOUT_INCOMPLETE_TEST_COUNT=$checks" >&2; exit 1; }
