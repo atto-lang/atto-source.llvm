@@ -44,6 +44,9 @@ jobs:
           sha256sum src/main/cpp/oreslang/backend/GpuG1EventProvider.hpp \
             src/main/cpp/oreslang/backend/GpuG1CudaDriver.hpp \
             tests/gpu_g1_event_provider_test.cpp tests/gpu_g1_cuda_adapter_compile_test.cpp
+          sha256sum src/main/cpp/oreslang/backend/GpuG1VerifiedPtx.hpp \
+            src/main/cpp/oreslang/backend/GpuG1CudaModuleLoader.hpp \
+            tests/gpu_g1_verified_ptx_test.cpp tests/gpu_g1_cuda_module_compile_test.cpp
       - name: Compile and execute typed frontend source tests
         shell: bash
         run: |
@@ -70,12 +73,16 @@ jobs:
           clang++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
             -I src/main/cpp tests/gpu_g1_event_provider_test.cpp \
             -o /tmp/gpu-g1-proof/event-provider-host
+          clang++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -I src/main/cpp tests/gpu_g1_verified_ptx_test.cpp \
+            -lcrypto -o /tmp/gpu-g1-proof/verified-ptx-host
           /tmp/gpu-g1-proof/typed-frontend
           /tmp/gpu-g1-proof/source-admission
           /tmp/gpu-g1-proof/resident-budget
           /tmp/gpu-g1-proof/adversarial-abi
           /tmp/gpu-g1-proof/provider-ledger
           /tmp/gpu-g1-proof/event-provider-host
+          /tmp/gpu-g1-proof/verified-ptx-host
           /tmp/gpu-g1-proof/source-compiler tests/fixtures/gpu-g1-saxpy.atto \
             > /tmp/gpu-g1-proof/source.ll
           clang -x ir -S -emit-llvm -Wno-override-module \
