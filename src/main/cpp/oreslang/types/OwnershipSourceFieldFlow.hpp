@@ -290,8 +290,9 @@ class SourceFieldFlowBuilder {
             case SK::ForEach: {
                 if (stmt.kind == SK::ForIndex) {
                     if (!stmt.branch_local || !stmt.branch_local->initializer ||
+                            !stmt.branch_local->class_name.empty() ||
                             !stmt.condition || !stmt.loop_step)
-                        unsupported("incomplete index-loop frame");
+                        unsupported("unclassified index-loop class owner or missing frame");
                     at = expression(*stmt.branch_local->initializer, at, depth + 1);
                 } else {
                     if (!stmt.expression || !stmt.branch_local ||
