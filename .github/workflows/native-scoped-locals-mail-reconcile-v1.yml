@@ -15,6 +15,7 @@ on:
       - "tests/native_request_data_mail_gate_v1_test.cpp"
       - "tests/native_request_wake_origin_v1_test.cpp"
       - "tests/native_request_issued_data_ingress_v1_test.cpp"
+      - "tests/native_request_issued_data_stop_race_v1_test.cpp"
       - "tests/native_scoped_locals_45_case_matrix.cpp"
       - ".github/workflows/native-scoped-locals-mail-reconcile-v1.yml"
   workflow_dispatch:
@@ -60,6 +61,7 @@ jobs:
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestIngressIssuerV1.hpp)" = "28ec7d4340b04463c05b45bf1f21b08f41ca9dd1"
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalActorTerminationRegistryV1.hpp)" = "fef7c42d3dedf3f6126c3d6036e55c78a4689c8c"
           test "$(git hash-object tests/native_request_issued_data_ingress_v1_test.cpp)" = "1a0e4a1529ac348ba19dc7ab54377701d66458ad"
+          test "$(git hash-object tests/native_request_issued_data_stop_race_v1_test.cpp)" = "1217af207ea618a91462abcd9994661830dac991"
           printf 'checkout_head=%s\ncheckout_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
       - name: Compile and execute scheduler-origin, DATA, WAKE and 45-case host gates
         shell: bash
@@ -107,4 +109,10 @@ jobs:
           "$work/issued-ingress" | tee "$work/issued-ingress.log"
           test "$(grep -c '^ISSUED_DATA_INGRESS_PASS ' "$work/issued-ingress.log")" = "175"
           grep -qx 'NATIVE_ISSUED_DATA_INGRESS_HOST_PASS total=175' "$work/issued-ingress.log"
+          "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp tests/native_request_issued_data_stop_race_v1_test.cpp \
+            "$work/scheduler.o" -o "$work/issued-stop-races"
+          "$work/issued-stop-races" | tee "$work/issued-stop-races.log"
+          test "$(grep -c '^ISSUED_DATA_STOP_RACE_PASS ' "$work/issued-stop-races.log")" = "391"
+          grep -qx 'NATIVE_ISSUED_DATA_STOP_RACE_HOST_PASS total=391 trials=60' "$work/issued-stop-races.log"
           printf 'NATIVE_ORIGIN_AND_SCOPED_45_EXACT_HEAD_HOST_PASS compiler=%s mode=%s\n' "$CXX" "$MODE"
