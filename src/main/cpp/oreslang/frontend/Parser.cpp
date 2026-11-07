@@ -144,12 +144,12 @@ bool reserved(std::string_view name) {
         "define", "class", "enum", "pattern", "module", "contract", "conforms", "namespace",
         "import", "from", "as", "extends", "implements", "try", "catch",
         "throw", "raise", "panic", "recover",
-        "finally", "end", "fi", "if", "do", "else", "then", "new",
+        "finally", "end", "fi", "if", "guard", "do", "else", "then", "new",
         "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "gen", "generator",
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
-        "default", "eq", "neq", "nb", "select", "readch", "writech",
+        "default", "eq", "neq", "and", "or", "xor", "nb", "select", "readch", "writech",
         "cb", "shared", "untrusted", "type", "types", "typeof",
         "interface", "trait", "struct", "impl", "abstract", "void", "Iterator", "AsyncIterator",
         "static", "pub", "private", "return", "defer", "throw", "raise",
@@ -596,6 +596,41 @@ public:
             advance();
             if (token_.text == "contract")
                 fail("native contract imports require a validated cross-unit linker");
+            if (accept("fnc")) {
+                // Java-compatible named function import: `import fnc a, b from "p";`
+                // or `import fnc a as b from "p";`. One import record per name;
+                // the module loader binds each to the target file's pub function.
+                std::vector<ModuleImport> selected;
+                const std::size_t offset = token_.offset;
+                do {
+                    ModuleImport imported;
+                    imported.offset = offset;
+                    imported.selected_function = true;
+                    imported.selected_module = identifier();
+                    imported.local_name = imported.selected_module;
+                    selected.push_back(std::move(imported));
+                } while (accept(","));
+                if (accept("as")) {
+                    if (selected.size() != 1) fail("named import aliases require exactly one selected name");
+                    selected.front().local_name = identifier();
+                }
+                require("from");
+                if (token_.kind != Kind::String) fail("native function import requires a quoted source path");
+                const std::string path(token_.text);
+                if (path.empty() || path.size() > 4096) fail("native import path must contain 1..4096 bytes");
+                for (unsigned char ch : path)
+                    if (ch < 32 || ch == 127 || ch == '\\')
+                        fail("native import path escapes/control characters unsupported");
+                advance();
+                require(";");
+                for (auto& imported : selected) {
+                    if (module_names_.count(imported.local_name) || !function_import_names_.insert(imported.local_name).second)
+                        fail("duplicate imported function binding '" + imported.local_name + "'");
+                    imported.path = path;
+                    program.imports.push_back(std::move(imported));
+                }
+                continue;
+            }
             ModuleImport imported;
             imported.offset = token_.offset;
             imported.selected_class = accept("class");
@@ -636,6 +671,10 @@ public:
                 if (exported) fail("duplicate pub modifier");
                 exported = true;
             }
+            // Java M0 admits compiler-only durable declarations. LLVM has no
+            // typed history state, command-manifest or replay ABI yet.
+            if (token_.text == "activity" || token_.text == "workflow")
+                fail("DURABLE_M0_BACKEND_UNSUPPORTED: LLVM requires typed durable manifest and replay lowering");
             if (token_.text == "mtd") {
                 program.functions.push_back(extension_method(exported));
                 continue;
@@ -722,6 +761,10 @@ public:
                     if (public_class) fail("duplicate pub modifier");
                     public_class = true;
                 }
+                // Java M0 admits compiler-only durable declarations. LLVM has no
+                // typed history state, command-manifest or replay ABI yet.
+                if (token_.text == "activity" || token_.text == "workflow")
+                    fail("DURABLE_M0_BACKEND_UNSUPPORTED: LLVM requires typed durable manifest and replay lowering");
                 if (token_.text == "mtd") {
                     program.functions.push_back(extension_method(public_class));
                     continue;
@@ -1311,10 +1354,14 @@ private:
             field.offset = token_.offset;
             field.field_mutable = token_.text == "let";
             advance();
+            // Canonical type-first `let int total = 0;` or native `let total: int = 0;`.
+            const bool type_first = accept("int");
             field.name = identifier();
             if (!names.insert(field.name).second) fail("duplicate actor field '" + field.name + "'");
-            require(":");
-            require("int");
+            if (!type_first) {
+                require(":");
+                require("int");
+            }
             require("=");
             field.initializer = expression();
             require(";");
@@ -1360,6 +1407,8 @@ private:
         require(":");
         require("int");
         require("{");
+        actor_handler_active_ = true;
+        struct HandlerScope { bool& flag; ~HandlerScope() { flag = false; } } handler_scope{actor_handler_active_};
         // The first compiler-lowered per-message owned value slice is
         // deliberately synchronous and immutable. Handler temporaries are
         // allocated in the existing actor heap and dropped before returning;
@@ -1396,6 +1445,7 @@ private:
             }
             ActorFieldWrite write;
             write.offset = token_.offset;
+            if (accept("self")) require(".");
             write.field = identifier();
             require("=");
             write.expression = expression();
@@ -2519,6 +2569,20 @@ private:
             class_receivers_ = receivers;
             require("}"); return loop;
         };
+        // Only a syntactically proven terminal failure path may be emitted as a
+        // guard. Never allow a fall-through branch to reach guarded code.
+        std::function<bool(const std::vector<Statement>&)> guard_failure_exits;
+        guard_failure_exits = [&](const std::vector<Statement>& body) -> bool {
+            if (body.empty()) return false;
+            const Statement& last = body.back();
+            if (last.kind == Statement::Kind::Return) return true;
+            if (last.kind == Statement::Kind::Conditional) {
+                return !last.then_statements.empty() && !last.else_statements.empty()
+                    && guard_failure_exits(last.then_statements)
+                    && guard_failure_exits(last.else_statements);
+            }
+            return false;
+        };
         branch_arm = [&](bool finally_scope, bool then_scope) {
             if (++statement_depth > 16) fail("native structured statement depth exceeds 16");
             struct Depth { std::size_t& n; ~Depth() { --n; } } depth{statement_depth};
@@ -2553,11 +2617,48 @@ private:
                 }
                 Statement statement;
                 statement.offset = token_.offset;
+                if (token_.text == "guard" && !finally_scope) {
+                    const auto offset = token_.offset;
+                    require("guard");
+                    // No implicit Option payload projection until ownership-aware narrowing exists.
+                    {
+                        Lexer probe = lexer_;
+                        std::string previous(token_.text);
+                        for (std::size_t budget = 0; budget < 256; ++budget) {
+                            const Token candidate = probe.next();
+                            if (candidate.kind == Kind::End || candidate.text == "{") break;
+                            if (previous == "is" && candidate.text == "Some")
+                                fail("native guard is Some requires ownership-aware Option narrowing");
+                            previous = std::string(candidate.text);
+                        }
+                    }
+                    auto predicate = expression();
+                    while (accept(",")) {
+                        auto combined = make_expression(Expression::Kind::LogicalAnd, offset);
+                        combined->left = std::move(predicate);
+                        combined->right = expression();
+                        predicate = std::move(combined);
+                    }
+                    require("{");
+                    auto failure = branch_arm(false, false);
+                    require("}");
+                    if (!guard_failure_exits(failure))
+                        fail("AttoLang guard failure block must terminate on every path");
+                    if (!then_scope && (token_.text == "else" || token_.text == "fi"))
+                        fail("AttoLang guard has no else or fi");
+                    Statement inverted;
+                    inverted.kind = Statement::Kind::Conditional; inverted.offset = offset;
+                    inverted.condition = make_expression(Expression::Kind::LogicalNot, offset);
+                    inverted.condition->left = std::move(predicate);
+                    inverted.then_statements = std::move(failure);
+                    actions.push_back(std::move(inverted));
+                    continue;
+                }
                 if (token_.text == "if" && !finally_scope) {
                     advance(); statement.kind = Statement::Kind::Conditional;
                     statement.condition = expression();
-                    if (accept(";")) {
-                        if (!accept("then")) require("do"); statement.then_statements = branch_arm(false, true);
+                    if (accept_keyword_if_header()) {
+                        statement.then_statements = branch_arm(false, true);
                         if (accept("else")) statement.else_statements = branch_arm(false, true);
                     } else {
                         require("{"); statement.then_statements = branch_arm(false, false); require("}");
@@ -2574,7 +2675,10 @@ private:
                     if (!value.return_class.empty()) fail("structured class return requires ownership-aware exit lowering");
                     statement.kind = Statement::Kind::Return;
                     if (!value.returns_void) statement.expression = expression();
-                    require(";"); actions.push_back(std::move(statement));
+                    if (!accept(";") && token_.text != "}"
+                            && (!then_scope || (token_.text != "fi" && token_.text != "else" && token_.text != "elif")))
+                        fail("native return requires ';' or a closing block delimiter");
+                    actions.push_back(std::move(statement));
                     if (token_.text != "}" && (!then_scope || (token_.text != "fi" && token_.text != "else" && token_.text != "elif")))
                         fail("native statement follows terminal return");
                     continue;
@@ -2878,18 +2982,56 @@ private:
                     continue;
                 }
             }
+            if (token_.text == "guard") {
+                if (terminal_try_finally)
+                    fail("native protected guard requires verified cleanup-aware lowering");
+                if (return_guards_started)
+                    fail("native guard cannot follow legacy return guards");
+                const auto offset = token_.offset;
+                require("guard");
+                // No implicit Option payload projection until ownership-aware narrowing exists.
+                {
+                    Lexer probe = lexer_;
+                    std::string previous(token_.text);
+                    for (std::size_t budget = 0; budget < 256; ++budget) {
+                        const Token candidate = probe.next();
+                        if (candidate.kind == Kind::End || candidate.text == "{") break;
+                        if (previous == "is" && candidate.text == "Some")
+                            fail("native guard is Some requires ownership-aware Option narrowing");
+                        previous = std::string(candidate.text);
+                    }
+                }
+                auto predicate = expression();
+                while (accept(",")) {
+                    auto combined = make_expression(Expression::Kind::LogicalAnd, offset);
+                    combined->left = std::move(predicate);
+                    combined->right = expression();
+                    predicate = std::move(combined);
+                }
+                require("{");
+                if (++branch_count > 128) fail("native structured guard limit exceeded (128)");
+                auto failure = branch_arm(false, false);
+                require("}");
+                if (!guard_failure_exits(failure))
+                    fail("AttoLang guard failure block must terminate on every path");
+                if (token_.text == "else" || token_.text == "fi")
+                    fail("AttoLang guard has no else or fi");
+                Statement inverted;
+                inverted.kind = Statement::Kind::Conditional; inverted.offset = offset;
+                inverted.condition = make_expression(Expression::Kind::LogicalNot, offset);
+                inverted.condition->left = std::move(predicate);
+                inverted.then_statements = std::move(failure);
+                value.statements.push_back(std::move(inverted));
+                continue;
+            }
             if (token_.text == "if") {
                 const auto offset = token_.offset;
                 require("if");
                 auto condition = expression();
                 if (terminal_try_finally && !native_pure_scalar_tree(*condition))
                     fail("native protected try guard requires a pure nonthrowing bool expression");
-                const bool then_form = accept(";");
-                if (then_form) {
-                    if (!accept("then")) require("do");
-                } else {
-                    require("{");
-                }
+                const bool then_form = accept_keyword_if_header();
+                if (!then_form) require("{");
                 if (accept("return")) {
                     if (value.returns_void)
                         fail("guarded early return requires a scalar result");
@@ -3057,6 +3199,27 @@ private:
             }
             Statement statement;
             statement.offset = token_.offset;
+            // Java/canonical spelling `worker.stop();` is the same request as
+            // the native `stop worker;` statement on a direct ActorRef. `stop` is
+            // a keyword, so recognise it by lookahead before expression parsing.
+            if (token_.kind == Kind::Identifier && !reserved(token_.text) && [&] {
+                    Lexer look = lexer_;
+                    return look.next().text == "." && look.next().text == "stop"
+                        && look.next().text == "(";
+                }()) {
+                const std::string reference = identifier();
+                require(".");
+                require("stop");
+                require("(");
+                require(")");
+                require(";");
+                if (!value.done_await_actor.empty())
+                    fail("actor effects after await get_done are unsupported");
+                value.actor_stops.push_back(reference);
+                value.actor_actions.push_back({ActorAction::Kind::Stop,
+                                               value.actor_stops.size() - 1});
+                continue;
+            }
             auto action = primary();
             if (action->kind == Expression::Kind::Field && action->name == "send"
                     && accept("(")) {
@@ -3330,6 +3493,13 @@ private:
             std::string operation(token_.text);
             if (operation == "mut") {
                 advance();
+                if (token_.text == "share") {
+                    // A source spelling alone never proves a native shared
+                    // allocation domain or a guarded SharedMutex<T> handle.
+                    // Reject before evaluating the operand or emitting IR.
+                    fail("native rt mut share requires verified SharedMutex<T> capability, "
+                         "guarded lowering and allocation-domain proof; refusing unsynchronized alias");
+                }
                 if (token_.text != "borrow")
                     fail("'rt mut' only supports borrowing; use 'rt mut borrow value'");
                 operation = "borrow";
@@ -3631,7 +3801,24 @@ private:
         if (accept("stdio")) {
             require(".");
             auto expr = make_expression(Expression::Kind::Console, offset);
+            // String unless the native type checker proves an int/bool argument.
+            expr->resolved_type = ScalarType::String;
             expr->name = identifier();
+            if (expr->name == "stdout") {
+                // Java stdio.stdout.write/println take exactly one argument and
+                // render it like stdio.print/println; write adds no newline.
+                // Lower onto the same Console node so output is byte-identical.
+                require(".");
+                const std::string member = identifier();
+                if (member == "write") expr->name = "print";
+                else if (member == "println") expr->name = "println";
+                else fail("unsupported native stdio.stdout operation");
+                require("(");
+                expr->left = expression();
+                if (token_.text == ",") fail("stdio.stdout." + member + " takes exactly one argument");
+                require(")");
+                return expr;
+            }
             if (expr->name != "print" && expr->name != "println") fail("unsupported native stdio operation");
             // Java stdio.print/println concatenate arguments without an
             // inserted separator and append at most one newline. Lower all
@@ -3706,6 +3893,13 @@ private:
             token_.text == "ActorGroupJoinCapability")
             fail("native ActorGroup source lowering unsupported: "
                  "typed membership capabilities and lifecycle authority required");
+        if (actor_handler_active_ && token_.text == "self") {
+            advance();
+            require(".");
+            auto field = make_expression(Expression::Kind::Variable, offset);
+            field->name = identifier();
+            return field;
+        }
         const bool extension_self = extension_header_active_ && token_.text == "self";
         if (token_.kind != Kind::Identifier || (reserved(token_.text) && token_.text != "pattern" &&
                 !sum_variant(token_.text) &&
@@ -3842,6 +4036,16 @@ private:
         if (token_.text != text) return false;
         advance();
         return true;
+    }
+
+    // Keyword-delimited `if` header after the condition, matching the Java
+    // reference: the `;` is optional, `then` is canonical and `do` is the
+    // deprecated spelling. Returns false when the caller must parse a `{` block.
+    bool accept_keyword_if_header() {
+        const bool semicolon = accept(";");
+        if (accept("then") || accept("do")) return true;
+        if (semicolon) require("then");
+        return false;
     }
 
     // Consult a copy of the scanner rather than merging arithmetic tokens.
@@ -4112,7 +4316,8 @@ private:
                 if (found == functions.end() ||
                     found->second.count(expr.arguments.size()) == 0) {
                     throw std::runtime_error("unknown function or wrong call arity '"
-                                             + expr.name + "' at byte "
+                                             + expr.name + (found == functions.end() ? "': unknown function" : "': call arity mismatch")
+                                             + " at byte "
                                              + std::to_string(expr.offset));
                 }
                 if (!expr.argument_names.empty() &&
@@ -4267,9 +4472,14 @@ private:
                 return ScalarType::Bool;
             case Expression::Kind::String:
                 return expr.resolved_type = ScalarType::String;
-            case Expression::Kind::Console:
-                require_type(validate_scalar_expression(*expr.left, variables, functions, depth + 1), ScalarType::String, "stdio");
+            case Expression::Kind::Console: {
+                // String, int or bool; int/bool are rendered as text by codegen.
+                const ScalarType argument = validate_scalar_expression(*expr.left, variables, functions, depth + 1);
+                if (argument != ScalarType::I64 && argument != ScalarType::Bool)
+                    require_type(argument, ScalarType::String, "stdio");
+                expr.resolved_type = argument;
                 return ScalarType::I64;
+            }
             case Expression::Kind::Variable: {
                 const auto found = variables.find(expr.name);
                 // Non-scalar class/array/actor names are rejected by ownership
@@ -4317,7 +4527,7 @@ private:
                 if (family == functions.end() ||
                         !family->second.count(expr.arguments.size()))
                     throw std::runtime_error("unknown function or wrong call arity '" +
-                        expr.name + "' at byte " + std::to_string(expr.offset));
+                        expr.name + (family == functions.end() ? "': unknown function" : "': call arity mismatch") + " at byte " + std::to_string(expr.offset));
                 const auto& signature = family->second.at(expr.arguments.size());
                 if (signature.async_source_i64)
                     throw std::runtime_error(
@@ -5651,6 +5861,7 @@ private:
     Lexer lexer_;
     Token token_;
     std::unordered_set<std::string> module_names_;
+    std::unordered_set<std::string> function_import_names_;
     std::string method_scope_;
     std::unordered_set<std::string> class_receivers_;
     std::vector<Function> methods_;
@@ -5665,6 +5876,8 @@ private:
         std::unordered_map<std::string, std::unordered_set<std::size_t>>> extension_methods_;
     std::unordered_set<std::string> extension_public_slots_;
     bool extension_header_active_ = false;
+    // Inside a native actor on_message body: `self.field` names the actor field.
+    bool actor_handler_active_ = false;
     std::string extension_receiver_alias_;
     std::string extension_method_name_;
     std::size_t extension_offset_ = 0;

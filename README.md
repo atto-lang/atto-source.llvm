@@ -107,13 +107,17 @@ a code within `0..255`; values outside that range return failure status `1`
 rather than silently truncating to an unrelated shell status. Native source
 `std.process.exit()` and exception effects remain unsupported and fail closed.
 
-The `int` to `i64` mapping, wraparound arithmetic and other non-entrypoint
-calling conventions are still **provisional**. Their semantics must be
-reconciled with the shared Oreslang specification and Java/GraalVM behavior,
-then verified by cross-backend differential tests before those features
-are marked parity-complete.
-The native slice does not support `-9223372036854775808` as one literal.
-Wasm32 remains governed by its distinct embedder/WASI entrypoint ABI.
+The `int` to `i64` mapping and other non-entrypoint calling conventions
+remain **provisional**, but default signed i64 add/subtract/multiply and unary
+negation now lower through LLVM checked-overflow intrinsics and trap on overflow;
+they no longer intentionally wrap. Native executable regression cases cover
+runtime and constant-source paths at O1/O2, including the signed minimum
+boundary. This is still a target trap ABI rather than the final typed Oreslang
+`ArithmeticOverflow` error contract, and it does not establish Math/BigInt/
+Decimal or floating-point parity. Cross-backend differential tests remain
+required before numeric parity is marked complete.
+Wasm32 remains governed by its distinct embedder/WASI entrypoint ABI and must
+pin a compiler revision carrying the same checked arithmetic semantics.
 
 ## Build and test
 

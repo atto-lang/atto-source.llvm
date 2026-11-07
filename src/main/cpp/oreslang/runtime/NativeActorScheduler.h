@@ -7,8 +7,7 @@ typedef struct OresNativePhysicalTurnGate OresNativePhysicalTurnGate;
 extern "C" {
 #endif
 typedef struct OresNativeActorScheduler OresNativeActorScheduler;
-/* Upper bound on actor slots per scheduler. One tenant VM-isolate hosts all of
- * its actors on one scheduler, so this bounds actors per tenant incarnation. */
+/* uint32_t intrusive queue indices support bounded million-slot schedulers. */
 enum { ORES_NATIVE_SCHEDULER_MAX_ACTORS = 1 << 20 };
 typedef struct {
     uint64_t scheduler_domain;
@@ -145,6 +144,33 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_wakes(
     size_t actor_count, size_t per_actor_capacity, size_t workers,
     OresNativeActorTaskFn on_message, OresNativeActorTaskFn on_control,
     OresNativeActorPanicFn on_panic, OresNativeActorWakeFn on_wake, void* ctx);
+/* Scheduler-lock protocol, fixed at open.
+ * PRIORITY_INHERIT (default for every legacy constructor): bounded priority
+ *   inversion, required by hard-RT admission. On Linux every *contended*
+ *   acquire is kernel-arbitrated (FUTEX_LOCK_PI, no user-space spinning), so
+ *   heavy producer/carrier contention costs ~25x in throughput.
+ * THROUGHPUT: plain (glibc: adaptive-spin) mutex. No priority inheritance:
+ *   priority_inheritance_enabled() reports 0, so hard-RT admission that
+ *   requires it fails closed. Use for general-purpose domains only. */
+typedef enum {
+    ORES_NATIVE_SCHEDULER_LOCK_PRIORITY_INHERIT = 0,
+    ORES_NATIVE_SCHEDULER_LOCK_THROUGHPUT = 1
+} OresNativeSchedulerLockProtocol;
+typedef struct {
+    size_t actor_count;
+    size_t per_actor_capacity;
+    size_t workers;
+    OresNativeActorTaskFn on_message;  /* required */
+    OresNativeActorTaskFn on_control;  /* optional */
+    OresNativeActorPanicFn on_panic;   /* optional */
+    OresNativeActorWakeFn on_wake;     /* optional; enables wake escrow */
+    void* ctx;
+    OresNativeSchedulerLockProtocol lock_protocol;
+} OresNativeActorSchedulerOptions;
+/* Superset of every open_* variant. Returns NULL for invalid options,
+ * including an unknown lock protocol. */
+OresNativeActorScheduler* ores_native_actor_scheduler_open_with_options(
+    const OresNativeActorSchedulerOptions* options);
 OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     size_t actor_count, size_t per_actor_capacity, size_t workers,
     OresNativeActorTaskFn on_message, OresNativeActorTaskFn on_future,
@@ -246,6 +272,26 @@ int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* scheduler)
  * such threads; prestart fails closed if pthread_create rejects the policy. */
 int ores_native_actor_scheduler_configure_fifo(
     OresNativeActorScheduler* scheduler, int priority);
+/* Bounded idle spin: before parking in the kernel, an idle carrier busy-polls
+ * for new work for at most spin_ns (0 disables; max 1,000,000). A handoff that
+ * arrives inside the budget costs a cache-line transfer instead of a futex
+ * sleep + wake, at the price of burning that CPU while idle. Bootstrap-only,
+ * same rule as configure_fifo. Spinning never delays CONTROL or retirement:
+ * both bump the same work epoch the spinner polls. */
+int ores_native_actor_scheduler_configure_idle_spin(
+    OresNativeActorScheduler* scheduler, uint32_t spin_ns);
+/* Pin carrier k to cpus[k % count] (one CPU per carrier) from thread creation.
+ * Linux only; returns 0 on other OSes, for CPUs outside the process's current
+ * affinity mask, or after bootstrap. Configuration is not evidence: use
+ * cpu_affinity_observed after prestart_carriers. */
+int ores_native_actor_scheduler_configure_cpu_affinity(
+    OresNativeActorScheduler* scheduler, const uint32_t* cpus, size_t count);
+/* True only when affinity was configured, every carrier has started, and each
+ * carrier read back an OS affinity of exactly its one configured CPU and was
+ * running on it. Required by hard-RT admission; not sufficient for it (IRQ
+ * routing, nohz_full, cpuset partitions and memory residency are separate). */
+int ores_native_actor_scheduler_cpu_affinity_observed(
+    OresNativeActorScheduler* scheduler);
 /* True only after every configured SCHED_FIFO carrier has been created. */
 int ores_native_actor_scheduler_fifo_carriers_ready(
     OresNativeActorScheduler* scheduler);
