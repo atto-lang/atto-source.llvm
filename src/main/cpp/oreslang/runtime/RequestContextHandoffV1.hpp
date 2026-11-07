@@ -45,8 +45,9 @@ namespace oreslang::runtime {
 // access to envelopes or scheduler authority; tests can exercise exhaustion
 // without performing 2^48 handoffs or exposing a mutation backdoor.
 namespace detail {
+inline constexpr unsigned handoff_slot_bits_v1 = 16;
 inline constexpr std::uint64_t handoff_max_generation_v1 =
-    (~std::uint64_t{0}) >> 16;
+    (~std::uint64_t{0}) >> handoff_slot_bits_v1;
 inline constexpr std::optional<std::uint64_t> handoff_next_generation_v1(
     std::uint64_t previous) noexcept {
     if (previous >= handoff_max_generation_v1) return std::nullopt;
@@ -274,7 +275,7 @@ public:
     }
 
 private:
-    static constexpr unsigned kSlotBits = 16;
+    static constexpr unsigned kSlotBits = detail::handoff_slot_bits_v1;
     static constexpr std::uint64_t kSlotMask = (1u << kSlotBits) - 1;
 
     struct Envelope {
