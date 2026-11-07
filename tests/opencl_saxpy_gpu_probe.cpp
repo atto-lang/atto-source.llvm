@@ -38,6 +38,11 @@ int main(int argc, char** argv) {
         }
         std::ifstream source(argv[1], std::ios::binary);
         if (!source) throw std::runtime_error("SAXPY probe source unreadable");
+        source.seekg(0, std::ios::end);
+        const auto source_size = source.tellg();
+        if (source_size <= 0 || source_size > 65536)
+            throw std::runtime_error("SAXPY source exceeds physical probe cap");
+        source.seekg(0, std::ios::beg);
         const std::string text((std::istreambuf_iterator<char>(source)),
                                std::istreambuf_iterator<char>());
         const auto kernel = oreslang::gpu_source_v1::compile_saxpy(text);
@@ -48,6 +53,11 @@ int main(int argc, char** argv) {
             std::ifstream emitted(argv[2], std::ios::binary);
             if (!emitted)
                 throw std::runtime_error("compiler-emitted OpenCL artifact unreadable");
+            emitted.seekg(0, std::ios::end);
+            const auto artifact_size = emitted.tellg();
+            if (artifact_size <= 0 || artifact_size > 65536)
+                throw std::runtime_error("compiler device artifact exceeds physical probe cap");
+            emitted.seekg(0, std::ios::beg);
             const std::string actual_device_source(
                 (std::istreambuf_iterator<char>(emitted)),
                 std::istreambuf_iterator<char>());
