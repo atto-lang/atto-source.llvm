@@ -156,7 +156,7 @@ public:
         // by the cancellation graph's authority mutex. No user callbacks.
         return cancellation_->with_active_authority([&] {
             auto commit = [&]() -> bool {
-                if (!actor_lifetime_live_locked()) return false;
+                if (!write_authorized_locked(scheduler)) return false;
                 if (!original_mail_sequence_) original_mail_sequence_ = admitted_mail;
                 return original_mail_sequence_ == admitted_mail;
             };
@@ -197,7 +197,7 @@ public:
         if (bytes > max_value_bytes) return false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (!actor_lifetime_live_locked() || cancellation_->is_cancelled()) return false;
+            if (!write_authorized_locked(scheduler) || cancellation_->is_cancelled()) return false;
             auto found = slots_.find(key.id_);
             const std::size_t old = found == slots_.end() ? 0 : found->second->bytes;
             if ((found == slots_.end() && slots_.size() >= max_slots) ||
@@ -220,7 +220,7 @@ public:
             // No guest copy/move/dtor or user callback runs under graph lock.
             committed = cancellation_->with_active_authority([&] {
                 auto commit = [&]() -> bool {
-                    if (!actor_lifetime_live_locked()) return false;
+                    if (!write_authorized_locked(scheduler)) return false;
                     auto found = slots_.find(key.id_);
                     const std::size_t old =
                         found == slots_.end() ? 0 : found->second->bytes;
@@ -300,7 +300,7 @@ public:
             // cancellation and retirement state, without running T::~T.
             committed = cancellation_->with_active_authority([&] {
                 auto commit = [&]() -> bool {
-                    if (!actor_lifetime_live_locked()) return false;
+                    if (!write_authorized_locked(scheduler)) return false;
                     const auto found = slots_.find(key.id_);
                     if (found == slots_.end()) return false;
                     retired = std::move(found->second);
@@ -348,6 +348,13 @@ private:
     bool actor_lifetime_live_locked() const noexcept {
         return open_ && (!actor_lifetime_fence_ ||
             actor_lifetime_fence_->load(std::memory_order_acquire));
+    }
+    // An actor-registered scope must never commit via the legacy raw host
+    // bypass: registered mutation must use the exact scheduler lifecycle
+    // mutex, not only a best-effort atomic precheck.
+    bool write_authorized_locked(OresNativeActorScheduler* scheduler) const noexcept {
+        return actor_lifetime_live_locked() &&
+            (!actor_lifetime_fence_ || scheduler != nullptr);
     }
 
     // Host-owned operation leases are exact-scope and cannot be copied.
