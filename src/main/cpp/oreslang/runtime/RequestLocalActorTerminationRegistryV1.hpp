@@ -79,10 +79,10 @@ public:
         if (!request || !request->identity().valid() ||
             !request->belongs_to(actor) || !actor.scheduler_domain ||
             !actor.generation || actor.actor_slot >= actor_slots_ ||
-            shutdown_.load(std::memory_order_acquire)) return false;
+            admissions_sealed_.load(std::memory_order_acquire)) return false;
         Slot& slot = slots_[static_cast<std::size_t>(actor.actor_slot)];
         std::lock_guard<std::mutex> guard(mutex_);
-        if (shutdown_.load(std::memory_order_acquire) ||
+        if (admissions_sealed_.load(std::memory_order_acquire) ||
             !slot.live->load(std::memory_order_acquire) ||
             slot.count == max_requests_per_actor) return false;
         for (std::size_t i = 0; i < slot.count; ++i)
@@ -141,9 +141,10 @@ public:
             if (shutdown_.load(std::memory_order_acquire)) return false;
             // Preserve single trusted shutdown caller. Worker runs until
             // every terminated slot has been swept.
-            shutdown_.store(true, std::memory_order_release);
+            admissions_sealed_.store(true, std::memory_order_release);
         }
         ores_native_actor_scheduler_retire(scheduler_);
+        shutdown_.store(true, std::memory_order_release);
         if (worker_.joinable()) worker_.join();
         return true;
     }
@@ -215,11 +216,11 @@ private:
         const auto claimed_domain =
             slot.claimed_domain.load(std::memory_order_relaxed);
         if ((claimed && claimed != actor.generation) ||
-            (claimed_domain && claimed_domain != actor.scheduler_domain)) {
+            (claimed_domain && claimed_domain != actor.scheduler_domain))
             self->invalid_terminations_.fetch_add(
                 1, std::memory_order_relaxed);
-            return;
-        }
+        // Even an unexpected incarnation MUST revoke access, not leave an
+        // old request fence live. Never reactivate a retired slot.
         slot.terminated_domain.store(
             actor.scheduler_domain, std::memory_order_relaxed);
         slot.terminated_generation.store(
@@ -293,6 +294,7 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable reaped_;
     std::atomic<bool> shutdown_{false};
+    std::atomic<bool> admissions_sealed_{false};
     std::atomic<std::size_t> invalid_terminations_{0};
     std::atomic<std::size_t> reaped_count_{0};
     std::thread worker_;
