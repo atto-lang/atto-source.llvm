@@ -2,6 +2,7 @@
 
 #include "oreslang/frontend/Parser.hpp"
 
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -14,7 +15,20 @@ namespace oreslang::native_ownership {
 
 using Mode = Parameter::Mode;
 
+// A BindingId identifies one compiler-local declaration and survives CFG
+// state cloning. An OriginId is more demanding: zero means no independent
+// allocation identity has been proved. It is NEVER inferred from an AST
+// identifier or the fact that two lexical slots have different names.
+struct BindingId {
+    std::uint64_t value = 0;
+};
+struct OriginId {
+    std::uint64_t value = 0;
+};
+
 struct LocalOwnership {
+    BindingId binding_id{};
+    OriginId allocation_origin{};
     Mode mode = Mode::Value;
     bool moved = false;
     bool heap_owned = false; // Experimental region slots cannot transfer ownership yet.
@@ -45,6 +59,8 @@ inline bool same_affine_state(const Locals& left, const Locals& right) {
         const LocalOwnership& b = found->second;
         if (
             a.mode != b.mode ||
+            a.binding_id.value != b.binding_id.value ||
+            a.allocation_origin.value != b.allocation_origin.value ||
             a.moved != b.moved ||
             a.heap_owned != b.heap_owned ||
             a.int_array != b.int_array ||
