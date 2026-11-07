@@ -55,8 +55,10 @@ public:
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (sealed_) return false;
-            sealed_ = true;
+            // Allocation may fail; do not publish a sealed state until the
+            // complete recipient snapshot can be recorded.
             pinned.reserve(registered_.size());
+            sealed_ = true;
             for (const auto& weak : registered_)
                 if (auto request = weak.lock())
                     pinned.push_back(std::move(request));
