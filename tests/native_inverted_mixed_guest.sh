@@ -32,8 +32,21 @@ hash_file() {
     [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || return 1
     printf '%s\n' "$digest"
 }
+clang_binary="$(command -v "$clang")"
+[[ -f "$clang_binary" && -x "$clang_binary" && ! -L "$clang_binary" ]] || {
+    echo 'FAIL: Clang executable must be a regular non-symlink tool' >&2; exit 1
+}
 compiler_sha="$(hash_file "$compiler")" || exit 1
+clang_sha="$(hash_file "$clang_binary")" || exit 1
 auditor_sha="$(hash_file "$auditor")" || exit 1
+require_tools_unchanged() {
+    [[ "$(hash_file "$compiler")" == "$compiler_sha" &&
+       "$(hash_file "$clang_binary")" == "$clang_sha" &&
+       "$(hash_file "$auditor")" == "$auditor_sha" ]] || {
+        echo 'FAIL: source compiler, Clang or no-GC auditor mutated' >&2; exit 1
+    }
+}
+printf '%s\n' 'STRICT_NO_GC_IR_SCREENED_ONLY (linked binary and FFI audit still required)' > "$tmp/expected-audit.txt"
 printf '%s\n' 'declare ptr @GC_malloc(i64)' > "$tmp/known-gc.ll"
 if "$auditor" "$tmp/known-gc.ll" >"$tmp/known-gc.out" 2>"$tmp/known-gc.err"; then
     echo 'FAIL: source-built auditor admitted collector import' >&2
@@ -41,6 +54,10 @@ if "$auditor" "$tmp/known-gc.ll" >"$tmp/known-gc.out" 2>"$tmp/known-gc.err"; the
 fi
 grep -Fq 'STRICT_NO_GC_IR_REJECTED' "$tmp/known-gc.err" ||
     { echo 'FAIL: missing known-GC diagnostic' >&2; exit 1; }
+[[ ! -s "$tmp/known-gc.out" ]] || {
+    echo 'FAIL: no-GC auditor emitted stdout on rejection' >&2; exit 1
+}
+require_tools_unchanged
 
 audit_ir() {
     local file="$1" before after
@@ -52,12 +69,12 @@ audit_ir() {
         exit 1
     fi
     after="$(hash_file "$file")" || exit 1
-    if ! grep -Fxq 'STRICT_NO_GC_IR_SCREENED_ONLY (linked binary and FFI audit still required)' "$tmp/audit.out" ||
-       [[ -s "$tmp/audit.err" || "$before" != "$after" ||
-          "$(hash_file "$auditor")" != "$auditor_sha" ]]; then
+    if ! cmp -s "$tmp/expected-audit.txt" "$tmp/audit.out" ||
+       [[ -s "$tmp/audit.err" || "$before" != "$after" ]]; then
         echo 'FAIL: mixed source IR audit or provenance changed' >&2
         exit 1
     fi
+    require_tools_unchanged
 }
 # Verify a *real* native process and bound its execution independently of CTest.
 native_status() {
