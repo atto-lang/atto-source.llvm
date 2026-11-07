@@ -1,6 +1,7 @@
 #include "oreslang/runtime/MultiActorCarrier.hpp"
 
 #include <atomic>
+#include <cstdlib>
 #include <functional>
 #include <stdexcept>
 #include <utility>
@@ -11,6 +12,7 @@ struct ActiveGuestTurn {
     ActorGuestFrameStack* stack = nullptr;
     std::uint32_t slot = 0;
     std::uint64_t generation = 0;
+    ActorGuestFrameStack::FrameToken generated_scalar{};
 };
 thread_local ActiveGuestTurn active_guest_turn{};
 class ScopedGuestTurn final {
@@ -371,6 +373,43 @@ void MultiActorCarrier::worker_loop(const std::shared_ptr<Shared>& state) noexce
             actor.cancel_requested = true;
         }
     }
+}
+
+
+// Compiler-owned, synchronous i64 actor parameter frame ABI. These functions
+// require the *actual* MultiActorCarrier worker lease; raw ActorRef, actor IDs,
+// pointers, or guest-supplied frame serials are never accepted as authority.
+// Intentionally not a suspended-frame/continuation API.
+extern "C" void oreslang_actor_guest_frame_i64_enter(std::int64_t value) noexcept {
+    auto& turn = active_guest_turn;
+    if (!turn.stack || turn.generation == 0 ||
+            turn.generated_scalar.serial != 0 || turn.stack->depth() != 0)
+        std::abort();
+    ActorGuestFrameStack::FrameToken frame{};
+    if (!turn.stack->push(sizeof(value), frame) ||
+            frame.actor_generation != turn.generation ||
+            !turn.stack->write(frame, 0, &value, sizeof(value)))
+        std::abort();
+    turn.generated_scalar = frame;
+}
+
+extern "C" std::int64_t oreslang_actor_guest_frame_i64_read() noexcept {
+    const auto& turn = active_guest_turn;
+    std::int64_t value = 0;
+    if (!turn.stack || turn.generated_scalar.serial == 0 ||
+            turn.generated_scalar.actor_generation != turn.generation ||
+            !turn.stack->read(turn.generated_scalar, 0, &value, sizeof(value)))
+        std::abort();
+    return value;
+}
+
+extern "C" void oreslang_actor_guest_frame_i64_leave() noexcept {
+    auto& turn = active_guest_turn;
+    if (!turn.stack || turn.generated_scalar.serial == 0 ||
+            turn.generated_scalar.actor_generation != turn.generation ||
+            !turn.stack->pop(turn.generated_scalar))
+        std::abort();
+    turn.generated_scalar = {};
 }
 
 } // namespace oreslang::runtime
