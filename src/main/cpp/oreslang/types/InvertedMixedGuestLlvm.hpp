@@ -29,9 +29,15 @@ struct VerifiedMixedSource {
     MixedIrOperands operands;
 };
 
+inline bool positive_zero_mixed(double value) {
+    // -0.0 compares equal to +0.0 but is a *different* raw payload. A
+    // canonical inactive variant must have no IEEE sign bit.
+    return value == 0.0 && !std::signbit(value);
+}
+
 inline bool unused_mixed_literal(const InvertedSourceLiteral& value) {
     return value.kind == InvertedScalarKind::I64 && value.integer == 0 &&
-           !value.boolean && value.floating == 0.0;
+           !value.boolean && positive_zero_mixed(value.floating);
 }
 
 inline bool unused_mixed_values(
@@ -48,9 +54,9 @@ inline void check_mixed_literal(const InvertedSourceLiteral& value,
     // Each literal is a closed tagged scalar, not a bag of alternate values.
     // Rejected hidden payloads prevent forged AST/MIR metadata smuggling.
     const bool hidden = (expected == InvertedScalarKind::I64 &&
-                            (value.boolean || value.floating != 0.0)) ||
+                            (value.boolean || !positive_zero_mixed(value.floating))) ||
                         (expected == InvertedScalarKind::Bool &&
-                            (value.integer != 0 || value.floating != 0.0)) ||
+                            (value.integer != 0 || !positive_zero_mixed(value.floating))) ||
                         (expected == InvertedScalarKind::F64 &&
                             (value.integer != 0 || value.boolean));
     if (hidden)
