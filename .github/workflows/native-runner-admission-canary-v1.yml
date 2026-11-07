@@ -1,0 +1,26 @@
+name: Native runner admission canary (NO SOURCE CHECKOUT)
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/native-runner-admission-canary-v1.yml"
+  workflow_dispatch:
+permissions: {}
+jobs:
+  source-free:
+    name: "source-free assigned runner proof"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Emit source-free executed-step receipt
+        shell: bash
+        env:
+          PR_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test -n "${RUNNER_NAME:-}"
+          test -n "${GITHUB_RUN_ID:-}"
+          test -n "${GITHUB_RUN_ATTEMPT:-}"
+          test -n "$PR_HEAD"
+          # Never checkout code, fetch secrets, or send source across orgs.
+          printf 'SOURCE_FREE_RUNNER_ADMITTED head=%s run=%s attempt=%s runner=%s\n' \
+            "$PR_HEAD" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$RUNNER_NAME"
