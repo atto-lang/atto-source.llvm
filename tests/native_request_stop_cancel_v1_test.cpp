@@ -225,6 +225,44 @@ void close_wins_during_read_copy() {
     c->retire();
 }
 
+void stop_waits_for_pinned_read_copy() {
+    Actors actors;
+    auto cancellation = TaskCancellation::root();
+    auto request = new_request(actors.a, 8, cancellation);
+    RequestLocalStopGroupV1 stop(actors.scheduler, actors.a);
+    RequestLocalKeyV1<PauseOnCopy> key;
+    auto pause = std::make_shared<Pause>();
+    check("31_copy_stop_source_registered",
+          stop.register_request(request) &&
+          request->set(key, PauseOnCopy(pause)));
+    std::atomic<bool> got{true};
+    std::thread reader([&] {
+        got.store(request->get_copy(key).has_value());
+    });
+    check("32_copy_stop_reader_paused", pause->await());
+    std::atomic<bool> finished{false}, ok{false};
+    std::thread control([&] {
+        ok.store(stop.stop_sealed_and_wait());
+        finished.store(true);
+    });
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds(8);
+    while (request->active() &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    check("33_stop_waits_for_pinned_read",
+          stop.sealed() && !request->active() && !finished.load());
+    pause->resume();
+    reader.join();
+    control.join();
+    check("34_closed_read_copy_not_published", !got.load());
+    check("35_STOP_done_only_after_lease_release",
+          ok.load() && stop.completed() &&
+          ores_native_actor_scheduler_poll_done(
+              actors.scheduler, actors.a));
+    cancellation->retire();
+}
+
 void replay_quota_and_retirement() {
     auto c = TaskCancellation::root();
     auto request = new_request({71, 8, 1}, 7, c);
@@ -254,6 +292,7 @@ int main() {
     cancel_wins_before_writer_commit();
     close_wins_during_read_copy();
     replay_quota_and_retirement();
-    if (passed != 30) return 2;
-    std::puts("REQUEST_STOP_CANCEL_30_HOST_CASES_PASS");
+    stop_waits_for_pinned_read_copy();
+    if (passed != 35) return 2;
+    std::puts("REQUEST_STOP_CANCEL_35_HOST_CASES_PASS");
 }
