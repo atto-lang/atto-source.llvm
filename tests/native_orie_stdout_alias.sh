@@ -75,7 +75,7 @@ native_exact legacy "PASS:orie-stdio" \
 
 native_reject unknown_stdout_op \
   'pub routine main(): int { stdio.stdout.flush("bad"); return 0; }' \
-  'unsupported native stdio operation'
+  'unsupported native stdio.stdout operation'
 native_reject stderr_not_stdout \
   'pub routine main(): int { stdio.stderr.println("bad"); return 0; }' \
   'unsupported native stdio operation'
