@@ -45,6 +45,23 @@ void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
  */
 void oreslang_source_actor_send(void* actor, int64_t payload);
 
+/* Compiler-only restricted scalar frame ABI. The runtime grants exactly one
+ * physical actor callback turn after validating the native actor heap owner.
+ * A source-compiled synchronous on_message places its parameter, cached
+ * fields and owned scalar locals into separate actor-incarnation-owned
+ * 64-KiB native frame bytes. Index is an i64 slot (0..8191); this is not an
+ * arbitrary guest pointer API and MUST NOT be exposed by the parser/imports.
+ * The slot pointer is valid only until the current actor callback returns;
+ * no async/capture/return of the pointer is permitted. Native recursion or
+ * C/FFI stack overflow is NOT contained by this logical scalar storage.
+ */
+int64_t* oreslang_source_actor_frame_i64_slot(
+    uint64_t domain, uint64_t epoch, uint64_t slot);
+/* Host-only negative-check API, never callable from guest source. On failure
+ * output is cleared to NULL and no pointer authority is returned. */
+int oreslang_source_actor_frame_i64_slot_checked(
+    uint64_t domain, uint64_t epoch, uint64_t slot, int64_t** output);
+
 /*
  * Compiler/runtime stop phases. request_stop is nonblocking and only asks the
  * scheduler to terminate the actor. join_done is trusted host glue: it waits
