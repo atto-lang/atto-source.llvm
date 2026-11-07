@@ -37,6 +37,18 @@ class SourceFieldFlowBuilder {
     std::size_t operations_ = 0;
     std::vector<const Statement*> defers_;
 
+    void collect_declared_sites(const std::vector<Statement>& stmts,
+            std::set<std::uint64_t>& sites, std::size_t depth) const {
+        require_depth(depth);
+        for (const auto& stmt : stmts) {
+            if (stmt.reinitialize_write_id &&
+                    !sites.insert(stmt.reinitialize_write_id).second)
+                unsupported("repeated restoration ticket in source AST");
+            collect_declared_sites(stmt.then_statements, sites, depth + 1);
+            collect_declared_sites(stmt.else_statements, sites, depth + 1);
+        }
+    }
+
     [[noreturn]] static void unsupported(const std::string& what) {
         throw std::runtime_error(
             "ownership violation: source field CFG needs classified effect: " + what);
@@ -350,6 +362,11 @@ public:
                 !function_.ready_await_actor.empty() ||
                 !function_.done_await_actor.empty())
             unsupported("exception/actor/task/suspension exits not modeled");
+        std::set<std::uint64_t> declared_sites;
+        collect_declared_sites(function_.statements, declared_sites, 0);
+        collect_declared_sites(function_.caught_throw_defers, declared_sites, 0);
+        if (declared_sites.empty())
+            unsupported("missing compiler-minted restoration witness");
         const auto start = block();
         std::optional<std::size_t> current = start;
         for (const auto& stmt : function_.statements) {
@@ -382,8 +399,8 @@ public:
             current = next;
         }
         if (current) (void)cleanup_and_exit(*current, function_.result.get());
-        if (result_.reinitialization_sites.empty())
-            unsupported("no compiler restoration site in flow");
+        if (result_.reinitialization_sites != declared_sites)
+            unsupported("unreachable or omitted source restoration ticket");
         // The dataflow verifier computes the powerset of possible ownership
         // states at every join/backedge: a read requires kOwned, not
         // {kOwned,kMoved}. This enforces all-predecessor restoration coverage
