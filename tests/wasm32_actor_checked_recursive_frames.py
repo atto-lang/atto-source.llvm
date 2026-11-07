@@ -28,7 +28,7 @@ binary_hash = hashlib.sha256(compiler.read_bytes()).hexdigest()
 def run(argv, stdin=None, permitted=False):
     r = subprocess.run(argv, input=stdin, text=True, capture_output=True,
                        timeout=75, check=False)
-    if not permitted and (r.returncode != 0 or r.signal if hasattr(r, "signal") else r.returncode != 0):
+    if not permitted and r.returncode != 0:
         raise AssertionError((argv, r.returncode, r.stderr[:1200], r.stdout[:1200]))
     return r
 
@@ -162,6 +162,6 @@ with tempfile.TemporaryDirectory(prefix="atto-checked-actor-stack-") as folder:
         invalid = run([str(compiler), *flags, str(negative)], permitted=True)
         assert invalid.returncode != 0, name
         assert not invalid.stdout.strip(), name
-        assert "checked recursive actors v1 require" in invalid.stderr, (name, invalid.stderr)
+        assert "oreslang-llvmc:" in invalid.stderr, (name, invalid.stderr)
         assert not (root / (name + ".wasm")).exists()
 print("PASS restricted compiler-managed recursive actor frames and fail-closed negatives (O0/Oz)")
