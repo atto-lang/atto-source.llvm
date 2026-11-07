@@ -94,3 +94,29 @@ Native host `main` still cannot return f64. Only the explicit
 compilation remains i64-only by default; the f64 flag is rejected on native
 and Cortex-M targets. The compiler driver and LLVM codegen enforce the same
 gate. This is not equivalent to an executed guest parity certificate.
+
+## Exact-head, source-local f64 execution workflow (draft)
+
+`.github/workflows/llvm-f64-exact-head.yml` is restricted to this source
+repository and never clones, mirrors, uploads or exports the private LLVM source
+tree or compiler binary to another organization. It checks out the actual PR
+head, verifies the root Git tree and clean index, builds `oreslang-llvmc` and
+the Rust ML/IR auditor targets, and **requires** precisely these registered,
+actually executed CTest gates:
+
+- `native_f64_scalar_e2e` (42 native scalar positives / 24 source negatives)
+- `wasm_core_f64_entry_source_gate` (one real compiler IR positive and nine
+  fail-before-IR rejections)
+- `native_float_ml` (real Rust-driven ML native guest suite)
+
+Successful CTest exit alone is insufficient: missing test registrations and
+skipped/failed JUnit testcases invalidate the receipt. The receipt carries
+exact source head, root tree SHA, the compiler executable SHA-256, JUnit hash,
+executed case IDs and Actions run ID/attempt. **Only the receipt and test
+report** may be uploaded to the source-repository Actions artifact store.
+This is **NOT_CERTIFIED** for Java parity, linked Wasm or Worker execution.
+
+A separately reviewed source-owned, executed receipt must be approved before
+its compiler bytes may be pre-provisioned onto an authorized Wasm guest runner;
+this workflow does not confer that approval. Zero-step failed Actions runs
+remain `NOT_EXECUTED` and produce no success receipt.

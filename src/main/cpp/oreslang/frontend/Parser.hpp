@@ -53,8 +53,9 @@ struct Expression {
     double floating = 0.0; // typed source f64, never an i64 carrier
     bool boolean = false;
     mutable ScalarType resolved_type = ScalarType::I64;
-    // Set only by the scalar checkers when an int value reaches a float
-    // context (Java numeric widening). Lowered as an explicit sitofp.
+    // Only the explicitly real int/int division operator sets this marker
+    // to preserve its f64 result. No assignment, parameter or mixed-operand
+    // context may implicitly promote int to f64.
     mutable bool widen_to_f64 = false;
     mutable std::string resolved_class;
     std::string name;

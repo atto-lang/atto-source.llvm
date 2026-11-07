@@ -1133,7 +1133,7 @@ if(BUILD_TESTING)
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_f64_lexical_gate.sh"
                 "$<TARGET_FILE:oreslang-llvmc>"
                 "${ORE_RT_AOT_CLANG}")
-        # The real f64 compiler ABI gate now compiles/links 32 native guests
+        # The real f64 compiler ABI gate now compiles/links 42 native guests
         # and separately checks 24 rejected sources with no emitted IR.
         set_tests_properties(native_f64_scalar_e2e PROPERTIES TIMEOUT 300)
         # Real LLVM compiler source->IR wasm32 f64 entry gate. This test
