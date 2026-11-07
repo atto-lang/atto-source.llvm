@@ -100,7 +100,7 @@ jobs:
               raise SystemExit(f'FAIL: wrong DOP mixed native CTest inventory: {cases}')
           PY
 
-      - name: Execute real guest compiler, Clang O0/O2 and negative traps
+      - name: Execute real guest compiler, Clang O0/O2 and static negative cases
         shell: bash
         run: |
           set -euo pipefail
@@ -124,25 +124,44 @@ jobs:
           if any(x.find('failure') is not None or x.find('skipped') is not None or
                  x.find('error') is not None for x in cases):
               raise SystemExit('FAIL: failed/skipped CTest cannot certify native execution')
+          if any(x.attrib.get('status') != 'run' or
+                 not x.attrib.get('time') or float(x.attrib['time']) <= 0
+                 for x in cases):
+              raise SystemExit('FAIL: missing actual executed CTest case status or duration')
           native=next(x for x in cases if x.attrib.get('name')=='native_inverted_mixed_source_to_native')
           text=' '.join(native.itertext())
-          if 'MIXED_ATTO_NATIVE_GUEST_PASS' not in text:
-              raise SystemExit('FAIL: no executed mixed native guest marker in JUnit result')
+          exact_marker=('MIXED_ATTO_NATIVE_GUEST_PASS: 4 exit42, 6 compile rejects, '
+                        'source IR trap guards present; IR no-GC screened (not linked/FFI proof)')
+          if exact_marker not in text:
+              raise SystemExit('FAIL: no exact executed mixed native guest marker in JUnit result')
           head=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
           source_tree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip()
           if head != os.environ['EXPECTED_HEAD']:
               raise SystemExit('FAIL: source head changed')
+          if subprocess.run(['git','diff','--exit-code','HEAD','--'],
+                            check=False,stdout=subprocess.DEVNULL).returncode != 0:
+              raise SystemExit('FAIL: source worktree or tracked tests changed during build')
+          source_files=subprocess.check_output(['git','ls-files','-m'],text=True).strip()
+          if source_files:
+              raise SystemExit('FAIL: tracked source modified after checkout')
           paths=['src/main/cpp/oreslang/frontend/Parser.cpp',
                  'src/main/cpp/oreslang/frontend/Parser.hpp',
                  'src/main/cpp/oreslang/types/InvertedMixedGuestLlvm.hpp',
                  'src/main/cpp/oreslang/main.cpp',
                  'tests/native_inverted_mixed_guest.sh',
                  'tests/native_inverted_mixed_mir_test.cpp',
+                 '.github/workflows/dop-inverted-mixed-native.yml',
+                 'CMakeLists.txt',
+                 'build/oreslang-no-gc-ir-audit',
                  'build/oreslang-llvmc']
+          paths += sorted(str(p) for p in pathlib.Path('tests/fixtures/inverted-mixed').glob('*.atto'))
+          if len([p for p in paths if p.endswith('.atto')]) != 8:
+              raise SystemExit('FAIL: fixture inventory changed')
           receipt=dict(head=head,tree=source_tree,run=os.environ['GITHUB_RUN_ID'],
                        attempt=os.environ['GITHUB_RUN_ATTEMPT'],
                        evidence='COMPILER_BACKED_MIXED_ATTO_GUEST_EXECUTED',
                        ctest_cases=observed,
+                       native_success_marker=exact_marker,
                        files={p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in paths})
           out=root/'build-evidence/mixed-native-receipt.json'
           out.write_text(json.dumps(receipt,sort_keys=True,indent=2)+'\n')
