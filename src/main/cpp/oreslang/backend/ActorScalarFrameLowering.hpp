@@ -113,7 +113,8 @@ struct Builder {
     }
 
     void validate_function(const Function& fn) {
-        if (fn.name.empty() || fn.method_owner.size() || fn.native_internal
+        if (fn.name.empty() || fn.direct_only_routine
+            || fn.method_owner.size() || fn.native_internal
             || fn.async_source_i64 || fn.has_declared_effects
             || !fn.generic_parameters.empty() || fn.scalar_while
             || fn.returns_void || fn.return_type != ScalarType::I64
