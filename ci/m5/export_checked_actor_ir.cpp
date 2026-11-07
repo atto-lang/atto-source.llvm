@@ -10,6 +10,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <sstream>
 #include <string_view>
 #include <vector>
 
@@ -111,7 +112,10 @@ static void project(const Program& p) {
             "M5_MIR_UNSUPPORTED: unsupported main effects/types");
     const auto& fld = actor.fields.front();
     const auto& param = actor.on_message.parameters.front();
-    std::cout << "{\"schema\":\"atto.canonical-checked-actor-ir.v0\","
+    // Build an atomic checked-IR response: no bytes are published until
+    // *all* graph/action/identity validations have completed.
+    std::ostringstream buffer;
+    buffer << "{\"schema\":\"atto.canonical-checked-actor-ir.v0\","
               << "\"checker\":\"LLVM_PARSE_PROGRAM_OWNERSHIP_SCALAR_TYPES\","
               << "\"status\":\"CHECKED_RESTRICTED_ACTOR_SLICE\","
               << "\"actor\":{\"name\":" << escaped(actor.name)
@@ -124,33 +128,39 @@ static void project(const Program& p) {
         const auto& spawn = fn.actor_spawns[i];
         identifier(spawn.name); identifier(spawn.actor_type);
         require(spawn.actor_type == actor.name, "M5_MIR_UNSUPPORTED: unknown actor kind");
-        if (i) std::cout << ',';
-        std::cout << "{\"ref\":" << escaped(spawn.name) << ",\"kind\":"
+        if (i) buffer << ',';
+        buffer << "{\"ref\":" << escaped(spawn.name) << ",\"kind\":"
                   << escaped(spawn.actor_type) << "}";
     }
-    std::cout << "],\"actions\":[";
+    buffer << "],\"actions\":[";
     for (std::size_t i = 0; i < fn.actor_actions.size(); ++i) {
         const auto& action = fn.actor_actions[i];
-        if (i) std::cout << ',';
+        if (i) buffer << ',';
         if (action.kind == ActorAction::Kind::Send) {
             require(action.index < fn.actor_sends.size(),
                     "M5_MIR_UNSUPPORTED: checked actor send index invalid");
             const auto& send = fn.actor_sends[action.index];
             identifier(send.reference);
-            std::cout << "{\"op\":\"send\",\"ref\":" << escaped(send.reference)
+            buffer << "{\"op\":\"send\",\"ref\":" << escaped(send.reference)
                       << ",\"value\":" << integer(send.payload.get()) << '}';
         } else {
             require(action.index < fn.actor_stops.size(),
                     "M5_MIR_UNSUPPORTED: checked actor stop index invalid");
             const auto& name = fn.actor_stops[action.index];
             identifier(name);
-            std::cout << "{\"op\":\"stop\",\"ref\":" << escaped(name) << '}';
+            buffer << "{\"op\":\"stop\",\"ref\":" << escaped(name) << '}';
         }
     }
-    std::cout << "],\"return_i64\":" << fn.result->integer
+    buffer << "],\"return_i64\":" << fn.result->integer
               << ",\"limits\":{\"max_actor_instances\":64,\"max_source_sends\":1024},"
               << "\"unsupported\":[\"await\",\"critical-read\",\"critical-write\","
               << "\"rt_take\",\"rt_share\",\"dynamic_guest_code\",\"tenant_sandbox\"]}\n";
+    const auto checked_json = buffer.str();
+    require(checked_json.size() <= 131072u,
+            "M5_MIR_UNSUPPORTED: serialized IR exceeds bounded size");
+    // Only this final statement publishes machine-readable IR. All earlier
+    // fail-closed errors leave stdout empty for downstream GraalVM codegen.
+    std::cout << checked_json;
 }
 
 int main(int argc, char** argv) {
