@@ -52,7 +52,7 @@ files=(
   "tests/native_context_domains_v1_test.cpp:c9fd993bd78e4a6b2bd27c384fff43276ca915dd"
   "tests/native_local_read_revocation_v1_test.cpp:cf49e51bed5834fae1d76a1191ec18e41f379656"
   "tests/native_local_payload_budget_v1_test.cpp:25dec8d5f15bafbc6d28d73f94c9027f21ca9ac5"
-  "tests/native_local_read_revocation_mutation_witness.sh:40f5b62235c5aab64b5861252bf0fceab701cd3d"
+  "tests/native_local_read_revocation_mutation_witness.sh:0d256fe89fd963e520226f7207f434b9e6477be7"
 )
 for entry in "${files[@]}"; do
   path="${entry%%:*}"
