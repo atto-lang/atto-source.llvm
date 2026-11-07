@@ -9,6 +9,8 @@ on:
       - "tests/native_local_payload_budget_v1_test.cpp"
       - "src/main/cpp/oreslang/runtime/ScopedLocalStorageV1.hpp"
       - "tests/native_scoped_local_coexistence_v1_test.cpp"
+      - "src/main/cpp/oreslang/runtime/ActorLocalSchedulerTurnV1.hpp"
+      - "tests/native_actorlocal_scheduler_turn_test.cpp"
       - "CMakeLists.txt"
       - ".github/workflows/native-local-context-domains-v1.yml"
   workflow_dispatch:
@@ -44,6 +46,8 @@ jobs:
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp)" = "bcecb54e7750fca7ef84010a2fa3f66e6bf61902"
           test "$(git hash-object tests/native_context_domains_v1_test.cpp)" = "08cba6d3b390cf399f73535c044ea949263f5887"
           test "$(git hash-object tests/native_local_payload_budget_v1_test.cpp)" = "25dec8d5f15bafbc6d28d73f94c9027f21ca9ac5"
+          test "$(git hash-object tests/native_actorlocal_scheduler_turn_test.cpp)" = "48808661462b8758bff722503d275db7a3c9615d"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/ActorLocalSchedulerTurnV1.hpp)" = "3011e40222789dc8161052028abc76941e8444f0"
           test "$(git hash-object CMakeLists.txt)" = "d394b917c73e901dd046013adf49a061c9941c90"
           test "$(git hash-object tests/native_scoped_local_coexistence_v1_test.cpp)" = "63f4b28208b69fc0f68742641c9e417d2fd5a34c"
           test "$(git hash-object src/main/cpp/oreslang/runtime/ScopedLocalStorageV1.hpp)" = "9b6fa46743091dd4bc8dd90da1f6641633b85fde"
