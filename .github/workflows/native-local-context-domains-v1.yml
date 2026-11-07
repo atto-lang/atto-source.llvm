@@ -8,6 +8,7 @@ on:
       - "tests/native_context_domains_v1_test.cpp"
       - "tests/native_local_read_revocation_v1_test.cpp"
       - "tests/native_local_read_revocation_mutation_witness.sh"
+      - "tests/run_native_local_context_m6_offline.sh"
       - "tests/native_local_payload_budget_v1_test.cpp"
       - "CMakeLists.txt"
       - ".github/workflows/native-local-context-domains-v1.yml"
@@ -45,6 +46,7 @@ jobs:
           test "$(git hash-object tests/native_context_domains_v1_test.cpp)" = "c9fd993bd78e4a6b2bd27c384fff43276ca915dd"
           test "$(git hash-object tests/native_local_read_revocation_v1_test.cpp)" = "cf49e51bed5834fae1d76a1191ec18e41f379656"
           test "$(git hash-object tests/native_local_read_revocation_mutation_witness.sh)" = "0d256fe89fd963e520226f7207f434b9e6477be7"
+          test "$(git hash-object tests/run_native_local_context_m6_offline.sh)" = "f12cc91d8423d3861c39eabc05fb289143930f02"
           test "$(git hash-object tests/native_local_payload_budget_v1_test.cpp)" = "25dec8d5f15bafbc6d28d73f94c9027f21ca9ac5"
           printf 'source_head=%s\nsource_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
       - name: Compile and execute local-context native regression
