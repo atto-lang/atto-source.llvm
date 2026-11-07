@@ -1,5 +1,7 @@
 #include "oreslang/runtime/SaxpyOpenClProvider.hpp"
 
+#include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -9,6 +11,7 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <thread>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -54,6 +57,17 @@ struct FakeApi final : SaxpyApi {
     bool auto_complete = true;
     bool physical_quiescent = false;
     bool fail_alloc_once = false;
+    std::uint32_t fail_alloc_at = 0;
+    bool fail_prepare_once = false;
+    bool fail_release_program_once = false;
+    std::uint32_t throw_upload_at = 0;
+    std::uint32_t null_upload_at = 0;
+    std::uint32_t upload_count = 0;
+    bool throw_during_download = false;
+    bool null_download_event = false;
+    bool null_kernel_event = false;
+    bool throw_poll_event_once = false;
+    bool failed_event_once = false;
     bool fail_release_event_once = false;
     bool fail_release_buffer_once = false;
     bool alias_third_allocation = false;
@@ -74,14 +88,24 @@ struct FakeApi final : SaxpyApi {
         return new int(1);
     }
     Handle prepare_saxpy(const gpu_source_v1::Artifact&) override {
+        if (fail_prepare_once) {
+            fail_prepare_once = false;
+            throw std::runtime_error("injected program preparation failure");
+        }
         return new int(2);
     }
     void release_program(Handle value) override {
+        if (fail_release_program_once) {
+            fail_release_program_once = false;
+            throw std::runtime_error("injected program release failure");
+        }
         delete static_cast<int*>(value);
         ++released_programs;
     }
     Handle allocate(std::uint64_t bytes) override {
         ++allocation_count;
+        if (fail_alloc_at == allocation_count)
+            throw std::runtime_error("injected numbered allocation failure");
         if (alias_third_allocation && allocation_count == 3)
             return second_allocation; // invalid driver provenance injection
         if (fail_alloc_once) {
@@ -108,6 +132,11 @@ struct FakeApi final : SaxpyApi {
     Handle enqueue_upload(Handle target, const unsigned char* host,
                           std::size_t bytes) override {
         ++enqueued;
+        ++upload_count;
+        if (throw_upload_at == upload_count)
+            throw std::runtime_error("injected ambiguous upload failure");
+        if (null_upload_at == upload_count)
+            return nullptr;
         if (return_null_upload_event)
             return nullptr; // unknown durable enqueue: quarantine
         auto* ev = new Event;
@@ -128,6 +157,8 @@ struct FakeApi final : SaxpyApi {
         ++enqueued;
         if (throw_during_kernel_enqueue)
             throw std::runtime_error("injected ambiguous kernel enqueue");
+        if (null_kernel_event)
+            return nullptr;
         auto* ev = new Event;
         ev->kind = Event::Kind::Kernel;
         ev->x = static_cast<Buffer*>(x);
@@ -141,6 +172,10 @@ struct FakeApi final : SaxpyApi {
     Handle enqueue_download(Handle source, unsigned char* host,
                             std::size_t bytes) override {
         ++enqueued;
+        if (throw_during_download)
+            throw std::runtime_error("injected ambiguous download failure");
+        if (null_download_event)
+            return nullptr;
         auto* ev = new Event;
         ev->kind = Event::Kind::Download;
         ev->out = static_cast<Buffer*>(source);
@@ -153,6 +188,14 @@ struct FakeApi final : SaxpyApi {
         auto* ev = static_cast<Event*>(handle);
         if (!live_events.count(ev))
             throw std::logic_error("foreign native event");
+        if (throw_poll_event_once) {
+            throw_poll_event_once = false;
+            throw std::runtime_error("injected event-poll transport failure");
+        }
+        if (failed_event_once) {
+            failed_event_once = false;
+            return EventStatus::Failed;
+        }
         if (device_lost) return EventStatus::DeviceLost;
         if (!auto_complete) return EventStatus::Pending;
         if (!ev->completed) {
