@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -55,6 +56,55 @@ int main(int argc, char* argv[]) {
             }
             op.close(); ++verified;
             std::cerr<<"GPU-G2 HARDWARE PASS: n="<<n<<" elements\n";
+        }
+        // Reproducible physical-GPU differential sweep: diverse padded tails,
+        // small/large launch extents, workgroup sizes, and signs/magnitudes.
+        std::mt19937_64 rng(0xa77020261106ULL);
+        for(int trial=0;trial<64;++trial) {
+            const auto n=trial<16? std::size_t(trial*33+1):
+                std::size_t(rng()%8193);
+            const auto group=std::uint32_t(1u<<(rng()%9));
+            const auto scale=float(int(rng()%33)-16)/5.0f;
+            std::vector<float> x(n),y(n);
+            for(std::size_t i=0;i<n;++i) {
+                x[i]=float(int(rng()%2003)-1001)/13.0f;
+                y[i]=float(int(rng()%997)-498)/7.0f;
+            }
+            SaxpyOperation op(driver,"gpu-g1-hardware-ci",generation,16*1024*1024);
+            generation+=3;
+            op.submit(ptx,scale,x,y,group);
+            completion(op);
+            if(op.state()!=State::Completed || op.output().size()!=n)
+                throw std::runtime_error("GPU-G2-004: randomized kernel did not complete");
+            for(std::size_t i=0;i<n;++i) {
+                const auto expected=scale*x[i]+y[i];
+                const auto actual=op.output()[i];
+                if(!std::isfinite(actual) ||
+                    std::abs(actual-expected)>0.00002f*(1.0f+std::abs(expected)))
+                    throw std::runtime_error("GPU-G2-004: seeded numerical oracle mismatch");
+            }
+            op.close(); ++verified;
+        }
+        // Invalid launches must fail *before* allocating or scheduling.
+        {
+            SaxpyOperation op(driver,"gpu-g1-hardware-ci",generation,16*1024*1024);
+            generation+=3;
+            bool rejected=false;
+            try { op.submit(ptx,1.0f,{1.0f},{2.0f},0); }
+            catch(const std::invalid_argument&) { rejected=true; }
+            if(!rejected || op.has_live_device_handles() || op.state()!=State::Ready)
+                throw std::runtime_error("GPU-G2-004: invalid block size admitted");
+            ++verified;
+        }
+        {
+            SaxpyOperation op(driver,"gpu-g1-hardware-ci",generation,sizeof(float));
+            generation+=3;
+            bool rejected=false;
+            try { op.submit(ptx,1.0f,{1.0f,2.0f},{3.0f,4.0f}); }
+            catch(const std::invalid_argument&) { rejected=true; }
+            if(!rejected || op.has_live_device_handles() || op.state()!=State::Ready)
+                throw std::runtime_error("GPU-G2-004: byte quota bypassed");
+            ++verified;
         }
         { // A cancelled future/request must not free in-flight device buffers.
             SaxpyOperation op(driver,"gpu-g1-hardware-ci",generation,16*1024*1024);
