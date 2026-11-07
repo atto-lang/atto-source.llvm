@@ -59,6 +59,25 @@ if(BUILD_TESTING)
     set_tests_properties(native_gpu_g1_typed_nvptx_saxpy_ir_host_only
         PROPERTIES TIMEOUT 20)
 
+    # First positive, *restricted* source compiler island: one canonical
+    # .atto SAXPY kernel. It cannot admit host launch or arbitrary GPU source.
+    add_executable(oreslang-gpu-g1-atto-saxpy-llvmc
+        tests/gpu_g1_atto_saxpy_cli.cpp)
+    target_include_directories(oreslang-gpu-g1-atto-saxpy-llvmc PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-gpu-g1-atto-saxpy-llvmc PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_executable(oreslang-gpu-g1-atto-source-test
+        tests/gpu_g1_atto_saxpy_source_test.cpp)
+    target_include_directories(oreslang-gpu-g1-atto-source-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-gpu-g1-atto-source-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_gpu_g1_restricted_atto_source_host_only
+        COMMAND oreslang-gpu-g1-atto-source-test)
+    set_tests_properties(native_gpu_g1_restricted_atto_source_host_only
+        PROPERTIES TIMEOUT 20 LABELS "restricted-atto;host-only")
+
     # Host-only structural admission, distinct from authentic provider/device authority.
     add_executable(oreslang-gpu-g1-launch-admission-test
         tests/gpu_g1_saxpy_launch_admission_test.cpp)
@@ -101,6 +120,18 @@ if(BUILD_TESTING)
                 "-DG1_WORK=${CMAKE_CURRENT_BINARY_DIR}/gpu-g1-ptx-proof"
                 "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_g1_nvptx_ptx_compile.cmake")
         set_tests_properties(native_gpu_g1_llc_ptx_no_device_claim PROPERTIES TIMEOUT 30)
+        # Separate source-backed PTX gate: it must consume .atto source,
+        # not the prebuilt typed-IR emitter, to support guest-source claims.
+        add_test(NAME native_gpu_g1_llc_ptx_from_restricted_atto
+            COMMAND "${CMAKE_COMMAND}"
+                "-DG1_EMITTER=$<TARGET_FILE:oreslang-gpu-g1-atto-saxpy-llvmc>"
+                "-DG1_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/gpu-g1-saxpy.atto"
+                "-DG1_REQUIRE_ATTO_SOURCE=ON"
+                "-DG1_LLC=${ATTO_GPU_G1_LLC}"
+                "-DG1_WORK=${CMAKE_CURRENT_BINARY_DIR}/gpu-g1-source-ptx-proof"
+                "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_g1_nvptx_ptx_compile.cmake")
+        set_tests_properties(native_gpu_g1_llc_ptx_from_restricted_atto
+            PROPERTIES TIMEOUT 30 LABELS "restricted-atto;requires-nvptx;not-device-evidence")
     endif()
 
     # This lane is STRICTLY OPT-IN. It cannot skip or pass on hosts without
@@ -128,7 +159,8 @@ if(BUILD_TESTING)
                 "-DG1_GIT=${GIT_EXECUTABLE}"
                 "-DG1_REPO=${CMAKE_CURRENT_SOURCE_DIR}"
                 "-DG1_HEAD=${ATTO_GPU_G1_EXACT_HEAD_SHA}"
-                "-DG1_EMITTER=$<TARGET_FILE:oreslang-gpu-g1-typed-saxpy-ir-test>"
+                "-DG1_EMITTER=$<TARGET_FILE:oreslang-gpu-g1-atto-saxpy-llvmc>"
+                "-DG1_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/gpu-g1-saxpy.atto"
                 "-DG1_LLC=${ATTO_GPU_G1_LLC}"
                 "-DG1_PROBE=$<TARGET_FILE:oreslang-gpu-g1-cuda-physical-probe>"
                 "-DG1_WORK=${CMAKE_CURRENT_BINARY_DIR}/gpu-g1-physical-proof"
@@ -151,6 +183,16 @@ if(BUILD_TESTING)
                 "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_g1_nvptx_llvm_ir_verify.cmake")
         set_tests_properties(native_gpu_g1_llvm_ir_parse_and_mutation_host_only
             PROPERTIES TIMEOUT 30)
+        add_test(NAME native_gpu_g1_atto_source_to_llvm_ir_clang_host_only
+            COMMAND "${CMAKE_COMMAND}"
+                "-DG1_COMPILER=$<TARGET_FILE:oreslang-gpu-g1-atto-saxpy-llvmc>"
+                "-DG1_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/gpu-g1-saxpy.atto"
+                "-DG1_EMITTER=$<TARGET_FILE:oreslang-gpu-g1-typed-saxpy-ir-test>"
+                "-DG1_CLANG=${ATTO_GPU_G1_CLANG}"
+                "-DG1_WORK=${CMAKE_CURRENT_BINARY_DIR}/gpu-g1-source-ir-proof"
+                "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_g1_atto_source_verify.cmake")
+        set_tests_properties(native_gpu_g1_atto_source_to_llvm_ir_clang_host_only
+            PROPERTIES TIMEOUT 30 LABELS "restricted-atto;host-only")
     endif()
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
