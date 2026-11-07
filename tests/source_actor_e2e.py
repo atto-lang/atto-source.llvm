@@ -403,8 +403,8 @@ def main():
                 # Only the host entry symbol is renamed; all actor code and
                 # compiled bytecode constants remain byte-for-byte identical.
                 harness_ir, renamed = re.subn(
-                    r"(?m)^(define\\s+(?:dso_local\\s+)?i32\\s+)@main\\(",
-                    r"\\1@oreslang_compiled_guest_main_unused(",
+                    r"(?m)^(define\s+(?:dso_local\s+)?i32\s+)@main\(",
+                    r"\1@oreslang_compiled_guest_main_unused(",
                     guest.stdout, count=1)
                 assert renamed == 1, (name, "missing one host main wrapper")
                 harness_ll = pathlib.Path(temp, name + ".executed.ll")
