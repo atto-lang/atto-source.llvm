@@ -29,16 +29,65 @@ fn compile(compiler: &Path, dir: &Path, name: &str, source: &str)
     output
 }
 
+// Negative admission must be semantic, not a crash or arbitrary nonzero status.
 fn reject(compiler: &Path, dir: &Path, name: &str,
           source: &str, diagnostic: Option<&str>) {
-    let output = compile(compiler, dir, name, source);
-    assert!(!output.status.success(), "{name}: unexpected acceptance");
+    // Each rejected case gets a fresh output directory. An earlier case's
+    // stale .ll or binary cannot mask a compiler that wrongly emits artifacts.
+    let case_dir = dir.join(name.strip_suffix(".atto").unwrap_or(name));
+    fs::create_dir(&case_dir).expect("create negative case scratch");
+    let output = compile(compiler, &case_dir, name, source);
+    assert_eq!(output.status.code(), Some(1),
+        "{name}: expected semantic exit 1, got {:?}: {}",
+        output.status, String::from_utf8_lossy(&output.stderr));
     assert!(output.stdout.iter().all(u8::is_ascii_whitespace),
-        "{name}: rejected source emitted IR");
+        "{name}: rejected source emitted IR to stdout");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.trim().is_empty(),
+        "{name}: missing semantic diagnostic");
+    let lower = stderr.to_ascii_lowercase();
+    for marker in ["segmentation fault", "internal compiler error",
+                   "addresssanitizer", "threadsanitizer", "panicked at",
+                   "assertion failed", "illegal instruction"] {
+        assert!(!lower.contains(marker),
+            "{name}: crash marker in purported semantic rejection: {marker}");
+    }
     if let Some(message) = diagnostic {
-        let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains(message),
             "{name}: missing {message:?}, stderr={stderr}");
+    }
+    let source_path = case_dir.join(name);
+    let unexpected: Vec<PathBuf> = fs::read_dir(&case_dir)
+        .expect("read negative case artifacts")
+        .map(|entry| entry.expect("read output entry").path())
+        .filter(|path| path != &source_path)
+        .collect();
+    assert!(unexpected.is_empty(),
+        "{name}: rejected source left compiler artifacts: {unexpected:?}");
+}
+
+// These deliberate fake-compiler mutations prove the negative gate itself
+// rejects infrastructure failure, leaked IR and filesystem side effects.
+#[cfg(unix)]
+fn test_negative_admission_mutations(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    for (label, body) in [
+        ("exit-two", "echo 'semantic error' >&2\nexit 2"),
+        ("emitted-ir", "echo '; ModuleID = fake'\necho 'semantic error' >&2\nexit 1"),
+        ("emitted-file", "echo 'semantic error' >&2\ntouch \"$1.ll\"\nexit 1"),
+    ] {
+        let script = dir.join(format!("fake-compiler-{label}.sh"));
+        fs::write(&script, format!("#!/bin/sh\n{body}\n"))
+            .expect("write fake compiler witness");
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700))
+            .expect("make fake compiler executable");
+        let witness_dir = dir.join(format!("witness-{label}"));
+        fs::create_dir(&witness_dir).expect("make witness directory");
+        let caught = std::panic::catch_unwind(|| reject(
+            &script, &witness_dir, "rejected.atto",
+            "pub fnc main(): int { return 0; }\n", None));
+        assert!(caught.is_err(),
+            "negative harness accepted a fake compiler mutation: {label}");
     }
 }
 
@@ -51,6 +100,8 @@ fn main() {
     let root = PathBuf::from(args.next().expect("SOURCE_ROOT"))
         .canonicalize().expect("source root");
     let dir = Scratch::new();
+    #[cfg(unix)]
+    test_negative_admission_mutations(&dir.0);
 
     let positive = fs::read_to_string(
         root.join("tests/fixtures/tasklocal-i64-source.atto"))
