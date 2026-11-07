@@ -3,6 +3,10 @@
 #include "oreslang/runtime/LocalValueAdmissionV1.hpp"
 #include "oreslang/runtime/LocalPayloadBudgetV1.hpp"
 
+// COMPATIBILITY/CHARACTERIZATION ONLY: merged ScopedLocalStorageV1.hpp
+// owns canonical ActorLocalKeyV1, TaskLocalKeyV1, ThreadLocalKeyV1.
+// Deliberately use Legacy* aliases here to avoid conflicting type aliases
+// when both headers coexist in one translation unit. No guest ABI.
 // AttoLang native HOST substrate for ThreadLocal, TaskLocal and ActorLocal.
 // The existing RequestContextLocalV1.hpp owns HTTP RequestLocal. None of
 // these C++ APIs are guest intrinsics or grant actor/task execution authority.
@@ -235,8 +239,8 @@ private:
 
 using ActorLocalScopeV1 = LogicalLocalScopeV1<LocalDomainV1::Actor>;
 using TaskLocalScopeV1 = LogicalLocalScopeV1<LocalDomainV1::Task>;
-template <class T> using ActorLocalKeyV1 = LogicalLocalKeyV1<LocalDomainV1::Actor, T>;
-template <class T> using TaskLocalKeyV1 = LogicalLocalKeyV1<LocalDomainV1::Task, T>;
+template <class T> using LegacyActorLocalKeyV1 = LogicalLocalKeyV1<LocalDomainV1::Actor, T>;
+template <class T> using LegacyTaskLocalKeyV1 = LogicalLocalKeyV1<LocalDomainV1::Task, T>;
 
 // Physical ThreadLocal: never carries guest actor, request or Task authority.
 // Thread exit destroys the whole map; newly created threads start empty.
@@ -325,6 +329,6 @@ public:
     };
 };
 
-template <class T> using ThreadLocalKeyV1 = PhysicalThreadLocalsV1::Key<T>;
+template <class T> using LegacyThreadLocalKeyV1 = PhysicalThreadLocalsV1::Key<T>;
 
 } // namespace oreslang::runtime
