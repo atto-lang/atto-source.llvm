@@ -8,6 +8,9 @@
 
 namespace oreslang::gpu::g1 {
 
+// G1 lowers f32 buffers to NVPTX with a four-byte element ABI.
+static_assert(sizeof(float) == 4, "GPU-G1 requires 32-bit f32 storage");
+
 // Structural preflight ONLY. These fields must be constructed from trusted
 // allocator/queue records; user-supplied IDs are not security capabilities.
 enum class Loan : std::uint8_t { ReadOnly, ExclusiveWrite };
@@ -82,7 +85,8 @@ inline LaunchPlan admit_saxpy_launch(const DeviceView& x, const DeviceView& y,
         throw std::invalid_argument("GPU-G1-ADMISSION-001: unauthenticated queue identity");
     if (!caps.maximum_buffer_bytes || !caps.maximum_threads_per_group ||
         !caps.maximum_groups_x || !group_threads ||
-        group_threads > caps.maximum_threads_per_group)
+        group_threads > caps.maximum_threads_per_group ||
+        group_threads > std::numeric_limits<std::uint32_t>::max())
         throw std::invalid_argument("GPU-G1-ADMISSION-004: invalid group or capability");
     require_view(x, Loan::ReadOnly, queue, caps);
     require_view(y, Loan::ReadOnly, queue, caps);
@@ -116,7 +120,11 @@ inline LaunchPlan admit_saxpy_launch(const DeviceView& x, const DeviceView& y,
         resident_elements += count;
     }
     const std::uint64_t groups = n / group_threads + (n % group_threads != 0);
-    if (groups > caps.maximum_groups_x ||
+    // CUDA Driver API uses unsigned int for gridDimX and blockDimX; the
+    // NVPTX backend reads 32-bit CTA/block coordinates. Even a provider
+    // advertising an oversized limit may not authorize truncation here.
+    if (groups > std::numeric_limits<std::uint32_t>::max() ||
+        groups > caps.maximum_groups_x ||
         (groups != 0 && group_threads > std::numeric_limits<std::uint64_t>::max() / groups))
         throw std::invalid_argument("GPU-G1-ADMISSION-004: physical launch overflow");
     return {n, group_threads, groups, groups * group_threads, n == 0};
