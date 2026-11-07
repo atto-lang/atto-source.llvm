@@ -18,6 +18,12 @@ static void actor_init(OresActorI64Heap* heap, uint64_t domain, uint64_t epoch) 
         domain, epoch + 1, 0, &denied) && denied == NULL);
     check(!oreslang_source_actor_frame_i64_slot_checked(
         domain, epoch, 8192, &denied) && denied == NULL);
+    check(!oreslang_source_actor_frame_i64_slot_checked(
+        domain, epoch, UINT64_MAX, &denied) && denied == NULL);
+    int64_t* last = NULL;
+    check(oreslang_source_actor_frame_i64_slot_checked(
+        domain, epoch, 8191, &last) && last != NULL && *last == 0);
+    *last = 99;
 }
 
 static int64_t actor_message(
@@ -32,6 +38,9 @@ static int64_t actor_message(
         domain, epoch, 0, &word) && word != NULL);
     /* This is a fresh per-turn scalar slot, not a carrier-local static. */
     check(*word == 0);
+    int64_t* last = NULL;
+    check(oreslang_source_actor_frame_i64_slot_checked(
+        domain, epoch, 8191, &last) && last != NULL && *last == 0);
     *word = payload;
     check(*oreslang_source_actor_frame_i64_slot(domain, epoch, 0) == payload);
     int64_t* invalid = word;
