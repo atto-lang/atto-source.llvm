@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 // Host-only exact carrier admission and STOP/commit linearization test.
 // This uses a preexisting scalar host counter, not a second ActorLocal store
 // and NOT a compiler-produced .atto guest.
