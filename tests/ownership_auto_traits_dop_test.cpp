@@ -146,5 +146,37 @@ int main() {
     catch (const std::invalid_argument&) { rejected = true; }
     REQUIRE(rejected);
 
+    // Write granules: rows [0,12) and [12,24) are logically disjoint, but with
+    // 8-lane AoSoA tiles both writers touch tile [8,16).
+    auto tiled = [](std::uint64_t begin, std::uint64_t end, std::uint64_t granule,
+                    std::uint64_t epoch = 7) {
+        return Place(oreslang::dop::Layout::AoSoA, "world", "moving", "Position", "x",
+                     Range(begin, end), epoch, granule);
+    };
+    REQUIRE(!overlaps(tiled(0, 12, 8), tiled(12, 24, 8)));
+    REQUIRE(conflicts(Loan{tiled(0, 12, 8), Access::Write}, Loan{tiled(12, 24, 8), Access::Write}));
+    REQUIRE(conflicts(Loan{tiled(0, 12, 8), Access::Write}, Loan{tiled(12, 24, 8), Access::Read}));
+    REQUIRE(!can_run_concurrently({Loan{tiled(0, 12, 8), Access::Write}},
+                                  {Loan{tiled(12, 24, 8), Access::Write}}));
+    REQUIRE(!conflicts(Loan{tiled(0, 12, 8), Access::Read}, Loan{tiled(12, 24, 8), Access::Read}));
+    REQUIRE(!conflicts(Loan{tiled(0, 16, 8), Access::Write}, Loan{tiled(16, 32, 8), Access::Write}));
+    // The coarser granule of either side decides.
+    REQUIRE(conflicts(Loan{tiled(0, 16, 1), Access::Write}, Loan{tiled(16, 32, 32), Access::Write}));
+    // Widening saturates at the top of the row space.
+    constexpr auto top = std::numeric_limits<std::uint64_t>::max();
+    REQUIRE(conflicts(Loan{tiled(top - 3, top, 1024), Access::Write},
+                      Loan{tiled(top - 1030, top - 1020, 1024), Access::Write}));
+    // Stale epochs still fail closed for read/read.
+    rejected = false;
+    try { (void)conflicts(Loan{tiled(0, 8, 8), Access::Read}, Loan{tiled(0, 8, 8, 6), Access::Read}); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    REQUIRE(rejected);
+    for (std::uint64_t bad : {std::uint64_t{0}, std::uint64_t{3}, std::uint64_t{12}, std::uint64_t{2048}}) {
+        rejected = false;
+        try { (void)tiled(0, 8, bad); } catch (const std::invalid_argument&) { rejected = true; }
+        REQUIRE(rejected);
+    }
+    REQUIRE(place(oreslang::dop::Layout::SoA, std::nullopt, std::nullopt, std::nullopt, std::nullopt).granule == 1);
+
     return 0;
 }
