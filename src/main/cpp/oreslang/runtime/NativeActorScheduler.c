@@ -1522,6 +1522,12 @@ void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
 int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* s) {
     return s && executing == s;
 }
+/* Global native carrier predicate. Scheduler TLS is set only while a native
+ * actor callback owns a real physical turn and cleared before release.
+ * This rejects a CONTROL-only blocking operation from any scheduler domain. */
+int ores_native_actor_scheduler_is_any_current_carrier_v1(void) {
+    return executing != NULL;
+}
 /* Actor-specific authority, not merely membership in the same worker pool. */
 int ores_native_actor_scheduler_is_current_actor(
         OresNativeActorScheduler* s, OresNativeActorRef actor) {
