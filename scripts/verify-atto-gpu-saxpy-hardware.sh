@@ -29,8 +29,17 @@ if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   echo "tracked source tree dirty: refusing unsupported GPU source provenance" >&2
   exit 70
 fi
-if [ "${GITHUB_SHA:-$head_sha}" != "$head_sha" ]; then
-  echo "runner SHA differs from checked out immutable source head" >&2
+if [ -n "${GITHUB_RUN_ID:-}" ]; then
+  # github.sha is often a synthetic PR merge SHA. Callers MUST explicitly
+  # bind the immutable PR source head, not just a branch label or merge ref.
+  if [ -z "${ATTO_EXPECTED_PR_HEAD_SHA:-}" ] ||
+     [ "${ATTO_EXPECTED_PR_HEAD_SHA}" != "$head_sha" ]; then
+    echo "missing or mismatched immutable PR head identity" >&2
+    exit 70
+  fi
+elif [ -n "${ATTO_EXPECTED_PR_HEAD_SHA:-}" ] &&
+     [ "${ATTO_EXPECTED_PR_HEAD_SHA}" != "$head_sha" ]; then
+  echo "local expected head identity mismatch" >&2
   exit 70
 fi
 workdir="$(mktemp -d)"
@@ -45,7 +54,7 @@ if ! grep -q '__kernel void atto_saxpy_f32' "$workdir/atto-saxpy.cl"; then
   exit 1
 fi
 set +e
-"$probe" "$fixture" > "$workdir/physical.log" 2>&1
+"$probe" "$fixture" "$workdir/atto-saxpy.cl" > "$workdir/physical.log" 2>&1
 probe_status="$?"
 set -e
 cat "$workdir/physical.log"
