@@ -149,6 +149,17 @@ if(BUILD_TESTING)
     add_test(NAME native_ownership_derived_last_use_12
         COMMAND oreslang-native-derived-last-use-12-test)
 
+    # Fail-closed admission of LoanId and write-site metadata on opaque CFG
+    # operations, including unreachable blocks and the direct helper API.
+    add_executable(oreslang-native-ownership-opaque-loan-metadata-10-test
+        tests/native_ownership_opaque_loan_metadata_10_test.cpp)
+    target_include_directories(oreslang-native-ownership-opaque-loan-metadata-10-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-ownership-opaque-loan-metadata-10-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ownership_opaque_loan_metadata_10
+        COMMAND oreslang-native-ownership-opaque-loan-metadata-10-test)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
