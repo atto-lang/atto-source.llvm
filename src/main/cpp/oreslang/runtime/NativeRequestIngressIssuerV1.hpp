@@ -40,7 +40,8 @@ public:
         const auto slots = ores_native_actor_scheduler_actor_capacity_v1(
             scheduler);
         if (slots == 0 ||
-            slots > RequestLocalActorTerminationRegistryV1::max_actor_slots)
+            slots > RequestLocalActorTerminationRegistryV1::max_actor_slots ||
+            !registry->claim_data_ingress_issuer_once())
             return {};
         return Ptr(new NativeRequestIngressIssuerV1(
             scheduler, registry, trusted_tenant, trusted_isolate, slots));
