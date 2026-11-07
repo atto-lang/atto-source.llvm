@@ -113,6 +113,18 @@ public:
         return scheduler_ == scheduler;
     }
 
+    // One lifetime issuer per registry. A second issuer could maintain an
+    // independent mail replay sequence and mint a duplicate request for the
+    // same physical DATA turn. Never release/rebind this claim: a hot upgrade
+    // needs a new scheduler/registry generation, not recycled authority.
+    bool claim_data_ingress_issuer_once() noexcept {
+        bool expected = false;
+        return !admissions_sealed_.load(std::memory_order_acquire) &&
+            issuer_claimed_.compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel,
+                std::memory_order_acquire);
+    }
+
     // Host ingress must never expose the raw newly opened request to guest
     // code before scheduler-serialized registry admission succeeds. A failed
     // registration closes the provisional scope rather than returning a
@@ -392,6 +404,7 @@ private:
     std::condition_variable reaped_;
     std::atomic<bool> shutdown_{false};
     std::atomic<bool> admissions_sealed_{false};
+    std::atomic<bool> issuer_claimed_{false};
     std::atomic<std::size_t> invalid_terminations_{0};
     std::atomic<std::size_t> reaped_count_{0};
     std::thread worker_;
