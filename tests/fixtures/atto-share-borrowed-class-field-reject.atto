@@ -1,0 +1,13 @@
+// EXPECT_COMPILE_ERROR: E_SHARE_BORROW
+// A borrowed class parameter does not own its scalar field. Reading/copying
+// a field is a separate capability from sharing the borrowed root's storage.
+define class Box as
+  pub let int count = 42;
+end
+pub fnc illegal_share(borrow Box box): int {
+  return rt share box.count;
+}
+pub fnc main(): int {
+  let Box original = new Box();
+  return illegal_share(rt borrow original);
+}
