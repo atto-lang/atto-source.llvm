@@ -99,6 +99,18 @@ inline std::optional<ResolvedPlace> resolve_compiler_place(
     return std::nullopt;
 }
 
+// The flat CFG is keyed by compiler-generated canonical source slots and
+// validated field paths. Centralize serialization so the checker and graph
+// builder cannot silently disagree on which storage is invalidated.
+inline std::string compiler_place_key(const ResolvedPlace& place) {
+    std::string key = place.lexical_slot;
+    for (const auto& field : place.fields) {
+        key.push_back('.');
+        key += field;
+    }
+    return key;
+}
+
 // Sharing a named local or a named class field must originate in an owned
 // value slot. A shared/mutable borrowed parameter is a loan; Copy of its
 // scalar payload is separate from sharing the loan itself. This predicate is
