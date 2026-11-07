@@ -685,7 +685,19 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         if (actor.fields.empty() || actor.fields.size() > 16 ||
                 actor.on_message.parameters.size() != 1 ||
                 actor.on_message.parameters.front().scalar_type != ScalarType::I64 ||
+                actor.on_message.parameters.front().mode != Parameter::Mode::Value ||
+                !actor.on_message.parameters.front().class_name.empty() ||
+                !actor.on_message.parameters.front().generic_type.empty() ||
+                !actor.on_message.parameters.front().sum_type.empty() ||
                 !actor.on_message.result || actor.on_message.returns_void ||
+                actor.on_message.has_declared_effects ||
+                actor.on_message.async_source_i64 ||
+                actor.on_message.caught_throw_value ||
+                !actor.on_message.caught_throw_defers.empty() ||
+                !actor.on_message.source_tasks.empty() ||
+                !actor.on_message.future_pipelines.empty() ||
+                !actor.on_message.ready_await_actor.empty() ||
+                !actor.on_message.done_await_actor.empty() ||
                 !actor.on_message.locals.empty() ||
                 !actor.on_message.statements.empty() ||
                 !actor.on_message.early_returns.empty()) {
