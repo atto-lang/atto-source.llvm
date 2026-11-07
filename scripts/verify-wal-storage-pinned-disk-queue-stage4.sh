@@ -13,10 +13,10 @@ timeout 30s "$scratch/wal-native-pinned" >"$scratch/out" 2>"$scratch/err" || {
     cat "$scratch/err" >&2
     exit 1
 }
-printf '%s\n' 'WAL_NATIVE_PINNED_QUEUE_PASS checks=11; NO GUEST OR POWER-LOSS PROOF' \
+printf '%s\n' 'WAL_NATIVE_PINNED_QUEUE_PASS checks=14; NO GUEST OR POWER-LOSS PROOF' \
     >"$scratch/expected"
 cmp -s "$scratch/out" "$scratch/expected" || {
     cat "$scratch/out" >&2
     exit 1
 }
-printf 'NATIVE_ACTOR_GROUP_PRODUCTION_HEADER_CHECKS=11 NO_GUEST_EXECUTION\n'
+printf 'NATIVE_ACTOR_GROUP_PRODUCTION_HEADER_CHECKS=14 NO_GUEST_EXECUTION\n'

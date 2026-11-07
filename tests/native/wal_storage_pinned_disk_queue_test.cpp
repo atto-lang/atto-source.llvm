@@ -86,7 +86,12 @@ int main() {
         queue->submit(foreign,&grant,scope,wal_frame(7,5,3,44));
     },"equal actor ID but foreign runtime ticket accepted");
     // Same numeric actor ID and generation is not the same opaque incarnation.
+    ok(actor.resource_admission_open(),"active native actor admission open");
     group.close();
+    ok(!actor.resource_admission_open(),"stopped native actor admission closed");
+    rejects<std::logic_error>([&]{
+        queue->submit(actor,&grant,scope,wal_frame(7,5,3,44));
+    },"closed actor group accepted new WAL disk effect");
     ok(!finalizer.ready_for_resource_reclamation(),
        "actor arena could retire while native WAL queue still owns resources");
     queue.reset(); // only off-carrier shutdown; joins workers before loan release
