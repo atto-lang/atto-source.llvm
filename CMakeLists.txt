@@ -151,7 +151,7 @@ if(BUILD_TESTING)
             tests/gpu_g1_verified_ptx_test.cpp)
         target_include_directories(oreslang-gpu-g1-verified-ptx-host-test PRIVATE
             "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
-        target_link_libraries(oreslang-gpu-g1-verified-ptx-host-test PRIVATE OpenSSL::Crypto)
+        target_link_libraries(oreslang-gpu-g1-verified-ptx-host-test PRIVATE OpenSSL::Crypto Threads::Threads)
         target_compile_options(oreslang-gpu-g1-verified-ptx-host-test PRIVATE
             $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
         add_test(NAME native_gpu_g1_verified_ptx_hash_mutation_host_only
