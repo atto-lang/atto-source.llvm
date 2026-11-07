@@ -7,6 +7,8 @@ on:
       - src/main/cpp/oreslang/backend/LlvmCodegen.cpp
       - tests/source_actor_e2e.py
       - tests/source_actor_await_trace_runtime_test.c
+      - tests/source_actor_frame_isolation_runtime_test.c
+      - CMakeLists.txt
       - tests/fixtures/atto-actor-frame-*.atto
       - tests/fixtures/atto-actor-heap-*.atto
       - .github/workflows/source-actor-frame-native-guest.yml
@@ -57,11 +59,12 @@ jobs:
             -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON \
             -DLLVM_DIR=/usr/lib/llvm-19/lib/cmake/llvm
           cmake --build "$RUNNER_TEMP/source-actor-build" --parallel 2 \
-            --target oreslang-llvmc oreslang-source-actor-await-trace-runtime-test
+            --target oreslang-llvmc oreslang-source-actor-await-trace-runtime-test \
+                     oreslang-source-actor-frame-isolation-runtime-test
           ctest --test-dir "$RUNNER_TEMP/source-actor-build" --output-on-failure \
-            -R '^source_actor_await_trace_runtime$' \
+            -R '^(source_actor_await_trace_runtime|source_actor_frame_isolation_restart_and_denial)$' \
             | tee "$RUNNER_TEMP/source-actor-runtime-ctest.log"
-          grep -F '100% tests passed, 0 tests failed out of 1' \
+          grep -F '100% tests passed, 0 tests failed out of 2' \
             "$RUNNER_TEMP/source-actor-runtime-ctest.log"
       - name: Compile and execute real .atto and legacy source actors (O1)
         shell: bash
