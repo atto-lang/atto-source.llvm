@@ -52,6 +52,7 @@ files=(
   "src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp:bcecb54e7750fca7ef84010a2fa3f66e6bf61902"
   "tests/native_context_domains_v1_test.cpp:c9fd993bd78e4a6b2bd27c384fff43276ca915dd"
   "tests/native_actorlocal_stop_during_copy_v1_test.cpp:d21b6c525819c277038f2c5f0d393c3b82cf2f35"
+  "tests/native_actorlocal_stop_mutation_witness.sh:d80313a05287185ff7b39fef395d58d6f8514b71"
   "tests/native_local_read_revocation_v1_test.cpp:cf49e51bed5834fae1d76a1191ec18e41f379656"
   "tests/native_local_payload_budget_v1_test.cpp:25dec8d5f15bafbc6d28d73f94c9027f21ca9ac5"
   "tests/native_local_read_revocation_mutation_witness.sh:0d256fe89fd963e520226f7207f434b9e6477be7"
@@ -138,6 +139,12 @@ if [[ "$MODE" == optimized ]]; then
       echo "MUTATION_WITNESS_MISSING_OR_UNEXPECTED" >&2
       exit 1
     }
+  CXX="$CXX" bash tests/native_actorlocal_stop_mutation_witness.sh \
+    >"$out/actorlocal-stop-mutation.log" 2>&1 || {
+      cat "$out/actorlocal-stop-mutation.log" >&2
+      echo "STOP_MUTATION_WITNESS_MISSING_OR_UNEXPECTED" >&2
+      exit 1
+    }
 fi
 
 # This JSON reports only the local host-native source and test invocations.
@@ -171,6 +178,7 @@ record = {
     "binarySha256": binaries,
     "verifiedGitBlobPins": source_pins,
     "mutationWitness": "caught" if mode == "optimized" else "not-run",
+    "actorStopMutations": ["postcopy", "stopgate"] if mode == "optimized" else [],
     "logsSha256": logs,
     "notes": "Runner admission and guest parity remain independent requirements."
 }
