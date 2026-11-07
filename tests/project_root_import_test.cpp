@@ -158,6 +158,18 @@ note = "good"
         must_fail("nested package", "nested package boundary",
                   [&] { (void)resolve(dir/"main.ores", "+/nested/lib"); });
     }
+    {
+        const auto dir = temp / "nonregular-legacy-import";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.ores", "");
+        // Previously fs::canonical accepted an existing .ores directory and
+        // returned it as a loadable source path.
+        fs::create_directories(dir/"lib.ores");
+        must_fail("legacy source directory", "source must be a regular file",
+                  [&] { (void)resolve(dir/"main.ores", "+/lib.ores"); });
+        must_fail("implicit legacy directory", "source must be a regular file",
+                  [&] { (void)resolve(dir/"main.ores", "+/lib"); });
+    }
 #if !defined(_WIN32)
     {
         const auto dir = temp / "target-escape";
