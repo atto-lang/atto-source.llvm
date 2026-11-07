@@ -56,7 +56,7 @@ jobs:
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextHandoffV1.hpp)" = "b0fc4ac5f1c92e92b8aeee03204603d438e544a7"
           test "$(git hash-object tests/native_request_context_handoff_v1_test.cpp)" = "e7e909861262df0d062350d1d309e91abafe66f6"
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalStopGroupV1.hpp)" = "7c89dffb8a5dc93c992f1b2d777667432cbbc4c9"
-          test "$(git hash-object tests/native_request_stop_cancel_v1_test.cpp)" = "54efb573317f1da217c52a3d71c96e0ac9165722"
+          test "$(git hash-object tests/native_request_stop_cancel_v1_test.cpp)" = "d41874ea2adb7d69c47a855ae4f1a7cce51ee775"
       - name: Compile and execute real actor two-request isolation
         shell: bash
         env:
@@ -91,6 +91,6 @@ jobs:
             -Isrc/main/cpp tests/native_request_stop_cancel_v1_test.cpp \
             "$tmp/scheduler.o" -o "$tmp/request-stop-cancel"
           "$tmp/request-stop-cancel" | tee "$tmp/request-stop-cases.log"
-          test "$(grep -c '^REQUEST_STOP_CASE_PASS ' "$tmp/request-stop-cases.log")" = "35"
-          grep -qx 'REQUEST_STOP_CANCEL_35_HOST_CASES_PASS' "$tmp/request-stop-cases.log"
+          test "$(grep -c '^REQUEST_STOP_CASE_PASS ' "$tmp/request-stop-cases.log")" = "38"
+          grep -qx 'REQUEST_STOP_CANCEL_38_HOST_CASES_PASS' "$tmp/request-stop-cases.log"
           printf 'REQUEST_CONTEXT_LOCAL_EXACT_SOURCE_HOST_PASS compiler=%s mode=%s\n' "$CC" "$MODE"
