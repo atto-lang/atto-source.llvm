@@ -39,9 +39,9 @@ jobs:
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp)" = "b217b912cff0b1e01798f4079ee31b5e1dc5da01"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp)" = "7b79138951aa878fe2ee43cfcef21277cb68b256"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp)" = "dc2cf832fe98aea8e0b4722135f562808efe3738"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp)" = "bcecb54e7750fca7ef84010a2fa3f66e6bf61902"
           test "$(git hash-object tests/native_context_domains_v1_test.cpp)" = "f73411cfba577ea54bf61c6c4225d73f34fc0a91"
-          test "$(git hash-object tests/native_local_payload_budget_v1_test.cpp)" = "650d3050308421bc15c89fcc08d3f934330ba801"
+          test "$(git hash-object tests/native_local_payload_budget_v1_test.cpp)" = "25dec8d5f15bafbc6d28d73f94c9027f21ca9ac5"
           printf 'source_head=%s\nsource_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
       - name: Compile and execute local-context native regression
         shell: bash
