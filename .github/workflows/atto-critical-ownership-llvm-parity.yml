@@ -25,6 +25,8 @@ on:
       - 'audit/llvm-restore-witness-to-store-*'
       - 'audit/llvm-source-restoration-cfg-dom-v1-*'
       - 'audit/llvm-source-cfg-50-guests-and-regressions-*'
+      - 'audit/llvm-cfg-guest-oracle-hardening-*'
+      - 'audit/llvm-node22-source-cfg-oracle-receipts-*'
   pull_request:
     paths:
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
@@ -51,7 +53,7 @@ on:
       - 'src/main/cpp/oreslang/types/OwnershipSourceFieldFlow.hpp'
       - 'src/main/cpp/oreslang/frontend/Parser.hpp'
       - 'scripts/ownership-ci-workflow-shape.mjs'
-      - 'tests/ownership_ci_workflow_shape_50.test.mjs'
+      - 'tests/ownership_ci_workflow_shape_53.test.mjs'
       - 'bin/check-ownership-workflow-shape.mjs'
       - 'src/main/cpp/oreslang/backend/NativeIrOwnershipCensus.hpp'
       - 'src/main/cpp/oreslang/backend/NativeSourceFieldWriteLinks.hpp'
@@ -59,6 +61,7 @@ on:
       - 'src/main/cpp/oreslang/types/OwnershipMirEvidence.hpp'
       - 'tests/contracts/atto_ownership_place_mir_50.json'
       - 'tests/contracts/atto_ownership_source_cfg_50.json'
+      - 'tests/ownership_source_cfg_node_oracles_50.test.mjs'
       - 'tests/ownership_source_cfg_compiler_matrix.py'
       - 'tests/test_ownership_source_cfg_compiler_matrix.py'
       - 'tests/ownership_compiler_fixture_matrix.py'
@@ -96,13 +99,19 @@ jobs:
           echo "ATTO_LLVM_EXACT_TREE=$(git rev-parse 'HEAD^{tree}')"
           # SOURCE_ONLY: static CI guard never authenticates native/guest work.
           node --check scripts/ownership-ci-workflow-shape.mjs
-          node --check tests/ownership_ci_workflow_shape_50.test.mjs
+          node --check tests/ownership_ci_workflow_shape_53.test.mjs
           node --check bin/check-ownership-workflow-shape.mjs
-          node --test --test-reporter=tap tests/ownership_ci_workflow_shape_50.test.mjs | tee /tmp/atto-ownership-workflow-shape.tap
-          grep -Eq '^# tests 50$' /tmp/atto-ownership-workflow-shape.tap
-          grep -Eq '^# pass 50$' /tmp/atto-ownership-workflow-shape.tap
+          node --test --test-reporter=tap tests/ownership_ci_workflow_shape_53.test.mjs | tee /tmp/atto-ownership-workflow-shape.tap
+          grep -Eq '^# tests 53$' /tmp/atto-ownership-workflow-shape.tap
+          grep -Eq '^# pass 53$' /tmp/atto-ownership-workflow-shape.tap
           grep -Eq '^# fail 0$' /tmp/atto-ownership-workflow-shape.tap
           node bin/check-ownership-workflow-shape.mjs
+          # Independent Node source-only oracle checks. These are not guests.
+          node --check tests/ownership_source_cfg_node_oracles_50.test.mjs
+          node --test --test-reporter=tap tests/ownership_source_cfg_node_oracles_50.test.mjs | tee /tmp/atto-source-cfg-node-50.tap
+          grep -Eq '^# tests 50$' /tmp/atto-source-cfg-node-50.tap
+          grep -Eq '^# pass 50$' /tmp/atto-source-cfg-node-50.tap
+          grep -Eq '^# fail 0$' /tmp/atto-source-cfg-node-50.tap
       - name: Install Clang/LLVM developer toolchain
         shell: bash
         run: |
