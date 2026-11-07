@@ -14,7 +14,7 @@ struct Scenario {
     OresNativeActorRef actors[2]{};
     ActorLocalScopeV1::Ptr scope[2];
     ExecutionStampV1 stamps[2]{};
-    ActorLocalKeyV1<int> key;
+    LegacyActorLocalKeyV1<int> key;
     std::mutex mutex;
     std::condition_variable done;
     int passes[2]{};
