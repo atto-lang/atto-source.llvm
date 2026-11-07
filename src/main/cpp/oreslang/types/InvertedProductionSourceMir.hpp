@@ -35,7 +35,7 @@ inline VerifiedInvertedSourceI64 verify_production_inverted_i64(
     const auto& schema = schemas.front().layout;
     const auto& source = *program.inverted_main;
     if (schema.name() != source.schema_name ||
-            source.owner_name.empty() ||
+            (source.owner_name.empty() || source.owner_name == "_") ||
             schema.columns() != 2 ||
             schema.column(0).type != InvertedScalarKind::I64 ||
             schema.column(1).type != InvertedScalarKind::I64)
