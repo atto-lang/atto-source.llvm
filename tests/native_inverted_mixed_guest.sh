@@ -79,16 +79,43 @@ audit_ir() {
 # Verify a *real* native process and bound its execution independently of CTest.
 native_status() {
     python3 - "$1" "$2" <<'PY'
+import hashlib
+import os
+from pathlib import Path
 import resource
 import signal
 import subprocess
 import sys
-resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+import tempfile
+guest = Path(sys.argv[1])
+if guest.is_symlink() or not guest.is_file() or not os.access(guest, os.X_OK):
+    raise SystemExit("FAIL: guest image not an executable regular file")
+with guest.open("rb") as f:
+    magic = f.read(4)
+if sys.platform.startswith("linux"):
+    expected_magic = {bytes.fromhex("7f454c46")}
+elif sys.platform == "darwin":
+    expected_magic = {bytes.fromhex(x) for x in
+                      ("feedface", "feedfacf", "cefaedfe", "cffaedfe")}
+else:
+    raise SystemExit("FAIL: native process verification unsupported on this host")
+if magic not in expected_magic:
+    raise SystemExit("FAIL: executable-format proof rejected forged guest")
+before = hashlib.sha256(guest.read_bytes()).hexdigest()
+def limits():
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
+    resource.setrlimit(resource.RLIMIT_FSIZE, (4096, 4096))
 try:
-    run = subprocess.run([sys.argv[1]], stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, timeout=15, check=False)
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        run = subprocess.run([str(guest)], stdout=out, stderr=err,
+                             timeout=15, check=False, preexec_fn=limits)
+        if out.tell() or err.tell():
+            raise SystemExit("FAIL: native guest emitted unexpected stdout/stderr")
 except (OSError, subprocess.TimeoutExpired) as exc:
     raise SystemExit(f"FAIL: native mixed guest did not complete: {exc}")
+if hashlib.sha256(guest.read_bytes()).hexdigest() != before:
+    raise SystemExit("FAIL: native executable changed during real process")
 expected = sys.argv[2]
 if expected == "exit42":
     if run.returncode != 42:
@@ -98,6 +125,7 @@ elif expected == "trap":
         raise SystemExit(f"FAIL: native mixed guest expected genuine trap got {run.returncode}")
 else:
     raise SystemExit("FAIL: unknown native outcome")
+print("MIXED_NATIVE_IMAGE_SHA256="+before+" expected="+expected)
 PY
 }
 for file in positive-mixed-swap.atto positive-permuted-columns.atto; do
