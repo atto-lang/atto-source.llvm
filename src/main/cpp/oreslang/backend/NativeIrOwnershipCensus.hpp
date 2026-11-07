@@ -34,6 +34,9 @@ struct NativeIrUseStoreCensus {
     std::size_t ssa_operand_uses = 0;
     std::size_t reciprocal_ssa_uses = 0;
     std::vector<ActualStore> stores;
+    // Borrowed module owner. This census must not outlive its Module, and
+    // callers must not mutate the Module concurrently with readback.
+    const llvm::Module* source_module = nullptr;
 
     // These fields CANNOT be set to true by an instruction census. Linking
     // source loans / actual field assignments needs a separate compiler-owned
@@ -41,21 +44,44 @@ struct NativeIrUseStoreCensus {
     bool ownership_complete = false;
     bool guest_verified = false;
 
+    // Never dereference an instruction supplied by the caller: a pass may
+    // have erased it, leaving the cached StoreInst* dangling. Instead walk
+    // only LIVE instructions still owned by the original Module. Reject
+    // changed store operands, reordered instructions, inserted/deleted
+    // instructions, and foreign module stores. This is advisory readback,
+    // NOT a stable identity across allocator reuse or a source loan proof.
     bool contains_store(const llvm::StoreInst* identity,
             const llvm::Value* destination,
             const llvm::Value* stored) const noexcept {
-        if (!identity || !destination || !stored) return false;
-        for (const auto& receipt : stores)
-            if (receipt.instruction == identity &&
-                    receipt.pointer == destination &&
-                    receipt.value == stored &&
-                    // A cached census must not authenticate a store whose
-                    // operands changed after collection. Rewalk the module
-                    // after any lowering or optimizer pass.
-                    identity->getPointerOperand() == destination &&
-                    identity->getValueOperand() == stored)
-                return true;
-        return false;
+        if (!source_module || !identity || !destination || !stored)
+            return false;
+        std::uint64_t ordinal = 0;
+        std::size_t store_index = 0;
+        bool matched = false;
+        for (const auto& function : *source_module) {
+            if (function.isDeclaration()) continue;
+            for (const auto& block : function) {
+                for (const auto& instruction : block) {
+                    ++ordinal;
+                    if (const auto* live =
+                            llvm::dyn_cast<llvm::StoreInst>(&instruction)) {
+                        if (store_index >= stores.size()) return false;
+                        const auto& old = stores[store_index++];
+                        if (old.instruction != live ||
+                                old.instruction_ordinal != ordinal ||
+                                old.pointer != live->getPointerOperand() ||
+                                old.value != live->getValueOperand())
+                            return false;
+                        if (live == identity &&
+                                old.pointer == destination &&
+                                old.value == stored)
+                            matched = true;
+                    }
+                }
+            }
+        }
+        return ordinal == instructions &&
+            store_index == stores.size() && matched;
     }
 };
 
@@ -64,6 +90,7 @@ inline NativeIrUseStoreCensus collect_native_ir_ssa_census(
     constexpr std::size_t kMaxInstructions = 2000000;
     constexpr std::size_t kMaxStores = 250000;
     NativeIrUseStoreCensus result;
+    result.source_module = &module;
     for (const auto& function : module) {
         if (function.isDeclaration()) continue;
         for (const auto& block : function) {
