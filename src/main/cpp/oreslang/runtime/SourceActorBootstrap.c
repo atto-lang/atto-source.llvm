@@ -88,6 +88,19 @@ typedef struct {
  */
 static SourceActorGroup group = { .mutex = PTHREAD_MUTEX_INITIALIZER };
 static _Atomic uint64_t next_actor_id = 4100;
+
+/* Source ActorRef incarnation IDs never wrap/reissue earlier authority. */
+static uint64_t reserve_source_actor_id(void) {
+    uint64_t next = atomic_load_explicit(
+        &next_actor_id, memory_order_relaxed);
+    while (next != 0 && next != UINT64_MAX) {
+        if (atomic_compare_exchange_weak_explicit(
+                &next_actor_id, &next, next + 1,
+                memory_order_relaxed, memory_order_relaxed))
+            return next;
+    }
+    return 0;
+}
 static _Thread_local OresNativeExecutionHandle current_source_execution;
 static _Thread_local SourceActor* current_source_frame_actor;
 static void ensure(int condition);
@@ -123,6 +136,8 @@ int oreslang_source_actor_frame_i64_slot_checked(
         || index >= SOURCE_ACTOR_FRAME_WORDS
         || atomic_load_explicit(&actor->frame_active, memory_order_acquire) != 1)
         return 0;
+    if (actor->frame_slot_calls == UINT64_MAX)
+        return 0; /* terminal accounting overflow, no silent wrap */
     ++actor->frame_slot_calls;
     if (actor->frame_high_water < index + 1)
         actor->frame_high_water = index + 1;
@@ -640,9 +655,8 @@ void* oreslang_source_actor_spawn(
     SourceActor* instance = (SourceActor*)calloc(1, sizeof(*instance));
     ensure(instance != NULL);
     instance->magic = SOURCE_ACTOR_MAGIC;
-    instance->id =
-        atomic_fetch_add_explicit(&next_actor_id, 1, memory_order_relaxed);
-    ensure(instance->id != 0 && instance->id != UINT64_MAX);
+    instance->id = reserve_source_actor_id();
+    ensure(instance->id != 0);
     instance->constructor = constructor;
     instance->on_message = on_message;
 
