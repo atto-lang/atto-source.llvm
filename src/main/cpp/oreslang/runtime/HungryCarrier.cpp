@@ -16,10 +16,15 @@ namespace oreslang::runtime {
 
 namespace {
 thread_local HungryCarrier::NativeHeap* tls_actor_heap = nullptr;
+thread_local HungryCarrier::NativeStack* tls_actor_stack = nullptr;
 }
 
 HungryCarrier::NativeHeap* HungryCarrier::active_heap() noexcept {
     return tls_actor_heap;
+}
+
+HungryCarrier::NativeStack* HungryCarrier::active_stack() noexcept {
+    return tls_actor_stack;
 }
 
 // An independent shared control block outlives the carrier. One atomic
@@ -345,15 +350,41 @@ bool HungryCarrier::pin_cpu() noexcept {
 
 void HungryCarrier::run_handler(ActorMessage message, ResumeCause cause, std::int64_t result) noexcept {
     if (stop_.load(std::memory_order_acquire)) return;
-    // Only actor handler execution may access this heap. Suspension does not
-    // invalidate its handles; broker callbacks have no such capability.
+    if (cause == ResumeCause::initial) {
+        if (logical_execution_ == std::numeric_limits<std::uint64_t>::max()) {
+            failures_.fetch_add(1, std::memory_order_relaxed);
+            request_stop();
+            return;
+        }
+        ++logical_execution_;
+    }
+    // A suspended execution retains its frame bytes, but no physical carrier
+    // authority. A different execution cannot adopt those frames.
+    if (!actor_stack_.enter(logical_execution_)) {
+        failures_.fetch_add(1, std::memory_order_relaxed);
+        request_stop();
+        return;
+    }
     tls_actor_heap = &actor_heap_;
+    tls_actor_stack = &actor_stack_;
     const auto step = handler_v2_ != nullptr
         ? handler_v2_(actor_state_, message, cause, result)
         : handler_(actor_state_, message, cause == ResumeCause::io, result);
+    tls_actor_stack = nullptr;
     tls_actor_heap = nullptr;
-    if (stop_.load(std::memory_order_acquire)) return;
+    if (actor_stack_.poisoned() || stop_.load(std::memory_order_acquire)) {
+        (void)actor_stack_.cancel_active();
+        if (actor_stack_.poisoned())
+            failures_.fetch_add(1, std::memory_order_relaxed);
+        request_stop();
+        return;
+    }
     if (step.kind == StepKind::done) {
+        if (!actor_stack_.finish()) {
+            failures_.fetch_add(1, std::memory_order_relaxed);
+            request_stop();
+            return;
+        }
         cooperating_ = false;
         completed_.fetch_add(1, std::memory_order_release);
         return;
@@ -362,7 +393,9 @@ void HungryCarrier::run_handler(ActorMessage message, ResumeCause cause, std::in
         // CPU handoff is not IO and not logical turn completion. Do not admit
         // subsequent user envelopes while this frame is runnable. A V1
         // callback MUST NOT get an invented 'resumed=true' CPU wakeup.
-        if (!handler_v2_ || pending_ || step.value != 0 || step.delay_ms != 0) {
+        if (!handler_v2_ || pending_ || step.value != 0 || step.delay_ms != 0 ||
+            !actor_stack_.suspend()) {
+            (void)actor_stack_.cancel_active();
             failures_.fetch_add(1, std::memory_order_relaxed);
             request_stop();
             return;
@@ -373,7 +406,9 @@ void HungryCarrier::run_handler(ActorMessage message, ResumeCause cause, std::in
         return;
     }
     if (step.kind != StepKind::await_io || pending_ ||
-        generation_ == std::numeric_limits<std::uint64_t>::max()) {
+        generation_ == std::numeric_limits<std::uint64_t>::max() ||
+        !actor_stack_.suspend()) {
+        (void)actor_stack_.cancel_active();
         failures_.fetch_add(1, std::memory_order_relaxed);
         request_stop();
         return;
@@ -485,6 +520,10 @@ void HungryCarrier::actor_loop() noexcept {
                                               std::memory_order_acquire))
             canceled_.fetch_add(1, std::memory_order_relaxed);
     }
+    // Final actor-local scrub is performed only after all handler turns have
+    // unwound. The broker has no frame/heap capability and is canceled above.
+    if (!actor_stack_.retire_quiesced() || !actor_heap_.retire())
+        failures_.fetch_add(1, std::memory_order_relaxed);
     stopped_.store(true, std::memory_order_release);
 }
 
