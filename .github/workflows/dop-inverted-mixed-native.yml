@@ -84,13 +84,199 @@ jobs:
           cmake --version
           rustc --version
 
-      - name: Run 24 fail-closed source-free CTest receipt mutation groups
+      - name: Run 38 fail-closed source-free CTest receipt mutation groups
         shell: bash
         run: |
           set -euo pipefail
-          python3 -B tests/test_verify_dop_mixed_ctest.py
+          python3 -B tests/test_verify_dop_mixed_ctest.py 2>&1 | tee build-evidence/mixed-ctest-unit.txt
+          grep -Eq '^Ran 38 tests in [0-9.]+s
+      - name: Compile production parser, verifier, native compiler and auditor
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --parallel 2 --target \
+            oreslang-llvmc \
+            oreslang-inverted-mixed-mir-test \
+            oreslang-inverted-production-mir-test \
+            oreslang-native-inverted-struct-ast-test \
+            oreslang-no-gc-ir-audit-build
+          test -x build/oreslang-llvmc
+          test -x build/oreslang-inverted-mixed-mir-test
+          test -x build/oreslang-inverted-production-mir-test
+          test -x build/oreslang-native-inverted-struct-ast-test
+          test -x build/oreslang-no-gc-ir-audit
+
+      - name: Verify required CTest cases are actually registered
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -N -R '^(inverted_mixed_source_mir_cpp17|inverted_production_source_mir_cpp17|native_inverted_struct_schema_ast|native_inverted_mixed_source_to_native|native_inverted_production_source_to_native)$' > build-evidence/inventory.txt
+          cat build-evidence/inventory.txt
+          python3 - <<'PY'
+          import pathlib, re
+          cases = re.findall(r'Test\s+#\d+:\s+(\S+)',pathlib.Path('build-evidence/inventory.txt').read_text())
+          expected={'inverted_mixed_source_mir_cpp17',
+                    'inverted_production_source_mir_cpp17',
+                    'native_inverted_struct_schema_ast',
+                    'native_inverted_mixed_source_to_native',
+                    'native_inverted_production_source_to_native'}
+          if len(cases)!=5 or set(cases)!=expected:
+              raise SystemExit(f'FAIL: wrong DOP mixed native CTest inventory: {cases}')
+          PY
+
+      - name: Execute real guest compiler, Clang O0/O2 and negative traps
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build --output-on-failure --timeout 180 \
+            --output-junit "$GITHUB_WORKSPACE/build-evidence/mixed-ctest.xml" \
+            -R '^(inverted_mixed_source_mir_cpp17|inverted_production_source_mir_cpp17|native_inverted_struct_schema_ast|native_inverted_mixed_source_to_native|native_inverted_production_source_to_native)$'
+
+      - name: Refuse fake, contradictory or non-executed CTest JUnit evidence
+        id: certify_junit
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B scripts/verify_dop_mixed_ctest.py build-evidence/mixed-ctest.xml | tee build-evidence/mixed-ctest-certifier.txt
+          test "$(wc -l < build-evidence/mixed-ctest-certifier.txt)" -eq 2
+          grep -Fxq 'DOP_MIXED_JUNIT_VERIFIED tests=5 guest_receipt_requires_independent_run_job_attestation=YES' build-evidence/mixed-ctest-certifier.txt
+          grep -Eq '^DOP_MIXED_JUNIT_SHA256=[0-9a-f]{64}$' build-evidence/mixed-ctest-certifier.txt
+          expected="$(sed -n 's/^DOP_MIXED_JUNIT_SHA256=//p' build-evidence/mixed-ctest-certifier.txt)"
+          test "${#expected}" -eq 64
+          test "$(sha256sum build-evidence/mixed-ctest.xml | cut -d ' ' -f1)" = "$expected"
+          printf 'junit_sha256=%s\n' "$expected" >> "$GITHUB_OUTPUT"
+      - name: Qualify exact-head execution receipts
+        shell: bash
+        env:
+          VERIFIED_JUNIT_SHA256: ${{ steps.certify_junit.outputs.junit_sha256 }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess, xml.etree.ElementTree as ET
+          root=pathlib.Path('.')
+          xml_path=root/'build-evidence/mixed-ctest.xml'
+          validated_xml=xml_path.read_bytes()
+          verified_digest=hashlib.sha256(validated_xml).hexdigest()
+          import re
+          expected_digest=os.environ.get('VERIFIED_JUNIT_SHA256', '')
+          if not re.fullmatch(r'[0-9a-f]{64}', expected_digest) or verified_digest != expected_digest:
+              raise SystemExit('FAIL: CTest XML changed after exact-byte JUnit certification')
+          tree=ET.fromstring(validated_xml)
+          cases=list(tree.iter('testcase'))
+          expected={'inverted_mixed_source_mir_cpp17',
+                    'inverted_production_source_mir_cpp17',
+                    'native_inverted_struct_schema_ast',
+                    'native_inverted_mixed_source_to_native',
+                    'native_inverted_production_source_to_native'}
+          observed=[x.attrib.get('name') for x in cases]
+          if len(observed)!=5 or set(observed)!=expected:
+              raise SystemExit(f'FAIL: missing actual CTest case: {observed}')
+          if any(x.find('failure') is not None or x.find('skipped') is not None or
+                 x.find('error') is not None for x in cases):
+              raise SystemExit('FAIL: failed/skipped CTest cannot certify native execution')
+          if any(x.attrib.get('status') != 'run' or
+                 not x.attrib.get('time') or float(x.attrib['time']) <= 0
+                 for x in cases):
+              raise SystemExit('FAIL: missing actual executed CTest case status or duration')
+          native=next(x for x in cases if x.attrib.get('name')=='native_inverted_mixed_source_to_native')
+          text=' '.join(native.itertext())
+          exact_marker=('MIXED_ATTO_NATIVE_GUEST_PASS: 8 exit42, 4 trap signals, '
+                        '10 rejects; IR no-GC screened (not linked/FFI proof)')
+          if exact_marker not in text:
+              raise SystemExit('FAIL: no exact executed mixed native guest marker in JUnit result')
+          legacy=next(x for x in cases
+                      if x.attrib.get('name')=='native_inverted_production_source_to_native')
+          legacy_marker=('PASS: production .atto -> typed MIR -> no-GC-screened IR, '
+                         '10 native exit-42 (O0/O2), 4 bounds signals, 5 source rejects, '
+                         '5 mode rejects, known-GC denied')
+          if legacy_marker not in ' '.join(legacy.itertext()):
+              raise SystemExit('FAIL: missing actual legacy two-i64 native guest marker')
+          head=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          source_tree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip()
+          if head != os.environ['EXPECTED_HEAD']:
+              raise SystemExit('FAIL: source head changed')
+          identity=json.loads((root/'build-evidence/identity.json').read_text())
+          expected_identity={
+              'head': head, 'tree': source_tree,
+              'run': os.environ['GITHUB_RUN_ID'],
+              'attempt': os.environ['GITHUB_RUN_ATTEMPT']
+          }
+          if identity != expected_identity:
+              raise SystemExit('FAIL: initial source identity differs from final receipt')
+          if os.environ.get('GITHUB_JOB')!='compiler-mixed-native' or not os.environ.get('RUNNER_NAME'):
+              raise SystemExit('FAIL: missing expected allocated runner or job identity')
+          if subprocess.run(['git','diff','--exit-code','HEAD','--'],
+                            check=False,stdout=subprocess.DEVNULL).returncode != 0:
+              raise SystemExit('FAIL: source worktree or tracked tests changed during build')
+          source_files=subprocess.check_output(['git','ls-files','-m'],text=True).strip()
+          if source_files:
+              raise SystemExit('FAIL: tracked source modified after checkout')
+          subprocess.run(['python3','tests/check_dop_pair_source_blobs.py',
+                          'tests/fixtures/inverted-mixed'],check=True)
+          paths=['src/main/cpp/oreslang/frontend/Parser.cpp',
+                 'src/main/cpp/oreslang/frontend/Parser.hpp',
+                 'src/main/cpp/oreslang/types/InvertedMixedGuestLlvm.hpp',
+                 'src/main/cpp/oreslang/main.cpp',
+                 'tests/native_inverted_mixed_guest.sh',
+                 'tests/native_inverted_mixed_mir_test.cpp',
+                 'tests/native_inverted_production_guest.sh',
+                 'tests/native_inverted_production_mir_test.cpp',
+                 'src/main/cpp/oreslang/types/InvertedProductionSourceMir.hpp',
+                 '.github/workflows/dop-inverted-mixed-native.yml',
+                 'tests/check_dop_pair_source_blobs.py',
+                 'scripts/verify_dop_mixed_ctest.py',
+                 'tests/test_verify_dop_mixed_ctest.py',
+                 'CMakeLists.txt',
+                 'build/oreslang-no-gc-ir-audit',
+                 'build/oreslang-llvmc']
+          paths += sorted(str(p) for p in pathlib.Path('tests/fixtures/inverted-mixed').glob('*.atto'))
+          if len([p for p in paths if p.endswith('.atto')]) != 16:
+              raise SystemExit('FAIL: 2/3-column fixture inventory changed')
+          if hashlib.sha256(xml_path.read_bytes()).hexdigest() != verified_digest:
+              raise SystemExit('FAIL: verified JUnit mutated while issuing the receipt')
+          receipt=dict(head=head,tree=source_tree,run=os.environ['GITHUB_RUN_ID'],
+                       attempt=os.environ['GITHUB_RUN_ATTEMPT'],
+                       evidence='COMPILER_BACKED_MIXED_ATTO_GUEST_EXECUTED',
+                       ctest_cases=observed,
+                       native_success_marker=exact_marker,
+                       legacy_success_marker=legacy_marker,
+                       job=os.environ['GITHUB_JOB'],
+                       runner_name=os.environ['RUNNER_NAME'],
+                       toolchains={
+                         tool:subprocess.check_output(
+                           [tool,'--version'],text=True).splitlines()[0]
+                         for tool in ('clang','clang++','cmake','rustc')
+                       },
+                       files={p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in paths},
+                       ctest_xml_sha256=verified_digest,
+                       certificate_transcript_sha256=hashlib.sha256(
+                         (root/'build-evidence/mixed-ctest-certifier.txt').read_bytes()).hexdigest(),
+                       independent_github_job_api_correlation_required=True,
+                       inventory_sha256=hashlib.sha256(
+                         (root/'build-evidence/inventory.txt').read_bytes()).hexdigest())
+          out=root/'build-evidence/mixed-native-receipt.json'
+          out.write_text(json.dumps(receipt,sort_keys=True,indent=2)+'\n')
+          print(out.read_text())
+          PY
+
+      - name: Publish independent evidence artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: atto-mixed-native-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            build-evidence/identity.json
+            build-evidence/inventory.txt
+            build-evidence/mixed-ctest.xml
+            build-evidence/mixed-ctest-certifier.txt
+            build-evidence/mixed-native-receipt.json
+ build-evidence/mixed-ctest-unit.txt
+          grep -Fxq 'OK' build-evidence/mixed-ctest-unit.txt
           test -z "$(git status --porcelain=v1 --untracked-files=all -- . ':!build-evidence')"
-          echo 'ATTO_DOP_CTEST_VERIFIER_HOST_ONLY=24 NOT_GUEST_EXECUTION'
+          echo 'ATTO_DOP_CTEST_VERIFIER_HOST_ONLY=38 NOT_GUEST_EXECUTION'
       - name: Compile production parser, verifier, native compiler and auditor
         shell: bash
         run: |
