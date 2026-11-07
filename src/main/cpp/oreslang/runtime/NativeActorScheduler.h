@@ -274,6 +274,16 @@ int ores_native_actor_scheduler_is_current_actor(
 int ores_native_actor_scheduler_current_data_mail_sequence(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
     uint64_t* out_sequence);
+
+/* Read back the exact immutable DATA payload currently being dispatched.
+ * Only an authenticated physical actor DATA callback can read it; WAKE,
+ * CONTROL, STOP, other actors, detached Tasks and foreign threads cannot.
+ * The host-only mailbox-to-handoff bridge uses this to prove a redemption
+ * ticket is actually the envelope delivered in the current DATA turn.
+ * On denial the caller-provided output is not modified. No guest ABI. */
+int ores_native_actor_scheduler_current_data_payload(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
+    uint64_t* out_payload);
 /* Logical execution identity for the current guest turn. The execution id is
  * not a heap id and is not a carrier/thread id. For actor turns the allocation
  * domain names the actor-owned domain independently. Returns zero outside an
