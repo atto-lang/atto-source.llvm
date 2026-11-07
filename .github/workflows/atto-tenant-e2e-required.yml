@@ -1,0 +1,48 @@
+name: Strict source-compiled AttoLang tenant AOT
+on:
+  pull_request:
+    paths:
+      - 'tests/tenant-vm/**'
+      - 'tools/tenant-vm/**'
+      - 'src/main/cpp/oreslang/backend/**'
+      - 'src/main/cpp/oreslang/runtime/TenantVm*'
+      - '.github/workflows/atto-tenant-e2e-required.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  exact-source-atto-native-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout actual source head without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact compiler source checkout
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          git diff --quiet HEAD --
+          test -z "$(git ls-files --others --exclude-standard)"
+      - name: Install exact LLVM 18 and Wasm lowering toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang-18 lld-18 llvm-18-dev libzstd-dev wabt cmake python3
+          sudo ln -sf /usr/bin/clang-18 /usr/local/bin/clang
+          sudo ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++
+          sudo ln -sf /usr/bin/wasm-ld-18 /usr/local/bin/wasm-ld
+      - name: Prove 5 negative no-compiler/unpinned-head controls
+        run: python3 -m unittest discover -s tests/tenant-vm -p 'test_e2e_gate.py' -v
+      - name: Compile real source-guest program and execute tenant isolation
+        env:
+          ATTO_E2E_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          LLVM_DIR: /usr/lib/llvm-18/lib/cmake/llvm
+          ATTO_BUILD_JOBS: 2
+        run: bash tools/tenant-vm/verify-atto-e2e.sh
+      - name: Evidence boundary
+        run: echo 'NARROW SOURCE-COMPILED ATTO TENANT VM ONLY; no Graal zero-GC, Forge or dotnet parity certification'
