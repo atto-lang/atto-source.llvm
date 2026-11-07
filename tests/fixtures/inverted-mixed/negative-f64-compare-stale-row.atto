@@ -1,0 +1,13 @@
+// Runtime-only row guard: after swap-delete index 1 is stale for f64.
+define inverted struct Particle as
+    let x: int;
+    alive: bool;
+    let energy: f64;
+end
+fnc main(): int {
+    let rows = InvertedArray<Particle>.with_capacity(2);
+    rows.push(7, true, 1.5);
+    rows.push(19, false, 3.75);
+    rows.erase_swap(0);
+    return rows.get(1, energy) == 3.75 ? 42 : 7;
+}
