@@ -52,15 +52,15 @@ jobs:
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h)" = "cfd0e7f1d8fbd125a0ca20c7907432fc0407635c"
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp)" = "c9fc12422856d84bd6fdc61e01aec405142d98ba"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp)" = "bcecb54e7750fca7ef84010a2fa3f66e6bf61902"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestDataMailGateV1.hpp)" = "6affba5e1b021bf9f4e5b54584241d873f245451"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestWakeGateV1.hpp)" = "03c6978398bde37ab5260aabb93697dabb60740a"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestDataMailGateV1.hpp)" = "9315cf61c93726fa769802e19ee93dccd3367130"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestWakeGateV1.hpp)" = "a24dd1f08e1965537411baa753e704f510e3c0cb"
           test "$(git hash-object tests/native_original_data_mail_sequence_v1_test.c)" = "8e6c2e3d89b4ea4ceca0d7e97d97d763049cb6ee"
           test "$(git hash-object tests/native_request_data_mail_gate_v1_test.cpp)" = "dab3259be523afd76a2a0357663be7e5bfc661ef"
           test "$(git hash-object tests/native_request_wake_origin_v1_test.cpp)" = "85244e6bba9f913aaecde7df2ae010f20db362ad"
           test "$(git hash-object tests/native_scoped_locals_45_case_matrix.cpp)" = "98cb1b2c8bb4c735e40139445120435f4108633c"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestIngressIssuerV1.hpp)" = "8fd70cc1de7b0beac139b0c61ccb1bf993bbe8f8"
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalActorTerminationRegistryV1.hpp)" = "0de02957361a5eb39a3a60eb906f39ed50124c90"
-          test "$(git hash-object tests/native_request_issued_data_ingress_v1_test.cpp)" = "f11ac9608caa2ec2f402fbce843c65a6990521c1"
+          test "$(git hash-object tests/native_request_issued_data_ingress_v1_test.cpp)" = "747688e378edcd9b906df03516e8cbf138c99c52"
           test "$(git hash-object tests/native_request_issued_data_stop_race_v1_test.cpp)" = "1217af207ea618a91462abcd9994661830dac991"
           printf 'checkout_head=%s\ncheckout_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
       - name: Compile and execute scheduler-origin, DATA, WAKE and 45-case host gates
@@ -107,8 +107,8 @@ jobs:
             -Isrc/main/cpp tests/native_request_issued_data_ingress_v1_test.cpp \
             "$work/scheduler.o" -o "$work/issued-ingress"
           "$work/issued-ingress" | tee "$work/issued-ingress.log"
-          test "$(grep -c '^ISSUED_DATA_INGRESS_PASS ' "$work/issued-ingress.log")" = "240"
-          grep -qx 'NATIVE_ISSUED_DATA_INGRESS_HOST_PASS total=240' "$work/issued-ingress.log"
+          test "$(grep -c '^ISSUED_DATA_INGRESS_PASS ' "$work/issued-ingress.log")" = "244"
+          grep -qx 'NATIVE_ISSUED_DATA_INGRESS_HOST_PASS total=244' "$work/issued-ingress.log"
           "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
             -Isrc/main/cpp tests/native_request_issued_data_stop_race_v1_test.cpp \
             "$work/scheduler.o" -o "$work/issued-stop-races"
