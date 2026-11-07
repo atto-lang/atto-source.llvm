@@ -24,6 +24,8 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
+#include <exception>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -91,6 +93,25 @@ public:
             return false;
         entries_.push_back(std::move(entry)); // capacity already reserved
         return true;
+    }
+
+    // Preferred trusted-ingress factory. A request scope never escapes to
+    // its caller unless the exact actor-generation registry accepted it.
+    // On STOP/rejection it is immediately closed before being discarded.
+    // Identities still MUST originate from trusted ingress; this is not a
+    // source-language constructor or tenant/isolate provenance proof.
+    RequestContextLocalV1::Ptr open_registered(
+            RequestIdentityV1 identity,
+            TaskCancellation::Ptr cancellation) {
+        if (!identity.valid() || !cancellation) return {};
+        auto scope = RequestContextLocalV1::open(
+            identity, std::move(cancellation));
+        if (!scope) return {};
+        if (!register_request(identity.actor, scope)) {
+            scope->close();
+            return {};
+        }
+        return scope;
     }
 
     bool register_request(OresNativeActorRef actor,
