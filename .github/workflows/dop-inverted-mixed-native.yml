@@ -252,6 +252,8 @@ jobs:
                        ctest_xml_sha256=verified_digest,
                        certificate_transcript_sha256=hashlib.sha256(
                          (root/'build-evidence/mixed-ctest-certifier.txt').read_bytes()).hexdigest(),
+                       source_only_test_transcript_sha256=hashlib.sha256(
+                         (root/'build-evidence/mixed-ctest-unit.txt').read_bytes()).hexdigest(),
                        independent_github_job_api_correlation_required=True,
                        inventory_sha256=hashlib.sha256(
                          (root/'build-evidence/inventory.txt').read_bytes()).hexdigest())
@@ -271,6 +273,7 @@ jobs:
             build-evidence/identity.json
             build-evidence/inventory.txt
             build-evidence/mixed-ctest.xml
+            build-evidence/mixed-ctest-unit.txt
             build-evidence/mixed-ctest-certifier.txt
             build-evidence/mixed-native-receipt.json
  build-evidence/mixed-ctest-unit.txt
