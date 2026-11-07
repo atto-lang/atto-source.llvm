@@ -4,6 +4,7 @@ on:
     paths:
       - "src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp"
       - "src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp"
+      - "src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp"
       - "tests/native_context_domains_v1_test.cpp"
       - "CMakeLists.txt"
       - ".github/workflows/native-local-context-domains-v1.yml"
@@ -35,9 +36,10 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp)" = "015022980c1a4e10a3b98b821dcd6d343744bcc0"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp)" = "b217b912cff0b1e01798f4079ee31b5e1dc5da01"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp)" = "7b79138951aa878fe2ee43cfcef21277cb68b256"
-          test "$(git hash-object tests/native_context_domains_v1_test.cpp)" = "e2e8f08758cee4598b2ad604bbbcddf9ced9db0e"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp)" = "ab9741016a8f85e6aef03931a95ecf6d100eeac2"
+          test "$(git hash-object tests/native_context_domains_v1_test.cpp)" = "71cc713d6fc98856c88e3dc084007b60bd9cd9f6"
           printf 'source_head=%s\nsource_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
       - name: Compile and execute local-context native regression
         shell: bash
