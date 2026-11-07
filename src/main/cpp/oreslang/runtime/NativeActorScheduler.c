@@ -1532,15 +1532,19 @@ int ores_native_actor_scheduler_is_any_current_carrier_v1(void) {
 // This lock is the same lifecycle arbitration lock used by ordinary STOP,
 // sealed STOP, and global runtime retirement. Only a bounded, nonallocating
 // trusted-host callback may execute here. It MUST NOT reenter the scheduler.
-int ores_native_actor_scheduler_commit_if_running_v1(
+int ores_native_actor_scheduler_commit_if_live_v1(
         OresNativeActorScheduler* s, OresNativeActorRef actor,
         OresNativeActorBoundedCommitV1 commit, void* opaque) {
     if (!s || !commit) return 0;
     lock(s);
     const int live = !s->retired && matching(s, actor)
         && !s->actors[actor.actor_slot].retired
-        && ores_execution_phase(
-            &s->actors[actor.actor_slot].authority) == ORES_EXEC_RUNNING;
+        && (ores_execution_phase(
+            &s->actors[actor.actor_slot].authority) == ORES_EXEC_READY ||
+            ores_execution_phase(
+            &s->actors[actor.actor_slot].authority) == ORES_EXEC_RUNNING ||
+            ores_execution_phase(
+            &s->actors[actor.actor_slot].authority) == ORES_EXEC_SUSPENDED);
     const int ok = live ? (commit(opaque) != 0) : 0;
     unlock(s);
     return ok;
