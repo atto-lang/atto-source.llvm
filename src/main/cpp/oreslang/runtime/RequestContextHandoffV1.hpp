@@ -201,7 +201,7 @@ public:
                     }
                     return false;
                 };
-                return ores_native_actor_scheduler_commit_if_running_v1(
+                return ores_native_actor_scheduler_commit_if_live_v1(
                     scheduler_, sender,
                     [](void* p) -> int {
                         return (*static_cast<decltype(commit)*>(p))() ? 1 : 0;
