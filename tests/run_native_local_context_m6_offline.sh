@@ -28,7 +28,10 @@ command -v git >/dev/null || exit 2
 mkdir -p "$OUTPUT_DIR"
 out="$(cd "$OUTPUT_DIR" && pwd -P)"
 case "$out/" in "$root/"*) echo "REFUSED: output must be outside source checkout" >&2; exit 2;; esac
-rm -f "$out/host-local-receipt.json"  # stale success cannot survive failed execution
+if [[ -n "$(ls -A "$out")" ]]; then
+  echo "REFUSED: OUTPUT_DIR must be empty; never reuse earlier logs/receipts" >&2
+  exit 2
+fi
 
 # These are the six current #1521 tracked sources, helpers, and witness, plus
 # the existing quota-policy test. Reject a moved head or modified test bytes.
@@ -99,15 +102,18 @@ fi
 # This JSON reports only the local host-native source and test invocations.
 # It is explicitly NON-PROMOTING. Real CI and compiler-produced .atto guests
 # still need independently read-back, exact-head workflow/job receipts.
-python3 - "$out" "$head" "$tree" "$CXX" "$MODE" <<'PY'
-import datetime, hashlib, json, pathlib, subprocess, sys
-out, head, tree, compiler, mode = sys.argv[1:]
-out = pathlib.Path(out)
+python3 - "$out" "$work" "$head" "$tree" "$CXX" "$MODE" "${files[@]}" <<'PY'
+import datetime, hashlib, json, pathlib, sys
+out, work, head, tree, compiler, mode, *pins = sys.argv[1:]
+out, work = pathlib.Path(out), pathlib.Path(work)
 tests = ["native_context_domains_v1_test", "native_local_read_revocation_v1_test",
          "native_local_payload_budget_v1_test"]
-files = {}
+logs = {}
 for path in sorted(out.glob("*.log")):
-    files[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    logs[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+binaries = {name: hashlib.sha256((work / name).read_bytes()).hexdigest()
+            for name in tests}
+source_pins = dict(pin.split(":", 1) for pin in pins)
 record = {
     "schemaVersion": 1,
     "classification": "LOCAL_HOST_ONLY_NOT_ATTESTED",
@@ -119,8 +125,12 @@ record = {
     "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     "compiler": compiler, "mode": mode,
     "executedHostPrograms": tests,
+    "compileExitCodes": {name: 0 for name in tests},
+    "hostExitCodes": {name: 0 for name in tests},
+    "binarySha256": binaries,
+    "verifiedGitBlobPins": source_pins,
     "mutationWitness": "caught" if mode == "optimized" else "not-run",
-    "logsSha256": files,
+    "logsSha256": logs,
     "notes": "Runner admission and guest parity remain independent requirements."
 }
 (out / "host-local-receipt.json").write_text(json.dumps(record, indent=2) + "\n")
