@@ -20,6 +20,7 @@ for path in \
   src/main/cpp/oreslang/frontend/Parser.cpp \
   src/main/cpp/oreslang/frontend/GpuLaunchSourceMir.hpp \
   src/main/cpp/oreslang/frontend/GpuKernelSourceLink.hpp \
+  src/main/cpp/oreslang/runtime/GpuTypedLaunchIr.hpp \
   tests/gpu_source_launch_mir_test.cpp \
   tests/gpu_kernel_source_link_test.cpp \
   tests/atto_gpu_kernel_source_link_admission.cmake \
