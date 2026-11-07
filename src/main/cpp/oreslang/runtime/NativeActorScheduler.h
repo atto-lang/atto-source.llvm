@@ -198,6 +198,14 @@ int ores_native_actor_scheduler_reserve_wake(
     OresNativeActorRef target, uint64_t continuation_slot,
     uint64_t continuation_generation, uint64_t code_generation,
     uint64_t descriptor_generation, OresNativeWakeTicket* out);
+/* Verifies a ticket is currently RESERVED in this scheduler's own wake
+ * credit table and was reserved during the current authenticated DATA-mail
+ * turn with this original mail ordinal. False for copied/old tickets,
+ * foreign producers, generic callbacks, other mails or STOP. This is
+ * trusted-host capture-only; it does not grant authority at resume. */
+int ores_native_actor_scheduler_current_data_issued_wake(
+    OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket,
+    uint64_t expected_original_mail);
 int ores_native_actor_scheduler_transfer_wake(
     OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket);
 /* Cancellation succeeds only while still RESERVED (not transferred). */
@@ -214,6 +222,13 @@ OresNativeWakePublishStatus ores_native_actor_scheduler_publish_wake(
     OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket,
     OresNativeWakeOutcome outcome);
 int ores_native_actor_scheduler_is_current_wake(
+    OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket);
+/* Exact scheduler-issued WAKE ticket, READY outcome, current physical
+ * producer claim and RUNNING phase are all required. CANCELLED/FAILED wakes
+ * and STOPPING cleanup return 0. Does not confer request identity by itself:
+ * trusted source admission must snapshot the originating DATA-mail receipt
+ * into an owned continuation before suspension. */
+int ores_native_actor_scheduler_is_current_ready_wake(
     OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket);
 size_t ores_native_actor_scheduler_outstanding_wake_loans(
     OresNativeActorScheduler* scheduler, OresNativeActorRef producer);
@@ -249,6 +264,16 @@ int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* sch
 /* Exact live actor identity for trusted callback/FFI bridges only. */
 int ores_native_actor_scheduler_is_current_actor(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+/* Original DATA-mail admission sequence for the current authenticated
+ * physical actor carrier only. Returns 0 (without modifying *out_sequence)
+ * on any non-DATA, STOP, foreign actor/thread or nonexecuting context.
+ * The sequence is minted and stored alongside the DATA mailbox payload at
+ * successful admission; WAKE/SourceTask resume requires a separate issuance
+ * path and is intentionally unbound here. This is a trusted-host API, not
+ * a guest-callable source of HTTP request authority. */
+int ores_native_actor_scheduler_current_data_mail_sequence(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
+    uint64_t* out_sequence);
 /* Logical execution identity for the current guest turn. The execution id is
  * not a heap id and is not a carrier/thread id. For actor turns the allocation
  * domain names the actor-owned domain independently. Returns zero outside an
