@@ -15,6 +15,25 @@ command -v "$clang" >/dev/null 2>&1 || {
 }
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+if command -v sha256sum >/dev/null 2>&1; then
+    digest_tool=(sha256sum)
+elif command -v shasum >/dev/null 2>&1; then
+    digest_tool=(shasum -a 256)
+else
+    echo 'FAIL: no SHA-256 artifact utility' >&2; exit 1
+fi
+hash_file() {
+    local output token
+    if ! output="$("${digest_tool[@]}" -- "$1")"; then
+        echo 'FAIL: failed artifact SHA-256' >&2; return 1
+    fi
+    token="$(printf '%s\n' "$output" | cut -d ' ' -f 1)"
+    if [[ ! "$token" =~ ^[0-9a-f]{64}$ ]]; then
+        echo 'FAIL: malformed artifact SHA-256' >&2; return 1
+    fi
+    printf '%s\n' "$token"
+}
+auditor_sha="$(hash_file "$auditor")"
 printf 'declare ptr @GC_malloc(i64)\n' > "$tmp/known-gc.ll"
 if "$auditor" "$tmp/known-gc.ll" > "$tmp/known-gc.out" 2> "$tmp/known-gc.err"; then
     echo 'FAIL: no-GC auditor admitted collector' >&2; exit 1
@@ -26,6 +45,8 @@ grep -Fq STRICT_NO_GC_IR_REJECTED "$tmp/known-gc.err" || {
 audit() {
     local file="$1"
     [[ -s "$file" ]] || { echo 'FAIL: missing guest LLVM IR' >&2; exit 1; }
+    local source_sha
+    source_sha="$(hash_file "$file")"
     "$auditor" "$file" > "$tmp/audit.out" 2> "$tmp/audit.err" || {
         echo 'FAIL: IR rejected by source-built no-GC auditor' >&2; exit 1
     }
@@ -34,6 +55,11 @@ audit() {
         "$tmp/audit.out" || {
         echo 'FAIL: invalid auditor success marker' >&2; exit 1
     }
+    if [[ "$(hash_file "$file")" != "$source_sha" ||
+          "$(hash_file "$auditor")" != "$auditor_sha" ]]; then
+        echo 'FAIL: native IR or source-built auditor mutated during audit' >&2
+        exit 1
+    fi
 }
 run_process() {
     python3 - "$1" "$2" "$3" "$4" <<'PY'
