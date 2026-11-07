@@ -27,7 +27,9 @@ The module intentionally has no automatic destructor-driven `cuModuleUnload` whe
 
 ## Tests / gates
 
-- `gpu_g1_verified_ptx_test.cpp`: 1,069 executed local host-only assertions including 1,024 deliberate PTX byte mutations, malformed SHA/entrypoint/ABI, oversized and embedded-NUL PTX, and module pin/unload/resolve failures. GCC and Clang strict C++17 and ASan/UBSan locally cover this separate hash gate.
+- `gpu_g1_verified_ptx_test.cpp`: 1,073 executed local host-only assertions including 1,024 deliberate PTX byte mutations, malformed SHA/entrypoint/ABI, oversized and embedded-NUL PTX, and module pin/unload/resolve failures. GCC and Clang strict C++17 and ASan/UBSan locally cover this separate hash gate.
+- `gpu_g1_verified_ptx_negative_mutations.py` compiles two deliberately weakened copies of the exact Git source and requires an assertion-abort exit for both: digest checking disabled and module-token lifetime checking disabled. **2/2 mutations killed locally**; integrated with CTest and exact-head workflow as HOST_ONLY evidence.
+- Failed `cuModuleGetFunction` followed by failed `cuModuleUnload` now raises `GPU-G1-MODULE-008`, an explicit quarantine-required rollback error; the loader never silently categorizes that situation as a clean rollback.
 - `gpu_g1_cuda_adapter_compile_test.cpp` has a compile-time negative assertion that a raw `CUfunction` constructor does not exist, and a positive assertion for an approved kernel token.
 - Optional `ATTO_GPU_G1_CHECK_CUDA_SDK=ON` adds SDK compile/link tests for the CUDA module loader and driver. A locally supplied **test-only stub** `cuda.h` may establish C++ API syntax, never real CUDA ABI compatibility or hardware evidence. Do not ship the stub.
 - The normal exact-head host CI compiles/runs the hash suite using `libcrypto` and checks Git source blob identity. A hosted run with `steps=null` or `[]` is a runner-admission failure, not executed proof.
