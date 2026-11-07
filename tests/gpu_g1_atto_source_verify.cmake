@@ -19,6 +19,20 @@ execute_process(COMMAND "${G1_EMITTER}" --emit-llvm-ir
 if(NOT emit_rc EQUAL 0 OR NOT actual STREQUAL reference)
     message(FATAL_ERROR "GPU-G1-SOURCE-TEST-003: .atto source IR disagrees with checked G1 IR backend")
 endif()
+# Native top-level oreslang-llvmc must use its secure source-identity
+# reader before reaching the exact same restricted G1 compiler proof.
+if(DEFINED G1_MAIN_COMPILER AND NOT G1_MAIN_COMPILER STREQUAL "")
+    execute_process(COMMAND "${G1_MAIN_COMPILER}" --gpu-g1-kernel-ir "${G1_SOURCE}"
+        OUTPUT_VARIABLE main_ir ERROR_VARIABLE main_error RESULT_VARIABLE main_rc)
+    if(NOT main_rc EQUAL 0 OR NOT main_ir STREQUAL actual)
+        message(FATAL_ERROR "GPU-G1-SOURCE-TEST-008: native main compiler disagrees with restricted .atto compiler: ${main_error}")
+    endif()
+    execute_process(COMMAND "${G1_MAIN_COMPILER}" --target=host --gpu-g1-kernel-ir "${G1_SOURCE}"
+        OUTPUT_VARIABLE mixed_stdout ERROR_VARIABLE mixed_error RESULT_VARIABLE mixed_rc)
+    if(mixed_rc EQUAL 0 OR NOT mixed_stdout STREQUAL "")
+        message(FATAL_ERROR "GPU-G1-SOURCE-TEST-009: target/compiler flags bypassed isolated G1 source mode")
+    endif()
+endif()
 file(WRITE "${ir_path}" "${actual}")
 execute_process(COMMAND "${G1_CLANG}" -x ir -S -emit-llvm -Wno-override-module
     -o "${parsed_path}" "${ir_path}"
