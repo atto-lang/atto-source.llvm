@@ -45,6 +45,16 @@ inline void check_mixed_literal(const InvertedSourceLiteral& value,
                                InvertedScalarKind expected) {
     if (value.kind != expected)
         throw std::invalid_argument("mixed inverted operand scalar type mismatch");
+    // Each literal is a closed tagged scalar, not a bag of alternate values.
+    // Rejected hidden payloads prevent forged AST/MIR metadata smuggling.
+    const bool hidden = (expected == InvertedScalarKind::I64 &&
+                            (value.boolean || value.floating != 0.0)) ||
+                        (expected == InvertedScalarKind::Bool &&
+                            (value.integer != 0 || value.floating != 0.0)) ||
+                        (expected == InvertedScalarKind::F64 &&
+                            (value.integer != 0 || value.boolean));
+    if (hidden)
+        throw std::invalid_argument("mixed inverted scalar has hidden variant payload");
     if (expected == InvertedScalarKind::F64 && !std::isfinite(value.floating))
         throw std::invalid_argument("mixed inverted f64 must be finite");
 }
