@@ -7,6 +7,31 @@
 
 namespace oreslang::runtime {
 namespace {
+struct ActiveGuestTurn {
+    ActorGuestFrameStack* stack = nullptr;
+    std::uint32_t slot = 0;
+    std::uint64_t generation = 0;
+};
+thread_local ActiveGuestTurn active_guest_turn{};
+class ScopedGuestTurn final {
+    ActiveGuestTurn previous_;
+public:
+    ScopedGuestTurn(ActorGuestFrameStack* stack, std::uint32_t slot,
+                    std::uint64_t generation) noexcept
+        : previous_(active_guest_turn) {
+        active_guest_turn = {stack, slot, generation};
+    }
+    ~ScopedGuestTurn() noexcept { active_guest_turn = previous_; }
+    ScopedGuestTurn(const ScopedGuestTurn&) = delete;
+    ScopedGuestTurn& operator=(const ScopedGuestTurn&) = delete;
+};
+ActorGuestFrameStack* authenticated_stack(MultiActorCarrier::ActorToken token) noexcept {
+    if (token.slot == 0 || token.generation == 0 ||
+            token.slot != active_guest_turn.slot ||
+            token.generation != active_guest_turn.generation)
+        return nullptr;
+    return active_guest_turn.stack;
+}
 // Actor tickets must never be valid in two distinct carrier lifetimes.
 // The saturated CAS prevents wraparound reuse (including after UINT64_MAX).
 std::atomic<std::uint64_t> next_global_actor_generation{1};
@@ -61,11 +86,40 @@ MultiActorCarrier::ActorToken MultiActorCarrier::register_actor(
     actor.slice = slice;
     actor.cancel = cancel;
     actor.generation = generation;
+    if (!actor.guest_stack.initialize(generation))
+        throw std::logic_error("actor stack could not be initialized");
     return {static_cast<std::uint32_t>(index + 1), actor.generation};
 }
 
 MultiActorCarrier::Producer MultiActorCarrier::producer() const noexcept {
     return Producer{std::weak_ptr<Shared>{shared_}};
+}
+
+bool MultiActorCarrier::guest_frame_push(ActorToken owner, std::size_t bytes,
+                                         GuestFrameToken& out) noexcept {
+    out = {};
+    auto* stack = authenticated_stack(owner);
+    return stack && stack->push(bytes, out);
+}
+bool MultiActorCarrier::guest_frame_read(ActorToken owner, GuestFrameToken frame,
+                                         std::size_t offset, void* destination,
+                                         std::size_t bytes) noexcept {
+    auto* stack = authenticated_stack(owner);
+    return stack && stack->read(frame, offset, destination, bytes);
+}
+bool MultiActorCarrier::guest_frame_write(ActorToken owner, GuestFrameToken frame,
+                                          std::size_t offset, const void* source,
+                                          std::size_t bytes) noexcept {
+    auto* stack = authenticated_stack(owner);
+    return stack && stack->write(frame, offset, source, bytes);
+}
+bool MultiActorCarrier::guest_frame_pop(ActorToken owner, GuestFrameToken frame) noexcept {
+    auto* stack = authenticated_stack(owner);
+    return stack && stack->pop(frame);
+}
+std::size_t MultiActorCarrier::guest_frame_depth(ActorToken owner) noexcept {
+    auto* stack = authenticated_stack(owner);
+    return stack ? stack->depth() : 0;
 }
 
 bool MultiActorCarrier::enqueue(Shared& state, std::size_t index) noexcept {
@@ -141,7 +195,11 @@ void MultiActorCarrier::request_stop() noexcept {
     auto s = shared_;
     std::lock_guard<std::mutex> lock(s->mutex);
     s->closing = true;
-    if (!s->started) s->stopped = true;
+    if (!s->started) {
+        for (std::size_t i = 0; i < s->registered; ++i)
+            s->actors[i].guest_stack.retire();
+        s->stopped = true;
+    }
     s->wake.notify_one();
 }
 
@@ -211,8 +269,14 @@ void MultiActorCarrier::worker_loop(const std::shared_ptr<Shared>& state) noexce
             auto* user_state = actor.state;
             auto* cleanup = actor.cancel;
             lock.unlock();
-            // Acknowledge only AFTER this owner-thread cleanup returns.
-            cleanup(user_state, message, had_active);
+            // Teardown runs under this actor's authority, never a sibling's.
+            {
+                ScopedGuestTurn guest_turn(&actor.guest_stack,
+                    static_cast<std::uint32_t>(cancel_index + 1), actor.generation);
+                cleanup(user_state, message, had_active);
+            }
+            actor.guest_stack.retire();
+            // Acknowledge only AFTER cleanup and physical frame scrubbing.
             lock.lock();
             actor.active = false;
             actor.queued = false;
@@ -258,7 +322,12 @@ void MultiActorCarrier::worker_loop(const std::shared_ptr<Shared>& state) noexce
         auto* callback = actor.slice;
         const auto fuel = state->fuel;
         lock.unlock();
-        const auto outcome = callback(user_state, message, cause, fuel);
+        Outcome outcome;
+        {
+            ScopedGuestTurn guest_turn(&actor.guest_stack,
+                static_cast<std::uint32_t>(index + 1), actor.generation);
+            outcome = callback(user_state, message, cause, fuel);
+        }
         lock.lock();
         ++state->counters.dispatches;
         // A completed guest slice has ALREADY committed its source effects.
@@ -267,6 +336,15 @@ void MultiActorCarrier::worker_loop(const std::shared_ptr<Shared>& state) noexce
         // retires the actor (and discards later envelopes) with no active
         // frame; it cannot retroactively turn DONE into a canceled frame.
         if (outcome == Outcome::complete) {
+            // Native guest frames cannot leak into the next message. A bogus
+            // leftover frame is a contract failure even though this callback's
+            // already-published source effects cannot be uncommitted.
+            const bool leaked_frames = actor.guest_stack.depth() != 0;
+            actor.guest_stack.clear_turn();
+            if (leaked_frames) {
+                ++state->counters.protocol_failures;
+                actor.cancel_requested = true;
+            }
             actor.active = false;
             ++actor.completed;
             ++state->counters.completed;
