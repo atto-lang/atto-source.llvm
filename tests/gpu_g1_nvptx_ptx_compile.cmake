@@ -14,8 +14,13 @@ if(DEFINED G1_SOURCE AND NOT G1_SOURCE STREQUAL "")
     if(NOT EXISTS "${G1_SOURCE}")
         message(FATAL_ERROR "GPU-G1-PTX-002: .atto source fixture is missing")
     endif()
-    execute_process(COMMAND "${G1_EMITTER}" "${G1_SOURCE}"
-        OUTPUT_VARIABLE ir ERROR_VARIABLE emit_err RESULT_VARIABLE emit_rc)
+    if(DEFINED G1_SOURCE_FLAG AND NOT G1_SOURCE_FLAG STREQUAL "")
+        execute_process(COMMAND "${G1_EMITTER}" "${G1_SOURCE_FLAG}" "${G1_SOURCE}"
+            OUTPUT_VARIABLE ir ERROR_VARIABLE emit_err RESULT_VARIABLE emit_rc)
+    else()
+        execute_process(COMMAND "${G1_EMITTER}" "${G1_SOURCE}"
+            OUTPUT_VARIABLE ir ERROR_VARIABLE emit_err RESULT_VARIABLE emit_rc)
+    endif()
     if(NOT emit_rc EQUAL 0 OR ir STREQUAL "")
         message(FATAL_ERROR "GPU-G1-PTX-002: .atto source compilation failed: ${emit_err}")
     endif()
