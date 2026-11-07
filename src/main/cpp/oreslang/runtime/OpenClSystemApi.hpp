@@ -22,6 +22,15 @@
 
 namespace oreslang::opencl {
 
+// Explicitly distinguish absence of a compatible physical GPU (SKIP)
+// from a broken driver/device query (FAIL). These are not interchangeable
+// conformance results.
+class NoCompatibleGpu final : public std::runtime_error {
+public:
+    explicit NoCompatibleGpu(const char* reason)
+        : std::runtime_error(reason) {}
+};
+
 class SystemApi final : public SaxpyApi {
     using cl_char = std::int8_t;
     using cl_int = std::int32_t;
@@ -54,6 +63,8 @@ class SystemApi final : public SaxpyApi {
     using cl_event = _cl_event*;
 
     static constexpr cl_int CL_SUCCESS = 0;
+    static constexpr cl_int CL_DEVICE_NOT_FOUND = -1;
+    static constexpr cl_int CL_PLATFORM_NOT_FOUND_KHR = -1001;
     static constexpr cl_int CL_DEVICE_NOT_AVAILABLE = -2;
     static constexpr cl_int CL_COMPLETE = 0;
     static constexpr cl_device_type CL_DEVICE_TYPE_GPU = 1ULL << 2;
@@ -140,9 +151,10 @@ public:
     static std::unique_ptr<SystemApi> try_create_gpu() {
         try {
             return std::unique_ptr<SystemApi>(new SystemApi());
-        } catch (...) {
+        } catch (const NoCompatibleGpu&) {
             return nullptr;
         }
+        // All other driver/ICD failures remain errors, never a fake SKIP.
     }
 
     const std::string& device_name() const noexcept {
@@ -502,15 +514,17 @@ private:
     void initialize() {
         library_ = open_library();
         if (!library_)
-            throw std::runtime_error("OpenCL runtime library unavailable");
+            throw NoCompatibleGpu("OpenCL runtime library unavailable");
         load_dispatch();
 
         cl_uint platform_count = 0;
-        require_success(
-                dispatch_.get_platform_ids(0, nullptr, &platform_count),
-                "clGetPlatformIDs(count)");
+        const cl_int platform_status = dispatch_.get_platform_ids(
+                0, nullptr, &platform_count);
+        if (platform_status == CL_PLATFORM_NOT_FOUND_KHR)
+            throw NoCompatibleGpu("no OpenCL platforms installed");
+        require_success(platform_status, "clGetPlatformIDs(count)");
         if (platform_count == 0)
-            throw std::runtime_error("OpenCL has no platform");
+            throw NoCompatibleGpu("OpenCL has no platform");
 
         std::unique_ptr<cl_platform_id[]> platforms(
                 new cl_platform_id[platform_count]);
@@ -527,21 +541,22 @@ private:
                     0,
                     nullptr,
                     &count);
-            if (status != CL_SUCCESS || count == 0)
+            if (status == CL_DEVICE_NOT_FOUND)
+                continue;
+            require_success(status, "clGetDeviceIDs(count)");
+            if (count == 0)
                 continue;
             std::unique_ptr<cl_device_id[]> devices(new cl_device_id[count]);
-            if (dispatch_.get_device_ids(
-                        platforms[p],
-                        CL_DEVICE_TYPE_GPU,
-                        count,
-                        devices.get(),
-                        nullptr) == CL_SUCCESS) {
-                device_ = devices[0];
-            }
+            require_success(
+                dispatch_.get_device_ids(platforms[p], CL_DEVICE_TYPE_GPU,
+                                         count, devices.get(), nullptr),
+                "clGetDeviceIDs");
+            if (!devices[0])
+                throw std::runtime_error("OpenCL returned null physical GPU device");
+            device_ = devices[0];
         }
         if (!device_)
-            throw std::runtime_error(
-                    "OpenCL has no GPU device; CPU fallback is forbidden");
+            throw NoCompatibleGpu("OpenCL has no GPU device; CPU fallback is forbidden");
 
         cl_uint address_bits = 0;
         require_success(
@@ -553,7 +568,7 @@ private:
                         nullptr),
                 "clGetDeviceInfo(address bits)");
         if (address_bits != 64)
-            throw std::runtime_error("OpenCL GPU is not 64-bit address capable");
+            throw NoCompatibleGpu("OpenCL GPU is not 64-bit address capable");
 
         cl_device_fp_config fp32 = 0;
         require_success(
@@ -565,7 +580,7 @@ private:
                         nullptr),
                 "clGetDeviceInfo(fp32)");
         if (fp32 == 0)
-            throw std::runtime_error("OpenCL GPU lacks admitted f32 support");
+            throw NoCompatibleGpu("OpenCL GPU lacks admitted f32 support");
 
         cl_bool endian_little = 0;
         require_success(
@@ -577,8 +592,7 @@ private:
                         nullptr),
                 "clGetDeviceInfo(endianness)");
         if (endian_little == 0)
-            throw std::runtime_error(
-                    "OpenCL GPU endianness is incompatible with portable f32 ABI");
+            throw NoCompatibleGpu("OpenCL GPU endianness is incompatible with portable f32 ABI");
 
         const std::uint32_t host_endian_probe = 1;
         if (*reinterpret_cast<const unsigned char*>(&host_endian_probe) != 1)
