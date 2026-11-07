@@ -78,6 +78,16 @@ if(BUILD_TESTING)
         TIMEOUT 65
         SKIP_REGULAR_EXPRESSION "SKIP:no-compatible-physical-opencl-gpu")
 
+    # Source-free negative tests for exact-head proof spoofing. Node is
+    # optional for native builds but required by the dedicated CI gate.
+    find_program(ATTO_GPU_NODE_EXECUTABLE NAMES node)
+    if(ATTO_GPU_NODE_EXECUTABLE)
+        add_test(NAME atto_gpu_saxpy_receipt_negative_v1
+            COMMAND "${ATTO_GPU_NODE_EXECUTABLE}" --test
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_gpu_hardware_receipt_gate_v1.test.mjs")
+        set_tests_properties(atto_gpu_saxpy_receipt_negative_v1 PROPERTIES TIMEOUT 20)
+    endif()
+
     # Atto-native SAXPY source admission and OpenCL C compiler artifact.
     # These are real host/compiler checks, never a device-dispatch claim.
     add_executable(oreslang-atto-gpu-saxpy-source-v1-test
