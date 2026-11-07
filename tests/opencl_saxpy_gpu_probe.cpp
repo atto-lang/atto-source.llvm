@@ -32,8 +32,8 @@ bool terminal(oreslang::opencl::SaxpyProvider::State state) {
 
 int main(int argc, char** argv) {
     try {
-        if (argc != 3) {
-            std::cerr << "usage: opencl-saxpy-gpu-probe <source.atto> <compiler-device.cl>\n";
+        if (argc != 2 && argc != 3) {
+            std::cerr << "usage: opencl-saxpy-gpu-probe <source.atto> [compiler-device.cl]\n";
             return 2;
         }
         std::ifstream source(argv[1], std::ios::binary);
@@ -41,17 +41,19 @@ int main(int argc, char** argv) {
         const std::string text((std::istreambuf_iterator<char>(source)),
                                std::istreambuf_iterator<char>());
         const auto kernel = oreslang::gpu_source_v1::compile_saxpy(text);
-        // Bind physical execution to the exact standalone oreslang-llvmc
-        // device source artifact rather than silently recompiling from the
-        // host-side reference parser alone.
-        std::ifstream emitted(argv[2], std::ios::binary);
-        if (!emitted)
-            throw std::runtime_error("compiler-emitted OpenCL artifact unreadable");
-        const std::string actual_device_source(
-            (std::istreambuf_iterator<char>(emitted)),
-            std::istreambuf_iterator<char>());
-        if (actual_device_source != kernel.device_source)
-            throw std::runtime_error("physical GPU artifact differs from native compiler output");
+        // The standalone strict hardware gate supplies a device artifact
+        // emitted by oreslang-llvmc. CTest may call this probe directly for
+        // explicit SKIP/physical-device enumeration; never conflate the two.
+        if (argc == 3) {
+            std::ifstream emitted(argv[2], std::ios::binary);
+            if (!emitted)
+                throw std::runtime_error("compiler-emitted OpenCL artifact unreadable");
+            const std::string actual_device_source(
+                (std::istreambuf_iterator<char>(emitted)),
+                std::istreambuf_iterator<char>());
+            if (actual_device_source != kernel.device_source)
+                throw std::runtime_error("physical GPU artifact differs from native compiler output");
+        }
 
         // The actual SystemApi selects only CL_DEVICE_TYPE_GPU; there is no
         // software OpenCL CPU device or scalar fallback for this probe.
