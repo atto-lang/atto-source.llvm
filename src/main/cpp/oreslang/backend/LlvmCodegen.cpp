@@ -684,7 +684,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         const auto& actor = source.actors.front();
         if (actor.fields.empty() || actor.fields.size() > 16 ||
                 actor.on_message.parameters.size() != 1 ||
-                actor.on_message.parameters.front().type != ScalarType::I64 ||
+                actor.on_message.parameters.front().scalar_type != ScalarType::I64 ||
                 !actor.on_message.result || actor.on_message.returns_void ||
                 !actor.on_message.locals.empty() ||
                 !actor.on_message.statements.empty() ||
