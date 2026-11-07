@@ -274,5 +274,27 @@ int main() {
         reject([&]{ (void)verify_production_inverted_i64(forged); },
                "exceeds signed i64");
     }
+    // The legacy compiler must not silently accept newly introduced typed
+    // operands in a stale/deserialized two-i64 Program.
+    {
+        auto forged = make_source();
+        forged.inverted_main->three_scalar = true;
+        reject([&]{ (void)verify_production_inverted_i64(forged); },
+               "rejects mixed source tag");
+    }
+    {
+        auto forged = make_source();
+        forged.inverted_main->operations[0].mixed_values[1].kind =
+            InvertedScalarKind::Bool;
+        forged.inverted_main->operations[0].mixed_values[1].boolean = true;
+        reject([&]{ (void)verify_production_inverted_i64(forged); },
+               "contains mixed operands");
+    }
+    {
+        auto forged = make_source();
+        forged.inverted_main->operations[4].mixed_value.floating = 2.5;
+        reject([&]{ (void)verify_production_inverted_i64(forged); },
+               "contains mixed operands");
+    }
     return 0;
 }
