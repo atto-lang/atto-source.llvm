@@ -901,6 +901,13 @@ if(BUILD_TESTING)
         # The real f64 compiler ABI gate now compiles/links 32 native guests
         # and separately checks 21 rejected sources with no emitted IR.
         set_tests_properties(native_f64_scalar_e2e PROPERTIES TIMEOUT 300)
+        # Real LLVM compiler source->IR wasm32 f64 entry gate. This test
+        # does not claim Clang-linking, browser Worker execution or release.
+        add_test(NAME wasm_core_f64_entry_source_gate
+            COMMAND "${ORE_ORIE_STDOUT_BASH}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm_f64_entry_gate.sh"
+                "$<TARGET_FILE:oreslang-llvmc>")
+        set_tests_properties(wasm_core_f64_entry_source_gate PROPERTIES TIMEOUT 90)
     endif()
 
     # Pure host resolver security test for canonical +/ project-root imports.
