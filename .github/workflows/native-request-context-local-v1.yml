@@ -69,7 +69,7 @@ jobs:
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestDataMailGateV1.hpp)" = "6affba5e1b021bf9f4e5b54584241d873f245451"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestWakeGateV1.hpp)" = "03c6978398bde37ab5260aabb93697dabb60740a"
           test "$(git hash-object tests/native_request_actor_lifecycle_guard_v1_test.cpp)" = "ebba397307a27451492d0c3aa20d8b259807d80f"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalActorTerminationRegistryV1.hpp)" = "9a813be8db40e89445e6740a40705092eb3ff2a7"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalActorTerminationRegistryV1.hpp)" = "ceda6a58354ba6f353fa4620557aa8db299704f7"
           test "$(git hash-object tests/native_request_actor_termination_registry_v1_test.cpp)" = "b46c40bc6316740f9a89f1f841ab98544852834a"
       - name: Compile and execute real actor two-request isolation
         shell: bash
