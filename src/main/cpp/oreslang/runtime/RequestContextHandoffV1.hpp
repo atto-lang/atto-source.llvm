@@ -118,7 +118,13 @@ public:
         template <typename T>
         Selection& include(const RequestLocalKeyV1<T>& key) {
             if (keys_.size() < RequestContextLocalV1::max_slots)
-                keys_.push_back({&key, &pick<T>});
+                // Own the typed key identity: callers may pass temporary
+                // aliases and their stack frame may end before seal().
+                keys_.push_back({
+                    std::static_pointer_cast<const void>(
+                        std::make_shared<RequestLocalKeyV1<T>>(key)),
+                    &pick<T>
+                });
             else
                 overflow_ = true;
             return *this;
@@ -132,7 +138,13 @@ public:
             if (!value) return nullptr;
             return std::make_unique<Entry<T>>(typed, std::move(*value));
         }
-        std::vector<std::pair<const void*, Picker>> keys_;
+        // Immutable owned key identities; never retain caller stack
+        // addresses across a mailbox handoff or asynchronous selection.
+        struct BoundPicker {
+            std::shared_ptr<const void> key;
+            Picker pick;
+        };
+        std::vector<BoundPicker> keys_;
         bool overflow_ = false;
     };
 
@@ -158,8 +170,9 @@ public:
         env.recipient = recipient;
         env.request_cancellation = source.cancellation_;
         env.entries.reserve(selection.keys_.size());
-        for (const auto& [key, pick] : selection.keys_)
-            if (auto entry = pick(key, source)) env.entries.push_back(std::move(entry));
+        for (const auto& bound : selection.keys_)
+            if (auto entry = bound.pick(bound.key.get(), source))
+                env.entries.push_back(std::move(entry));
         // Copy constructors can run arbitrary host code, including STOP,
         // cancellation and actor turnover. Check original mail again rather
         // than accepting an unrelated later turn on the same pooled actor.
