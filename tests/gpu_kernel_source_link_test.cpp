@@ -72,6 +72,32 @@ int main() {
         auto pair = source_link::checked_catalog({signature(), s});
         check(pair.size() == 2, "two distinct kernels");
     }
+    // Signed int and unsigned u64 are distinct; no implicit numeric
+    // conversion at the typed GPU-argument boundary.
+    {
+        auto sig = signature();
+        sig.parameters.back().type = typed_ir::Parameter::I64;
+        const auto link = source_link::link({sig}, launch());
+        check(link.kernel_shape.parameters.back() == typed_ir::Parameter::I64,
+              "signed int source signature preserved");
+        const typed_ir::Limits caps{{65535,65535,65535}, {1024,1024,64},
+                                    1024,49152};
+        typed_ir::Request req{
+            {"signed", {typed_ir::Parameter::I64}, {}, true},
+            {typed_ir::ScalarI64{-7}},
+            {"tenant", "device", "queue", 1},
+            typed_ir::Physical{{1,1,1},{1,1,1}},
+            0, caps, 1, 1
+        };
+        const auto valid = typed_ir::verify(req);
+        check(valid.kernel_symbol == "signed" && !valid.executable(),
+              "signed scalar host preflight remains non-executable");
+        req.arguments = {typed_ir::ScalarU64{7}};
+        denied([&] { (void)typed_ir::verify(req); }, "GPU-LAUNCH-002");
+        req.kernel.parameters = {typed_ir::Parameter::U64};
+        req.arguments = {typed_ir::ScalarI64{7}};
+        denied([&] { (void)typed_ir::verify(req); }, "GPU-LAUNCH-002");
+    }
     // N distinct parameters and declaration sizes, preserving order.
     for (int count=0;count<=64;++count) {
         Signature s{"kernel", {}, true, true};
