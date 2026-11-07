@@ -158,12 +158,26 @@ void stop_wins_before_writer_commit() {
     });
     const bool reached = pause->await();
     check("12_writer_paused_before_commit", reached);
+    std::atomic<bool> stop_returned{false}, stop_ok{false};
+    std::thread controller([&] {
+        stop_ok.store(stop.stop_sealed_and_wait());
+        stop_returned.store(true);
+    });
+    // STOP closes the scope but MUST NOT finish while the old value move is
+    // pinned. Releasing it permits the denied writer to drop its lease.
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds(8);
+    while (request->active() &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
     check("13_stop_seals_before_writer_released",
-          stop.stop_sealed_and_wait());
+          stop.sealed() && !request->active() && !stop_returned.load());
     pause->resume();
     writer.join();
+    controller.join();
     check("14_stale_writer_commit_denied", !result.load());
     check("15_no_post_stop_quota_or_value",
+          stop_ok.load() && stop.completed() &&
           request->used_bytes() == 0 && !request->get_copy(key));
     c->retire();
 }
