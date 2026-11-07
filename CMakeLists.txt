@@ -46,6 +46,7 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
     # G4 physical three-buffer SAXPY provider: standalone host-state tests
     # and an independently reported real-GPU-only probe. No GPU = SKIPPED,
     # never a passing physical-execution receipt.
@@ -53,6 +54,7 @@ if(BUILD_TESTING)
         tests/opencl_saxpy_provider_v1_test.cpp)
     target_include_directories(oreslang-opencl-saxpy-provider-v1-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-opencl-saxpy-provider-v1-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-opencl-saxpy-provider-v1-test PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME atto_gpu_saxpy_provider_host_v1
@@ -63,7 +65,7 @@ if(BUILD_TESTING)
         tests/opencl_saxpy_gpu_probe.cpp)
     target_include_directories(oreslang-opencl-saxpy-gpu-probe PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
-    target_link_libraries(oreslang-opencl-saxpy-gpu-probe PRIVATE ${CMAKE_DL_LIBS})
+    target_link_libraries(oreslang-opencl-saxpy-gpu-probe PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
     target_compile_options(oreslang-opencl-saxpy-gpu-probe PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME atto_gpu_saxpy_physical_opencl_v1
