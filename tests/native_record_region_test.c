@@ -10,11 +10,41 @@ static void* foreign_root(void* argument) {
     int64_t own = ores_record_new(1, 1, &value);
     require(own != foreign && ores_record_get(own, 1, 0) == 29);
     require(ores_record_get(foreign, 1, 0) == 0);
+    require(ores_record_set(foreign, 1, 0, 99) == 1);
     require(ores_record_region_end() == 1);
     return NULL;
 }
 int main(void) {
     const int64_t values[] = {13, 29};
+    require(ores_record_region_begin() == 0);
+    int64_t mutable = ores_record_new_mutable(1, 2, values, 1);
+    require(mutable != 0);
+    for (int i = 0; i < 4096; ++i) require(ores_record_new(2, 2, values) != 0);
+    require(ores_record_set(mutable, 1, 0, 42) == 0);
+    require(ores_record_get(mutable, 1, 0) == 42);
+    require(ores_record_get(mutable, 1, 1) == 29);
+    pthread_t mutable_thread;
+    require(pthread_create(&mutable_thread, NULL, foreign_root, &mutable) == 0);
+    require(pthread_join(mutable_thread, NULL) == 0);
+    require(ores_record_get(mutable, 1, 0) == 42);
+    require(ores_record_region_end() == 0);
+    require(ores_record_region_begin() == 0);
+    require(ores_record_set(mutable, 1, 0, 0) == 1);
+    require(ores_record_region_end() == 1);
+    for (int invalid = 0; invalid < 5; ++invalid) {
+        require(ores_record_region_begin() == 0);
+        mutable = ores_record_new_mutable(1, 2, values, 1);
+        require(ores_record_set(mutable, invalid == 0 ? 2 : 1,
+            invalid == 1 ? -1 : invalid == 2 ? 2 : invalid == 3 ? 64 : 1, 99) == 1);
+        require(ores_record_region_end() == 1);
+    }
+    require(ores_record_region_begin() == 0);
+    mutable = ores_record_new(1, 2, values);
+    require(ores_record_set(mutable, 1, 0, 0) == 1);
+    require(ores_record_region_end() == 1);
+    require(ores_record_region_begin() == 0);
+    require(ores_record_new_mutable(1, 2, values, UINT64_C(1) << 40) == 0);
+    require(ores_record_region_end() == 1);
     require(ores_record_region_begin() == 0);
     int64_t first = ores_record_new(1, 2, values);
     require(first != 0);
@@ -78,6 +108,6 @@ int main(void) {
     ores_record_test_exhaust_generation();
     require(ores_record_region_begin() == 1);
     require(ores_record_region_begin() == 1);
-    puts("PASS immutable record generation, schema, growth, quota, thread confinement and failure cleanup");
+    puts("PASS record generation, writable masks, stable mutation, schema, quota, thread confinement and failure cleanup");
     return 0;
 }
