@@ -955,6 +955,17 @@ if(BUILD_TESTING)
                 --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/wasm32-actor-bounded-recursion-v1.atto")
         set_tests_properties(wasm32_compiler_actor_checked_trampoline_v1
             PROPERTIES TIMEOUT 240)
+        # No source-level suspends/await guest continuation is executable
+        # until generated frame PCs, ownership roots and scheduler fencing
+        # exist. Run a real compiler-negative and allowed recursion baseline.
+        add_test(NAME wasm32_actor_guest_continuation_fail_closed_v0
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm32_actor_continuation_negative_v0.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --negative "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/wasm32-actor-suspended-negative-v0.atto"
+                --baseline "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/wasm32-actor-bounded-recursion-v1.atto")
+        set_tests_properties(wasm32_actor_guest_continuation_fail_closed_v0
+            PROPERTIES TIMEOUT 120)
     endif()
     # First real compiler-emitted AOT while continuation. The host owns the
     # frame and schedules finite reductions; actor/mailbox integration is not
