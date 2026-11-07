@@ -6,6 +6,7 @@
 #include "oreslang/types/OwnershipChecker.hpp"
 #include "oreslang/frontend/GpuLaunchSourceMir.hpp"
 #include "oreslang/frontend/GpuKernelSourceLink.hpp"
+#include "oreslang/frontend/GpuKernelBodyHir.hpp"
 #include "oreslang/frontend/MethodResolver.hpp"
 #include "oreslang/types/NativeScalarTypes.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
@@ -847,6 +848,7 @@ public:
 
 private:
     std::vector<gpu::source_link::Signature> gpu_kernel_source_signatures_;
+    std::vector<std::pair<std::string, gpu::body_hir::CheckedBody>> gpu_kernel_typed_body_hirs_;
     std::vector<NativeSumType> sum_types_;
     bool is_sum_name(const std::string& name) const {
         return name.rfind("Option<", 0) == 0 || name.rfind("Result<", 0) == 0;
@@ -3880,6 +3882,7 @@ private:
             gpu_launch_parse_error("GPU-LAUNCH-001", "GPU kernel must return void", token_.offset);
         if (!accept("{"))
             gpu_launch_parse_error("GPU-LAUNCH-001", "GPU kernel requires braced body", token_.offset);
+        std::vector<gpu::body_hir::Token> body_tokens;
         std::size_t depth = 1;
         std::size_t count = 0;
         while (depth > 0) {
@@ -3906,6 +3909,14 @@ private:
                 gpu_launch_parse_error("GPU-LAUNCH-006", "effectful operation in GPU kernel source", token_.offset);
             if (token_.kind == Kind::Symbol && token_.text == "{") ++depth;
             else if (token_.kind == Kind::Symbol && token_.text == "}") --depth;
+            if (depth > 0) {
+                const auto kind = token_.kind == Kind::Integer
+                    ? gpu::body_hir::TokenKind::Integer
+                    : token_.kind == Kind::Identifier
+                        ? gpu::body_hir::TokenKind::Identifier
+                        : gpu::body_hir::TokenKind::Symbol;
+                body_tokens.push_back({kind, std::string(token_.text)});
+            }
             advance();
         }
         try {
@@ -3914,6 +3925,28 @@ private:
                 if (existing.symbol == sig.symbol)
                     gpu_launch_parse_error("GPU-LAUNCH-001",
                         "duplicate GPU source kernel declaration", token_.offset);
+
+            std::vector<gpu::body_hir::Parameter> body_params;
+            body_params.reserve(sig.parameters.size());
+            for (const auto& p : sig.parameters) {
+                gpu::body_hir::Type type;
+                switch (p.type) {
+                    case gpu::typed_ir::Parameter::F32: type = gpu::body_hir::Type::F32; break;
+                    case gpu::typed_ir::Parameter::I64: type = gpu::body_hir::Type::I64; break;
+                    case gpu::typed_ir::Parameter::U64: type = gpu::body_hir::Type::U64; break;
+                    case gpu::typed_ir::Parameter::ReadF32: type = gpu::body_hir::Type::ReadF32; break;
+                    case gpu::typed_ir::Parameter::WriteF32: type = gpu::body_hir::Type::WriteF32; break;
+                    default:
+                        gpu_launch_parse_error("GPU-LAUNCH-002", "unknown GPU body type", token_.offset);
+                }
+                body_params.push_back({p.name, type});
+            }
+            auto typed_body = gpu::body_hir::check(body_params, body_tokens);
+            if (typed_body.executable() || typed_body.device_code_available() ||
+                    typed_body.provider_loans_verified())
+                gpu_launch_parse_error("GPU-LAUNCH-008",
+                    "forged GPU typed-body execution authority", token_.offset);
+            gpu_kernel_typed_body_hirs_.push_back({sig.symbol, std::move(typed_body)});
         } catch (const std::invalid_argument& malformed) {
             throw std::runtime_error(std::string(malformed.what()) +
                     "; no implicit CPU fallback at byte " + std::to_string(token_.offset));
