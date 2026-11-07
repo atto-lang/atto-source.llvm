@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <limits>
 #include <functional>
 #include <cctype>
@@ -24,7 +25,7 @@
 namespace oreslang {
 namespace {
 
-enum class Kind { Identifier, Integer, String, Template, Symbol, End };
+enum class Kind { Identifier, Integer, Real, String, Template, Symbol, End };
 struct Token {
     Kind kind;
     std::string_view text;
@@ -166,6 +167,10 @@ class Lexer {
 public:
     explicit Lexer(std::string_view source) : source_(source) {}
 
+    // Only the explicitly typed, bounded mixed-column source grammar can
+    // consume f64 real tokens. All other native source remains fail-closed.
+    void allow_mixed_reals(bool enabled) noexcept { mixed_reals_ = enabled; }
+
     Token next() {
         for (;;) {
             if (at_ == source_.size()) return {Kind::End, {}, at_};
@@ -273,6 +278,8 @@ public:
                 real = true;
             }
             if (real) {
+                if (mixed_reals_)
+                    return {Kind::Real, source_.substr(start, at_ - start), start};
                 throw std::runtime_error(
                         "native floating-point/decimal literal unsupported until typed "
                         "LLVM f32/f64 and exact decimal lowering (at byte " +
@@ -307,6 +314,7 @@ public:
 private:
     std::string_view source_;
     std::size_t at_ = 0;
+    bool mixed_reals_ = false;
 };
 
 std::unique_ptr<Expression> make_expression(Expression::Kind kind,
@@ -855,13 +863,62 @@ private:
         return static_cast<std::size_t>(n);
     }
 
+    InvertedSourceLiteral inverted_scalar_literal(InvertedScalarKind kind) {
+        InvertedSourceLiteral literal;
+        literal.kind = kind;
+        switch (kind) {
+            case InvertedScalarKind::I64:
+                literal.integer = signed_integer_literal();
+                return literal;
+            case InvertedScalarKind::Bool:
+                if (accept("true")) { literal.boolean = true; return literal; }
+                if (accept("false")) { literal.boolean = false; return literal; }
+                fail("mixed inverted bool column requires true or false literal");
+            case InvertedScalarKind::F64: {
+                const bool negative = accept("-");
+                if (token_.kind != Kind::Real)
+                    fail("mixed inverted f64 column requires a real literal");
+                const std::string_view raw = token_.text;
+                // The legacy native lexer also recognizes suffix 'd' as
+                // decimal, but it does not have the exact decimal ABI here.
+                // Do not silently round a decimal literal into binary f64.
+                if (raw.empty() || raw.back() == 'd' || raw.find('_') != std::string_view::npos)
+                    fail("mixed inverted f64 requires explicit finite binary real literal");
+                double value = 0.0;
+                const auto parsed = std::from_chars(
+                    raw.data(), raw.data() + raw.size(), value, std::chars_format::general);
+                if (parsed.ec != std::errc{} || parsed.ptr != raw.data() + raw.size() ||
+                        !std::isfinite(value))
+                    fail("mixed inverted f64 literal out of range or malformed");
+                advance();
+                literal.floating = negative ? -value : value;
+                return literal;
+            }
+            default:
+                fail("unsupported mixed inverted scalar kind");
+        }
+    }
+
     InvertedSourceMain inverted_source_main(const InvertedStructDecl& decl) {
-        if (decl.fields.size() != 2 ||
-                decl.fields[0].type != InvertedScalarKind::I64 ||
-                decl.fields[1].type != InvertedScalarKind::I64)
-            fail("production inverted main requires precisely two i64 fields");
+        const bool legacy_pair = decl.fields.size() == 2 &&
+            decl.fields[0].type == InvertedScalarKind::I64 &&
+            decl.fields[1].type == InvertedScalarKind::I64;
+        bool mixed = decl.fields.size() == 3;
+        if (mixed) {
+            unsigned integers = 0, booleans = 0, floating = 0;
+            for (const auto& field : decl.fields) {
+                integers += field.type == InvertedScalarKind::I64;
+                booleans += field.type == InvertedScalarKind::Bool;
+                floating += field.type == InvertedScalarKind::F64;
+            }
+            mixed = integers == 1 && booleans == 1 && floating == 1;
+        }
+        if (!legacy_pair && !mixed)
+            fail("production inverted main requires precisely two i64 fields or three distinct i64/bool/f64 fields");
         InvertedSourceMain result;
         result.schema_name = decl.name;
+        result.three_scalar = mixed;
+        if (mixed) lexer_.allow_mixed_reals(true);
         require("fnc"); require("main"); require("("); require(")");
         require(":"); require("int"); require("{");
         require("let");
@@ -887,9 +944,16 @@ private:
                 op.index = inverted_source_index();
                 require(",");
                 op.field = identifier();
+                if (mixed) {
+                    const auto it = std::find_if(decl.fields.begin(), decl.fields.end(),
+                        [&](const InvertedStructField& field) { return field.name == op.field; });
+                    if (it == decl.fields.end() || it->type != InvertedScalarKind::I64)
+                        fail("mixed inverted int main must return an i64 field");
+                }
                 require(")"); require(";");
                 result.operations.push_back(std::move(op));
                 require("}");
+                lexer_.allow_mixed_reals(false);
                 return result;
             }
             if (identifier() != result.owner_name)
@@ -898,15 +962,31 @@ private:
             if (accept("push")) {
                 op.kind = InvertedSourceOperation::Kind::Push;
                 require("(");
-                op.values[0] = signed_integer_literal();
-                require(",");
-                op.values[1] = signed_integer_literal();
+                if (mixed) {
+                    for (std::size_t i = 0; i < 3; ++i) {
+                        if (i) require(",");
+                        op.mixed_values[i] = inverted_scalar_literal(decl.fields[i].type);
+                    }
+                } else {
+                    op.values[0] = signed_integer_literal();
+                    require(",");
+                    op.values[1] = signed_integer_literal();
+                }
                 require(")");
             } else if (accept("set")) {
                 op.kind = InvertedSourceOperation::Kind::WriteField;
                 require("("); op.index = inverted_source_index();
                 require(","); op.field = identifier(); require(",");
-                op.value = signed_integer_literal(); require(")");
+                if (mixed) {
+                    const auto it = std::find_if(decl.fields.begin(), decl.fields.end(),
+                        [&](const InvertedStructField& field) { return field.name == op.field; });
+                    if (it == decl.fields.end())
+                        fail("mixed inverted field not in declared nominal schema");
+                    op.mixed_value = inverted_scalar_literal(it->type);
+                } else {
+                    op.value = signed_integer_literal();
+                }
+                require(")");
             } else if (accept("erase_swap")) {
                 op.kind = InvertedSourceOperation::Kind::EraseSwap;
                 require("("); op.index = inverted_source_index(); require(")");
