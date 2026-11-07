@@ -83,6 +83,17 @@ def verify_junit(raw: bytes) -> dict[str, object]:
         value = suite.get(field)
         if value is not None and _nonnegative_integer(value, "suite " + field) != 0:
             _error("suite contains error/disabled tests")
+    # CTest's suite wall clock can legitimately round down to zero even when
+    # case execution durations are positive. Reject impossible values without
+    # wrongly requiring total wall time to equal the sum of per-case times.
+    suite_time = suite.get("time")
+    if suite_time is not None:
+        try:
+            elapsed_suite = float(suite_time)
+        except ValueError:
+            _error("invalid CTest suite duration")
+        if not math.isfinite(elapsed_suite) or not 0 <= elapsed_suite <= 3600:
+            _error("nonfinite, negative or excessive CTest suite duration")
     # Only direct testcase records count. Nested/extra reporting sections are
     # not allowed to hide a duplicated or skipped case.
     cases = list(suite)
@@ -95,6 +106,10 @@ def verify_junit(raw: bytes) -> dict[str, object]:
         if name not in EXPECTED or name in observed:
             _error("unexpected or duplicated test case")
         observed.add(name)
+        if set(case.attrib) - {"name", "classname", "status", "time"}:
+            _error("unexpected testcase attributes for " + name)
+        if case.get("classname") not in (None, name):
+            _error("testcase class/name mismatch for " + name)
         if case.get("status") != "run":
             _error("testcase is not reported as actually run: " + name)
         durations[name] = _elapsed(case.get("time"), "case time " + name)
@@ -120,6 +135,9 @@ def verify_junit(raw: bytes) -> dict[str, object]:
                            if child.tag == "system-out"), "")
             if output.splitlines().count(required) != 1:
                 _error("missing or duplicated exact executed stdout marker in " + name)
+            if any(other != required and other in output
+                   for other in REQUIRED_MARKERS.values()):
+                _error("other native guest marker in wrong testcase " + name)
         # A marker in an unrelated case or in suite-level metadata is not
         # equivalent to actually executing the named native guest test.
         else:
