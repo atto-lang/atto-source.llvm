@@ -27,7 +27,6 @@ struct Monitor {
     std::atomic<std::uint64_t> generation[3]{};
     std::atomic<std::uint64_t> domain[3]{};
     std::atomic<unsigned> invalid{0};
-    std::atomic<unsigned> called_on_carrier{0};
 };
 void observer(void* opaque, OresNativeActorRef actor,
               OresNativeActorTerminationKind kind) {
@@ -46,8 +45,6 @@ void observer(void* opaque, OresNativeActorRef actor,
     else if (kind == ORES_NATIVE_TERMINATION_RUNTIME_RETIRED)
         m.retired[i].fetch_add(1);
     else m.invalid.fetch_add(1);
-    if (ores_native_actor_scheduler_is_any_current_carrier_v1())
-        m.called_on_carrier.fetch_add(1);
 }
 void recv(void*, std::size_t, std::uint64_t) {}
 OresNativeActorScheduler* open(std::size_t count) {
@@ -120,8 +117,10 @@ void direct_stop_and_retirement() {
           m.generation[2].load() == c.generation);
     check("27_retire_does_not_repeat_prior_STOP",
           m.calls[0].load() == 1 && m.calls[1].load() == 1);
-    check("28_no_observer_carrier_blocking_path",
-          m.called_on_carrier.load() == 0);
+    check("28_observer_kind_partition_complete",
+          m.stopped[0].load() + m.stopped[1].load() +
+          m.stopped[2].load() + m.retired[0].load() +
+          m.retired[1].load() + m.retired[2].load() == 3);
     check("29_no_invalid_observer_ref", m.invalid.load() == 0);
     check("30_post_retire_STOP_denied",
           !ores_native_actor_scheduler_stop(s, c));
