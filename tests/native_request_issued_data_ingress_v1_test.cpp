@@ -40,6 +40,8 @@ struct World {
     std::mutex mutex;
     std::condition_variable cv;
     int completed[2]{0, 0};
+    bool duplicate_denied[2][per_actor]{};
+    bool foreign_denied[2][per_actor]{};
     bool cancelled_turn_denied = false;
 
     static void on_message(void* opaque, std::size_t actor_index,
@@ -65,12 +67,14 @@ struct World {
             actor, w.cancellations[actor_index]);
         assert(gate && gate->authorized());
         // The authenticated same DATA mail cannot mint a second request.
-        assert(!w.issuer->admit_current_data_turn(
-            actor, w.cancellations[actor_index]));
+        const bool duplicate_denied =
+            !w.issuer->admit_current_data_turn(
+                actor, w.cancellations[actor_index]);
         // Even from a real DATA carrier, a foreign actor is never issued
         // an identity or a scope.
-        assert(!w.issuer->admit_current_data_turn(
-            w.actors[1-actor_index], w.cancellations[1-actor_index]));
+        const bool foreign_denied =
+            !w.issuer->admit_current_data_turn(
+                w.actors[1-actor_index], w.cancellations[1-actor_index]);
         assert(gate->set(w.key, int(payload)));
         assert(gate->get_copy(w.key) == int(payload));
         // No request ownership survives a different actor's DATA.
@@ -78,6 +82,8 @@ struct World {
             std::lock_guard<std::mutex> lock(w.mutex);
             assert(!w.gates[actor_index][payload - 1]);
             w.gates[actor_index][payload - 1] = std::move(gate);
+            w.duplicate_denied[actor_index][payload - 1] = duplicate_denied;
+            w.foreign_denied[actor_index][payload - 1] = foreign_denied;
             ++w.completed[actor_index];
         }
         w.cv.notify_all();
@@ -172,6 +178,14 @@ void test_issued_turns_and_revocation() {
                           "mail_%02d_actor_%zu_read_denied_offturn",
                           index, actor);
             check(name, !w.gates[actor][index-1]->get_copy(w.key));
+            std::snprintf(name, sizeof(name),
+                          "mail_%02d_actor_%zu_duplicate_DENIED",
+                          index, actor);
+            check(name, w.duplicate_denied[actor][index-1]);
+            std::snprintf(name, sizeof(name),
+                          "mail_%02d_actor_%zu_cross_actor_DENIED",
+                          index, actor);
+            check(name, w.foreign_denied[actor][index-1]);
         }
         std::snprintf(name, sizeof(name),
                       "mail_%02d_unique_minted_request_ids", index);
