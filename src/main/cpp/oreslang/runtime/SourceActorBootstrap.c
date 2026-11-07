@@ -998,7 +998,7 @@ void oreslang_source_actor_join_done(void* opaque) {
     instance->frame_words = NULL;
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
     fprintf(stderr,
-        "SOURCE_ACTOR_FRAME_RETIRE_VERIFIED actor=%llu bytes=65536 high_water=%llu slot_calls=%llu released=1\\n",
+        "SOURCE_ACTOR_FRAME_RETIRE_VERIFIED actor=%llu bytes=65536 high_water=%llu slot_calls=%llu released=1\n",
         (unsigned long long)instance->id,
         (unsigned long long)instance->frame_high_water,
         (unsigned long long)instance->frame_slot_calls);
