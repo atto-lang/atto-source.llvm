@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -19,6 +20,7 @@ enum class EventResult { Pending, Complete, Failed };
 
 // Driver functions operate on one explicitly selected device and one stream.
 // The real implementation MUST derive limits from CUDA, not guest source.
+class SaxpyOperation;
 class Driver {
 public:
     virtual ~Driver() = default;
@@ -38,6 +40,25 @@ public:
     virtual void destroy_event(Handle event) = 0;
     virtual void free_buffer(Handle allocation) = 0;
     virtual void unload(Handle module) = 0;
+
+private:
+    friend class SaxpyOperation;
+    // One real CUDA stream belongs to the driver, not to each operation.
+    // Admission and release must be atomic across all operation objects.
+    bool claim_stream() {
+        std::lock_guard<std::mutex> guard(stream_lock_);
+        if (stream_claimed_) return false;
+        stream_claimed_ = true;
+        return true;
+    }
+    void release_stream() {
+        std::lock_guard<std::mutex> guard(stream_lock_);
+        if (!stream_claimed_)
+            throw std::logic_error("GPU-G2-005: missing stream lease");
+        stream_claimed_ = false;
+    }
+    std::mutex stream_lock_;
+    bool stream_claimed_ = false;
 };
 
 enum class State {
@@ -64,13 +85,14 @@ public:
     ~SaxpyOperation() {
         // Cannot release in-flight host staging or handles without device proof.
         // A production scheduler must retain operations until they settle.
-        if (module_ || event_ || allocations_[0] || allocations_[1] || allocations_[2])
+        if (has_live_device_handles())
             std::terminate();
     }
 
     State state() const noexcept { return state_; }
     bool has_live_device_handles() const noexcept {
-        return module_ || event_ || allocations_[0] || allocations_[1] || allocations_[2];
+        return stream_claimed_ || module_ || event_ ||
+               allocations_[0] || allocations_[1] || allocations_[2];
     }
     const std::vector<float>& output() const {
         if (state_ != State::Completed)
@@ -105,6 +127,9 @@ public:
         identities_ = {{{tenant_, driver_.device_identity(), generation_},
                         {tenant_, driver_.device_identity(), generation_ + 1},
                         {tenant_, driver_.device_identity(), generation_ + 2}}};
+        if (!driver_.claim_stream())
+            throw std::logic_error("GPU-G2-005: CUDA stream already has an operation");
+        stream_claimed_ = true;
         try {
             module_ = require_handle(driver_.load_ptx(ptx));
             const auto fn = require_handle(driver_.kernel(module_, "saxpy"));
@@ -226,6 +251,12 @@ private:
                 fences_[i]->retire_after_backend_release(identities_[i]);
                 fences_[i]->close_after_retirement();
             }
+        // No other command may enter the shared stream until every previous
+        // device handle and authenticated buffer fence has been retired.
+        if (stream_claimed_) {
+            driver_.release_stream();
+            stream_claimed_ = false;
+        }
     }
     Driver& driver_;
     std::string tenant_;
@@ -240,6 +271,7 @@ private:
     std::array<std::optional<Ticket>, 3> tickets_{};
     std::vector<float> input_x_, input_y_, output_;
     bool submitted_to_driver_ = false, poisoned_ = false;
+    bool stream_claimed_ = false;
 };
 
 } // namespace oreslang::gpu::g2
