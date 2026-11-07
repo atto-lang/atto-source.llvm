@@ -610,10 +610,13 @@ public:
                 if (++count > 64)
                     throw std::runtime_error("GPU-KERNEL-002: too many kernel ABI parameters");
                 const std::string_view type = token_.text;
-                if (type == "int" || type == "i64" || type == "f32" || type == "bool") {
+                bool gpu_array = false;
+                if (type == "int" || type == "i64" || type == "u64"
+                        || type == "f32" || type == "bool") {
                     advance();
-                } else if (type == "GpuReadBuffer" || type == "GpuWriteBuffer"
-                        || type == "GpuReadWriteBuffer") {
+                } else if (type == "GpuArray" || type == "GpuReadBuffer"
+                        || type == "GpuWriteBuffer" || type == "GpuReadWriteBuffer") {
+                    gpu_array = type == "GpuArray";
                     advance();
                     require("<");
                     if (!accept("f32"))
@@ -624,13 +627,17 @@ public:
                     throw std::runtime_error(
                         "GPU-KERNEL-002: unsupported GPU kernel parameter type; no CPU fallback");
                 }
+                const bool mutable_view = accept("mut");
+                if (mutable_view && !gpu_array)
+                    throw std::runtime_error("GPU-KERNEL-005: mut parameter requires GpuArray<f32>");
                 const std::string parameter = identifier();
                 if (!names.insert(parameter).second)
                     throw std::runtime_error("GPU-KERNEL-003: duplicate GPU parameter");
             } while (accept(","));
             require(")");
         }
-        require(":");
+        if (!accept("->"))
+            throw std::runtime_error("GPU-KERNEL-001: gpu fnc requires slim arrow ->; no fat arrow or colon");
         if (!accept("void"))
             throw std::runtime_error("GPU-KERNEL-002: GPU kernel entry must return void");
         require("{");
