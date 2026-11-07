@@ -40,7 +40,7 @@ static void check(int ok, const char* what) {
 typedef struct {
     OresRtDomain* domain;
     uint32_t placement[ACTORS];
-    _Atomic(pthread_t*) core_thread[CORES]; /* first thread seen per core */
+    _Atomic unsigned core_owner_phase[CORES]; /* 0=unclaimed, 1=initializing, 2=published */
     pthread_t core_thread_store[CORES];
     atomic_int inside[ACTORS];
     uint64_t last_seq[ACTORS][PRODUCERS]; /* touched only on the actor's core */
@@ -51,15 +51,53 @@ typedef struct {
 
 static void note_core(Stress* st, uint32_t actor) {
     const uint32_t core = st->placement[actor];
-    pthread_t* expected = NULL;
-    pthread_t* mine = &st->core_thread_store[core];
-    if (atomic_compare_exchange_strong(&st->core_thread[core], &expected, mine)) {
-        *mine = pthread_self();
+    unsigned expected = 0;
+    /* Claim the slot BEFORE writing pthread_t, but publish the initialized
+     * identity only after a release store. Losing readers must acquire phase
+     * 2 before accessing the non-atomic pthread_t. */
+    if (atomic_compare_exchange_strong_explicit(&st->core_owner_phase[core],
+            &expected, 1u, memory_order_acq_rel, memory_order_acquire)) {
+        st->core_thread_store[core] = pthread_self();
+        atomic_store_explicit(&st->core_owner_phase[core], 2u, memory_order_release);
         return;
     }
-    /* Spin until the first writer finished publishing the id. */
-    if (!pthread_equal(*atomic_load(&st->core_thread[core]), pthread_self()))
+    unsigned phase = expected;
+    for (unsigned spins = 0; phase == 1u && spins < 100000u; ++spins) {
+        sched_yield();
+        phase = atomic_load_explicit(&st->core_owner_phase[core], memory_order_acquire);
+    }
+    if (phase != 2u || !pthread_equal(st->core_thread_store[core], pthread_self()))
         atomic_fetch_add(&st->errors, 1); /* actor ran off its core's carrier */
+}
+
+/* Deliberately make two different carriers race to establish one core's
+ * owner. Only the winning carrier may publish pthread_t; the losing carrier
+ * must wait for release/acquire publication before comparing. */
+typedef struct { Stress* st; atomic_int* ready; atomic_int* go; } OwnerProbe;
+static void* probe_note_core(void* raw) {
+    OwnerProbe* p = raw;
+    atomic_fetch_add(p->ready, 1);
+    while (!atomic_load(p->go)) sched_yield();
+    note_core(p->st, 0);
+    note_core(p->st, 0);
+    return NULL;
+}
+static void owner_publication_race_test(void) {
+    for (int round = 0; round < 256; ++round) {
+        Stress st = {0};
+        atomic_int ready = 0, go = 0;
+        OwnerProbe p = {&st, &ready, &go};
+        pthread_t a, b;
+        check(pthread_create(&a, NULL, probe_note_core, &p) == 0, "owner thread A");
+        check(pthread_create(&b, NULL, probe_note_core, &p) == 0, "owner thread B");
+        while (atomic_load(&ready) < 2) sched_yield();
+        atomic_store(&go, 1);
+        pthread_join(a, NULL);
+        pthread_join(b, NULL);
+        check(atomic_load(&st.core_owner_phase[0]) == 2u, "owner identity fully published");
+        check(atomic_load(&st.errors) == 2, "wrong-core thread rejected twice");
+    }
+    puts("owner publication adversary: OK");
 }
 
 static void on_data(void* ctx, OresRtSender* self, uint32_t actor, uint64_t payload) {
@@ -526,6 +564,7 @@ static void contract(void) {
 }
 
 int main(void) {
+    owner_publication_race_test();
     contract();
     control_priority();
     drain_multi_send();
