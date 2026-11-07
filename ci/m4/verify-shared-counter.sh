@@ -73,8 +73,44 @@ for expected in \
   ATTO_M4_LLVM_ACTOR_CALLS_OBSERVED=3 \
   ATTO_M4_LLVM_OBSERVATION_ACTOR_STOPS=2 \
   ATTO_M4_LLVM_HOST_OBSERVED_ACTOR_DIGEST=7021 \
-  ATTO_M4_LLVM_MAIN_GUEST_DRAINED=1; do
+  ATTO_M4_LLVM_MAIN_GUEST_DRAINED=1 \
+  ATTO_M4_LLVM_STALE_HANDLE_DENIED=1 \
+  ATTO_M4_LLVM_REINCARNATION_FRESH_STATE=1 \
+  ATTO_M4_LLVM_TENANT_NEIGHBOR_SURVIVED=1; do
   grep -Fx "$expected" "$build/m4-observations.txt" || exit 1
 done
+# The same native loader must fail closed for a wrong signed-off digest and
+# for a tampered executable even with the previously verified digest.
+deny_native_library() {
+  local candidate="$1" expected_sha="$2" reason="$3"
+  if "$build/m4-native-actor-observation" "$candidate" "$expected_sha" \
+       > "$build/m4-refused-stdout" 2> "$build/m4-refused-stderr"; then
+    echo "M4_LLVM_ADMISSION_BYPASS: $reason unexpectedly loaded" >&2; exit 1
+  fi
+  grep -F 'ATTO_M4_LLVM_GUEST_FAILED: native guest failed exact-digest admission' \
+      "$build/m4-refused-stderr" >/dev/null || {
+    echo "M4_LLVM_ADMISSION_BYPASS: wrong failure for $reason" >&2
+    cat "$build/m4-refused-stderr" >&2
+    exit 1
+  }
+  if grep -q '^ATTO_M4_LLVM_SOURCE_GUEST_RETURN=' "$build/m4-refused-stdout"; then
+    echo "M4_LLVM_ADMISSION_BYPASS: untrusted native guest executed" >&2; exit 1
+  fi
+}
+deny_native_library "$out/$library" "$(printf '%064d' 0)" 'wrong digest'
+echo 'ATTO_M4_LLVM_NEGATIVE_DIGEST_REJECTION=PASSED'
+cp "$out/$library" "$build/m4-corrupted-guest.so"
+python3 - "$build/m4-corrupted-guest.so" <<'PY'
+import pathlib,sys
+path=pathlib.Path(sys.argv[1])
+with path.open("r+b") as f:
+    f.seek(-1,2)
+    byte=f.read(1)
+    f.seek(-1,2)
+    f.write(bytes([byte[0] ^ 1]))
+PY
+deny_native_library "$build/m4-corrupted-guest.so" "$sha" 'tampered native image'
+echo 'ATTO_M4_LLVM_TAMPERED_GUEST_REJECTION=PASSED'
+
 echo 'ATTO_M4_LLVM_COMPILER_GENERATED_IDENTICAL_SOURCE_GUEST=PASSED'
 echo 'EVIDENCE_SCOPE=M4_IDENTICAL_SOURCE_GUEST_EXECUTION_WITH_HOST_OBSERVED_REPLY_TRACE_NOT_FULL_LANGUAGE_OR_SECURITY'
