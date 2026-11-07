@@ -95,7 +95,7 @@ if guest.is_symlink() or not guest.is_file() or not os.access(guest, os.X_OK):
 with guest.open("rb") as file:
     magic = file.read(4)
 if sys.platform.startswith("linux"):
-    allowed = (b"\\x7fELF",)
+    allowed = (bytes.fromhex("7f454c46"),)
 elif sys.platform == "darwin":
     allowed = tuple(bytes.fromhex(x) for x in
                     ("feedface","feedfacf","cefaedfe","cffaedfe"))
