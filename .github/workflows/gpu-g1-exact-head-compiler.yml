@@ -37,7 +37,8 @@ jobs:
           sha256sum src/main/cpp/oreslang/backend/GpuG1AttoSaxpySource.hpp \
             tests/gpu_g1_typed_frontend_matrix_test.cpp tests/fixtures/gpu-g1-saxpy.atto
           sha256sum src/main/cpp/oreslang/backend/GpuG1SaxpyLaunchAdmission.hpp \
-            tests/gpu_g1_resident_budget_test.cpp
+            tests/gpu_g1_resident_budget_test.cpp \
+            tests/gpu_g1_adversarial_abi_test.cpp
       - name: Compile and execute typed frontend source tests
         shell: bash
         run: |
@@ -55,9 +56,13 @@ jobs:
           clang++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
             -I src/main/cpp tests/gpu_g1_resident_budget_test.cpp \
             -o /tmp/gpu-g1-proof/resident-budget
+          clang++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -I src/main/cpp tests/gpu_g1_adversarial_abi_test.cpp \
+            -o /tmp/gpu-g1-proof/adversarial-abi
           /tmp/gpu-g1-proof/typed-frontend
           /tmp/gpu-g1-proof/source-admission
           /tmp/gpu-g1-proof/resident-budget
+          /tmp/gpu-g1-proof/adversarial-abi
           /tmp/gpu-g1-proof/source-compiler tests/fixtures/gpu-g1-saxpy.atto \
             > /tmp/gpu-g1-proof/source.ll
           clang -x ir -S -emit-llvm -Wno-override-module \
