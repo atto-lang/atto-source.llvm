@@ -27,6 +27,7 @@ struct Unit {
     bool core_closure_complete = false;
     std::unordered_map<std::string, std::size_t> dependencies;
     std::unordered_map<std::string, std::pair<std::size_t, std::string>> class_imports;
+    // local name -> (unit index, pub function name) from `import fnc`.
     std::unordered_map<std::string, std::pair<std::size_t, std::string>> function_imports;
     // Declaration identities stay immutable while ASTs are moved/qualified.
     std::unordered_map<std::string, std::unordered_map<std::size_t, bool>> functions;
@@ -318,6 +319,8 @@ private:
                         [](const auto& slot) { return slot.second; });
                 if (!exported)
                     fail(current, "unknown or private imported function '" + imported.selected_module + "'");
+                if (current.functions.count(imported.local_name))
+                    fail(current, "imported function conflicts with local function '" + imported.local_name + "'");
                 if (!current.function_imports.emplace(imported.local_name,
                         std::make_pair(selected, imported.selected_module)).second)
                     fail(current, "duplicate imported function binding '" + imported.local_name + "'");
@@ -344,7 +347,7 @@ private:
         return index;
     }
     static void binding_name(const Unit& unit, const std::string& name) {
-        if (unit.dependencies.count(name) || unit.class_imports.count(name))
+        if (unit.dependencies.count(name) || unit.class_imports.count(name) || unit.function_imports.count(name))
             fail(unit, "native module import binding cannot be shadowed: '" + name + "'");
     }
     void expression(const Unit& unit, Expression* expr) {
@@ -376,7 +379,8 @@ private:
         }
         const auto function = target->functions.find(member);
         if (function == target->functions.end() || !function->second.count(expr->arguments.size()))
-            fail(unit, "unknown function or wrong call arity '" + expr->name + "'");
+            fail(unit, "unknown function or wrong call arity '" + expr->name +
+                (function == target->functions.end() ? "': unknown function" : "': call arity mismatch"));
         if (external && !function->second.at(expr->arguments.size()))
             fail(unit, "imported function is private: '" + expr->name + "'");
         expr->name = target->prefix + member;

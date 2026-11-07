@@ -197,7 +197,8 @@ llvm::Value* lower_unwidened(const Expression& expr,
         case Expression::Kind::SumAccess: {
             const auto& type = native_sum(*moves->sum_program, expr.sum_type);
             auto* handle = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
-            llvm::Value* fallback = expr.arguments.empty() ? nullptr : lower(*expr.arguments[0], builder, i64, storage, field_storage, functions, moves);
+            const bool expect = expr.name == "expect";
+            llvm::Value* fallback = expr.arguments.empty() || expect ? nullptr : lower(*expr.arguments[0], builder, i64, storage, field_storage, functions, moves);
             const auto schema = moves->record_schemas->at(expr.sum_type);
             auto* tag = checked_sum_tag(builder, i64, handle, schema, type.kind == NativeSumType::Kind::Option ? 2 : 3, moves->sum_check, moves->record_get);
             const bool option = type.kind == NativeSumType::Kind::Option;
@@ -215,6 +216,18 @@ llvm::Value* lower_unwidened(const Expression& expr,
             if (type.value_type == ScalarType::F64) value = builder.CreateBitCast(value, builder.getDoubleTy(), "sum.f64");
             if (!fallback) {
                 builder.SetInsertPoint(absent);
+                auto flush = function->getParent()->getOrInsertFunction("ores_string_panic_flush",
+                    llvm::FunctionType::get(builder.getVoidTy(), false));
+                builder.CreateCall(flush);
+                if (expect) {
+                    // Literal message (enforced by the sum resolver) to stderr, then the
+                    // same abort path as unwrap. Java appends ": <payload>"; this slice does not.
+                    const std::string message = expr.arguments[0]->name + "\n";
+                    auto* text = builder.CreateGlobalStringPtr(message, "expect.message");
+                    auto write = function->getParent()->getOrInsertFunction("write", llvm::FunctionType::get(
+                        i64, {builder.getInt32Ty(), builder.getPtrTy(), i64}, false));
+                    builder.CreateCall(write, {builder.getInt32(2), text, llvm::ConstantInt::get(i64, message.size())});
+                }
                 auto panic = function->getParent()->getOrInsertFunction("abort", llvm::FunctionType::get(builder.getVoidTy(), false));
                 builder.CreateCall(panic); builder.CreateUnreachable(); builder.SetInsertPoint(present); return value;
             }

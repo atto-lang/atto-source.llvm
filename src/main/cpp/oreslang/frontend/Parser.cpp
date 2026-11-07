@@ -615,6 +615,15 @@ public:
                     fail("duplicate imported module binding '" + imported.local_name + "'");
                 selections.push_back(std::move(imported));
             } while ((selected_class || selected_function) && accept(","));
+            // Java: an alias renames exactly one selected function.
+            if (selected_function && selections.size() > 1)
+                for (const auto& imported : selections)
+                    if (imported.local_name != imported.selected_module)
+                        fail("named import aliases require exactly one selected name");
+            for (const auto& imported : selections)
+                if (selected_function && (module_names_.count(imported.local_name) ||
+                        !function_import_names_.insert(imported.local_name).second))
+                    fail("duplicate imported function binding '" + imported.local_name + "'");
             require("from");
             if (token_.kind != Kind::String) fail("native module import requires a quoted source path");
             const std::string import_path(token_.text);
@@ -2675,9 +2684,7 @@ private:
             return statement;
         };
         conditional_statement = [&](std::unique_ptr<Expression> condition) {
-            const bool had_semicolon = accept(";");
-            if (accept("then") || accept("do")) return keyword_conditional(std::move(condition));
-            if (had_semicolon) require("do");
+            if (accept_keyword_if_header()) return keyword_conditional(std::move(condition));
             Statement statement;
             statement.offset = condition->offset;
             statement.kind = Statement::Kind::Conditional;
@@ -3175,9 +3182,7 @@ private:
                 auto condition = expression();
                 if (terminal_try_finally && !native_pure_scalar_tree(*condition))
                     fail("native protected try guard requires a pure nonthrowing bool expression");
-                const bool had_semicolon = accept(";");
-                const bool then_form = accept("then") || accept("do");
-                if (had_semicolon && !then_form) require("do");
+                const bool then_form = accept_keyword_if_header();
                 // Keyword conditionals share one structured form so `else`,
                 // `elif` and void returns behave as in Java. Brace guards keep
                 // their own ownership-checked early-return lowering.
@@ -3945,9 +3950,14 @@ private:
             // literal stdout stream at parse time and reuse the exact
             // legacy stdio.println/print AST, effect and ownership path.
             // No dynamic stream object or blocking I/O fallback exists.
-            if (accept("stdout")) require(".");
+            const bool stdout_stream = accept("stdout");
+            if (stdout_stream) require(".");
             auto expr = make_expression(Expression::Kind::Console, offset);
+            // String unless the native type checker proves an int/bool argument.
+            expr->resolved_type = ScalarType::String;
             expr->name = identifier();
+            if (stdout_stream && expr->name != "write" && expr->name != "println")
+                fail("unsupported native stdio.stdout operation");
             // Java spells the no-newline form stdout.write; print is the
             // legacy native spelling. Both lower to the same reactor path.
             if (expr->name != "print" && expr->name != "println" && expr->name != "write")
@@ -3969,6 +3979,7 @@ private:
             }
             std::size_t argc = 1;
             while (accept(",")) {
+                if (stdout_stream) fail("stdio.stdout." + expr->name + " takes exactly one argument");
                 if (++argc > 32) fail("native stdio argument count exceeds 32");
                 auto joined = make_expression(Expression::Kind::Add, offset);
                 joined->left = std::move(expr->left);
@@ -4195,6 +4206,16 @@ private:
         if (token_.text != text) return false;
         advance();
         return true;
+    }
+
+    // Keyword-delimited `if` header after the condition, matching the Java
+    // reference: the `;` is optional, `then` is canonical and `do` is the
+    // deprecated spelling. Returns false when the caller must parse a `{` block.
+    bool accept_keyword_if_header() {
+        const bool semicolon = accept(";");
+        if (accept("then") || accept("do")) return true;
+        if (semicolon) require("then");
+        return false;
     }
 
     // Consult a copy of the scanner rather than merging arithmetic tokens.
@@ -4473,7 +4494,8 @@ private:
                 if (found == functions.end() ||
                     found->second.count(expr.arguments.size()) == 0) {
                     throw std::runtime_error("unknown function or wrong call arity '"
-                                             + expr.name + "' at byte "
+                                             + expr.name + (found == functions.end() ? "': unknown function" : "': call arity mismatch")
+                                             + " at byte "
                                              + std::to_string(expr.offset));
                 }
                 if (!expr.argument_names.empty() &&
@@ -4711,7 +4733,7 @@ private:
                 if (family == functions.end() ||
                         !family->second.count(expr.arguments.size()))
                     throw std::runtime_error("unknown function or wrong call arity '" +
-                        expr.name + "' at byte " + std::to_string(expr.offset));
+                        expr.name + (family == functions.end() ? "': unknown function" : "': call arity mismatch") + " at byte " + std::to_string(expr.offset));
                 const auto& signature = family->second.at(expr.arguments.size());
                 if (signature.async_source_i64)
                     throw std::runtime_error(
@@ -6119,6 +6141,7 @@ private:
     std::unordered_set<std::string> module_names_;
     std::string own_module_;
     std::vector<std::string> own_module_calls_;
+    std::unordered_set<std::string> function_import_names_;
     std::string method_scope_;
     std::unordered_set<std::string> class_receivers_;
     std::vector<Function> methods_;

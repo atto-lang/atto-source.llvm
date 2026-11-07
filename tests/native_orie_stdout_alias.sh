@@ -66,8 +66,10 @@ native_reject() {
 
 native_exact canonical "PASS:orie-stdio" \
   'pub routine main(): int { stdio.stdout.println("PASS:orie-stdio"); return 0; }'
-native_exact canonical_multi "PASS:orie-stdio" \
-  'pub routine main(): int { stdio.stdout.println("PASS:", "orie-stdio"); return 0; }'
+# Java stdio.stdout members take exactly one argument.
+native_reject canonical_multi \
+  'pub routine main(): int { stdio.stdout.println("PASS:", "orie-stdio"); return 0; }' \
+  'takes exactly one argument'
 native_exact legacy "PASS:orie-stdio" \
   'pub routine main(): int { stdio.println("PASS:orie-stdio"); return 0; }'
 
@@ -83,4 +85,4 @@ native_reject unknown_stdout_field \
 
 [[ "$checks" -eq 6 ]] ||
   { echo "NATIVE_STDOUT_INCOMPLETE_TEST_COUNT=$checks" >&2; exit 1; }
-echo "NATIVE_STDOUT_EXACT_GUEST_TESTS=3; REJECTED_WITH_NO_IR=3"
+echo "NATIVE_STDOUT_EXACT_GUEST_TESTS=2; REJECTED_WITH_NO_IR=4"

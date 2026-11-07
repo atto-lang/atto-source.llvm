@@ -112,8 +112,10 @@ void validate_native_scalar_types(const Program& program) {
                 const auto& type = native_sum(program, e.sum_type);
                 const bool option = type.kind == NativeSumType::Kind::Option;
                 const bool query = option ? e.name == "is_some" || e.name == "is_none" : e.name == "is_ok" || e.name == "is_err";
-                if ((!query && e.name != "unwrap" && e.name != "unwrap_or") || e.arguments.size() != (e.name == "unwrap_or" ? 1u : 0u))
+                const bool with_argument = e.name == "unwrap_or" || e.name == "expect";
+                if ((!query && e.name != "unwrap" && e.name != "unwrap_or" && e.name != "expect") || e.arguments.size() != (with_argument ? 1u : 0u))
                     fail(e.offset, "sum member or payload arity");
+                if (e.name == "expect") require(expression(*e.arguments.at(0), locals), scalar(ScalarType::String), e.offset, "expect message type");
                 if (e.name == "unwrap_or") assign(*e.arguments.at(0), expression(*e.arguments.at(0), locals), scalar(type.value_type), e.offset, "sum fallback type");
                 return query ? scalar(true) : scalar(type.value_type);
             }

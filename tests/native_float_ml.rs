@@ -135,7 +135,7 @@ fn main() {
     for (id, source, diagnostic) in [
         ("import_private_fnc", "import fnc secret from './lib';\npub routine main(): void { stdio.stdout.println(1); }\n", "unknown or private imported function"),
         ("import_unknown_fnc", "import fnc absent from './lib';\npub routine main(): void { stdio.stdout.println(1); }\n", "unknown or private imported function"),
-        ("import_redefined_fnc", "import fnc open from './lib';\nfnc open(): float { return 2.0; }\npub routine main(): void { stdio.stdout.println(open()); }\n", "cannot be redefined"),
+        ("import_redefined_fnc", "import fnc open from './lib';\nfnc open(): float { return 2.0; }\npub routine main(): void { stdio.stdout.println(open()); }\n", "conflicts with local function"),
     ] {
         tools.reject(id, source, diagnostic);
     }
