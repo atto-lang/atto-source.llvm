@@ -104,6 +104,15 @@ public:
         return committed && request->active();
     }
 
+    // Do not attach a native DATA-mail issuer to a registry installed on
+    // another scheduler, even if both have equal actor slot capacities.
+    // The scheduler pointer is a trusted host lifetime identity, not a
+    // cross-tenant or source-language security token.
+    bool belongs_to_scheduler(
+            const OresNativeActorScheduler* scheduler) const noexcept {
+        return scheduler_ == scheduler;
+    }
+
     // Host ingress must never expose the raw newly opened request to guest
     // code before scheduler-serialized registry admission succeeds. A failed
     // registration closes the provisional scope rather than returning a
