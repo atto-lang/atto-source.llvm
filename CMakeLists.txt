@@ -92,6 +92,17 @@ if(BUILD_TESTING)
     add_test(NAME native_ownership_share_projection_root
         COMMAND oreslang-native-share-projection-root-test)
 
+    # Production checker resolves place provenance from compiler-owned
+    # Locals, not names supplied by untrusted AST / source receipts.
+    add_executable(oreslang-native-compiler-place-origin-test
+        tests/native_compiler_place_origin_test.cpp)
+    target_include_directories(oreslang-native-compiler-place-origin-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-compiler-place-origin-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ownership_compiler_resolved_place_origin
+        COMMAND oreslang-native-compiler-place-origin-test)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
