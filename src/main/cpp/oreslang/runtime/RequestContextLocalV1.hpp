@@ -394,6 +394,14 @@ private:
         if (--in_flight_ == 0) quiescent_.notify_all();
     }
 
+    // CONTROL sweeper only: observes a closed, drained request without
+    // waiting for a pinned guest/host operation. Prevents one slow actor's
+    // lease from starving teardown of unrelated actor incarnations.
+    bool closed_quiescent_now() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return !open_ && in_flight_ == 0;
+    }
+
     // CONTROL-plane only, after close(): waiting here on a carrier would
     // deadlock if the actor's continuation owns the outstanding operation.
     bool wait_closed_quiescent() const {
