@@ -8,7 +8,7 @@ const STEPS = [
   'Execute seventeen source-owned place, identity and NLL integrity CTests',
   'Prove twenty scoped compiler CTest cases are registered',
   'Require compiler diagnostics and Clang-linked native guest',
-  'Execute 50 real compiler fixtures and fail-closed matrix mutations',
+  'Execute 100 real compiler fixtures in two matrices and fail-closed mutations',
   'Reverify checkout head and clean tracked source'
 ];
 const NAMES = [
