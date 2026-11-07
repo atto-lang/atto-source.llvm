@@ -114,6 +114,32 @@ void audit_native_symbol_image_boundaries() {
     recent.reset();
     check(retiring.live_generation_count() == 0);
 
+    // Closed-store rejection precedes the content validator. Retired
+    // registries must not inspect or stage a huge untrusted host vector.
+    SharedSymbolLiteralImageStore already_closed;
+    already_closed.close();
+    expect_rejected<std::logic_error>([&] {
+        (void)already_closed.publish({Key::string("invalid-Symbol-domain")});
+    });
+    expect_rejected<std::logic_error>([&] {
+        (void)already_closed.publish({ready});
+    });
+    check(already_closed.live_generation_count() == 0);
+
+    // Immutable reader pins survive destruction of the owning registry.
+    SharedSymbolLiteralImageStore::Pin outliving_store;
+    std::uint64_t outliving_generation = 0;
+    {
+        SharedSymbolLiteralImageStore transient;
+        outliving_generation = transient.publish({ready, error});
+        outliving_store = transient.pin_expected(outliving_generation);
+        check(outliving_store->generation() == outliving_generation);
+    }
+    check(outliving_store->size() == 2);
+    check(outliving_store->at(0) == ready);
+    check(outliving_store->at(1) == error);
+    outliving_store.reset();
+
     // Concurrent VM-local store creation must never recycle an epoch across
     // stores, even when each store publishes its own generation 1.
     constexpr int threads = 8;
