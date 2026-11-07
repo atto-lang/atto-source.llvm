@@ -18,10 +18,15 @@ code="GPU-LAUNCH-008"
 case "$name" in
   unknown-kernel|duplicate-kernel|duplicate-param|nonvoid|missing-body|wrong-scalar-name)
     code="GPU-LAUNCH-001" ;;
-  wrong-arity|invalid-type|read-mut)
+  wrong-arity|invalid-type|read-mut|saxpy-signedness|saxpy-wrong-operator)
     code="GPU-LAUNCH-002" ;;
   forbidden-await|string-body|template-body|defer-body|throw-body|raise-body|panic-body|async-body|nb-body|using-body|console-body|sleep-body|select-body|readch-body|writech-body|spawn-body)
     code="GPU-LAUNCH-006" ;;
+esac
+case "$name" in
+  saxpy-invalid-axis) code="GPU-LAUNCH-003" ;;
+  saxpy-unguarded|saxpy-readonly-store|saxpy-read-from-output|saxpy-wrong-index|saxpy-early-no-return|saxpy-wrong-bound)
+    code="GPU-LAUNCH-005" ;;
 esac
 mode="${GPU_LINK_SELFTEST_MODE:-normal}"
 if [[ "$name" == "unknown-kernel" ]]; then
