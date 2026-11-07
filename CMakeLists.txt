@@ -103,6 +103,18 @@ if(BUILD_TESTING)
     set_tests_properties(native_gpu_g1_structural_buffer_loan_host_only
         PROPERTIES TIMEOUT 20)
 
+    # G1 launch ABI + independent adversarial oracle; HOST_ONLY, no device.
+    add_executable(oreslang-gpu-g1-adversarial-abi-test
+        tests/gpu_g1_adversarial_abi_test.cpp)
+    target_include_directories(oreslang-gpu-g1-adversarial-abi-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-gpu-g1-adversarial-abi-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_gpu_g1_adversarial_abi_and_quota_host_only
+        COMMAND oreslang-gpu-g1-adversarial-abi-test)
+    set_tests_properties(native_gpu_g1_adversarial_abi_and_quota_host_only
+        PROPERTIES TIMEOUT 20 LABELS "host-only;gpu-abi;negative-mutation")
+
     # Independent source-free identity mutation tests for the physical
     # receipt script: no actual PTX or CUDA claims are permitted here.
     if(UNIX)
