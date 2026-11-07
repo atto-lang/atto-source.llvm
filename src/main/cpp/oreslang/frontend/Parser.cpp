@@ -712,7 +712,7 @@ public:
                 if (program.inverted_structs.size() != 1 || wrapped_module ||
                         !program.functions.empty() || !program.classes.empty() ||
                         !program.actors.empty() || !program.generators.empty())
-                    fail("production inverted i64 requires one standalone schema and main");
+                    fail("production inverted scalar pair requires one standalone schema and main");
                 program.inverted_main = inverted_source_main(program.inverted_structs.front());
                 continue;
             }
@@ -6121,7 +6121,7 @@ Program parse_unresolved_program(std::string_view source, bool experimental_owne
 
 void resolve_and_validate_program(Program& program) {
     // A parsed schema alone never authorizes guest codegen. Only a complete
-    // bounded, local two-i64 source main can cross checked typed HIR/MIR;
+    // bounded, local i64/i64 or bool/i64 source main can cross typed HIR/MIR;
     // broader inverted structs/classes and all escaped owners fail closed.
     if (!program.inverted_structs.empty()) {
         // The schema preflight checks only a synthetic allocate/close probe;
