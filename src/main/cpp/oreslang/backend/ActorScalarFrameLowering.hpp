@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace oreslang {
@@ -21,7 +22,7 @@ struct ActorScalarCompiledProgram {
 };
 
 namespace actor_scalar_m3 {
-inline void deny(const char* reason) {
+[[noreturn]] inline void deny(const char* reason) {
     throw std::runtime_error(
         std::string("native actor typed scalar frame admission: ") + reason);
 }
