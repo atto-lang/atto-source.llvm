@@ -466,7 +466,7 @@ The guest never receives raw RequestContextLocal handles from this path.
 
 `native_request_issued_data_ingress_v1_test.cpp` uses real scheduler
 DATA callbacks for two independent actors. Across 16 DATA turns each it
-authors 240 named checks: 32 scheduler-issued request admissions; exact
+authors 244 named checks: 32 scheduler-issued request admissions; exact
 source actor/mail authorization and 64 duplicate/cross-actor denials;
 wrong/off-carrier actor and issuer rejection; issuer counter monotonicity;
 cancelled root authority refusal on actual DATA execution; and actor A
@@ -516,3 +516,27 @@ not a newly minted issuer for a retired incarnation. One additional named
 check (240 issuer checks total) and a second compile-and-execute mutation
 witness guard the exclusive claim.
 
+
+
+### Stale DATA/WAKE gate after scheduler retirement
+
+Both `NativeRequestDataMailGateV1::authorized()` and
+`NativeRequestWakeGateV1::authorized()` now check the request's revocation
+before querying the raw native scheduler pointer, and recheck revocation
+after the scheduler lookup. For a registry-bound scope that has already
+been closed on STOP/retirement, a retained gate denies immediately even
+if the scheduler has since been destroyed.
+
+Four additional named host checks keep an issued DATA gate alive after
+the owning registry terminates all actors and destroys the scheduler;
+the gate then must reject `authorized`, copied reads, writes and
+removals without dereferencing a stale scheduler. The scheduler DATA
+ingress suite now authors **244** named host checks.
+
+**This does not prove arbitrary concurrent scheduler destruction is safe:**
+there remains a race if an operation samples the request as active before
+another thread destroys the scheduler. External host ownership must
+quiesce all gate users/leases before destroying that scheduler. A
+scheduler-lifetime reference/lease mechanism, cancellation of every
+in-flight callback, and generation-fenced reactivation are still needed
+before claiming an unrestricted source guest ABI.
