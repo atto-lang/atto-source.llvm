@@ -112,6 +112,29 @@ pub fn ir_external_declarations(ir: &str) -> Vec<String> {
         .collect()
 }
 
+/// Ways IR can reach the host without a declared function: external globals
+/// (`@stdout = external global ...`), module-level `asm`, and inline `asm`
+/// calls (an `svc`/`bkpt` syscall bypasses every symbol audit).
+pub fn ir_escape_hatches(ir: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for line in ir.lines().map(str::trim) {
+        if line.starts_with(';') {
+            continue;
+        }
+        if line.starts_with("module asm") {
+            found.push(format!("module-level assembly: {line}"));
+        } else if line.contains(" asm ") || line.contains(" asm sideeffect ") {
+            found.push(format!("inline assembly: {line}"));
+        } else if line.starts_with('@')
+            && (line.contains("= external global") || line.contains("= external constant")
+                || line.contains("= extern_weak global"))
+        {
+            found.push(format!("external global: {line}"));
+        }
+    }
+    found
+}
+
 fn declared_name(line: &str) -> Option<String> {
     let at = line.find('@')?;
     let rest = &line[at + 1..];
@@ -149,7 +172,8 @@ pub fn parse_nm(output: &str) -> Vec<NmSymbol> {
 pub fn audit_guest_object(symbols: &[NmSymbol]) -> Vec<String> {
     symbols
         .iter()
-        .filter(|s| s.kind == 'U')
+        // `w`/`v` are weak undefined references: still a request for a host symbol.
+        .filter(|s| matches!(s.kind, 'U' | 'w' | 'v'))
         .filter_map(|s| {
             if let Some(reason) = forbidden_reason(&s.name) {
                 Some(format!("forbidden {reason} symbol `{}`", s.name))
@@ -163,6 +187,11 @@ pub fn audit_guest_object(symbols: &[NmSymbol]) -> Vec<String> {
             }
         })
         .collect()
+}
+
+/// Index of the first console line containing `needle`, if any.
+pub fn line_index(console: &str, needle: &str) -> Option<usize> {
+    console.lines().position(|line| line.contains(needle))
 }
 
 /// Audit a fully linked image: nothing undefined, and no forbidden symbol
@@ -272,6 +301,33 @@ declare void @"ores_actor_send"(ptr)
         assert!(audit_sections(ok).is_empty());
         let bad = "  [ 3] .init_array INIT_ARRAY\n  [ 4] .tbss NOBITS\n  [ 5] .tdata.x PROGBITS\n";
         assert_eq!(audit_sections(bad).len(), 3);
+    }
+
+    #[test]
+    fn ir_escape_hatches_catch_globals_and_assembly() {
+        let clean = "define i64 @f(i64 %x) {\n  ret i64 %x\n}\n; comment mentioning asm \n";
+        assert!(ir_escape_hatches(clean).is_empty());
+        let dirty = "module asm \"svc 0\"\n@stdout = external global ptr\n@w = extern_weak global i8\n  call void asm sideeffect \"svc #0\", \"\"()\n";
+        let found = ir_escape_hatches(dirty);
+        assert_eq!(found.len(), 4, "{found:?}");
+        assert!(found[0].starts_with("module-level assembly"));
+        assert!(found[1].starts_with("external global"));
+        assert!(found[3].starts_with("inline assembly"));
+    }
+
+    #[test]
+    fn guest_weak_undefined_references_are_audited() {
+        let v = audit_guest_object(&[sym('w', "malloc"), sym('v', "mystery")]);
+        assert_eq!(v.len(), 2, "{v:?}");
+        assert!(v[0].contains("libc/OS/allocator"));
+    }
+
+    #[test]
+    fn console_line_order_is_checkable() {
+        let out = "ORES_CORE_TRAP_PROBE start\nORES_CORE_TRAP hardfault\n";
+        assert_eq!(line_index(out, "PROBE start"), Some(0));
+        assert_eq!(line_index(out, "hardfault"), Some(1));
+        assert_eq!(line_index(out, "missing"), None);
     }
 
     #[test]
