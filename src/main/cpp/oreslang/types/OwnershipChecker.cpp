@@ -295,17 +295,28 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
                                  "borrowed parameter to shared ownership");
                 if (source.int_array || !source.class_name.empty())
                     reject(expr, "E_SHARE_MOVE_ONLY: rt share cannot alias a non-Copy array or class owner");
-            } else if (expr.left && expr.left->kind == Expression::Kind::Field &&
-                       expr.left->left && expr.left->left->kind == Expression::Kind::Variable) {
-                const auto place = native_place(*expr.left);
-                const auto found = locals.find(place.first);
+            } else if (expr.left->kind == Expression::Kind::Field) {
+                // Direct and nested field reads may look like Copy scalar
+                // values, but the original receiver still determines
+                // whether sharing is permitted. Never let a computed or
+                // unnamed projection manufacture ownership authority.
+                const Expression* root =
+                    native_ownership::tracked_share_projection_root(*expr.left);
+                if (!root)
+                    reject(expr, "E_SHARE_UNTRACKED_PROJECTION: rt share requires "
+                                 "a named compiler-tracked field root");
+                const auto found = locals.find(root->name);
                 if (found != locals.end() &&
                     !native_ownership::share_place_has_owner_authority(found->second.mode))
                     reject(expr, "E_SHARE_BORROW: rt share cannot upgrade a borrowed class field");
-                if (found != locals.end() &&
-                    (found->second.class_array_fields.count(place.second) ||
-                     found->second.subobjects.count(place.second)))
-                    reject(expr, "E_SHARE_MOVE_ONLY: rt share cannot alias a non-Copy owned field");
+                if (expr.left->left &&
+                        expr.left->left->kind == Expression::Kind::Variable) {
+                    const auto place = native_place(*expr.left);
+                    if (found != locals.end() &&
+                        (found->second.class_array_fields.count(place.second) ||
+                         found->second.subobjects.count(place.second)))
+                        reject(expr, "E_SHARE_MOVE_ONLY: rt share cannot alias a non-Copy owned field");
+                }
             }
             check_value(*expr.left, locals, functions);
             return;
