@@ -1537,14 +1537,14 @@ int ores_native_actor_scheduler_commit_if_live_v1(
         OresNativeActorBoundedCommitV1 commit, void* opaque) {
     if (!s || !commit) return 0;
     lock(s);
-    const int live = !s->retired && matching(s, actor)
-        && !s->actors[actor.actor_slot].retired
-        && (ores_execution_phase(
-            &s->actors[actor.actor_slot].authority) == ORES_EXEC_READY ||
-            ores_execution_phase(
-            &s->actors[actor.actor_slot].authority) == ORES_EXEC_RUNNING ||
-            ores_execution_phase(
-            &s->actors[actor.actor_slot].authority) == ORES_EXEC_SUSPENDED);
+    int live = !s->retired && matching(s, actor)
+        && !s->actors[actor.actor_slot].retired;
+    if (live) {
+        const OresExecutionPhase phase = ores_execution_phase(
+            &s->actors[actor.actor_slot].authority);
+        live = phase == ORES_EXEC_READY || phase == ORES_EXEC_RUNNING
+            || phase == ORES_EXEC_SUSPENDED;
+    }
     const int ok = live ? (commit(opaque) != 0) : 0;
     unlock(s);
     return ok;
