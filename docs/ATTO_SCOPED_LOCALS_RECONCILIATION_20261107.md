@@ -173,7 +173,8 @@ Seal rechecks source-mail authority after any user copy constructors.
 Wrong mail or foreign attempts cannot consume the ticket.
 
 Selection now OWNS copies of its typed key identities rather than retaining
-borrowed caller-key pointers. A temporary alias can die before seal/redeem.
+borrowed caller-key pointers. The regression releases a heap-allocated alias
+before seal/redeem, so ASan can catch a raw-pointer use-after-free.
 
 Native test fixtures now cover wrong source mail, unauthorized later message,
 wrong recipient DATA payload not burning the ticket, expired key aliases,
