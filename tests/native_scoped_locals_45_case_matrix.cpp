@@ -38,8 +38,8 @@ int main() {
     auto task = TaskLocalScopeV1::open(owner);
     check("03_actor_open", !!actor);
     check("04_task_open", !!task);
-    ActorLocalKeyV1<std::string> akey;
-    TaskLocalKeyV1<std::string> tkey;
+    LegacyActorLocalKeyV1<std::string> akey;
+    LegacyTaskLocalKeyV1<std::string> tkey;
     check("05_actor_write", actor->set(owner, akey, std::string("actor")));
     check("06_actor_read", actor->get_copy(owner, akey) == std::string("actor"));
     check("07_actor_wrong_tenant", !actor->get_copy(other_tenant, akey));
@@ -58,7 +58,7 @@ int main() {
     check("19_parent_replacement", task->set(owner, tkey, std::string("updated")));
     check("20_child_not_mutated_by_parent", child->get_copy(sibling, tkey) == std::string("parent"));
 
-    ThreadLocalKeyV1<int> tls;
+    LegacyThreadLocalKeyV1<int> tls;
     check("21_tls_initially_empty", !tls.get_copy());
     check("22_tls_set", tls.set(44));
     check("23_tls_main_read", tls.get_copy() == 44);
