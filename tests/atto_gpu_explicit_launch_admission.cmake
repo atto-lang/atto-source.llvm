@@ -25,7 +25,9 @@ endif()
 set(cases
   "explicit" "logical" "empty-logical" "invalid-block"
   "zero-grid" "negative-grid" "wrong-placement" "host-geometry"
-  "zero-divisor" "mixed-geometry" "literal-argument")
+  "zero-divisor" "mixed-geometry" "literal-argument"
+  "zero-logical-group" "overflow-grid" "negative-shared" "physical-2d"
+  "extra-axes" "unknown-field" "missing-queue" "empty-device")
 set(source_explicit
   "pub fnc main(): int { return launch saxpy(x) on gpu(device) {grid: [1,1,1], block: [64,1,1], queue: queue}; }\n")
 set(source_logical
@@ -48,6 +50,22 @@ set(source_mixed-geometry
   "pub fnc main(): int { return launch saxpy(x) on gpu(device) {over: [16], block: [64], queue: queue}; }\n")
 set(source_literal-argument
   "pub fnc main(): int { return launch saxpy(1) on gpu(device) {grid: [1,1,1], block: [64,1,1], queue: queue}; }\n")
+set(source_zero-logical-group
+  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {over: [257], group: [0], queue: queue}; }\n")
+set(source_overflow-grid
+  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {grid: [9223372036854775808,1,1], block: [64,1,1], queue: queue}; }\n")
+set(source_negative-shared
+  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {grid: [1,1,1], block: [64,1,1], queue: queue, shared_bytes: -1}; }\n")
+set(source_physical-2d
+  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {grid: [1,1], block: [64,1,1], queue: queue}; }\n")
+set(source_extra-axes
+  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {grid: [1,1,1,1], block: [64,1,1], queue: queue}; }\n")
+set(source_unknown-field
+  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {grid: [1,1,1], block: [64,1,1], queue: queue, surprise: 1}; }\n")
+set(source_missing-queue
+  "pub fnc main(): int { return launch saxpy(x) on gpu(device) {grid: [1,1,1], block: [64,1,1]}; }\n")
+set(source_empty-device
+  "pub fnc main(): int { return launch saxpy(x) on gpu() {grid: [1,1,1], block: [64,1,1], queue: queue}; }\n")
 set(expected_explicit "GPU-LAUNCH-008")
 set(expected_logical "GPU-LAUNCH-008")
 set(expected_empty-logical "GPU-LAUNCH-008")
@@ -59,6 +77,14 @@ set(expected_host-geometry "GPU-LAUNCH-003")
 set(expected_zero-divisor "GPU-LAUNCH-003")
 set(expected_mixed-geometry "GPU-LAUNCH-003")
 set(expected_literal-argument "GPU-LAUNCH-002")
+set(expected_zero-logical-group "GPU-LAUNCH-003")
+set(expected_overflow-grid "GPU-LAUNCH-003")
+set(expected_negative-shared "GPU-LAUNCH-003")
+set(expected_physical-2d "GPU-LAUNCH-003")
+set(expected_extra-axes "GPU-LAUNCH-003")
+set(expected_unknown-field "GPU-LAUNCH-003")
+set(expected_missing-queue "GPU-LAUNCH-003")
+set(expected_empty-device "GPU-LAUNCH-004")
 foreach(case_name IN LISTS cases)
   # Every rejected source gets an isolated directory. No prior positive
   # compilation artifact can conceal a same-name overwrite.
