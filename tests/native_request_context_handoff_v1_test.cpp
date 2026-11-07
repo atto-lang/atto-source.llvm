@@ -101,7 +101,12 @@ struct Fixture {
             ores_native_actor_scheduler_stop(w.scheduler, actor);
             ores_native_actor_scheduler_wait_done(w.scheduler, actor);
         }
-        if (lifecycle) lifecycle.reset();
+        if (lifecycle) {
+            // The table borrows the registry; tear down the table FIRST.
+            // Pending envelope values are destroyed before registry teardown.
+            table.reset();
+            lifecycle.reset();
+        }
         ores_native_actor_scheduler_retire(w.scheduler);
         ores_native_actor_scheduler_drain(w.scheduler);
         ores_native_actor_scheduler_try_destroy(w.scheduler);
