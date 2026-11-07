@@ -74,7 +74,7 @@ jobs:
             -I src/main/cpp tests/gpu_g1_event_provider_test.cpp \
             -o /tmp/gpu-g1-proof/event-provider-host
           clang++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
-            -I src/main/cpp tests/gpu_g1_verified_ptx_test.cpp \
+            -pthread -I src/main/cpp tests/gpu_g1_verified_ptx_test.cpp \
             -lcrypto -o /tmp/gpu-g1-proof/verified-ptx-host
           /tmp/gpu-g1-proof/typed-frontend
           /tmp/gpu-g1-proof/source-admission
