@@ -34,7 +34,7 @@ jobs:
           done
       - name: Execute native host scheduler/frame test with GCC and Clang
         run: |
-          set -eu
+          set -euo pipefail
           for compiler in g++ clang++; do
             command -v "$compiler"
             "$compiler" -std=c++17 -O2 -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG -Isrc/main/cpp tests/native_actor_guest_frame_stack_test.cpp src/main/cpp/oreslang/runtime/MultiActorCarrier.cpp -o "/tmp/actor-frames-$compiler"
@@ -44,7 +44,7 @@ jobs:
           done
       - name: Execute Clang ASan and UBSan host scheduler/frame test
         run: |
-          set -eu
+          set -euo pipefail
           clang++ -std=c++17 -O1 -g -pthread -fsanitize=address,undefined -fno-omit-frame-pointer -Wall -Wextra -Wpedantic -Werror -UNDEBUG -Isrc/main/cpp tests/native_actor_guest_frame_stack_test.cpp src/main/cpp/oreslang/runtime/MultiActorCarrier.cpp -o /tmp/actor-frames-sanitized
           /tmp/actor-frames-sanitized | tee /tmp/sanitizer.log
           grep -Fx ACTOR_OWNED_LOGICAL_FRAME_STORE_HOST_PASS /tmp/sanitizer.log
