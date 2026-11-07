@@ -57,6 +57,10 @@ files=(
 for entry in "${files[@]}"; do
   path="${entry%%:*}"
   expected="${entry#*:}"
+  if [[ ! -f "$path" ]]; then
+    echo "REFUSED: missing native source/test file $path" >&2
+    exit 2
+  fi
   actual="$(git hash-object "$path")"
   tracked="$(git rev-parse "HEAD:$path")"
   if [[ "$actual" != "$expected" || "$tracked" != "$expected" ]]; then
