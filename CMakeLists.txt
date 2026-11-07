@@ -129,6 +129,37 @@ if(BUILD_TESTING)
     set_tests_properties(native_gpu_g1_provider_loan_lifecycle_host_only
         PROPERTIES TIMEOUT 20 LABELS "host-only;gpu-ownership;concurrency;negative-mutation")
 
+    # Host-only fake-driver event tests: no CUDA header/device or physical proof.
+    add_executable(oreslang-gpu-g1-event-provider-host-test
+        tests/gpu_g1_event_provider_test.cpp)
+    target_include_directories(oreslang-gpu-g1-event-provider-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-gpu-g1-event-provider-host-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-gpu-g1-event-provider-host-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_gpu_g1_event_provider_fake_host_only
+        COMMAND oreslang-gpu-g1-event-provider-host-test)
+    set_tests_properties(native_gpu_g1_event_provider_fake_host_only
+        PROPERTIES TIMEOUT 20 LABELS "host-only;fake-driver;gpu-event;negative-mutation")
+
+    # Deliberately opt-in SDK compatibility check; no real GPU needed.
+    # NOT a physical execution or source-backed .atto compiler parity result.
+    option(ATTO_GPU_G1_CHECK_CUDA_SDK "Build G1 CUDA Driver API adapter with an installed CUDA SDK" OFF)
+    if(ATTO_GPU_G1_CHECK_CUDA_SDK)
+        find_package(CUDAToolkit REQUIRED)
+        add_executable(oreslang-gpu-g1-cuda-adapter-compile-test
+            tests/gpu_g1_cuda_adapter_compile_test.cpp)
+        target_include_directories(oreslang-gpu-g1-cuda-adapter-compile-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-gpu-g1-cuda-adapter-compile-test PRIVATE CUDA::cuda_driver Threads::Threads)
+        target_compile_options(oreslang-gpu-g1-cuda-adapter-compile-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        add_test(NAME native_gpu_g1_real_cuda_sdk_compile_only
+            COMMAND oreslang-gpu-g1-cuda-adapter-compile-test)
+        set_tests_properties(native_gpu_g1_real_cuda_sdk_compile_only
+            PROPERTIES TIMEOUT 20 LABELS "cuda-sdk;compile-only;no-device")
+    endif()
+
     # Independent source-free identity mutation tests for the physical
     # receipt script: no actual PTX or CUDA claims are permitted here.
     if(UNIX)
