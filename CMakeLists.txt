@@ -57,6 +57,19 @@ if(BUILD_TESTING)
     add_test(NAME native_sum_payload_type_admission
         COMMAND oreslang-native-sum-payload-admission-test)
     set_tests_properties(native_sum_payload_type_admission PROPERTIES TIMEOUT 20)
+    # Rank-2 tensor descriptor geometry admission, independent native host
+    # oracle. Guest source execution remains a separate gate in CI.
+    add_executable(oreslang-native-tensor2d-admission-test
+        tests/native_tensor2d_admission_test.cpp)
+    target_include_directories(oreslang-native-tensor2d-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-tensor2d-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_tensor2d_descriptor_geometry_host_only
+        COMMAND oreslang-native-tensor2d-admission-test)
+    set_tests_properties(native_tensor2d_descriptor_geometry_host_only
+        PROPERTIES TIMEOUT 15)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
