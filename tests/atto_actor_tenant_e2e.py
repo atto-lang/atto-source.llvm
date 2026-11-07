@@ -88,6 +88,15 @@ def main():
     compiler = Path(args.compiler).resolve(strict=True)
     assert compiler.name == "oreslang-llvmc", "not the source-owned compiler"
     assert os.access(compiler, os.X_OK), "compiler is not executable"
+    # Prove the same compiler and native runtime source bytes were used by
+    # the verifier throughout, not only after successful guest execution.
+    assert compiler.is_file() and not compiler.is_symlink(), "compiler path must be a regular file"
+    compiler_before = digest(compiler.read_bytes())
+    runtime_sources = {name: runtime / name for name in RUNTIME_FILES}
+    assert all(path.is_file() and not path.is_symlink()
+               for path in runtime_sources.values()), "runtime C input escaped source tree"
+    runtime_before = {name: digest(path.read_bytes())
+                      for name, path in runtime_sources.items()}
     assert all(path.is_file() and not path.is_symlink()
                for path in (fixtures / name for name, *_ in POSITIVE + NEGATIVE))
     before = {
@@ -107,6 +116,12 @@ def main():
             assert digest(source.read_bytes()) == before[name], name
             print(f"ATTO_ACTOR_REJECT|case={name}|source_sha256={before[name]}|"
                   "guest_executed=false|ir_emitted=false", flush=True)
+
+        assert digest(compiler.read_bytes()) == compiler_before, (
+            "compiler changed during negative compiler-denial checks")
+        assert all(digest(path.read_bytes()) == runtime_before[label]
+                   for label, path in runtime_sources.items()), (
+            "runtime inputs changed before native compilation")
 
         for name, actor_count, expected_admitted in POSITIVE:
             source = fixtures / name
@@ -157,12 +172,17 @@ def main():
                 assert rec["abandoned"] == rec["accepted"] - rec["processed"], (name, rec)
                 assert rec["last"] == last_for(name, index, rec["processed"]), (name, rec)
             assert digest(source.read_bytes()) == before[name], name
+            assert digest(compiler.read_bytes()) == compiler_before, (
+                name, "source compiler changed during guest verification")
+            assert all(digest(path.read_bytes()) == runtime_before[label]
+                       for label, path in runtime_sources.items()), (
+                name, "native actor runtime source changed during guest verification")
             print(f"ATTO_NATIVE_ACTOR_GUEST_PASS|case={name}|actors={actor_count}|"
                   f"profile={profile}|source_sha256={before[name]}|"
                   f"ir_sha256={digest(ir.encode('utf-8'))}|"
                   f"binary_sha256={digest(binary.read_bytes())}|exit=43", flush=True)
     print("ATTO_ACTOR_ISOLATION_MATRIX_PASS|positive=2|negative=2|"
-          f"profile={profile}|compiler_sha256={digest(compiler.read_bytes())}|"
+          f"profile={profile}|compiler_sha256={compiler_before}|"
           "tenant_sandbox=NOT_VERIFIED", flush=True)
 
 if __name__ == "__main__":
