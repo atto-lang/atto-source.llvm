@@ -46,6 +46,16 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Source-free compiler-negative harness mutation scenarios. A passing
+    # synthetic compiler proves only that malformed receipts are rejected;
+    # it cannot promote actual llvmc or physical GPU execution.
+    if(UNIX)
+        add_test(NAME native_atto_gpu_kernel_link_negative_evidence_source_free
+            COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_kernel_source_link_harness_selftest.sh")
+        set_tests_properties(native_atto_gpu_kernel_link_negative_evidence_source_free
+            PROPERTIES TIMEOUT 90)
+    endif()
+
     # Source-declared GPU kernel types -> typed kernel signature *shape*.
     # Does not resolve host values or yield device execution permissions.
     add_executable(oreslang-native-gpu-kernel-source-link-test
