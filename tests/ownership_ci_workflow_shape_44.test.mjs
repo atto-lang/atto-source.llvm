@@ -206,8 +206,8 @@ test('40 second compiled guest matrix JUnit cannot be suppressed',()=>{
 });
 test('41 second independent manifest mutation inventory mandatory',()=>{
   denied(workflow.replace(
-    'native_ownership_source_cfg_manifest_18_mutations$',
-    'native_ownership_source_cfg_manifest_INERT$'),'MISSING_SOURCE_CFG_REAL_GUEST_EVIDENCE');
+    "          grep -Eq 'Test +#[0-9]+: native_ownership_source_cfg_manifest_18_mutations$' /tmp/atto-source-cfg-fixture-inventory.txt",
+    "          grep -Eq 'Test +#[0-9]+: native_ownership_source_cfg_manifest_INERT$' /tmp/atto-source-cfg-fixture-inventory.txt"),'MISSING_SOURCE_CFG_REAL_GUEST_EVIDENCE');
 });
 test('42 source CFG matrix branch must trigger exact-head CI',()=>{
   denied(workflow.replace(
