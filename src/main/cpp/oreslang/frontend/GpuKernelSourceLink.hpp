@@ -41,6 +41,7 @@ struct Linked {
 inline bool supported(typed_ir::Parameter value) {
     switch (value) {
         case typed_ir::Parameter::F32:
+        case typed_ir::Parameter::I64:
         case typed_ir::Parameter::U64:
         case typed_ir::Parameter::ReadF32:
         case typed_ir::Parameter::WriteF32: return true;
@@ -102,7 +103,7 @@ inline Linked link(const std::vector<Signature>& declarations,
     if (launch.ordered_arguments.size() != found->parameters.size())
         reject("GPU-LAUNCH-002", "GPU source launch arity differs from declaration");
     auto resolved = signature_to_typed_shape(*found);
-    const auto arguments = launch.ordered_arguments;
+    auto arguments = launch.ordered_arguments;
     return {std::move(resolved), std::move(launch), std::move(arguments)};
 }
 } // namespace oreslang::gpu::source_link
