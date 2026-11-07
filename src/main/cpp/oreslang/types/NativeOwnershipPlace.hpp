@@ -64,6 +64,15 @@ struct ResolvedPlace {
     std::string lexical_slot;
     std::vector<std::string> fields; // source order, outermost to innermost
     PlaceOrigin origin = PlaceOrigin::OwnedSlot;
+    BindingId binding_id{};
+    OriginId allocation_origin{};
+
+    // An allocated root can be identified only when the production
+    // constructor/move path supplied its provenance. No disjointness
+    // conclusions are drawn from differing BindingId values.
+    bool has_proven_allocation() const noexcept {
+        return allocation_origin.value != 0;
+    }
 
     bool owns_storage() const noexcept { return origin == PlaceOrigin::OwnedSlot; }
     bool has_direct_field() const noexcept { return fields.size() == 1; }
@@ -81,14 +90,16 @@ inline std::optional<ResolvedPlace> resolve_compiler_place(
             if (node->name.empty() || node->name.find('.') != std::string::npos)
                 return std::nullopt;
             const auto found = locals.find(node->name);
-            if (found == locals.end()) return std::nullopt;
+            if (found == locals.end() || found->second.binding_id.value == 0)
+                return std::nullopt;
             std::reverse(fields.begin(), fields.end());
             PlaceOrigin provenance = PlaceOrigin::OwnedSlot;
             if (found->second.mode == Parameter::Mode::Borrow)
                 provenance = PlaceOrigin::IncomingSharedLoan;
             else if (found->second.mode == Parameter::Mode::BorrowMut)
                 provenance = PlaceOrigin::IncomingExclusiveLoan;
-            return ResolvedPlace{found->first, std::move(fields), provenance};
+            return ResolvedPlace{found->first, std::move(fields), provenance,
+                found->second.binding_id, found->second.allocation_origin};
         }
         if (node->kind != Expression::Kind::Field || node->name.empty() ||
                 node->name.find('.') != std::string::npos || !node->left)
