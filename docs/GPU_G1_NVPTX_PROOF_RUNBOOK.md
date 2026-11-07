@@ -46,3 +46,19 @@ The source-free `gpu_g1_receipt_toctou_negative.cmake` exercises four adversaria
 **Local executed evidence on exact committed source/test Git blobs:** C++17 27/27 closed device IR assertions, 29/29 structural admission assertions, actual Clang LLVM-IR parsing and rejected undefined-SSA mutation with no artifact, and all four TOCTOU negative scenarios. These passed as four separate tests using a standalone local CMake/CTest harness; the repository-wide LLVM build and hosted CI have **not** executed on this revised PR head. CUDA test compilation used fake header declarations and a zero-device fake driver *only* for negative admission; no NVIDIA GPU or NVPTX `llc` was available locally.
 
 Hard blockers remain `ATTO_SOURCE_TO_IR=NOT_IMPLEMENTED`, `NVPTX_PTX=NOT_EXECUTED`, `PHYSICAL_GPU=NOT_EXECUTED`, scheduler-owned async `Future<void>` and real authenticated allocation/queue/fence ownership. Do not merge until these gates and independent review are satisfied.
+
+## Restricted .atto source compiler bridge (2026-11-06)
+
+A new **opt-in** kernel-only compiler gate admits the one canonical SAXPY source fixture in `tests/fixtures/gpu-g1-saxpy.atto`. Run the normal native compiler as:
+
+    oreslang-llvmc --gpu-g1-kernel-ir tests/fixtures/gpu-g1-saxpy.atto
+
+The isolated `oreslang-gpu-g1-atto-saxpy-llvmc` binary exercises the same bounded lexer and verified G1 device-IR emitter, independently of the native compiler's larger LLVM dependency graph. Source bytes must be a regular, pinned UTF-8 .atto input within 64 KiB in the native mode; any additional compiler flags, kernel/host declarations, unresolved device calls, changed bounds, forbidden effects or extra source are rejected before IR output. The positive set is **exactly one recognized SAXPY body** with an optional terminal `return;`, not a general GPU parser, typechecker, host launch implementation or arbitrary user function codegen.
+
+The PTX gate now accepts `G1_SOURCE` and `G1_SOURCE_FLAG`, and the opt-in physical gate requires both a Git-tracked .atto source fixture and the main native compiler flag `--gpu-g1-kernel-ir`. The physical receipt pins the source SHA-256. The gate cannot replace compiler source input with the older preconstructed device IR while still claiming source evidence.
+
+**Executed local host verification:** exact-file G++/C++17 restricted source compiler tests **50/50**, an isolated CMake/CTest run **2/2**, complete .atto fixture -> canonical G1 LLVM IR equivalence -> real Clang LLVM IR parser, invalid bounds and appended host-code rejection with no IR stdout. The GitHub blobs of the source admission header, CLI, tests and fixture were checked against the local files. The main `oreslang-llvmc` build is still NOT_EXECUTED in hosted CI because runner admission is failing.
+
+**Offline PTX experiment (not the hosted llc gate or GPU):** LLVM 20.1.8 NVPTX via a local llvmlite binding emitted PTX for the real restricted .atto fixture. The PTX contains a named kernel, 64-bit addressing, a bounds branch, global F32 loads/store, and round-to-nearest F32 multiply/add. Source SHA-256 `0efd5ee7e90765d82d4059324413387b63c3559a9334815072277b3ae75c9482`; LLVM IR SHA-256 `fab2215fe3bc072989733f4e10b2bd2183ee99b9509ef8575e4eded738dbe314`; offline PTX SHA-256 `a1183dbc981e7be66dfad48b5dadb160ca6b6ccf4adf4434230bb4cf29871e35`. This is a **local codegen proof**, not an independently executed GitHub exact-head build or physical GPU evidence.
+
+Remaining steps: executable exact-head hosted CTests/JUnit with nonzero job steps, actual repository `llc` NVPTX test, CUDA hardware numerical/redzone proof through the main compiler, verified `.atto` host `launch` parsing/ownership + asynchronous scheduler-owned device completion, and independent review. Remain draft.
