@@ -12,6 +12,8 @@ on:
       - 'tests/opencl_saxpy_gpu_probe.cpp'
       - 'tests/cmake/verify-atto-gpu-saxpy-physical-v1.cmake'
       - 'scripts/verify-atto-gpu-saxpy-hardware.sh'
+      - 'tests/atto_gpu_hardware_receipt_gate_v1.test.mjs'
+      - 'tests/atto_gpu_saxpy_source_v1_test.cpp'
       - 'CMakeLists.txt'
   workflow_dispatch:
 
@@ -45,6 +47,14 @@ jobs:
           echo "gpu_source_tree=$(git rev-parse HEAD^{tree})"
           echo "gpu_run_attempt=${{ github.run_attempt }}"
           echo "gpu_run_id=${{ github.run_id }}"
+
+      - name: Assert false hardware receipts and forged runner identity reject
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          node --test tests/atto_gpu_hardware_receipt_gate_v1.test.mjs
+          printf 'ATTO_GPU_SOURCE_FREE_NEGATIVE_RECEIPTS_ONLY\\n'
 
       - name: Compile exact-source host-only tests under ASan and UBSan
         shell: bash
