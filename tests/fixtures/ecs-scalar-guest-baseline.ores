@@ -1,0 +1,13 @@
+// First source-level scalar ECS parity baseline.
+// Two ordinary records, not actors, and not yet mixed-width or layout-selectable.
+define class Entity as
+  pub let int position = 0;
+  pub let int velocity = 1;
+end
+pub fnc main(): int {
+  let mut Entity first = new Entity();
+  let mut Entity second = new Entity();
+  first.position = first.position + first.velocity * 2;
+  second.position = second.position + second.velocity * 40;
+  return first.position + second.position;
+}

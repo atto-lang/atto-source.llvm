@@ -37,9 +37,15 @@ int main(void) {
     require(!ores_native_actor_scheduler_poll_done(scheduler,two));
     require(!ores_native_actor_scheduler_wait_done(scheduler,two));
     require(ores_native_actor_scheduler_stop(scheduler,two));
+    require(!ores_native_actor_scheduler_poll_done(scheduler,two));
+    /* Retiring the entire scheduler is not permission to reclaim a live
+     * carrier. Destruction remains fenced until the guest turn exits. */
+    ores_native_actor_scheduler_retire(scheduler);
+    require(!ores_native_actor_scheduler_try_destroy(scheduler));
+    require(!ores_native_actor_scheduler_poll_done(scheduler,two));
     atomic_store(&state.released,1);
     require(ores_native_actor_scheduler_wait_done(scheduler,two));
-    ores_native_actor_scheduler_retire(scheduler);
+    require(ores_native_actor_scheduler_poll_done(scheduler,two));
     require(ores_native_actor_scheduler_try_destroy(scheduler));
     puts("ACTORGROUP_PER_CHILD_WAIT_PASS first_done=1 sibling_still_running=1");
     return 0;

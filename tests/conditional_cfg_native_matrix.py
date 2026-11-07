@@ -15,7 +15,7 @@ PAIR = (
 POSITIVE = {
     "field-take-and-reinitialize-on-both-edges": PAIR + """
 pub fnc main(): int {
-  let Pair p = new Pair();
+  let mut Pair p = new Pair();
   if (p.first eq 1) { p.first = rt take p.second; p.second = 40; }
   else { p.first = rt take p.second; p.second = 40; } fi
   return p.first + p.second;
@@ -27,9 +27,9 @@ fnc update(borrow mut Pair p, int flag): void {
   return;
 }
 pub fnc main(): int {
-  let Pair p = new Pair();
-  update(rt borrow mut p, 0);
-  update(rt borrow mut p, 1);
+  let mut Pair p = new Pair();
+  update(rt mut borrow p, 0);
+  update(rt mut borrow p, 1);
   return p.first + p.second;
 }
 """,
@@ -43,14 +43,14 @@ fnc update_second(borrow mut Pair p): void {
   return;
 }
 fnc dispatch(borrow mut Pair p, int n): void {
-  if (n eq 0) { update_first(rt borrow mut p); }
-  else { update_second(rt borrow mut p); } fi
+  if (n eq 0) { update_first(rt mut borrow p); }
+  else { update_second(rt mut borrow p); } fi
   return;
 }
 pub fnc main(): int {
-  let Pair p = new Pair();
-  dispatch(rt borrow mut p, 0);
-  dispatch(rt borrow mut p, 1);
+  let mut Pair p = new Pair();
+  dispatch(rt mut borrow p, 0);
+  dispatch(rt mut borrow p, 1);
   return p.first + p.second;
 }
 """,
@@ -60,13 +60,13 @@ fnc add_one(borrow mut Pair p): void {
   return;
 }
 fnc branch(borrow mut Pair p, int n): void {
-  defer add_one(rt borrow mut p);
+  defer add_one(rt mut borrow p);
   if (n eq 0) { p.first = 10; } else { p.first = 40; } fi
   return;
 }
 pub fnc main(): int {
-  let Pair p = new Pair();
-  branch(rt borrow mut p, 0);
+  let mut Pair p = new Pair();
+  branch(rt mut borrow p, 0);
   return p.first + 31;
 }
 """,
@@ -75,7 +75,7 @@ pub fnc main(): int {
 NEGATIVE = {
     "divergent-field-move": (PAIR + """
 pub fnc main(): int {
-  let Pair p = new Pair();
+  let mut Pair p = new Pair();
   if (p.first eq 1) { p.first = rt take p.second; }
   else { p.first = 41; } fi
   return p.first;
@@ -90,26 +90,19 @@ pub fnc main(): int {
   return n;
 }
 """, "ownership violation: conditional CFG predecessor ownership mismatch"),
-    "side-effect-condition": ("""
-fnc one(): int { return 1; }
-pub fnc main(): int {
-  if (one() eq 1) { one(); } else { one(); } fi
-  return 42;
-}
-""", "native guarded condition must be pure"),
     "missing-else": (PAIR + """
 pub fnc main(): int {
-  let Pair p = new Pair();
+  let mut Pair p = new Pair();
   if (1 eq 1) { p.first = 42; } fi
   return p.first;
 }
 """, "expected 'else'"),
     "branch-local-construction": (PAIR + """
 pub fnc main(): int {
-  if (1 eq 1) { let Pair p = new Pair(); } else { } fi
+  if (1 eq 1) { let mut Pair p = new Pair(); } else { } fi
   return 42;
 }
-""", "expected int expression"),
+""", "native branch-local class owner requires destructor/drop lowering"),
     "branch-local-defer": ("""
 fnc update(): void { return; }
 pub fnc main(): int {
@@ -117,9 +110,20 @@ pub fnc main(): int {
   return 42;
 }
 """, "expected int expression"),
+    "if-as-binding-value": ("""
+pub fnc main(): int {
+  val y: int = if (1 eq 1) { return 1; } else { return 2; } fi
+  return y;
+}
+""", "expected int expression"),
+    "if-as-return-value": ("""
+pub fnc main(): int {
+  return if (1 eq 1) { return 1; } else { return 2; } fi;
+}
+""", "expected int expression"),
     "branch-after-return-guard": (PAIR + """
 pub fnc main(): int {
-  let Pair p = new Pair();
+  let mut Pair p = new Pair();
   if (0 eq 1) { return 0; } fi
   if (1 eq 1) { p.first = 4; } else { p.first = 5; } fi
   return 42;
@@ -127,6 +131,157 @@ pub fnc main(): int {
 """, "native conditional statements cannot follow return guards"),
 }
 
+
+# Conditions execute once before splitting the affine ownership state.
+POSITIVE["side-effect-condition"] = '\nfnc one(): int { return 1; }\npub fnc main(): int {\n  if (one() eq 1) { one(); } else { one(); } fi\n  return 42;\n}\n'
+
+
+
+# Canonical .atto guard is an inverted, guaranteed-terminal conditional.
+# These must be compiler-backed guest executions, not host parser simulations.
+POSITIVE["guard-success-fallthrough"] = """
+fnc bounded(int x): int {
+  guard x > 0 { return 1 }
+  guard x < 10, x != 5 { return 2; }
+  return 42;
+}
+pub fnc main(): int {
+  return bounded(3);
+}
+"""
+
+POSITIVE["guard-nested-in-conditional"] = """
+fnc bounded(int x): int {
+  if (x > 0) {
+    guard x < 10 { return 2; }
+  } else { return 1; } fi
+  return 42;
+}
+pub fnc main(): int { return bounded(3); }
+"""
+
+
+POSITIVE["guard-multistatement-terminal"] = """
+fnc one(): int { return 1; }
+fnc bounded(int x): int {
+  guard x > 0 {
+    one();
+    return 42;
+  }
+  return 42;
+}
+pub fnc main(): int {
+  return bounded(-1);
+}
+"""
+
+POSITIVE["guard-nested-exhaustive-terminal"] = """
+fnc bounded(int x): int {
+  guard x > 0 {
+    if (x == 0) { return 42; } else { return 42; } fi
+  }
+  return 42;
+}
+pub fnc main(): int {
+  return bounded(-1);
+}
+"""
+
+
+POSITIVE["guard-enclosing-then-else"] = """
+fnc bounded(int x): int {
+  if (x > 0); then
+    guard x < 10 { return 1; }
+  else
+    return 2;
+  fi
+  return 42;
+}
+pub fnc main(): int { return bounded(3); }
+"""
+
+NEGATIVE["guard-incomplete-nested-if"] = ("""
+pub fnc main(): int {
+  guard false {
+    if (true) { return 42; } fi
+  }
+  return 42;
+}
+""", "AttoLang guard failure block must terminate on every path")
+
+NEGATIVE["guard-terminal-call-only"] = ("""
+fnc noop(): void { return; }
+pub fnc main(): int {
+  guard false {
+    noop();
+  }
+  return 42;
+}
+""", "AttoLang guard failure block must terminate on every path")
+
+NEGATIVE["guard-missing-exit"] = ("""
+pub fnc main(): int {
+  guard 1 > 0 { }
+  return 42;
+}
+""", "AttoLang guard failure block must terminate on every path")
+
+NEGATIVE["guard-no-else"] = ("""
+pub fnc main(): int {
+  guard 1 > 0 { return 1; } else { return 2; }
+  return 42;
+}
+""", "AttoLang guard has no else or fi")
+
+NEGATIVE["guard-no-fi"] = ("""
+pub fnc main(): int {
+  guard 1 > 0 { return 1; } fi
+  return 42;
+}
+""", "AttoLang guard has no else or fi")
+
+NEGATIVE["guard-no-return-followthrough"] = ("""
+pub fnc main(): int {
+  guard 1 > 0 { return 1; return 2; }
+  return 42;
+}
+""", "native statement follows terminal return")
+
+
+NEGATIVE["guard-option-narrowing-denied"] = ("""
+pub fnc main(): int {
+  let o: Option<int> = Some(4);
+  guard o is Some { return 1; }
+  return 42;
+}
+""", "native guard is Some requires ownership-aware Option narrowing")
+
+NEGATIVE["guard-class-return-denied"] = ("""
+define class Box as
+  pub let int value = 42;
+end
+fnc create(int n): Box {
+  guard n > 0 { return new Box(); }
+  return new Box();
+}
+pub fnc main(): int {
+  return 42;
+}
+""", "structured class return requires ownership-aware exit lowering")
+
+
+# Execute the same Git-blob-identical canonical .atto files registered in all
+# five AttoLang compiler repositories; this runs the actual native frontend.
+GUARD_CORPUS = Path(__file__).resolve().parents[1] / "contracts" / "guard-v1"
+POSITIVE["guard-canonical-scalar"] = (GUARD_CORPUS / "canonical-scalar.atto").read_text(encoding="utf-8")
+NEGATIVE["guard-canonical-fallthrough"] = (
+    (GUARD_CORPUS / "reject-fallthrough.atto").read_text(encoding="utf-8"),
+    "AttoLang guard failure block must terminate on every path",
+)
+NEGATIVE["guard-canonical-else"] = (
+    (GUARD_CORPUS / "reject-else.atto").read_text(encoding="utf-8"),
+    "AttoLang guard has no else or fi",
+)
 
 def execute(cmd):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=75)
@@ -141,7 +296,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="ores-conditional-cfg-") as temp:
         root = Path(temp)
         for name, source in POSITIVE.items():
-            src = root / (name + ".ores")
+            src = root / (name + (".atto" if name.startswith("guard-") else ".ores"))
             src.write_text(source)
             produced = execute([a.compiler, str(src)])
             assert produced.returncode == 0 and produced.stdout, (name, produced.stderr)

@@ -1,13 +1,99 @@
 # Future LLVM native runtime
 
 Track execution-domain/actor ABI work in [issue #1](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1).
-This directory intentionally contains no executable actor or memory allocator.
+This directory contains experimental executable actor-carrier primitives,
+a fixed-capacity actor-owned graph heap, and actor-owned byte-heap primitives.
+These prototypes do not provide a general-purpose native object allocator,
+tracing GC, or an OS-level sandbox.
 
 Java reference classes: `ActorRuntime`, `OresScheduler`, `OresFuture`, `RuntimeGarbageCollector`.
 Native phases: structured cancellation, generational wake IDs, pinned/relocatable async frames,
 actor mailbox lease, supervisor trees, independent physical heap regions and bounded arenas.
 
-No RT scheduler policy, zero-GC or actor isolation is currently implemented.
+A bounded actor-local native heap now exists in the experimental carrier; full Oreslang actor lowering, strict zero-GC admission and physical isolation remain unimplemented.
+
+## New experimental actor-owned heap slice (October 10, 2026)
+
+`ActorHeap.hpp` provides a **separate bounded fixed-slot byte heap per native
+HungryCarrier**. A dedicated carrier binds as the heap owner; only a currently
+executing actor handler can obtain the `active_heap()` pointer. The broker
+and external senders cannot obtain it from their threads.
+
+- No tracing GC in allocate/read/write/release. Memory is preallocated
+  inside the carrier, and each released slot is zeroed immediately.
+- `Handle{heap, slot, generation}` prevents cross-actor handle use,
+  stale handle use after release, and slot reuse ABA.
+- Bounded allocation fails when slots are full, byte size is excessive,
+  or a foreign thread calls the heap API.
+- The heap remains live while `await_io` parks the carrier, and is retired
+  only after joining the actor and broker threads.
+- `native_actor_heap_no_tracing_gc` tests isolation, accounting, stale
+  tokens, bounds, foreign-thread denial and zeroized reuse. The carrier
+  integration test verifies await/resume and distinct heap identities.
+
+**Not yet general object heaps:** `ActorHeap` presently holds POD bytes.
+Oreslang compilation still rejects source actors, and arbitrary callbacks
+can call `malloc`, use global state, or obtain raw pointers outside this
+allocator. There is no compiler-proven ownership transfer, destructor
+lowering, borrowing across `await`, shared region manager or external
+sandbox. The existing strict-no-GC / hard-RT flags continue to fail closed.
+Consequently, the prototype has no tracing collector within its own
+allocation API, but zero GC **pauses for arbitrary compiled Oreslang** is
+not yet demonstrated.
+
+## Experimental actor-owned cyclic graph storage (not source-lowered)
+
+`ActorOwnedGraphHeap.hpp` provides a **real fixed-capacity native storage
+prototype** owned by one authenticated actor execution identity. Nodes store
+inline bytes (no per-node `malloc` or JVM garbage collector), and non-owning
+generation-checked handles form self/mutual cycles without reference counting.
+Retirement now requires a non-forgeable `CarrierRetirementProof` minted only
+after `HungryCarrier::join()` drains its actor and broker threads and the
+producer ingress. The `ActorHeapBorrowGate` independently leases suspended
+frames, FFI uses and borrowed memory. Retirement seals new lease admissions
+atomically and refuses to release native storage while any lease remains.
+The compiler/scheduler MUST instrument every outstanding borrow/FFI resource
+with a lease; this runtime gate cannot detect untracked raw native pointers.
+Completed retirement zeroes storage and invalidates every stale handle.
+Deleting a node purges incoming edges and advances its generation before
+reusing its slot. Separate actors have separate fixed arrays and reject
+foreign handles.
+
+The `quiesced` argument is a *precondition*, **not** proof that async
+frames, borrows, FFI resources or hot-reload continuations have drained.
+Do not wire `retire` into real actor cancellation until the scheduler
+provides that proof and prevents concurrent/reentrant accesses.
+`NodeBytes` are POD byte payloads; arbitrary Oreslang class layout,
+destructor glue, inter-actor transport, the source borrow checker and
+actor-specific native memory quotas are still not lowered by LLVM.
+
+The fixed-capacity arena now also exposes
+`emplace_owned<T>(actor, ctorArgs...)` for no-throw native actor-owned
+objects. It registers one type-erased `noexcept` destructor callback in the
+node slot. `remove` invalidates the node generation before invoking the
+destructor; `retire` revokes all node handles before running every remaining
+object destructor exactly once, independent of graph cycles. Object slots
+reject raw byte-copy and overwrite operations to prevent bypassing native
+object lifetime rules. The C++ test checks explicit drop, reuse after drop,
+exact-once retirement, and ASan/UBSan memory safety.
+
+**Scope:** this is executable native object lifetime/drop glue, not compiler
+lowering of arbitrary Oreslang class fields or async borrow lifetimes.
+The compiler must still generate typed placement constructors and destructor
+glue and forbid destructor reentry/cross-actor pointers. Constructors and
+destructors are intentionally restricted to `noexcept` and default-aligned
+objects; larger/overaligned object layout needs a different arena.
+
+The native `ActorOwnedGraphHeap` test covers cycles, deterministic
+logical reclamation, ABA generation reuse, cross-owner exclusion,
+capacity, and refusal to retire before quiescence. Native CTest:
+`native_actor_owned_cyclic_graph_heap`.
+
+This is the `ACTOR_ARENA` substrate. It does **not** require one
+GraalVM isolate per actor. `VM_ISOLATE` is a separate execution policy:
+one isolated Engine can house multiple independently owned actor arenas,
+but those actors share that Engine's JIT and VM-level GC. A separate
+`PROCESS_ISOLATE` is reserved for stricter security boundaries.
 
 ## Dedicated hungry actor idle/I/O semantics — design only
 
@@ -180,3 +266,41 @@ eventfd storage can be reclaimed. The hot send still does not allocate
 its payload, but handle refcount operations and OS notification costs are
 not strict hard-realtime certified. Copyable handles can outlive the actor
 and reject sends after it is destroyed.
+
+
+## ActorOwnedHeap: actor-specific non-GC storage (experimental)
+
+`ActorOwnedHeap<Bytes,Slots>` is a fixed-capacity, per-instance native
+byte region, not a managed Java object heap. The allocator never calls
+`malloc`, does not use reference counting, and cannot trigger a tracing GC.
+It returns opaque heap/slot/generation handles rather than raw pointers.
+`read`/`write` validate heap identity and bounds on every access;
+`remove` invalidates a slot, and `retire_quiesced` zeroes/invalidates the
+entire actor region without traversing reference cycles. A new heap at the
+same address has a new identity, preventing stale-handle ABA. Handle-to-handle
+links allow data-level cyclic relationships without owning pointer cycles.
+
+When **the final live allocation is removed**, the byte cursor resets and
+the region is zeroed, permitting repeated allocate/free cycles for a
+long-lived actor without triggering GC or exhausting a nonlive bump region.
+Slot **generations are not reset**, so old handles remain invalid. Partial
+frees **do not compact or reclaim bump bytes** while other allocations
+remain; longer-lived mixed-size allocations can still fragment the region
+and exhaust its fixed byte budget. Compaction and safe point/FFI pin
+coordination would require additional runtime work.
+
+**Limits**: only trivially copyable data, no real drop hooks, object
+ownership checker, actor-scoped root map, shared region, scheduler-integrated
+heap leases, concurrent-state synchronization, physical memory protection,
+host/guest bridge, or dynamic/traced cycle collection. The bytes are
+independent native storage, but concurrent access must be externally
+serialized or synchronized. A malicious in-process native module could
+ignore these APIs and access arbitrary memory; use a separate process or
+hardware-enforced sandbox for hostile code. There is no LLVM lowering of
+guest Oreslang actors to this heap yet. Per-actor independently running
+collectors are therefore **not** implemented.
+
+`native_actor_owned_heap_contract` tests two distinct heaps, bidirectional
+and self-cycles through non-owning handles, stale-slot invalidation, foreign
+heap rejection, overflow/budget refusal, retirement, address-reuse ABA,
+and 1,000 full-drain reclamation cycles without stale-handle resurrection.

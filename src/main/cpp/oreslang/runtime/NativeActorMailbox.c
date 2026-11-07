@@ -27,6 +27,25 @@ OresNativeActorMailbox* ores_native_actor_mailbox_open(size_t capacity) {
     m->capacity = capacity;
     return m;
 }
+int ores_native_actor_mailbox_try_enter(OresNativeActorMailbox* m) {
+    if (!m || current_lane != NULL) return 0;
+    if (pthread_mutex_lock(&m->lock) != 0) abort();
+    /* Zero waiting turns: capacity one already means one active plus no FIFO
+     * backlog. For capacity > 1 this path must never overtake queued tickets. */
+    if (m->retired || m->active || m->pending != 0 ||
+        m->next_ticket != m->served || m->next_ticket == UINT64_MAX) {
+        m->rejected++;
+        pthread_mutex_unlock(&m->lock);
+        return 0;
+    }
+    m->next_ticket++;
+    m->pending = 1;
+    m->active = 1;
+    current_lane = m;
+    pthread_mutex_unlock(&m->lock);
+    return 1;
+}
+
 int ores_native_actor_mailbox_enter(OresNativeActorMailbox* m) {
     if (!m || current_lane != NULL) return 0;
     if (pthread_mutex_lock(&m->lock) != 0) abort();
