@@ -5,6 +5,7 @@ The native compiler does NOT yet lower ActorGroup/Topic guests. A successful
 run here proves *rejection*, not runnable AttoLang PubSub parity.
 """
 import argparse
+import hashlib
 import pathlib
 import subprocess
 import sys
@@ -19,6 +20,19 @@ FIXTURES = (
     "actor-pubsub-reject-async-capability",
 )
 DIAGNOSTIC = "native ActorGroup/Topic source lowering unsupported"
+CANONICAL_ATTO = "actor-pubsub-formal-suspends-v1.atto"
+CANONICAL_GIT_BLOB = "fe10d9e5018a3f030a10bc31586e851198aaa4a3"
+
+
+def verify_canonical_source(root: pathlib.Path) -> None:
+    source = root / "contracts" / "v1" / "fixtures" / CANONICAL_ATTO
+    data = source.read_bytes()
+    if not data or len(data) > 131072:
+        raise AssertionError("canonical .atto source missing or unexpectedly large")
+    digest = hashlib.sha1(b"blob " + str(len(data)).encode("ascii")
+                          + b"\\0" + data).hexdigest()
+    if digest != CANONICAL_GIT_BLOB:
+        raise AssertionError("canonical .atto source differs from pinned formal PR #579 Git blob")
 
 
 def verify_fixture_identity(root: pathlib.Path) -> int:
@@ -30,14 +44,18 @@ def verify_fixture_identity(root: pathlib.Path) -> int:
             raise AssertionError(
                 f"{stem}: .atto differs from canonical .ores guest source"
             )
+    verify_canonical_source(root)
     return len(FIXTURES)
 
 
 def verify_compiler_rejections(root: pathlib.Path, compiler: str) -> int:
     count = 0
-    for stem in FIXTURES:
-        for suffix in (".ores", ".atto"):
-            name = stem + suffix
+    # This canonical suspends-only .atto source intentionally has no legacy
+    # .ores twin. Prove compiler denial, not merely filename identity.
+    names = [stem + suffix for stem in FIXTURES
+             for suffix in (".ores", ".atto")]
+    names.append(CANONICAL_ATTO)
+    for name in names:
             source = root / "contracts" / "v1" / "fixtures" / name
             run = subprocess.run(
                 [compiler, str(source)],
@@ -83,7 +101,7 @@ def main() -> int:
     root = pathlib.Path(args.source_root).resolve()
     paired = verify_fixture_identity(root)
     if args.verify_fixtures_only:
-        print(f"PASS SOURCE_ONLY LLVM .atto/.ores PubSub pairs: {paired}/{paired}")
+        print(f"PASS SOURCE_ONLY LLVM .atto/.ores PubSub pairs: {paired}/{paired}; pinned canonical suspends .atto blob verified")
         return 0
     if not args.compiler:
         parser.error("--compiler is mandatory for executable negative gate")
