@@ -99,16 +99,20 @@ if(BUILD_TESTING)
         message(STATUS "AttoLang GPU-G1 offline PTX gate NOT EXECUTED: no llc found")
     endif()
     # G2 CUDA provider state machine: host-only fake-driver tests always run.
+    # Includes 128 concurrent four-way stream admission trials, 300 seeded
+    # SAXPY vectors, and failure/recovery mutations: link real host threads.
+    find_package(Threads REQUIRED)
     add_executable(oreslang-gpu-g2-provider-host-test
         tests/gpu_g2_cuda_provider_host_test.cpp)
     target_include_directories(oreslang-gpu-g2-provider-host-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-gpu-g2-provider-host-test PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    target_link_libraries(oreslang-gpu-g2-provider-host-test PRIVATE Threads::Threads)
     add_test(NAME native_atto_gpu_g2_cuda_provider_HOST_ONLY
         COMMAND oreslang-gpu-g2-provider-host-test)
     set_tests_properties(native_atto_gpu_g2_cuda_provider_HOST_ONLY
-        PROPERTIES TIMEOUT 30)
+        PROPERTIES TIMEOUT 120)
     # The selected hardware test must reject stale artifact reuse, even when
     # a caller runs ctest -R and excludes the standalone offline PTX producer.
     # This regression runs on host CI with NO CUDA SDK, device, or NVPTX llc.
