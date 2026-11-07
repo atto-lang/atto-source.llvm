@@ -1,0 +1,7 @@
+// Guest source may never forge native actor frame-slot ABI authority.
+pub fnc oreslang_source_actor_frame_i64_slot(): int {
+  return 7;
+}
+pub fnc main(): int {
+  return 43;
+}
