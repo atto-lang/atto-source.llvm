@@ -62,6 +62,11 @@ typedef struct {
     OresNativeActorTerminationKind requested_terminal_kind;
     unsigned terminal_valid;
     OresNativeActorTerminalState terminal;
+    /* One exact-generation listener. Callback is atomic-store ONLY while
+     * holding scheduler lock; all RequestLocal cleanup is deferred. */
+    OresNativeActorStopNoticeV1 stop_notice;
+    void* stop_notice_opaque;
+    unsigned stop_notice_sent;
     /* Stable actor-lifetime allocation capability, independent of turn ids. */
     OresNativeAllocationDomainRef allocation_domain;
     OresNativeExecutionAuthority authority;
@@ -1397,6 +1402,10 @@ static int stop_locked(
     ActorLane* lane = &s->actors[actor.actor_slot];
     lane->requested_terminal_kind = ORES_NATIVE_TERMINATION_STOPPED;
     lane->retired = 1;
+    if (lane->stop_notice && !lane->stop_notice_sent) {
+        lane->stop_notice_sent = 1;
+        lane->stop_notice(lane->stop_notice_opaque);
+    }
 
     if (abandon_queued_data && lane->queued) {
         const size_t abandoned = lane->queued;
@@ -1508,7 +1517,12 @@ void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
         ActorLane* lane = &s->actors[i];
         if (lane->spawned && !lane->retired)
             lane->requested_terminal_kind = ORES_NATIVE_TERMINATION_RUNTIME_RETIRED;
+        const int first_stop = lane->spawned && !lane->retired;
         lane->retired = 1;
+        if (first_stop && lane->stop_notice && !lane->stop_notice_sent) {
+            lane->stop_notice_sent = 1;
+            lane->stop_notice(lane->stop_notice_opaque);
+        }
         if (lane->spawned) {
             if (ores_execution_phase(&lane->authority) != ORES_EXEC_STOPPING
                 && ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED)
@@ -1559,6 +1573,45 @@ int ores_native_actor_scheduler_is_stopping_v1(
     unlock(s);
     return stopping;
 }
+
+/* A single registered observer is sufficient for the scheduler-level
+ * RequestLocal registry. Registration/unregistration and STOP notification
+ * all arbitrate under the scheduler mutex. Callback must never reenter it. */
+int ores_native_actor_scheduler_register_stop_notice_v1(
+        OresNativeActorScheduler* s, OresNativeActorRef actor,
+        OresNativeActorStopNoticeV1 notice, void* opaque) {
+    if (!s || !notice || !opaque) return 0;
+    lock(s);
+    int ok = !s->retired && matching(s, actor)
+        && !s->actors[actor.actor_slot].retired
+        && !s->actors[actor.actor_slot].stop_notice;
+    if (ok) {
+        ActorLane* lane = &s->actors[actor.actor_slot];
+        lane->stop_notice = notice;
+        lane->stop_notice_opaque = opaque;
+        lane->stop_notice_sent = 0;
+    }
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_unregister_stop_notice_v1(
+        OresNativeActorScheduler* s, OresNativeActorRef actor,
+        OresNativeActorStopNoticeV1 notice, void* opaque) {
+    if (!s || !notice || !opaque) return 0;
+    lock(s);
+    int ok = matching(s, actor)
+        && s->actors[actor.actor_slot].stop_notice == notice
+        && s->actors[actor.actor_slot].stop_notice_opaque == opaque;
+    if (ok) {
+        ActorLane* lane = &s->actors[actor.actor_slot];
+        lane->stop_notice = NULL;
+        lane->stop_notice_opaque = NULL;
+        lane->stop_notice_sent = 0;
+    }
+    unlock(s);
+    return ok;
+}
+
 /* Actor-specific authority, not merely membership in the same worker pool. */
 int ores_native_actor_scheduler_is_current_actor(
         OresNativeActorScheduler* s, OresNativeActorRef actor) {
