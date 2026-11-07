@@ -98,6 +98,48 @@ if(BUILD_TESTING)
     else()
         message(STATUS "AttoLang GPU-G1 offline PTX gate NOT EXECUTED: no llc found")
     endif()
+    # G2 CUDA provider state machine: host-only fake-driver tests always run.
+    add_executable(oreslang-gpu-g2-provider-host-test
+        tests/gpu_g2_cuda_provider_host_test.cpp)
+    target_include_directories(oreslang-gpu-g2-provider-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-gpu-g2-provider-host-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_atto_gpu_g2_cuda_provider_HOST_ONLY
+        COMMAND oreslang-gpu-g2-provider-host-test)
+    set_tests_properties(native_atto_gpu_g2_cuda_provider_HOST_ONLY
+        PROPERTIES TIMEOUT 30)
+
+    # Physical CUDA execution is a separately governed, opt-in runner lane.
+    # Never claim hardware validation just because a CUDA SDK was installed.
+    option(ATTO_GPU_G2_ENABLE_PHYSICAL_CUDA_TESTS
+        "Enable separately provisioned NVIDIA CUDA hardware correctness tests" OFF)
+    if(ATTO_GPU_G2_ENABLE_PHYSICAL_CUDA_TESTS)
+        if(NOT TEST native_atto_gpu_g1_offline_ptx_no_device)
+            message(FATAL_ERROR
+                "GPU-G2 hardware tests require an NVPTX-capable llc offline PTX test")
+        endif()
+        find_package(CUDAToolkit REQUIRED)
+        if(NOT TARGET CUDA::cuda_driver)
+            message(FATAL_ERROR "GPU-G2 physical execution requires CUDA::cuda_driver")
+        endif()
+        add_executable(oreslang-gpu-g2-cuda-hardware-test
+            tests/gpu_g2_cuda_hardware_test.cpp)
+        target_include_directories(oreslang-gpu-g2-cuda-hardware-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(oreslang-gpu-g2-cuda-hardware-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+        target_link_libraries(oreslang-gpu-g2-cuda-hardware-test PRIVATE CUDA::cuda_driver)
+        add_test(NAME native_atto_gpu_g2_PHYSICAL_CUDA_SAXPY
+            COMMAND oreslang-gpu-g2-cuda-hardware-test
+                "${CMAKE_CURRENT_BINARY_DIR}/atto-gpu-g1-ptx/kernel.ptx")
+        set_tests_properties(native_atto_gpu_g2_PHYSICAL_CUDA_SAXPY
+            PROPERTIES TIMEOUT 300
+                DEPENDS native_atto_gpu_g1_offline_ptx_no_device
+                RESOURCE_LOCK gpu0)
+    else()
+        message(STATUS "GPU-G2 PHYSICAL CUDA test NOT EXECUTED (opt-in OFF)")
+    endif()
     # AttoLang native launch spelling: exact compiler-backed scalar control and
     # fail-closed GPU admission, not executed kernels or hardware parity.
     add_test(NAME native_atto_gpu_explicit_launch_source_admission
