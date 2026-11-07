@@ -102,7 +102,13 @@ struct Fixture {
     }
     RequestContextHandoffTableV1::Selection selection() {
         RequestContextHandoffTableV1::Selection s;
-        s.include(trace).include(budget);
+        {
+            // The caller-owned key alias dies BEFORE seal() or redeem().
+            // Selection must retain an owned typed key identity, not &alias.
+            RequestLocalKeyV1<std::string> ephemeral_alias = trace;
+            s.include(ephemeral_alias);
+        }
+        s.include(budget);
         return s;
     }
 };
