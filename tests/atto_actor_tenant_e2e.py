@@ -85,15 +85,19 @@ def main():
     root = Path(args.root).resolve(strict=True)
     fixtures = root / "tests" / "fixtures"
     runtime = root / "src" / "main" / "cpp" / "oreslang" / "runtime"
-    compiler = Path(args.compiler).resolve(strict=True)
+    compiler_argument = Path(args.compiler)
+    assert compiler_argument.is_file() and not compiler_argument.is_symlink(), (
+        "compiler path must not be a symlink")
+    compiler = compiler_argument.resolve(strict=True)
     assert compiler.name == "oreslang-llvmc", "not the source-owned compiler"
     assert os.access(compiler, os.X_OK), "compiler is not executable"
     # Prove the same compiler and native runtime source bytes were used by
     # the verifier throughout, not only after successful guest execution.
-    assert compiler.is_file() and not compiler.is_symlink(), "compiler path must be a regular file"
+    assert compiler.is_file(), "resolved compiler path must be a regular file"
     compiler_before = digest(compiler.read_bytes())
     runtime_sources = {name: runtime / name for name in RUNTIME_FILES}
-    assert all(path.is_file() and not path.is_symlink()
+    assert all(path.is_file() and not path.is_symlink() and
+               path.resolve(strict=True).is_relative_to(root)
                for path in runtime_sources.values()), "runtime C input escaped source tree"
     runtime_before = {name: digest(path.read_bytes())
                       for name, path in runtime_sources.items()}
