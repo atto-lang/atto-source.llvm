@@ -111,7 +111,7 @@ public:
     bool finish_after_external_stop() {
         if (!scheduler_ ||
             ores_native_actor_scheduler_is_any_current_carrier_v1() ||
-            ores_native_actor_scheduler_poll_ready(scheduler_, actor_))
+            !ores_native_actor_scheduler_is_stopping_v1(scheduler_, actor_))
             return false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
