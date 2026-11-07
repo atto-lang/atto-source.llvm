@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+head="$(git rev-parse HEAD)"
+tree="$(git rev-parse 'HEAD^{tree}')"
+if [[ -n "${EXPECTED_GPU_HEAD_SHA:-}" && "$head" != "$EXPECTED_GPU_HEAD_SHA" ]]; then
+  echo "GPU_SOURCE_MIR_FAIL: wrong source head" >&2
+  exit 1
+fi
+echo "evidence_class=HOST_ONLY_SOURCE_MIR"
+echo "source_head=$head"
+echo "source_tree=$tree"
+echo "compiler_guest_executed=false"
+echo "physical_gpu_executed=false"
+for path in \
+  src/main/cpp/oreslang/frontend/Parser.cpp \
+  src/main/cpp/oreslang/frontend/GpuLaunchSourceMir.hpp \
+  tests/gpu_source_launch_mir_test.cpp \
+  tests/atto_gpu_explicit_launch_admission.cmake; do
+  expected="$(git rev-parse "HEAD:$path")"
+  observed="$(git hash-object "$path")"
+  [[ "$expected" == "$observed" ]] || { echo "GPU_SOURCE_MIR_FAIL: blob mismatch $path" >&2; exit 1; }
+  echo "blob:$path:$observed"
+done
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+"${CXX:-c++}" --version | head -n1
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+  -Isrc/main/cpp tests/gpu_source_launch_mir_test.cpp -o "$work/gpu-source-mir"
+"$work/gpu-source-mir"
+echo "GPU_SOURCE_MIR_HOST_PASS: production Parser.cpp not compiler-executed by this script"
