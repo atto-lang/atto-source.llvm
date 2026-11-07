@@ -306,6 +306,15 @@ public:
         return committed;
     }
 
+    // CONTROL-plane polling hook for an actor-wide lifecycle reactor.
+    // Unlike wait_closed_quiescent(), this never waits for a pinned read or
+    // precommit value. The reactor can therefore progress sibling actors
+    // while one actor's earlier operation remains suspended.
+    bool closed_and_quiescent_now() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return !open_ && in_flight_ == 0;
+    }
+
     bool close() noexcept {
         std::unordered_map<std::uint64_t, std::shared_ptr<CellBase>> retired;
         {
