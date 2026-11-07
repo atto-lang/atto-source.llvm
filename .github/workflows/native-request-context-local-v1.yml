@@ -97,8 +97,8 @@ jobs:
             -Isrc/main/cpp tests/native_request_actor_lifecycle_guard_v1_test.cpp \
             "$tmp/scheduler.o" -o "$tmp/request-lifecycle"
           "$tmp/request-lifecycle" | tee "$tmp/request-lifecycle-cases.log"
-          test "$(grep -c '^ACTOR_LIFECYCLE_PASS ' "$tmp/request-lifecycle-cases.log")" = "38"
-          grep -qx 'ACTOR_LIFECYCLE_GUARD_38_HOST_CASES_PASS' "$tmp/request-lifecycle-cases.log"
+          test "$(grep -c '^ACTOR_LIFECYCLE_PASS ' "$tmp/request-lifecycle-cases.log")" = "49"
+          grep -qx 'ACTOR_LIFECYCLE_GUARD_49_HOST_CASES_PASS' "$tmp/request-lifecycle-cases.log"
           "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
             -Isrc/main/cpp tests/native_request_stop_cancel_v1_test.cpp \
             "$tmp/scheduler.o" -o "$tmp/request-stop-cancel"
