@@ -306,7 +306,7 @@ public:
                     op.kind == OpKind::ReleaseRead || op.kind == OpKind::ReleaseWrite)
                 throw std::logic_error("mixed LLVM source loans, snapshot or suspension unsupported");
 
-        code_ = "; typed mixed i64/bool/f64 SoA MIR, local owner, no row handles\n";
+        code_ = "; typed mixed scalar SoA MIR (2/3 columns), local owner, no row handles\n";
         code_ += "declare void @llvm.trap()\n";
         code_ += "define i32 @main() {\nentry:\n";
         emit("%length = alloca i64"); emit("store i64 0, ptr %length");
