@@ -42,7 +42,8 @@ inline Graph lower_explicit_last_use_evidence_v1(
         if (!unproven.insert(*op.loan_id).second)
             violation(op.place, "duplicate lexical last-use loan identity");
     }
-    if (expected.size() > 4096 || proofs.size() > 4096 || proofs.size() != unproven.size())
+    if (operations.size() > 4096 || proofs.size() > 4096 ||
+            proofs.size() != unproven.size())
         throw std::runtime_error(
             "ownership violation: incomplete last-use compiler provenance");
     for (const auto& proof : proofs) {
