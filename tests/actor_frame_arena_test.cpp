@@ -28,6 +28,9 @@ int main() {
         require(!second.read(*bottom, 0, &observed, sizeof observed),
                 "foreign actor read first actor's frame");
         require(!second.enter(5), "reentrant actor admission on same carrier");
+        ActorFrameArena<1, 8> another_capacity;
+        require(!another_capacity.enter(7),
+                "nested actor admission crossed template capacity domains");
         require(!first.retire_quiesced(), "retired while a physical turn was active");
         require(first.suspend(), "await failed to preserve logical stack");
         require(!first.read(*bottom, 0, &observed, sizeof observed),
