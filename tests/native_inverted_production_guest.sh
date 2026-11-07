@@ -141,20 +141,31 @@ done
 # Canonical cross-backend candidate: explicit row reuse after swap-delete.
 # This validates dense-index behavior only, not stale generation-fenced handles.
 if [[ ! -f "$contracts/swap-reuse.atto" ||
+      ! -f "$contracts/column-write-42.atto" ||
       ! -f "$contracts/removed-index-trap.atto" ]]; then
     echo "FAIL: canonical DOP v1 fixture corpus absent" >&2
     exit 1
 fi
 swap_fixture_sha="$(hash_file "$contracts/swap-reuse.atto")" || exit 1
+write_fixture_sha="$(hash_file "$contracts/column-write-42.atto")" || exit 1
 trap_fixture_sha="$(hash_file "$contracts/removed-index-trap.atto")" || exit 1
-"$compiler" "$contracts/swap-reuse.atto" > "$tmp/reuse.ll"
-audit_ir "$tmp/reuse.ll"
-for optimization in -O0 -O2; do
-    "$clang" "$optimization" -x ir "$tmp/reuse.ll" -o "$tmp/reuse"
-    expect_native_exit_42 "$tmp/reuse" "swap-reuse.atto" "$optimization"
-    printf 'DOP_NATIVE_CASE=%s OPT=%s SOURCE_SHA256=%s IR_SHA256=%s BINARY_SHA256=%s EXIT=42\n' \
-        swap-reuse.atto "$optimization" "$swap_fixture_sha" \
-        "$(hash_file "$tmp/reuse.ll")" "$(hash_file "$tmp/reuse")"
+# The exact same column-write source blob is committed to the Java compiler
+# fixture corpus. This is a native guest test, not a Java backend pass.
+for canonical in swap-reuse.atto column-write-42.atto; do
+    canonical_sha="$(hash_file "$contracts/$canonical")" || exit 1
+    "$compiler" "$contracts/$canonical" > "$tmp/canonical.ll"
+    audit_ir "$tmp/canonical.ll"
+    for optimization in -O0 -O2; do
+        "$clang" "$optimization" -x ir "$tmp/canonical.ll" -o "$tmp/canonical"
+        expect_native_exit_42 "$tmp/canonical" "$canonical" "$optimization"
+        if [[ "$(hash_file "$contracts/$canonical")" != "$canonical_sha" ]]; then
+            echo "FAIL: canonical source changed during native test" >&2
+            exit 1
+        fi
+        printf 'DOP_NATIVE_CASE=%s OPT=%s SOURCE_SHA256=%s IR_SHA256=%s BINARY_SHA256=%s EXIT=42\n' \
+            "$canonical" "$optimization" "$canonical_sha" \
+            "$(hash_file "$tmp/canonical.ll")" "$(hash_file "$tmp/canonical")"
+    done
 done
 
 # A guest read past logical length is dynamically guarded, rather than
@@ -276,10 +287,11 @@ if [[ "$(hash_file "$compiler")" != "$compiler_sha" ||
       "$(hash_file "$clang_path")" != "$clang_sha" ||
       "$(hash_file "$auditor")" != "$auditor_sha" ||
       "$(hash_file "$contracts/swap-reuse.atto")" != "$swap_fixture_sha" ||
+      "$(hash_file "$contracts/column-write-42.atto")" != "$write_fixture_sha" ||
       "$(hash_file "$contracts/removed-index-trap.atto")" != "$trap_fixture_sha" ]]; then
     echo 'FAIL: inverted native toolchain or canonical fixture changed during gate' >&2
     exit 1
 fi
-printf 'DOP_SOURCE_COMPILER_SHA256=%s\nDOP_CLANG_SHA256=%s\nDOP_IR_AUDITOR_SHA256=%s\nDOP_SWAP_FIXTURE_SHA256=%s\nDOP_TRAP_FIXTURE_SHA256=%s\n' \
-    "$compiler_sha" "$clang_sha" "$auditor_sha" "$swap_fixture_sha" "$trap_fixture_sha"
-printf 'PASS: production .atto -> typed MIR -> no-GC-screened IR, 10 bounded native exit-42 (O0/O2), 4 bounds signals, 5 source rejects, 5 mode rejects, known-GC denied (linked/FFI audit still unproven)\n'
+printf 'DOP_SOURCE_COMPILER_SHA256=%s\nDOP_CLANG_SHA256=%s\nDOP_IR_AUDITOR_SHA256=%s\nDOP_SWAP_FIXTURE_SHA256=%s\nDOP_WRITE_FIXTURE_SHA256=%s\nDOP_TRAP_FIXTURE_SHA256=%s\n' \
+    "$compiler_sha" "$clang_sha" "$auditor_sha" "$swap_fixture_sha" "$write_fixture_sha" "$trap_fixture_sha"
+printf 'PASS: production .atto -> typed MIR -> no-GC-screened IR, 12 bounded native exit-42 (O0/O2), 4 bounds signals, 5 source rejects, 5 mode rejects, known-GC denied (linked/FFI audit still unproven)\n'
