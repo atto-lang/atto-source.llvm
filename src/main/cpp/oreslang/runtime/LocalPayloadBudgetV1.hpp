@@ -80,7 +80,8 @@ struct LocalUnboundedPayloadV1<std::optional<T>>
                          !std::is_enum_v<T>> {};
 template <typename A, typename B>
 struct LocalUnboundedPayloadV1<std::pair<A, B>>
-    : std::bool_constant<!std::is_arithmetic_v<A> || !std::is_arithmetic_v<B>> {};
+    : std::bool_constant<(!std::is_arithmetic_v<A> && !std::is_enum_v<A>) ||
+                         (!std::is_arithmetic_v<B> && !std::is_enum_v<B>)> {};
 template <typename... T>
 struct LocalUnboundedPayloadV1<std::tuple<T...>>
     : std::bool_constant<((!std::is_arithmetic_v<T> && !std::is_enum_v<T>) || ...)> {};
