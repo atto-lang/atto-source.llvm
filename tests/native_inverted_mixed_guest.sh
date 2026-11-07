@@ -101,6 +101,12 @@ for file in positive-mixed-swap.atto positive-permuted-columns.atto; do
     fi
     grep -Fq "$required_f64" "$tmp/guest.ll" ||
         { echo "FAIL: mixed f64 source payload lost in native IR: $file" >&2; exit 1; }
+    if [[ "$file" == "positive-permuted-columns.atto" ]]; then
+        # A real -0.0 source literal must retain the IEEE sign bit when
+        # assigned to an active f64 column. Only *inactive* -0.0 is forbidden.
+        grep -Fq '0x8000000000000000' "$tmp/guest.ll" ||
+            { echo 'FAIL: active f64 negative-zero sign bit lost in LLVM IR' >&2; exit 1; }
+    fi
     for opt in -O0 -O2; do
         "$clang" "$opt" -x ir "$tmp/guest.ll" -o "$tmp/guest"
         native_status "$tmp/guest" exit42
