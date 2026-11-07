@@ -103,6 +103,27 @@ jobs:
           test "$(grep -c '^HANDOFF_REGISTRY_CASE_PASS ' "$tmp/request-handoff-registry.log")" = "30"
           grep -qx 'HANDOFF_REGISTRY_30_HOST_CASES_PASS' "$tmp/request-handoff-registry.log"
           grep -qx 'REQUEST_CONTEXT_HANDOFF_V1_ALL_PASS' "$tmp/request-handoff-registry.log"
+          # Negative mutation: bypass derived registration. An unattached
+          # recipient must no longer be rejectable; the regression MUST fail.
+          if [[ "$MODE" == optimized ]]; then
+            header=src/main/cpp/oreslang/runtime/RequestContextHandoffV1.hpp
+            test "$(grep -Fc 'lifecycle_registry_->open_registered(identity, derived)' "$header")" = 1
+            mkdir -p "$tmp/mutated/oreslang/runtime"
+            sed 's/lifecycle_registry_->open_registered(identity, derived)/RequestContextLocalV1::open(identity, derived)/g' \
+              "$header" > "$tmp/mutated/oreslang/runtime/RequestContextHandoffV1.hpp"
+            "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+              -I"$tmp/mutated" -Isrc/main/cpp \
+              tests/native_request_context_handoff_v1_test.cpp \
+              "$tmp/scheduler.o" -o "$tmp/handoff-no-registry-mutant"
+            set +e
+            timeout 90s "$tmp/handoff-no-registry-mutant" > "$tmp/handoff-mutant.log" 2>&1
+            mutation_status=$?
+            set -e
+            test "$mutation_status" -ne 0
+            grep -Fq 'HANDOFF_REGISTRY_CASE_FAIL 14_unattached_B_redeem_fail_closed' \
+              "$tmp/handoff-mutant.log"
+            printf 'HANDOFF_DERIVED_ADMISSION_MUTATION_DETECTED compiler=%s\n' "$CXX"
+          fi
           "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
             -Isrc/main/cpp tests/native_request_actor_lifecycle_guard_v1_test.cpp \
             "$tmp/scheduler.o" -o "$tmp/request-lifecycle"
