@@ -6,6 +6,7 @@ on:
       - "src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp"
       - "src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp"
       - "tests/native_context_domains_v1_test.cpp"
+      - "tests/native_local_read_revocation_v1_test.cpp"
       - "tests/native_local_payload_budget_v1_test.cpp"
       - "CMakeLists.txt"
       - ".github/workflows/native-local-context-domains-v1.yml"
@@ -37,10 +38,11 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp)" = "b217b912cff0b1e01798f4079ee31b5e1dc5da01"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/LocalContextDomainsV1.hpp)" = "f6446eaffc28cda347803351763560d69aa68db4"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp)" = "7b79138951aa878fe2ee43cfcef21277cb68b256"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp)" = "bcecb54e7750fca7ef84010a2fa3f66e6bf61902"
-          test "$(git hash-object tests/native_context_domains_v1_test.cpp)" = "f73411cfba577ea54bf61c6c4225d73f34fc0a91"
+          test "$(git hash-object tests/native_context_domains_v1_test.cpp)" = "c9fd993bd78e4a6b2bd27c384fff43276ca915dd"
+          test "$(git hash-object tests/native_local_read_revocation_v1_test.cpp)" = "760a103e159d35d566420e8c0a82532a11f9e0d0"
           test "$(git hash-object tests/native_local_payload_budget_v1_test.cpp)" = "25dec8d5f15bafbc6d28d73f94c9027f21ca9ac5"
           printf 'source_head=%s\nsource_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
       - name: Compile and execute local-context native regression
@@ -65,6 +67,10 @@ jobs:
             -Isrc/main/cpp tests/native_context_domains_v1_test.cpp \
             -o "$work/local-context-test"
           "$work/local-context-test"
+          "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp tests/native_local_read_revocation_v1_test.cpp \
+            -o "$work/local-read-revocation-test"
+          "$work/local-read-revocation-test"
           "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
             -Isrc/main/cpp tests/native_local_payload_budget_v1_test.cpp \
             -o "$work/local-payload-test"
