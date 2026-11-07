@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Synthetic hostile CTest JUnit mutation suite (source-free, NOT guest proof)."""
 import copy
+import hashlib
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -179,6 +180,91 @@ class MixedCertificateMutationTests(unittest.TestCase):
         for raw in (b"", b"<testsuite", b"<testsuite></testcase>"):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 verify_junit(raw)
+
+
+    def test_verified_digest_uses_exact_admitted_bytes(self):
+        document = xml(canonical())
+        result = verify_junit(document)
+        self.assertEqual(result["junit_sha256"],
+                         hashlib.sha256(document).hexdigest())
+
+    def test_semantically_equivalent_xml_has_distinct_certified_hash(self):
+        original = xml(canonical())
+        altered = original + b"\n"
+        self.assertEqual(verify_junit(original)["verified_tests"], 5)
+        self.assertEqual(verify_junit(altered)["verified_tests"], 5)
+        self.assertNotEqual(verify_junit(original)["junit_sha256"],
+                            verify_junit(altered)["junit_sha256"])
+        # The workflow's step output must only admit one of these digests.
+
+    def test_suite_zero_time_accepted_as_real_ctest_rounding(self):
+        root = canonical()
+        root.set("time", "0")
+        self.assertEqual(verify_junit(xml(root))["verified_tests"], 5)
+
+    def test_suite_missing_time_accepted(self):
+        root = canonical()
+        root.attrib.pop("time")
+        self.assertEqual(verify_junit(xml(root))["verified_tests"], 5)
+
+    def test_suite_nan_infinity_denied(self):
+        for value in ("nan", "NaN", "Infinity", "-inf"):
+            with self.subTest(value=value):
+                root = canonical()
+                root.set("time", value)
+                rejection(root)
+
+    def test_suite_negative_or_excessive_seconds_denied(self):
+        for value in ("-0.1", "-1", "3600.01"):
+            with self.subTest(value=value):
+                root = canonical()
+                root.set("time", value)
+                rejection(root)
+
+    def test_suite_malformed_duration_denied(self):
+        root = canonical()
+        root.set("time", "not-a-time")
+        rejection(root)
+
+    def test_ctest_case_class_matches_name(self):
+        root = canonical()
+        for case in root:
+            case.set("classname", case.get("name"))
+        self.assertEqual(verify_junit(xml(root))["verified_tests"], 5)
+
+    def test_wrong_ctest_class_name_rejected(self):
+        root = canonical()
+        root[0].set("classname", "forged_other_test")
+        rejection(root)
+
+    def test_unexpected_testcase_attribute_rejected(self):
+        root = canonical()
+        root[0].set("proof", "approved")
+        rejection(root)
+
+    def test_other_native_marker_replayed_in_mixed_guest_denied(self):
+        root = canonical()
+        mixed = next(case for case in root if case.get("name") == MIXED)
+        mixed.find("system-out").text += LEGACY_MARKER + "\n"
+        rejection(root)
+
+    def test_other_native_marker_replayed_in_legacy_guest_denied(self):
+        root = canonical()
+        legacy = next(case for case in root if case.get("name") == LEGACY)
+        legacy.find("system-out").text += MIXED_MARKER + "\n"
+        rejection(root)
+
+    def test_noncanonical_suite_error_counter_denied(self):
+        for value in ("01", "-0", "NaN", "+0", "0.0"):
+            with self.subTest(value=value):
+                root = canonical()
+                root.set("errors", value)
+                rejection(root)
+
+    def test_case_classname_may_be_absent_in_synthetic_reference(self):
+        root = canonical()
+        self.assertTrue(all("classname" not in case.attrib for case in root))
+        self.assertEqual(verify_junit(xml(root))["verified_tests"], 5)
 
 
 if __name__ == "__main__":
