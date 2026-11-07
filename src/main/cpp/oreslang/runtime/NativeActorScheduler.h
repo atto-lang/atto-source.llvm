@@ -274,7 +274,7 @@ int ores_native_actor_scheduler_is_any_current_carrier_v1(void);
 // APIs, suspend, block, acquire external mutexes, or run destructors.
 // This is NOT a guest-callable API or a generic executor.
 typedef int (*OresNativeActorBoundedCommitV1)(void* opaque);
-int ores_native_actor_scheduler_commit_if_running_v1(
+int ores_native_actor_scheduler_commit_if_live_v1(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
     OresNativeActorBoundedCommitV1 commit, void* opaque);
 
