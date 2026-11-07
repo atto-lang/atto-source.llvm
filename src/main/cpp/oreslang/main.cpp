@@ -1,6 +1,7 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/types/InvertedProductionSourceMir.hpp"
+#include "oreslang/types/InvertedMixedGuestLlvm.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ModuleLoader.hpp"
@@ -435,10 +436,14 @@ int main(int argc, char** argv) {
                     allocator_provider_seen)
                 throw std::runtime_error(
                     "production inverted i64 slice requires plain host compilation without extra owner, RT or target flags");
-            const auto verified = oreslang::dop::mir::verify_production_inverted_i64(ast);
-            const auto llvm_ir = oreslang::dop::mir::emit_native_i64_pair_ir(
-                verified.mir, verified.operands);
-            std::cout << llvm_ir;
+            if (ast.inverted_main->three_scalar) {
+                const auto verified = oreslang::dop::mir::verify_production_inverted_mixed(ast);
+                std::cout << oreslang::dop::mir::emit_mixed_source_ir(verified);
+            } else {
+                const auto verified = oreslang::dop::mir::verify_production_inverted_i64(ast);
+                std::cout << oreslang::dop::mir::emit_native_i64_pair_ir(
+                    verified.mir, verified.operands);
+            }
             std::cout.flush();
             if (coreLog) coreLog->dump(stderr);
             return 0;
