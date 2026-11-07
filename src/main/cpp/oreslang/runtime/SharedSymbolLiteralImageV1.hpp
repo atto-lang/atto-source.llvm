@@ -3,6 +3,7 @@
 #include "oreslang/runtime/SymbolPropertyLayoutV1.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -111,18 +112,23 @@ public:
         const std::size_t new_live = retired_.size() + (keep_old ? 1u : 0u) + 1u;
         if (new_live > MAX_LIVE_GENERATIONS)
             throw std::logic_error("too many live Symbol image generations");
-        if (next_generation_ == std::numeric_limits<std::uint64_t>::max())
-            throw std::overflow_error("Symbol image generation exhausted");
-
         // Reserve/allocate before changing current, so failure cannot expose
         // a partially staged generation.
         if (keep_old) retired_.reserve(retired_.size() + 1);
+        // Store-scoped sequence counters would allow a generation number from
+        // an unrelated store to match by accident (cross-store ABA).
+        // Allocate unique VM-local epochs, never exposed as capabilities.
+        std::uint64_t candidate = next_global_generation_.load();
+        for (;;) {
+            if (candidate == std::numeric_limits<std::uint64_t>::max())
+                throw std::overflow_error("Symbol image generation exhausted");
+            if (next_global_generation_.compare_exchange_weak(candidate, candidate + 1)) break;
+        }
         auto sealed = std::shared_ptr<const Image>(new Image(
-            next_generation_, std::move(values), std::move(positions), bytes));
+            candidate, std::move(values), std::move(positions), bytes));
 
         Pin previous = current_;
         current_ = std::move(sealed);
-        ++next_generation_;
         if (keep_old) retired_.push_back(previous);
         return current_->generation();
     }
@@ -166,7 +172,7 @@ private:
     mutable std::mutex lock_;
     Pin current_;
     std::vector<std::weak_ptr<const Image>> retired_;
-    std::uint64_t next_generation_ = 1;
+    inline static std::atomic<std::uint64_t> next_global_generation_{1};
     bool closed_ = false;
 };
 
