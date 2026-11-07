@@ -117,7 +117,10 @@ public:
             state_ = std::make_shared<State>(State{m,k,true,&loader_});
         } catch (...) {
             try { loader_.unload_module(m); }
-            catch (...) { /* fail-closed: caller must quarantine CUDA context */ }
+            catch (...) {
+                throw std::runtime_error(
+                    "GPU-G1-MODULE-008: failed cleanup after unresolved kernel; quarantine CUDA context");
+            }
             throw;
         }
     }
