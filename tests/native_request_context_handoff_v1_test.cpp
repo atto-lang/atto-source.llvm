@@ -92,7 +92,8 @@ struct Fixture {
             request = RequestContextLocalV1::open(
                 {7, 8, 9001, 1, w.a}, request_cancel);
             table = std::make_unique<RequestContextHandoffTableV1>(
-                w.scheduler, capacity);
+                w.scheduler, capacity,
+                RequestContextHandoffTableV1::UnregisteredHostOnly{});
         }
         CHECK(request);
     }
