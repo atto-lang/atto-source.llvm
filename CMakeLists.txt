@@ -4364,6 +4364,23 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set_tests_properties(native_epoll_reactor_manager_rt_preallocated PROPERTIES TIMEOUT 20)
 endif()
 
+# Host-only actor-shared TCP/HTTP pool over real loopback sockets (POSIX).
+# NOT compiled .atto guest networking.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-actor-shared-tcp-pool-test
+        tests/actor_shared_tcp_pool_test.cpp)
+    target_include_directories(oreslang-actor-shared-tcp-pool-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-shared-tcp-pool-test PRIVATE cxx_std_20)
+    target_link_libraries(oreslang-actor-shared-tcp-pool-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-actor-shared-tcp-pool-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME actor_shared_tcp_pool_loopback
+        COMMAND oreslang-actor-shared-tcp-pool-test)
+    set_tests_properties(actor_shared_tcp_pool_loopback PROPERTIES TIMEOUT 120)
+endif()
+
 # Native RT profile has no pthread creation after VM preparation. Existing
 # throughput open remains metadata-only until first runnable admission.
 if(BUILD_TESTING)
