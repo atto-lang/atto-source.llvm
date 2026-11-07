@@ -80,23 +80,30 @@ jobs:
           cmake --build build --parallel 2 --target \
             oreslang-llvmc \
             oreslang-inverted-mixed-mir-test \
+            oreslang-inverted-production-mir-test \
             oreslang-native-inverted-struct-ast-test \
             oreslang-no-gc-ir-audit-build
           test -x build/oreslang-llvmc
           test -x build/oreslang-inverted-mixed-mir-test
+          test -x build/oreslang-inverted-production-mir-test
+          test -x build/oreslang-native-inverted-struct-ast-test
           test -x build/oreslang-no-gc-ir-audit
 
       - name: Verify required CTest cases are actually registered
         shell: bash
         run: |
           set -euo pipefail
-          ctest --test-dir build -N -R '^(inverted_mixed_source_mir_cpp17|native_inverted_struct_schema_ast|native_inverted_mixed_source_to_native)$' > build-evidence/inventory.txt
+          ctest --test-dir build -N -R '^(inverted_mixed_source_mir_cpp17|inverted_production_source_mir_cpp17|native_inverted_struct_schema_ast|native_inverted_mixed_source_to_native|native_inverted_production_source_to_native)$' > build-evidence/inventory.txt
           cat build-evidence/inventory.txt
           python3 - <<'PY'
           import pathlib, re
           cases = re.findall(r'Test\s+#\d+:\s+(\S+)',pathlib.Path('build-evidence/inventory.txt').read_text())
-          expected={'inverted_mixed_source_mir_cpp17','native_inverted_struct_schema_ast','native_inverted_mixed_source_to_native'}
-          if len(cases)!=3 or set(cases)!=expected:
+          expected={'inverted_mixed_source_mir_cpp17',
+                    'inverted_production_source_mir_cpp17',
+                    'native_inverted_struct_schema_ast',
+                    'native_inverted_mixed_source_to_native',
+                    'native_inverted_production_source_to_native'}
+          if len(cases)!=5 or set(cases)!=expected:
               raise SystemExit(f'FAIL: wrong DOP mixed native CTest inventory: {cases}')
           PY
 
@@ -106,7 +113,7 @@ jobs:
           set -euo pipefail
           ctest --test-dir build --output-on-failure --timeout 180 \
             --output-junit "$GITHUB_WORKSPACE/build-evidence/mixed-ctest.xml" \
-            -R '^(inverted_mixed_source_mir_cpp17|native_inverted_struct_schema_ast|native_inverted_mixed_source_to_native)$'
+            -R '^(inverted_mixed_source_mir_cpp17|inverted_production_source_mir_cpp17|native_inverted_struct_schema_ast|native_inverted_mixed_source_to_native|native_inverted_production_source_to_native)$'
 
       - name: Qualify exact-head execution receipts
         shell: bash
@@ -117,9 +124,13 @@ jobs:
           root=pathlib.Path('.')
           tree=ET.parse(root/'build-evidence/mixed-ctest.xml').getroot()
           cases=list(tree.iter('testcase'))
-          expected={'inverted_mixed_source_mir_cpp17','native_inverted_struct_schema_ast','native_inverted_mixed_source_to_native'}
+          expected={'inverted_mixed_source_mir_cpp17',
+                    'inverted_production_source_mir_cpp17',
+                    'native_inverted_struct_schema_ast',
+                    'native_inverted_mixed_source_to_native',
+                    'native_inverted_production_source_to_native'}
           observed=[x.attrib.get('name') for x in cases]
-          if len(observed)!=3 or set(observed)!=expected:
+          if len(observed)!=5 or set(observed)!=expected:
               raise SystemExit(f'FAIL: missing actual CTest case: {observed}')
           if any(x.find('failure') is not None or x.find('skipped') is not None or
                  x.find('error') is not None for x in cases):
@@ -134,6 +145,13 @@ jobs:
                         '5 rejects; IR no-GC screened (not linked/FFI proof)')
           if exact_marker not in text:
               raise SystemExit('FAIL: no exact executed mixed native guest marker in JUnit result')
+          legacy=next(x for x in cases
+                      if x.attrib.get('name')=='native_inverted_production_source_to_native')
+          legacy_marker=('PASS: production .atto -> typed MIR -> no-GC-screened IR, '
+                         '10 native exit-42 (O0/O2), 4 bounds signals, 5 source rejects, '
+                         '5 mode rejects, known-GC denied')
+          if legacy_marker not in ' '.join(legacy.itertext()):
+              raise SystemExit('FAIL: missing actual legacy two-i64 native guest marker')
           head=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
           source_tree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip()
           if head != os.environ['EXPECTED_HEAD']:
@@ -150,6 +168,9 @@ jobs:
                  'src/main/cpp/oreslang/main.cpp',
                  'tests/native_inverted_mixed_guest.sh',
                  'tests/native_inverted_mixed_mir_test.cpp',
+                 'tests/native_inverted_production_guest.sh',
+                 'tests/native_inverted_production_mir_test.cpp',
+                 'src/main/cpp/oreslang/types/InvertedProductionSourceMir.hpp',
                  '.github/workflows/dop-inverted-mixed-native.yml',
                  'CMakeLists.txt',
                  'build/oreslang-no-gc-ir-audit',
@@ -162,6 +183,7 @@ jobs:
                        evidence='COMPILER_BACKED_MIXED_ATTO_GUEST_EXECUTED',
                        ctest_cases=observed,
                        native_success_marker=exact_marker,
+                       legacy_success_marker=legacy_marker,
                        files={p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in paths})
           out=root/'build-evidence/mixed-native-receipt.json'
           out.write_text(json.dumps(receipt,sort_keys=True,indent=2)+'\n')
