@@ -370,3 +370,41 @@ is not itself proof of full language or backend parity.
   tenant cleanup workers, typed guest descriptors, panic/restart/hot-upgrade
   integration, real sanitizer execution and compiled .atto parity remain
   unproven. No unauthorized private-source mirroring is permitted.
+
+
+## Handoff-derived registry and canonical scoped-local reconciliation (2026-11-07)
+
+- Merged LLVM PR #1391 provides the canonical HOST-ONLY
+  `ScopedLocalStorageV1.hpp` ActorLocal/TaskLocal/ThreadLocal family.
+  Its header was imported into this branch byte-identically with upstream
+  blob `9b6fa46743091dd4bc8dd90da1f6641633b85fde`.
+- The older `LocalContextDomainsV1.hpp` remains characterization-only and
+  now uses `LegacyActorLocalKeyV1`, `LegacyTaskLocalKeyV1` and
+  `LegacyThreadLocalKeyV1`; the canonical alias names remain owned solely
+  by the merged header. All existing legacy test/adapter consumers updated.
+  A 17-case co-inclusion test is compiled in the GCC/Clang workflow and
+  registered with native CTest; incompatible key identities never convert.
+- `RequestContextHandoffTableV1` has a lifecycle-aware constructor:
+  derived RequestLocal must be attached through the recipient actor's
+  generation-fenced `NativeRequestLifecycleRegistryV1::open_registered`
+  before redemption returns a value. Unattached/stopped recipient registration
+  fails closed. The old unregistered host path requires the explicit
+  `UnregisteredHostOnly` tag and cannot be exposed to guest code.
+- Added 30 named host recipient-lifecycle assertions: valid handoff and
+  recipient STOP, unattached-recipient denial, original-request cancel
+  propagation, independent sender STOP/sibling survival, quota reclamation.
+  A negative mutation replaces registry admission with raw `open`; it
+  must fail the unattached-recipient assertion in optimized CI.
+- Together with earlier 70 registry, 17 C STOP notice, 49 lifecycle,
+  38 STOP/cancel and 45 scoped assertions, these add up to **266 named**
+  host-source assertions (219 prior + 30 handoff + 17 coexistence).
+  None establishes executed native, sanitizer or compiler-backed `.atto`
+  evidence while runner admission remains broken.
+- Merge status is NOT resolved: at least nine main-vs-PR paths differ
+  (parser, codegen, scheduler, DATA/WAKE, RequestLocal and CMake). See
+  `docs/ATTO_SCOPED_LOCAL_MERGE_RECONCILIATION_20261107.md`.
+- Outstanding release gate: pending handoff tickets need automatic
+  lifecycle-managed revocation when the intended recipient STOPs.
+  A currently unredeemed ticket is bounded by table capacity and the
+  explicit `revoke_recipient`/`sweep` APIs but is not automatically
+  closed by the registry. Do not claim complete universal cleanup yet.
