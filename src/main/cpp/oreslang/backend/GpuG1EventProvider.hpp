@@ -131,12 +131,12 @@ public:
 
         // Event is created BEFORE claiming loans or enqueuing a kernel.
         // Any error after admission conservatively quarantines the device.
-        auto event = driver_.create_event();
         std::vector<Registry::View> views{
             {launch.x.allocation, launch.x.offset_bytes, bytes, Registry::Access::Read},
             {launch.y.allocation, launch.y.offset_bytes, bytes, Registry::Access::Read},
             {launch.out.allocation, launch.out.offset_bytes, bytes, Registry::Access::Write}
         };
+        auto event = driver_.create_event();
         Ticket ticket = 0;
         try {
             ticket = ledger_.provider_submit(launch.queue, views);
