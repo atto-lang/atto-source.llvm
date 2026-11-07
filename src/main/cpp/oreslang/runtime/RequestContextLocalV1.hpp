@@ -5,6 +5,7 @@
 // ActorLocal, and guest-visible capabilities are separate release gates.
 
 #include "oreslang/runtime/LocalValueAdmissionV1.hpp"
+#include "oreslang/runtime/LocalPayloadBudgetV1.hpp"
 #include "oreslang/runtime/NativeActorScheduler.h"
 #include "oreslang/runtime/TaskCancellation.hpp"
 
@@ -75,16 +76,21 @@ private:
 class RequestContextLocalV1 final
     : public std::enable_shared_from_this<RequestContextLocalV1> {
     struct CellBase {
+        explicit CellBase(std::size_t payload) : bytes(payload) {}
         virtual ~CellBase() = default;
+        const std::size_t bytes;
     };
     template <typename T>
     struct Cell final : CellBase {
-        explicit Cell(T value) : value(std::move(value)) {}
+        Cell(T value, std::size_t payload)
+            : CellBase(payload), value(std::move(value)) {}
         T value;
     };
 public:
     using Ptr = std::shared_ptr<RequestContextLocalV1>;
     static constexpr std::size_t max_slots = 32;
+    static constexpr std::size_t max_value_bytes = 1024;
+    static constexpr std::size_t max_bytes = 8192;
 
     static Ptr open(RequestIdentityV1 identity,
                     TaskCancellation::Ptr cancellation) {
@@ -122,27 +128,54 @@ public:
         return open_ && !cancellation_->is_cancelled();
     }
 
+    // Trusted-ingress one-shot binding to scheduler-minted original DATA mail.
+    // This identity is immutable once set; neither a later pooled-actor mail
+    // nor a wake callback may silently rebind an existing request.
+    bool bind_original_mail_once(std::uint64_t admitted_mail) {
+        if (!admitted_mail) return false;
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!open_ || cancellation_->is_cancelled()) return false;
+        if (!original_mail_sequence_) original_mail_sequence_ = admitted_mail;
+        return original_mail_sequence_ == admitted_mail;
+    }
+
+    std::size_t used_bytes() const noexcept {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return used_bytes_;
+    }
+
     template <typename T>
     bool set(const RequestLocalKeyV1<T>& key, T value) {
-        auto next = std::make_shared<Cell<T>>(std::move(value));
+        // Host-only measured payload limit; composite deep-size descriptors
+        // and compiler ownership checks remain mandatory for guest access.
+        const std::size_t bytes = local_measured_payload_bytes_v1(value);
+        if (bytes > max_value_bytes) return false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!open_ || cancellation_->is_cancelled()) return false;
+            auto found = slots_.find(key.id_);
+            const std::size_t old = found == slots_.end() ? 0 : found->second->bytes;
+            if ((found == slots_.end() && slots_.size() >= max_slots) ||
+                bytes > max_bytes - (used_bytes_ - old)) return false;
+        }
+        auto next = std::make_shared<Cell<T>>(std::move(value), bytes);
         std::shared_ptr<CellBase> previous;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (!open_ || cancellation_->is_cancelled())
-                return false;
+            if (!open_ || cancellation_->is_cancelled()) return false;
             auto found = slots_.find(key.id_);
+            const std::size_t old = found == slots_.end() ? 0 : found->second->bytes;
+            if ((found == slots_.end() && slots_.size() >= max_slots) ||
+                bytes > max_bytes - (used_bytes_ - old)) return false;
             if (found == slots_.end()) {
-                if (slots_.size() >= max_slots)
-                    return false;
                 slots_.emplace(key.id_, std::move(next));
             } else {
                 previous.swap(found->second);
                 found->second = std::move(next);
             }
+            used_bytes_ = used_bytes_ - old + bytes;
         }
-        // Drop replaced values outside the store mutex: user destructors must
-        // not reenter the mutex or run under a TaskCancellation graph lock.
-        previous.reset();
+        previous.reset(); // reentrant destructors never run with the scope locked
         return true;
     }
 
@@ -181,6 +214,7 @@ public:
             if (found == slots_.end())
                 return false;
             retired = std::move(found->second);
+            used_bytes_ -= retired->bytes;
             slots_.erase(found);
         }
         retired.reset();
@@ -194,6 +228,7 @@ public:
             if (!open_) return false;
             open_ = false;
             retired.swap(slots_);
+            used_bytes_ = 0;
         }
         // Host-owned request locals are destroyed after the closing fence and
         // outside the lock. Caller must fence child Tasks and pinned borrows
@@ -215,6 +250,8 @@ private:
     const TaskCancellation::Ptr cancellation_;
     mutable std::mutex mutex_;
     bool open_ = true;
+    std::uint64_t original_mail_sequence_ = 0;
+    std::size_t used_bytes_ = 0;
     std::unordered_map<std::uint64_t, std::shared_ptr<CellBase>> slots_;
     TaskCancellation::Subscription revocation_;
 };
