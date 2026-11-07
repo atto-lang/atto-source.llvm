@@ -178,6 +178,12 @@ void validate_native_scalar_types(const Program& program) {
                 if (left.kind == Kind::String && right.kind == Kind::String) return left;
                 return join(*e.left, left, *e.right, right, e.offset, "addition requires int, f64 or string");
             }
+            case E::ShiftLeft: case E::ShiftRight: case E::ShiftUnsignedRight:
+                require(expression(*e.left, locals), scalar(false), e.offset,
+                        "shift left operand requires int");
+                require(expression(*e.right, locals), scalar(false), e.offset,
+                        "shift distance requires int");
+                return scalar(false);
             case E::Subtract: case E::Multiply: case E::Divide: case E::Remainder: {
                 const auto lhs = expression(*e.left, locals);
                 const auto rhs = expression(*e.right, locals);

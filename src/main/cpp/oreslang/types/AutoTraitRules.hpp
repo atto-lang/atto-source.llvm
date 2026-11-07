@@ -20,7 +20,7 @@ struct Capabilities {
         switch (trait) {
         case AutoTrait::Send: return send;
         case AutoTrait::Sync: return sync;
-        case AutoTrait::Share: return share;
+        case AutoTrait::Share: return share && send && sync;
         }
         return false;
     }
@@ -55,6 +55,10 @@ inline Capabilities apply_negative(Capabilities caps, const std::set<AutoTrait>&
     if (negative.count(AutoTrait::Send)) caps.send = false;
     if (negative.count(AutoTrait::Sync)) caps.sync = false;
     if (negative.count(AutoTrait::Share)) caps.share = false;
+    // A cross-actor shared alias must also satisfy Send and Sync.
+    // Preserve this invariant after negative-trait erasure, including for
+    // dyn and nominal types whose bounds may be contradictory.
+    caps.share = caps.share && caps.send && caps.sync;
     return caps;
 }
 

@@ -421,6 +421,20 @@ negative implicit_f64_assignment 'pub fnc main(): int {
   value = 2;
   return 42;
 }' 'requires f64, got int'
-[[ "$pass" -eq 42 && "$reject" -eq 21 ]] ||
+# Cross-feature merge with ODB1 shifts: float operands/distances never
+# become integer bit patterns through the scalar f64 lowering.
+negative f64_shift_left_operand 'pub fnc main(): int {
+  val int value = 1.0 << 2;
+  return value;
+}' 'native shift operands require int'
+negative f64_shift_right_distance 'pub fnc main(): int {
+  val int value = 4 >> 1.0;
+  return value;
+}' 'native shift operands require int'
+negative f64_shift_unsigned 'pub fnc main(): int {
+  val int value = 8.0 >>> 1;
+  return value;
+}' 'native shift operands require int'
+[[ "$pass" -eq 42 && "$reject" -eq 24 ]] ||
   { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
-echo "NATIVE_F64_SCALAR_GUESTS_PASS=42; NEGATIVE_NO_IR_PASS=21"
+echo "NATIVE_F64_SCALAR_GUESTS_PASS=42; NEGATIVE_NO_IR_PASS=24"

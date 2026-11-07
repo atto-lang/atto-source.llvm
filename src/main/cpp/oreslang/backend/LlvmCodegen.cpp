@@ -532,6 +532,41 @@ llvm::Value* lower_unwidened(const Expression& expr,
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             return builder.CreateFDiv(left, right, "f64.div");
         }
+        case Expression::Kind::ShiftLeft:
+        case Expression::Kind::ShiftRight:
+        case Expression::Kind::ShiftUnsignedRight: {
+            if (!expr.left || !expr.right)
+                throw std::runtime_error("native shift AST missing operand");
+            llvm::Value* left = lower(*expr.left, builder, i64, storage,
+                                      field_storage, functions, moves);
+            llvm::Value* distance = lower(*expr.right, builder, i64, storage,
+                                          field_storage, functions, moves);
+            // Java/Graal accepts shift distances only in 0..63. Unlike Java
+            // bytecode, LLVM shifts with a distance >= bit width are poison,
+            // and blindly masking to 63 would incorrectly admit 64, -1, etc.
+            // The unsigned comparison rejects negatives and oversized i64
+            // distances in one check BEFORE constructing any shift instruction.
+            auto* module = builder.GetInsertBlock()->getModule();
+            auto* parent = builder.GetInsertBlock()->getParent();
+            auto* invalid = llvm::BasicBlock::Create(
+                builder.getContext(), "shift.distance.invalid", parent);
+            auto* valid = llvm::BasicBlock::Create(
+                builder.getContext(), "shift.distance.valid", parent);
+            builder.CreateCondBr(builder.CreateICmpULT(
+                distance, llvm::ConstantInt::get(i64, 64)), valid, invalid);
+            builder.SetInsertPoint(invalid);
+            // Native target currently uses a trap for typed runtime errors.
+            // This is fail-closed rather than Java's exception-class parity.
+            builder.CreateCall(
+                llvm::Intrinsic::getDeclaration(module, llvm::Intrinsic::trap));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(valid);
+            if (expr.kind == Expression::Kind::ShiftLeft)
+                return builder.CreateShl(left, distance, "shift.left");
+            if (expr.kind == Expression::Kind::ShiftRight)
+                return builder.CreateAShr(left, distance, "shift.signed.right");
+            return builder.CreateLShr(left, distance, "shift.unsigned.right");
+        }
         case Expression::Kind::Remainder: {
             if (expr.resolved_type == ScalarType::F64) {
                 llvm::Value* dividend = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
@@ -1278,7 +1313,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             argument_types, false);
         llvm::Function* declaration = llvm::Function::Create(
             signature,
-            (fn.native_internal || fn.async_source_i64)
+            (fn.native_internal || fn.async_source_i64 ||
+             !fn.c_export_u32_symbol.empty())
                 ? llvm::Function::InternalLinkage
                 : llvm::Function::ExternalLinkage,
             symbol, module);
@@ -3135,6 +3171,90 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         for (auto* field : globals) finish.CreateStore(zero, field);
         finish.CreateStore(two, lifecycle);
         finish.CreateRetVoid();
+    }
+    // P0 browser FFI foundation: an annotated, public, constant-returning
+    // guest Oreslang function is the ONLY source of the version value. Its
+    // i64 guest ABI stays unchanged. Generate a distinct, exactly i32 C
+    // entrypoint so hosts never cast a 64-bit function to a 32-bit ABI.
+    // There is intentionally no opaque-handle/tab/renderer ABI here.
+    for (const auto& fn : source.functions) {
+        if (fn.c_export_u32_symbol.empty()) continue;
+        if (wasm32_target || cortex_m_target || !source.module.empty() ||
+            source.functions.size() != 1 || !source.classes.empty() ||
+            !source.generators.empty() || !source.cooperative_loops.empty() ||
+            !source.type_only_declarations.empty() || !source.contracts.empty() ||
+            !source.imports.empty() || !source.sum_types.empty() ||
+            fn.c_export_u32_symbol != "ores_browser_abi_version" ||
+            fn.name == fn.c_export_u32_symbol || fn.name == "main" ||
+            fn.name.find('.') != std::string::npos ||
+            !fn.exported || fn.native_internal || fn.async_source_i64 ||
+            !fn.method_owner.empty() || !fn.parameters.empty() ||
+            !fn.generic_parameters.empty() || fn.returns_void ||
+            fn.return_type != ScalarType::I64 || !fn.return_class.empty() ||
+            !fn.return_sum.empty() || !fn.pending_return_type_alias.empty() ||
+            fn.has_declared_effects || !fn.result ||
+            fn.result->kind != Expression::Kind::Integer ||
+            fn.result->integer != 1 || !fn.locals.empty() ||
+            !fn.statements.empty() || !fn.early_returns.empty() ||
+            !fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
+            !fn.actor_stops.empty() || !fn.actor_actions.empty() ||
+            !fn.actor_field_writes.empty() ||
+            !fn.ready_await_actor.empty() || !fn.done_await_actor.empty() ||
+            !fn.ready_future_name.empty() || !fn.ready_future_actor.empty() ||
+            !source.actors.empty() ||
+            !fn.source_tasks.empty() || !fn.future_pipelines.empty() ||
+            fn.scalar_while || fn.caught_throw_value ||
+            !fn.caught_throw_defers.empty())
+            throw std::runtime_error(
+                "C_EXPORT_U32_REJECT: forged or unsupported browser host ABI declaration");
+        // A companion plain guest i64 function must never impersonate one
+        // of the browser's unimplemented C ABI entrypoints. A linker can
+        // otherwise export an incorrect same-name symbol even while the
+        // version trampoline is properly typed.
+        for (const auto& other : source.functions) {
+            if (other.name == "ores_browser_open" ||
+                other.name == "ores_browser_dispatch" ||
+                other.name == "ores_browser_snapshot" ||
+                other.name == "ores_browser_close")
+                throw std::runtime_error(
+                    "C_EXPORT_U32_REJECT: unimplemented browser C symbol shadowed by guest");
+        }
+        // An overloaded guest family is subject to arity-based mangling.
+        // This initial C ABI admits a single stable guest definition only;
+        // never let adding an unrelated overload silently rename or redirect
+        // the implementation behind the exported host symbol.
+        if (family_sizes.at(fn.name) != 1)
+            throw std::runtime_error(
+                "C_EXPORT_U32_REJECT: overloaded guest export family forbidden");
+        if (module.getNamedValue(fn.c_export_u32_symbol))
+            throw std::runtime_error(
+                "C_EXPORT_U32_REJECT: C ABI symbol collision");
+        llvm::Function* guest =
+            declarations.at(native_function_slot(fn.name, 0));
+        if (guest->getReturnType() != i64 || guest->arg_size() != 0 ||
+            guest->getLinkage() != llvm::GlobalValue::InternalLinkage)
+            throw std::runtime_error(
+                "C_EXPORT_U32_REJECT: guest ABI does not match checked i64() contract");
+        auto* host = llvm::Function::Create(
+            llvm::FunctionType::get(i32, false),
+            llvm::Function::ExternalLinkage,
+            fn.c_export_u32_symbol, module);
+        auto* entry = llvm::BasicBlock::Create(context, "entry", host);
+        auto* accepted = llvm::BasicBlock::Create(context, "u32.valid", host);
+        auto* rejected = llvm::BasicBlock::Create(context, "u32.trap", host);
+        llvm::IRBuilder<> b(entry);
+        llvm::Value* value = b.CreateCall(guest);
+        // Treat negative i64 as unsigned > UINT32_MAX; reject rather than
+        // silently truncating a forged guest result.
+        llvm::Value* in_range = b.CreateICmpULE(
+            value, llvm::ConstantInt::get(i64, UINT32_MAX));
+        b.CreateCondBr(in_range, accepted, rejected);
+        b.SetInsertPoint(rejected);
+        b.CreateCall(llvm::Intrinsic::getDeclaration(
+            &module, llvm::Intrinsic::trap));
+        b.CreateUnreachable();
+        b.SetInsertPoint(accepted);
+        b.CreateRet(b.CreateTrunc(value, i32));
     }
     if (native_main) {
         // OS/process ABI boundary: never expose i64/void Oreslang main as C main.
