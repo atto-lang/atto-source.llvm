@@ -383,3 +383,61 @@ the shallow host value policy proves bounded cleanup latency under an
 arbitrarily blocking destructor. The compiler-facing value/ownership
 descriptor, bounded cleanup policy, and integration through the real
 supervisor/HTTP lifecycle are still mandatory.
+
+
+## P0 trusted ingress / supervisor STOP entrypoint — stacked follow-up
+
+**Status:** host source authored and CI workflow expanded. No admitted native
+runner, sanitizer pass, or compiled `.atto` proof. Do not merge as guest parity.
+
+The request registry's `create` bootstrap checks its advertised slot count
+against the scheduler's immutable capacity, obtained via the new C host
+`ores_native_actor_scheduler_actor_capacity_v1` readback. An undersized
+observer array no longer silently permits a real actor to escape the fence.
+
+`admit_from_trusted_ingress` constructs a provisional RequestLocal context
+and returns it only if scheduler-serialized registration succeeds. On rejection,
+the provisional context closes immediately; no unregistered scope is published
+by this entrypoint. The trusted transport must issue tenant/isolate/request
+identity from an authenticated runtime source: accepting a host C++ struct is
+not itself a proof of issuer authenticity, so the API remains HOST-ONLY.
+
+`signal_supervisor_termination` accepts explicit normal STOP, cancellation,
+panic, supervisor shutdown, restart, and hot-reload **signals**. Normal STOP
+uses the ordinary scheduler STOP; the other causes use sealed STOP so queued
+DATA is abandoned. Every path triggers the existing scheduler-owned atomic
+RequestLocal lifetime notification. This does **not** implement source
+supervisor restart, dynamic actor slot reuse, successful hot-upgrade state
+migration, or actor resurrection; those remain independent release gates.
+
+The new `native_request_ingress_supervisor_v1_test.cpp` authors **207**
+named assertions (38 fixed admission/bootstrap cases, 48 checks across
+the six stop causes, 120 two-thread race checks spanning 60 schedules,
+and one final count assertion). It covers wrong tenant/isolate/request and
+actor generations, cross-domain/wrong-slot actor IDs, null/cancelled task
+authorities, no raw registered mutation, duplicate/late STOP, sibling survival,
+disallowed reuse, and concurrent ingress versus each STOP cause.
+
+The source-local RequestLocal workflow adds GCC/Clang optimized, ASan/UBSan,
+and TSan builds for the ingress test and **four executable negative
+mutations**: remove capacity equivalence, skip registry admission, suppress
+supervisor STOP delivery, or remove the registry-bound raw-write gate.
+Each mutated binary must **compile successfully**, then fail the exact
+expected named assertion; any unexpected failure or a surviving mutation
+fails the CI job. Both affected workflow scheduler blob pins were updated.
+
+### Outstanding proof obligations
+- Find and update the actual native transport/HTTP ingress call sites and
+  actor supervisor dispatchers to exclusively use this trusted entrypoint;
+  raw `RequestContextLocalV1::open` remains host-only and must never lower
+  directly into guest code.
+- Bind tenant/isolate/request identity to scheduler-issued issuer evidence
+  and compiler-owned AOT descriptors, not guest-provided integers.
+- Prove task cancellation propagation, true actor reincarnation/hot-upgrade
+  generation fencing, callback quarantine, ownership/borrow safety and
+  supervisor restart, rather than treating a sealed STOP signal as parity.
+- Bound or quarantine blocking C++ finalizers: the current CONTROL worker
+  avoids blocking on leases/DONE but a host value destructor may itself block.
+  Zero-step CI is an admission failure, not evidence for or against semantics.
+- Require independently reviewed, stepful exact-head GCC/Clang/sanitizer and
+  compiled `.atto` guest receipts before ready/merge or five-backend parity.
