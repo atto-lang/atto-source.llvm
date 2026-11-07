@@ -82,6 +82,10 @@ b.oreslang_wasm_actor_init();
 for(const [depth,result] of [[0n,0n],[1n,1n],[2n,2n],[63n,63n]])
  assert.equal(a.oreslang_wasm_actor_on_message(depth),result);
 assert.equal(a.oreslang_wasm_actor_frame_status(),0);
+const negative=instantiate();negative.oreslang_wasm_actor_init();
+assert.throws(()=>negative.oreslang_wasm_actor_on_message(-1n),WebAssembly.RuntimeError);
+assert.equal(negative.oreslang_wasm_actor_frame_status(),0,
+ "invalid negative recursion must not be mislabeled as stack overflow");
 assert.equal(b.oreslang_wasm_actor_on_message(5n),5n);
 assert.throws(()=>a.oreslang_wasm_actor_on_message(64n),WebAssembly.RuntimeError);
 assert.equal(a.oreslang_wasm_actor_frame_status(),1,"typed terminal stack quota");
