@@ -171,7 +171,18 @@ public:
         }
         // A guest/host copy constructor must never execute under this lock.
         // Pin the cell so a reentrant close/erase cannot destroy the source.
-        return static_cast<const LocalCellV1<T>&>(*pinned).value;
+        // Copying can invoke arbitrary host code, including close(). A read
+        // whose own copy closed the scope must not return a stale snapshot;
+        // the second lock is the read's final open-state linearization point.
+        // This remains a HOST-only primitive: guest authority still requires
+        // a trusted scheduler gate and post-copy actor/task admission.
+        std::optional<T> snapshot(
+            std::in_place, static_cast<const LocalCellV1<T>&>(*pinned).value);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!open_) return std::nullopt;
+        }
+        return snapshot;
     }
 
     template <class T>
