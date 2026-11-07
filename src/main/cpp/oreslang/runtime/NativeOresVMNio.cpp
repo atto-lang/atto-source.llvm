@@ -1,4 +1,5 @@
 #include "oreslang/runtime/NativeOresVMNio.h"
+#include "oreslang/runtime/NativeOresVMActorNio.hpp"
 
 // The callback is owned by a C-compiled VM, so use C language linkage
 // explicitly rather than relying on permissive C++ callback-pointer ABI.
@@ -99,3 +100,39 @@ extern "C" void ores_native_vm_nio_drain_signal(
     auto* backend = lease.get();
     if (backend) ores_native_nio_drain_completion_signal(backend, reactor);
 }
+
+namespace oreslang::runtime {
+// Keep the exact existing VM backend lease across each host operation. An
+// accepted watch owns a persistent callback permit in the backend ledger
+// until its terminal completion is explicitly acknowledged.
+bool vm_nio_actor_try_watch(OresNativeVM* vm,
+        NativeTransportCallbackGate& owner, int fd, std::uint32_t events,
+        OresNativeNioWatch* output) noexcept {
+    if (!vm || !output) return false;
+    NioBackendLease lease(vm);
+    return nio_actor_try_watch(lease.get(), owner, fd, events, output);
+}
+bool vm_nio_actor_try_cancel(OresNativeVM* vm,
+                             OresNativeNioWatch watch) noexcept {
+    if (!vm) return false;
+    NioBackendLease lease(vm);
+    return nio_actor_try_cancel(lease.get(), watch);
+}
+bool vm_nio_actor_stop(OresNativeVM* vm) noexcept {
+    if (!vm) return false;
+    NioBackendLease lease(vm);
+    return nio_actor_stop(lease.get());
+}
+bool vm_nio_actor_try_pop(OresNativeVM* vm,
+                          ActorNioCompletion* output) noexcept {
+    if (!vm || !output) return false;
+    NioBackendLease lease(vm);
+    return nio_actor_try_pop(lease.get(), output);
+}
+bool vm_nio_actor_acknowledge(OresNativeVM* vm,
+                              const ActorNioCompletion& completion) noexcept {
+    if (!vm) return false;
+    NioBackendLease lease(vm);
+    return nio_actor_acknowledge(lease.get(), completion);
+}
+} // namespace oreslang::runtime
