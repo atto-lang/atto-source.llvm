@@ -123,6 +123,26 @@ int main() {
                 "hidden variant payload");
     }
     {
+        auto bad=make_source();
+        bad.inverted_main->operations[0].mixed_values[1].floating=-0.0;
+        rejects([&]{ (void)verify_production_inverted_mixed(bad); },
+                "hidden variant payload");
+    }
+    {
+        auto bad=make_source();
+        bad.inverted_main->operations[3].mixed_value.floating=-0.0;
+        rejects([&]{ (void)verify_production_inverted_mixed(bad); },
+                "invalid mixed inverted erase metadata");
+    }
+    {
+        auto valid_negative_zero=make_source();
+        valid_negative_zero.inverted_main->operations[0].mixed_values[2]=f64(-0.0);
+        const auto admitted=verify_production_inverted_mixed(valid_negative_zero);
+        const auto ir_negative_zero=emit_mixed_source_ir(admitted);
+        require(ir_negative_zero.find("0x8000000000000000") != std::string::npos,
+                "active mixed f64 negative zero lost its IEEE sign bit");
+    }
+    {
         auto bad=make_source(); bad.inverted_main->operations[2].field="alive";
         bad.inverted_main->operations[2].mixed_value=bit(false);
         rejects([&]{ (void)verify_production_inverted_mixed(bad); },
