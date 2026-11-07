@@ -60,8 +60,8 @@ jobs:
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = "6da67b0caf13eb1889a3509c7aa41dd31378863a"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.h)" = "6e11a3d85df99b1e79687c2bf803d2da6d38ee1a"
           test "$(git hash-object src/main/cpp/oreslang/runtime/TaskCancellation.hpp)" = "7eafa420e92ba10e552dade1846f3862cb79aec7"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextHandoffV1.hpp)" = "80d03fe85c406d2b67898d890bc174850e2a54be"
-          test "$(git hash-object tests/native_request_context_handoff_v1_test.cpp)" = "4d66bc7b520d34148b49eb726962819557a6ba74"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextHandoffV1.hpp)" = "d2c9ba203ea43108f1f306023b421527e00dab74"
+          test "$(git hash-object tests/native_request_context_handoff_v1_test.cpp)" = "25feb9a47b4dbc4f9bc1f0d50e3ffdc13992f5b1"
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalStopGroupV1.hpp)" = "eb888ee35cefb09710723faa50ac23c47e8924d8"
           test "$(git hash-object tests/native_request_stop_cancel_v1_test.cpp)" = "d41874ea2adb7d69c47a855ae4f1a7cce51ee775"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestDataMailGateV1.hpp)" = "6affba5e1b021bf9f4e5b54584241d873f245451"
@@ -99,7 +99,10 @@ jobs:
           "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
             -Isrc/main/cpp tests/native_request_context_handoff_v1_test.cpp \
             "$tmp/scheduler.o" -o "$tmp/request-handoff"
-          "$tmp/request-handoff"
+          "$tmp/request-handoff" | tee "$tmp/request-handoff-registry.log"
+          test "$(grep -c '^HANDOFF_REGISTRY_CASE_PASS ' "$tmp/request-handoff-registry.log")" = "30"
+          grep -qx 'HANDOFF_REGISTRY_30_HOST_CASES_PASS' "$tmp/request-handoff-registry.log"
+          grep -qx 'REQUEST_CONTEXT_HANDOFF_V1_ALL_PASS' "$tmp/request-handoff-registry.log"
           "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
             -Isrc/main/cpp tests/native_request_actor_lifecycle_guard_v1_test.cpp \
             "$tmp/scheduler.o" -o "$tmp/request-lifecycle"
