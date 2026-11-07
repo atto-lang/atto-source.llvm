@@ -2,16 +2,21 @@
 # Production .atto parser -> verified MIR -> LLVM IR -> no-GC screen
 # -> real Clang executable. This script MUST run, not just be checked in.
 set -euo pipefail
-compiler="$1"
-clang="$2"
-fixtures="$3"
-auditor="$4"
-[[ -x "$compiler" && -x "$auditor" && ! -L "$auditor" &&
+compiler="${1:?production compiler required}"
+clang="${2:?Clang required}"
+fixtures="${3:?source fixture directory required}"
+auditor="${4:?source-built no-GC auditor required}"
+[[ -f "$compiler" && -x "$compiler" && ! -L "$compiler" &&
+   -f "$auditor" && -x "$auditor" && ! -L "$auditor" &&
    "$(basename "$auditor")" == oreslang-no-gc-ir-audit ]] || {
     echo 'FAIL: missing compiler or source-built no-GC auditor' >&2; exit 1
 }
 command -v "$clang" >/dev/null 2>&1 || {
     echo 'FAIL: missing Clang' >&2; exit 1
+}
+clang_executable="$(command -v "$clang")"
+[[ -f "$clang_executable" && -x "$clang_executable" ]] || {
+    echo 'FAIL: missing executable Clang binary' >&2; exit 1
 }
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -33,7 +38,18 @@ hash_file() {
     fi
     printf '%s\n' "$token"
 }
+compiler_sha="$(hash_file "$compiler")"
+clang_sha="$(hash_file "$clang_executable")"
 auditor_sha="$(hash_file "$auditor")"
+require_tools_unchanged() {
+    if [[ "$(hash_file "$compiler")" != "$compiler_sha" ||
+          "$(hash_file "$clang_executable")" != "$clang_sha" ||
+          "$(hash_file "$auditor")" != "$auditor_sha" ]]; then
+        echo 'FAIL: compiler, Clang or source-built auditor changed during native guest proof' >&2
+        exit 1
+    fi
+}
+printf '%s\n' 'STRICT_NO_GC_IR_SCREENED_ONLY (linked binary and FFI audit still required)'     > "$tmp/expected-audit.txt"
 printf 'declare ptr @GC_malloc(i64)\n' > "$tmp/known-gc.ll"
 if "$auditor" "$tmp/known-gc.ll" > "$tmp/known-gc.out" 2> "$tmp/known-gc.err"; then
     echo 'FAIL: no-GC auditor admitted collector' >&2; exit 1
@@ -42,24 +58,26 @@ grep -Fq STRICT_NO_GC_IR_REJECTED "$tmp/known-gc.err" || {
     echo 'FAIL: auditor negative not recognized' >&2; exit 1
 }
 [[ ! -s "$tmp/known-gc.out" ]] || exit 1
+require_tools_unchanged
 audit() {
     local file="$1"
-    [[ -s "$file" ]] || { echo 'FAIL: missing guest LLVM IR' >&2; exit 1; }
+    [[ -s "$file" && -f "$file" && ! -L "$file" && ! "$file" -ef "$auditor" ]] || {
+        echo 'FAIL: missing, aliased or unsafe guest LLVM IR' >&2; exit 1
+    }
     local source_sha
     source_sha="$(hash_file "$file")"
     "$auditor" "$file" > "$tmp/audit.out" 2> "$tmp/audit.err" || {
         echo 'FAIL: IR rejected by source-built no-GC auditor' >&2; exit 1
     }
     [[ ! -s "$tmp/audit.err" ]] || exit 1
-    grep -Fxq 'STRICT_NO_GC_IR_SCREENED_ONLY (linked binary and FFI audit still required)' \
-        "$tmp/audit.out" || {
-        echo 'FAIL: invalid auditor success marker' >&2; exit 1
+    cmp -s "$tmp/expected-audit.txt" "$tmp/audit.out" || {
+        echo 'FAIL: contaminated auditor success output' >&2; exit 1
     }
-    if [[ "$(hash_file "$file")" != "$source_sha" ||
-          "$(hash_file "$auditor")" != "$auditor_sha" ]]; then
-        echo 'FAIL: native IR or source-built auditor mutated during audit' >&2
+    if [[ "$(hash_file "$file")" != "$source_sha" ]]; then
+        echo 'FAIL: emitted LLVM IR mutated during audit' >&2
         exit 1
     fi
+    require_tools_unchanged
 }
 run_process() {
     python3 - "$1" "$2" "$3" "$4" <<'PY'
