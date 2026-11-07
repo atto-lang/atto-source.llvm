@@ -51,7 +51,7 @@ int main() {
           && typed.parameter_shapes[1] == typed_ir::Parameter::ReadF32
           && typed.parameter_shapes[3] == typed_ir::Parameter::WriteF32
           && typed.parameter_shapes[4] == typed_ir::Parameter::U64, "typed parameter order");
-    check(typed.access_hints.size() == 2 && typed.access_hints[0] == typed_ir::Effect::DeviceRead
+    check(typed.access_hints.size() == 2 && typed.access_hints[0] == source_link::AccessHint::DeviceRead
           && typed.access_hints[1] == source_link::AccessHint::DeviceWrite, "effects shape");
     const auto linked = source_link::link({signature()}, launch());
     check(linked.unresolved_host_arguments.size() == 5 &&
@@ -133,7 +133,7 @@ int main() {
             (mask & (1<<i)) ? typed_ir::Parameter::WriteF32 : typed_ir::Parameter::ReadF32});
         auto shape = source_link::signature_to_source_shape(s);
         for (auto e : shape.access_hints)
-            check(e == typed_ir::Effect::DeviceRead || e == source_link::AccessHint::DeviceWrite,
+            check(e == source_link::AccessHint::DeviceRead || e == source_link::AccessHint::DeviceWrite,
                   "effect summary must not grant host effects");
     }
     std::cout << "PASS " << verified
