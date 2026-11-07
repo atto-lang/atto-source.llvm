@@ -1110,7 +1110,10 @@ void validate_i64_ownership(Program& program) {
                             next_restore_write_id > 4096)
                         throw std::runtime_error(
                             "ownership violation: restoration write ticket bound exceeded");
-                    const std::uint64_t ticket = next_restore_write_id++;
+                    // Separate restoration identity domain from ordinary
+                    // lexical loan token numbers and SSA ordinal IDs.
+                    const std::uint64_t ticket =
+                        (std::uint64_t{1} << 63) | next_restore_write_id++;
                     // Reuse the real CFG transition validator for this
                     // precisely one-field, straight-line source site. This
                     // does not establish whole-function SSA coverage.
