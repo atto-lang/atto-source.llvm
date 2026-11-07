@@ -1698,7 +1698,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     auto* published_field_store = builder.CreateStore(incoming, original);
                     compiler_field_write_links.record(*function, target,
                         native_ir::SourceFieldWriteKind::Direct,
-                        *published_field_store);
+                        *published_field_store, effect.reinitialize_write_id);
                     builder.CreateStore(llvm::ConstantInt::get(i64, 0), lexical);
                     array_failure_places[target] = array_failure_places.at(source);
                 } else {
@@ -1708,7 +1708,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                         builder.CreateStore(updated, field_storage.at(target));
                     compiler_field_write_links.record(*function, target,
                         native_ir::SourceFieldWriteKind::Direct,
-                        *published_field_store);
+                        *published_field_store, effect.reinitialize_write_id);
                 }
             } else if (effect.kind == Statement::Kind::Call) {
                 lower(*effect.expression, builder, i64, storage, field_storage, declarations, &region_moves);
