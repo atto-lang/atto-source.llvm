@@ -186,6 +186,42 @@ void actor_self_stop() {
           !r->active() && r->used_bytes()==0);
     c->retire();
 }
+void sibling_cleanup_not_blocked_by_paused_reader() {
+    World w;
+    NativeRequestLifecycleRegistryV1 reg(w.scheduler);
+    auto ca=TaskCancellation::root(),cb=TaskCancellation::root();
+    auto ra=request(w.a,701,ca),rb=request(w.b,702,cb);
+    RequestLocalKeyV1<PauseCopy> ka;
+    RequestLocalKeyV1<int> kb;
+    auto pause=std::make_shared<Barrier>();
+    check("36_sibling_both_attached",
+          reg.attach(w.a) && reg.attach(w.b));
+    check("37_sibling_both_registered_and_set",
+          reg.register_request(w.a,ra) && reg.register_request(w.b,rb) &&
+          ra->set(ka,PauseCopy(pause)) && rb->set(kb,123));
+    std::atomic<bool> got{true};
+    std::thread reader([&] { got.store(ra->get_copy(ka).has_value()); });
+    const bool entered=pause->await();
+    if (!entered) {pause->release();reader.join();}
+    check("38_A_copy_is_pinned",entered);
+    const bool stopped=ores_native_actor_scheduler_stop_sealed(w.scheduler,w.a) &&
+                       ores_native_actor_scheduler_stop_sealed(w.scheduler,w.b);
+    check("39_both_STOP_signals_sent",stopped);
+    check("40_B_reclaimed_while_A_copy_blocked",
+          reg.wait_cleaned(w.b,timeout) && !rb->active() &&
+          rb->used_bytes()==0);
+    check("41_A_receipt_not_premature",
+          !reg.wait_cleaned(w.a,std::chrono::milliseconds(30)) &&
+          !ra->active());
+    pause->release();
+    reader.join();
+    check("42_A_reclaimed_after_lease_release",
+          reg.wait_cleaned(w.a,timeout) && !got.load() &&
+          ra->used_bytes()==0);
+    ca->retire();
+    cb->retire();
+}
+
 void fail_closed_registered_ingress() {
     World w;
     NativeRequestLifecycleRegistryV1 reg(w.scheduler);
@@ -247,6 +283,7 @@ int main() {
     actor_self_stop();
     paused_copy_holds_cleanup();
     fail_closed_registered_ingress();
-    if (passed != 35) return 2;
-    std::puts("NATIVE_REQUEST_LIFECYCLE_REGISTRY_35_HOST_CASES_PASS");
+    sibling_cleanup_not_blocked_by_paused_reader();
+    if (passed != 42) return 2;
+    std::puts("NATIVE_REQUEST_LIFECYCLE_REGISTRY_42_HOST_CASES_PASS");
 }
