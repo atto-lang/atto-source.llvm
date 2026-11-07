@@ -46,6 +46,17 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # M2 executes genuine compiler-produced .atto on_message through the
+    # authenticated native actor carrier and physically distinct actor heaps.
+    # This tests a synchronous handler adapter, NOT source ActorRef/spawn or
+    # compiler-lowered await/select continuations.
+    add_test(NAME native_compiled_actor_guest_scalar_frame_m2
+        COMMAND bash
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_guest_scalar_frame_m2.sh"
+            "$<TARGET_FILE:oreslang-llvmc>"
+            "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(native_compiled_actor_guest_scalar_frame_m2
+        PROPERTIES TIMEOUT 120)
     # Host-executed actor-owned logical guest frame storage (not LLVM guest
     # codegen and not independent physical C/OS stacks).
     find_package(Threads REQUIRED)
