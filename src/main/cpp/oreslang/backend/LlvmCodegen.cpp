@@ -668,6 +668,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool bounded_allocator_provider) {
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
+        if (fn.name.rfind("oreslang_source_actor_", 0) == 0 ||
+            fn.name.rfind("ores_actor_i64_heap_", 0) == 0 ||
+            fn.name.rfind("oreslang_actor_", 0) == 0)
+            throw std::runtime_error("reserved native actor runtime symbol collision");
+    for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
             throw std::runtime_error("reserved native record runtime symbol collision");
     for (const auto& fn : source.functions)
