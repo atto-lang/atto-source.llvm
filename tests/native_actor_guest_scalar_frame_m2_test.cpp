@@ -105,7 +105,9 @@ static void physically_reclaim(Actor& actor) {
 
 int main() {
     Shared shared;
-    Actor a{&shared}, b{&shared};
+    Actor a{}, b{};
+    a.shared = &shared;
+    b.shared = &shared;
     a.is_a = true;
     MultiActorCarrier carrier(32);
     a.owner = carrier.register_actor(&a, compiled_actor, cancel_actor);
