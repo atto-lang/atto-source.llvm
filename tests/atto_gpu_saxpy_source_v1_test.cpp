@@ -5,6 +5,7 @@
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <utility>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -78,6 +79,63 @@ compute fnc saxpy(x: DeviceRead<f32>, y: DeviceRead<f32>,
     reject([&] { (void)compile_saxpy(std::string(65537, ' ')); });
     reject([&] { (void)compile_saxpy(std::string(600, 'a')); });
 
+    // Each of these single-edit guest-source mutations must fail before
+    // emitting any device artifact. This intentionally closed parser does
+    // not admit host closures, hidden effects, alternative indexing, or
+    // accidental CUDA/C++ syntax by permissive token fallback.
+    const std::vector<std::pair<std::string, std::string>> syntax_mutations = {
+        {"compute fnc saxpy", "gpu fnc saxpy"},
+        {"compute fnc saxpy", "suspends compute fnc saxpy"},
+        {"compute fnc saxpy", "compute routine saxpy"},
+        {"saxpy(", "saxpy_untrusted("},
+        {"x: DeviceRead<f32>", "x: DeviceWrite<f32>"},
+        {"y: DeviceRead<f32>", "y: DeviceWrite<f32>"},
+        {"out: DeviceWrite<f32>", "out: DeviceRead<f32>"},
+        {"alpha: f32", "alpha: f64"},
+        {"n: u64", "n: u32"},
+        {") device {", ") host {"},
+        {"const i =", "let i ="},
+        {"const i =", "const j ="},
+        {"gpu.global_id.x", "gpu.global_id.y"},
+        {"gpu.global_id.x", "gpu.global_id.z"},
+        {"gpu.global_id.x", "gpu.local_id.x"},
+        {"gpu.global_id.x", "gpu.global_id.x + 1"},
+        {"if i < n", "if i <= n"},
+        {"if i < n", "if n > i"},
+        {"if i < n", "if i < n || true"},
+        {"out[i]", "x[i]"},
+        {"out[i]", "out[n]"},
+        {"x[i]", "x[n]"},
+        {"y[i]", "y[n]"},
+        {"alpha * x[i]", "x[i] * alpha"},
+        {"alpha * x[i]", "alpha * y[i]"},
+        {"alpha * x[i]", "alpha * x[i] * x[i]"},
+        {"out[i] = alpha", "out[i] += alpha"},
+        {"out[i] = alpha", "await out[i] = alpha"},
+        {"out[i] = alpha", "atomic out[i] = alpha"},
+        {"if i < n {", "if i < n { print(i);"},
+        {"if i < n {", "if i < n { barrier();"},
+        {"if i < n {", "if i < n { gpu.shared();"},
+        {"compute fnc saxpy", "pub compute fnc saxpy"},
+        {"gpu.global_id.x", "gpu.global_id.x; host_call()"}
+    };
+    for (const auto& mutation : syntax_mutations) {
+        reject([&] {
+            (void)compile_saxpy(replace_once(
+                source, mutation.first, mutation.second));
+        });
+    }
+    // Lexical normalization is not syntax expansion; whitespace and
+    // comments may be inert, but embedded binary operators/directives,
+    // arbitrary declarations and control bytes still fail closed.
+    reject([&] { (void)compile_saxpy(source + std::string(1, '\0')); });
+    reject([&] { (void)compile_saxpy(source + "\nfnc unsafe(){}"); });
+    reject([&] { (void)compile_saxpy(
+        "compute fnc saxpy(x: DeviceRead<f32>,\n" + source); });
+    check(compile_saxpy("\n\t/* no capabilities */\n" + source +
+          "\n// host injected in comment is inert\n").device_source ==
+          artifact.device_source, "valid comments/whitespace preserve artifact");
+
     const Limits caps{{65535, 65535, 65535}, {1024, 1024, 64},
                       1024, 100000000, 49152};
     const Launch good{{8, 2, 1}, {256, 1, 1}, 0};
@@ -94,6 +152,54 @@ compute fnc saxpy(x: DeviceRead<f32>, y: DeviceRead<f32>,
         }) {
         reject([&] { (void)validate_launch(invalid, caps); });
     }
+    // Exhaustive small-grid property gate: each valid dimension triple
+    // must preserve exact multiplication. Reject one-boundary violations
+    // even when another dimension is small enough to fit in total quota.
+    const Limits compact{{4, 3, 2}, {8, 4, 2}, 32, 512, 64};
+    std::uint32_t valid_geometry_cases = 0;
+    for (std::uint64_t gx = 1; gx <= 4; ++gx) {
+        for (std::uint64_t gy = 1; gy <= 3; ++gy) {
+            for (std::uint64_t gz = 1; gz <= 2; ++gz) {
+                for (std::uint64_t bx : {1u, 2u, 4u, 8u}) {
+                    for (std::uint64_t by : {1u, 2u, 4u}) {
+                        for (std::uint64_t bz : {1u, 2u}) {
+                            const std::uint64_t block = bx * by * bz;
+                            const std::uint64_t total = gx * gy * gz * block;
+                            Launch candidate{{gx, gy, gz},
+                                             {bx, by, bz}, 0};
+                            if (block <= compact.max_block_threads &&
+                                total <= compact.max_launch_threads) {
+                                const auto valid = validate_launch(candidate, compact);
+                                check(valid.threads_per_block == block &&
+                                      valid.total_threads == total,
+                                      "3D geometry property exact multiplication");
+                                ++valid_geometry_cases;
+                            } else {
+                                reject([&] { (void)validate_launch(candidate, compact); });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    check(valid_geometry_cases > 100,
+          "geometry matrix must cover many nontrivial 3D configurations");
+    reject([&] { (void)validate_launch(
+        {{5, 1, 1}, {1, 1, 1}, 0}, compact); });
+    reject([&] { (void)validate_launch(
+        {{1, 4, 1}, {1, 1, 1}, 0}, compact); });
+    reject([&] { (void)validate_launch(
+        {{1, 1, 3}, {1, 1, 1}, 0}, compact); });
+    reject([&] { (void)validate_launch(
+        {{1, 1, 1}, {9, 1, 1}, 0}, compact); });
+    reject([&] { (void)validate_launch(
+        {{1, 1, 1}, {1, 5, 1}, 0}, compact); });
+    reject([&] { (void)validate_launch(
+        {{1, 1, 1}, {1, 1, 3}, 0}, compact); });
+    reject([&] { (void)validate_launch(
+        {{1, 1, 1}, {1, 1, 1}, 65}, compact); });
+
     const auto max = std::numeric_limits<std::uint64_t>::max();
     const Limits huge{{max, max, max}, {max, max, max},
                       max, max, max};
