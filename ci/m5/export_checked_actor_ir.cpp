@@ -58,7 +58,7 @@ static void checked_actor(const ActorDecl& actor) {
     identifier(field.name);
     identifier(parameter.name);
     require(field.name != parameter.name && !field.heap_owned && !field.int_array &&
-                !field.new_class && !field.field_mutable /* validated state is private */,
+                !field.new_class, // checked mutable state belongs to the actor, not an external borrower
             "M5_MIR_UNSUPPORTED: unsafe actor field ownership or alias");
     require(field.scalar_type == oreslang::ScalarType::I64 &&
                 parameter.scalar_type == oreslang::ScalarType::I64,
