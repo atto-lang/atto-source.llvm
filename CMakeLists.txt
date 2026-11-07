@@ -103,6 +103,18 @@ if(BUILD_TESTING)
     add_test(NAME native_ownership_compiler_resolved_place_origin
         COMMAND oreslang-native-compiler-place-origin-test)
 
+    # Compiler-native invariant inventory: 30 cases validate unique minted
+    # BindingIds, nonduplicated live allocation origins, CFG joins, and
+    # projections/loan modes using production metadata headers.
+    add_executable(oreslang-native-ownership-identity-inventory-30-test
+        tests/native_ownership_identity_inventory_30_test.cpp)
+    target_include_directories(oreslang-native-ownership-identity-inventory-30-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-ownership-identity-inventory-30-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ownership_identity_inventory_30
+        COMMAND oreslang-native-ownership-identity-inventory-30-test)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
