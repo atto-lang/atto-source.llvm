@@ -115,6 +115,20 @@ if(BUILD_TESTING)
     set_tests_properties(native_gpu_g1_adversarial_abi_and_quota_host_only
         PROPERTIES TIMEOUT 20 LABELS "host-only;gpu-abi;negative-mutation")
 
+    # Provider-owned GPU loan ledger: isolated HOST_ONLY event/state tests.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-gpu-g1-provider-ledger-test
+        tests/gpu_g1_device_lease_registry_test.cpp)
+    target_include_directories(oreslang-gpu-g1-provider-ledger-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-gpu-g1-provider-ledger-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-gpu-g1-provider-ledger-test PRIVATE Threads::Threads)
+    add_test(NAME native_gpu_g1_provider_loan_lifecycle_host_only
+        COMMAND oreslang-gpu-g1-provider-ledger-test)
+    set_tests_properties(native_gpu_g1_provider_loan_lifecycle_host_only
+        PROPERTIES TIMEOUT 20 LABELS "host-only;gpu-ownership;concurrency;negative-mutation")
+
     # Independent source-free identity mutation tests for the physical
     # receipt script: no actual PTX or CUDA claims are permitted here.
     if(UNIX)
