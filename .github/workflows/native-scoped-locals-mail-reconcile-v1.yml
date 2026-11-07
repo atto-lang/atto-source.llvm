@@ -142,4 +142,29 @@ jobs:
           grep -Fxq 'ISSUED_DATA_INGRESS_FAILED mail_01_actor_0_duplicate_DENIED' \
             "$work/replay-mutated.log"
           printf 'NATIVE_ISSUED_DATA_REPLAY_MUTATION_KILLED\n'
+          # A second issuer with independent replay counters must never
+          # attach to the same registry. Verify its rejection by mutation.
+          python3 - "$work" <<'PY'
+          from pathlib import Path
+          import sys
+          src = Path("src/main/cpp/oreslang/runtime/NativeRequestIngressIssuerV1.hpp").read_text()
+          guard = "!registry->claim_data_ingress_issuer_once()"
+          if src.count(guard) != 1:
+              raise SystemExit("missing or ambiguous single-issuer claim")
+          dest = Path(sys.argv[1]) / "negative-second-issuer/oreslang/runtime/NativeRequestIngressIssuerV1.hpp"
+          dest.parent.mkdir(parents=True, exist_ok=True)
+          dest.write_text(src.replace(guard, "false", 1))
+          PY
+          "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -I"$work/negative-second-issuer" -Isrc/main/cpp \
+            tests/native_request_issued_data_ingress_v1_test.cpp \
+            "$work/scheduler.o" -o "$work/second-issuer-mutated"
+          set +e
+          "$work/second-issuer-mutated" > "$work/second-issuer-mutated.log" 2>&1
+          second_issuer_status=$?
+          set -e
+          test "$second_issuer_status" -ne 0
+          grep -Fxq 'ISSUED_DATA_INGRESS_FAILED issuer_duplicate_creation_DENIED' \
+            "$work/second-issuer-mutated.log"
+          printf 'NATIVE_SECOND_ISSUER_MUTATION_KILLED\n'
           printf 'NATIVE_ORIGIN_AND_SCOPED_45_EXACT_HEAD_HOST_PASS compiler=%s mode=%s\n' "$CXX" "$MODE"
