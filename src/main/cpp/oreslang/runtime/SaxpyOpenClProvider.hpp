@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -120,10 +121,30 @@ public:
             throw std::invalid_argument("SAXPY provider identity/capability incomplete");
     }
 
-    // Never invoke provider destruction while an operation is active: device
-    // handles must remain owned until a trusted terminal event or clFinish
-    // recovery proves all three are quiescent. A destruction-time implicit
-    // cancellation would be unsafe.
+    SaxpyProvider(const SaxpyProvider&) = delete;
+    SaxpyProvider& operator=(const SaxpyProvider&) = delete;
+    SaxpyProvider(SaxpyProvider&&) = delete;
+    SaxpyProvider& operator=(SaxpyProvider&&) = delete;
+
+    // An active operation owns nonblocking OpenCL transfers referencing
+    // vectors inside Operation. Destroying the last shared_ptr before the
+    // device reaches quiescence would be a host use-after-free. Never run a
+    // blocking clFinish from an actor carrier or silently drop that memory.
+    // The host CONTROL/shutdown path must drain/recover and explicitly close.
+    // If caller violates that contract, terminate before staging is freed.
+    ~SaxpyProvider() noexcept {
+        std::lock_guard<std::mutex> guard(lock_);
+        if (active_) std::terminate();
+    }
+
+    void close() {
+        std::lock_guard<std::mutex> guard(lock_);
+        if (active_)
+            throw std::logic_error("SAXPY shutdown requires authenticated device quiescence and full release");
+        closed_ = true;
+    }
+
+    // Release eligibility is NOT evidence of an explicitly closed provider.
     bool closed_for_release() const {
         std::lock_guard<std::mutex> guard(lock_);
         return !active_;
@@ -160,6 +181,8 @@ public:
             throw std::invalid_argument("SAXPY three-buffer allocation exceeds provider quotas");
 
         std::lock_guard<std::mutex> guard(lock_);
+        if (closed_)
+            throw std::logic_error("SAXPY provider cannot submit after explicit shutdown");
         if (active_)
             throw std::logic_error("SAXPY provider queue has an in-flight or quarantined operation");
         if (next_generation_ == std::numeric_limits<std::uint64_t>::max())
@@ -412,6 +435,7 @@ private:
     mutable std::mutex lock_;
     std::shared_ptr<Operation> active_;
     SaxpyProviderUsage usage_;
+    bool closed_ = false;
     std::uint64_t next_generation_ = 0;
 };
 
