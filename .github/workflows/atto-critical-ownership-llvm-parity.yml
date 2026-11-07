@@ -51,7 +51,7 @@ on:
       - 'src/main/cpp/oreslang/types/OwnershipSourceFieldFlow.hpp'
       - 'src/main/cpp/oreslang/frontend/Parser.hpp'
       - 'scripts/ownership-ci-workflow-shape.mjs'
-      - 'tests/ownership_ci_workflow_shape_46.test.mjs'
+      - 'tests/ownership_ci_workflow_shape_50.test.mjs'
       - 'bin/check-ownership-workflow-shape.mjs'
       - 'src/main/cpp/oreslang/backend/NativeIrOwnershipCensus.hpp'
       - 'src/main/cpp/oreslang/backend/NativeSourceFieldWriteLinks.hpp'
@@ -96,11 +96,11 @@ jobs:
           echo "ATTO_LLVM_EXACT_TREE=$(git rev-parse 'HEAD^{tree}')"
           # SOURCE_ONLY: static CI guard never authenticates native/guest work.
           node --check scripts/ownership-ci-workflow-shape.mjs
-          node --check tests/ownership_ci_workflow_shape_46.test.mjs
+          node --check tests/ownership_ci_workflow_shape_50.test.mjs
           node --check bin/check-ownership-workflow-shape.mjs
-          node --test --test-reporter=tap tests/ownership_ci_workflow_shape_46.test.mjs | tee /tmp/atto-ownership-workflow-shape.tap
-          grep -Eq '^# tests 46$' /tmp/atto-ownership-workflow-shape.tap
-          grep -Eq '^# pass 46$' /tmp/atto-ownership-workflow-shape.tap
+          node --test --test-reporter=tap tests/ownership_ci_workflow_shape_50.test.mjs | tee /tmp/atto-ownership-workflow-shape.tap
+          grep -Eq '^# tests 50$' /tmp/atto-ownership-workflow-shape.tap
+          grep -Eq '^# pass 50$' /tmp/atto-ownership-workflow-shape.tap
           grep -Eq '^# fail 0$' /tmp/atto-ownership-workflow-shape.tap
           node bin/check-ownership-workflow-shape.mjs
       - name: Install Clang/LLVM developer toolchain
