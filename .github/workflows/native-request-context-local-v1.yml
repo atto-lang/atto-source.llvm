@@ -11,6 +11,8 @@ on:
       - "src/main/cpp/oreslang/runtime/RequestLocalSchedulerTurnV1.hpp"
       - "tests/native_request_context_local_v1_test.cpp"
       - "src/main/cpp/oreslang/runtime/RequestContextHandoffV1.hpp"
+      - "src/main/cpp/oreslang/runtime/RequestLocalStopGroupV1.hpp"
+      - "tests/native_request_stop_cancel_v1_test.cpp"
       - "tests/native_request_context_handoff_v1_test.cpp"
       - ".github/workflows/native-request-context-local-v1.yml"
   workflow_dispatch:
@@ -42,17 +44,19 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp)" = "d8da3cd331fc5b9b353179d251a8ea5dc44ad642"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp)" = "208bc62e93d19531a4dd77a4a7b64af90282fe5d"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp)" = "7b79138951aa878fe2ee43cfcef21277cb68b256"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp)" = "bcecb54e7750fca7ef84010a2fa3f66e6bf61902"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h)" = "cfd0e7f1d8fbd125a0ca20c7907432fc0407635c"
-          test "$(git hash-object tests/native_request_context_local_v1_test.cpp)" = "1a9faffae8412ca2a46e817757cc65f606d76839"
+          test "$(git hash-object tests/native_request_context_local_v1_test.cpp)" = "05f071f911650a53b7158135d07f22b2650ea64b"
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalSchedulerTurnV1.hpp)" = "08f21c4a37aa9836e1343d9a513acb2d9a8614b3"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = "684cb08fc30bad29bcf615e46321dbec23878d96"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.h)" = "4fd6636d5fbc1b4c13150bb14d1657119debf5b1"
           test "$(git hash-object src/main/cpp/oreslang/runtime/TaskCancellation.hpp)" = "7eafa420e92ba10e552dade1846f3862cb79aec7"
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextHandoffV1.hpp)" = "b0fc4ac5f1c92e92b8aeee03204603d438e544a7"
           test "$(git hash-object tests/native_request_context_handoff_v1_test.cpp)" = "e7e909861262df0d062350d1d309e91abafe66f6"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalStopGroupV1.hpp)" = "569d1275ff9326e1adf724e93f73b87c762e6197"
+          test "$(git hash-object tests/native_request_stop_cancel_v1_test.cpp)" = "9dc245b5a5f927e0ff7cb7e1df7c078a375ad9dc"
       - name: Compile and execute real actor two-request isolation
         shell: bash
         env:
@@ -83,4 +87,10 @@ jobs:
             -Isrc/main/cpp tests/native_request_context_handoff_v1_test.cpp \
             "$tmp/scheduler.o" -o "$tmp/request-handoff"
           "$tmp/request-handoff"
+          "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp tests/native_request_stop_cancel_v1_test.cpp \
+            "$tmp/scheduler.o" -o "$tmp/request-stop-cancel"
+          "$tmp/request-stop-cancel" | tee "$tmp/request-stop-cases.log"
+          test "$(grep -c '^REQUEST_STOP_CASE_PASS ' "$tmp/request-stop-cases.log")" = "30"
+          grep -qx 'REQUEST_STOP_CANCEL_30_HOST_CASES_PASS' "$tmp/request-stop-cases.log"
           printf 'REQUEST_CONTEXT_LOCAL_EXACT_SOURCE_HOST_PASS compiler=%s mode=%s\n' "$CC" "$MODE"
