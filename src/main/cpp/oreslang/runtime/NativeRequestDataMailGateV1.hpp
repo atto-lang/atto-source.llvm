@@ -28,9 +28,12 @@ public:
             std::uint64_t original_admitted_mail)
         : scheduler_(&scheduler), request_(std::move(request)),
           actor_(actor), original_mail_(original_admitted_mail) {
+        std::uint64_t authenticated_mail = 0;
         if (!request_ || !request_->identity().valid()
-                || !request_->belongs_to(actor_)
-                || !original_mail_
+                || !request_->belongs_to(actor_) || !original_mail_
+                || !ores_native_actor_scheduler_current_data_mail_sequence(
+                    scheduler_, actor_, &authenticated_mail)
+                || authenticated_mail != original_mail_
                 || !request_->bind_original_mail_once(original_mail_)) {
             throw std::invalid_argument("invalid native DATA-mail request binding");
         }
