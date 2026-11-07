@@ -24,8 +24,21 @@ struct Signature {
     bool returns_void = true;
     bool source_body_scanned_only = true;
 };
+// No source-only value may have the layout/type of typed_ir::Kernel:
+// typed_ir::Kernel.effects are accepted by the host preflight, while this
+// declaration has NOT had its body or transitive effects type-checked.
+// AccessHint is merely syntactic access implied by declared parameter views.
+enum class AccessHint { DeviceRead, DeviceWrite };
+struct SourceShape {
+    std::string symbol;
+    std::vector<typed_ir::Parameter> parameter_shapes;
+    std::vector<AccessHint> access_hints;
+    bool returns_void = true;
+    [[nodiscard]] static constexpr bool effects_verified() noexcept { return false; }
+    [[nodiscard]] static constexpr bool device_code_available() noexcept { return false; }
+};
 struct Linked {
-    typed_ir::Kernel kernel_shape;
+    SourceShape source_shape;
     source_mir::Candidate launch_shape;
     // These are literal source spellings; their referenced values are NOT
     // resolved to the host type checker or an authenticated provider snapshot.
@@ -76,19 +89,19 @@ inline std::vector<Signature> checked_catalog(std::vector<Signature> signatures)
     }
     return signatures;
 }
-inline typed_ir::Kernel signature_to_typed_shape(const Signature& input) {
+inline SourceShape signature_to_source_shape(const Signature& input) {
     const auto s = checked_signature(input);
-    typed_ir::Kernel result;
+    SourceShape result;
     result.symbol = s.symbol;
     result.returns_void = s.returns_void;
     bool reads = false, writes = false;
     for (const auto& p : s.parameters) {
-        result.parameters.push_back(p.type);
+        result.parameter_shapes.push_back(p.type);
         reads |= p.type == typed_ir::Parameter::ReadF32;
         writes |= p.type == typed_ir::Parameter::WriteF32;
     }
-    if (reads) result.effects.push_back(typed_ir::Effect::DeviceRead);
-    if (writes) result.effects.push_back(typed_ir::Effect::DeviceWrite);
+    if (reads) result.access_hints.push_back(AccessHint::DeviceRead);
+    if (writes) result.access_hints.push_back(AccessHint::DeviceWrite);
     return result;
 }
 inline Linked link(const std::vector<Signature>& declarations,
@@ -102,7 +115,7 @@ inline Linked link(const std::vector<Signature>& declarations,
         reject("GPU-LAUNCH-001", "source GPU kernel not declared in this unit");
     if (launch.ordered_arguments.size() != found->parameters.size())
         reject("GPU-LAUNCH-002", "GPU source launch arity differs from declaration");
-    auto resolved = signature_to_typed_shape(*found);
+    auto resolved = signature_to_source_shape(*found);
     auto arguments = launch.ordered_arguments;
     return {std::move(resolved), std::move(launch), std::move(arguments)};
 }
