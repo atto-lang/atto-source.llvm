@@ -138,9 +138,10 @@ public:
             return false;
         {
             std::lock_guard<std::mutex> guard(mutex_);
-            if (shutdown_.load(std::memory_order_acquire)) return false;
-            // Preserve single trusted shutdown caller. Worker runs until
-            // every terminated slot has been swept.
+            if (admissions_sealed_.load(std::memory_order_acquire))
+                return false;
+            // Seal the shutdown owner before retiring or joining; concurrent
+            // callers may not join the same worker or retire twice.
             admissions_sealed_.store(true, std::memory_order_release);
         }
         ores_native_actor_scheduler_retire(scheduler_);
