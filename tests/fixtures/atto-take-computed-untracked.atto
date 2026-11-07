@@ -1,0 +1,9 @@
+// EXPECT_COMPILE_ERROR: E_TAKE_UNTRACKED_PLACE
+// A computed int is an rvalue, not a tracked owner slot. The explicit take
+// must not imply that first was consumed while the native checker leaves it
+// live; bind a real source owner before transferring it.
+pub fnc main(): int {
+  let int first = 41;
+  let int moved = rt take (first + 1);
+  return moved;
+}
