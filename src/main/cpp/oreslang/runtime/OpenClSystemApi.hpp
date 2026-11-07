@@ -551,12 +551,36 @@ private:
                 dispatch_.get_device_ids(platforms[p], CL_DEVICE_TYPE_GPU,
                                          count, devices.get(), nullptr),
                 "clGetDeviceIDs");
-            if (!devices[0])
-                throw std::runtime_error("OpenCL returned null physical GPU device");
-            device_ = devices[0];
+            // Do not skip a compatible GPU just because the first reported
+            // device lacks the closed 64-bit/f32/little-endian SAXPY profile.
+            for (cl_uint d = 0; d < count && !device_; ++d) {
+                if (!devices[d])
+                    throw std::runtime_error("OpenCL returned null physical GPU device");
+                cl_uint bits = 0;
+                cl_device_fp_config fp = 0;
+                cl_bool little = 0;
+                cl_ulong max_bytes = 0;
+                require_success(dispatch_.get_device_info(
+                    devices[d], CL_DEVICE_ADDRESS_BITS, sizeof(bits), &bits,
+                    nullptr), "clGetDeviceInfo(candidate address bits)");
+                require_success(dispatch_.get_device_info(
+                    devices[d], CL_DEVICE_SINGLE_FP_CONFIG, sizeof(fp), &fp,
+                    nullptr), "clGetDeviceInfo(candidate fp32)");
+                require_success(dispatch_.get_device_info(
+                    devices[d], CL_DEVICE_ENDIAN_LITTLE, sizeof(little), &little,
+                    nullptr), "clGetDeviceInfo(candidate endianness)");
+                require_success(dispatch_.get_device_info(
+                    devices[d], CL_DEVICE_MAX_MEM_ALLOC_SIZE,
+                    sizeof(max_bytes), &max_bytes, nullptr),
+                    "clGetDeviceInfo(candidate max allocation)");
+                if (bits == 64 && fp != 0 && little != 0
+                        && max_bytes >= sizeof(float)) {
+                    device_ = devices[d];
+                }
+            }
         }
         if (!device_)
-            throw NoCompatibleGpu("OpenCL has no GPU device; CPU fallback is forbidden");
+            throw NoCompatibleGpu("no physical OpenCL GPU meets the admitted 64-bit/f32 profile");
 
         cl_uint address_bits = 0;
         require_success(
