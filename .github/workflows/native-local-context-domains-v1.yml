@@ -66,7 +66,7 @@ jobs:
           test "$(git hash-object tests/native_context_domains_v1_test.cpp)" = "c9fd993bd78e4a6b2bd27c384fff43276ca915dd"
           test "$(git hash-object tests/native_local_read_revocation_v1_test.cpp)" = "cf49e51bed5834fae1d76a1191ec18e41f379656"
           test "$(git hash-object tests/native_local_read_revocation_mutation_witness.sh)" = "0d256fe89fd963e520226f7207f434b9e6477be7"
-          test "$(git hash-object tests/run_native_local_context_m6_offline.sh)" = "c9af102013c275496d009d97b93aa4cab00e9000"
+          test "$(git hash-object tests/run_native_local_context_m6_offline.sh)" = "c5715841e1530898803f167fbec93e465de7b3ce"
           test "$(git hash-object tests/native_local_payload_budget_v1_test.cpp)" = "25dec8d5f15bafbc6d28d73f94c9027f21ca9ac5"
           printf 'source_head=%s\nsource_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
       - name: Compile and execute local-context native regression
