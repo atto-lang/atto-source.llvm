@@ -207,7 +207,9 @@ void test_reentrant_copy_safe_retirement() {
     ActorLocalKeyV1<ReentrantCopy> actor_key;
     assert(actor->set(actor_a, actor_key, ReentrantCopy(actor)));
     auto copied = actor->get_copy(actor_a, actor_key);
-    assert(copied);
+    // The value copy reentrantly closes its owner: no stale value may escape
+    // once that logical scope has been revoked during the copy.
+    assert(!copied);
     assert(!actor->is_open());
     assert(!actor->get_copy(actor_a, actor_key));
 
