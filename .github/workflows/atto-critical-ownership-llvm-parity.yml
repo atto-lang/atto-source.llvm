@@ -269,7 +269,20 @@ jobs:
           ctest --test-dir build -N -R '^(native_ownership_source_cfg_manifest_18_mutations|atto_ownership_source_cfg_real_compiler_50)$' > /tmp/atto-source-cfg-fixture-inventory.txt
           grep -Eq 'Test +#[0-9]+: native_ownership_source_cfg_manifest_18_mutations$' /tmp/atto-source-cfg-fixture-inventory.txt
           grep -Eq 'Test +#[0-9]+: atto_ownership_source_cfg_real_compiler_50$' /tmp/atto-source-cfg-fixture-inventory.txt
-          ctest --test-dir build -V -R '^native_ownership_source_cfg_manifest_18_mutations$' --timeout 90
+          ctest --test-dir build -V -R '^native_ownership_source_cfg_manifest_18_mutations$' \
+            --output-junit /tmp/atto-source-cfg-mut-18.xml --timeout 90 | tee /tmp/atto-source-cfg-mut-18.log
+          grep -Eq 'Ran 18 tests' /tmp/atto-source-cfg-mut-18.log
+          python3 - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('/tmp/atto-source-cfg-mut-18.xml').getroot()
+          observed = [x.get('name') for x in root.iter('testcase')]
+          if (int(root.get('tests', '-1')) != 1 or
+                  int(root.get('failures', '1')) or
+                  int(root.get('errors', '1')) or
+                  int(root.get('skipped', '1')) or
+                  observed != ['native_ownership_source_cfg_manifest_18_mutations']):
+              raise SystemExit('source CFG manifest mutation suite receipt invalid')
+          PY
           ctest --test-dir build -V -R '^atto_ownership_source_cfg_real_compiler_50$' \
             --output-junit /tmp/atto-source-cfg-50.xml --timeout 1100 | tee /tmp/atto-source-cfg-50.log
           grep -Fq 'ATTO_SOURCE_CFG_REAL_COMPILER_FIXTURES=50/50_EXECUTED' /tmp/atto-source-cfg-50.log
