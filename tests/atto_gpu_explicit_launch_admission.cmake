@@ -108,6 +108,11 @@ foreach(case_name IN LISTS cases)
   if("${result}" STREQUAL "0")
     message(FATAL_ERROR "${case_name}: unsupported physical GPU launch was compiled")
   endif()
+  # Crash, timeout or process-launch errors are not compiler diagnostics.
+  # Require an actual numeric nonzero compiler exit before validating stderr.
+  if(NOT "${result}" MATCHES "^[1-9][0-9]*$")
+    message(FATAL_ERROR "${case_name}: compiler failed without a numeric rejection exit: ${result}")
+  endif()
   # A diagnostic ID in an unrelated copied source line is not sufficient.
   # Require the exact code followed by a colon in the compiler's stderr.
   if(NOT "${error}" MATCHES "(^|[\\r\\n])oreslang-llvmc: ${expected_${case_name}}:")
