@@ -195,6 +195,7 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
 int main(int argc, char** argv) {
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
+    bool experimental_actor_guest_frames = false;
     bool wasm32_target = false;
     bool cortex_m_target = false;
     bool target_seen = false;
@@ -284,6 +285,11 @@ int main(int argc, char** argv) {
                 std::cerr << "duplicate rt scalar loop option\n"; return 2;
             }
             experimental_rt_scalar_loop = true;
+        } else if (arg == "--experimental-actor-guest-frames") {
+            if (experimental_actor_guest_frames) {
+                std::cerr << "duplicate actor guest frames option\n"; return 2;
+            }
+            experimental_actor_guest_frames = true;
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
@@ -359,6 +365,7 @@ int main(int argc, char** argv) {
             (tree_shake || !tree_shake_roots.empty() || native_hard_rt_profile ||
              rt_check_only || rt_entry_seen || rt_report_seen ||
              experimental_owned_int || experimental_rt_scalar_loop ||
+             experimental_actor_guest_frames ||
              target_seen || allocator_provider_seen)) {
         std::cerr << "constraint-descriptors is a metadata-only mode and cannot be combined with execution/codegen options\n";
         return 2;
@@ -409,6 +416,11 @@ int main(int argc, char** argv) {
         }
         if (experimental_rt_scalar_loop && (wasm32_target || experimental_owned_int))
             throw std::runtime_error("scalar-loop frame requires native host and no owned-int experiment");
+        if (experimental_actor_guest_frames &&
+                (wasm32_target || cortex_m_target || experimental_owned_int ||
+                 experimental_rt_scalar_loop || tree_shake || native_hard_rt_profile ||
+                 rt_report_seen || allocator_provider_seen))
+            throw std::runtime_error("actor guest frames M2 requires native host actor-only source and no other experimental modes");
         if (cortex_m_target && text.size() > 128u * 1024u)
             throw std::runtime_error("cortex-m source exceeds 128 KiB limit");
         if (native_hard_rt_profile && (wasm32_target || cortex_m_target))
@@ -737,7 +749,8 @@ int main(int argc, char** argv) {
             // so unsupported target features cannot hide in unreachable code.
             (void)oreslang::emit_verified_llvm_ir(
                 ast, wasm32_target, cortex_m_target,
-                bounded_allocator_provider);
+                bounded_allocator_provider,
+                experimental_actor_guest_frames);
 
             // The shipped pass is deliberately function-only. Richer Program
             // owners have hidden semantic/ABI roots that are not represented
@@ -749,7 +762,8 @@ int main(int argc, char** argv) {
         }
         std::cout << oreslang::emit_verified_llvm_ir(
                 ast, wasm32_target, cortex_m_target,
-                bounded_allocator_provider);
+                bounded_allocator_provider,
+                experimental_actor_guest_frames);
         std::cout.flush();
         if (coreLog) coreLog->dump(stderr);
         return 0;
