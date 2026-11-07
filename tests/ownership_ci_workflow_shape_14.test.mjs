@@ -80,11 +80,11 @@ test('14 untrusted empty source never claims workflow execution',()=>{
 });
 test('15 missing twelfth opaque-effects CTest inventory is rejected',()=>{
   denied(workflow.replace(
-    "          grep -Eq 'Test +#[0-9]+: native_ownership_mir_opaque_effects_18$' /tmp/atto-place-inventory.txt\\n",
+    "          grep -Eq 'Test +#[0-9]+: native_ownership_mir_opaque_effects_18$' /tmp/atto-place-inventory.txt\n",
     ''),'MISSING_OR_DUPLICATED_CTEST:mir_opaque_effects_18');
 });
 test('16 duplicated opaque-effects inventory assertion is rejected',()=>{
-  const line="          grep -Eq 'Test +#[0-9]+: native_ownership_mir_opaque_effects_18$' /tmp/atto-place-inventory.txt\\n";
+  const line="          grep -Eq 'Test +#[0-9]+: native_ownership_mir_opaque_effects_18$' /tmp/atto-place-inventory.txt\n";
   denied(workflow.replace(line,()=>line+line),
     'MISSING_OR_DUPLICATED_CTEST:mir_opaque_effects_18');
 });
