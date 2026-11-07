@@ -1,0 +1,312 @@
+{
+  "schema_version": 1,
+  "classification": "CANDIDATE_REAL_COMPILER_INPUTS_NOT_EXECUTED",
+  "requirements": {
+    "real_compiler_binary": true,
+    "semantic_diagnostic_on_negative": true,
+    "clang_link_and_guest_exit_on_positive": true,
+    "exact_50_distinct_source_programs": true
+  },
+  "cases": [
+    {
+      "id": "take-computed-01",
+      "category": "computed-take",
+      "expected_diagnostic": "E_TAKE_UNTRACKED_PLACE",
+      "source": "// Expected semantic ownership denial, not a parse error.\npub fnc main(): int {\n  let int first = 41;\n  let int second = 2;\n  let int consumed = rt take (first + 1);\n  return consumed;\n}\n"
+    },
+    {
+      "id": "take-computed-02",
+      "category": "computed-take",
+      "expected_diagnostic": "E_TAKE_UNTRACKED_PLACE",
+      "source": "// Expected semantic ownership denial, not a parse error.\npub fnc main(): int {\n  let int first = 41;\n  let int second = 2;\n  let int consumed = rt take (first - 1);\n  return consumed;\n}\n"
+    },
+    {
+      "id": "take-computed-03",
+      "category": "computed-take",
+      "expected_diagnostic": "E_TAKE_UNTRACKED_PLACE",
+      "source": "// Expected semantic ownership denial, not a parse error.\npub fnc main(): int {\n  let int first = 41;\n  let int second = 2;\n  let int consumed = rt take (first * 2);\n  return consumed;\n}\n"
+    },
+    {
+      "id": "take-computed-04",
+      "category": "computed-take",
+      "expected_diagnostic": "E_TAKE_UNTRACKED_PLACE",
+      "source": "// Expected semantic ownership denial, not a parse error.\npub fnc main(): int {\n  let int first = 41;\n  let int second = 2;\n  let int consumed = rt take (first + second);\n  return consumed;\n}\n"
+    },
+    {
+      "id": "take-computed-05",
+      "category": "computed-take",
+      "expected_diagnostic": "E_TAKE_UNTRACKED_PLACE",
+      "source": "// Expected semantic ownership denial, not a parse error.\npub fnc main(): int {\n  let int first = 41;\n  let int second = 2;\n  let int consumed = rt take (first - second);\n  return consumed;\n}\n"
+    },
+    {
+      "id": "take-computed-06",
+      "category": "computed-take",
+      "expected_diagnostic": "E_TAKE_UNTRACKED_PLACE",
+      "source": "// Expected semantic ownership denial, not a parse error.\npub fnc main(): int {\n  let int first = 41;\n  let int second = 2;\n  let int consumed = rt take (first * second);\n  return consumed;\n}\n"
+    },
+    {
+      "id": "take-computed-07",
+      "category": "computed-take",
+      "expected_diagnostic": "E_TAKE_UNTRACKED_PLACE",
+      "source": "// Expected semantic ownership denial, not a parse error.\npub fnc main(): int {\n  let int first = 41;\n  let int second = 2;\n  let int consumed = rt take ((first + second) + 1);\n  return consumed;\n}\n"
+    },
+    {
+      "id": "take-computed-08",
+      "category": "computed-take",
+      "expected_diagnostic": "E_TAKE_UNTRACKED_PLACE",
+      "source": "// Expected semantic ownership denial, not a parse error.\npub fnc main(): int {\n  let int first = 41;\n  let int second = 2;\n  let int consumed = rt take ((first - second) * second);\n  return consumed;\n}\n"
+    },
+    {
+      "id": "take-computed-09",
+      "category": "computed-take",
+      "expected_diagnostic": "E_TAKE_UNTRACKED_PLACE",
+      "source": "// Expected semantic ownership denial, not a parse error.\npub fnc main(): int {\n  let int first = 41;\n  let int second = 2;\n  let int consumed = rt take (first * (second + 1));\n  return consumed;\n}\n"
+    },
+    {
+      "id": "take-computed-10",
+      "category": "computed-take",
+      "expected_diagnostic": "E_TAKE_UNTRACKED_PLACE",
+      "source": "// Expected semantic ownership denial, not a parse error.\npub fnc main(): int {\n  let int first = 41;\n  let int second = 2;\n  let int consumed = rt take (-(first + 1));\n  return consumed;\n}\n"
+    },
+    {
+      "id": "share-borrowed-scalar-01",
+      "category": "borrowed-scalar-share",
+      "expected_diagnostic": "E_SHARE_BORROW",
+      "source": "// A scalar Copy trait does not authorize sharing a borrowed parameter.\npub fnc read(borrow int loan0): int {\n  return rt share loan0;\n}\npub fnc main(): int {\n  let int owner = 41;\n  return read(rt borrow owner);\n}\n"
+    },
+    {
+      "id": "share-borrowed-scalar-02",
+      "category": "borrowed-scalar-share",
+      "expected_diagnostic": "E_SHARE_BORROW",
+      "source": "// A scalar Copy trait does not authorize sharing a borrowed parameter.\npub fnc read(borrow int loan1): int {\n  return rt share loan1;\n}\npub fnc main(): int {\n  let int owner = 42;\n  return read(rt borrow owner);\n}\n"
+    },
+    {
+      "id": "share-borrowed-scalar-03",
+      "category": "borrowed-scalar-share",
+      "expected_diagnostic": "E_SHARE_BORROW",
+      "source": "// A scalar Copy trait does not authorize sharing a borrowed parameter.\npub fnc read(borrow int loan2): int {\n  return rt share loan2;\n}\npub fnc main(): int {\n  let int owner = 43;\n  return read(rt borrow owner);\n}\n"
+    },
+    {
+      "id": "share-borrowed-scalar-04",
+      "category": "borrowed-scalar-share",
+      "expected_diagnostic": "E_SHARE_BORROW",
+      "source": "// A scalar Copy trait does not authorize sharing a borrowed parameter.\npub fnc read(borrow int loan3): int {\n  return rt share loan3;\n}\npub fnc main(): int {\n  let int owner = 44;\n  return read(rt borrow owner);\n}\n"
+    },
+    {
+      "id": "share-borrowed-scalar-05",
+      "category": "borrowed-scalar-share",
+      "expected_diagnostic": "E_SHARE_BORROW",
+      "source": "// A scalar Copy trait does not authorize sharing a borrowed parameter.\npub fnc read(borrow int loan4): int {\n  return rt share loan4;\n}\npub fnc main(): int {\n  let int owner = 45;\n  return read(rt borrow owner);\n}\n"
+    },
+    {
+      "id": "share-borrowed-scalar-06",
+      "category": "borrowed-scalar-share",
+      "expected_diagnostic": "E_SHARE_BORROW",
+      "source": "// A scalar Copy trait does not authorize sharing a borrowed parameter.\npub fnc read(borrow int loan5): int {\n  return rt share loan5;\n}\npub fnc main(): int {\n  let int owner = 46;\n  return read(rt borrow owner);\n}\n"
+    },
+    {
+      "id": "share-borrowed-scalar-07",
+      "category": "borrowed-scalar-share",
+      "expected_diagnostic": "E_SHARE_BORROW",
+      "source": "// A scalar Copy trait does not authorize sharing a borrowed parameter.\npub fnc read(borrow int loan6): int {\n  return rt share loan6;\n}\npub fnc main(): int {\n  let int owner = 47;\n  return read(rt borrow owner);\n}\n"
+    },
+    {
+      "id": "share-borrowed-scalar-08",
+      "category": "borrowed-scalar-share",
+      "expected_diagnostic": "E_SHARE_BORROW",
+      "source": "// A scalar Copy trait does not authorize sharing a borrowed parameter.\npub fnc read(borrow int loan7): int {\n  return rt share loan7;\n}\npub fnc main(): int {\n  let int owner = 48;\n  return read(rt borrow owner);\n}\n"
+    },
+    {
+      "id": "share-borrowed-scalar-09",
+      "category": "borrowed-scalar-share",
+      "expected_diagnostic": "E_SHARE_BORROW",
+      "source": "// A scalar Copy trait does not authorize sharing a borrowed parameter.\npub fnc read(borrow int loan8): int {\n  return rt share loan8;\n}\npub fnc main(): int {\n  let int owner = 49;\n  return read(rt borrow owner);\n}\n"
+    },
+    {
+      "id": "share-borrowed-scalar-10",
+      "category": "borrowed-scalar-share",
+      "expected_diagnostic": "E_SHARE_BORROW",
+      "source": "// A scalar Copy trait does not authorize sharing a borrowed parameter.\npub fnc read(borrow int loan9): int {\n  return rt share loan9;\n}\npub fnc main(): int {\n  let int owner = 50;\n  return read(rt borrow owner);\n}\n"
+    },
+    {
+      "id": "share-borrowed-field-01",
+      "category": "borrowed-field-share",
+      "expected_diagnostic": "E_SHARE_BORROW",
+      "source": "// A class field's Copy trait cannot upgrade its borrowed root.\ndefine class Box0 as\n  pub let int field0 = 42;\nend\npub fnc read(borrow Box0 incoming): int {\n  return rt share incoming.field0;\n}\npub fnc main(): int {\n  let Box0 owner = new Box0();\n  return read(rt borrow owner);\n}\n"
+    },
+    {
+      "id": "share-borrowed-field-02",
+      "category": "borrowed-field-share",
+      "expected_diagnostic": "E_SHARE_BORROW",
+      "source": "// A class field's Copy trait cannot upgrade its borrowed root.\ndefine class Box1 as\n  pub let int field1 = 43;\nend\npub fnc read(borrow Box1 incoming): int {\n  return rt share incoming.field1;\n}\npub fnc main(): int {\n  let Box1 owner = new Box1();\n  return read(rt borrow owner);\n}\n"
+    },
+    {
+      "id": "share-borrowed-field-03",
+      "category": "borrowed-field-share",
+      "expected_diagnostic": "E_SHARE_BORROW",
+      "source": "// A class field's Copy trait cannot upgrade its borrowed root.\ndefine class Box2 as\n  pub let int field2 = 44;\nend\npub fnc read(borrow Box2 incoming): int {\n  return rt share incoming.field2;\n}\npub fnc main(): int {\n  let Box2 owner = new Box2();\n  return read(rt borrow owner);\n}\n"
+    },
+    {
+      "id": "share-borrowed-field-04",
+      "category": "borrowed-field-share",
+      "expected_diagnostic": "E_SHARE_BORROW",
+      "source": "// A class field's Copy trait cannot upgrade its borrowed root.\ndefine class Box3 as\n  pub let int field3 = 45;\nend\npub fnc read(borrow Box3 incoming): int {\n  return rt share incoming.field3;\n}\npub fnc main(): int {\n  let Box3 owner = new Box3();\n  return read(rt borrow owner);\n}\n"
+    },
+    {
+      "id": "share-borrowed-field-05",
+      "category": "borrowed-field-share",
+      "expected_diagnostic": "E_SHARE_BORROW",
+      "source": "// A class field's Copy trait cannot upgrade its borrowed root.\ndefine class Box4 as\n  pub let int field4 = 46;\nend\npub fnc read(borrow Box4 incoming): int {\n  return rt share incoming.field4;\n}\npub fnc main(): int {\n  let Box4 owner = new Box4();\n  return read(rt borrow owner);\n}\n"
+    },
+    {
+      "id": "share-borrowed-field-06",
+      "category": "borrowed-field-share",
+      "expected_diagnostic": "E_SHARE_BORROW",
+      "source": "// A class field's Copy trait cannot upgrade its borrowed root.\ndefine class Box5 as\n  pub let int field5 = 47;\nend\npub fnc read(borrow Box5 incoming): int {\n  return rt share incoming.field5;\n}\npub fnc main(): int {\n  let Box5 owner = new Box5();\n  return read(rt borrow owner);\n}\n"
+    },
+    {
+      "id": "share-borrowed-field-07",
+      "category": "borrowed-field-share",
+      "expected_diagnostic": "E_SHARE_BORROW",
+      "source": "// A class field's Copy trait cannot upgrade its borrowed root.\ndefine class Box6 as\n  pub let int field6 = 48;\nend\npub fnc read(borrow Box6 incoming): int {\n  return rt share incoming.field6;\n}\npub fnc main(): int {\n  let Box6 owner = new Box6();\n  return read(rt borrow owner);\n}\n"
+    },
+    {
+      "id": "share-borrowed-field-08",
+      "category": "borrowed-field-share",
+      "expected_diagnostic": "E_SHARE_BORROW",
+      "source": "// A class field's Copy trait cannot upgrade its borrowed root.\ndefine class Box7 as\n  pub let int field7 = 49;\nend\npub fnc read(borrow Box7 incoming): int {\n  return rt share incoming.field7;\n}\npub fnc main(): int {\n  let Box7 owner = new Box7();\n  return read(rt borrow owner);\n}\n"
+    },
+    {
+      "id": "share-borrowed-field-09",
+      "category": "borrowed-field-share",
+      "expected_diagnostic": "E_SHARE_BORROW",
+      "source": "// A class field's Copy trait cannot upgrade its borrowed root.\ndefine class Box8 as\n  pub let int field8 = 50;\nend\npub fnc read(borrow Box8 incoming): int {\n  return rt share incoming.field8;\n}\npub fnc main(): int {\n  let Box8 owner = new Box8();\n  return read(rt borrow owner);\n}\n"
+    },
+    {
+      "id": "share-borrowed-field-10",
+      "category": "borrowed-field-share",
+      "expected_diagnostic": "E_SHARE_BORROW",
+      "source": "// A class field's Copy trait cannot upgrade its borrowed root.\ndefine class Box9 as\n  pub let int field9 = 51;\nend\npub fnc read(borrow Box9 incoming): int {\n  return rt share incoming.field9;\n}\npub fnc main(): int {\n  let Box9 owner = new Box9();\n  return read(rt borrow owner);\n}\n"
+    },
+    {
+      "id": "share-owned-scalar-01",
+      "category": "owned-scalar-share",
+      "expected_guest_exit": 33,
+      "source": "// Positive: scalar Share may compile and execute with value 33.\npub fnc main(): int {\n  return rt share 33;\n}\n"
+    },
+    {
+      "id": "share-owned-scalar-02",
+      "category": "owned-scalar-share",
+      "expected_guest_exit": 34,
+      "source": "// Positive: scalar Share may compile and execute with value 34.\npub fnc main(): int {\n  return rt share 34;\n}\n"
+    },
+    {
+      "id": "share-owned-scalar-03",
+      "category": "owned-scalar-share",
+      "expected_guest_exit": 35,
+      "source": "// Positive: scalar Share may compile and execute with value 35.\npub fnc main(): int {\n  return rt share 35;\n}\n"
+    },
+    {
+      "id": "share-owned-scalar-04",
+      "category": "owned-scalar-share",
+      "expected_guest_exit": 36,
+      "source": "// Positive: scalar Share may compile and execute with value 36.\npub fnc main(): int {\n  return rt share 36;\n}\n"
+    },
+    {
+      "id": "share-owned-scalar-05",
+      "category": "owned-scalar-share",
+      "expected_guest_exit": 37,
+      "source": "// Positive: scalar Share may compile and execute with value 37.\npub fnc main(): int {\n  return rt share 37;\n}\n"
+    },
+    {
+      "id": "share-owned-scalar-06",
+      "category": "owned-scalar-share",
+      "expected_guest_exit": 38,
+      "source": "// Positive: scalar Share may compile and execute with value 38.\npub fnc main(): int {\n  return rt share 38;\n}\n"
+    },
+    {
+      "id": "share-owned-scalar-07",
+      "category": "owned-scalar-share",
+      "expected_guest_exit": 39,
+      "source": "// Positive: scalar Share may compile and execute with value 39.\npub fnc main(): int {\n  return rt share 39;\n}\n"
+    },
+    {
+      "id": "share-owned-scalar-08",
+      "category": "owned-scalar-share",
+      "expected_guest_exit": 40,
+      "source": "// Positive: scalar Share may compile and execute with value 40.\npub fnc main(): int {\n  return rt share 40;\n}\n"
+    },
+    {
+      "id": "share-owned-scalar-09",
+      "category": "owned-scalar-share",
+      "expected_guest_exit": 41,
+      "source": "// Positive: scalar Share may compile and execute with value 41.\npub fnc main(): int {\n  return rt share 41;\n}\n"
+    },
+    {
+      "id": "share-owned-scalar-10",
+      "category": "owned-scalar-share",
+      "expected_guest_exit": 42,
+      "source": "// Positive: scalar Share may compile and execute with value 42.\npub fnc main(): int {\n  return rt share 42;\n}\n"
+    },
+    {
+      "id": "copy-owned-scalar-01",
+      "category": "owned-scalar-copy",
+      "expected_guest_exit": 33,
+      "source": "// Positive: Copy is a value operation, not a borrowed root upgrade.\npub fnc main(): int {\n  return rt copy 33;\n}\n"
+    },
+    {
+      "id": "copy-owned-scalar-02",
+      "category": "owned-scalar-copy",
+      "expected_guest_exit": 34,
+      "source": "// Positive: Copy is a value operation, not a borrowed root upgrade.\npub fnc main(): int {\n  return rt copy 34;\n}\n"
+    },
+    {
+      "id": "copy-owned-scalar-03",
+      "category": "owned-scalar-copy",
+      "expected_guest_exit": 35,
+      "source": "// Positive: Copy is a value operation, not a borrowed root upgrade.\npub fnc main(): int {\n  return rt copy 35;\n}\n"
+    },
+    {
+      "id": "copy-owned-scalar-04",
+      "category": "owned-scalar-copy",
+      "expected_guest_exit": 36,
+      "source": "// Positive: Copy is a value operation, not a borrowed root upgrade.\npub fnc main(): int {\n  return rt copy 36;\n}\n"
+    },
+    {
+      "id": "copy-owned-scalar-05",
+      "category": "owned-scalar-copy",
+      "expected_guest_exit": 37,
+      "source": "// Positive: Copy is a value operation, not a borrowed root upgrade.\npub fnc main(): int {\n  return rt copy 37;\n}\n"
+    },
+    {
+      "id": "copy-owned-scalar-06",
+      "category": "owned-scalar-copy",
+      "expected_guest_exit": 38,
+      "source": "// Positive: Copy is a value operation, not a borrowed root upgrade.\npub fnc main(): int {\n  return rt copy 38;\n}\n"
+    },
+    {
+      "id": "copy-owned-scalar-07",
+      "category": "owned-scalar-copy",
+      "expected_guest_exit": 39,
+      "source": "// Positive: Copy is a value operation, not a borrowed root upgrade.\npub fnc main(): int {\n  return rt copy 39;\n}\n"
+    },
+    {
+      "id": "copy-owned-scalar-08",
+      "category": "owned-scalar-copy",
+      "expected_guest_exit": 40,
+      "source": "// Positive: Copy is a value operation, not a borrowed root upgrade.\npub fnc main(): int {\n  return rt copy 40;\n}\n"
+    },
+    {
+      "id": "copy-owned-scalar-09",
+      "category": "owned-scalar-copy",
+      "expected_guest_exit": 41,
+      "source": "// Positive: Copy is a value operation, not a borrowed root upgrade.\npub fnc main(): int {\n  return rt copy 41;\n}\n"
+    },
+    {
+      "id": "copy-owned-scalar-10",
+      "category": "owned-scalar-copy",
+      "expected_guest_exit": 42,
+      "source": "// Positive: Copy is a value operation, not a borrowed root upgrade.\npub fnc main(): int {\n  return rt copy 42;\n}\n"
+    }
+  ]
+}
