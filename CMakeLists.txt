@@ -1292,10 +1292,10 @@ if(BUILD_TESTING)
 
     # The manifest mutation suite is independent of LLVM/Clang installation,
     # and the 50-case matrix MUST run the actual native compiler and guest.
-    add_test(NAME native_ownership_place_mir_manifest_17_mutations
+    add_test(NAME native_ownership_place_mir_manifest_19_mutations
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ownership_compiler_fixture_matrix.py")
-    set_tests_properties(native_ownership_place_mir_manifest_17_mutations
+    set_tests_properties(native_ownership_place_mir_manifest_19_mutations
         PROPERTIES TIMEOUT 30)
     if(ORE_CLANG)
         add_test(NAME atto_ownership_place_mir_real_compiler_50
