@@ -21,6 +21,7 @@ def canonical():
     for name in sorted(EXPECTED):
         case = ET.SubElement(suite, "testcase", name=name,
                              status="run", time="0.7")
+        ET.SubElement(case, "properties")  # actual CTest 3.31 report shape
         output = ET.SubElement(case, "system-out")
         if name == MIXED:
             output.text = "production compiler ran\n" + MIXED_MARKER + "\n"
@@ -85,9 +86,25 @@ class MixedCertificateMutationTests(unittest.TestCase):
         root.set("tests", "6")
         rejection(root)
 
-    def test_missing_error_total_denied(self):
+    def test_missing_errors_total_accepted_like_real_ctest(self):
         root = canonical()
         root.attrib.pop("errors")
+        self.assertEqual(verify_junit(xml(root))["verified_tests"], 5)
+
+    def test_nonzero_errors_total_denied(self):
+        root = canonical()
+        root.set("errors", "1")
+        rejection(root)
+
+    def test_nonempty_properties_denied(self):
+        root = canonical()
+        props = root[0].find("properties")
+        ET.SubElement(props, "property", name="forged", value=MIXED_MARKER)
+        rejection(root)
+
+    def test_nonzero_disabled_total_denied(self):
+        root = canonical()
+        root.set("disabled", "1")
         rejection(root)
 
     def test_nonfinite_seconds_denied(self):
