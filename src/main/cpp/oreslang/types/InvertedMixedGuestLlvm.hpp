@@ -12,6 +12,7 @@
 #include <cstring>
 #include <iomanip>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -20,9 +21,16 @@
 
 namespace oreslang::dop::mir {
 
+struct F64EqSelect {
+    InvertedSourceLiteral expected;
+    std::int64_t if_equal = 0;
+    std::int64_t if_unequal = 0;
+};
 struct MixedIrOperands {
     std::vector<std::array<InvertedSourceLiteral, 3>> rows;
     std::vector<InvertedSourceLiteral> writes;
+    // Present only for the terminal runtime-observed f64 comparison.
+    std::optional<F64EqSelect> terminal_f64_compare;
 };
 struct VerifiedMixedSource {
     Module mir;
@@ -115,6 +123,9 @@ inline VerifiedMixedSource verify_production_inverted_mixed(const Program& progr
         if (operation.values != std::array<std::int64_t, 2>{} ||
                 operation.value != 0)
             throw std::logic_error("mixed inverted command has legacy scalar metadata");
+        if (operation.kind != InvertedSourceOperation::Kind::ReturnCompareF64 &&
+                (operation.equal_result != 0 || operation.unequal_result != 0))
+            throw std::logic_error("mixed inverted nonterminal operation has comparison metadata");
         switch (operation.kind) {
             case InvertedSourceOperation::Kind::Push: {
                 if (operation.index != 0 || !operation.field.empty() ||
@@ -155,6 +166,24 @@ inline VerifiedMixedSource verify_production_inverted_mixed(const Program& progr
                     throw std::invalid_argument("mixed inverted main must return i64");
                 plan.read_runtime_checked(operation.index, operation.field);
                 plan.close(); // revoke and scrub every stack column
+                returned = true;
+                break;
+            case InvertedSourceOperation::Kind::ReturnCompareF64:
+                if (!unused_mixed_values(operation.mixed_values))
+                    throw std::invalid_argument("invalid mixed inverted f64 comparison metadata");
+                if (n + 1 != source.operations.size())
+                    throw std::logic_error("mixed inverted f64 comparison must be terminal");
+                if (layout.column(layout.field_index(operation.field)).type !=
+                        InvertedScalarKind::F64)
+                    throw std::invalid_argument("mixed inverted f64 compare must read f64 column");
+                check_mixed_literal(operation.mixed_value, InvertedScalarKind::F64);
+                plan.read_runtime_checked(operation.index, operation.field);
+                plan.close();
+                operands.terminal_f64_compare = F64EqSelect{
+                    operation.mixed_value,
+                    operation.equal_result,
+                    operation.unequal_result
+                };
                 returned = true;
                 break;
             default:
