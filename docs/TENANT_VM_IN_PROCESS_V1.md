@@ -3,10 +3,20 @@
 One OS process hosts up to 1000 tenants, with one VM per tenant and that tenant's actors inside
 it. On GraalVM a VM is a Graal isolate. On LLVM, Wasm and .NET it is what this document describes.
 
-Status: working runtime with end-to-end evidence, including whole `.atto` programs that spawn, send
-and stop. The language subset is still narrow (see [What `.atto` can do](#what-atto-can-do-in-a-vm)). All
-evidence below is local: no GitHub Actions job has run this code. No backend is certified as a
-production boundary.
+Status: experimental runtime with local end-to-end evidence, including whole `.atto` programs
+that spawn, send and stop. The language subset is still narrow (see
+[What `.atto` can do](#what-atto-can-do-in-a-vm)). All evidence below is local:
+no GitHub Actions job has run this code. No backend is certified as a production boundary.
+
+**Security hold:** This native in-process topology is a trusted-code research
+experiment, not the default for hostile/untrusted tenants. The C guest ABI itself
+notes that the cage addressing rule is not enforced at its boundary. The native
+loader checks a caller-provided SHA-256 against the bytes it maps, but that
+does not prove source provenance, trustworthy compiler output or that native
+instructions are cage-confined. A malicious native library still has the host
+process's authority. Keep the process-isolated untrusted-tenant contract in force
+until a separately trusted admission/signing chain and executable confinement
+evidence are implemented and independently reviewed.
 
 ## What a VM is
 
