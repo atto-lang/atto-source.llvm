@@ -101,6 +101,26 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
 /* Compatibility API: 1 iff accepted, 0 otherwise. Prefer typed try_send. */
 int ores_native_actor_scheduler_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
+/* Bootstrap-only trusted host termination fence. Installed before the first
+ * actor spawn or carrier start. Called exactly once for each actor incarnation
+ * on ordinary STOP, sealed STOP, or scheduler-wide retirement, while the same
+ * lifecycle mutex serializes admission and STOP. The callback MUST be bounded,
+ * allocation-free, nonblocking and lock-free: it may only publish atomic
+ * revocation tokens. In particular it MUST NOT call scheduler APIs, request
+ * close(), cancellation, a guest function, or a destructor. Request cleanup
+ * and quiescence waits belong to an external CONTROL-plane sweeper AFTER this
+ * callback. The observer context must outlive the scheduler.
+ *
+ * This is a host-only fencing primitive, NOT completed RequestLocal teardown
+ * and NOT an authorized guest interface.
+ */
+typedef void (*OresNativeActorTerminationObserverV1)(
+    void* context, OresNativeActorRef actor,
+    OresNativeActorTerminationKind kind);
+int ores_native_actor_scheduler_configure_termination_observer_v1(
+    OresNativeActorScheduler* scheduler,
+    OresNativeActorTerminationObserverV1 observer,
+    void* context);
 int ores_native_actor_scheduler_stop(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
 /* Seal user DATA immediately while preserving an already-active turn and
