@@ -82,15 +82,22 @@ int main() {
     check(store.live_generation_count() == 1);
     check(store.publish({ready}) > g2);
 
-    // Pins own immutable state independently from store shutdown.
+    // A temporary pin may expire immediately: at() must return an owned
+    // key instead of a dangling reference into the retired generation.
+    Key copied_from_temporary_pin = store.pin_latest()->at(0);
+    check(copied_from_temporary_pin == ready);
+    // Pins own immutable state independently from store shutdown, while
+    // live_generation_count() must continue to account retained bytes.
     auto pinned_after_close = store.pin_latest();
     store.close();
     store.close();
     check(pinned_after_close->at(0) == ready);
+    check(store.live_generation_count() == 1);
     expect_rejected<std::logic_error>([&] { (void)store.pin_latest(); });
     expect_rejected<std::logic_error>([&] { (void)store.publish({ready}); });
     pinned_after_close.reset();
     check(store.live_generation_count() == 0);
+    check(copied_from_temporary_pin == ready);
 
     // No global mutable intern table: concurrently read distinct snapshots.
     SharedSymbolLiteralImageStore concurrent;
