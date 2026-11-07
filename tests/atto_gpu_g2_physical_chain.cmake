@@ -9,6 +9,9 @@ if(NOT EXISTS "${COMPILER}" OR NOT EXISTS "${FIXTURE}" OR
    NOT EXISTS "${OFFLINE_SCRIPT}")
   message(FATAL_ERROR "GPU-G2-006: compiler, source, LLVM target, hardware test or gate missing")
 endif()
+# Rejected or stale fixture identities must not retain any old PTX artifact.
+file(MAKE_DIRECTORY "${WORKDIR}")
+file(REMOVE "${WORKDIR}/kernel.ll" "${WORKDIR}/kernel.ptx")
 file(SHA256 "${FIXTURE}" source_sha256)
 # The SHA is the canonical GitHub G1 .atto fixture. Changing the source
 # requires a reviewed update to this expected identity, never a silent fallback.
@@ -16,8 +19,6 @@ set(expected_source_sha256 "c39562871d7287634c44180dcf0bc63e6602f7b261f28895eedf
 if(NOT source_sha256 STREQUAL expected_source_sha256)
   message(FATAL_ERROR "GPU-G2-006: canonical .atto fixture hash changed")
 endif()
-file(MAKE_DIRECTORY "${WORKDIR}")
-file(REMOVE "${WORKDIR}/kernel.ll" "${WORKDIR}/kernel.ptx")
 execute_process(
   COMMAND "${CMAKE_COMMAND}"
     "-DCOMPILER=${COMPILER}" "-DFIXTURE=${FIXTURE}"
