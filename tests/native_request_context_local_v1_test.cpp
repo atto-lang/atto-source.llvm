@@ -71,6 +71,16 @@ namespace {
 using Context = RequestContextLocalV1;
 thread_local int test_native_tls_marker = 0;
 
+// HOST-ONLY reentrant copy probe. This opaque C++ pointer carrier is not
+// allowed in guest AttoLang typed locals without a compiler-owned descriptor.
+struct CloseScopeDuringCopy {
+    RequestContextLocalV1* scope;
+    explicit CloseScopeDuringCopy(RequestContextLocalV1* s) : scope(s) {}
+    CloseScopeDuringCopy(CloseScopeDuringCopy&&) noexcept = default;
+    CloseScopeDuringCopy(const CloseScopeDuringCopy& other) : scope(other.scope) {
+        assert(scope->close());
+    }
+};
 struct Scenario {
     OresNativeActorScheduler* scheduler = nullptr;
     OresNativeActorRef actor{};
@@ -117,6 +127,23 @@ void on_actor_message(void* userdata, std::size_t actor_index,
             s.scheduler, s.actor, *s.left, s.trace,
             std::string("trace-left")));
         assert(s.left->set(s.counter, 1));
+
+        // A copy constructor can close its own source scope. The legacy
+        // actor adapter must revalidate after copy and return no snapshot.
+        auto copy_cancel = TaskCancellation::root();
+        auto copy_scope = Context::open(
+            {11, 22, 503, 1, s.actor}, copy_cancel);
+        assert(copy_scope);
+        assert(copy_scope->bind_original_mail_once(mail));
+        RequestLocalKeyV1<CloseScopeDuringCopy> copied;
+        assert(request_local_set_on_actor_turn_v1(
+            s.scheduler, s.actor, *copy_scope, copied,
+            CloseScopeDuringCopy(copy_scope.get())));
+        assert(!request_local_get_on_actor_turn_v1(
+            s.scheduler, s.actor, *copy_scope, copied));
+        assert(!copy_scope->active());
+        copy_scope.reset();
+        copy_cancel->retire();
     } else if (payload == 2) {
         assert(test_native_tls_marker == 41);
         assert(!s.right->get_copy(s.trace));
