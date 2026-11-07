@@ -5,6 +5,8 @@ on:
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
       - 'src/main/cpp/oreslang/frontend/GpuLaunchSourceMir.hpp'
       - 'src/main/cpp/oreslang/frontend/GpuKernelSourceLink.hpp'
+      - 'src/main/cpp/oreslang/frontend/GpuKernelBodyHir.hpp'
+      - 'tests/gpu_kernel_body_hir_test.cpp'
       - 'src/main/cpp/oreslang/runtime/GpuTypedLaunchIr.hpp'
       - 'tests/gpu_kernel_source_link_test.cpp'
       - 'tests/atto_gpu_kernel_source_link_admission.cmake'
