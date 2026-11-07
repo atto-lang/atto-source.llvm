@@ -978,7 +978,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceRequestStop,
         sourceAwaitReady, sourceAwaitDone;
-    llvm::FunctionCallee actorScopedNew, actorScopedDrop;
+    llvm::FunctionCallee actorScopedNew, actorScopedDrop, sourceFrameI64Slot;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
     if (!source.actors.empty() && !wasm32_target) {
         auto* voidTy = llvm::Type::getVoidTy(context);
@@ -996,6 +996,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         actorScopedDrop = module.getOrInsertFunction("ores_actor_i64_heap_scoped_drop",
             llvm::FunctionType::get(voidTy,
                 {native_ptr, i64, i64, native_ptr}, false));
+        sourceFrameI64Slot = module.getOrInsertFunction(
+            "oreslang_source_actor_frame_i64_slot",
+            llvm::FunctionType::get(native_ptr, {i64, i64, i64}, false));
         sourceSpawn = module.getOrInsertFunction("oreslang_source_actor_spawn",
             llvm::FunctionType::get(native_ptr, {native_ptr, native_ptr, i64}, false));
         sourceSend = module.getOrInsertFunction("oreslang_source_actor_send",
@@ -2744,8 +2747,23 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         llvm::Value* currentEpoch = &*args++;
         llvm::Value* incoming = &*args++;
         std::unordered_map<std::string, llvm::Value*> values, emptyFields;
+        // Only this closed synchronous scalar handler subset may borrow a
+        // real actor-owned frame slot. The runtime admits one actor turn,
+        // validates heap turn epoch and scrubs all frame bytes before release.
+        // Opaque heap ownership tokens remain separate compiler scratch.
+        std::size_t next_frame_slot = 0;
+        auto actor_scalar_place = [&](const std::string& name) -> llvm::Value* {
+            if (next_frame_slot >= 8192)
+                throw std::runtime_error("source actor scalar frame exceeds 64 KiB");
+            llvm::Value* address = builder.CreateCall(sourceFrameI64Slot,
+                {currentDomain, currentEpoch,
+                 llvm::ConstantInt::get(i64, next_frame_slot++)},
+                name + ".actor.frame.address");
+            return builder.CreatePointerCast(address, loan_ptr,
+                name + ".actor.frame.i64");
+        };
         const std::string param = actor.on_message.parameters[0].name;
-        llvm::Value* pslot = builder.CreateAlloca(i64, nullptr, param + ".slot");
+        llvm::Value* pslot = actor_scalar_place(param);
         builder.CreateStore(incoming, pslot);
         values.emplace(param, pslot);
         for (std::size_t i=0; i<actor.fields.size(); ++i) {
@@ -2753,7 +2771,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             llvm::Value* value = builder.CreateCall(fieldRead, {
                 actorHeap, currentDomain, currentEpoch, llvm::ConstantInt::get(i64,i)},
                 field.name + ".read");
-            llvm::Value* slot = builder.CreateAlloca(i64, nullptr, field.name + ".slot");
+            llvm::Value* slot = actor_scalar_place(field.name);
             builder.CreateStore(value, slot);
             values.emplace(field.name, slot);
         }
@@ -2770,9 +2788,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 local.name + ".actor.owned.token");
             builder.CreateCall(actorScopedNew,
                 {actorHeap, currentDomain, currentEpoch, initial, token});
-            // Pure reads of an immutable scalar agree with the native payload.
-            llvm::Value* slot = builder.CreateAlloca(i64, nullptr,
-                local.name + ".actor.owned.cached");
+            // Compiler-owned scalar value is stored in actual per-actor frame
+            // bytes instead of a carrier-stack cached local. The independent
+            // 3-word heap token still enforces owned temporary drop.
+            llvm::Value* slot = actor_scalar_place(local.name);
             builder.CreateStore(initial, slot);
             values.emplace(local.name, slot);
             actor_owned_tokens.push_back(token);
