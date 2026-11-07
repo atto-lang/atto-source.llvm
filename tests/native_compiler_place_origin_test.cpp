@@ -12,6 +12,7 @@ using oreslang::native_ownership::Locals;
 using oreslang::native_ownership::LocalOwnership;
 using oreslang::native_ownership::PlaceOrigin;
 using oreslang::native_ownership::resolve_compiler_place;
+using oreslang::native_ownership::compiler_place_key;
 
 Expression make(K kind, std::string name) {
     Expression node{};
@@ -43,6 +44,16 @@ bool expect(const char* description, const Expression& expression,
         std::cerr << "native compiler-resolved place failure: " << description
                   << " case " << executed << '\n';
         return false;
+    }
+    if (result) {
+        std::string expected = "owner";
+        for (unsigned index = 0; index < expected_fields; ++index)
+            expected += ".member";
+        if (compiler_place_key(*result) != expected) {
+            std::cerr << "native CFG source-place key differs from checker at "
+                      << executed << '\n';
+            return false;
+        }
     }
     return true;
 }
