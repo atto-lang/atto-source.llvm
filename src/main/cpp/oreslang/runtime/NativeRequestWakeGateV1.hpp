@@ -55,7 +55,7 @@ public:
     template <typename T>
     bool set(const RequestLocalKeyV1<T>& key, T value) {
         if (!authorized()) return false;
-        return request_->set(key, std::move(value));
+        return request_->set(key, std::move(value), scheduler_);
     }
 
     template <typename T>
@@ -69,7 +69,7 @@ public:
     template <typename T>
     bool remove(const RequestLocalKeyV1<T>& key) {
         if (!authorized()) return false;
-        return request_->erase(key);
+        return request_->erase(key, scheduler_);
     }
 
 private:

@@ -261,6 +261,23 @@ int ores_native_actor_scheduler_drain(OresNativeActorScheduler* scheduler);
 /* Whether this OS thread is currently executing a callback from scheduler.
  * Only intended for immediate deadlock prevention in VM teardown. */
 int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* scheduler);
+/* Nonblocking global native carrier check for trusted CONTROL-only APIs.
+ * A carrier from ANY native scheduler (not just the supplied domain) must
+ * never call blocking request retirement or quiescence barriers. */
+int ores_native_actor_scheduler_is_any_current_carrier_v1(void);
+
+// Trusted-host ONLY callback gate. The scheduler serializes this bounded
+// nonallocating C operation against stop(), stop_sealed(), and retire() using
+// its lifecycle mutex. A STOP winning first never runs callback; a callback
+// winning first commits before STOP can acquire that same mutex.
+// CRITICAL: callback must not allocate, invoke guest code, call scheduler
+// APIs, suspend, block, acquire external mutexes, or run destructors.
+// This is NOT a guest-callable API or a generic executor.
+typedef int (*OresNativeActorBoundedCommitV1)(void* opaque);
+int ores_native_actor_scheduler_commit_if_running_v1(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
+    OresNativeActorBoundedCommitV1 commit, void* opaque);
+
 /* Exact live actor identity for trusted callback/FFI bridges only. */
 int ores_native_actor_scheduler_is_current_actor(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);

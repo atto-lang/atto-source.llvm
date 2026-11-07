@@ -188,3 +188,50 @@ values are NOT guest APIs. Genuine tenant/isolate origin and a jointly
 linearized STOP/cancel/write/borrow fence are still required. A STOP racing
 an already-authorized host mutation has not been proven impossible.
 Retain draft, maintain #1391 as the alternate draft, and do not claim parity.
+
+## STOP / cancellation commit and in-flight lease integration (2026-11-07)
+
+- RequestContextLocalV1::set, erase and first-mail binding now use
+  TaskCancellation::with_active_authority at the final store mutation.
+  Cancellation/retirement winning graph authority first denies the commit;
+  a prior commit linearizes before cancellation can be observed. User value
+  copies, moves and destruction are outside the authority graph lock.
+- To make the graph-locked commit bounded and allocation-free, request open
+  reserves all 32 map slots. A new map node is allocated and extracted
+  BEFORE graph authority, then inserted without a rehash. Erase extracts a
+  node and destroys/deallocates it outside both store and authority locks.
+- get_copy now rechecks open + cancellation/retirement after a user-defined
+  copy; reentrant close/cancel fails closed rather than releasing a snapshot.
+- Each RequestLocal operation holds a noncopyable, scope-owned in-flight
+  lease, including during any host copy/move outside the store mutex.
+  close() seals new admission but does NOT synchronously block a carrier.
+- New host CONTROL-plane RequestLocalStopGroupV1 registers all request
+  contexts of one exact actor incarnation, closes them first, calls
+  scheduler.stop_sealed to unblock STOP-dependent work, then waits for
+  pinned operations to finish and for scheduler.wait_done. It refuses to
+  block the same scheduler's carrier.
+  Sibling actors are not closed by this group. Every STOP path must be
+  routed through this trusted bridge or separately revoke its requests;
+  direct native scheduler STOP remains an unproven guest ABI bypass.
+- Added 38 distinct named host assertions covering STOP vs value move,
+  cancel vs value move, close vs value-copy, STOP vs pinned read, original
+  DATA mail identity, quotas, generation scope, sibling actor survival and
+  refusal to wait for STOP from another scheduler's callback carrier.
+  Real GCC/Clang optimized, ASan/UBSan and TSan workflow targets are
+  attached to the original RequestLocal workflow, with exact blob pins.
+- Source-level structural audits and isolated GCC/Clang C++17 node-handle
+  and lease syntax probes are NOT full repository native execution.
+  Hosted Actions with runner_id=0 or null and steps=[] or null remain
+  runner-admission failures; compiled .atto parity remains unproven.
+
+Remaining work before guest ABI exposure: enforce issuer-proven tenant,
+isolate and request identity; integrate the STOP bridge at every scheduler
+termination path; compiler-owned type/borrow admission; review graph mutex
+ordering and sanitizer evidence; exact-head compiled .atto receipts and
+independent review. Never treat host C++ custom aggregates as guest values.
+
+NativeActorScheduler now offers a host-only global carrier predicate so
+CONTROL-only blocking STOP helpers reject callback carriers from **any**
+scheduler domain, not just the actor's owning scheduler. The scheduler
+source/header blobs are pinned in both affected workflows. A three-case
+cross-scheduler negative fixture exercises this guard; it is not yet executed.

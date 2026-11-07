@@ -10,6 +10,7 @@
 #include "oreslang/runtime/TaskCancellation.hpp"
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -131,15 +132,24 @@ public:
     // Trusted-ingress one-shot binding to scheduler-minted original DATA mail.
     // This identity is immutable once set; neither a later pooled-actor mail
     // nor a wake callback may silently rebind an existing request.
-    bool bind_original_mail_once(std::uint64_t admitted_mail) {
+    bool bind_original_mail_once(std::uint64_t admitted_mail,
+                                 OresNativeActorScheduler* scheduler = nullptr) {
         if (!admitted_mail) return false;
         std::lock_guard<std::mutex> lock(mutex_);
         // This tiny mutation is serialized with cancellation and retirement
         // by the cancellation graph's authority mutex. No user callbacks.
         return cancellation_->with_active_authority([&] {
-            if (!open_) return false;
-            if (!original_mail_sequence_) original_mail_sequence_ = admitted_mail;
-            return original_mail_sequence_ == admitted_mail;
+            auto commit = [&]() -> bool {
+                if (!open_) return false;
+                if (!original_mail_sequence_) original_mail_sequence_ = admitted_mail;
+                return original_mail_sequence_ == admitted_mail;
+            };
+            return !scheduler ? commit()
+                : ores_native_actor_scheduler_commit_if_running_v1(
+                    scheduler, identity_.actor,
+                    [](void* ptr) -> int {
+                        return (*static_cast<decltype(commit)*>(ptr))() ? 1 : 0;
+                    }, &commit) != 0;
         });
     }
 
@@ -161,7 +171,10 @@ public:
     }
 
     template <typename T>
-    bool set(const RequestLocalKeyV1<T>& key, T value) {
+    bool set(const RequestLocalKeyV1<T>& key, T value,
+             OresNativeActorScheduler* scheduler = nullptr) {
+        auto operation = begin_operation();
+        if (!operation) return false;
         // Host-only measured payload limit; composite deep-size descriptors
         // and compiler ownership checks remain mandatory for guest access.
         const std::size_t bytes = local_measured_payload_bytes_v1(value);
@@ -175,6 +188,12 @@ public:
                 bytes > max_bytes - (used_bytes_ - old)) return false;
         }
         auto next = std::make_shared<Cell<T>>(std::move(value), bytes);
+        // Preallocate an owned map node outside TaskCancellation's authority
+        // mutex. Every scope reserves all 32 bucket positions at open, so
+        // node insertion cannot rehash/allocate during the final commit.
+        std::unordered_map<std::uint64_t, std::shared_ptr<CellBase>> staged;
+        staged.emplace(key.id_, next);
+        auto staged_node = staged.extract(key.id_);
         std::shared_ptr<CellBase> previous;
         bool committed = false;
         {
@@ -184,20 +203,32 @@ public:
             // earlier commit finishes before cancellation can become visible.
             // No guest copy/move/dtor or user callback runs under graph lock.
             committed = cancellation_->with_active_authority([&] {
-                if (!open_) return false;
-                auto found = slots_.find(key.id_);
-                const std::size_t old =
-                    found == slots_.end() ? 0 : found->second->bytes;
-                if ((found == slots_.end() && slots_.size() >= max_slots) ||
-                    bytes > max_bytes - (used_bytes_ - old)) return false;
-                if (found == slots_.end()) {
-                    slots_.emplace(key.id_, std::move(next));
-                } else {
-                    previous.swap(found->second);
-                    found->second = std::move(next);
-                }
-                used_bytes_ = used_bytes_ - old + bytes;
-                return true;
+                auto commit = [&]() -> bool {
+                    if (!open_) return false;
+                    auto found = slots_.find(key.id_);
+                    const std::size_t old =
+                        found == slots_.end() ? 0 : found->second->bytes;
+                    if ((found == slots_.end() && slots_.size() >= max_slots) ||
+                        bytes > max_bytes - (used_bytes_ - old)) return false;
+                    if (found == slots_.end()) {
+                        // Node and bucket array allocated before the gate.
+                        slots_.insert(std::move(staged_node));
+                    } else {
+                        previous.swap(found->second);
+                        found->second = std::move(next);
+                    }
+                    used_bytes_ = used_bytes_ - old + bytes;
+                    return true;
+                };
+                // TRUSTED ADAPTER ONLY: this bounded commit executes while
+                // scheduler STOP/retire holds the same lifecycle mutex.
+                // Compiler/guest APIs must always supply the scheduler.
+                return !scheduler ? commit()
+                    : ores_native_actor_scheduler_commit_if_running_v1(
+                        scheduler, identity_.actor,
+                        [](void* ptr) -> int {
+                            return (*static_cast<decltype(commit)*>(ptr))() ? 1 : 0;
+                        }, &commit) != 0;
             });
         }
         previous.reset(); // reentrant destructors never run with the scope locked
@@ -206,6 +237,8 @@ public:
 
     template <typename T>
     std::optional<T> get_copy(const RequestLocalKeyV1<T>& key) const {
+        auto operation = begin_operation();
+        if (!operation) return std::nullopt;
         std::shared_ptr<const Cell<T>> pinned;
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -237,24 +270,39 @@ public:
     // destructor must not execute under the request lock, since it may
     // synchronously close/cancel/inspect this same request.
     template <typename T>
-    bool erase(const RequestLocalKeyV1<T>& key) {
+    bool erase(const RequestLocalKeyV1<T>& key,
+               OresNativeActorScheduler* scheduler = nullptr) {
+        auto operation = begin_operation();
+        if (!operation) return false;
         std::shared_ptr<CellBase> retired;
+        std::unordered_map<std::uint64_t,
+            std::shared_ptr<CellBase>>::node_type retired_node;
         bool committed = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             // Deletion and quota return linearize against the graph's
             // cancellation and retirement state, without running T::~T.
             committed = cancellation_->with_active_authority([&] {
-                if (!open_) return false;
-                const auto found = slots_.find(key.id_);
-                if (found == slots_.end()) return false;
-                retired = std::move(found->second);
-                used_bytes_ -= retired->bytes;
-                slots_.erase(found);
-                return true;
+                auto commit = [&]() -> bool {
+                    if (!open_) return false;
+                    const auto found = slots_.find(key.id_);
+                    if (found == slots_.end()) return false;
+                    retired = std::move(found->second);
+                    used_bytes_ -= retired->bytes;
+                    // No deallocation under graph/scheduler lifecycle lock.
+                    retired_node = slots_.extract(found);
+                    return true;
+                };
+                return !scheduler ? commit()
+                    : ores_native_actor_scheduler_commit_if_running_v1(
+                        scheduler, identity_.actor,
+                        [](void* ptr) -> int {
+                            return (*static_cast<decltype(commit)*>(ptr))() ? 1 : 0;
+                        }, &commit) != 0;
             });
         }
         retired.reset();
+        retired_node = {}; // release map allocation AFTER all locks
         return committed;
     }
 
@@ -278,15 +326,69 @@ private:
     // Cross-actor handoff links a recipient's derived context to this
     // request's cancellation (never the reverse) and needs read access.
     friend class RequestContextHandoffTableV1;
+    friend class RequestLocalStopGroupV1;
+
+    // Host-owned operation leases are exact-scope and cannot be copied.
+    // They pin the logical operation during allocation/value copying outside
+    // the store lock, even if STOP marks the scope closed concurrently.
+    class OperationLease final {
+    public:
+        explicit OperationLease(const RequestContextLocalV1* owner) noexcept
+            : owner_(owner) {}
+        OperationLease(const OperationLease&) = delete;
+        OperationLease& operator=(const OperationLease&) = delete;
+        OperationLease(OperationLease&& other) noexcept
+            : owner_(std::exchange(other.owner_, nullptr)) {}
+        OperationLease& operator=(OperationLease&&) = delete;
+        ~OperationLease() {
+            if (owner_) owner_->release_operation();
+        }
+    private:
+        const RequestContextLocalV1* owner_;
+    };
+
+    std::optional<OperationLease> begin_operation() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!cancellation_->with_active_authority([&] {
+                if (!open_ ||
+                    in_flight_ == std::numeric_limits<std::size_t>::max())
+                    return false;
+                ++in_flight_;
+                return true;
+            })) return std::nullopt;
+        return std::optional<OperationLease>(std::in_place, this);
+    }
+
+    void release_operation() const noexcept {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (in_flight_ == 0) std::terminate();
+        if (--in_flight_ == 0) quiescent_.notify_all();
+    }
+
+    // CONTROL-plane only, after close(): waiting here on a carrier would
+    // deadlock if the actor's continuation owns the outstanding operation.
+    bool wait_closed_quiescent() const {
+        std::unique_lock<std::mutex> lock(mutex_);
+        if (open_) return false;
+        quiescent_.wait(lock, [&] { return in_flight_ == 0; });
+        return true;
+    }
 
     RequestContextLocalV1(RequestIdentityV1 identity,
                           TaskCancellation::Ptr cancellation)
-        : identity_(identity), cancellation_(std::move(cancellation)) {}
+        : identity_(identity), cancellation_(std::move(cancellation)) {
+        // Fixed maximum slot count, reserved before request admission. This
+        // excludes hash-table allocation/rehashing from the cancellation
+        // graph's locked commit path.
+        slots_.reserve(max_slots);
+    }
 
     const RequestIdentityV1 identity_;
     const TaskCancellation::Ptr cancellation_;
     mutable std::mutex mutex_;
     bool open_ = true;
+    mutable std::size_t in_flight_ = 0;
+    mutable std::condition_variable quiescent_;
     std::uint64_t original_mail_sequence_ = 0;
     std::size_t used_bytes_ = 0;
     std::unordered_map<std::uint64_t, std::shared_ptr<CellBase>> slots_;
