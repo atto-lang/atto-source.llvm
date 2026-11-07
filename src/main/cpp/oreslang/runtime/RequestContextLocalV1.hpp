@@ -175,6 +175,11 @@ public:
                 bytes > max_bytes - (used_bytes_ - old)) return false;
         }
         auto next = std::make_shared<Cell<T>>(std::move(value), bytes);
+        // Preallocate an owned map node outside TaskCancellation's authority
+        // mutex. Every scope reserves all 32 bucket positions at open, so
+        // node insertion cannot rehash/allocate during the final commit.
+        std::unordered_map<std::uint64_t, std::shared_ptr<CellBase>> staged;
+        staged.emplace(key.id_, next);
         std::shared_ptr<CellBase> previous;
         bool committed = false;
         {
@@ -191,7 +196,9 @@ public:
                 if ((found == slots_.end() && slots_.size() >= max_slots) ||
                     bytes > max_bytes - (used_bytes_ - old)) return false;
                 if (found == slots_.end()) {
-                    slots_.emplace(key.id_, std::move(next));
+                    // Preallocated node, existing bucket array: no allocator
+                    // or guest callback while cancellation authority is held.
+                    slots_.insert(staged.extract(key.id_));
                 } else {
                     previous.swap(found->second);
                     found->second = std::move(next);
@@ -239,6 +246,8 @@ public:
     template <typename T>
     bool erase(const RequestLocalKeyV1<T>& key) {
         std::shared_ptr<CellBase> retired;
+        std::unordered_map<std::uint64_t,
+            std::shared_ptr<CellBase>>::node_type retired_node;
         bool committed = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -250,11 +259,14 @@ public:
                 if (found == slots_.end()) return false;
                 retired = std::move(found->second);
                 used_bytes_ -= retired->bytes;
-                slots_.erase(found);
+                // Extract the allocated node; its allocator/dtor runs only
+                // once this authority section has been exited.
+                retired_node = slots_.extract(found);
                 return true;
             });
         }
         retired.reset();
+        retired_node = {}; // release map allocation AFTER all locks
         return committed;
     }
 
@@ -281,7 +293,12 @@ private:
 
     RequestContextLocalV1(RequestIdentityV1 identity,
                           TaskCancellation::Ptr cancellation)
-        : identity_(identity), cancellation_(std::move(cancellation)) {}
+        : identity_(identity), cancellation_(std::move(cancellation)) {
+        // Fixed maximum slot count, reserved before request admission. This
+        // excludes hash-table allocation/rehashing from the cancellation
+        // graph's locked commit path.
+        slots_.reserve(max_slots);
+    }
 
     const RequestIdentityV1 identity_;
     const TaskCancellation::Ptr cancellation_;
