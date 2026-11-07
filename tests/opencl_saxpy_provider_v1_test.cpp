@@ -248,6 +248,7 @@ int main() {
         reject([&] { (void)provider.begin(artifact, x, y, 2.0f); });
         finish(provider, *op);
         check(op->state() == SaxpyProvider::State::Succeeded, "physical-success state");
+        check(op->completed_events() == 4, "four native events acknowledged");
         check(op->result() == std::vector<float>({7, 10, 13, 16}), "SAXPY three-buffer output");
         check(provider.closed_for_release() && provider.usage().queue_slots == 0,
               "post-event quota release");
@@ -277,6 +278,7 @@ int main() {
         api.auto_complete = true;
         check(provider.poll(*op) == SaxpyProvider::State::Cancelled,
               "cancelled only after native event completion");
+        check(op->completed_events() == 1, "only completed X upload acknowledged");
         check(api.enqueued == 1 && provider.usage().queue_slots == 0,
               "cancel before Y upload avoids further effects");
     }
@@ -413,7 +415,8 @@ int main() {
               "pending device kernel holds all three buffers");
         api.auto_complete = true;
         check(provider.poll(*op) == SaxpyProvider::State::Cancelled &&
-              api.enqueued == 3 && api.released_buffers == 3,
+              api.enqueued == 3 && api.released_buffers == 3 &&
+              op->completed_events() == 3,
               "kernel cancellation drains without launching download");
     }
 
