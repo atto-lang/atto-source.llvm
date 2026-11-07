@@ -8,10 +8,30 @@ file(MAKE_DIRECTORY "${G1_WORK}")
 set(source "${G1_WORK}/gpu-g1-saxpy.ll")
 set(ptx "${G1_WORK}/gpu-g1-saxpy.ptx")
 file(REMOVE "${source}" "${ptx}")
-execute_process(COMMAND "${G1_EMITTER}" --emit-llvm-ir OUTPUT_FILE "${source}"
-    RESULT_VARIABLE emit_rc ERROR_VARIABLE emit_err)
-if(NOT emit_rc EQUAL 0 OR NOT EXISTS "${source}")
-    message(FATAL_ERROR "GPU-G1-PTX-002: typed IR was not produced: ${emit_err}")
+# Source-backed mode reads exactly one real .atto kernel, never a
+# preconstructed typed-IR result. The hardware receipt REQUIRES this mode.
+if(DEFINED G1_SOURCE AND NOT G1_SOURCE STREQUAL "")
+    if(NOT EXISTS "${G1_SOURCE}")
+        message(FATAL_ERROR "GPU-G1-PTX-002: .atto source fixture is missing")
+    endif()
+    execute_process(COMMAND "${G1_EMITTER}" "${G1_SOURCE}"
+        OUTPUT_VARIABLE ir ERROR_VARIABLE emit_err RESULT_VARIABLE emit_rc)
+    if(NOT emit_rc EQUAL 0 OR ir STREQUAL "")
+        message(FATAL_ERROR "GPU-G1-PTX-002: .atto source compilation failed: ${emit_err}")
+    endif()
+    file(WRITE "${source}" "${ir}")
+    set(g1_input_class "RESTRICTED_ATTO_SOURCE")
+else()
+    if(G1_REQUIRE_ATTO_SOURCE)
+        message(FATAL_ERROR "GPU-G1-PTX-005: physical proof requires .atto input")
+    endif()
+    execute_process(COMMAND "${G1_EMITTER}" --emit-llvm-ir
+        OUTPUT_VARIABLE ir ERROR_VARIABLE emit_err RESULT_VARIABLE emit_rc)
+    if(NOT emit_rc EQUAL 0 OR ir STREQUAL "")
+        message(FATAL_ERROR "GPU-G1-PTX-002: typed IR was not produced: ${emit_err}")
+    endif()
+    file(WRITE "${source}" "${ir}")
+    set(g1_input_class "CLOSED_TYPED_IR_ONLY")
 endif()
 execute_process(COMMAND "${G1_LLC}" -march=nvptx64 -mcpu=sm_50 -O0
     -filetype=asm -o "${ptx}" "${source}"
@@ -28,4 +48,4 @@ if(NOT ptx_contents MATCHES "\\.entry[ \\t\\r\\n]+atto_g1_saxpy_f32" OR
 endif()
 file(SHA256 "${source}" ir_sha256)
 file(SHA256 "${ptx}" ptx_sha256)
-message(STATUS "GPU_G1_PTX_TRANSLATION_PASS IR_SHA256=${ir_sha256} PTX_SHA256=${ptx_sha256} (NO_DEVICE_EXECUTION)")
+message(STATUS "GPU_G1_PTX_TRANSLATION_PASS class=${g1_input_class} IR_SHA256=${ir_sha256} PTX_SHA256=${ptx_sha256} (NO_DEVICE_EXECUTION)")
