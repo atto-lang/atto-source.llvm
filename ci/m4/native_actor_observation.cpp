@@ -72,7 +72,37 @@ int main(int argc, char** argv) {
                 "LLVM actor state differs from the pinned M4 transcript");
         require(digest == 7021, "LLVM actor reply rolling digest differs from GraalVM");
         require(host.stop_actor(first.actor) == Status::Ok, "cannot retire first actor");
+        // A terminated handle must never regain authority, even if its memory
+        // slot is reused by a fresh incarnation. The next actor remains live.
+        require(host.call(first.actor, message(1)).get().status == Status::UnknownActor,
+                "stale first actor handle unexpectedly admitted a send");
+        require(send(host, second.actor, 0) == 9,
+                "first actor retirement changed the still-live neighbor");
         require(host.stop_actor(second.actor) == Status::Ok, "cannot retire second actor");
+        auto replacement = host.spawn_actor(observed.handle, 0);
+        require(replacement.status == Status::Ok, "cannot reincarnate retired actor slot");
+        require(send(host, replacement.actor, 4) == 4,
+                "reincarnated actor inherited stale native state");
+        require(host.call(first.actor, message(1)).get().status == Status::UnknownActor,
+                "recycled actor slot revived an obsolete authority");
+        require(host.stop_actor(replacement.actor) == Status::Ok,
+                "cannot retire reincarnated actor");
+        // Separate VM must remain alive even when another tenant's actors are
+        // retired/recycled. This does not prove arbitrary hostile code isolation.
+        auto neighbor = host.open(spec("m4-isolated-neighbor", guest));
+        require(neighbor.status == Status::Ok, "cannot open independent tenant");
+        auto neighbor_actor = host.spawn_actor(neighbor.handle, 0);
+        require(neighbor_actor.status == Status::Ok, "cannot spawn independent neighbor");
+        require(send(host, neighbor_actor.actor, 100) == 100,
+                "neighbor tenant state unexpectedly aliased");
+        require(send(host, neighbor_actor.actor, 0) == 100,
+                "neighbor state lost after unrelated actor churn");
+        require(host.stop_actor(neighbor_actor.actor) == Status::Ok,
+                "cannot retire neighbor actor");
+        require(host.begin_shutdown(neighbor.handle) == Status::Ok,
+                "cannot close independent tenant");
+        require(host.wait_closed(neighbor.handle).phase == Phase::Stopped,
+                "neighbor tenant did not drain cleanly");
         require(host.begin_shutdown(observed.handle) == Status::Ok, "cannot stop observation tenant");
         const auto observed_result = host.wait_closed(observed.handle);
         require(observed_result.phase == Phase::Stopped, "observation tenant never stopped");
@@ -99,6 +129,9 @@ int main(int argc, char** argv) {
         std::puts("ATTO_M4_LLVM_OBSERVATION_ACTOR_STOPS=2");
         std::puts("ATTO_M4_LLVM_HOST_OBSERVED_ACTOR_DIGEST=7021");
         std::puts("ATTO_M4_LLVM_MAIN_GUEST_DRAINED=1");
+        std::puts("ATTO_M4_LLVM_STALE_HANDLE_DENIED=1");
+        std::puts("ATTO_M4_LLVM_REINCARNATION_FRESH_STATE=1");
+        std::puts("ATTO_M4_LLVM_TENANT_NEIGHBOR_SURVIVED=1");
         std::puts("ATTO_M4_SCOPE=ACTUAL_LLVM_TENANT_GUEST_NOT_PRODUCTION_SANDBOX");
         return 0;
     } catch (const std::exception& e) {
