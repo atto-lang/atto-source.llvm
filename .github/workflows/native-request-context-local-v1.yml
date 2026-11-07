@@ -44,7 +44,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp)" = "9278c10112fab2c9eb92584ed247ea16d9272dca"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp)" = "ef48f19ceadd010666823924381ac24680541b65"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalValueAdmissionV1.hpp)" = "7b79138951aa878fe2ee43cfcef21277cb68b256"
           test "$(git hash-object src/main/cpp/oreslang/runtime/LocalPayloadBudgetV1.hpp)" = "bcecb54e7750fca7ef84010a2fa3f66e6bf61902"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h)" = "cfd0e7f1d8fbd125a0ca20c7907432fc0407635c"
@@ -55,8 +55,8 @@ jobs:
           test "$(git hash-object src/main/cpp/oreslang/runtime/TaskCancellation.hpp)" = "7eafa420e92ba10e552dade1846f3862cb79aec7"
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextHandoffV1.hpp)" = "b0fc4ac5f1c92e92b8aeee03204603d438e544a7"
           test "$(git hash-object tests/native_request_context_handoff_v1_test.cpp)" = "e7e909861262df0d062350d1d309e91abafe66f6"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalStopGroupV1.hpp)" = "854bcbbd006804c9f4f9cb18fad6f3c15992ef98"
-          test "$(git hash-object tests/native_request_stop_cancel_v1_test.cpp)" = "9dc245b5a5f927e0ff7cb7e1df7c078a375ad9dc"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalStopGroupV1.hpp)" = "561fb9a7091bf6072cbd73dfa9662d9b5c9087aa"
+          test "$(git hash-object tests/native_request_stop_cancel_v1_test.cpp)" = "da62418448b2b7232b66fc48a303019ca5e1593c"
       - name: Compile and execute real actor two-request isolation
         shell: bash
         env:
@@ -91,6 +91,6 @@ jobs:
             -Isrc/main/cpp tests/native_request_stop_cancel_v1_test.cpp \
             "$tmp/scheduler.o" -o "$tmp/request-stop-cancel"
           "$tmp/request-stop-cancel" | tee "$tmp/request-stop-cases.log"
-          test "$(grep -c '^REQUEST_STOP_CASE_PASS ' "$tmp/request-stop-cases.log")" = "30"
-          grep -qx 'REQUEST_STOP_CANCEL_30_HOST_CASES_PASS' "$tmp/request-stop-cases.log"
+          test "$(grep -c '^REQUEST_STOP_CASE_PASS ' "$tmp/request-stop-cases.log")" = "35"
+          grep -qx 'REQUEST_STOP_CANCEL_35_HOST_CASES_PASS' "$tmp/request-stop-cases.log"
           printf 'REQUEST_CONTEXT_LOCAL_EXACT_SOURCE_HOST_PASS compiler=%s mode=%s\n' "$CC" "$MODE"
