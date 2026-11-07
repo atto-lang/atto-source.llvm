@@ -242,6 +242,17 @@ if(BUILD_TESTING)
         ${ORE_LLVM_LIBS})
     add_test(NAME native_ownership_reinitialize_store_witness_48
         COMMAND oreslang-native-reinitialize-store-witness-48-test)
+    # Path-preserving source AST field-state CFG, including branches, loops,
+    # early exits and 96 deterministic adversarial source mutations.
+    # This is not a typed SSA loan or optimized-IR dominator certificate.
+    add_executable(oreslang-native-source-field-cfg-96-test
+        tests/native_source_field_cfg_96_test.cpp)
+    target_include_directories(oreslang-native-source-field-cfg-96-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-source-field-cfg-96-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ownership_source_field_cfg_96
+        COMMAND oreslang-native-source-field-cfg-96-test)
 
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
