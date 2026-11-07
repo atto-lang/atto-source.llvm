@@ -957,6 +957,8 @@ private:
                 }
                 require(")");
                 if (mixed && read_type == InvertedScalarKind::F64) {
+                    if (token_.text != "==")
+                        fail("mixed inverted int main requires explicit f64 equality and int branches");
                     // A deliberately narrow ordinary AttoLang expression:
                     // compare a *runtime-loaded* f64 and select two int
                     // literals. No f64->int conversion or hidden host read.
