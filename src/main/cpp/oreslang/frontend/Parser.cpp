@@ -3887,14 +3887,21 @@ private:
                 gpu_launch_parse_error("GPU-LAUNCH-001", "unterminated GPU kernel body", token_.offset);
             if (++count > 16384 || depth > 64)
                 gpu_launch_parse_error("GPU-LAUNCH-001", "GPU kernel body token/depth budget", token_.offset);
+            // GPU device subset excludes strings/templates; their contents
+            // are not structural braces and cannot bypass the body envelope.
+            if (token_.kind == Kind::String || token_.kind == Kind::Template)
+                gpu_launch_parse_error("GPU-LAUNCH-006",
+                    "string/template is not a GPU device value", token_.offset);
             if (token_.kind == Kind::Identifier &&
                     (token_.text == "await" || token_.text == "spawn" ||
                      token_.text == "critical" || token_.text == "suspends" ||
                      token_.text == "yield" || token_.text == "actor" ||
-                     token_.text == "new"))
+                     token_.text == "new" || token_.text == "defer" ||
+                     token_.text == "recover" || token_.text == "select" ||
+                     token_.text == "readch" || token_.text == "writech"))
                 gpu_launch_parse_error("GPU-LAUNCH-006", "effectful operation in GPU kernel source", token_.offset);
-            if (token_.text == "{") ++depth;
-            else if (token_.text == "}") --depth;
+            if (token_.kind == Kind::Symbol && token_.text == "{") ++depth;
+            else if (token_.kind == Kind::Symbol && token_.text == "}") --depth;
             advance();
         }
         try {
