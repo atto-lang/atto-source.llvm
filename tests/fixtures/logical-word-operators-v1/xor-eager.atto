@@ -1,0 +1,17 @@
+define class Pair as
+  pub let int first = 1;
+  pub let int second = 2;
+end
+
+fnc touch(borrow mut Pair p): bool {
+  p.first = 42;
+  return true;
+}
+fnc probe(borrow mut Pair p): bool {
+  return false xor touch(rt mut borrow p);
+}
+pub fnc main(): int {
+  let mut Pair p = new Pair();
+  probe(rt mut borrow p);
+  return p.first;
+}
