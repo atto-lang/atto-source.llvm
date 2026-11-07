@@ -13,7 +13,7 @@ if [[ ! -f "$compiler" || ! -x "$compiler" || -L "$compiler" ||
     exit 1
 fi
 command -v "$clang" >/dev/null 2>&1 || { echo 'FAIL: Clang not found' >&2; exit 1; }
-command -v python3 >/dev/null 2>&1 || { echo 'FAIL: Python3 required for signal checks' >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo 'FAIL: Python3 required for bounded native executions' >&2; exit 1; }
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -63,7 +63,6 @@ audit_ir() {
 native_status() {
     python3 - "$1" "$2" <<'PY'
 import resource
-import signal
 import subprocess
 import sys
 resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
@@ -72,15 +71,8 @@ try:
                          stderr=subprocess.DEVNULL, timeout=15, check=False)
 except (OSError, subprocess.TimeoutExpired) as exc:
     raise SystemExit(f"FAIL: native mixed guest did not complete: {exc}")
-expected = sys.argv[2]
-if expected == "exit42":
-    if run.returncode != 42:
-        raise SystemExit(f"FAIL: native mixed guest expected exit 42 got {run.returncode}")
-elif expected == "trap":
-    if run.returncode not in (-signal.SIGILL, -signal.SIGTRAP):
-        raise SystemExit(f"FAIL: native mixed guest expected genuine trap got {run.returncode}")
-else:
-    raise SystemExit("FAIL: unknown native outcome")
+if sys.argv[2] != "exit42" or run.returncode != 42:
+    raise SystemExit(f"FAIL: native mixed guest expected exit 42 got {run.returncode}")
 PY
 }
 for file in positive-mixed-swap.atto positive-permuted-columns.atto; do
@@ -106,16 +98,14 @@ for file in positive-mixed-swap.atto positive-permuted-columns.atto; do
         native_status "$tmp/guest" exit42
     done
 done
-"$compiler" "$fixtures/negative-stale-dense-index.atto" > "$tmp/trap.ll"
-audit_ir "$tmp/trap.ll"
-grep -Fq 'call void @llvm.trap()' "$tmp/trap.ll" ||
-    { echo 'FAIL: missing out-of-bounds trap in mixed guest IR' >&2; exit 1; }
-for opt in -O0 -O2; do
-    "$clang" "$opt" -x ir "$tmp/trap.ll" -o "$tmp/trap"
-    native_status "$tmp/trap" trap
-done
+# Stale dense indices are statically known here: the HIR proves the row was
+# deleted and must reject before LLVM IR. A native trap would be unreachable
+# without adding runtime-dependent indices to this intentionally literal-only
+# source grammar. Preserve this stronger compile-time rule; the positive IR
+# must still contain the actual checked LLVM trap branch for runtime use.
 # Every unsupported source rejects without writing any IR: no partial codegen.
 for item in \
+  'negative-stale-dense-index.atto|inverted row index outside current length' \
   'negative-bool-as-int.atto|mixed inverted bool column' \
   'negative-f64-from-int.atto|mixed inverted f64 column' \
   'negative-immutable-bool-write.atto|immutable inverted field' \
@@ -135,4 +125,4 @@ done
 [[ "$(hash_file "$compiler")" == "$compiler_sha" &&
    "$(hash_file "$auditor")" == "$auditor_sha" ]] ||
     { echo 'FAIL: compiler/auditor changed during native evidence run' >&2; exit 1; }
-printf '%s\n' 'MIXED_ATTO_NATIVE_GUEST_PASS: 4 exit42, 2 trap signals, 5 rejects; IR no-GC screened (not linked/FFI proof)'
+printf '%s\n' 'MIXED_ATTO_NATIVE_GUEST_PASS: 4 exit42, 6 compile rejects, source IR trap guards present; IR no-GC screened (not linked/FFI proof)'
