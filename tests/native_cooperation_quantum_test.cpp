@@ -66,24 +66,33 @@ static void reduction_fast_path() {
     require(q.completedBackedgesThisDispatch() == 512);
 }
 
-static void overdue_no_yield_region_checks_every_new_boundary() {
+static void overdue_no_yield_region_latches_handoff_without_per_edge_polls() {
     reset_clock();
     Quantum q;
     q.beginDispatch();
-    for (int i = 1; i <= 511; ++i)
-        require(q.completedBackedgeNeedsCheck() == (i % 64 == 0));
-    require(q.completedBackedgeNeedsCheck());
-    require(q.shouldCooperateAtCheck());
-    // The first deadline was skipped while a lexical guard was live.
-    // Once the guard is dropped, the next completed backedge must permit
-    // handoff immediately instead of waiting for another full batch.
-    for (int i = 513; i <= 560; ++i) {
-        require(q.completedBackedgeNeedsCheck());
-        require(q.shouldCooperateAtCheck());
+    for (int i = 1; i <= 512; ++i) {
+        const bool due = q.completedBackedgeNeedsCheck();
+        require(due == (i % 64 == 0));
+        if (due) require(q.shouldCooperateAtCheck() == (i == 512));
     }
-    require(q.completedBackedgesThisDispatch() == 560);
-    require(FakeClock::reads.load() == 2);
+    // The critical section was still held when the 512-cap was reached.
+    // Later backedges must NOT invoke the slow poll on every iteration.
+    require(q.pendingHandoffOnNoYieldExit());
+    for (int i = 513; i <= 1025; ++i) {
+        const bool due = q.completedBackedgeNeedsCheck();
+        require(due == (i % 64 == 0));
+        if (due) require(q.shouldCooperateAtCheck());
+        require(q.pendingHandoffOnNoYieldExit());
+    }
+    require(q.completedBackedgesThisDispatch() == 1025);
+    require(FakeClock::reads.load() == 9); // 2 start + only seven early slow polls
+    // The caller must invoke pendingHandoffOnNoYieldExit() when the guard is
+    // finally dropped, even if the exit is between two batch boundaries.
+    q.recordedCooperate();
+    q.beginDispatch();
+    require(!q.pendingHandoffOnNoYieldExit());
 }
+
 
 static void configurable_soft_poll_interval_preserves_hard_cap() {
     for (std::uint32_t interval : {128u, 256u, 512u}) {
@@ -98,11 +107,13 @@ static void configurable_soft_poll_interval_preserves_hard_cap() {
         }
         // At 512 the hard cap is clock-free, regardless of chosen batch.
         require(FakeClock::reads.load() == 2 + 512 / static_cast<int>(interval) - 1);
-        // Existing no-yield invariant: after hard cap each new backedge is
-        // actionable, even if it is not a multiple of the soft interval.
+        // A sticky request is actionable when the protected scope exits.
+        // Normal fast-path backedges still poll only at their own cadence.
         for (int n = 513; n < 530; ++n) {
-            require(q.completedBackedgeNeedsCheck());
-            require(q.shouldCooperateAtCheck());
+            const bool due = q.completedBackedgeNeedsCheck();
+            require(due == (n % interval == 0));
+            if (due) require(q.shouldCooperateAtCheck());
+            require(q.pendingHandoffOnNoYieldExit());
         }
         require(FakeClock::reads.load() == 2 + 512 / static_cast<int>(interval) - 1);
     }
@@ -120,6 +131,7 @@ static void timer_slow_path() {
     require(FakeClock::reads.load() == 2);
     require(q.completedBackedgeNeedsCheck());
     require(q.shouldCooperateAtCheck());
+    require(q.pendingHandoffOnNoYieldExit()); // critical exit immediately observes timed debt
     require(FakeClock::reads.load() == 3);
 }
 
@@ -132,9 +144,12 @@ static void independent_watchdog_requests_next_safe_boundary() {
     require(q.completedBackedgeNeedsCheck());
     require(FakeClock::reads.load() == 2);
     require(q.shouldCooperateAtCheck(true));
-    require(FakeClock::reads.load() == 2); // watcher request needs no clock read
-    require(!q.shouldCooperateAtCheck(false));
-    require(FakeClock::reads.load() == 3);
+    require(q.pendingHandoffOnNoYieldExit());
+    require(FakeClock::reads.load() == 2); // watchdog request needs no clock read
+    require(q.shouldCooperateAtCheck(false)); // request stays sticky until handoff
+    require(FakeClock::reads.load() == 2);
+    q.recordedCooperate();
+    require(!q.pendingHandoffOnNoYieldExit());
 }
 
 static void await_is_not_cooperate() {
@@ -169,10 +184,10 @@ static void repeated_dispatches_keep_task_context() {
 int main() {
     reduction_fast_path();
     configurable_soft_poll_interval_preserves_hard_cap();
-    overdue_no_yield_region_checks_every_new_boundary();
+    overdue_no_yield_region_latches_handoff_without_per_edge_polls();
     timer_slow_path();
     independent_watchdog_requests_next_safe_boundary();
     await_is_not_cooperate();
     repeated_dispatches_keep_task_context();
-    std::cout << "native quantum 64/512/2ms: PASS (host-only, no guest await parity)\n";
+    std::cout << "native quantum 64/128/256/512 sticky pending: PASS (host-only, no guest await parity)\n";
 }
