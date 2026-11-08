@@ -54,6 +54,7 @@ typedef struct {
     atomic_int frame_vm_error; /* sticky, per-actor fail-stop reason */
     atomic_int frame_vm_active; /* forbids nested VM frame overwrite */
     atomic_uint_fast64_t frame_vm_checkpoints;
+    atomic_uint_fast64_t frame_vm_peak_frames;
     atomic_uint_fast64_t frame_vm_steps;
     atomic_uint_fast64_t frame_vm_tail_calls;
     atomic_uint_fast64_t frame_vm_non_tail_calls;
@@ -263,7 +264,11 @@ static void scalar_init_frame(
 }
 static int scalar_push(uint64_t* frame, uint64_t tag, uint64_t bits) {
     const uint64_t sp = frame[5];
-    if (sp >= ORES_SCALAR_MAX_OPERAND_SLOTS) return 0;
+    if ((tag != SOURCE_SCALAR_TAG_I64
+            && tag != SOURCE_SCALAR_TAG_BOOL)
+        || (tag == SOURCE_SCALAR_TAG_BOOL && bits > 1)
+        || sp >= ORES_SCALAR_MAX_OPERAND_SLOTS)
+        return 0;
     frame[16 + 2 * sp] = tag;
     frame[17 + 2 * sp] = bits;
     frame[5] = sp + 1;
@@ -274,7 +279,9 @@ static int scalar_pop(
     const uint64_t sp = frame[5];
     if (!sp || sp > ORES_SCALAR_MAX_OPERAND_SLOTS) return 0;
     const size_t pos = 16 + 2 * (size_t)(sp - 1);
-    if (frame[pos] != expected) return 0;
+    if (frame[pos] != expected
+            || (expected == SOURCE_SCALAR_TAG_BOOL && frame[pos + 1] > 1))
+        return 0;
     *result = frame[pos + 1];
     frame[pos] = 0;
     frame[pos + 1] = 0;
@@ -380,6 +387,7 @@ int oreslang_source_actor_scalar_vm_execute(
     }
     const uint64_t epoch = actor->frame_epoch;
     size_t depth = 1;
+    uint64_t peak_frames = 1;
     uint64_t executed = 0;
     uint64_t tails = 0;
     uint64_t calls = 0;
@@ -475,6 +483,9 @@ int oreslang_source_actor_scalar_vm_execute(
                     goto cleanup;
                 const uint64_t target = (uint64_t)ins.immediate;
                 if (ins.opcode == ORES_SCALAR_TAIL_CALL) {
+                    /* Tail transfers replace exactly one activation; any
+                     * abandoned operands indicate corrupted lexical cleanup. */
+                    if (frame[5] != 0) goto cleanup;
                     scalar_clear_frame(actor, depth - 1);
                     scalar_init_frame(actor, depth - 1, target,
                         program->function_entries[target],
@@ -489,6 +500,7 @@ int oreslang_source_actor_scalar_vm_execute(
                         program->function_entries[target],
                         epoch, scalar_signed(rhs));
                     ++depth;
+                    if (peak_frames < depth) peak_frames = depth;
                     ++calls;
                 }
                 break;
@@ -551,6 +563,13 @@ cleanup:
         tails, memory_order_relaxed);
     atomic_fetch_add_explicit(&actor->frame_vm_non_tail_calls,
         calls, memory_order_relaxed);
+    /* One VM owns this actor turn. Peak is max, not an additive charge. */
+    uint64_t old_peak = atomic_load_explicit(
+        &actor->frame_vm_peak_frames, memory_order_relaxed);
+    while (old_peak < peak_frames &&
+           !atomic_compare_exchange_weak_explicit(
+               &actor->frame_vm_peak_frames, &old_peak, peak_frames,
+               memory_order_relaxed, memory_order_relaxed)) { }
     if (status == ORES_SCALAR_OK &&
             atomic_load_explicit(&actor->frame_vm_error,
                 memory_order_acquire) != ORES_SCALAR_OK)
@@ -1089,6 +1108,7 @@ void* oreslang_source_actor_spawn(
     atomic_init(&instance->frame_vm_error, ORES_SCALAR_OK);
     atomic_init(&instance->frame_vm_active, 0);
     atomic_init(&instance->frame_vm_checkpoints, 0);
+    atomic_init(&instance->frame_vm_peak_frames, 0);
     atomic_init(&instance->frame_vm_steps, 0);
     atomic_init(&instance->frame_vm_tail_calls, 0);
     atomic_init(&instance->frame_vm_non_tail_calls, 0);
@@ -1434,6 +1454,8 @@ void oreslang_source_actor_join_done(void* opaque) {
      */
     ensure(atomic_load_explicit(&instance->frame_active,
         memory_order_acquire) == 0);
+    ensure(atomic_load_explicit(&instance->frame_vm_active,
+        memory_order_acquire) == 0);
     ores_actor_i64_heap_retire(instance->heap);
     ensure(ores_actor_i64_heap_try_destroy(instance->heap));
     /* Physical scheduler completion forbids any further frame access. */
@@ -1448,7 +1470,7 @@ void oreslang_source_actor_join_done(void* opaque) {
         (unsigned long long)instance->frame_high_water,
         (unsigned long long)instance->frame_slot_calls);
     fprintf(stderr,
-        "SOURCE_ACTOR_SCALAR_VM_VERIFIED actor=%llu steps=%llu tail_calls=%llu non_tail_calls=%llu error=%d\n",
+        "SOURCE_ACTOR_SCALAR_VM_VERIFIED actor=%llu steps=%llu tail_calls=%llu non_tail_calls=%llu peak_frames=%llu checkpoints=%llu error=%d\n",
         (unsigned long long)instance->id,
         (unsigned long long)atomic_load_explicit(
             &instance->frame_vm_steps, memory_order_acquire),
@@ -1456,6 +1478,10 @@ void oreslang_source_actor_join_done(void* opaque) {
             &instance->frame_vm_tail_calls, memory_order_acquire),
         (unsigned long long)atomic_load_explicit(
             &instance->frame_vm_non_tail_calls, memory_order_acquire),
+        (unsigned long long)atomic_load_explicit(
+            &instance->frame_vm_peak_frames, memory_order_acquire),
+        (unsigned long long)atomic_load_explicit(
+            &instance->frame_vm_checkpoints, memory_order_acquire),
         atomic_load_explicit(&instance->frame_vm_error,
             memory_order_acquire));
     fprintf(stderr,
