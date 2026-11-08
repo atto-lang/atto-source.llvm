@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <deque>
 #include <stdexcept>
+#include <algorithm>
 #include <string>
 #include <utility>
 #include <vector>
@@ -32,6 +33,9 @@ enum class OwnershipV1OpKind : std::uint8_t {
 struct OwnershipV1Op {
     OwnershipV1OpKind kind;
     std::size_t owner = 0;
+    // Take transfers the owner's resource into a distinct, previously
+    // uninitialized destination. SIZE_MAX means no destination and is invalid.
+    std::size_t target = static_cast<std::size_t>(-1);
 };
 
 struct OwnershipV1Block {
@@ -94,7 +98,6 @@ public:
         reached[graph.entry] = true;
         incoming[graph.entry] = initial;
         work.push_back(graph.entry);
-        std::vector<bool> processed(graph.blocks.size(), false);
         OwnershipV1Result result;
         std::vector<bool> exit_seen(graph.blocks.size(), false);
 
@@ -103,10 +106,15 @@ public:
             work.pop_front();
             const auto& block = graph.blocks[index];
             State state = incoming[index];
-            processed[index] = true;
             ++result.reachable_blocks;
 
             bool has_exit = false;
+            std::uint64_t next_acquisition_order = 1;
+            // Acquisition sequence is path state, not a per-block counter.
+            // Seed it from the maximum sequence already present at entry.
+            for (const auto& owner : state)
+                if (owner.acquisition_order >= next_acquisition_order)
+                    next_acquisition_order = owner.acquisition_order + 1;
             for (std::size_t op_index = 0; op_index < block.operations.size(); ++op_index) {
                 const auto& op = block.operations[op_index];
                 if (op.kind == OwnershipV1OpKind::ExitNormal ||
@@ -123,18 +131,24 @@ public:
                     exit_seen[index] = true;
                     OwnershipV1ExitPlan plan;
                     plan.block = index;
-                    for (std::size_t owner = state.size(); owner > 0; --owner) {
-                        const auto& item = state[owner - 1];
+                    for (std::size_t owner = 0; owner < state.size(); ++owner) {
+                        const auto& item = state[owner];
                         if (item.shared_borrows || item.mutable_borrow)
                             fail("normal exit with outstanding borrow");
                         if (item.state == OwnerState::Owned)
-                            plan.cleanup_reverse_order.push_back(owner - 1);
+                            plan.cleanup_reverse_order.push_back(owner);
                     }
+                    std::stable_sort(plan.cleanup_reverse_order.begin(),
+                        plan.cleanup_reverse_order.end(),
+                        [&](std::size_t lhs, std::size_t rhs) {
+                            return state[lhs].acquisition_order >
+                                   state[rhs].acquisition_order;
+                        });
                     result.normal_exits.push_back(std::move(plan));
                     has_exit = true;
                     break;
                 }
-                apply(op, state, graph.owners.size());
+                apply(op, state, graph.owners.size(), next_acquisition_order);
             }
             if (has_exit) continue;
             if (block.successors.empty())
@@ -154,6 +168,9 @@ public:
             }
         }
         if (result.normal_exits.empty()) fail("CFG has no reachable normal exit");
+        for (std::size_t i = 0; i < reached.size(); ++i)
+            if (!reached[i])
+                fail("unreachable CFG block is not admitted in v1");
 
         // V1 is intentionally a terminating acyclic CFG subset. Merely
         // reaching one exit does not prove that a second path cannot loop
@@ -180,7 +197,6 @@ public:
         }
         if (topological_count != reachable_count)
             fail("cyclic CFG requires a separate bounded-loop ownership proof");
-        (void)processed;
         return result;
     }
 
@@ -190,9 +206,11 @@ private:
         OwnerState state = OwnerState::Uninitialized;
         std::uint32_t shared_borrows = 0;
         bool mutable_borrow = false;
+        std::uint64_t acquisition_order = 0;
         bool operator==(const Owner& other) const noexcept {
             return state == other.state && shared_borrows == other.shared_borrows &&
-                   mutable_borrow == other.mutable_borrow;
+                   mutable_borrow == other.mutable_borrow &&
+                   acquisition_order == other.acquisition_order;
         }
     };
     using State = std::vector<Owner>;
@@ -211,13 +229,17 @@ private:
             fail("use requires a live owned value");
     }
 
-    static void apply(const OwnershipV1Op& op, State& state, std::size_t count) {
+    static void apply(const OwnershipV1Op& op, State& state, std::size_t count,
+                      std::uint64_t& next_acquisition_order) {
         Owner& owner = get(state, op.owner, count);
         switch (op.kind) {
             case OwnershipV1OpKind::Create:
                 if (owner.state != OwnerState::Uninitialized)
                     fail("create on initialized owner");
+                if (next_acquisition_order == UINT64_MAX)
+                    fail("owner acquisition sequence exhausted");
                 owner.state = OwnerState::Owned;
+                owner.acquisition_order = next_acquisition_order++;
                 break;
             case OwnershipV1OpKind::Use:
                 require_owned(owner);
@@ -245,23 +267,35 @@ private:
                     fail("mutable borrow end without matching borrow");
                 owner.mutable_borrow = false;
                 break;
-            case OwnershipV1OpKind::Take:
+            case OwnershipV1OpKind::Take: {
                 require_owned(owner);
                 if (owner.shared_borrows || owner.mutable_borrow)
                     fail("take while borrow is outstanding");
+                if (op.target >= count || op.target == op.owner)
+                    fail("take requires a distinct valid destination owner");
+                Owner& destination = get(state, op.target, count);
+                if (destination.state != OwnerState::Uninitialized)
+                    fail("take destination is already initialized");
+                destination.state = OwnerState::Owned;
+                destination.acquisition_order = owner.acquisition_order;
                 owner.state = OwnerState::Moved;
+                owner.acquisition_order = 0;
                 break;
+            }
             case OwnershipV1OpKind::Drop:
                 require_owned(owner);
                 if (owner.shared_borrows || owner.mutable_borrow)
                     fail("drop while borrow is outstanding");
                 owner.state = OwnerState::Destroyed;
+                owner.acquisition_order = 0;
                 break;
             case OwnershipV1OpKind::ExitNormal:
             case OwnershipV1OpKind::ExitExceptional:
             case OwnershipV1OpKind::ExitSuspend:
             case OwnershipV1OpKind::ExitCancel:
                 fail("exit must be handled by CFG walker");
+            default:
+                fail("unknown ownership operation kind");
         }
     }
 };
