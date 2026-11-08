@@ -472,6 +472,11 @@ static void require_actor_region_v1_aot_graph(const oreslang::Program& program) 
         throw std::runtime_error("actor-region-v1 requires a synchronous int main/0");
     std::size_t owners = 0;
     for (const auto& fn : program.functions) {
+        if (!fn.return_class.empty() ||
+            std::any_of(fn.parameters.begin(), fn.parameters.end(),
+                [](const Parameter& parameter) { return !parameter.class_name.empty(); }))
+            throw std::runtime_error(
+                "actor-region-v1 forbids class-valued parameters and returns until owner transfer lowering exists");
         for (const auto& local : fn.locals) {
             if (local.class_name.empty()) continue;
             if (&fn != &*main)
