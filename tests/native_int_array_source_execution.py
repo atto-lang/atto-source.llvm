@@ -19,6 +19,14 @@ except ImportError:  # Windows has no RLIMIT_CORE
 
 
 POSITIVE = {
+    "checked-copy-zero-vs-none": ("""pub fnc main(): int {
+  let mut Array<int> values = new Array<int>();
+  values.add(0);
+  val Option<int> zero = values.get_copy(0);
+  val Option<int> absent = values.get_copy(1);
+  return zero.is_some() && absent.is_none() ? 42 : 0;
+}
+""", 42, 1),
     "checked-copy-option-hit-miss": ("""pub fnc main(): int {
   let mut Array<int> values = new Array<int>();
   values.add(42);
@@ -249,7 +257,7 @@ def verify(compiler: Path, clang: Path, root: Path, sanitized: bool):
             if b"call i64 @oreslang_int_array_new(" in ir or \
                     b"call void @oreslang_int_array_add(" in ir:
                 raise AssertionError(f"{name}: legacy aborting allocator remains in generated IR")
-            if name == "checked-copy-option-hit-miss":
+            if name.startswith("checked-copy-"):
                 for required in (b"@oreslang_int_array_try_get_copy",
                                  b"@ores_record_new", b"@ores_record_region_begin",
                                  b"array.copy.tag.invalid:", b"array.copy.option.invalid:",
