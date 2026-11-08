@@ -1290,6 +1290,29 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_ownership_cfg_dataflow_fixed_point
         COMMAND oreslang-ownership-cfg-dataflow-test)
+
+    # Real parser -> native ownership pass Task<int> suspension regression.
+    # The initial source is admitted, then a compiler-AST mutation injects a
+    # borrowed parameter. Ownership must revoke its Task ticket and reject.
+    add_executable(oreslang-native-source-suspend-ownership-test
+        tests/native_source_suspend_ownership_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp
+        src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-native-source-suspend-ownership-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_include_directories(oreslang-native-source-suspend-ownership-test SYSTEM PRIVATE
+        ${LLVM_INCLUDE_DIRS})
+    target_link_libraries(oreslang-native-source-suspend-ownership-test PRIVATE
+        ${ORE_LLVM_LIBS})
+    target_compile_features(oreslang-native-source-suspend-ownership-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-source-suspend-ownership-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_source_task_suspend_ownership_checker
+        COMMAND oreslang-native-source-suspend-ownership-test)
+    set_tests_properties(native_source_task_suspend_ownership_checker
+        PROPERTIES TIMEOUT 30)
     # Field-wise native destruction verifier and concrete owner flags.
     # Separate from unsupported source-level nontrivial class drop glue.
     add_executable(oreslang-ownership-drop-plan-test
