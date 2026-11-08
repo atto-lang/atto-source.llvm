@@ -940,25 +940,6 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             actor_region_stride > 1024u * 1024u)
             throw std::runtime_error("actor-region-v1 requires 1..4096 bounded class owners");
     }
-    std::uint32_t actor_region_slots = 0;
-    std::uint32_t actor_region_stride = 8;
-    if (actor_region_v1) {
-        if (!native_main || !source.actors.empty())
-            throw std::runtime_error("actor-region-v1 requires a synchronous native main without actors");
-        for (const auto& local : main_it->locals) {
-            if (local.class_name.empty()) continue;
-            ++actor_region_slots;
-            const auto cls = std::find_if(source.classes.begin(), source.classes.end(),
-                [&](const ClassDecl& candidate) { return candidate.name == local.class_name; });
-            if (cls == source.classes.end())
-                throw std::runtime_error("actor-region-v1 local has no resolved class layout");
-            actor_region_stride = std::max(actor_region_stride,
-                static_cast<std::uint32_t>(cls->fields.size() * sizeof(std::int64_t)));
-        }
-        if (!actor_region_slots || actor_region_slots > 4096u ||
-            actor_region_stride > 1024u * 1024u)
-            throw std::runtime_error("actor-region-v1 requires 1..4096 bounded class owners");
-    }
     if (native_main) {
         if (!main_it->parameters.empty())
             throw std::runtime_error("native main() must have zero arguments");
