@@ -123,7 +123,7 @@ files, unsupported submodule entries, `assume-unchanged` content mismatch,
 missing LLVM CMake SDK, and major-version-mismatched Clang.
 
 It configures/builds the compiler and native test targets and requires
-exactly six named CTest cases to appear in the executed JUnit report.
+all eight mandatory CTest cases (six core and two integrity gates) to appear in the executed JUnit report.
 Any missing, skipped, failed or duplicate case fails certification.
 Crucially it verifies the complete tree and SHA **again after execution**,
 to detect intervening source mutations. The isolated runner must exclude
@@ -147,7 +147,7 @@ child Python imports cannot introduce source-tree `__pycache__` dirt.
 The separate `native_rt_scalar_synthetic_certification_mechanics` test
 creates **disposable fake CMake targets and fake LLVM/Clang version probes**
 to exercise the entire certificate machinery on an isolated Git fixture.
-It proves that six CTest/JUnit cases can be genuinely discovered and recorded,
+It proves that eight CTest/JUnit cases can be genuinely discovered and recorded,
 that their logs are SHA-256 hashed, and that a test modifying the source
 checkout causes mandatory post-execution denial. This is strictly a
 **synthetic wrapper-mechanics test**: it does not contain AttoLang source,
@@ -277,7 +277,7 @@ files, unsupported submodule entries, `assume-unchanged` content mismatch,
 missing LLVM CMake SDK, and major-version-mismatched Clang.
 
 It configures/builds the compiler and native test targets and requires
-exactly six named CTest cases to appear in the executed JUnit report.
+all eight mandatory CTest cases (six core and two integrity gates) to appear in the executed JUnit report.
 Any missing, skipped, failed or duplicate case fails certification.
 Crucially it verifies the complete tree and SHA **again after execution**,
 to detect intervening source mutations. The isolated runner must exclude
