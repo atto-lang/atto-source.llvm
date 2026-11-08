@@ -41,6 +41,13 @@ def main():
         assert "define void @oreslang_rt_scalar_frame_cancel" in accepted.stdout
         assert "define void @oreslang_rt_scalar_frame_init" in accepted.stdout
         assert "define i64 @oreslang_rt_scalar_frame_result" in accepted.stdout
+        # The LLVM source emitter must prove a single batch-fuel admission:
+        # decrement/compare of dispatch fuel on each loop backedge is forbidden.
+        assert "batch.requested_end" in accepted.stdout
+        assert "batch.limit" in accepted.stdout
+        assert "batch.current" in accepted.stdout
+        assert "fuel.remaining" not in accepted.stdout
+        assert "dispatch.fuel" not in accepted.stdout
         llvm_ir = out / "guest.ll"
         llvm_ir.write_text(accepted.stdout)
         exe = out / "run-guest"
@@ -53,6 +60,7 @@ def main():
         assert "SCALAR_FRAME_AOT_TWO_TASKS_PASS" in execution.stdout
         assert "SCALAR_FRAME_AOT_THREE_PEERS_BOUNDED_PROGRESS_PASS" in execution.stdout
         assert "SCALAR_FRAME_AOT_CANCELLED_PEER_ISOLATION_PASS" in execution.stdout
+        assert "SCALAR_FRAME_AOT_BATCH_FUEL_BOUNDARIES_PASS" in execution.stdout
         for i, (original, replacement) in enumerate(cases):
             assert original in source
             file = out / f"invalid-{i}.ores"
@@ -61,7 +69,7 @@ def main():
             assert wrong.returncode != 0 and not wrong.stdout.strip(), (i, wrong.stdout)
         missing = run([compiler, "--experimental-rt-scalar-loop", "--target=wasm32", str(fixture)])
         assert missing.returncode != 0 and not missing.stdout.strip()
-        print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: 3 peer frames, cancellation isolation, bounded progress, negatives")
+        print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: batched fuel, 7 boundaries, 3 peer frames, cancellation isolation, negatives")
 
 if __name__ == "__main__":
     main()
