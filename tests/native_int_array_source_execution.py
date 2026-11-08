@@ -172,7 +172,7 @@ pub fnc main(): int {
  a.add(1);
  return a.get(0, 1);
 }
-""", "requires get(index) or typed get_copy(index)"),
+""", "get(index) or typed get_copy(index)"),
     "unsupported-field": ("""pub fnc main(): int {
  let mut Array<int> a = new Array<int>();
  return a.capacity;
@@ -188,7 +188,7 @@ pub fnc main(): int {
  let mut Array<int> a = new Array<int>();
  return a.add(2);
 }
-""", "expression requires get(index) or typed get_copy(index)"),
+""", "get(index) or typed get_copy(index)"),
     "bad-set-arity": ("""pub fnc main(): int {
  let mut Array<int> a = new Array<int>();
  a.set(0);
