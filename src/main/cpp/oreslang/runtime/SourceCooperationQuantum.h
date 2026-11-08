@@ -102,10 +102,16 @@ public:
             backedges_ >= kMaxBackedgesPerDispatch;
     }
 
-    // Must only be called for an actual logical cooperate handoff.
+    // Only a genuine legal scheduler handoff acknowledges pending debt.
+    // Reset the exhausted dispatch counter as part of that acknowledgement:
+    // otherwise the next beginDispatch() would relatch the already-serviced
+    // 512-cap and an exit hook could spuriously request another handoff.
+    // This must never be called for a plain await, generator yield, or a
+    // still-held no-yield/ownership guard.
     void recordedCooperate() noexcept {
         lastCooperate_ = Clock::now();
         pendingHandoff_ = false;
+        backedges_ = 0;
     }
 
     // Generator 'yield value' is NOT a scheduler cooperation.
