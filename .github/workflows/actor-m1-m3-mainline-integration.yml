@@ -48,6 +48,7 @@ jobs:
             src/main/cpp/oreslang/runtime/ActorFrameArena.hpp \
             tests/source_actor_e2e.py \
             tests/source_actor_scalar_vm_runtime_test.c \
+            tests/actor_scalar_compiler_admission_test.cpp \
             tests/fixtures/atto-actor-scalar-runaway-fuel.atto \
             tests/fixtures/atto-actor-scalar-stack16-accept.atto \
             tests/fixtures/atto-actor-scalar-stack17-reject.atto; do
@@ -70,18 +71,19 @@ jobs:
           cmake --build "$RUNNER_TEMP/actor-merged-build" --parallel 2 --target \
             oreslang-llvmc \
             oreslang-actor-frame-arena-test \
+            oreslang-actor-scalar-compiler-admission-test \
             oreslang-native-actor-frame-integration-test \
             oreslang-source-actor-await-trace-runtime-test \
             oreslang-source-actor-frame-isolation-runtime-test \
             oreslang-source-actor-scalar-vm-runtime-test
-      - name: Execute five real native M1 M2 M3 CTests
+      - name: Execute six real M1 M2 M3 native and compiler admission CTests
         shell: bash
         run: |
           set -euo pipefail
           ctest --test-dir "$RUNNER_TEMP/actor-merged-build" --output-on-failure \
-            -R '^(native_actor_frame_arena_owner_suspend_migrate|native_actor_frame_suspension_sibling_survival|source_actor_await_trace_runtime|source_actor_frame_isolation_restart_and_denial|source_actor_scalar_vm_tail_quota_sibling)$' \
+            -R '^(native_actor_frame_arena_owner_suspend_migrate|native_actor_scalar_compiler_admission|native_actor_frame_suspension_sibling_survival|source_actor_await_trace_runtime|source_actor_frame_isolation_restart_and_denial|source_actor_scalar_vm_tail_quota_sibling)$' \
             | tee "$RUNNER_TEMP/integration-actor-tests.txt"
-          grep -F '100% tests passed, 0 tests failed out of 5' "$RUNNER_TEMP/integration-actor-tests.txt"
+          grep -F '100% tests passed, 0 tests failed out of 6' "$RUNNER_TEMP/integration-actor-tests.txt"
       - name: Compile and execute actual AttoLang actors with four M3 proofs
         shell: bash
         run: |
@@ -123,7 +125,7 @@ jobs:
             printf 'head_sha=%s\n' "$EXPECTED_HEAD"
             printf 'tree_sha=%s\n' "$(git rev-parse 'HEAD^{tree}')"
             printf 'run_id=%s\nrun_attempt=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
-            printf 'M1_M2_M3_CTest=5_EXECUTED\n'
+            printf 'M1_M2_M3_CTest=6_EXECUTED\n'
             printf 'M3_source_actor_guest=5_EXECUTED\n'
             printf 'current_main_scalar_native=3_EXECUTED\n'
             printf 'guest_and_scalar_sanitizers=EXECUTED\n'
