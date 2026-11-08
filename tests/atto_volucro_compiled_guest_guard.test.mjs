@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {assertCompiledActorProfile, assertInjectedOutOfBounds, assertVmOutcome,
+import {assertCompiledActorProfile, assertInjectedOutOfBounds, assertVmOutcome, selectCargoGuestExecutable,
   MAX_ACTOR_WASM_BYTES} from './atto_volucro_compiled_guest_guard.mjs';
 const u32 = n => {const r=[];do{let b=n&127;n=Math.floor(n/128);if(n)b|=128;r.push(b);}while(n);return r;};
 const str = s => [...u32(Buffer.byteLength(s)),...Buffer.from(s)];
@@ -122,4 +122,27 @@ test('guest killed by signal cannot be treated as typed failure',()=>{
 });
 test('unrecognized outcome classifier is rejected',()=>{
   assert.throws(()=>assertVmOutcome({status:1,stdout:'',stderr:''},'SomeOtherError','fake'));
+});
+
+test('Cargo artifact selector binds a successful build to one real binary',()=>{
+  const good=JSON.stringify({reason:'compiler-artifact',target:{name:'atto_actor_isolation_smoke',kind:['bin']},executable:'/private/volucro/target/debug/atto_actor_isolation_smoke'});
+  const ignored=JSON.stringify({reason:'compiler-artifact',target:{name:'some_dependency',kind:['lib']},executable:null});
+  const done=JSON.stringify({reason:'build-finished',success:true});
+  assert.equal(selectCargoGuestExecutable([ignored,good,done].join('\n'),'atto_actor_isolation_smoke'),
+    '/private/volucro/target/debug/atto_actor_isolation_smoke');
+});
+test('Cargo artifact selector rejects untrusted or incomplete tool transcripts',()=>{
+  const artifact=(file)=>JSON.stringify({reason:'compiler-artifact',target:{name:'atto_actor_isolation_smoke',kind:['bin']},executable:file});
+  const done=JSON.stringify({reason:'build-finished',success:true});
+  for(const bad of [
+    '',
+    artifact('/a'),
+    done,
+    [artifact('relative/file'),done].join('\n'),
+    [artifact('/a'),JSON.stringify({reason:'build-finished',success:false})].join('\n'),
+    [artifact('/a'),artifact('/b'),done].join('\n'),
+    [artifact('/a'),done,done].join('\n'),
+    [done,artifact('/a')].join('\n'),
+    [artifact('/a'),'{ broken-json ',done].join('\n'),
+  ]) assert.throws(()=>selectCargoGuestExecutable(bad,'atto_actor_isolation_smoke'),/ACTOR_WASM_ADMISSION_DENIED/);
 });
