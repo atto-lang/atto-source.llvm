@@ -10,7 +10,7 @@ The analysis takes a compiler-owned CFG with unique owner identities and explici
 - `Use`: require a live owned value and no mutable borrow.
 - `BorrowShared` / `EndBorrowShared`: maintain a bounded shared-loan count.
 - `BorrowMutable` / `EndBorrowMutable`: enforce exclusive mutable loan.
-- `Take`: mark the current owner moved; it is not destroyed at the exit.
+- `Take(source, destination)`: transfer the live resource into a distinct uninitialized owner; the source becomes moved and the destination inherits the original acquisition order.
 - `Drop`: explicitly destroy once; a later use/drop is rejected.
 - `ExitNormal`: emit a reverse declaration-order cleanup plan for all still owned objects.
 
@@ -24,7 +24,7 @@ ActorRegionV2 constructs a small CFG: all lexical objects are created in the ent
 
 ## Tests
 
-`native_ownership_dataflow_v1` contains five positive scenarios and nine negative scenarios. It checks cleanup order, moved and explicitly dropped owners, shared/mutable borrow release, double destruction, use after move, dropping with a loan, conflicting aliases, mismatched join states, suspend exit, missing explicit exit and duplicate owner identities, and an ownership-changing/nonterminating CFG cycle.
+`native_ownership_dataflow_v1` contains five positive scenarios and fifteen negative scenarios. It checks cleanup order, moved and explicitly dropped owners, shared/mutable borrow release, double destruction, use after move, dropping with a loan, conflicting aliases, mismatched join states, suspend exit, missing explicit exit and duplicate owner identities, unbounded cycles, missing/invalid transfer destinations, transfer into an initialized destination, use-before-create, unknown operation kinds, unreachable blocks, and unbalanced borrows.
 
 The tests are authored and registered. They are **not reported as passing** until a nonzero-step native CTest job runs on the exact PR head. They do not prove LLVM guest execution or a process-wide no-GC link closure.
 
