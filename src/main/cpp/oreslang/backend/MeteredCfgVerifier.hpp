@@ -6,6 +6,11 @@
 
 namespace oreslang::backend_detail {
 
+// Conservatively bound attacker-influenced compiler analysis memory and time.
+// These ceilings are much higher than the experimental scalar guest CFG.
+inline constexpr std::size_t kMaxMeteredCfgNodes = 262144;
+inline constexpr std::size_t kMaxMeteredCfgEdges = 1048576;
+
 // Fail closed when a CFG has any cycle that can avoid the supplied, trusted
 // metering blocks. Input indices are intentionally plain integers, so this
 // invariant can be tested independently of an LLVM installation. This checks
@@ -14,17 +19,22 @@ inline bool every_cycle_contains_meter(
         const std::vector<std::vector<std::size_t>>& successors,
         const std::vector<std::size_t>& metered_nodes) {
     const std::size_t count = successors.size();
-    if (count == 0 || metered_nodes.empty()) return false;
+    if (count == 0 || count > kMaxMeteredCfgNodes || metered_nodes.empty())
+        return false;
     std::vector<unsigned char> metered(count, 0);
     for (const std::size_t id : metered_nodes) {
         if (id >= count) return false;
         metered[id] = 1;
     }
-    // Reject bad edges even if the malformed block is unreachable. A bad CFG
-    // cannot be certified by silently dropping its invalid successor.
-    for (const auto& outgoing : successors)
+    // Reject malformed or excessively large CFGs even when their edges are
+    // unreachable or their source blocks are already marked metered.
+    std::size_t edge_count = 0;
+    for (const auto& outgoing : successors) {
+        if (outgoing.size() > kMaxMeteredCfgEdges - edge_count) return false;
+        edge_count += outgoing.size();
         for (const std::size_t next : outgoing)
             if (next >= count) return false;
+    }
 
     // A cycle that remains after removing all trusted metering blocks is a
     // potential unmetered infinite execution path. Use iterative DFS rather
