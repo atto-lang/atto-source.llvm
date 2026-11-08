@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
 
 namespace oreslang::runtime {
 
@@ -30,8 +31,15 @@ public:
     static constexpr std::uint32_t kMaxBackedgesPerDispatch = 512;
     static constexpr auto kSoftDispatchQuantum = std::chrono::milliseconds(2);
 
-    BasicSourceCooperationQuantum()
-        : lastCooperate_(Clock::now()), dispatchStarted_(lastCooperate_) {}
+    // Keep the established 64-step default for Java/LLVM parity. A
+    // compiler-verified 128/256/512 option batches ordinary soft polls; the
+    // hard 512-backedge no-yield handoff rule is NEVER diluted by an option.
+    explicit BasicSourceCooperationQuantum(std::uint32_t interval = kLoopCheckInterval)
+        : lastCooperate_(Clock::now()), dispatchStarted_(lastCooperate_),
+          loopCheckInterval_(interval) {
+        if (interval != 64 && interval != 128 && interval != 256 && interval != 512)
+            throw std::invalid_argument("unsupported cooperation interval");
+    }
 
     // A budget belongs to one logical task: copying or moving would split
     // its reduction history from the saved heap continuation. Carrier
@@ -55,7 +63,7 @@ public:
         // available safe handoff for another 64 backedges. The caller still
         // decides whether a protected lexical scope forbids suspension.
         return backedges_ >= kMaxBackedgesPerDispatch ||
-            (backedges_ & (kLoopCheckInterval - 1)) == 0;
+            (backedges_ & (loopCheckInterval_ - 1)) == 0;
     }
 
     // Cold path: independent watchdog request, reduction cap, or active
@@ -84,6 +92,7 @@ private:
     time_point lastCooperate_;
     time_point dispatchStarted_;
     std::uint64_t backedges_ = 0;
+    std::uint32_t loopCheckInterval_;
 };
 
 using SourceCooperationQuantum = BasicSourceCooperationQuantum<>;
