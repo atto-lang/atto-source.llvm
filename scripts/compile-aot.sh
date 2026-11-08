@@ -33,7 +33,8 @@ case "$aot_admission" in
   off) ;;
   sealed-scalar-v1) compiler_aot_args=(--aot-profile=sealed-scalar-v1) ;;
   sealed-class-fields-v1) compiler_aot_args=(--aot-profile=sealed-class-fields-v1) ;;
-  *) echo 'ORESLANG_LLVM_AOT_PROFILE must be off, sealed-scalar-v1 or sealed-class-fields-v1.' >&2; exit 64 ;;
+  actor-region-v1) compiler_aot_args=(--aot-profile=actor-region-v1) ;;
+  *) echo 'ORESLANG_LLVM_AOT_PROFILE must be off, sealed-scalar-v1, sealed-class-fields-v1 or actor-region-v1.' >&2; exit 64 ;;
 esac
 output_dir="$(cd "$(dirname "$2")" && pwd -P)"
 output_file="$output_dir/$(basename "$2")"
@@ -109,6 +110,13 @@ if grep -Eq 'declare .*@(oreslang_source_actor_|ores_actor_)' "$work/program.ll"
 fi
 # Native source Task<int> has a runtime ABI even when there is no actor import.
 # Link it on the normal AOT path, not only the bespoke source Task test.
+# ActorRegionGuestV1 currently has NO certified sealed-AOT linker closure.
+# Discover the exact direct C source dependencies so the fail-closed gate below
+# rejects before Clang or output publication; never silently link guest imports.
+if grep -Eq 'declare .*@ores_actor_region_guest_v1_' "$work/program.ll"; then
+  rt="$root/src/main/cpp/oreslang/runtime"
+  runtime_sources+=("$rt/ActorRegionGuestV1.c" "$rt/ActorRegionV1.c" "$rt/ActorArena.c")
+fi
 if grep -Eq 'declare .*@oreslang_source_task_(start_i64|await_i64|runtime_shutdown)' "$work/program.ll"; then
   rt="$root/src/main/cpp/oreslang/runtime"
   runtime_sources+=("$rt/SourceTaskRuntime.c")
