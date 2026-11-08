@@ -45,6 +45,7 @@ public:
     void beginDispatch() noexcept {
         dispatchStarted_ = Clock::now();
         backedges_ = 0;
+        pollDue_ = false;
     }
 
     // One cheap integer counter/bit-mask on the committed loop backedge.
@@ -55,7 +56,10 @@ public:
         // even after the fairness budget expires inside a no-yield scope.
         // A newly safe handoff can be delayed by at most 127 backedges;
         // hard untrusted fuel limits require separate charged instrumentation.
-        return (backedges_ & (kLoopCheckInterval - 1)) == 0;
+        // Poll phase must survive 127-step dispatches and carrier migration.
+        pollPhase_ = (pollPhase_ + 1) & (kLoopCheckInterval - 1);
+        pollDue_ = pollPhase_ == 0;
+        return pollDue_;
     }
 
     // Cold path: independent watchdog request, reduction cap, or active
@@ -63,6 +67,10 @@ public:
     // compiler-proven post-commit heap continuation and no live no-yield loans.
     // A watchdog never interrupts or rewinds an executing native stack.
     bool shouldCooperateAtCheck(bool watchdogRequested = false) noexcept {
+        // Consume exactly one poll ticket. Calls between true boundaries are
+        // cheap and can never repeatedly read the clock.
+        if (!pollDue_) return false;
+        pollDue_ = false;
         if (watchdogRequested || backedges_ >= kMaxBackedgesPerDispatch)
             return true;
         return Clock::now() - dispatchStarted_ >= kSoftDispatchQuantum;
@@ -84,6 +92,8 @@ private:
     time_point lastCooperate_;
     time_point dispatchStarted_;
     std::uint64_t backedges_ = 0;
+    std::uint32_t pollPhase_ = 0;
+    bool pollDue_ = false;
 };
 
 using SourceCooperationQuantum = BasicSourceCooperationQuantum<>;
