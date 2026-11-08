@@ -140,6 +140,15 @@ static bool rejects_unreachable_block() {
     g.blocks[1].operations={{static_cast<OwnershipV1OpKind>(255),0}};
     return expect_reject("unreachable hidden block",std::move(g));
 }
+static bool rejects_mutation_during_shared_borrow() {
+    auto g=graph(1);
+    g.blocks[0].operations={op(OwnershipV1OpKind::Create),
+        op(OwnershipV1OpKind::BorrowShared),
+        op(OwnershipV1OpKind::UseMutable),
+        op(OwnershipV1OpKind::EndBorrowShared),
+        op(OwnershipV1OpKind::ExitNormal)};
+    return expect_reject("mutable use with shared borrow",std::move(g));
+}
 static bool rejects_unbalanced_borrow() {
     auto g=graph(1);
     g.blocks[0].operations={op(OwnershipV1OpKind::Create),
@@ -165,8 +174,9 @@ int main() {
       rejects_duplicate_identity() && rejects_unbounded_cycle() &&
       rejects_take_without_destination() && rejects_take_into_live_destination() &&
       rejects_use_before_create() && rejects_unknown_operation() &&
-      rejects_unreachable_block() && rejects_unbalanced_borrow();
+      rejects_unreachable_block() && rejects_unbalanced_borrow() &&
+      rejects_mutation_during_shared_borrow();
     if (!ok) return 1;
-    std::puts("OWNERSHIP_DATAFLOW_V1|positive=5|negative=15|result=PASS");
+    std::puts("OWNERSHIP_DATAFLOW_V1|positive=5|negative=16|result=PASS");
     return 0;
 }
