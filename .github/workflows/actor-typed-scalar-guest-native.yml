@@ -55,6 +55,8 @@ jobs:
               tests/fixtures/atto-actor-scalar-mutual-tail.atto \
               tests/fixtures/atto-actor-scalar-nontail-overflow.atto \
               tests/fixtures/atto-actor-scalar-runaway-fuel.atto \
+              tests/fixtures/atto-actor-scalar-stack16-accept.atto \
+              tests/fixtures/atto-actor-scalar-stack17-reject.atto \
               tests/fixtures/atto-actor-scalar-unsafe-nested-call-reject.atto; do
             test "$(git hash-object "$src")" = "$(git rev-parse "HEAD:$src")"
             printf '%s %s\n' "$(git hash-object "$src")" "$src"
@@ -99,6 +101,8 @@ jobs:
             "$RUNNER_TEMP/m3-compiled-guest-o1.log"
           grep -F 'PASS actual compiler-backed M3 actor VM: atto-actor-scalar-runaway-fuel.atto' \
             "$RUNNER_TEMP/m3-compiled-guest-o1.log"
+          grep -F 'PASS actual compiler-backed M3 actor VM: atto-actor-scalar-stack16-accept.atto' \
+            "$RUNNER_TEMP/m3-compiled-guest-o1.log"
       - name: Execute actual source-compiled guest under ASan and UBSan
         shell: bash
         env:
@@ -112,7 +116,7 @@ jobs:
             | tee "$RUNNER_TEMP/m3-compiled-guest-sanitized.log"
           grep -c 'PASS actual compiler-backed M3 actor VM:' \
             "$RUNNER_TEMP/m3-compiled-guest-sanitized.log" \
-            | grep -Fx '4'
+            | grep -Fx '5'
       - name: Classify tested semantics and preserve executed exact-head receipt
         shell: bash
         env:
