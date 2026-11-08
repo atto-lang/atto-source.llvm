@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mutateActorWasmExport, mutateActorWasmOutOfBounds, wasmSha256} from './atto_volucro_compiled_guest_faults_lib.mjs';
+import {mutateActorWasmExport, mutateActorWasmOutOfBounds, mutateActorWasmOutOfBoundsStore, wasmSha256} from './atto_volucro_compiled_guest_faults_lib.mjs';
 const encodeU32 = number => {
   const out=[];do {let b=number%128;number=Math.floor(number/128);if(number)b|=128;out.push(b);}while(number);
   return out;
@@ -39,6 +39,24 @@ test('out-of-bounds injection keeps valid wasm but traps on actual i64.load',()=
   const sibling=new WebAssembly.Instance(new WebAssembly.Module(valid));
   assert.equal(sibling.exports.oreslang_wasm_actor_on_message(9n),9n);
   assert.notEqual(wasmSha256(valid),wasmSha256(mutated));
+});
+test('out-of-bounds compiled-Wasm store traps without damaging sibling actor memory',()=>{
+  const mutated=mutateActorWasmOutOfBoundsStore(valid);
+  assert.equal(WebAssembly.validate(mutated),true);
+  assert.notEqual(wasmSha256(mutated),wasmSha256(mutateActorWasmOutOfBounds(valid)));
+  assert.deepEqual(WebAssembly.Module.imports(new WebAssembly.Module(mutated)),[]);
+  const attacker=new WebAssembly.Instance(new WebAssembly.Module(mutated));
+  assert.throws(()=>attacker.exports.oreslang_wasm_actor_on_message(19n),WebAssembly.RuntimeError);
+  const sibling=new WebAssembly.Instance(new WebAssembly.Module(valid));
+  assert.equal(sibling.exports.oreslang_wasm_actor_on_message(9n),9n);
+});
+test('out-of-bounds store injection also denies modules without memory',()=>{
+  const memoryBytes=Buffer.from(section(5,[1,1,1,1]));
+  const i=valid.indexOf(memoryBytes);
+  assert.ok(i>0);
+  const noMemory=Buffer.concat([valid.subarray(0,i),valid.subarray(i+memoryBytes.length)]);
+  assert.equal(WebAssembly.validate(noMemory),true);
+  assert.throws(()=>mutateActorWasmOutOfBoundsStore(noMemory),/mutation invalidated wasm/);
 });
 test('deterministic fault bytes and digests',()=>{
   assert.equal(wasmSha256(mutateActorWasmOutOfBounds(valid)),wasmSha256(mutateActorWasmOutOfBounds(valid)));
