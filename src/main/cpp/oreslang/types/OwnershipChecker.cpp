@@ -555,11 +555,8 @@ void validate_i64_ownership(Program& program) {
     // before checking anything. Failed ownership admission therefore cannot
     // leave executable Future-pipeline authority from an earlier pass.
     for (auto& function : program.functions) {
-        for (auto& task : function.source_tasks) {
-            task.ownership_admitted = false;
-            task.ownership_authority_fingerprint = 0;
-            task.ownership_boundary_identity = nullptr;
-        }
+        for (auto& task : function.source_tasks)
+            types::revoke_source_task_i64(task);
         for (auto& pipeline : function.future_pipelines) {
             pipeline.ownership_admitted = false;
             pipeline.ownership_authority_fingerprint = 0;
