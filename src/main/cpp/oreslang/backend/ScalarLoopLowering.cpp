@@ -122,8 +122,17 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         // Loop backedges have NO repeated fuel test, time read or scheduler
         // callback. The only loop condition is the necessary source bound.
         auto* first = b.CreateLoad(i64, counterAddress, "counter.at.dispatch");
-        auto* byFuel = b.CreateAdd(first, fuel, "dispatch.end.by.fuel");
         auto* upper = llvm::ConstantInt::getSigned(i64, loop.upper_bound);
+        // This counter is part of a long-lived heap continuation. Reject
+        // corruption/stale frame replay before computing the batch endpoint:
+        // otherwise i64 wrapping could bypass the fuel cap.
+        auto* counterValid = llvm::BasicBlock::Create(context, "counter.valid", step);
+        auto* atOrAboveInitial = b.CreateICmpSGE(first,
+            llvm::ConstantInt::getSigned(i64, loop.initial));
+        auto* atOrBelowBound = b.CreateICmpSLE(first, upper);
+        b.CreateCondBr(b.CreateAnd(atOrAboveInitial, atOrBelowBound), counterValid, invalid);
+        b.SetInsertPoint(counterValid);
+        auto* byFuel = b.CreateAdd(first, fuel, "dispatch.end.by.fuel");
         auto* endByFuel = b.CreateICmpULT(byFuel, upper);
         auto* stop = b.CreateSelect(endByFuel, byFuel, upper, "dispatch.batch.stop");
         b.CreateBr(loopHead);
