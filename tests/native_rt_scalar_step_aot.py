@@ -78,6 +78,11 @@ def main():
         ("val count: int = 0;", "val count: int = -1;"),
         ("count = count + 1;", "count = count + 2;"),
         ("while (count < 1000)", "while (count < 2000000000)"),
+        # Hard reject unbounded/non-monotone source loop forms rather than
+        # silently generating an unmetered executable guest cycle.
+        ("while (count < 1000)", "while (true)"),
+        ("while (count < 1000)", "while (count >= 0)"),
+        ("count = count + 1;", "count = count - 1;"),
         ("return count;", "return 17;"),
         ("val count: int = 0;", "const count: int = 0;"),
         ("count = count + 1;", "other = other + 1;"),
@@ -135,7 +140,7 @@ def main():
             assert wrong.returncode != 0 and not wrong.stdout.strip(), (i, wrong.stdout)
         missing = run([compiler, "--experimental-rt-scalar-loop", "--target=wasm32", str(fixture)])
         assert missing.returncode != 0 and not missing.stdout.strip()
-        print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: O0/O2/O3 batched fuel, 4 compiled IR mutants, 16 invalid frames, 7 boundaries, peer/cancel isolation, negatives")
+        print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: O0/O2/O3 batched fuel, 4 compiled IR mutants, 16 invalid frames, 7 boundaries, peer/cancel isolation, 10 source admission negatives")
 
 if __name__ == "__main__":
     main()

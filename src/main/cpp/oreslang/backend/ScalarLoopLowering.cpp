@@ -4,9 +4,14 @@
 #include <stdexcept>
 #include <string>
 
+#include "llvm/ADT/SCCIterator.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/Dominators.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/IRBuilder.h"
 #include "oreslang/backend/LlvmCompat.hpp"
 #include "llvm/IR/Intrinsics.h"
@@ -89,6 +94,15 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
     auto* step = llvm::Function::Create(
         llvm::FunctionType::get(i32, {ptr, i64}, false),
         llvm::Function::ExternalLinkage, "oreslang_rt_scalar_frame_step", module);
+    // Compiler-private proof witnesses. These are the ACTUAL LLVM values,
+    // not strings or guest-provided claims about checkpoint coverage.
+    llvm::BasicBlock* admittedBatchStart = nullptr;
+    llvm::BasicBlock* admittedCommit = nullptr;
+    llvm::BasicBlock* admittedBatchEnd = nullptr;
+    llvm::Value* admittedCounterAddress = nullptr;
+    llvm::Value* admittedBatchLimit = nullptr;
+    llvm::Value* admittedNext = nullptr;
+    llvm::Value* admittedFuel = nullptr;
     {
         auto arg = step->arg_begin();
         llvm::Value* frame = &*arg++;
@@ -170,6 +184,14 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         auto* batchLimit = b.CreateSelect(
             b.CreateICmpSLT(requestedEnd, upperBound), requestedEnd,
             upperBound, "batch.limit");
+        // This path has already validated 0 < fuel <= 512, and the
+        // initialized counter is inside [initial, upper_bound <= 1e9].
+        admittedBatchStart = batchStart;
+        admittedCommit = advance;
+        admittedBatchEnd = batchEnd;
+        admittedCounterAddress = counterAddress;
+        admittedBatchLimit = batchLimit;
+        admittedFuel = fuel;
         b.CreateBr(advance);
         b.SetInsertPoint(exhausted);
         b.CreateRet(llvm::ConstantInt::get(i32, 1));
@@ -179,6 +201,7 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         // Commit before deciding to return COOPERATE. The only in-loop test
         // is the native counted-loop boundary, not a runtime fuel/clock poll.
         auto* next = b.CreateNSWAdd(index, constant(1), "counter.committed");
+        admittedNext = next;
         b.CreateStore(next, counterAddress);
         b.CreateCondBr(b.CreateICmpSLT(next, batchLimit), advance, batchEnd);
         index->addIncoming(next, advance);
@@ -259,6 +282,84 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
     llvm::raw_string_ostream diagnostic(errors);
     if (llvm::verifyModule(module, &diagnostic))
         throw std::runtime_error("invalid scalar-loop LLVM IR: " + diagnostic.str());
+    // Fail-closed CFG admission for this narrowly supported opt-in scalar
+    // frame emitter. Verifying LLVM module syntax alone does not prove fuel:
+    // a future optimizer/codegen change could introduce a second cycle or
+    // move the commit past the backedge guard. Check actual SSA/CFG objects
+    // before serialization, and reject ALL other cyclic SCCs (including
+    // irreducible control-flow cycles) rather than guessing they are safe.
+    auto invalidCoverage = [] {
+        throw std::runtime_error(
+            "unverified scalar-loop checkpoint CFG: unbounded/unmetered cycle");
+    };
+    if (!admittedBatchStart || !admittedCommit || !admittedBatchEnd
+            || !admittedCounterAddress || !admittedBatchLimit
+            || !admittedNext || !admittedFuel)
+        invalidCoverage();
+    auto* conditional = llvm::dyn_cast<llvm::BranchInst>(
+        admittedCommit->getTerminator());
+    auto* condition = conditional && conditional->isConditional()
+        ? llvm::dyn_cast<llvm::ICmpInst>(conditional->getCondition()) : nullptr;
+    if (!condition || condition->getPredicate() != llvm::CmpInst::ICMP_SLT
+            || condition->getOperand(0) != admittedNext
+            || condition->getOperand(1) != admittedBatchLimit
+            || conditional->getSuccessor(0) != admittedCommit
+            || conditional->getSuccessor(1) != admittedBatchEnd)
+        invalidCoverage();
+    auto* increment = llvm::dyn_cast<llvm::BinaryOperator>(admittedNext);
+    if (!increment || increment->getOpcode() != llvm::Instruction::Add
+            || !increment->hasNoSignedWrap()
+            || !llvm::isa<llvm::PHINode>(increment->getOperand(0)))
+        invalidCoverage();
+    auto* one = llvm::dyn_cast<llvm::ConstantInt>(increment->getOperand(1));
+    if (!one || !one->equalsInt(1)) invalidCoverage();
+    auto* select = llvm::dyn_cast<llvm::SelectInst>(admittedBatchLimit);
+    auto* requestedEnd = select
+        ? llvm::dyn_cast<llvm::BinaryOperator>(select->getTrueValue()) : nullptr;
+    if (!requestedEnd || requestedEnd->getOpcode() != llvm::Instruction::Add
+            || !requestedEnd->hasNoSignedWrap()
+            || requestedEnd->getOperand(1) != admittedFuel
+            || !llvm::isa<llvm::ConstantInt>(select->getFalseValue()))
+        invalidCoverage();
+    bool committed = false;
+    for (llvm::Instruction& inst : *admittedCommit) {
+        auto* store = llvm::dyn_cast<llvm::StoreInst>(&inst);
+        if (store && store->getValueOperand() == admittedNext
+                && store->getPointerOperand() == admittedCounterAddress)
+            committed = true;
+    }
+    if (!committed) invalidCoverage();
+    llvm::DominatorTree dominance(*step);
+    if (!dominance.dominates(admittedBatchStart, admittedCommit))
+        invalidCoverage();
+    unsigned cycles = 0;
+    for (llvm::Function& fn : module) {
+        if (fn.isDeclaration()) continue;
+        // SCCIterator starts at the entry block. Require complete CFG
+        // reachability, or an unreachable malicious loop could escape the
+        // cycle proof while still being emitted into the object module.
+        llvm::SmallPtrSet<llvm::BasicBlock*, 32> visited;
+        for (auto it = llvm::scc_begin(&fn); !it.isAtEnd(); ++it) {
+            const auto& component = *it;
+            for (auto* node : component) visited.insert(node);
+            bool cyclic = component.size() > 1;
+            if (!cyclic) {
+                for (const auto* successor : llvm::successors(component.front())) {
+                    if (successor == component.front()) cyclic = true;
+                }
+            }
+            if (!cyclic) continue;
+            ++cycles;
+            if (&fn != step || component.size() != 1
+                    || component.front() != admittedCommit)
+                invalidCoverage();
+        }
+        if (visited.size() != fn.size()) invalidCoverage();
+    }
+    if (cycles != 1) invalidCoverage();
+    // This is a bounded opt-in i64 scalar loop, not a proof of general
+    // actor recursion, native FFI revocation or tenant hard-fuel isolation.
+
     std::string output;
     llvm::raw_string_ostream o(output);
     module.print(o, nullptr);
