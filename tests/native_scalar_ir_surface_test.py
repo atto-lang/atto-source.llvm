@@ -49,7 +49,7 @@ def main():
     # AOT Clang and linked LLVM SDK must be the same major. Mocking only
     # the version probe ensures this negative test is portable and executes
     # without installed LLVM/Clang developer libraries.
-    for sample, expected in [("17.0.0\\n", 17), ("19", 19), ("22.1.7", 22)]:
+    for sample, expected in [("17.0.0\n", 17), ("19", 19), ("22.1.7", 22)]:
         if parse_clang_major(sample) != expected:
             raise AssertionError("clang version major parsed incorrectly")
     for sample in ["", "clang version 19.0", "v19", "19.1 extra", "NaN"]:
@@ -59,7 +59,7 @@ def main():
             continue
         raise AssertionError("bad clang version output unexpectedly accepted")
     with patch("native_rt_scalar_step_aot.run", return_value=SimpleNamespace(
-            returncode=0, stderr="", stdout="17.0.0\\n")):
+            returncode=0, stderr="", stdout="17.0.0\n")):
         if verify_matching_llvm_clang("clang", 17) != 17:
             raise AssertionError("matching Clang version denied")
         try:
