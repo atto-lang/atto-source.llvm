@@ -62,6 +62,11 @@ reject_reserved_operator_name() {
     echo "reserved keyword declaration emitted executable LLVM IR" >&2
     exit 1
   fi
+  if ! grep -Fq "expected non-keyword identifier" "$diagnostic"; then
+    echo "reserved keyword was rejected without the expected identifier diagnostic" >&2
+    cat "$diagnostic" >&2
+    exit 1
+  fi
 }
 
 reject_removed_caret_operator() {
