@@ -1,0 +1,5 @@
+pub fnc main(): int {
+  let int owner = 41;
+  let int moved = rt take owner;
+  return moved + 1;
+}
