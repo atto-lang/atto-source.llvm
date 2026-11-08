@@ -144,7 +144,7 @@ bool reserved(std::string_view name) {
         "define", "class", "enum", "pattern", "module", "contract", "conforms", "namespace",
         "import", "from", "as", "extends", "implements", "try", "catch",
         "throw", "raise", "panic", "recover",
-        "finally", "end", "fi", "if", "do", "else", "then", "new",
+        "finally", "end", "fi", "if", "guard", "do", "else", "then", "new",
         "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "gen", "generator",
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
@@ -2877,6 +2877,33 @@ private:
                     value.statements.push_back(dispatch_statement());
                     continue;
                 }
+            }
+            if (token_.text == "guard") {
+                // Else-free fail-fast is a *typed* boolean guard whose body
+                // terminates by returning. No new implicit conversions, no
+                // effectful statements, and no second condition evaluation.
+                if (terminal_try_finally)
+                    fail("native guard inside terminal try requires distinct cleanup proof");
+                if (value.returns_void)
+                    fail("native guard v1 requires an explicit scalar return");
+                if (value.early_returns.size() == 8)
+                    fail("native guarded return limit exceeded (8)");
+                GuardedReturn guard;
+                guard.offset = token_.offset;
+                guard.return_on_false = true;
+                require("guard");
+                guard.condition = expression();
+                require("{");
+                require("return");
+                guard.result = expression();
+                require(";");
+                require("}");
+                // Existing return-guard lowering runs one shared defer and
+                // ownership-cleanup exit on both the early and final paths.
+                // The ordinary final 'return' is mandatory after this arm.
+                value.early_returns.push_back(std::move(guard));
+                return_guards_started = true;
+                continue;
             }
             if (token_.text == "if") {
                 const auto offset = token_.offset;
