@@ -21,8 +21,8 @@ and narrows further:
 - at least one and at most 4,096 fresh class owners, all lexically declared
   in `main/0`;
 - class declarations have 1–16 immutable, initialized scalar fields;
-- owners do not move, escape, enter parameters, cross calls, suspend, use FFI
-  or become actors/tasks/continuations;
+- owners do not move, escape, enter class-valued parameters/returns or cross
+  helper-function boundaries, suspend, use FFI or become actors/tasks/continuations;
 - branch-scoped class aliases are rejected until path-sensitive branch cleanup exists;
 - no methods, parameterized constructors, arrays, nested owned fields,
   mutations or unsupported expression/statement roots.
