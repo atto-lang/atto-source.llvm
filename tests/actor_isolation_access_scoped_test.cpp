@@ -135,8 +135,8 @@ int main() {
         });
     } catch (const std::runtime_error&) { scrub_threw = true; }
     assert(scrub_threw);
+    assert(ledger.retired()); // partial zeroization quarantines the incarnation
+    assert(!ledger.with_checked_access(*replacement, 2, 8, [&](auto) { ++calls; }));
+    assert(!ledger.release_after_scrub(*replacement, [](auto, auto) {}));
     assert(!ledger.issue_allocation(8, 16));
-    assert(ledger.with_checked_access(*replacement, 2, 8, [&](auto) { ++calls; }));
-    assert(ledger.release_after_scrub(*replacement, [](auto, auto) {}));
-    assert(ledger.issue_allocation(8, 16));
 }
