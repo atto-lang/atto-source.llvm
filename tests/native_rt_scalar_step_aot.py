@@ -2,6 +2,7 @@
 """Compile actual opt-in Oreslang source and drive two native heap continuations."""
 import argparse
 import pathlib
+import re
 import subprocess
 import tempfile
 
@@ -53,6 +54,45 @@ def main():
         assert "SCALAR_FRAME_AOT_TWO_TASKS_PASS" in execution.stdout
         assert "SCALAR_FRAME_AOT_THREE_PEERS_BOUNDED_PROGRESS_PASS" in execution.stdout
         assert "SCALAR_FRAME_AOT_CANCELLED_PEER_ISOLATION_PASS" in execution.stdout
+
+        # Negative mutation of the ACTUAL source-compiled LLVM IR: each
+        # weakened guard must still compile successfully, but the executable
+        # optimized native guest must fail the original exact-frame oracle.
+        # A text-only source assertion or a non-compiling mutant is NOT a
+        # valid killed mutation.
+        def require_killed_guest_mutant(label, regex, replacement):
+            mutated_ir, mutations = re.subn(regex, replacement, accepted.stdout,
+                                              count=1, flags=re.MULTILINE)
+            assert mutations == 1, (label, "missing precise source-IR guard")
+            mutated_file = out / f"mutant-{label}.ll"
+            mutated_file.write_text(mutated_ir)
+            mutant_bin = out / f"mutant-{label}"
+            mutant_build = run([
+                args.clang, "-std=c11", "-O2", "-DNDEBUG", "-Wall",
+                "-Wextra", "-Werror", "-Wno-error=override-module", "-pedantic",
+                str(args.harness), "-x", "ir", str(mutated_file), "-o", str(mutant_bin)
+            ])
+            assert mutant_build.returncode == 0, (label, mutant_build.stderr)
+            killed = run([str(mutant_bin)])
+            assert killed.returncode != 0, (
+                label, "REMOVING A COMPILER GUARD STILL PASSED GUEST EXECUTION")
+            assert "frame check failed" in killed.stderr, (
+                label, "mutation failed outside the native guest oracle",
+                killed.stderr)
+            return label
+
+        killed_mutants = [
+            require_killed_guest_mutant(
+                "fuel-cap",
+                r"^(\\s*%[\\w.]+ = icmp ule i64 [^,\\n]+, )512(\\s*)$",
+                r"\\g<1>4096\\g<2>"),
+            require_killed_guest_mutant(
+                "charge-elision",
+                r"^(\\s*%fuel\\.remaining = sub i64 [^,\\n]+, )1(\\s*)$",
+                r"\\g<1>0\\g<2>"),
+        ]
+        assert len(killed_mutants) == 2
+
         for i, (original, replacement) in enumerate(cases):
             assert original in source
             file = out / f"invalid-{i}.ores"
@@ -61,7 +101,7 @@ def main():
             assert wrong.returncode != 0 and not wrong.stdout.strip(), (i, wrong.stdout)
         missing = run([compiler, "--experimental-rt-scalar-loop", "--target=wasm32", str(fixture)])
         assert missing.returncode != 0 and not missing.stdout.strip()
-        print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: 3 peer frames, cancellation isolation, bounded progress, negatives")
+        print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: 3 peer frames, cancellation isolation, bounded progress, 2 compiled-IR killed mutations, negatives")
 
 if __name__ == "__main__":
     main()
