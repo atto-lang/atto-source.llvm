@@ -31,15 +31,23 @@ set(source_early
 "${class_prefix}${owner_prefix}  if (first.flag eq 1) { return first.flag; } fi\n  return second.answer;\n}\n")
 set(source_normal
 "${class_prefix}${owner_prefix}  if (first.flag eq 2) { return first.flag; } fi\n  return second.answer;\n}\n")
+set(source_three
+"${class_prefix}${owner_prefix}  let Pair third = new Pair();\n  if (first.flag eq 2) { return first.flag; } fi\n  return third.answer;\n}\n")
 
 set(native_successes 0)
-foreach(case IN ITEMS early normal)
+foreach(case IN ITEMS early normal three)
   if(case STREQUAL "early")
     set(source "${source_early}")
     set(expected 1)
-  else()
+    set(expected_owners 2)
+  elseif(case STREQUAL "normal")
     set(source "${source_normal}")
     set(expected 42)
+    set(expected_owners 2)
+  else()
+    set(source "${source_three}")
+    set(expected 42)
+    set(expected_owners 3)
   endif()
   set(dir "${work}/${case}")
   file(MAKE_DIRECTORY "${dir}")
@@ -54,9 +62,10 @@ foreach(case IN ITEMS early normal)
     string(REGEX MATCHALL "call void @ores_actor_region_v1_compiler_drop\\(" drops "${ir}")
     list(LENGTH allocations alloc_count)
     list(LENGTH drops drop_count)
-    if(NOT alloc_count EQUAL 2 OR NOT drop_count EQUAL 2 OR
+    if(NOT alloc_count EQUAL ${expected_owners} OR
+       NOT drop_count EQUAL ${expected_owners} OR
        NOT ir MATCHES "shared.owner.cleanup")
-      message(SEND_ERROR "${case}: expected 2 runtime allocations and 2 drops in one CFG cleanup, got ${alloc_count}/${drop_count}")
+      message(SEND_ERROR "${case}: expected ${expected_owners} allocations and drops in one CFG cleanup, got ${alloc_count}/${drop_count}")
     else()
       file(WRITE "${dir}/program.ll" "${ir}")
       execute_process(COMMAND "${BUILD}/oreslang-no-gc-ir-audit"
@@ -97,8 +106,8 @@ endforeach()
 
 # Explicit rejection of unsupported flow and type surfaces. Invalid source
 # is never allowed to produce LLVM IR or a native output artifact.
-set(source_third_owner
-"${class_prefix}${owner_prefix}  let Pair third = new Pair();\n  if (first.flag eq 1) { return first.flag; } fi\n  return second.answer;\n}\n")
+set(source_ninth_owner
+"${class_prefix}${owner_prefix}  let Pair third = new Pair();\n  let Pair fourth = new Pair();\n  let Pair fifth = new Pair();\n  let Pair sixth = new Pair();\n  let Pair seventh = new Pair();\n  let Pair eighth = new Pair();\n  let Pair ninth = new Pair();\n  if (first.flag eq 1) { return first.flag; } fi\n  return second.answer;\n}\n")
 set(source_mutable
 "define class Pair as\n  pub final mut int flag: 1;\n  pub final int answer: 42;\nend\npub fnc main(): int {\n${owner_prefix}  if (first.flag eq 1) { return first.flag; } fi\n  return second.answer;\n}\n")
 set(source_borrow
@@ -119,7 +128,7 @@ set(source_exit_truncation
 "define class Pair as\n  pub final int flag: 1;\n  pub final int answer: 258;\nend\npub fnc main(): int {\n${owner_prefix}  if (first.flag eq 1) { return first.answer; } fi\n  return second.answer;\n}\n")
 set(source_wrong_profile "${source_early}")
 set(negatives 0)
-foreach(case IN ITEMS third_owner mutable borrow unknown extra_root
+foreach(case IN ITEMS ninth_owner mutable borrow unknown extra_root
                  dynamic_call two_guards no_guard nonliteral
                  exit_truncation)
   set(dir "${work}/rejected-${case}")
@@ -147,7 +156,7 @@ if(denied STREQUAL "0" OR NOT ir STREQUAL "")
 else()
   math(EXPR negatives "${negatives}+1")
 endif()
-if(NOT native_successes EQUAL 4 OR NOT negatives EQUAL 11)
-  message(FATAL_ERROR "ActorRegionV2 native guest incomplete: ${native_successes}/4 native executions, ${negatives}/11 rejections")
+if(NOT native_successes EQUAL 6 OR NOT negatives EQUAL 11)
+  message(FATAL_ERROR "ActorRegionV2 native guest incomplete: ${native_successes}/6 native executions (2/3 owners at O0/O2), ${negatives}/11 rejections")
 endif()
-message(STATUS "PASS ActorRegionV2: 4 compiled native guests + 11 rejected source/profile cases")
+message(STATUS "PASS ActorRegionV2: 6 compiled native guest executions (2/3 owners at O0/O2) + 11 rejected source/profile cases")
