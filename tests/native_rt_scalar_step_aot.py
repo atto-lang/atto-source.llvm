@@ -50,17 +50,25 @@ def main():
         assert "dispatch.fuel" not in accepted.stdout
         llvm_ir = out / "guest.ll"
         llvm_ir.write_text(accepted.stdout)
-        exe = out / "run-guest"
-        build = run([args.clang, "-std=c11", "-O2", "-DNDEBUG", "-Wall", "-Wextra",
-                     "-Werror", "-Wno-error=override-module", "-pedantic", str(args.harness),
-                     "-x", "ir", str(llvm_ir), "-o", str(exe)])
-        assert build.returncode == 0, build.stderr
-        execution = run([str(exe)])
-        assert execution.returncode == 0, execution.stderr
-        assert "SCALAR_FRAME_AOT_TWO_TASKS_PASS" in execution.stdout
-        assert "SCALAR_FRAME_AOT_THREE_PEERS_BOUNDED_PROGRESS_PASS" in execution.stdout
-        assert "SCALAR_FRAME_AOT_CANCELLED_PEER_ISOLATION_PASS" in execution.stdout
-        assert "SCALAR_FRAME_AOT_BATCH_FUEL_BOUNDARIES_PASS" in execution.stdout
+        # Run the *same* compiled source guest under unoptimized and two
+        # optimized native pipelines. A checkpoint/fuel mutation that changes
+        # behavior at O2/O3 must not be masked by a single debug result.
+        expected_receipts = (
+            "SCALAR_FRAME_AOT_TWO_TASKS_PASS",
+            "SCALAR_FRAME_AOT_THREE_PEERS_BOUNDED_PROGRESS_PASS",
+            "SCALAR_FRAME_AOT_CANCELLED_PEER_ISOLATION_PASS",
+            "SCALAR_FRAME_AOT_BATCH_FUEL_BOUNDARIES_PASS",
+        )
+        for opt in ("-O0", "-O2", "-O3"):
+            exe = out / ("run-guest-" + opt[1:])
+            build = run([args.clang, "-std=c11", opt, "-DNDEBUG", "-Wall", "-Wextra",
+                         "-Werror", "-Wno-error=override-module", "-pedantic",
+                         str(args.harness), "-x", "ir", str(llvm_ir), "-o", str(exe)])
+            assert build.returncode == 0, (opt, build.stderr)
+            execution = run([str(exe)])
+            assert execution.returncode == 0, (opt, execution.stderr)
+            for receipt in expected_receipts:
+                assert receipt in execution.stdout, (opt, receipt, execution.stdout)
         for i, (original, replacement) in enumerate(cases):
             assert original in source
             file = out / f"invalid-{i}.ores"
@@ -69,7 +77,7 @@ def main():
             assert wrong.returncode != 0 and not wrong.stdout.strip(), (i, wrong.stdout)
         missing = run([compiler, "--experimental-rt-scalar-loop", "--target=wasm32", str(fixture)])
         assert missing.returncode != 0 and not missing.stdout.strip()
-        print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: batched fuel, 7 boundaries, 3 peer frames, cancellation isolation, negatives")
+        print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: O0/O2/O3 batched fuel, 14 invalid frames, 7 boundaries, peer/cancel isolation, negatives")
 
 if __name__ == "__main__":
     main()
