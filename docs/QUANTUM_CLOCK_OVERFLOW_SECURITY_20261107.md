@@ -2,7 +2,7 @@
 
 **Scope:** host-only `BasicSourceCooperationQuantum<Clock>`, stacked on
 `oreslang-source.llvm` draft #1570 at source commit
-`1dc72735cc51a3d15882b663d6f5accc971da5c9`. No guest compiler
+`6fc8fd4d8e655ade428aeaf0dc5bd6edd1599b25`. No guest compiler
 instrumentation, FFI preemption, process kill, or backend parity is
 certified by these changes.
 
@@ -84,7 +84,7 @@ run on a compatible exact-head runner.
 
 ## 2026-11-08 parent reconciliation
 
-The #1570 parent advanced to `1dc72735cc51a3d15882b663d6f5accc971da5c9` with **four executable
+The #1570 parent advanced to `6fc8fd4d8e655ade428aeaf0dc5bd6edd1599b25` with **four executable
 compiled-LLVM-IR security mutation tests**. Stacked #1574 was rebased
 with a force-with-lease branch update and a verified single-commit
 merge tree. The Python driver now retains all four parent mutation
@@ -95,3 +95,17 @@ ahead and zero behind the parent, with five scoped changed files.
 This reconciliation is source verification only. The newly merged test
 driver and emitted-IR CFG verifier have **not** executed against an
 approved LLVM compiler and native guest toolchain.
+
+## 2026-11-08 refreshed parent mutation verdict
+
+LLVM #1570 now uses parent `6fc8fd4d8e655ade428aeaf0dc5bd6edd1599b25`, adding a test that requires
+mutated compiled guest executions to fail at the intended native frame
+invariant, rather than counting an unrelated crash as a killed security
+mutation. The stacked Python driver was rebuilt from that exact parent,
+retaining its four IR mutation tests and the three new negative source
+mutations. Current merged driver blob is
+`4137571dd5c144ef29d9c00b18d89ecddd6a469e`.
+
+No executable compiler/guest receipt is claimed from this metadata and
+source reconciliation. A real LLVM toolchain, independent security
+review, and approved test runner are still required.
