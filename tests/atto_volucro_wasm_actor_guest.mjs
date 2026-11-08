@@ -10,6 +10,7 @@ import {tmpdir} from 'node:os';
 import {join, resolve, dirname} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {verifyAttoWasmActorInstances} from './atto_wasm32_actor_instances.mjs';
 
 const args = new Map();
 for (let i = 2; i < process.argv.length; i += 2) {
@@ -70,6 +71,9 @@ try {
   const module=new WebAssembly.Module(wasm);
   assert.deepEqual(WebAssembly.Module.imports(module),[],
     'generated guest unexpectedly requests host imports');
+  // Source-compiled native-Wasm negative lifecycle and sibling evidence.
+  // The Volucro Wasmi exercise below is separate and mandatory.
+  const nodeActorProof = verifyAttoWasmActorInstances(wasm);
   const output=capture(args.get('--cargo'),['run','--quiet','--manifest-path',
     join(volucroRoot,'Cargo.toml'),'-p','vm-core',
     '--bin','atto_actor_isolation_smoke','--',wasmFile],{cwd:volucroRoot});
@@ -83,7 +87,8 @@ try {
     llvm_head:llvmHead, volucro_head:volucroHead,
     fixture_sha256:sha256(source), wasm_sha256:sha256(wasm),
     compiler_binary_sha256:compilerSha,
-    guest_execution:output.trim(), evidence_level:'guest-executed',
+    guest_execution:output.trim(), node_actor_proof:nodeActorProof,
+    evidence_level:'guest-executed',
     scope:'per actor Wasmi Store + trusted-host DomainId (not OS process sandbox)'
   }));
 } finally {
