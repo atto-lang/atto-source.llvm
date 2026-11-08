@@ -11,6 +11,15 @@ if(NOT EXISTS "${BUILD}/oreslang-llvmc" OR
   message(FATAL_ERROR "actor-region-v2 requires real LLVM compiler and no-GC IR auditor")
 endif()
 set(work "${BUILD}/actor-region-v2-real-guest")
+# The per-test workspace is compiler-owned under the configured build
+# directory. Never recursively remove an untrusted symlink (especially one
+# left by an interrupted or malicious previous run).
+if(IS_SYMLINK "${BUILD}" OR IS_SYMLINK "${BUILD}/actor-region-v2-real-guest")
+  message(FATAL_ERROR "actor-region-v2 refuses symlinked build/work roots")
+endif()
+if(NOT IS_DIRECTORY "${BUILD}")
+  message(FATAL_ERROR "actor-region-v2 requires an existing configured build")
+endif()
 file(REMOVE_RECURSE "${work}")
 file(MAKE_DIRECTORY "${work}")
 
