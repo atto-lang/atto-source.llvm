@@ -46,6 +46,7 @@ public:
         dispatchStarted_ = Clock::now();
         backedges_ = 0;
         checkPhase_ = 0;
+        checkDue_ = false;
     }
 
     // Cheap reduction accounting only: no clock, callback or scheduler read.
@@ -56,7 +57,8 @@ public:
     bool completedBackedgeNeedsCheck() noexcept {
         backedges_ = detail::saturatingBackedgeSuccessor(backedges_);
         checkPhase_ = (checkPhase_ + 1) & (kLoopCheckInterval - 1);
-        return checkPhase_ == 0;
+        checkDue_ = (checkPhase_ == 0);
+        return checkDue_;
     }
 
     // Cold path: independent watchdog request, reduction cap, or active
@@ -64,6 +66,12 @@ public:
     // compiler-proven post-commit heap continuation and no live no-yield loans.
     // A watchdog never interrupts or rewinds an executing native stack.
     bool shouldCooperateAtCheck(bool watchdogRequested = false) noexcept {
+        // An accidental eager caller must not bypass batching (even when a
+        // supervisor has requested cancellation) or sample the clock on
+        // every backedge. Consume the boundary ticket exactly once.
+        if (!checkDue_)
+            return false;
+        checkDue_ = false;
         if (watchdogRequested || backedges_ >= kMaxBackedgesPerDispatch)
             return true;
         return Clock::now() - dispatchStarted_ >= kSoftDispatchQuantum;
@@ -86,6 +94,7 @@ private:
     time_point dispatchStarted_;
     std::uint64_t backedges_ = 0;
     std::uint32_t checkPhase_ = 0;
+    bool checkDue_ = false;
 };
 
 using SourceCooperationQuantum = BasicSourceCooperationQuantum<>;
