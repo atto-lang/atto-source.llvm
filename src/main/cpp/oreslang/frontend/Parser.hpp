@@ -181,6 +181,10 @@ struct SourceTaskI64Binding {
     // Codegen verifies the exact expression shape again before IR emission.
     bool ownership_admitted = false;
     std::uint64_t ownership_authority_fingerprint = 0;
+    // Self-identity of the checked AST boundary, minted only after complete
+    // semantic ownership validation. A moved/cloned Task cannot copy an old
+    // fingerprint and continue lowering without a fresh compiler check.
+    const SourceTaskI64Binding* ownership_boundary_identity = nullptr;
 };
 
 struct SourceFuturePipelineI64Binding {
