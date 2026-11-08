@@ -67,6 +67,51 @@ static void require_guest_trap(int scenario) {
         case 10: oreslang_rt_scalar_frame_init_v1(&frame, 3);
                  CHECK(oreslang_rt_scalar_frame_step_v1(&frame, 3) == 3);
                  (void)oreslang_rt_scalar_frame_result_v1(&frame); break;
+        case 11: init_frame(&frame);
+                 frame.state = 0;
+                 init_frame(&frame); break; /* nonpristine frame re-init */
+        case 12: init_frame(&frame);
+                 frame.counter = UINT64_MAX;
+                 (void)oreslang_rt_scalar_frame_step_v1(&frame, 1); break;
+        case 13: init_frame(&frame);
+                 frame.counter = 1001;
+                 (void)oreslang_rt_scalar_frame_step_v1(&frame, 1); break;
+        case 14: init_frame(&frame);
+                 frame.remaining_logical_fuel = 100000001;
+                 (void)oreslang_rt_scalar_frame_step_v1(&frame, 1); break;
+        case 15: init_frame(&frame);
+                 frame.state = 2;
+                 frame.counter = 999;
+                 (void)oreslang_rt_scalar_frame_step_v1(&frame, 1); break;
+        case 16: init_frame(&frame);
+                 frame.state = 2;
+                 frame.counter = 999;
+                 (void)oreslang_rt_scalar_frame_result_v1(&frame); break;
+        case 17: init_frame(&frame);
+                 frame.state = 4;
+                 frame.counter = 7;
+                 frame.remaining_logical_fuel = 5;
+                 (void)oreslang_rt_scalar_frame_step_v1(&frame, 1); break;
+        case 18: init_frame(&frame);
+                 frame.state = 4;
+                 frame.counter = 1000;
+                 frame.remaining_logical_fuel = 0;
+                 (void)oreslang_rt_scalar_frame_step_v1(&frame, 1); break;
+        case 19: init_frame(&frame);
+                 frame.counter = 1001;
+                 oreslang_rt_scalar_frame_cancel_v1(&frame); break;
+        case 20: init_frame(&frame);
+                 frame.remaining_logical_fuel = 100000001;
+                 oreslang_rt_scalar_frame_cancel_v1(&frame); break;
+        case 21: init_frame(&frame);
+                 frame.state = 2;
+                 frame.counter = 999;
+                 oreslang_rt_scalar_frame_cancel_v1(&frame); break;
+        case 22: init_frame(&frame);
+                 frame.state = 2;
+                 frame.counter = 1000;
+                 frame.remaining_logical_fuel = 100000001;
+                 (void)oreslang_rt_scalar_frame_result_v1(&frame); break;
         default: _Exit(99);
         }
         _Exit(0); /* An invalid operation returning constitutes a failure. */
@@ -278,7 +323,10 @@ int main(void) {
     CHECK(oreslang_rt_scalar_frame_step_v1(a, 512) == 0);
     CHECK(a->counter == 1000);
 #ifdef __linux__
-    for (int scenario = 0; scenario != 11; ++scenario)
+    // Reject malformed persistent state through the actual compiled ABI.
+    // This is NOT protection against a guest that can overwrite all 32 bytes;
+    // real untrusted isolation must keep frame memory host-owned.
+    for (int scenario = 0; scenario != 23; ++scenario)
         require_guest_trap(scenario);
 #endif
     require_bounded_peer_progress();
