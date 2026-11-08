@@ -27,6 +27,19 @@ test('valid bounded actor ABI is admitted',()=>{
   assert.equal(WebAssembly.validate(good),true);
   assert.deepEqual(assertCompiledActorProfile(good).memory,{min:1,max:1});
 });
+test('two-page scalar actor profile matches linker reservation',()=>{
+  const wasm=binary({memoryMin:2,memoryMax:2});
+  assert.equal(WebAssembly.validate(wasm),true);
+  assert.deepEqual(assertCompiledActorProfile(wasm).memory,{min:2,max:2});
+});
+test('valid Wasm table section is rejected by scalar actor profile',()=>{
+  const tableSection=Buffer.from(sec(4,[1,0x70,1,1,1]));
+  const startOfMemory=good.indexOf(Buffer.from(sec(5,[1,1,1,1])));
+  assert.ok(startOfMemory>0);
+  const wasm=Buffer.concat([good.subarray(0,startOfMemory),tableSection,good.subarray(startOfMemory)]);
+  assert.equal(WebAssembly.validate(wasm),true);
+  assert.throws(()=>assertCompiledActorProfile(wasm),/wasm tables not admitted/);
+});
 test('mismatched i32 actor handler ABI is rejected',()=>{
   const bad=binary({wrongType:true});
   assert.equal(WebAssembly.validate(bad),true);
