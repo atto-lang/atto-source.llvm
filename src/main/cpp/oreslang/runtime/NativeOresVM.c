@@ -687,6 +687,10 @@ int ores_native_vm_close(OresNativeVM* vm) {
     control_unlock(vm);
     if (nio_backend) nio_destroy(nio_backend);
 
+    /* No callback can synchronously join or destroy its own scheduler. */
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
+        if (!ores_native_actor_scheduler_drain(vm->schedulers[i])) return 0;
+
     /* Caller-owned API/producer fence is required before memory reclamation. */
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         if (!ores_native_actor_scheduler_try_destroy(vm->schedulers[i])) abort();
