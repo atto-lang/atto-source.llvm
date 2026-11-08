@@ -10,6 +10,10 @@ def run(command, **kwargs):
                           timeout=60, **kwargs)
 
 def main():
+    # Python -O strips assert statements. Never let a release or wrapper
+    # invocation silently turn the security regression into an inert script.
+    if not __debug__:
+        raise RuntimeError("native AOT security test requires Python assertions enabled")
     p = argparse.ArgumentParser()
     p.add_argument("--compiler", required=True)
     p.add_argument("--clang", required=True)
@@ -55,6 +59,7 @@ def main():
         # behavior at O2/O3 must not be masked by a single debug result.
         expected_receipts = (
             "SCALAR_FRAME_AOT_TWO_TASKS_PASS",
+            "SCALAR_FRAME_AOT_INVALID_FRAME_TRAPS_16_PASS",
             "SCALAR_FRAME_AOT_THREE_PEERS_BOUNDED_PROGRESS_PASS",
             "SCALAR_FRAME_AOT_CANCELLED_PEER_ISOLATION_PASS",
             "SCALAR_FRAME_AOT_BATCH_FUEL_BOUNDARIES_PASS",
@@ -77,7 +82,7 @@ def main():
             assert wrong.returncode != 0 and not wrong.stdout.strip(), (i, wrong.stdout)
         missing = run([compiler, "--experimental-rt-scalar-loop", "--target=wasm32", str(fixture)])
         assert missing.returncode != 0 and not missing.stdout.strip()
-        print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: O0/O2/O3 batched fuel, 14 invalid frames, 7 boundaries, peer/cancel isolation, negatives")
+        print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: O0/O2/O3 batched fuel, 16 invalid frames, 7 boundaries, peer/cancel isolation, negatives")
 
 if __name__ == "__main__":
     main()
