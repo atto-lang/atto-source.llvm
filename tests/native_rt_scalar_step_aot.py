@@ -77,7 +77,6 @@ def verify_closed_guest_ir(source):
                 (expected_arity == 2 and
                  not i64_argument.fullmatch(parameters[1]))):
             raise AssertionError(("invalid scalar guest frame ABI", name, arguments))
-
     declarations = set(re.findall(r'(?m)^declare\s+[^@\n]+@([A-Za-z0-9_.]+)\(', source))
     if declarations != {"llvm.trap"}:
         raise AssertionError(("unapproved guest import or FFI", declarations))
