@@ -2648,6 +2648,24 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-critical-gate-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-critical-gate-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_logical_critical_gate COMMAND oreslang-critical-gate-test)
+
+    # HOST-ONLY immutable snapshot root protocol, not compiled guest critical
+    # syntax or canonical .atto persistent map/set/list implementation.
+    # Six real competing native threads exercise versioned compare/publish,
+    # pinned old generations, bounded capacity and lost-update rejection.
+    add_executable(oreslang-native-immutable-critical-snapshot-test
+        tests/native_immutable_critical_snapshot_test.cpp)
+    target_include_directories(oreslang-native-immutable-critical-snapshot-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-immutable-critical-snapshot-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-native-immutable-critical-snapshot-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-immutable-critical-snapshot-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_immutable_snapshot_critical_publication_host_only
+        COMMAND oreslang-native-immutable-critical-snapshot-test)
+    set_tests_properties(native_immutable_snapshot_critical_publication_host_only
+        PROPERTIES TIMEOUT 45)
+
     add_executable(oreslang-function-effects-test tests/function_effects_test.cpp)
     target_include_directories(oreslang-function-effects-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
