@@ -316,15 +316,21 @@ def main():
                     key, separator, value = part.partition("=")
                     assert separator and value.isdecimal(), (name, line)
                     assert key in {"actor", "steps", "tail_calls",
-                                   "non_tail_calls", "error"} and key not in record, (
+                                   "non_tail_calls", "peak_frames",
+                                   "checkpoints", "error"} and key not in record, (
                         name, line)
                     record[key] = int(value)
                 assert set(record) == {"actor", "steps", "tail_calls",
-                                       "non_tail_calls", "error"}, (name, line)
+                                       "non_tail_calls", "peak_frames",
+                                       "checkpoints", "error"}, (name, line)
+                assert record["peak_frames"] <= 64, (name, record)
+                assert record["checkpoints"] <= record["steps"] // 256, (name, record)
                 scalar_records.append(record)
             if not m3:
                 assert all(r["steps"] == 0 and r["tail_calls"] == 0
-                           and r["non_tail_calls"] == 0 and r["error"] == 0
+                           and r["non_tail_calls"] == 0
+                           and r["peak_frames"] == 0 and r["checkpoints"] == 0
+                           and r["error"] == 0
                            for r in scalar_records), (name, scalar_records)
 
             frames = [line for line in executed.stderr.splitlines()
@@ -373,9 +379,15 @@ def main():
                         if error == 1:
                             assert name == "atto-actor-scalar-nontail-overflow.atto"
                             assert scalar_records[i]["non_tail_calls"] >= 63
+                            assert scalar_records[i]["peak_frames"] == 64
+                        if error == 5:
+                            assert scalar_records[i]["checkpoints"] >= 1, (
+                                name, scalar_records[i])
                         if error == 0:
                             assert name != "atto-actor-scalar-nontail-overflow.atto"
                             assert scalar_records[i]["tail_calls"] >= 100000, (
+                                name, scalar_records[i])
+                            assert scalar_records[i]["peak_frames"] == 1, (
                                 name, scalar_records[i])
                 if processed:
                     assert frame_records[i]["high_water"] >= 2, (name, i)
@@ -445,16 +457,24 @@ def main():
                                    for piece in real_scals[0].split()[1:])
                 assert set(real_fields) == {
                     "actor", "steps", "tail_calls",
-                    "non_tail_calls", "error"}, (name, real_fields)
+                    "non_tail_calls", "peak_frames", "checkpoints",
+                    "error"}, (name, real_fields)
+                assert int(real_fields["peak_frames"]) in {1, 64}, (
+                    name, real_fields)
+                assert int(real_fields["checkpoints"]) <= (
+                    int(real_fields["steps"]) // 256)
                 assert int(real_fields["actor"]) != 0
                 assert int(real_fields["steps"]) > 0
                 assert int(real_fields["error"]) == (
                     1 if name == "atto-actor-scalar-nontail-overflow.atto"
                     else 0), (name, real_fields)
                 if name == "atto-actor-scalar-nontail-overflow.atto":
-                    assert int(real_fields["non_tail_calls"]) >= 63
+                    assert int(real_fields["non_tail_calls"]) == 63
+                    assert int(real_fields["peak_frames"]) == 64
                 else:
-                    assert int(real_fields["tail_calls"]) >= 100000
+                    assert int(real_fields["tail_calls"]) == 100000
+                    assert int(real_fields["peak_frames"]) == 1
+                    assert int(real_fields["checkpoints"]) > 0
                 completed = [line for line in actual.stderr.splitlines()
                              if line.startswith("SOURCE_ACTOR_SPAWN_STOP_VERIFIED ")]
                 assert len(completed) == 1, (name, completed)
