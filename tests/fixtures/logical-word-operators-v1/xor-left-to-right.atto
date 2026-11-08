@@ -1,0 +1,21 @@
+define class Pair as
+  pub let int first = 1;
+  pub let int second = 2;
+end
+
+fnc left_side(borrow mut Pair p): bool {
+  p.first = 42;
+  return true;
+}
+fnc right_side(borrow mut Pair p): bool {
+  p.second = p.first;
+  return false;
+}
+fnc probe(borrow mut Pair p): bool {
+  return left_side(rt mut borrow p) xor right_side(rt mut borrow p);
+}
+pub fnc main(): int {
+  let mut Pair p = new Pair();
+  probe(rt mut borrow p);
+  return p.second;
+}
