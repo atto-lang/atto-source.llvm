@@ -75,6 +75,24 @@ verify all source tree blobs against that head before using the results as
 is **not** sufficient provenance. Do not mark skipped/pending/failed-to-start
 jobs as successful.
 
+## Matching LLVM SDK and Clang toolchain
+
+The scalar AOT CTest now requires `--llvm-major "${LLVM_VERSION_MAJOR}"` and
+prefers `clang-${LLVM_VERSION_MAJOR}` over a generic PATH `clang`.
+Before running the source compiler or linking any generated IR,
+`native_rt_scalar_step_aot.py` checks `clang -dumpversion` and rejects
+major-version mismatches, invalid output, and failed probes. This prevents
+calling a run against an unrelated Clang version a compiler AOT proof.
+
+The portable `native_scalar_ir_surface_scan` regression also checks
+positive/mismatched version probes and malformed version output, including
+execution with `PYTHONOPTIMIZE=1`.
+
+This rule is intentionally stricter than LLVM's general cross-version IR
+compatibility. If your compiler SDK and Clang differ, provision a
+matching toolchain: do **not** weaken the test, change the expected major,
+or mark the run certified.
+
 ## Portable IR scanner verification
 
 The emitted IR scanner rejects missing/extra v1 frame functions, imports
@@ -108,6 +126,17 @@ not compiled guest execution proofs.
   `1a4e1f3d25b193093c4ecfbb1db8e05c71eef2ff`.
   Local Python normal and `PYTHONOPTIMIZE=1` negative suites **PASSED**;
   AOT harness `-O` fail-closed guard **PASSED**. No full LLVM guest was run.
+
+- Local 2026-11-08 checkpoint on full source PR head prior to this docs update:
+  the exact Python source/test blobs
+  `a438cc8319baae1f043e8bd98d5fb5d9a48bcd9b` and
+  `b64565563002ecf21c13c2d60375cee96d611f65` pass the
+  positive Clang 17 probe, mismatched Clang 19 negative probe,
+  regular Python and `PYTHONOPTIMIZE=1` IR scanner tests.
+  Exact portable CFG C++ blobs also passed GCC/Clang Release and
+  GCC/Clang ASan/UBSan tests. This is **not** a source-to-guest run.
+- Source-org LLVM smoke run 42519373207, job 128849285764: failure with
+  zero executed steps (runner/setup admission), **NOT_EXECUTED** guest tests.
 
 **Do not merge this PR or enable untrusted general source-loop execution
 until the remaining gates are green.**
