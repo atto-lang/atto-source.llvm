@@ -470,6 +470,20 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-nominal-selector-test)
     set_tests_properties(native_nominal_overload_selector_static PROPERTIES TIMEOUT 15)
 
+    # Independent structural proof: reject ANY unmetered CFG cycle, even
+    # unreachable cycles, malformed edges, and 200k-node deep graphs. This
+    # exercises the exact graph algorithm used by ScalarLoopLowering.cpp.
+    # It is not a claim of arbitrary guest call-graph or FFI certification.
+    add_executable(oreslang-native-metered-cfg-verifier-test
+        tests/native_metered_cfg_verifier_test.cpp)
+    target_include_directories(oreslang-native-metered-cfg-verifier-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-metered-cfg-verifier-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_metered_cfg_cycles_fail_closed
+        COMMAND oreslang-native-metered-cfg-verifier-test)
+    set_tests_properties(native_metered_cfg_cycles_fail_closed PROPERTIES TIMEOUT 30)
+
     # Host-only fairness budget; not evidence of compiled Oreslang suspension.
     add_executable(oreslang-native-reduction-quantum-test
         tests/native_cooperation_quantum_test.cpp)
