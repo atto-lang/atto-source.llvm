@@ -108,6 +108,46 @@ reject_case(if_semicolon_requires_then
   "fnc main(): int {\n  if 1 == 1; return 1; fi\n  return 0;\n}\n"
   "expected 'then'")
 
+
+# Strict closed-world AOT regression lane. These are real oreslang-llvmc
+# compiler rejections, not a source-text grep or host-only reference model.
+# The JS/GraalVM/NativeAOT runtime profiles are validated separately.
+# Use broad diagnostic-presence here: exact message strings may legitimately
+# differ as the typed frontend becomes more precise, but the compiler must
+# NEVER emit executable LLVM IR or silently accept runtime code generation.
+function(reject_closed_world_case name text)
+  set(dir "${work}/closed-world-${name}")
+  file(MAKE_DIRECTORY "${dir}")
+  file(WRITE "${dir}/main.atto" "${text}")
+  execute_process(
+    COMMAND "${BUILD}/oreslang-llvmc" "${dir}/main.atto"
+    RESULT_VARIABLE status
+    OUTPUT_VARIABLE stdout
+    ERROR_VARIABLE stderr
+    TIMEOUT 20)
+  if(NOT status MATCHES "^[0-9]+$" OR status EQUAL 0)
+    fail_case("${name}: closed-world rejection missing (compiler status ${status})")
+  elseif(NOT stdout STREQUAL "")
+    fail_case("${name}: invalid dynamic source emitted LLVM IR on stdout")
+  elseif(stderr STREQUAL "")
+    fail_case("${name}: rejection had no diagnostic on stderr")
+  else()
+    message(STATUS "PASS closed-world ${name}")
+  endif()
+  set(failures ${failures} PARENT_SCOPE)
+endfunction()
+
+reject_closed_world_case(runtime_eval
+  "fnc main(): int { return eval(42); }\n")
+reject_closed_world_case(runtime_function_factory
+  "fnc main(): int { return Function(42); }\n")
+reject_closed_world_case(unknown_runtime_class
+  "fnc main(): int { return new RuntimeProxy(); }\n")
+reject_closed_world_case(unregistered_reflection
+  "fnc main(): int { return Reflect.get(1); }\n")
+reject_closed_world_case(runtime_nested_class
+  "fnc main(): int { define class Mutable as end; return 0; }\n")
+
 if(failures GREATER 0)
   message(FATAL_ERROR "atto parity syntax: ${failures} failure(s)")
 endif()
