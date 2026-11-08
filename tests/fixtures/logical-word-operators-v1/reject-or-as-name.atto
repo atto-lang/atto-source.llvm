@@ -1,0 +1,6 @@
+fnc or(): bool {
+  return true;
+}
+pub fnc main(): int {
+  return 0;
+}
