@@ -485,6 +485,22 @@ static void require_actor_region_v1_aot_graph(const oreslang::Program& program) 
                     "actor-region-v1 requires fresh immutable class owners");
             ++owners;
         }
+        // Branch-local owners need path-sensitive destruction and are outside
+        // this v1 root-frame profile. Reject them before codegen instead of
+        // allowing a class inside ScopedLocal/ForIndex to bypass slot counting.
+        std::function<void(const Statement&)> reject_scoped_class_owners =
+            [&](const Statement& statement) {
+                if (statement.branch_local &&
+                    !statement.branch_local->class_name.empty())
+                    throw std::runtime_error(
+                        "actor-region-v1 rejects branch-scoped class owners until path-sensitive cleanup is proven");
+                for (const auto& child : statement.then_statements)
+                    reject_scoped_class_owners(child);
+                for (const auto& child : statement.else_statements)
+                    reject_scoped_class_owners(child);
+            };
+        for (const auto& statement : fn.statements)
+            reject_scoped_class_owners(statement);
     }
     if (!owners || owners > 4096)
         throw std::runtime_error(
