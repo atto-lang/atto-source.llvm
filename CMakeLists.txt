@@ -1134,6 +1134,14 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
+    # Byte-identical .atto source fixtures from Java and platform conformance.
+    # Positive: real frontend must emit IR. Negative: semantic use-after-move
+    # diagnostic must fire before IR; unsupported syntax is not a passing proof.
+    oreslang_contract_test(native_logical_borrow_take_accept
+        logical-borrow-compiler-v1/owned-take-positive.atto --ir "define")
+    oreslang_contract_test(native_logical_borrow_use_after_take_reject
+        logical-borrow-compiler-v1/use-after-take-reject.atto --diagnostic "moved")
+
     # Durable M0 language declarations are compiler-metadata only in Java.
     # LLVM does not have the history/manifest/replay ABI, so native compilation
     # must fail with the same explicit capability marker for all introducers.
