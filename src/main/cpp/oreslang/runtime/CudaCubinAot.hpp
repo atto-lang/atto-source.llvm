@@ -23,6 +23,55 @@ inline std::uint32_t u32le(const unsigned char* p) noexcept {
         | (static_cast<std::uint32_t>(p[2]) << 16)
         | (static_cast<std::uint32_t>(p[3]) << 24);
 }
+inline std::uint16_t u16le(const unsigned char* p) noexcept {
+    return static_cast<std::uint16_t>(p[0] | (p[1] << 8));
+}
+
+inline std::uint64_t u64le(const unsigned char* p) noexcept {
+    return static_cast<std::uint64_t>(u32le(p))
+        | (static_cast<std::uint64_t>(u32le(p + 4)) << 32);
+}
+
+// cuModuleLoadData receives only a pointer, so the driver sizes the image from
+// its own ELF headers. Every table and every file-backed section/segment those
+// headers describe must lie inside image.size, or a truncated or crafted cubin
+// makes the driver read host memory past the caller's buffer.
+inline void require_elf_extents(const Cubin& image) {
+    const auto* p = image.bytes;
+    const std::uint64_t size = image.size;
+    auto within = [size](std::uint64_t offset, std::uint64_t length) {
+        return offset <= size && length <= size - offset;
+    };
+    auto deny = [] {
+        throw std::invalid_argument("CUBIN ELF table or section extends past the image");
+    };
+    const std::uint64_t phoff = u64le(p + 32);
+    const std::uint64_t shoff = u64le(p + 40);
+    const std::uint16_t phentsize = u16le(p + 54), phnum = u16le(p + 56);
+    const std::uint16_t shentsize = u16le(p + 58), shnum = u16le(p + 60);
+    if (phnum != 0) {
+        if (phentsize != 56 || !within(phoff, std::uint64_t{phnum} * 56)) deny();
+        for (std::uint64_t i = 0; i < phnum; ++i) {
+            const auto* ph = p + phoff + i * 56;
+            if (!within(u64le(ph + 8), u64le(ph + 32))) deny(); // p_offset, p_filesz
+        }
+    }
+    if (shnum == 0) {
+        // e_shnum == 0 with a table offset means extended numbering; unsupported.
+        if (shoff != 0) deny();
+        return;
+    }
+    if (shentsize != 64 || !within(shoff, std::uint64_t{shnum} * 64)) deny();
+    for (std::uint64_t i = 0; i < shnum; ++i) {
+        const auto* sh = p + shoff + i * 64;
+        const std::uint32_t type = u32le(sh + 4);
+        constexpr std::uint32_t SHT_NULL = 0, SHT_NOBITS = 8; // occupy no file bytes
+        if (type != SHT_NULL && type != SHT_NOBITS
+                && !within(u64le(sh + 24), u64le(sh + 32))) // sh_offset, sh_size
+            deny();
+    }
+}
+
 inline unsigned cubin_sm(const Cubin& image) {
     // The GPU driver still validates the complete ELF. This bounded preflight
     // rules out PTX-as-text, fatbin containers and unexpected SM fallback.
@@ -36,6 +85,7 @@ inline unsigned cubin_sm(const Cubin& image) {
             || u32le(p + 20) != 1
             || p[52] != 64 || p[53] != 0)  // ELF64 header size
         throw std::invalid_argument("CUDA AOT requires finalized ELF64 CUBIN, not PTX/fatbin");
+    require_elf_extents(image);
     const auto flags = u32le(p + 48);
     // CUDA ELF flags have two published encodings. Strictly restrict the
     // initial no-finalization profile to known pre-Blackwell architectures.

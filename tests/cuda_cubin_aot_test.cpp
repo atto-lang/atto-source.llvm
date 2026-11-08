@@ -1,11 +1,13 @@
 #include "oreslang/runtime/CudaCubinAot.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 using namespace oreslang::cuda_aot;
 
@@ -106,6 +108,44 @@ int main() {
     auto unsupported=bytes;unsupported[49]=100;
     rejected([&]{(void)cubin_sm({unsupported.data(),unsupported.size(),100});});
     rejected([&]{(void)cubin_sm({nullptr,64,80});});
+    {
+        // ELF extents: the driver sizes the image from these headers alone.
+        // Layout: 64-byte header, one 56-byte program header at 64, 16 bytes
+        // of payload at 120, two 64-byte section headers (NULL, PROGBITS) at 136.
+        std::vector<unsigned char> image(264, 0);
+        std::copy(bytes.begin(), bytes.end(), image.begin());
+        auto put = [&](std::size_t at, std::uint64_t value, unsigned width) {
+            for (unsigned i = 0; i < width; ++i)
+                image[at + i] = static_cast<unsigned char>(value >> (8 * i));
+        };
+        put(32, 64, 8);  put(54, 56, 2); put(56, 1, 2);    // e_phoff/phentsize/phnum
+        put(40, 136, 8); put(58, 64, 2); put(60, 2, 2);    // e_shoff/shentsize/shnum
+        put(64 + 8, 120, 8); put(64 + 32, 16, 8);          // p_offset, p_filesz
+        put(200 + 4, 1, 4); put(200 + 24, 120, 8); put(200 + 32, 16, 8); // PROGBITS
+        auto check = [&](const std::vector<unsigned char>& b) {
+            return cubin_sm({b.data(), b.size(), 80});
+        };
+        assert(check(image) == 80);
+        auto mutate = [&](std::size_t at, std::uint64_t value, unsigned width) {
+            auto copy = image;
+            for (unsigned i = 0; i < width; ++i)
+                copy[at + i] = static_cast<unsigned char>(value >> (8 * i));
+            rejected([&]{(void)check(copy);});
+        };
+        rejected([&]{(void)cubin_sm({image.data(), 200, 80});});   // truncated section table
+        rejected([&]{(void)cubin_sm({image.data(), 130, 80});});   // truncated payload
+        mutate(200 + 32, 145, 8);                                   // section runs past end
+        mutate(200 + 24, ~0ULL - 4, 8);                             // offset+size overflow
+        mutate(64 + 32, 200, 8);                                    // segment runs past end
+        mutate(40, 250, 8);                                         // section table past end
+        mutate(32, ~0ULL, 8);                                       // program table overflow
+        mutate(58, 40, 2);                                          // wrong shentsize
+        mutate(54, 32, 2);                                          // wrong phentsize
+        mutate(60, 0, 2);                                           // extended numbering
+        auto nobits = image;                                        // NOBITS has no file bytes
+        nobits[200 + 4] = 8; nobits[200 + 32] = 0xff; nobits[200 + 33] = 0xff;
+        assert(check(nobits) == 80);
+    }
     assert(checked_launch(dims,limits)==1024);
     rejected([&]{(void)checked_launch({65535,65535,65535,1024,1024,64,0},limits);});
     return 0;
