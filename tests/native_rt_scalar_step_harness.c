@@ -119,6 +119,37 @@ static void require_bounded_peer_progress(void) {
 }
 
 /*
+ * A compiler-backed reduction matrix (NOT a host-only cooperation helper).
+ * Each case allocates a fresh native heap continuation generated from .ores.
+ * The guest must commit precisely the requested bounded number of effects;
+ * each case resumes again to prove a completed edge cannot be replayed.
+ * The forbidden 513-unit case is exercised through the trap child below.
+ */
+static void require_compiled_fuel_boundaries(void) {
+    static const uint64_t fuel[] = {
+        0, 1, 2, 63, 64, 65, 127, 128, 129,
+        255, 256, 257, 511, 512
+    };
+    for (size_t i = 0; i < sizeof(fuel) / sizeof(fuel[0]); ++i) {
+        ScalarFrame *frame = calloc(1, sizeof(*frame));
+        CHECK(frame != NULL);
+        oreslang_rt_scalar_frame_init(frame);
+        CHECK(frame->state == 1 && frame->counter == 0);
+        const int first = oreslang_rt_scalar_frame_step(frame, fuel[i]);
+        CHECK(first == 1 && frame->counter == fuel[i] && frame->state == 1);
+        const int second = oreslang_rt_scalar_frame_step(frame, 1);
+        CHECK(second == 1 && frame->counter == fuel[i] + 1 &&
+              frame->state == 1);
+        // A completed update must be neither replayed nor silently skipped
+        // when the host changes its next dispatch allowance.
+        oreslang_rt_scalar_frame_cancel(frame);
+        CHECK(oreslang_rt_scalar_frame_step(frame, 512) == 2);
+        CHECK(frame->counter == fuel[i] + 1 && frame->state == 3);
+        free(frame);
+    }
+}
+
+/*
  * In a mixed scheduler cohort, retiring a cancelled source continuation
  * must not mutate another frame or halt its bounded forward progress.
  * This is deliberately executed through the compiled guest ABI.
@@ -213,8 +244,10 @@ int main(void) {
     for (int scenario = 0; scenario != 8; ++scenario)
         require_guest_trap(scenario);
 #endif
+    require_compiled_fuel_boundaries();
     require_bounded_peer_progress();
     require_cancelled_peer_is_isolated();
+    puts("SCALAR_FRAME_AOT_COMPILED_FUEL_BOUNDARIES_PASS");
     puts("SCALAR_FRAME_AOT_CANCELLED_PEER_ISOLATION_PASS");
     puts("SCALAR_FRAME_AOT_THREE_PEERS_BOUNDED_PROGRESS_PASS");
     puts("SCALAR_FRAME_AOT_TWO_TASKS_PASS");
