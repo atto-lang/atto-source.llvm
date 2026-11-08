@@ -37,9 +37,12 @@ function name(data, p, end) {
   return s;
 }
 function sectionsOf(input) {
+  // Check length BEFORE copying untrusted bytes into a new Buffer.
+  if (!(input instanceof Uint8Array) || input.byteLength > MAX_ACTOR_WASM_BYTES)
+    deny('compiled Wasm must be a bounded byte array');
   const data = Buffer.from(input);
-  if (data.length < 8 || data.length > MAX_ACTOR_WASM_BYTES ||
-      !data.subarray(0, 8).equals(MAGIC)) deny('missing Wasm magic or oversized module');
+  if (data.length < 8 || !data.subarray(0, 8).equals(MAGIC))
+    deny('missing Wasm magic or oversized module');
   if (!WebAssembly.validate(data)) deny('invalid compiled Wasm');
   const module = new WebAssembly.Module(data);
   if (WebAssembly.Module.imports(module).length !== 0) deny('ambient host import');
