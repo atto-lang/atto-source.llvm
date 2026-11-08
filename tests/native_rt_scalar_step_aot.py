@@ -10,6 +10,32 @@ def run(command, **kwargs):
     return subprocess.run(command, text=True, capture_output=True, check=False,
                           timeout=60, **kwargs)
 
+def verify_closed_guest_ir(source):
+    """Reject any guest ABI/import/call surface beyond the scalar v1 subset.
+
+    This is a readable regression oracle in addition to the actual LLVM
+    module verifier. It does not replace optimized executable guest tests.
+    """
+    definitions = set(re.findall(r'(?m)^define\s+[^@\n]+@([A-Za-z0-9_.]+)\(', source))
+    expected = {
+        "oreslang_rt_scalar_frame_init_v1",
+        "oreslang_rt_scalar_frame_step_v1",
+        "oreslang_rt_scalar_frame_cancel_v1",
+        "oreslang_rt_scalar_frame_result_v1",
+    }
+    assert definitions == expected, ("unapproved compiled guest function", definitions)
+    declarations = set(re.findall(r'(?m)^declare\s+[^@\n]+@([A-Za-z0-9_.]+)\(', source))
+    assert declarations == {"llvm.trap"}, ("unapproved guest import or FFI", declarations)
+    assert not re.search(r'(?m)^\s*(?:%[\w.]+\s*=\s*)?(?:invoke|callbr)\b',
+                         source), "unverified interprocedural transfer"
+    calls = re.findall(
+        r'(?m)^\s*(?:%[\w.]+\s*=\s*)?(?:(?:tail|musttail|notail)\s+)?call\b[^\n]*',
+        source,
+    )
+    for call in calls:
+        assert re.search(r'@llvm\.trap\(', call), ("unapproved guest call", call)
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--compiler", required=True)
@@ -48,20 +74,7 @@ def main():
         assert "define i32 @oreslang_rt_scalar_frame_step(" not in accepted.stdout
         assert "fuel.remaining.logical" in accepted.stdout, "missing committed lifetime fuel debit"
         assert "fuel.logical.exhausted" in accepted.stdout, "missing immutable quota denial"
-        # This opt-in scalar source subset has no calls or recursion; the
-        # compiler must reject new unverified guest functions/imports rather
-        # than silently creating an uncharged call-graph cycle.
-        definitions = set(re.findall(r'(?m)^define\s+[^@\n]+@([A-Za-z0-9_.]+)\(', accepted.stdout))
-        assert definitions == {
-            "oreslang_rt_scalar_frame_init_v1",
-            "oreslang_rt_scalar_frame_step_v1",
-            "oreslang_rt_scalar_frame_cancel_v1",
-            "oreslang_rt_scalar_frame_result_v1",
-        }, ("unapproved compiled guest function", definitions)
-        declarations = set(re.findall(r'(?m)^declare\s+[^@\n]+@([A-Za-z0-9_.]+)\(', accepted.stdout))
-        assert declarations == {"llvm.trap"}, ("unapproved guest import or FFI", declarations)
-        assert not re.search(r'(?m)^\s*(?:%[\w.]+\s*=\s*)?(?:invoke|callbr)\b',
-                             accepted.stdout), "unverified interprocedural transfer"
+        verify_closed_guest_ir(accepted.stdout)
         llvm_ir = out / "guest.ll"
         llvm_ir.write_text(accepted.stdout)
         for optimization in ("-O0", "-O2", "-O3"):
