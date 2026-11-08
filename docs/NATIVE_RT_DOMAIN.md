@@ -68,6 +68,15 @@ domain has no scheduler lock at all.
   backlog remains. CONTROL keeps priority, but a flood delays DATA by at most
   64 CONTROL turns regardless of ring size (an unbounded drain let one
   fast CONTROL sender stop DATA and `stop()` forever).
+- **Per-actor isolation** (`per_actor_limit`, opt-in): a ring is shared by
+  every actor on a core for a given sender, and a core runs its turns FIFO,
+  so one hot actor could fill the ring and delay every sibling. With a limit,
+  an actor that already has that many DATA messages queued or running gets
+  `ORES_RT_SEND_ACTOR_FULL`; siblings are still admitted, and CONTROL ignores
+  the limit. Counters are one cache line per actor, allocated only when on.
+- **Memory cap**: ring slot memory above `ORES_RT_MAX_RING_BYTES` (1 GiB)
+  makes `open` fail rather than allocate-and-touch e.g. ~17 GiB.
+- **Init failures** of any mutex/condvar fail `open` cleanly.
 - **Lifecycle races**: concurrent `stop` calls are serialized (exactly one
   succeeds); calling stop from a handler is detected by thread id, not by
   `pthread_t` (which may be written only after the carrier is running); a

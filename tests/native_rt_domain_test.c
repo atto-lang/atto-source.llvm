@@ -125,7 +125,8 @@ static void on_data(void* ctx, OresRtSender* self, uint32_t actor, uint64_t payl
                 const uint32_t to = (actor + hop * (ACTORS / CORES)) % ACTORS;
                 OresRtSendStatus s = ores_rt_send(self, to, FORWARD_TAG | seq);
                 if (s == ORES_RT_SEND_OK) atomic_fetch_add(&st->forwards_sent, 1);
-                else if (s == ORES_RT_SEND_FULL) atomic_fetch_add(&st->forward_full, 1);
+                else if (s == ORES_RT_SEND_FULL || s == ORES_RT_SEND_ACTOR_FULL)
+                    atomic_fetch_add(&st->forward_full, 1);
                 else atomic_fetch_add(&st->errors, 1);
             }
         }
@@ -156,7 +157,8 @@ static void* producer(void* raw) {
         const uint32_t actor = rng % ACTORS;
         const uint64_t payload = ((uint64_t)a->id << 32) | (seq[actor] + 1);
         OresRtSendStatus st;
-        while ((st = ores_rt_send(s, actor, payload)) == ORES_RT_SEND_FULL) sched_yield();
+        while ((st = ores_rt_send(s, actor, payload)) == ORES_RT_SEND_FULL
+               || st == ORES_RT_SEND_ACTOR_FULL) sched_yield();
         check(st == ORES_RT_SEND_OK, "producer send");
         ++seq[actor];
         if (a->id == 0 && (i % 64) == 0) {
@@ -175,7 +177,7 @@ static void stress(uint32_t spin_ns) {
     for (uint32_t a = 0; a < ACTORS; ++a) st->placement[a] = a % CORES;
     OresRtDomainOptions o = {
         .core_count = CORES, .actor_count = ACTORS, .actor_core = st->placement,
-        .external_senders = PRODUCERS, .ring_capacity = 256, .idle_spin_ns = spin_ns,
+        .external_senders = PRODUCERS, .ring_capacity = 256, .idle_spin_ns = spin_ns, .per_actor_limit = spin_ns ? 8 : 0,
         .measure_turns = 1, .on_data = on_data, .on_control = on_control, .ctx = st,
     };
     st->domain = ores_rt_domain_open(&o);
@@ -605,6 +607,53 @@ static void no_restart_after_failed_start(void) {
     ores_rt_domain_destroy(d);
 }
 
+/* ---- per-actor admission ------------------------------------------------ */
+typedef struct { atomic_int release, a_in; _Atomic uint64_t runs[2]; } Hot;
+static void hot_data(void* ctx, OresRtSender* self, uint32_t actor, uint64_t payload) {
+    (void)self; (void)payload;
+    Hot* h = ctx;
+    if (actor == 0 && payload == 0) {
+        atomic_store(&h->a_in, 1);
+        while (!atomic_load(&h->release)) sched_yield();
+    }
+    atomic_fetch_add(&h->runs[actor], 1);
+}
+/* A hot actor cannot use up the shared (sender, core) ring: once it has
+ * per_actor_limit messages in flight, its sends fail with ACTOR_FULL while a
+ * sibling actor on the same core, same sender, is still admitted. */
+static void per_actor_limit(void) {
+    Hot h;
+    memset(&h, 0, sizeof(h));
+    uint32_t placement[2] = {0, 0}; /* both actors on core 0 */
+    OresRtDomainOptions o = {
+        .core_count = 1, .actor_count = 2, .actor_core = placement,
+        .external_senders = 1, .ring_capacity = 16, .per_actor_limit = 4,
+        .on_data = hot_data, .on_control = noop_data, .ctx = &h,
+    };
+    OresRtDomainOptions bad = o;
+    bad.per_actor_limit = 17;
+    check(!ores_rt_domain_open(&bad), "limit above ring capacity rejected");
+    OresRtDomain* d = ores_rt_domain_open(&o);
+    check(d && ores_rt_domain_start(d), "open/start");
+    OresRtSender* s = ores_rt_domain_external_sender(d, 0);
+    check(ores_rt_send(s, 0, 0) == ORES_RT_SEND_OK, "A blocker");
+    while (!atomic_load(&h.a_in)) sched_yield(); /* A's turn is running: 1 in flight */
+    for (int i = 1; i < 4; ++i)
+        check(ores_rt_send(s, 0, (uint64_t)i) == ORES_RT_SEND_OK, "A within limit");
+    check(ores_rt_send(s, 0, 9) == ORES_RT_SEND_ACTOR_FULL, "A at its limit");
+    check(ores_rt_send(s, 1, 0) == ORES_RT_SEND_OK, "sibling B still admitted");
+    check(ores_rt_send_control(s, 0, 0) == ORES_RT_SEND_OK, "CONTROL ignores the limit");
+    atomic_store(&h.release, 1);
+    while (atomic_load(&h.runs[0]) < 4) sched_yield();
+    /* Slots are returned after each turn: A is admitted again. */
+    check(ores_rt_send(s, 0, 5) == ORES_RT_SEND_OK, "A admitted after draining");
+    check(ores_rt_domain_stop(d), "stop");
+    check(atomic_load(&h.runs[0]) == 5 && atomic_load(&h.runs[1]) == 1, "every admitted turn ran");
+    check(ores_rt_sender_accepted(s) == 7, "ACTOR_FULL sends were not counted as accepted");
+    ores_rt_domain_destroy(d);
+    puts("per-actor admission limit: OK");
+}
+
 static void noop(void* ctx, OresRtSender* self, uint32_t actor, uint64_t payload) {
     (void)ctx; (void)self; (void)actor; (void)payload;
 }
@@ -714,6 +763,7 @@ int main(void) {
     control_flood_does_not_starve_data();
     concurrent_stop();
     no_restart_after_failed_start();
+    per_actor_limit();
     park_handoff(0);
     park_handoff(2000);
     stress(0);

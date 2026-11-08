@@ -60,6 +60,11 @@ static int ring_ready(RtRing* r) {
 }
 
 /* ---- domain ------------------------------------------------------------- */
+/* One cache line per actor: senders on many cores update different actors'
+ * counts concurrently, and must not false-share. */
+struct RtActorSlot {
+    _Alignas(64) _Atomic uint32_t count;
+};
 enum { LANE_DATA = 0, LANE_CONTROL = 1, LANES = 2, DATA_BATCH = 16, CONTROL_BURST = 64 };
 
 struct OresRtSender {
@@ -95,6 +100,7 @@ struct OresRtDomain {
     RtCore* core;
     OresRtSender* senders;       /* [0, cores) core senders, then external */
     RtRing* rings;               /* [lane][source][core] */
+    struct RtActorSlot* inflight;/* per-actor DATA in flight; NULL if no limit */
     RtMsg* slots;
     _Atomic int accepting;       /* sends allowed */
     _Atomic int stop;            /* carriers exit (set only once quiescent) */
@@ -192,6 +198,7 @@ static void free_domain(OresRtDomain* d, uint32_t cores_ready, int domain_sync) 
     free(d->senders);
     free(d->rings);
     free(d->slots);
+    free(d->inflight);
     free(d);
 }
 
@@ -202,7 +209,8 @@ OresRtDomain* ores_rt_domain_open(const OresRtDomainOptions* o) {
             || o->external_senders > ORES_RT_MAX_EXTERNAL
             || o->ring_capacity < 2 || o->ring_capacity > ORES_RT_MAX_RING
             || (o->ring_capacity & (o->ring_capacity - 1)) != 0
-            || o->idle_spin_ns > ORES_RT_MAX_IDLE_SPIN_NS)
+            || o->idle_spin_ns > ORES_RT_MAX_IDLE_SPIN_NS
+            || o->per_actor_limit > o->ring_capacity)
         return NULL;
     for (uint32_t a = 0; a < o->actor_count; ++a)
         if (o->actor_core[a] >= o->core_count) return NULL;
@@ -260,7 +268,10 @@ OresRtDomain* ores_rt_domain_open(const OresRtDomainOptions* o) {
     d->senders = aligned_alloc(64, ((d->sources * sizeof(OresRtSender) + 63) / 64) * 64);
     d->rings = aligned_alloc(64, ((rings * sizeof(RtRing) + 63) / 64) * 64);
     d->slots = aligned_alloc(64, ((slots * sizeof(RtMsg) + 63) / 64) * 64);
-    if (!d->actor_core || !d->core || !d->senders || !d->rings || !d->slots) {
+    if (o->per_actor_limit)
+        d->inflight = aligned_alloc(64, (size_t)o->actor_count * sizeof(struct RtActorSlot));
+    if (!d->actor_core || !d->core || !d->senders || !d->rings || !d->slots
+            || (o->per_actor_limit && !d->inflight)) {
         free_domain(d, 0, 0);
         return NULL;
     }
@@ -270,6 +281,10 @@ OresRtDomain* ores_rt_domain_open(const OresRtDomainOptions* o) {
     memset(d->senders, 0, d->sources * sizeof(OresRtSender));
     memset(d->rings, 0, rings * sizeof(RtRing));
     memset(d->slots, 0, slots * sizeof(RtMsg));
+    if (d->inflight) {
+        memset(d->inflight, 0, (size_t)o->actor_count * sizeof(struct RtActorSlot));
+        for (uint32_t a = 0; a < o->actor_count; ++a) atomic_init(&d->inflight[a].count, 0);
+    }
     for (size_t r = 0; r < rings; ++r) {
         d->rings[r].slots = d->slots + r * o->ring_capacity;
         d->rings[r].mask = o->ring_capacity - 1;
@@ -355,6 +370,8 @@ static void run_turn(OresRtDomain* d, RtCore* c, OresRtHandlerFn fn,
         atomic_store_explicit(&c->control_processed,
             atomic_load_explicit(&c->control_processed, memory_order_relaxed) + 1,
             memory_order_relaxed);
+    else if (d->inflight) /* the actor's admission slot is free again */
+        atomic_fetch_sub_explicit(&d->inflight[m->actor].count, 1, memory_order_relaxed);
     /* Release: stop() pairs this with its acquire read of all counters. */
     atomic_store_explicit(&c->processed,
         atomic_load_explicit(&c->processed, memory_order_relaxed) + 1,
@@ -544,6 +561,15 @@ static OresRtSendStatus rt_send(OresRtSender* s, uint32_t actor,
             return ORES_RT_SEND_INVALID;
     }
     const uint32_t core = d->actor_core[actor];
+    /* Per-actor admission (DATA only; CONTROL must always get through).
+     * Claim a slot before publishing; the carrier frees it after the turn. */
+    _Atomic uint32_t* inflight = lane == LANE_DATA && d->inflight
+        ? &d->inflight[actor].count : NULL;
+    if (inflight && atomic_fetch_add_explicit(inflight, 1, memory_order_relaxed)
+                    >= d->opt.per_actor_limit) {
+        atomic_fetch_sub_explicit(inflight, 1, memory_order_relaxed);
+        return ORES_RT_SEND_ACTOR_FULL;
+    }
     /* Count before publishing so total processed never exceeds total
      * accepted (stop()'s quiescence proof); undo if the ring is full. */
     const uint64_t accepted = atomic_load_explicit(&s->accepted, memory_order_relaxed);
@@ -551,6 +577,7 @@ static OresRtSendStatus rt_send(OresRtSender* s, uint32_t actor,
     if (!ring_push(ring_at(d, lane, s->source, core),
                    (RtMsg){ .actor = actor, .payload = payload })) {
         atomic_store_explicit(&s->accepted, accepted, memory_order_release);
+        if (inflight) atomic_fetch_sub_explicit(inflight, 1, memory_order_relaxed);
         return ORES_RT_SEND_FULL;
     }
     RtCore* target = &d->core[core];

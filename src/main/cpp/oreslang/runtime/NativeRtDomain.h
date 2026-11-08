@@ -61,6 +61,10 @@ typedef struct {
     uint64_t turn_budget_ns;      /* 0 = none; else count turns longer than this
                                      (implies measure_turns). Diagnostic only:
                                      an overrun is detected, not prevented. */
+    uint32_t per_actor_limit;     /* 0 = none; else max DATA messages queued or
+                                     running per actor (1..ring_capacity). Stops
+                                     one hot actor from filling a shared ring and
+                                     delaying every other actor on its core. */
     OresRtHandlerFn on_data;      /* required */
     OresRtHandlerFn on_control;   /* optional; CONTROL sends fail without it */
     void* ctx;
@@ -70,7 +74,8 @@ typedef enum {
     ORES_RT_SEND_OK = 0,
     ORES_RT_SEND_FULL = 1,     /* ring to that core is full; caller keeps item */
     ORES_RT_SEND_INVALID = 2,  /* bad actor, wrong thread, or no handler */
-    ORES_RT_SEND_CLOSED = 3    /* domain not started or stopping */
+    ORES_RT_SEND_CLOSED = 3,   /* domain not started or stopping */
+    ORES_RT_SEND_ACTOR_FULL = 4 /* actor already has per_actor_limit in flight */
 } OresRtSendStatus;
 
 typedef struct {
