@@ -92,8 +92,17 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         auto* stateAddress = field(b, frame, 0);
         auto* fresh = llvm::BasicBlock::Create(context, "fresh", init);
         auto* invalid = llvm::BasicBlock::Create(context, "already.initialized", init);
-        b.CreateCondBr(b.CreateICmpEQ(b.CreateLoad(i64, stateAddress), constant(0)),
-                       fresh, invalid);
+        // State=0 alone is not proof of a virgin frame. Require all four
+        // fields zero so an accidentally reset state cannot reinitialize a
+        // live or terminal task. This detects corruption, not hostile writes
+        // to guest-accessible memory: the host must own the entire frame.
+        llvm::Value* pristine = b.CreateICmpEQ(
+            b.CreateLoad(i64, stateAddress), constant(0));
+        for (unsigned fieldIndex = 1; fieldIndex != 4; ++fieldIndex) {
+            pristine = b.CreateAnd(pristine, b.CreateICmpEQ(
+                b.CreateLoad(i64, field(b, frame, fieldIndex)), constant(0)));
+        }
+        b.CreateCondBr(pristine, fresh, invalid);
         b.SetInsertPoint(invalid);
         fail(b);
         b.SetInsertPoint(fresh);
@@ -141,7 +150,33 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         auto* logicalReady = llvm::BasicBlock::Create(context, "fuel.logical.available", step);
         auto* logicalExhausted = llvm::BasicBlock::Create(context, "fuel.logical.exhausted", step);
         auto* complete = llvm::BasicBlock::Create(context, "loop.complete", step);
+        // The frame is trusted-carrier-owned, but reject accidental or
+        // adversarially malformed counters and lifetime fuel before a fake
+        // completed state can bypass any work. This cannot distinguish a
+        // plausible guest-forged refill from legitimate host state.
         auto* state = b.CreateLoad(i64, stateAddress, "state");
+        auto* storedCounter = b.CreateLoad(i64, counterAddress, "frame.counter.validated");
+        auto* storedFuel = b.CreateLoad(i64, field(b, frame, 3), "frame.fuel.validated");
+        auto* validCounter = b.CreateAnd(
+            b.CreateICmpUGE(storedCounter,
+                constant(static_cast<std::uint64_t>(loop.initial))),
+            b.CreateICmpULE(storedCounter,
+                constant(static_cast<std::uint64_t>(loop.upper_bound))));
+        auto* validFuel = b.CreateICmpULE(storedFuel, constant(kMaxLogicalFuel));
+        auto* doneConsistent = b.CreateOr(
+            b.CreateICmpNE(state, constant(2)),
+            b.CreateICmpEQ(storedCounter,
+                constant(static_cast<std::uint64_t>(loop.upper_bound))));
+        auto* expiredConsistent = b.CreateOr(
+            b.CreateICmpNE(state, constant(4)),
+            b.CreateAnd(b.CreateICmpEQ(storedFuel, constant(0)),
+                b.CreateICmpULT(storedCounter,
+                    constant(static_cast<std::uint64_t>(loop.upper_bound)))));
+        auto* stateChecked = llvm::BasicBlock::Create(context, "frame.state.checked", step);
+        b.CreateCondBr(b.CreateAnd(
+            b.CreateAnd(validCounter, validFuel),
+            b.CreateAnd(doneConsistent, expiredConsistent)), stateChecked, invalid);
+        b.SetInsertPoint(stateChecked);
         auto* sw = b.CreateSwitch(state, invalid, 4);
         sw->addCase(constant(1), active);
         sw->addCase(constant(2), done);
@@ -232,7 +267,27 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         auto* invalid = llvm::BasicBlock::Create(context, "invalid", cancel);
         auto* known = b.CreateAnd(b.CreateICmpUGE(s, constant(1)),
                                    b.CreateICmpULE(s, constant(4)));
-        b.CreateCondBr(b.CreateAnd(known,
+        auto* counter = b.CreateLoad(i64, field(b, frame, 1));
+        auto* quota = b.CreateLoad(i64, field(b, frame, 3));
+        auto* range = b.CreateAnd(
+            b.CreateICmpUGE(counter,
+                constant(static_cast<std::uint64_t>(loop.initial))),
+            b.CreateICmpULE(counter,
+                constant(static_cast<std::uint64_t>(loop.upper_bound))));
+        auto* doneConsistent = b.CreateOr(
+            b.CreateICmpNE(s, constant(2)),
+            b.CreateICmpEQ(counter,
+                constant(static_cast<std::uint64_t>(loop.upper_bound))));
+        auto* expiredConsistent = b.CreateOr(
+            b.CreateICmpNE(s, constant(4)),
+            b.CreateAnd(b.CreateICmpEQ(quota, constant(0)),
+                b.CreateICmpULT(counter,
+                    constant(static_cast<std::uint64_t>(loop.upper_bound)))));
+        auto* validShape = b.CreateAnd(
+            b.CreateAnd(known, range),
+            b.CreateAnd(b.CreateICmpULE(quota, constant(kMaxLogicalFuel)),
+                b.CreateAnd(doneConsistent, expiredConsistent)));
+        b.CreateCondBr(b.CreateAnd(validShape,
             b.CreateICmpEQ(b.CreateLoad(i64, field(b, frame, 2)), constant(kMagic))),
             valid, invalid);
         b.SetInsertPoint(invalid);
@@ -257,8 +312,15 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         entryGuard(result, frame, b);
         auto* valid = llvm::BasicBlock::Create(context, "result.ready", result);
         auto* invalid = llvm::BasicBlock::Create(context, "result.invalid", result);
-        b.CreateCondBr(b.CreateAnd(
+        auto* completedCounter = b.CreateLoad(i64, field(b, frame, 1));
+        auto* remainingFuel = b.CreateLoad(i64, field(b, frame, 3));
+        auto* validDone = b.CreateAnd(
             b.CreateICmpEQ(b.CreateLoad(i64, field(b, frame, 0)), constant(2)),
+            b.CreateAnd(
+                b.CreateICmpEQ(completedCounter,
+                    constant(static_cast<std::uint64_t>(loop.upper_bound))),
+                b.CreateICmpULE(remainingFuel, constant(kMaxLogicalFuel))));
+        b.CreateCondBr(b.CreateAnd(validDone,
             b.CreateICmpEQ(b.CreateLoad(i64, field(b, frame, 2)), constant(kMagic))),
             valid, invalid);
         b.SetInsertPoint(invalid);
