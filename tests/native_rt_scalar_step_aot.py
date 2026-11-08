@@ -11,6 +11,26 @@ def run(command, **kwargs):
     return subprocess.run(command, text=True, capture_output=True, check=False,
                           timeout=60, **kwargs)
 
+def parse_clang_major(output):
+    """Parse clang -dumpversion without silently accepting an unknown SDK."""
+    match = re.fullmatch(r'\s*([0-9]+)(?:\.[0-9]+)*\s*', output)
+    if not match:
+        raise ValueError("unrecognized clang -dumpversion output")
+    return int(match.group(1))
+
+
+def verify_matching_llvm_clang(clang, expected_major):
+    version = run([clang, "-dumpversion"])
+    if version.returncode != 0 or version.stderr.strip():
+        raise RuntimeError("cannot certify the selected Clang version")
+    actual = parse_clang_major(version.stdout)
+    if actual != expected_major:
+        raise RuntimeError(
+            f"LLVM SDK major {expected_major} mismatches Clang major {actual}; "
+            "not valid native AOT certification")
+    return actual
+
+
 def verify_closed_guest_ir(source):
     """Reject any guest ABI/import/call surface beyond the scalar v1 subset.
 
@@ -44,9 +64,13 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--compiler", required=True)
     p.add_argument("--clang", required=True)
+    p.add_argument("--llvm-major", required=True, type=int)
     p.add_argument("--fixture", required=True)
     p.add_argument("--harness", required=True)
     args = p.parse_args()
+    # A generic clang may be older/newer than the C++ LLVM SDK. Do not
+    # certify generated IR against a mismatched native toolchain.
+    verify_matching_llvm_clang(args.clang, args.llvm_major)
     compiler = args.compiler
     fixture = pathlib.Path(args.fixture)
     cases = [
