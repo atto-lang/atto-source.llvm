@@ -63,9 +63,17 @@ completed or cancelled frame must have a counter in the compiler-proven
 results require an exact terminal counter equal to upperBound. Invalid frames
 trap through `llvm.trap`; never skip ahead or return a forged result.
 
-The AOT harness executes 14 independent bad-frame/invalid-operation trap
+The AOT harness executes 16 independent bad-frame/invalid-operation trap
 scenarios on Linux, the exact 0/1/127/128/129/511/512 dispatch-fuel
 boundaries, and three-frame cancellation/fairness isolation. It must pass at
 Clang `-O0`, `-O2` and `-O3`. All tests require an actual compiler-generated
 LLVM module and linked native guest executable, not host-only mock receipts.
 These tests remain unverified on hosted CI while Actions jobs have zero steps.
+
+A forged state=2 with counter below upperBound now traps in **all** of
+`step`, `cancel` and `result`, since the scheduler can consume a DONE
+status without fetching a result. The harness must print
+`SCALAR_FRAME_AOT_INVALID_FRAME_TRAPS_16_PASS` after completing every
+Linux child-signal trap test; a skipped trap suite or Python `-O` test
+invocation is not acceptable evidence. The complete compiler-produced
+guest harness is run independently with Clang `-O0/-O2/-O3`.
