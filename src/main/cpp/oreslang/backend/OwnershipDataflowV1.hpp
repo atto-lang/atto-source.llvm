@@ -19,6 +19,7 @@ enum class OwnershipV1OpKind : std::uint8_t {
     Create,
     Use,
     UseMutable,
+    UseThroughMutableBorrow,
     BorrowShared,
     BorrowMutable,
     EndBorrowShared,
@@ -63,6 +64,7 @@ struct OwnershipV1Result {
 
 class OwnershipDataflowV1 final {
 public:
+    static constexpr std::size_t NoOwner = static_cast<std::size_t>(-1);
     static constexpr std::size_t MaxOwners = 64;
     static constexpr std::size_t MaxBlocks = 4096;
     static constexpr std::size_t MaxEdges = 16384;
@@ -233,6 +235,9 @@ private:
 
     static void apply(const OwnershipV1Op& op, State& state, std::size_t count,
                       std::uint64_t& next_acquisition_order) {
+        if (op.kind != OwnershipV1OpKind::Take &&
+            op.target != static_cast<std::size_t>(-1))
+            fail("unexpected transfer target on non-take operation");
         Owner& owner = get(state, op.owner, count);
         switch (op.kind) {
             case OwnershipV1OpKind::Create:
@@ -251,6 +256,11 @@ private:
                 require_owned(owner);
                 if (owner.shared_borrows || owner.mutable_borrow)
                     fail("mutable access conflicts with outstanding borrow");
+                break;
+            case OwnershipV1OpKind::UseThroughMutableBorrow:
+                require_owned(owner);
+                if (!owner.mutable_borrow || owner.shared_borrows)
+                    fail("mutable-borrow access requires its exclusive loan");
                 break;
             case OwnershipV1OpKind::BorrowShared:
                 require_owned(owner);
