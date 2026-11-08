@@ -35,6 +35,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <exception>
 #include <stdexcept>
 #include <mutex>
 #include <optional>
@@ -182,9 +183,15 @@ public:
         if (!lifecycle.register_stop_cleanup([weak](OresNativeActorRef actor) {
                 if (auto state = weak.lock())
                     (void)revoke_state_recipient(*state, actor);
-            }))
+            }, &stop_cleanup_token_))
             throw std::invalid_argument(
                 "handoff lifecycle cleanup registration denied");
+    }
+    ~RequestContextHandoffTableV1() {
+        if (lifecycle_registry_ && stop_cleanup_token_ &&
+            !lifecycle_registry_->unregister_stop_cleanup(
+                stop_cleanup_token_))
+            std::terminate(); // lifetime/CONTROL-only destruction violated
     }
     RequestContextHandoffTableV1(const RequestContextHandoffTableV1&) = delete;
     RequestContextHandoffTableV1& operator=(const RequestContextHandoffTableV1&) = delete;
@@ -408,6 +415,7 @@ private:
     OresNativeActorScheduler* const scheduler_;
     NativeRequestLifecycleRegistryV1* const lifecycle_registry_ = nullptr;
     std::shared_ptr<State> state_;
+    NativeRequestLifecycleRegistryV1::StopCleanupTokenV1 stop_cleanup_token_;
 };
 
 } // namespace oreslang::runtime
