@@ -112,6 +112,28 @@ static void require_guest_trap(int scenario) {
                  frame.counter = 1000;
                  frame.remaining_logical_fuel = 100000001;
                  (void)oreslang_rt_scalar_frame_result_v1(&frame); break;
+        case 23: {
+                 /* Aligned storage, deliberately misaligned pointer. Before
+                  * the guard, x86-64 may allow a corrupt u64 frame write. */
+                 _Alignas(8) unsigned char storage[sizeof(ScalarFrame) + 8] = {0};
+                 oreslang_rt_scalar_frame_init_v1(storage + 1, 1);
+                 break;
+                 }
+        case 24: {
+                 _Alignas(8) unsigned char storage[sizeof(ScalarFrame) + 8] = {0};
+                 (void)oreslang_rt_scalar_frame_step_v1(storage + 1, 1);
+                 break;
+                 }
+        case 25: {
+                 _Alignas(8) unsigned char storage[sizeof(ScalarFrame) + 8] = {0};
+                 oreslang_rt_scalar_frame_cancel_v1(storage + 1);
+                 break;
+                 }
+        case 26: {
+                 _Alignas(8) unsigned char storage[sizeof(ScalarFrame) + 8] = {0};
+                 (void)oreslang_rt_scalar_frame_result_v1(storage + 1);
+                 break;
+                 }
         default: _Exit(99);
         }
         _Exit(0); /* An invalid operation returning constitutes a failure. */
@@ -326,7 +348,7 @@ int main(void) {
     // Reject malformed persistent state through the actual compiled ABI.
     // This is NOT protection against a guest that can overwrite all 32 bytes;
     // real untrusted isolation must keep frame memory host-owned.
-    for (int scenario = 0; scenario != 23; ++scenario)
+    for (int scenario = 0; scenario != 27; ++scenario)
         require_guest_trap(scenario);
 #endif
     require_bounded_peer_progress();
