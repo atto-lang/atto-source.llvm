@@ -39,6 +39,8 @@ def expected_prefix_last(name, actor_index, processed):
         return 0
     if name == "atto-actor-scalar-mutual-tail.atto":
         return 1 if processed else 0
+    if name == "atto-actor-scalar-stack16-accept.atto":
+        return 22 if processed else 0
     if name == "source-actor-interleaved-stop.ores":
         sequences = ([1], [3, 4])
         return sum(sequences[actor_index][:processed])
@@ -105,11 +107,14 @@ def main():
         ("atto-actor-scalar-nontail-overflow.atto", 1, 1, 0),
         ("atto-actor-scalar-mutual-tail.atto", 1, 1, 1),
         ("atto-actor-scalar-runaway-fuel.atto", 1, 1, 0),
+        ("atto-actor-scalar-stack16-accept.atto", 1, 1, 22),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
     negatives = {
+        "atto-actor-scalar-stack17-reject.atto":
+            "native actor typed scalar frame admission: typed scalar operand stack exceeds 16 slots",
         "atto-actor-scalar-routine-recursion-reject.atto":
             "native actor typed scalar frame admission: function graph is not a closed pure unary integer fnc subset",
         "atto-actor-scalar-unsafe-nested-call-reject.atto":
@@ -202,6 +207,7 @@ def main():
                 "atto-actor-scalar-nontail-overflow.atto",
                 "atto-actor-scalar-mutual-tail.atto",
                 "atto-actor-scalar-runaway-fuel.atto",
+                "atto-actor-scalar-stack16-accept.atto",
             }
             if m3:
                 vm_calls = [line for line in guest.stdout.splitlines()
@@ -396,8 +402,12 @@ def main():
                             assert name not in {
                                 "atto-actor-scalar-nontail-overflow.atto",
                                 "atto-actor-scalar-runaway-fuel.atto"}
-                            assert scalar_records[i]["tail_calls"] >= 100000, (
-                                name, scalar_records[i])
+                            if name == "atto-actor-scalar-stack16-accept.atto":
+                                assert scalar_records[i]["tail_calls"] == 0, (
+                                    name, scalar_records[i])
+                            else:
+                                assert scalar_records[i]["tail_calls"] >= 100000, (
+                                    name, scalar_records[i])
                             assert scalar_records[i]["peak_frames"] == 1, (
                                 name, scalar_records[i])
                 if processed:
@@ -452,8 +462,10 @@ def main():
                 linked_harness = run(harness_command)
                 assert linked_harness.returncode == 0, (
                     name, "compiled harness link failed", linked_harness.stderr)
-                input_value = 100 if name == (
-                    "atto-actor-scalar-nontail-overflow.atto") else 100000
+                input_value = (
+                    100 if name == "atto-actor-scalar-nontail-overflow.atto"
+                    else 7 if name == "atto-actor-scalar-stack16-accept.atto"
+                    else 100000)
                 actual = run([str(harness_exe), str(input_value)])
                 assert actual.returncode == 0, (
                     name, "real source-compiled M3 guest failed", actual.stderr)
@@ -480,7 +492,13 @@ def main():
                     1 if name == "atto-actor-scalar-nontail-overflow.atto"
                     else 2 if name == "atto-actor-scalar-runaway-fuel.atto"
                     else 0), (name, real_fields)
-                if name == "atto-actor-scalar-runaway-fuel.atto":
+                if name == "atto-actor-scalar-stack16-accept.atto":
+                    assert int(real_fields["steps"]) == 32
+                    assert int(real_fields["peak_frames"]) == 1
+                    assert int(real_fields["tail_calls"]) == 0
+                    assert int(real_fields["non_tail_calls"]) == 0
+                    assert int(real_fields["checkpoints"]) == 0
+                elif name == "atto-actor-scalar-runaway-fuel.atto":
                     assert int(real_fields["steps"]) == 2000000
                     assert int(real_fields["peak_frames"]) == 1
                     assert int(real_fields["checkpoints"]) == 2000000 // 256
@@ -501,6 +519,7 @@ def main():
                 assert real_receipt["abandoned"] == 0
                 assert real_receipt["last"] == (
                     1 if name == "atto-actor-scalar-mutual-tail.atto"
+                    else 22 if name == "atto-actor-scalar-stack16-accept.atto"
                     else 0)
                 print("PASS actual compiler-backed M3 actor VM:", name,
                       "instructions", real_fields["steps"], flush=True)
