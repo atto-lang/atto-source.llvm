@@ -1,6 +1,6 @@
 fnc checked(float x): float {
   if !(x > 0.0) then rt fail("non-positive input"); fi
-  return x * 2;
+  return x * 2.0;
 }
 pub routine main(): void {
   stdio.stdout.println(checked(1.5));

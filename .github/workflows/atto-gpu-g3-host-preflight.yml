@@ -1,0 +1,39 @@
+name: AttoLang GPU G3 host-only probe admission
+
+on:
+  pull_request:
+    paths:
+      - 'tests/atto_gpu_physical_saxpy_probe.cpp'
+      - 'scripts/verify-atto-gpu-g3-preflight.sh'
+      - 'scripts/verify-atto-gpu-physical-saxpy.sh'
+      - '.github/workflows/atto-gpu-g3-host-preflight.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  gpu-probe-host-only-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Immutable PR head checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Compile probe and verify strict no-artifact rejection
+        shell: bash
+        env:
+          ATTO_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          bash scripts/verify-atto-gpu-g3-preflight.sh | tee "$RUNNER_TEMP/gpu-g3-host-negative-receipt.txt"
+
+      - name: Upload non-promoting host negative receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpu-g3-host-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gpu-g3-host-negative-receipt.txt
+          if-no-files-found: warn
+          retention-days: 7

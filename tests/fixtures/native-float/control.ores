@@ -24,17 +24,17 @@ fnc newton_sqrt(float v): float {
 
 pub routine main(): void {
   stdio.stdout.println(classify(-2.5));
-  stdio.stdout.println(classify(0));
+  stdio.stdout.println(classify(0.0));
   stdio.stdout.println(classify(0.25));
   stdio.stdout.println(newton_sqrt(2.0));
   stdio.stdout.println(newton_sqrt(1.0e10));
   let int odd_total = 0;
   let int i = 0;
-  let bool even = true;
+  let bool is_odd = false;
   while i < 20 do
     i = i + 1;
-    even = !even;
-    if even then continue; fi
+    is_odd = !is_odd;
+    if !is_odd then continue; fi
     if i > 15 then break; fi
     val int doubled = i * 2;
     odd_total = odd_total + doubled;

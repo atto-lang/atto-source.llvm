@@ -8,17 +8,18 @@ and method values, `Array<float>`, `Option<float>`, `Result<float, E>`.
 
 | Source | Behavior |
 |---|---|
-| `val float x = 1;`, float parameter, field, return or element given an int | Widens with `sitofp` |
-| `1 + 2.5`, `x < 1`, `c ? 1 : 2.5` | The int operand widens; the result is float |
+| `val float x = 1;`, float parameter, field, return or element given an int | Rejected: no implicit conversion |
+| `1 + 2.5`, `x < 1`, `c ? 1 : 2.5` | Rejected: mixed numeric operands require explicit conversion |
 | `1 / 2` | Real division, `0.5`. `1 / 0` is `Infinity`; the result never assigns to `int` |
-| `%` | Reserved. Float operands are rejected; the legacy `int % literal` form is unchanged |
-| `2 == 2.0` | Exact: `2^53 + 1` does not equal the double it rounds to |
+| `5.5 % 2`, `5 % 3`, `^`, `^^` | Removed source operators; lexical error before IR |
+| `2 == 2.0` | Rejected: mixed int/f64 equality |
 | `1.0e400`, `1.0e-400`, `1_000.5` | Infinity, zero and `1000.5`, as Java's lexer rounds them |
 | `<`, `==` with NaN or signed zero | IEEE `fcmp`. See the divergence below |
 | `println(x)`, `write(x)` | `java.lang.Double.toString` text: `1.0E10`, `9.9E-4`, `-0.0`, `NaN` |
 
-Nothing narrows implicitly. `val int x = 1.5` and `val int x = 1 / 2` are compile
-errors on both backends.
+No numeric type converts implicitly. `val float x = 1`, `val int x = 1.5`
+and `val int x = 1 / 2` are rejected. Integer `/` itself is defined as
+real division; its result is not an implicit assignment conversion.
 
 Storage is the checked static type. Stack slots and call ABIs use LLVM `double`.
 Record, array and sum slots are 8-byte cells that hold raw binary64 bits, and every
@@ -65,11 +66,10 @@ has fully evaluated. Classes with mutable fields or arrays stay non-replaceable.
    `NaN > 1.0` and `-0.0 < 0.0` are `true`. Its `NaN == NaN` depends on object
    identity. LLVM follows IEEE. Java PR #1033, open, hardens toward IEEE, and the
    OresLLM guests assume it, so this is treated as a Java bug.
-2. **An int in a float slot.** Java leaves the runtime `Long` in place:
-   `val float w = 3; println(w)` prints `3`, and `true ? 1 : 2.5` prints `1`. LLVM
-   prints `3.0` and `1.0`. Arithmetic that mixes in a real double agrees on both.
-3. **Very large exact comparison.** Java compares `int == float` through
-   `Double.toString`, so `2^62 == 2^62.0` is `false` there. LLVM compares exactly.
+2. **Java legacy numeric admission.** The native compiler rejects mixed numeric
+   assignments/expressions now; Java may need independent tightening to match.
+3. **Mixed int/f64 equality.** Rejected on LLVM pending a canonical explicit
+   conversion contract; Java historically used a divergent comparison.
 
 ## Evidence
 
@@ -79,3 +79,44 @@ stdout byte for byte with output captured from the Java backend. Regenerate the
 cases. `Double.toString` formatting was separately compared with the JVM over
 2,000,000 values, including subnormals and exact powers of two; that comparison is
 not part of CTest.
+
+## Remaining verification gate
+
+No exact-head compiler, native guest or Java/LLVM comparison has executed in
+the current CI environment. The local compiler-native tests and matching
+Java semantics must be run on an approved runner before this draft is certified.
+
+## Target-specific wasm32 Core f64 entry ABI
+
+Native host `main` still cannot return f64. Only the explicit
+`--target=wasm32 --wasm-core-abi=f64` combination may admit zero-argument
+`main(): f64` and emit a `double @main()` IR entry. Ordinary wasm32
+compilation remains i64-only by default; the f64 flag is rejected on native
+and Cortex-M targets. The compiler driver and LLVM codegen enforce the same
+gate. This is not equivalent to an executed guest parity certificate.
+
+## Exact-head, source-local f64 execution workflow (draft)
+
+`.github/workflows/llvm-f64-exact-head.yml` is restricted to this source
+repository and never clones, mirrors, uploads or exports the private LLVM source
+tree or compiler binary to another organization. It checks out the actual PR
+head, verifies the root Git tree and clean index, builds `oreslang-llvmc` and
+the Rust ML/IR auditor targets, and **requires** precisely these registered,
+actually executed CTest gates:
+
+- `native_f64_scalar_e2e` (42 native scalar positives / 24 source negatives)
+- `wasm_core_f64_entry_source_gate` (one real compiler IR positive and nine
+  fail-before-IR rejections)
+- `native_float_ml` (real Rust-driven ML native guest suite)
+
+Successful CTest exit alone is insufficient: missing test registrations and
+skipped/failed JUnit testcases invalidate the receipt. The receipt carries
+exact source head, root tree SHA, the compiler executable SHA-256, JUnit hash,
+executed case IDs and Actions run ID/attempt. **Only the receipt and test
+report** may be uploaded to the source-repository Actions artifact store.
+This is **NOT_CERTIFIED** for Java parity, linked Wasm or Worker execution.
+
+A separately reviewed source-owned, executed receipt must be approved before
+its compiler bytes may be pre-provisioned onto an authorized Wasm guest runner;
+this workflow does not confer that approval. Zero-step failed Actions runs
+remain `NOT_EXECUTED` and produce no success receipt.

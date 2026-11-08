@@ -53,22 +53,18 @@ Type local_type(const LocalBinding& local) {
 void require(Type actual, Type expected, std::size_t offset, const std::string& detail) {
     if (!(actual == expected)) fail(offset, detail);
 }
-// Java assignment context: a declared float accepts an int, which widens.
+// All numeric assignment and mixed-operand checks are exact; only the
+// explicit real-division operator converts two i64 operands for its result.
 void assign(const Expression& value, Type actual, Type expected, std::size_t offset, const std::string& detail) {
-    if (expected.kind == Kind::F64 && actual.kind == Kind::Int) {
-        value.widen_to_f64 = true;
-        return;
-    }
+    (void)value;
     require(actual, expected, offset, detail);
 }
 bool numeric(const Type& type) { return type.kind == Kind::Int || type.kind == Kind::F64; }
-// Java numeric join: mixed int/float operands evaluate as float.
 Type join(const Expression& left_expr, Type left, const Expression& right_expr, Type right,
           std::size_t offset, const std::string& detail) {
-    if (!numeric(left) || !numeric(right)) fail(offset, detail);
-    if (left.kind == right.kind) return left;
-    (left.kind == Kind::Int ? left_expr : right_expr).widen_to_f64 = true;
-    return scalar(ScalarType::F64);
+    (void)left_expr; (void)right_expr;
+    if (!numeric(left) || !numeric(right) || left.kind != right.kind) fail(offset, detail);
+    return left;
 }
 }
 void validate_native_scalar_types(const Program& program) {
@@ -182,6 +178,12 @@ void validate_native_scalar_types(const Program& program) {
                 if (left.kind == Kind::String && right.kind == Kind::String) return left;
                 return join(*e.left, left, *e.right, right, e.offset, "addition requires int, f64 or string");
             }
+            case E::ShiftLeft: case E::ShiftRight: case E::ShiftUnsignedRight:
+                require(expression(*e.left, locals), scalar(false), e.offset,
+                        "shift left operand requires int");
+                require(expression(*e.right, locals), scalar(false), e.offset,
+                        "shift distance requires int");
+                return scalar(false);
             case E::Subtract: case E::Multiply: case E::Divide: case E::Remainder: {
                 const auto lhs = expression(*e.left, locals);
                 const auto rhs = expression(*e.right, locals);

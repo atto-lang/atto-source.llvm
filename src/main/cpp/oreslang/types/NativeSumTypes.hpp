@@ -72,6 +72,7 @@ inline void resolve_native_sums(Program& program) {
         if (e.kind == E::String) return {ScalarType::String};
         if (e.kind == E::Boolean) return {ScalarType::Bool};
         if (e.kind == E::Integer) return {};
+        if (e.kind == E::Floating) return {ScalarType::F64};
         if (e.kind == E::Field) {
             const auto owner = expression(*e.left, env, {});
             if (!owner.cls.empty() && classes.count(owner.cls))
@@ -119,8 +120,7 @@ inline void resolve_native_sums(Program& program) {
                 if (fallback) {
                     const auto& default_value = argument_types.front();
                     if (!default_value.sum.empty() || !default_value.cls.empty() ||
-                            default_value.array || (default_value.scalar != type.value_type &&
-                                !(type.value_type == ScalarType::F64 && default_value.scalar == ScalarType::I64)))
+                            default_value.array || default_value.scalar != type.value_type)
                         throw std::runtime_error("native sum unwrap_or fallback type does not match payload");
                 }
                 e.kind = E::SumAccess; e.sum_type = owner.sum;
@@ -144,6 +144,8 @@ inline void resolve_native_sums(Program& program) {
         if (e.kind == E::LogicalNot || e.kind == E::Equal || e.kind == E::NotEqual || e.kind == E::Less || e.kind == E::LessEqual ||
                 e.kind == E::Greater || e.kind == E::GreaterEqual || e.kind == E::LogicalAnd || e.kind == E::LogicalOr || e.kind == E::LogicalXor)
             return {ScalarType::Bool};
+        // Division is real division, so its result is float whatever its operands.
+        if (e.kind == E::Divide) return {ScalarType::F64};
         return left;
     };
     for (auto& cls : program.classes) {

@@ -45,7 +45,7 @@ struct Expression {
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
         Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field,
-        ToText // Java stdio scalar-to-text boundary; left is the printed operand
+        ToText, ShiftLeft, ShiftRight, ShiftUnsignedRight // scalar text and shift operators
     };
     Kind kind;
     std::size_t offset = 0;
@@ -53,8 +53,9 @@ struct Expression {
     double floating = 0.0; // typed source f64, never an i64 carrier
     bool boolean = false;
     mutable ScalarType resolved_type = ScalarType::I64;
-    // Set only by the scalar checkers when an int value reaches a float
-    // context (Java numeric widening). Lowered as an explicit sitofp.
+    // Only the explicitly real int/int division operator sets this marker
+    // to preserve its f64 result. No assignment, parameter or mixed-operand
+    // context may implicitly promote int to f64.
     mutable bool widen_to_f64 = false;
     mutable std::string resolved_class;
     std::string name;
@@ -373,6 +374,9 @@ struct Function {
     bool exported = false;
     std::string method_owner; // compiler-owned class method privilege, never source syntax
     bool native_internal = false; // linker-owned private imported implementation
+    // Explicit compiler-owned host C u32 trampoline, never the guest i64 ABI.
+    // Only the browser v1 ABI version symbol is admitted in the first slice.
+    std::string c_export_u32_symbol;
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
     std::string return_sum;

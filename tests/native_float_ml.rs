@@ -105,13 +105,19 @@ fn main() {
         ("fail_non_string", "rt fail(1);", "rt fail message requires string"),
         ("decimal_suffix", "val float x = 1.5d; stdio.stdout.println(x);", "decimal literal unsupported"),
         ("f32_requires_binary32", "val f32 x = 1.0; stdio.stdout.println(x);", "native f32 requires binary32 lowering"),
-        ("float_remainder_reserved", "stdio.stdout.println(5.5 % 2.0);", "native remainder requires int operands"),
+        ("removed_percent", "let int a = 7; let int b = 2; stdio.stdout.println(a % b);", "removed AttoLang source operator"),
+        ("removed_double_caret", "stdio.stdout.println(true ^^ false);", "removed AttoLang source operator"),
+        ("removed_single_caret", "stdio.stdout.println(5 ^ 3);", "removed AttoLang source operator"),
+        ("implicit_float_binding", "val float x = 1; stdio.stdout.println(x);", "requires f64, got int"),
+        ("mixed_numeric_arithmetic", "stdio.stdout.println(1.0 + 1);", "requires explicit numeric conversion"),
+        ("mixed_numeric_equality", "stdio.stdout.println(1 == 1.0);", "requires explicit numeric conversion"),
+        ("mixed_numeric_ternary", "val float x = true ? 1 : 2.0; stdio.stdout.println(x);", "requires explicit numeric conversion"),
     ] {
         tools.reject(id, &main_with(body), diagnostic);
     }
     tools.reject("float_arg_to_int", "fnc f(int x): int { return x; }\npub routine main(): void { stdio.stdout.println(f(1.5)); }\n", "requires int, got f64");
     tools.reject("float_ret_from_int", "fnc f(): int { return 1.5; }\npub routine main(): void { stdio.stdout.println(f()); }\n", "requires int, got f64");
-    tools.reject("float_main", "pub routine main(): float { return 1.0; }\n", "native main does not admit f64 process ABI");
+    tools.reject("float_main", "pub routine main(): float { return 1.0; }\n", "OS entrypoint requires int or void");
     tools.reject("float_field_from_bool", "define class C as\n  pub val float a;\nend\npub routine main(): void { val C c = new C(true); stdio.stdout.println(c.a); }\n", "requires f64, got bool");
 
     // Native rt fail ends the process, so it cannot coexist with cleanup or a
