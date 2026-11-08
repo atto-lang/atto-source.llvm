@@ -23,6 +23,7 @@ and narrows further:
 - class declarations have 1–16 immutable, initialized scalar fields;
 - owners do not move, escape, enter parameters, cross calls, suspend, use FFI
   or become actors/tasks/continuations;
+- branch-scoped class aliases are rejected until path-sensitive branch cleanup exists;
 - no methods, parameterized constructors, arrays, nested owned fields,
   mutations or unsupported expression/statement roots.
 
@@ -81,7 +82,8 @@ object.
 The CTest `actor_region_v1_compiler_generated_ir_and_negative_admission`
 compiles the `Point` fixture and checks that generated IR calls the begin,
 alloc, read, write, drop and end symbols. It also verifies that class owners
-inside ordinary helper functions are rejected before IR output.
+inside ordinary helper functions and branch-scoped class aliases are rejected
+before IR output.
 
 The host-only tests separately exercise allocator generations, sidecar
 mapping, stale and double-drop rejection, explicit leak refusal, supervisor
