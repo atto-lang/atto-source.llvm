@@ -75,10 +75,10 @@ positive(transitive_call
 
 # Rejected source must not be silently lowered using interpreter or codegen.
 negative(class_root
-  "define class Box as\n pub int value = 1;\n end\nfnc main(): int { return 0; }\n"
+  "define class Public as\n  pub final int token: 42;\nend\npub fnc main(): int {\n  let Public value = new Public();\n  return value.token;\n}\n"
   "sealed scalar AOT rejects non-scalar declarations")
 negative(unmodeled_actor
-  "define actor Counter as\n end\nfnc main(): int { return 0; }\n"
+  "define actor Worker as {\n  let total: int = 0;\n  pub on_message(int n): int { total = total + n; return total; }\n}\npub fnc main(): int {\n  const worker = spawn Worker();\n  worker.send(1);\n  stop worker;\n  return 43;\n}\n"
   "sealed scalar AOT rejects non-scalar declarations")
 negative(unknown_callable
   "fnc main(): int { return missing(1); }\n"
@@ -89,6 +89,9 @@ negative(runtime_eval
 negative(no_entry
   "fnc helper(): int { return 1; }\n"
   "sealed scalar AOT requires a statically known main/0 entry")
+negative(side_effecting_io
+  "fnc main(): int { stdio.stdout.println(42); return 0; }\\n"
+  "sealed scalar AOT requires fully modeled pure scalar effects and calls")
 
 # Option validation is independent of source parsing; never fall back to a
 # different execution profile because of invalid or duplicated parameters.
@@ -107,6 +110,20 @@ execute_process(COMMAND "${BUILD}/oreslang-llvmc"
 if(NOT duplicate STREQUAL "2" OR NOT duplicate_out STREQUAL "")
   fail_case("duplicated profile was accepted or emitted output")
 endif()
+# The AOT wrapper must reject bad profiles before attempting a compiler or
+# producing an executable, rather than dropping the requested profile.
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" -E env
+    "ORESLANG_LLVM_AOT_PROFILE=unverified"
+    "ORESLANG_LLVMC=${BUILD}/oreslang-llvmc"
+    bash "${ROOT}/scripts/compile-aot.sh"
+    "${work}/constant.atto" "${work}/bad-profile"
+  RESULT_VARIABLE bad_wrapper OUTPUT_VARIABLE bad_wrapper_out
+  ERROR_VARIABLE bad_wrapper_err TIMEOUT 20)
+if(NOT bad_wrapper STREQUAL "64" OR EXISTS "${work}/bad-profile")
+  fail_case("AOT wrapper silently changed invalid profile: ${bad_wrapper}")
+endif()
+
 if(failures GREATER 0)
   message(FATAL_ERROR "sealed scalar AOT: ${failures} failures")
 endif()
