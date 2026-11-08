@@ -192,6 +192,81 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
 
 
 
+// This deliberately narrow strict AOT admission path proves *static scalar
+// call graph closure* before LLVM IR emission. It is not proof of actor heaps,
+// complete guest AOT, whole-program no-GC, WCET, or linker/FFI reachability.
+// Reuse the same compiler-maintained expression/statement scanner as the
+// hard-RT analysis; never trust source-text keyword scans as a graph oracle.
+static void require_sealed_scalar_aot_graph(const oreslang::Program& program) {
+    using namespace oreslang;
+    namespace detail = oreslang::realtime_detail;
+    if (!program.actors.empty() || !program.classes.empty() ||
+        !program.generators.empty() || !program.cooperative_loops.empty() ||
+        !program.imports.empty() || !program.contracts.empty() ||
+        !program.type_only_declarations.empty() || !program.sum_types.empty() ||
+        !program.conforms.empty() || !program.type_constraint_descriptors.empty())
+        throw std::runtime_error(
+            "sealed scalar AOT rejects non-scalar declarations until their "
+            "dispatch, initialization, continuation and drop roots are verified");
+
+    if (program.functions.empty() ||
+        program.functions.size() > detail::kMaxRealtimeFunctions)
+        throw std::runtime_error("sealed scalar AOT requires a bounded function graph");
+
+    std::unordered_set<std::string> definitions;
+    for (const auto& function : program.functions) {
+        const auto key = detail::function_key(
+            function.name, function.parameters.size());
+        if (!definitions.insert(key).second)
+            throw std::runtime_error("sealed scalar AOT rejects duplicate function identity");
+    }
+    if (!definitions.count("main/0"))
+        throw std::runtime_error("sealed scalar AOT requires a statically known main/0 entry");
+
+    std::size_t remaining_edges = detail::kMaxRealtimeCallEdges;
+    for (const auto& function : program.functions) {
+        if (!function.generic_parameters.empty() ||
+            !function.method_owner.empty() || function.native_internal ||
+            !function.c_export_u32_symbol.empty() ||
+            function.scalar_while || function.async_source_i64 ||
+            !function.source_tasks.empty() || !function.future_pipelines.empty() ||
+            !function.actor_spawns.empty() || !function.actor_sends.empty() ||
+            !function.actor_stops.empty() || !function.actor_actions.empty() ||
+            !function.actor_field_writes.empty() ||
+            !function.ready_await_actor.empty() || !function.done_await_actor.empty() ||
+            function.ready_await_form != NativeAwaitForm::None ||
+            !function.ready_future_name.empty() ||
+            !function.ready_future_actor.empty() ||
+            !function.return_class.empty() || !function.return_sum.empty() ||
+            function.caught_throw_value ||
+            function.return_type == ScalarType::String)
+            throw std::runtime_error(
+                "sealed scalar AOT rejects unmodeled function, ownership or suspension roots");
+        for (const auto& param : function.parameters)
+            if (!param.class_name.empty() || !param.sum_type.empty() ||
+                param.mode != Parameter::Mode::Value ||
+                param.scalar_type == ScalarType::String ||
+                !param.generic_type.empty())
+                throw std::runtime_error(
+                    "sealed scalar AOT rejects non-scalar or borrowed parameter ABI");
+
+        const auto facts = detail::direct_facts(function, remaining_edges, &program);
+        if (facts.call_budget_exceeded || !facts.bounded_calls ||
+            !facts.bounded_cleanup || facts.unsupported_runtime ||
+            facts.unqualified_copy_or_share || facts.unmodeled_expression ||
+            facts.effects.bits != 0u)
+            throw std::runtime_error(
+                "sealed scalar AOT requires fully modeled pure scalar effects and calls");
+        if (facts.calls.size() > remaining_edges)
+            throw std::runtime_error("sealed scalar AOT call graph edge budget exceeded");
+        remaining_edges -= facts.calls.size();
+        for (const auto& callee : facts.calls)
+            if (!definitions.count(callee))
+                throw std::runtime_error(
+                    "sealed scalar AOT rejects unresolved callable: " + callee);
+    }
+}
+
 int main(int argc, char** argv) {
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
@@ -211,6 +286,7 @@ int main(int argc, char** argv) {
     std::string rt_entry = "main/0";
     std::string rt_report_path;
     bool tree_shake = false;
+    bool sealed_scalar_aot = false;
     bool isolate_entry_seen = false;
     std::string isolate_entry;
     std::vector<std::string> tree_shake_roots;
@@ -248,6 +324,16 @@ int main(int argc, char** argv) {
                           << " (expected core or std)\n";
                 return 2;
             }
+        } else if (arg.rfind("--aot-profile=", 0) == 0) {
+            if (sealed_scalar_aot) {
+                std::cerr << "duplicate AOT profile option\\n"; return 2;
+            }
+            const std::string profile = arg.substr(std::string_view("--aot-profile=").size());
+            if (profile != "sealed-scalar-v1") {
+                std::cerr << "unsupported AOT profile (expected sealed-scalar-v1)\\n";
+                return 2;
+            }
+            sealed_scalar_aot = true;
         } else if (arg.rfind("--profile=", 0) == 0) {
             if (profile_seen) { std::cerr << "duplicate profile option\n"; return 2; }
             profile_seen = true;
@@ -362,6 +448,15 @@ int main(int argc, char** argv) {
                 oreslang::frontend::CoreProviderRequirement::Allocator)
             : 0u;
 
+    if (sealed_scalar_aot &&
+        (wasm32_target || cortex_m_target || experimental_owned_int ||
+         experimental_rt_scalar_loop || native_hard_rt_profile || rt_check_only ||
+         rt_entry_seen || rt_report_seen || tree_shake ||
+         !tree_shake_roots.empty() || isolate_entry_seen ||
+         bounded_allocator_provider || constraint_descriptors_only)) {
+        std::cerr << "sealed scalar AOT only supports isolated host scalar codegen\\n";
+        return 2;
+    }
     if (constraint_descriptors_only &&
             (tree_shake || !tree_shake_roots.empty() || native_hard_rt_profile ||
              rt_check_only || rt_entry_seen || rt_report_seen ||
@@ -396,7 +491,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--aot-profile=sealed-scalar-v1] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -436,6 +531,10 @@ int main(int argc, char** argv) {
             admitted_provider_bits);
         source_module = ast.module;
         source_namespace = ast.namespace_name;
+
+        // Strict admission happens on the fully resolved and ownership-checked
+        // Program, before any executable LLVM IR or sidecar is emitted.
+        if (sealed_scalar_aot) require_sealed_scalar_aot_graph(ast);
 
         if (constraint_descriptors_only) {
             for (const auto& descriptor : ast.type_constraint_descriptors) {

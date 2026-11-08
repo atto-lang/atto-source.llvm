@@ -946,6 +946,13 @@ if(BUILD_TESTING)
                 "-DCLANG=${ORE_CLANG}"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_parity_syntax.cmake")
         set_tests_properties(native_atto_parity_syntax PROPERTIES TIMEOUT 240)
+        add_test(NAME native_sealed_scalar_aot_v1
+            COMMAND "${CMAKE_COMMAND}"
+                "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+                "-DBUILD=${CMAKE_CURRENT_BINARY_DIR}"
+                "-DCLANG=${ORE_CLANG}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/sealed_scalar_aot_v1.cmake")
+        set_tests_properties(native_sealed_scalar_aot_v1 PROPERTIES TIMEOUT 180)
     endif()
     # Positive compiler-only contracts must assemble the emitted IR, not just
     # accept an expected substring after the textual ModuleID header.
