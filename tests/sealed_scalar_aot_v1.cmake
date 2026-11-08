@@ -90,7 +90,7 @@ negative(no_entry
   "fnc helper(): int { return 1; }\n"
   "sealed scalar AOT requires a statically known main/0 entry")
 negative(side_effecting_io
-  "fnc main(): int { stdio.stdout.println(42); return 0; }\\n"
+  "fnc main(): int { stdio.stdout.println(42); return 0; }\n"
   "sealed scalar AOT requires fully modeled pure scalar effects and calls")
 
 # Option validation is independent of source parsing; never fall back to a
