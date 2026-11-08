@@ -164,6 +164,14 @@ mod tests {
         assert!(matches_policy(c, "error: critical suspends modifier is forbidden"));
     }
     #[test]
+    fn immutable_binding_negative_requires_a_real_binding_diagnostic() {
+        let c = &CASES[3];
+        assert!(!matches_policy(c, "error: syntax error: unexpected const"));
+        assert!(!matches_policy(c, "error: syntax error: x unexpected"));
+        assert!(!matches_policy(c, "error: unknown identifier x"));
+        assert!(matches_policy(c, "error: immutable binding x cannot reassign"));
+    }
+    #[test]
     fn head_and_blob_identifiers_are_not_any_string() {
         assert!(!is_lower_sha40(""));
         assert!(!is_lower_sha40(&"A".repeat(40)));
