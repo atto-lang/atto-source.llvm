@@ -301,6 +301,100 @@ static void require_sealed_scalar_aot_graph(const oreslang::Program& program,
             }
         }
 
+        // Independently pin each class-field read to a known stack-local
+        // owner and public literal class layout. Effect bits alone do not
+        // establish field identity: a future expression kind must not get
+        // implicit AOT admission merely by reporting StateRead.
+        std::unordered_map<std::string, const ClassDecl*> owned_locals;
+        for (const auto& local : function.locals) {
+            if (local.class_name.empty()) continue;
+            const auto cls = std::find_if(
+                program.classes.begin(), program.classes.end(),
+                [&](const ClassDecl& candidate) {
+                    return candidate.name == local.class_name;
+                });
+            if (cls == program.classes.end())
+                throw std::runtime_error(
+                    "sealed class-field AOT rejects unknown local class layout");
+            if (!owned_locals.emplace(local.name, &*cls).second)
+                throw std::runtime_error(
+                    "sealed class-field AOT rejects duplicate local class ownership");
+        }
+        const auto verify_expression = [&](const auto& self,
+                                          const Expression* expr) -> void {
+            if (!expr) return;
+            if (expr->kind == Expression::Kind::Field) {
+                if (!allow_class_fields || !expr->left ||
+                    expr->left->kind != Expression::Kind::Variable)
+                    throw std::runtime_error(
+                        "sealed class-field AOT rejects unverified field receiver");
+                const auto owner = owned_locals.find(expr->left->name);
+                if (owner == owned_locals.end())
+                    throw std::runtime_error(
+                        "sealed class-field AOT rejects nonlocal field receiver");
+                const auto& fields = owner->second->fields;
+                const auto field = std::find_if(
+                    fields.begin(), fields.end(),
+                    [&](const ClassField& candidate) {
+                        return candidate.name == expr->name;
+                    });
+                if (field == fields.end() || !field->public_member)
+                    throw std::runtime_error(
+                        "sealed class-field AOT rejects unregistered or private field");
+            }
+            self(self, expr->left.get());
+            self(self, expr->right.get());
+            self(self, expr->condition.get());
+            self(self, expr->condition_lhs.get());
+            self(self, expr->condition_rhs.get());
+            self(self, expr->when_true.get());
+            self(self, expr->when_false.get());
+            for (const auto& argument : expr->arguments)
+                self(self, argument.get());
+        };
+        const auto verify_statement = [&](const auto& self,
+                                         const Statement& statement) -> void {
+            if (statement.branch_local) {
+                if (!statement.branch_local->class_name.empty() ||
+                    statement.branch_local->new_class ||
+                    statement.branch_local->record_view)
+                    throw std::runtime_error(
+                        "sealed class-field AOT rejects unverified scoped class owners");
+                verify_expression(verify_expression,
+                                  statement.branch_local->initializer.get());
+                for (const auto& argument :
+                     statement.branch_local->constructor_arguments)
+                    verify_expression(verify_expression, argument.get());
+            }
+            verify_expression(verify_expression, statement.expression.get());
+            verify_expression(verify_expression, statement.condition.get());
+            verify_expression(verify_expression, statement.condition_lhs.get());
+            verify_expression(verify_expression, statement.condition_rhs.get());
+            verify_expression(verify_expression, statement.loop_step.get());
+            verify_expression(verify_expression,
+                              statement.array_commit_length.get());
+            for (const auto& value : statement.array_commit_values)
+                verify_expression(verify_expression, value.get());
+            for (const auto& child : statement.then_statements)
+                self(self, child);
+            for (const auto& child : statement.else_statements)
+                self(self, child);
+        };
+        for (const auto& local : function.locals) {
+            verify_expression(verify_expression, local.initializer.get());
+            for (const auto& argument : local.constructor_arguments)
+                verify_expression(verify_expression, argument.get());
+        }
+        for (const auto& statement : function.statements)
+            verify_statement(verify_statement, statement);
+        for (const auto& guard : function.early_returns) {
+            verify_expression(verify_expression, guard.condition.get());
+            verify_expression(verify_expression, guard.lhs.get());
+            verify_expression(verify_expression, guard.rhs.get());
+            verify_expression(verify_expression, guard.result.get());
+        }
+        verify_expression(verify_expression, function.result.get());
+
         const auto facts = detail::direct_facts(function, remaining_edges, &program);
         // Only typechecked scalar field reads add an admissible effect.
         // Allocation, mutation, unknown bits, IO, suspension and FFI reject.
