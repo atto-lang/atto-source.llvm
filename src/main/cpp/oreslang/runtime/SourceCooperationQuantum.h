@@ -26,7 +26,7 @@ template <typename Clock = std::chrono::steady_clock>
 class BasicSourceCooperationQuantum final {
 public:
     using time_point = typename Clock::time_point;
-    static constexpr std::uint32_t kLoopCheckInterval = 64;
+    static constexpr std::uint32_t kLoopCheckInterval = 128;
     static constexpr std::uint32_t kMaxBackedgesPerDispatch = 512;
     static constexpr auto kSoftDispatchQuantum = std::chrono::milliseconds(2);
 
@@ -45,17 +45,18 @@ public:
     void beginDispatch() noexcept {
         dispatchStarted_ = Clock::now();
         backedges_ = 0;
+        checkPhase_ = 0;
     }
 
-    // One cheap integer counter/bit-mask on the committed loop backedge.
-    // No wall-clock sampling and no scheduler/FFI calls here.
+    // Cheap reduction accounting only: no clock, callback or scheduler read.
+    // The separate phase wraps independently of the saturating total, so even
+    // an astronomically long no-yield scope cannot disable future polls.
+    // The slow path is eligible only once per 128 committed backedges,
+    // including AFTER exceeding the 512-backedge dispatch budget.
     bool completedBackedgeNeedsCheck() noexcept {
         backedges_ = detail::saturatingBackedgeSuccessor(backedges_);
-        // After an over-budget no-yield region, do not defer a newly
-        // available safe handoff for another 64 backedges. The caller still
-        // decides whether a protected lexical scope forbids suspension.
-        return backedges_ >= kMaxBackedgesPerDispatch ||
-            (backedges_ & (kLoopCheckInterval - 1)) == 0;
+        checkPhase_ = (checkPhase_ + 1) & (kLoopCheckInterval - 1);
+        return checkPhase_ == 0;
     }
 
     // Cold path: independent watchdog request, reduction cap, or active
@@ -84,6 +85,7 @@ private:
     time_point lastCooperate_;
     time_point dispatchStarted_;
     std::uint64_t backedges_ = 0;
+    std::uint32_t checkPhase_ = 0;
 };
 
 using SourceCooperationQuantum = BasicSourceCooperationQuantum<>;
