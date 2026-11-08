@@ -53,7 +53,7 @@ struct RegionMoveLowering {
     llvm::FunctionCallee drop;
     const std::unordered_map<std::string, llvm::Value*>* live_flags = nullptr;
     llvm::Value* array_region = nullptr;
-    llvm::FunctionCallee array_add, array_get, array_set, array_length;
+    llvm::FunctionCallee array_add, array_get, array_try_get_copy, array_set, array_length;
     const std::unordered_set<std::string>* array_names = nullptr;
     const std::unordered_set<std::string>* array_fields = nullptr;
     llvm::BasicBlock* resource_failure = nullptr;
@@ -337,6 +337,33 @@ llvm::Value* lower(const Expression& expr,
             if (expr.name == "get" && args.size() == 1)
                 return builder.CreateCall(moves->array_get,
                     {selected_region, handle, args[0]}, "array.get");
+            if (expr.name == "get_copy" && args.size() == 1) {
+                // The validated source type/ownership pass mints exactly
+                // Option<int> for a named owned Array<int> receiver.
+                if (expr.sum_type != "Option<int>" || !moves->sum_program
+                        || !moves->record_schemas
+                        || !moves->record_schemas->count(expr.sum_type))
+                    throw std::runtime_error("native checked copy lacks verified Option<int> schema");
+                auto* copied = entry_alloca(builder, i64, nullptr, "array.copy.value");
+                builder.CreateStore(llvm::ConstantInt::get(i64, 0), copied);
+                auto* presence = builder.CreateCall(moves->array_try_get_copy,
+                    {selected_region, handle, args[0], copied}, "array.copy.present");
+                // The trusted C ABI leaves copied untouched on None. It was
+                // explicitly initialized, so no uninitialized LLVM load.
+                auto* value = builder.CreateLoad(i64, copied, "array.copy.owned");
+                auto* tag = builder.CreateZExt(
+                    builder.CreateICmpNE(presence,
+                        llvm::ConstantInt::get(presence->getType(), 0)), i64);
+                auto* fields = entry_alloca(builder, i64,
+                    llvm::ConstantInt::get(i64, 2), "array.copy.option.fields");
+                builder.CreateStore(tag, fields);
+                builder.CreateStore(value, builder.CreateGEP(i64, fields,
+                    llvm::ConstantInt::get(i64, 1)));
+                return builder.CreateCall(moves->record_new,
+                    {llvm::ConstantInt::get(i64, moves->record_schemas->at(expr.sum_type)),
+                     llvm::ConstantInt::get(i64, 2), fields},
+                    "array.copy.option");
+            }
             if (expr.name == "add" && args.size() == 1) {
                 llvm::Value* status = builder.CreateCall(moves->array_add,
                     {selected_region, handle, args[0]}, "array.add.status");
@@ -1013,7 +1040,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                             [](const ClassField& fld) { return fld.int_array; });
                 });
         });
-    llvm::FunctionCallee arrayOpen, arrayNew, arrayAdd, arrayGet, arraySet,
+    llvm::FunctionCallee arrayOpen, arrayNew, arrayAdd, arrayGet, arrayTryGetCopy, arraySet,
                          arrayLength, arrayDrop, arrayClose, arrayAbort,
                          arrayPrepareFilledMany, arrayCommitMany, arrayTransferMany, arrayUnhandled;
     if (has_array_bindings) {
@@ -1049,6 +1076,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             llvm::FunctionType::get(voidTy, {i32}, false));
         arrayGet = module.getOrInsertFunction("oreslang_int_array_get",
             llvm::FunctionType::get(i64, {native_ptr, i64, i64}, false));
+        // Signed checked lookup returns int presence plus a separately-owned
+        // scalar Copy<int>. It never returns a pointer into array backing.
+        arrayTryGetCopy = module.getOrInsertFunction("oreslang_int_array_try_get_copy",
+            llvm::FunctionType::get(i32, {native_ptr, i64, i64,
+                native_pointer_type(context, i64)}, false));
         arraySet = module.getOrInsertFunction("oreslang_int_array_set",
             llvm::FunctionType::get(voidTy, {native_ptr, i64, i64, i64}, false));
         arrayLength = module.getOrInsertFunction("oreslang_int_array_length",
@@ -1381,7 +1413,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             }
         }
         RegionMoveLowering region_moves{region, regionRead, regionDrop, &owned_live_flags,
-            array_region, arrayAdd, arrayGet, arraySet, arrayLength, &array_names,
+            array_region, arrayAdd, arrayGet, arrayTryGetCopy, arraySet, arrayLength, &array_names,
             &array_field_keys, array_failure, array_failure_status, &owned_failure_handles,
             &record_classes, &record_schemas, record_new, record_get, record_check,
             &class_array_regions, &class_array_parameters, &owning_results};
