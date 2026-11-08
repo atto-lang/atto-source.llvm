@@ -337,6 +337,33 @@ llvm::Value* lower(const Expression& expr,
             if (expr.name == "get" && args.size() == 1)
                 return builder.CreateCall(moves->array_get,
                     {selected_region, handle, args[0]}, "array.get");
+            if (expr.name == "get_copy" && args.size() == 1) {
+                // Native scalar copy is checked before pointer arithmetic.
+                // The C ABI validates region/handle authority even on None,
+                // and writes the payload only for a present element.
+                if (!moves || !moves->sum_program ||
+                        expr.sum_type != "Option<int>" ||
+                        native_sum(*moves->sum_program, expr.sum_type).value_type != ScalarType::I64)
+                    throw std::runtime_error("unproven native Array.get_copy Option<int>");
+                auto* payload_slot = entry_alloca(builder, i64,
+                    llvm::ConstantInt::get(i64, 1), "array.copy.payload");
+                builder.CreateStore(llvm::ConstantInt::get(i64, 0), payload_slot);
+                auto* module = builder.GetInsertBlock()->getModule();
+                auto checked_get = module->getOrInsertFunction(
+                    "oreslang_int_array_try_get_copy",
+                    llvm::FunctionType::get(builder.getInt32Ty(),
+                        {selected_region->getType(), i64, i64, payload_slot->getType()}, false));
+                llvm::Value* present = builder.CreateCall(checked_get,
+                    {selected_region, handle, args[0], payload_slot}, "array.copy.present");
+                auto* fields = entry_alloca(builder, i64,
+                    llvm::ConstantInt::get(i64, 2), "array.copy.option.fields");
+                builder.CreateStore(builder.CreateZExt(present, i64), fields);
+                builder.CreateStore(builder.CreateLoad(i64, payload_slot),
+                    builder.CreateGEP(i64, fields, llvm::ConstantInt::get(i64, 1)));
+                return builder.CreateCall(moves->record_new,
+                    {llvm::ConstantInt::get(i64, moves->record_schemas->at(expr.sum_type)),
+                     llvm::ConstantInt::get(i64, 2), fields}, "array.get_copy.option");
+            }
             if (expr.name == "add" && args.size() == 1) {
                 llvm::Value* status = builder.CreateCall(moves->array_add,
                     {selected_region, handle, args[0]}, "array.add.status");
