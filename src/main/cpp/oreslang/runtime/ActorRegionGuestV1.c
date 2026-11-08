@@ -17,6 +17,9 @@ typedef struct {
     uint32_t live_count;
     OresActorRegionV1Ref refs[ORES_GUEST_REGION_MAX_SLOTS];
     unsigned char live[ORES_GUEST_REGION_MAX_SLOTS];
+    /* A compact offset cannot distinguish a reused physical slot. Therefore
+     * v1 never reissues a slot within one scope, even after its object drops. */
+    unsigned char issued[ORES_GUEST_REGION_MAX_SLOTS];
 } GuestScope;
 
 /* Synchronous actor-main profile is physically pinned to its entry thread.
@@ -79,7 +82,8 @@ uint32_t ores_actor_region_guest_v1_alloc(uint32_t object_bytes) {
     const OresActorRegionV1Ref ref = ores_actor_region_v1_alloc(
         guest_scope.region, guest_scope.turn, object_bytes);
     const uint32_t index = (uint32_t)ref.proof.index;
-    if (index >= guest_scope.slots || guest_scope.live[index])
+    if (index >= guest_scope.slots || guest_scope.live[index] ||
+        guest_scope.issued[index])
         deny_guest_bridge();
     const uint64_t expected =
         (uint64_t)index * guest_scope.stride + UINT64_C(1);
@@ -87,6 +91,7 @@ uint32_t ores_actor_region_guest_v1_alloc(uint32_t object_bytes) {
         deny_guest_bridge();
     guest_scope.refs[index] = ref;
     guest_scope.live[index] = 1;
+    guest_scope.issued[index] = 1;
     ++guest_scope.live_count;
     return ref.offset.storage;
 }
