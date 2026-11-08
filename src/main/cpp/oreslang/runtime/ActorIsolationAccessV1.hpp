@@ -28,7 +28,12 @@ public:
     };
 private:
     struct Range { std::uint64_t start, end; };
-    std::uint64_t tenant_, actor_, generation_, span_;
+    // Identity remains available for later compiler-bound diagnostics. Grant
+    // authority is currently the unique per-incarnation issuer_ token below.
+    [[maybe_unused]] std::uint64_t tenant_;
+    [[maybe_unused]] std::uint64_t actor_;
+    [[maybe_unused]] std::uint64_t generation_;
+    std::uint64_t span_;
     std::shared_ptr<const int> issuer_ = std::make_shared<const int>(0);
     mutable std::mutex gate_;
     std::uint64_t next_id_ = 1;
