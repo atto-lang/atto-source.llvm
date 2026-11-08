@@ -467,7 +467,8 @@ static void require_actor_region_v1_aot_graph(const oreslang::Program& program) 
     require_sealed_scalar_aot_graph(program, true);
     const auto main = std::find_if(program.functions.begin(), program.functions.end(),
         [](const Function& fn) { return fn.name == "main" && fn.parameters.empty(); });
-    if (main == program.functions.end() || main->returns_void)
+    if (main == program.functions.end() || main->returns_void ||
+        main->return_type != ScalarType::I64)
         throw std::runtime_error("actor-region-v1 requires a synchronous int main/0");
     std::size_t owners = 0;
     for (const auto& fn : program.functions) {
