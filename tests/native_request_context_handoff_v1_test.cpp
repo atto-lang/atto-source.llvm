@@ -733,15 +733,15 @@ void test_destroyed_table_leaves_no_dangling_CONTROL_callback() {
                     f.request->active());
 }
 
-void test_new_cleanup_hooks_denied_after_actor_STOP() {
+void test_new_cleanup_hooks_after_unrelated_actor_STOP() {
     Fixture f(8,true);
     registered_case("57_stop_B_before_late_cleanup_registration",
                     ores_native_actor_scheduler_stop_sealed(f.w.scheduler,f.w.b));
-    registered_case("58_post_STOP_cleanup_hook_denied",
-                    !f.lifecycle->register_stop_cleanup(
-                        [](OresNativeActorRef){}) &&
+    registered_case("58_post_STOP_safe_new_cleanup_hook_admitted",
                     f.lifecycle->wait_cleaned(
-                        f.w.b,std::chrono::milliseconds(8000)));
+                        f.w.b,std::chrono::milliseconds(8000)) &&
+                    f.lifecycle->register_stop_cleanup(
+                        [](OresNativeActorRef){}));
 }
 
 void test_forged_recipient_cannot_seal_ticket() {
@@ -891,6 +891,59 @@ void test_live_hook_quota_and_release() {
                     f.request->active());
 }
 
+// An unrelated stopped generation cannot forever poison new ticket-table
+// attachment for actors still alive. The new table has no old B envelopes;
+// its dual-actor publish gate still rejects B, while A->C remains valid.
+void test_new_table_after_unrelated_STOP_still_services_survivors() {
+    Fixture f(8,true);
+    registered_case("81_B_STOP_admitted_before_new_table",
+                    ores_native_actor_scheduler_stop_sealed(f.w.scheduler,f.w.b));
+    registered_case("82_B_cleanup_completed_before_new_table",
+                    f.lifecycle->wait_cleaned(f.w.b,std::chrono::milliseconds(8000)));
+    std::unique_ptr<RequestContextHandoffTableV1> fresh;
+    try {
+        fresh=std::make_unique<RequestContextHandoffTableV1>(
+            f.w.scheduler,4,*f.lifecycle);
+    } catch (...) {}
+    registered_case("83_new_table_admitted_despite_prior_B_STOP",!!fresh);
+    registered_case("84_A_and_C_remain_live",
+                    ores_native_actor_scheduler_poll_ready(f.w.scheduler,f.w.a) &&
+                    ores_native_actor_scheduler_poll_ready(f.w.scheduler,f.w.c));
+    std::uint64_t c_ticket=0;
+    bool rejected_b=false;
+    on(f.w,0,[&](std::uint64_t) {
+        CHECK(f.bind_source_mail());
+        CHECK(f.request->set(f.trace,std::string("survivor-ticket")));
+        if (fresh) {
+            rejected_b=!fresh->seal(f.w.a,*f.request,f.w.b,f.selection());
+            c_ticket=fresh->seal(f.w.a,*f.request,f.w.c,f.selection()).value_or(0);
+        }
+    });
+    send(f.w,f.w.a,1);
+    registered_case("85_new_table_rejects_stopped_B",rejected_b);
+    registered_case("86_new_table_can_publish_to_live_C",
+                    fresh && c_ticket && fresh->pending()==1);
+    bool c_redeemed=false;
+    on(f.w,2,[&](std::uint64_t payload) {
+        if (fresh) {
+            auto r=fresh->redeem(f.w.c,payload);
+            c_redeemed=r && r->context().get_copy(f.trace) ==
+                std::string("survivor-ticket");
+        }
+    });
+    send(f.w,f.w.c,c_ticket);
+    registered_case("87_live_C_redeems_new_table",
+                    c_redeemed && fresh && fresh->pending()==0);
+    registered_case("88_C_STOP_admitted_to_revoke_new_table",
+                    ores_native_actor_scheduler_stop_sealed(f.w.scheduler,f.w.c));
+    registered_case("89_C_cleanup_receipt_after_B_STOP",
+                    f.lifecycle->wait_cleaned(f.w.c,std::chrono::milliseconds(8000)));
+    registered_case("90_A_still_live_and_original_request_accessible",
+                    f.request->active() &&
+                    f.request->get_copy(f.trace)==std::string("survivor-ticket"));
+    fresh.reset();
+}
+
 }  // namespace
 
 int main() {
@@ -923,8 +976,8 @@ int main() {
             test_recipient_STOP_wins_during_sender_snapshot_copy},
         {"destroyed_table_leaves_no_dangling_CONTROL_callback",
             test_destroyed_table_leaves_no_dangling_CONTROL_callback},
-        {"new_cleanup_hooks_denied_after_actor_STOP",
-            test_new_cleanup_hooks_denied_after_actor_STOP},
+        {"new_cleanup_hooks_after_unrelated_actor_STOP",
+            test_new_cleanup_hooks_after_unrelated_actor_STOP},
         {"forged_recipient_cannot_seal_ticket",
             test_forged_recipient_cannot_seal_ticket},
         {"old_cancel_does_not_sweep_new_generation_ticket",
@@ -933,19 +986,21 @@ int main() {
             test_repeated_table_shutdown_reclaims_registration_quota},
         {"live_hook_quota_and_release",
             test_live_hook_quota_and_release},
+        {"new_table_after_unrelated_STOP_still_services_survivors",
+            test_new_table_after_unrelated_STOP_still_services_survivors},
     };
     for (auto& t : tests) {
         const int before = failures;
         t.fn();
         std::printf("%s %s\n", failures == before ? "PASS" : "FAIL", t.name);
     }
-    if (registry_handoff_cases != 80) {
-        std::fprintf(stderr, "HANDOFF_REGISTRY_CASE_COUNT_FAILED got=%d expected=80\n",
+    if (registry_handoff_cases != 90) {
+        std::fprintf(stderr, "HANDOFF_REGISTRY_CASE_COUNT_FAILED got=%d expected=90\n",
                      registry_handoff_cases);
         ++failures;
     }
     if (failures) { std::fprintf(stderr, "%d failure(s)\n", failures); return 1; }
-    std::puts("HANDOFF_REGISTRY_80_HOST_CASES_PASS");
+    std::puts("HANDOFF_REGISTRY_90_HOST_CASES_PASS");
     std::printf("REQUEST_CONTEXT_HANDOFF_V1_ALL_PASS\n");
     return 0;
 }
