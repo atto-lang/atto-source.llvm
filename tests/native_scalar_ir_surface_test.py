@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Negative tests for the scalar AOT IR oracle (no LLVM SDK needed)."""
 
-from native_rt_scalar_step_aot import verify_closed_guest_ir
+from native_rt_scalar_step_aot import (verify_closed_guest_ir,
+                                      parse_clang_major,
+                                      verify_matching_llvm_clang)
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 IR = """declare void @llvm.trap()
@@ -42,6 +46,36 @@ def main():
     require_rejected(IR + "\n  invoke void @llvm.trap() to label %ok unwind label %bad\n")
     require_rejected(IR + "\n  callbr void @llvm.trap() to label %ok []\n")
     require_rejected(IR.replace("declare void @llvm.trap()", ""))
+    # AOT Clang and linked LLVM SDK must be the same major. Mocking only
+    # the version probe ensures this negative test is portable and executes
+    # without installed LLVM/Clang developer libraries.
+    for sample, expected in [("17.0.0\\n", 17), ("19", 19), ("22.1.7", 22)]:
+        if parse_clang_major(sample) != expected:
+            raise AssertionError("clang version major parsed incorrectly")
+    for sample in ["", "clang version 19.0", "v19", "19.1 extra", "NaN"]:
+        try:
+            parse_clang_major(sample)
+        except ValueError:
+            continue
+        raise AssertionError("bad clang version output unexpectedly accepted")
+    with patch("native_rt_scalar_step_aot.run", return_value=SimpleNamespace(
+            returncode=0, stderr="", stdout="17.0.0\\n")):
+        if verify_matching_llvm_clang("clang", 17) != 17:
+            raise AssertionError("matching Clang version denied")
+        try:
+            verify_matching_llvm_clang("clang", 19)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("mismatched LLVM SDK/Clang unexpectedly accepted")
+    with patch("native_rt_scalar_step_aot.run", return_value=SimpleNamespace(
+            returncode=1, stderr="not found", stdout="")):
+        try:
+            verify_matching_llvm_clang("missing-clang", 19)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("failed compiler version probe unexpectedly accepted")
     print("SCALAR_GUEST_IR_SURFACE_SCAN_PASS")
 
 
