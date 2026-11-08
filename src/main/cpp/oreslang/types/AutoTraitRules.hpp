@@ -97,7 +97,7 @@ inline Capabilities infer_auto_traits_bounded(
         // Scalar is a compiler-verified leaf. Hidden nested types or dyn
         // bounds must not launder a non-Send payload into a Copy/Send scalar.
         caps = type.parameters.empty() && type.dyn_bounds.empty() &&
-                !type.complete_nominal_layout && !type.shareable_domain
+                !type.complete_nominal_layout
             ? Capabilities{true, true, true}
             : Capabilities{false, false, false};
         break;
