@@ -112,7 +112,47 @@ static void independent_watchdog_requests_next_safe_boundary() {
     require(q.shouldCooperateAtCheck(true));
     require(FakeClock::reads.load() == 2);
     require(!q.shouldCooperateAtCheck(false));
-    require(FakeClock::reads.load() == 3);
+    require(FakeClock::reads.load() == 2); // no second clock read for same ticket
+}
+
+static void direct_slow_path_calls_cannot_skip_sampling_policy() {
+    reset_clock();
+    Quantum q;
+    q.beginDispatch();
+    FakeClock::nanos.store(200'000'000); // overdue in wall-clock time
+    std::uint64_t observed = 0;
+    // Adversarial eager caller invokes the expensive API EVERY iteration.
+    // The API itself must enforce periodicity, including watchdog requests
+    // and already exhausted reduction budgets.
+    for (int i = 1; i <= 8192; ++i) {
+        const bool due = q.completedBackedgeNeedsCheck();
+        require(due == (i % 128 == 0));
+        const bool permitted = q.shouldCooperateAtCheck(true);
+        require(permitted == due);
+        if (permitted) ++observed;
+        require(!q.shouldCooperateAtCheck(true)); // one-shot ticket
+    }
+    require(observed == 8192 / 128);
+    require(q.completedBackedgesThisDispatch() == 8192);
+    require(FakeClock::reads.load() == 2); // watchdog fast return, no clock
+    q.beginDispatch();
+    require(!q.shouldCooperateAtCheck(true)); // reset invalidates stale ticket
+}
+static void time_poll_without_due_ticket_never_samples_clock() {
+    reset_clock();
+    Quantum q;
+    q.beginDispatch();
+    const int baseline = FakeClock::reads.load();
+    for (int i = 1; i < 128; ++i) {
+        require(!q.completedBackedgeNeedsCheck());
+        require(!q.shouldCooperateAtCheck());
+    }
+    require(FakeClock::reads.load() == baseline);
+    require(q.completedBackedgeNeedsCheck());
+    require(!q.shouldCooperateAtCheck());
+    require(FakeClock::reads.load() == baseline + 1);
+    require(!q.shouldCooperateAtCheck());
+    require(FakeClock::reads.load() == baseline + 1);
 }
 
 static void await_is_not_cooperate() {
@@ -149,6 +189,8 @@ int main() {
     overdue_no_yield_region_checks_only_at_next_boundary();
     timer_slow_path();
     independent_watchdog_requests_next_safe_boundary();
+    direct_slow_path_calls_cannot_skip_sampling_policy();
+    time_poll_without_due_ticket_never_samples_clock();
     await_is_not_cooperate();
     repeated_dispatches_keep_task_context();
     std::cout << "native quantum 128/512/2ms: PASS (host-only, no guest await parity)\n";
