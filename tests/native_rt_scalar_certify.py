@@ -26,6 +26,8 @@ TESTS = (
     "native_scalar_ir_surface_scan_python_optimized",
     "native_reduction_quantum_watchdog_host_only",
     "native_rt_scalar_frame_aot_two_tasks",
+    "native_rt_scalar_exact_tree_preflight_negatives",
+    "native_rt_scalar_synthetic_certification_mechanics",
 )
 TARGETS = (
     "oreslang-llvmc",
