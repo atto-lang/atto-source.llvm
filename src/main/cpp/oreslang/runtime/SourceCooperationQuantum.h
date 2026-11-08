@@ -53,17 +53,18 @@ public:
     void beginDispatch() noexcept {
         dispatchStarted_ = Clock::now();
         backedges_ = 0;
+        pendingHandoff_ = false;
     }
 
     // One cheap integer counter/bit-mask on the committed loop backedge.
     // No wall-clock sampling and no scheduler/FFI calls here.
     bool completedBackedgeNeedsCheck() noexcept {
         backedges_ = detail::saturatingBackedgeSuccessor(backedges_);
-        // After an over-budget no-yield region, do not defer a newly
-        // available safe handoff for another 64 backedges. The caller still
-        // decides whether a protected lexical scope forbids suspension.
-        return backedges_ >= kMaxBackedgesPerDispatch ||
-            (backedges_ & (loopCheckInterval_ - 1)) == 0;
+        // Only the power-of-two boundary is a soft poll. In particular, do
+        // NOT call the slow path on every backedge after the 512-unit cap.
+        // Once overdue, pendingHandoff_ is drained by the mandatory
+        // no-yield-scope exit hook, not by spinning on each later backedge.
+        return (backedges_ & (loopCheckInterval_ - 1)) == 0;
     }
 
     // Cold path: independent watchdog request, reduction cap, or active
@@ -71,13 +72,34 @@ public:
     // compiler-proven post-commit heap continuation and no live no-yield loans.
     // A watchdog never interrupts or rewinds an executing native stack.
     bool shouldCooperateAtCheck(bool watchdogRequested = false) noexcept {
-        if (watchdogRequested || backedges_ >= kMaxBackedgesPerDispatch)
+        // A prior overdue signal stays pending across an unyieldable region.
+        // Avoid repeated clock reads even at later batched poll boundaries.
+        if (pendingHandoff_ || watchdogRequested ||
+                backedges_ >= kMaxBackedgesPerDispatch) {
+            pendingHandoff_ = true;
             return true;
-        return Clock::now() - dispatchStarted_ >= kSoftDispatchQuantum;
+        }
+        if (Clock::now() - dispatchStarted_ >= kSoftDispatchQuantum) {
+            pendingHandoff_ = true;
+            return true;
+        }
+        return false;
+    }
+
+    // The compiler MUST call this once on every verified exit of a no-yield
+    // critical/borrow scope. This is NOT a scheduler call or a clock read;
+    // it only reports a sticky request. Suspension remains forbidden until
+    // all live loans/guards are released and the heap frame is resumable.
+    bool pendingHandoffOnNoYieldExit() const noexcept {
+        return pendingHandoff_ ||
+            backedges_ >= kMaxBackedgesPerDispatch;
     }
 
     // Must only be called for an actual logical cooperate handoff.
-    void recordedCooperate() noexcept { lastCooperate_ = Clock::now(); }
+    void recordedCooperate() noexcept {
+        lastCooperate_ = Clock::now();
+        pendingHandoff_ = false;
+    }
 
     // Generator 'yield value' is NOT a scheduler cooperation.
     std::chrono::nanoseconds timeSinceLastCooperate() const noexcept {
@@ -93,6 +115,7 @@ private:
     time_point dispatchStarted_;
     std::uint64_t backedges_ = 0;
     std::uint32_t loopCheckInterval_;
+    bool pendingHandoff_ = false;
 };
 
 using SourceCooperationQuantum = BasicSourceCooperationQuantum<>;
