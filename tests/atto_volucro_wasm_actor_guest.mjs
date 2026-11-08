@@ -41,6 +41,8 @@ const checkHead = (root, expected, label) => {
   if (!/^[0-9a-f]{40}$/.test(expected)) throw Error(label + ' head must be full SHA');
   const actual = capture('git', ['rev-parse', 'HEAD'], {cwd: root}).trim();
   assert.equal(actual, expected, label + ' source head mismatch');
+  const dirty = capture('git', ['status', '--porcelain=v1', '--untracked-files=all'], {cwd: root});
+  assert.equal(dirty.trim(), '', label + ' checkout contains uncommitted or untracked source');
   return actual;
 };
 const llvmHead=checkHead(llvmRoot,args.get('--expected-llvm-head'),'LLVM');
@@ -73,10 +75,14 @@ try {
     '--bin','atto_actor_isolation_smoke','--',wasmFile],{cwd:volucroRoot});
   assert.match(output,/ATTO_VOLUCRO_WASM32_ACTOR_REAL_GUEST_PASS/);
   const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
+  // Recording the actual compiler binary SHA is independent of the source
+  // commit; matching this hash to a reproducible build is a later gate.
+  const compilerSha=sha256(readFileSync(args.get('--compiler')));
   console.log(JSON.stringify({
     result:'real LLVM AttoLang wasm32 source -> Volucro Wasmi guest',
     llvm_head:llvmHead, volucro_head:volucroHead,
     fixture_sha256:sha256(source), wasm_sha256:sha256(wasm),
+    compiler_binary_sha256:compilerSha,
     guest_execution:output.trim(), evidence_level:'guest-executed',
     scope:'per actor Wasmi Store + trusted-host DomainId (not OS process sandbox)'
   }));
