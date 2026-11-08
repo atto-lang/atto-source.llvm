@@ -3532,7 +3532,7 @@ if(BUILD_TESTING)
         COMMAND oreslang-ownership-dataflow-v1-test)
     set_tests_properties(native_ownership_dataflow_v1 PROPERTIES TIMEOUT 30)
 
-add_test(NAME native_actor_region_v2_multiowner_guarded_cleanup
+    add_test(NAME native_actor_region_v2_multiowner_guarded_cleanup
         COMMAND "${CMAKE_COMMAND}"
             "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
             "-DBUILD=${CMAKE_CURRENT_BINARY_DIR}"
