@@ -51,7 +51,10 @@ struct Operation {
     enum class Kind {
         Initialize, Read, Move, Drop, DropIfOwned,
         ReadObject, MoveObject, BorrowShared, BorrowExclusive,
-        ReleaseShared, ReleaseExclusive
+        ReleaseShared, ReleaseExclusive,
+        // Explicit logical continuation boundary, not an OS-thread fence.
+        // The frontend must emit this for every suspendable operation.
+        Suspend
     };
     Kind kind;
     std::string place;
@@ -119,6 +122,16 @@ inline void require_owned(const std::string& key, const PlaceState& value) {
 inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
     // Keep direct helper callers as safe as verify(Graph), not just the CFG path.
     validate_disjoint_place_layout(state);
+    if (op.kind == Operation::Kind::Suspend) {
+        // A logical Task may resume on a different carrier. No user borrow
+        // may survive this boundary until a separately proven pinned-frame
+        // and physical-quiescence contract is implemented. Scan *all*
+        // tracked places, not just op.place (which is intentionally empty).
+        for (const auto& item : state)
+            if (item.second.shared_loans || item.second.exclusive_loan)
+                violation(item.first, "live loan crosses logical suspension");
+        return;
+    }
     if (op.kind == Operation::Kind::ReadObject ||
             op.kind == Operation::Kind::MoveObject) {
         // A non-Copy object requires *all* its fields. A moved field does
@@ -216,6 +229,9 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
         case Operation::Kind::ReadObject:
         case Operation::Kind::MoveObject:
             break;
+        case Operation::Kind::Suspend:
+            // Handled above before any place lookup.
+            return;
     }
     violation(op.place, "invalid CFG operation");
 }
