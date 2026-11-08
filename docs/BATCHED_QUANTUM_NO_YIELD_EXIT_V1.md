@@ -56,3 +56,40 @@ general `.atto` actor-loop checkpoints or `critical` lowering. The same test run
 `-O3 -DNDEBUG` CTest so optimized/release builds cannot remove assertions.
 Require exact PR-head CI with nonzero **executed steps**, and separate
 compiler-backed .atto guest and negative mutation receipts, before readiness.
+
+## Current compiler-backed scalar subset (2026-11-07 extension)
+
+Both experimental LLVM emitter paths now derive the **512** maximum dispatch
+allowance from `runtime::SourceCooperationQuantum::kMaxBackedgesPerDispatch`,
+rather than maintaining unrelated compiler literals. The opt-in scalar-frame
+lowering performs a **cheap exact fuel decrement at every committed backedge**.
+Its native ABI returns once the host-selected quantum expires (64/128/256/512).
+The runtime/host can then perform its expensive scheduler/watchdog check once
+per dispatch. The emitted `loop.check`, `loop.fuel`, and `loop.commit`
+blocks have **no slow-path host calls**; a Python structural guard inspects
+the real compiler-produced LLVM IR and kills a deliberately inserted
+per-backedge call mutation.
+
+The `native_rt_scalar_frame_aot_two_tasks` CTest now runs under Python
+`-O`, with every admission/compilation/negative mutation check remaining
+active. Its optimized Clang `-O2 -DNDEBUG` compiled-guest harness verifies
+all requested dispatch boundaries, 64/128/256/512 exact quantum progress,
+post-cancel no-replay, and a host-driven example where a logical-task quota
+of 384 reductions is not refilled across three 128-step dispatches. The quota
+in that example is **host owned**. It is NOT enforced by the experimental
+24-byte guest frame: a malicious host could still supply more fuel.
+
+Two intentionally weakened generated-IR programs must independently compile
+and then **fail** the native guest oracle (512 cap -> 4096, fuel charge 1 -> 0).
+Three further structural IR mutants must fail the hot-CFG/no-slow-call oracle.
+No source-level `critical`, opaque FFI, `defer`, nested loop, general actor,
+or `rt cooperate` execution is admitted by this scalar-only path.
+
+**Executed local host smoke**: the exact
+`SourceCooperationQuantum.h` Git blob `9ac9b18541e7fd6c28cc1c04aedaabfe30311ba3`
+was compiled under both g++ and clang++ with
+`-std=c++20 -O3 -DNDEBUG -Wall -Wextra -Wpedantic -Werror`; focused
+64/128/256/512 sticky request, clock read count, cap and acknowledgement
+assertions passed. This is **host-only** evidence. Full LLVM CTests and
+source-compiled guest mutations have **not** executed in this environment;
+GitHub Actions zero-step admission remains blocked. Do not promote the PR.
