@@ -140,3 +140,42 @@ selection is not acceptable evidence.
   merge with current main, compiler-issued guest data descriptors and
   tenant/isolate authentication; actor hot-upgrade/restart/tenant reclaim
   integration remains unproven.
+
+
+## Late 2026-11-07 attachment and main-based scheduler integration
+
+- Audit found that registry cleanup-hook registration failed closed for ALL
+  new handoff tables after ANY unrelated attached actor STOP. The hook
+  admission now permits fresh empty tables to serve surviving actors. Its
+  bounded dual-generation scheduler commit still denies stopped recipients.
+- A more serious gap allowed a lifecycle-aware handoff to create a pending
+  ticket for a recipient never attached to the STOP registry: redemption
+  failed later, but such a ticket had no recipient cleanup observer.
+  Admission now requires a lock-free, immutable, generation-keyed attachment
+  snapshot BEFORE envelope copying or ticket quota charge. The final
+  scheduler dual-live gate still serializes actual publication against STOP.
+  Snapshot nodes are allocated/published by CONTROL and retained until
+  registry teardown; carriers never acquire the registry mutex for lookup.
+- The handoff suite now has **100** named host assertions: 10 surviving
+  actor admission cases and 10 lock-free recipient-attachment cases were
+  added. Negative mutations separately remove (a) recipient attachment
+  admission (case 13), (b) derived registry enrollment (case 09),
+  (c) STOP cleanup hook, and (d) recipient half of dual-actor publication.
+  This makes **352 authored host assertions** on draft #1389
+  (219 preexisting + 17 coexistence + 100 handoff + 16 dual-live C).
+  All are authored only, NOT native/sanitizer/guest execution receipts.
+- Extracted a minimal main-based scheduler integration draft:
+  **LLVM PR #1583**, branch
+  `integration/dual-actor-stop-commit-20261107`, based on
+  `main` commit `0ee037ca3e5dd9ac6ac1e9cc3d40f19ee6326a9c`.
+  Four files only: scheduler C/H, the byte-identical 16-case C fixture,
+  and an exact-head source-free admission + GCC/Clang native/sanitizer
+  workflow with a deliberate lifecycle-bypass negative mutation.
+  It must NOT be merged before independent review and real stepful tests.
+- PR #1583 Actions run #42437688734 had an assigned-runner failure:
+  the admission job completed FAILURE with runner_id=null and steps=null;
+  dependent native job SKIPPED. This is not an execution failure. The
+  integration PR is DRAFT and does not claim full #1389 parity.
+- Semantic conflict resolution for the remaining compiler, RequestLocal,
+  native scheduler STOP notices and CMake paths is still outstanding.
+  Do not blanket-choose the older scheduler source on top of current main.
