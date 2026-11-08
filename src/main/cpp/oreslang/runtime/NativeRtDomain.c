@@ -60,7 +60,7 @@ static int ring_ready(RtRing* r) {
 }
 
 /* ---- domain ------------------------------------------------------------- */
-enum { LANE_DATA = 0, LANE_CONTROL = 1, LANES = 2, DATA_BATCH = 16 };
+enum { LANE_DATA = 0, LANE_CONTROL = 1, LANES = 2, DATA_BATCH = 16, CONTROL_BURST = 64 };
 
 struct OresRtSender {
     OresRtDomain* domain;
@@ -98,7 +98,9 @@ struct OresRtDomain {
     RtMsg* slots;
     _Atomic int accepting;       /* sends allowed */
     _Atomic int stop;            /* carriers exit (set only once quiescent) */
-    int started, stopped;
+    _Atomic int stopping;        /* a stop() call is in progress */
+    /* Read by concurrent stop() callers and senders: atomic. */
+    _Atomic int started, stopped;
     uint64_t undelivered;        /* accepted but never run (set by stop) */
     pthread_mutex_t start_mutex;
     pthread_cond_t start_cond;
@@ -140,6 +142,12 @@ static int core_has_work(OresRtDomain* d, uint32_t core) {
     for (int lane = 0; lane < LANES; ++lane)
         for (uint32_t s = 0; s < d->sources; ++s)
             if (ring_ready(ring_at(d, lane, s, core))) return 1;
+    return 0;
+}
+
+static int core_has_control(OresRtDomain* d, uint32_t core) {
+    for (uint32_t s = 0; s < d->sources; ++s)
+        if (ring_ready(ring_at(d, LANE_CONTROL, s, core))) return 1;
     return 0;
 }
 
@@ -205,7 +213,7 @@ OresRtDomain* ores_rt_domain_open(const OresRtDomainOptions* o) {
                 if (o->cpus[i] == o->cpus[j]) return NULL;
     {
         const size_t rings = (size_t)2 * (o->core_count + o->external_senders) * o->core_count;
-        if ((size_t)o->ring_capacity > SIZE_MAX / sizeof(RtMsg) / rings - 1)
+        if ((size_t)o->ring_capacity > (SIZE_MAX / sizeof(RtMsg)) / rings)
             return NULL; /* slot array size would overflow size_t */
     }
 
@@ -270,6 +278,7 @@ OresRtDomain* ores_rt_domain_open(const OresRtDomainOptions* o) {
     pthread_cond_init(&d->start_cond, NULL);
     atomic_init(&d->accepting, 0);
     atomic_init(&d->stop, 0);
+    atomic_init(&d->stopping, 0);
     return d;
 }
 
@@ -313,15 +322,29 @@ static void run_turn(OresRtDomain* d, RtCore* c, OresRtHandlerFn fn,
         memory_order_release);
 }
 
-static size_t drain_control(OresRtDomain* d, RtCore* c, uint64_t* seen_hint) {
+/* Runs at most CONTROL_BURST CONTROL turns, round-robin over senders, then
+ * returns so a DATA turn can run. CONTROL still outranks DATA (the carrier
+ * drains again right after each DATA turn while a backlog remains), but a
+ * CONTROL flood can delay DATA by at most CONTROL_BURST turns, independent of
+ * ring size, instead of pinning the carrier here forever. */
+static size_t drain_control(OresRtDomain* d, RtCore* c, uint64_t* seen_hint,
+                            int* backlog) {
     size_t n = 0;
     RtMsg m;
     *seen_hint = atomic_load_explicit(&c->control_hint, memory_order_acquire);
-    for (uint32_t s = 0; s < d->sources; ++s) {
-        RtRing* r = ring_at(d, LANE_CONTROL, s, c->index);
-        while (ring_pop(r, &m)) {
-            run_turn(d, c, d->opt.on_control, &m, 1);
-            ++n;
+    *backlog = 0;
+    for (int progress = 1; progress;) {
+        progress = 0;
+        for (uint32_t s = 0; s < d->sources; ++s) {
+            if (n == CONTROL_BURST) {
+                *backlog = core_has_control(d, c->index);
+                return n;
+            }
+            if (ring_pop(ring_at(d, LANE_CONTROL, s, c->index), &m)) {
+                run_turn(d, c, d->opt.on_control, &m, 1);
+                ++n;
+                progress = 1;
+            }
         }
     }
     return n;
@@ -339,9 +362,10 @@ static void* rt_carrier(void* raw) {
     pthread_mutex_unlock(&d->start_mutex);
 
     uint64_t seen_hint = 0;
+    int backlog = 0;
     uint32_t rr = 0;
     for (;;) {
-        size_t n = d->opt.on_control ? drain_control(d, c, &seen_hint) : 0;
+        size_t n = d->opt.on_control ? drain_control(d, c, &seen_hint, &backlog) : 0;
         RtMsg m;
         for (uint32_t k = 0; k < d->sources; ++k) {
             uint32_t s = rr + k;
@@ -350,11 +374,13 @@ static void* rt_carrier(void* raw) {
             for (int b = 0; b < DATA_BATCH && ring_pop(r, &m); ++b) {
                 run_turn(d, c, d->opt.on_data, &m, 0);
                 ++n;
-                /* CONTROL outranks DATA: re-check between DATA turns. */
+                /* CONTROL outranks DATA: re-check between DATA turns, and keep
+                 * draining a burst-limited backlog one burst per DATA turn. */
                 if (d->opt.on_control
-                        && atomic_load_explicit(&c->control_hint, memory_order_relaxed)
-                           != seen_hint)
-                    n += drain_control(d, c, &seen_hint);
+                        && (backlog
+                            || atomic_load_explicit(&c->control_hint, memory_order_relaxed)
+                               != seen_hint))
+                    n += drain_control(d, c, &seen_hint, &backlog);
             }
         }
         if (++rr == d->sources) rr = 0;
@@ -404,7 +430,9 @@ static void stop_and_join(OresRtDomain* d, uint32_t created) {
 }
 
 int ores_rt_domain_start(OresRtDomain* d) {
-    if (!d || d->started) return 0;
+    /* A failed start leaves `stop` set: restarting would run carriers that
+     * exit at once while sends are accepted, so mail would never run. */
+    if (!d || d->started || d->stopped) return 0;
     uint32_t created = 0;
     for (; created < d->cores; ++created) {
         pthread_attr_t attr;
@@ -529,10 +557,24 @@ int ores_rt_domain_stop(OresRtDomain* d) {
     return ores_rt_domain_stop_timed(d, UINT64_MAX) == 1;
 }
 
-int ores_rt_domain_stop_timed(OresRtDomain* d, uint64_t timeout_ns) {
-    if (!d || !d->started || d->stopped) return -1;
+/* True on one of this domain's carriers (i.e. inside a handler). Compares
+ * never-reused thread ids that each carrier publishes before it runs any
+ * turn; core[c].thread is written by pthread_create, possibly only after the
+ * carrier has already started running handlers. */
+static int on_own_carrier(OresRtDomain* d) {
+    const uint64_t me = self_id();
     for (uint32_t c = 0; c < d->cores; ++c)
-        if (pthread_equal(pthread_self(), d->core[c].thread)) return -1;
+        if (atomic_load_explicit(&d->senders[c].owner, memory_order_relaxed) == me)
+            return 1;
+    return 0;
+}
+
+int ores_rt_domain_stop_timed(OresRtDomain* d, uint64_t timeout_ns) {
+    if (!d || !d->started || d->stopped || on_own_carrier(d)) return -1;
+    /* One stopper at a time; a second concurrent call must not join the
+     * same threads. A timed-out stop releases the claim for a retry. */
+    int idle = 0;
+    if (!atomic_compare_exchange_strong(&d->stopping, &idle, 1)) return -1;
     const uint64_t start = now_ns();
     const uint64_t deadline = timeout_ns > UINT64_MAX - start ? UINT64_MAX : start + timeout_ns;
     /* Quiescence: read every processed counter, then every accepted
@@ -545,7 +587,10 @@ int ores_rt_domain_stop_timed(OresRtDomain* d, uint64_t timeout_ns) {
         uint64_t processed, accepted;
         totals(d, &processed, &accepted);
         if (processed == accepted) break;
-        if (now_ns() >= deadline) return 0; /* still running; may retry */
+        if (now_ns() >= deadline) { /* still running; may retry */
+            atomic_store(&d->stopping, 0);
+            return 0;
+        }
         if (spins < 1000) cpu_relax();
         else {
             struct timespec pause = {0, 50000};

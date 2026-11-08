@@ -63,6 +63,15 @@ domain has no scheduler lock at all.
 - **Turn budget**: `turn_budget_ns` counts turns that overran it per core
   (`budget_overruns`). Detection only; nothing is preempted.
 - **Size overflow** of the ring allocation is rejected at open.
+- **Bounded CONTROL interference**: a drain runs at most 64 CONTROL turns,
+  then one DATA turn, and keeps draining one burst per DATA turn while a
+  backlog remains. CONTROL keeps priority, but a flood delays DATA by at most
+  64 CONTROL turns regardless of ring size (an unbounded drain let one
+  fast CONTROL sender stop DATA and `stop()` forever).
+- **Lifecycle races**: concurrent `stop` calls are serialized (exactly one
+  succeeds); calling stop from a handler is detected by thread id, not by
+  `pthread_t` (which may be written only after the carrier is running); a
+  domain whose start failed cannot be restarted.
 
 ## Tests
 

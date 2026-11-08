@@ -31,6 +31,10 @@ static void check(int ok, const char* what) {
     }
 }
 
+static void noop_data(void* ctx, OresRtSender* self, uint32_t actor, uint64_t payload) {
+    (void)ctx; (void)self; (void)actor; (void)payload;
+}
+
 #define CORES 4
 #define ACTORS 64
 #define PRODUCERS 3
@@ -444,6 +448,125 @@ static void stop_contract_violation(void) {
            (unsigned long long)total_undelivered);
 }
 
+/* ---- second hardening pass ---------------------------------------------- */
+typedef struct {
+    OresRtDomain* d;
+    atomic_int flooding;
+    _Atomic uint64_t data_runs, control_runs;
+    atomic_int stop_from_handler;
+} Flood;
+static void flood_data(void* ctx, OresRtSender* self, uint32_t actor, uint64_t payload) {
+    (void)self; (void)actor;
+    Flood* f = ctx;
+    if (payload == 99) /* a handler must never be able to stop its own domain */
+        atomic_store(&f->stop_from_handler, ores_rt_domain_stop_timed(f->d, 1000000));
+    atomic_fetch_add(&f->data_runs, 1);
+}
+static uint64_t mono_ns(void);
+static void flood_control(void* ctx, OresRtSender* self, uint32_t actor, uint64_t payload) {
+    (void)self; (void)actor; (void)payload;
+    /* Slower than the flooder can send, so the CONTROL ring stays full: an
+     * unbounded drain would then never return. */
+    const uint64_t until = mono_ns() + 2000;
+    while (mono_ns() < until) { }
+    atomic_fetch_add(&((Flood*)ctx)->control_runs, 1);
+}
+static void* control_flooder(void* raw) {
+    Flood* f = raw;
+    OresRtSender* s = ores_rt_domain_external_sender(f->d, 1);
+    while (atomic_load(&f->flooding)) (void)ores_rt_send_control(s, 0, 1);
+    return NULL;
+}
+/* CONTROL outranks DATA, but a CONTROL flood must not stop DATA forever:
+ * each drain is bounded to what was queued when it began. */
+static void control_flood_does_not_starve_data(void) {
+    Flood f;
+    memset(&f, 0, sizeof(f));
+    atomic_store(&f.stop_from_handler, 7);
+    uint32_t placement[1] = {0};
+    OresRtDomainOptions o = {
+        .core_count = 1, .actor_count = 1, .actor_core = placement,
+        .external_senders = 2, .ring_capacity = 4096,
+        .on_data = flood_data, .on_control = flood_control, .ctx = &f,
+    };
+    f.d = ores_rt_domain_open(&o);
+    check(f.d && ores_rt_domain_start(f.d), "open/start");
+    atomic_store(&f.flooding, 1);
+    pthread_t t;
+    check(pthread_create(&t, NULL, control_flooder, &f) == 0, "create");
+    while (atomic_load(&f.control_runs) < 2000) sched_yield(); /* flood is on */
+    OresRtSender* s = ores_rt_domain_external_sender(f.d, 0);
+    const uint64_t data = 2000;
+    for (uint64_t i = 0; i < data; ++i)
+        while (ores_rt_send(s, 0, i == data - 1 ? 99 : i) == ORES_RT_SEND_FULL) sched_yield();
+    const uint64_t give_up = mono_ns() + 5000000000ull;
+    while (atomic_load(&f.data_runs) < data) {
+        check(mono_ns() < give_up, "DATA starved by a CONTROL flood");
+        sched_yield();
+    }
+    atomic_store(&f.flooding, 0);
+    pthread_join(t, NULL);
+    check(atomic_load(&f.stop_from_handler) == -1, "stop from inside a handler is refused");
+    check(ores_rt_domain_stop(f.d), "stop");
+    printf("control flood: %llu DATA ran alongside %llu CONTROL: OK\n",
+           (unsigned long long)atomic_load(&f.data_runs),
+           (unsigned long long)atomic_load(&f.control_runs));
+    ores_rt_domain_destroy(f.d);
+}
+
+typedef struct { OresRtDomain* d; atomic_int go; int result; } Stopper;
+static void* stopper(void* raw) {
+    Stopper* s = raw;
+    while (!atomic_load(&s->go)) sched_yield();
+    s->result = ores_rt_domain_stop_timed(s->d, 5000000000ull);
+    return NULL;
+}
+/* Two threads calling stop at once: exactly one stops, the other is refused
+ * (joining the same carriers twice would be undefined behaviour). */
+static void concurrent_stop(void) {
+    for (int round = 0; round < 100; ++round) {
+        uint32_t placement[2] = {0, 1};
+        OresRtDomainOptions o = {
+            .core_count = 2, .actor_count = 2, .actor_core = placement,
+            .ring_capacity = 8, .on_data = noop_data,
+        };
+        OresRtDomain* d = ores_rt_domain_open(&o);
+        check(d && ores_rt_domain_start(d), "open/start");
+        Stopper a = { .d = d }, b = { .d = d };
+        pthread_t ta, tb;
+        check(pthread_create(&ta, NULL, stopper, &a) == 0, "create a");
+        check(pthread_create(&tb, NULL, stopper, &b) == 0, "create b");
+        atomic_store(&a.go, 1);
+        atomic_store(&b.go, 1);
+        pthread_join(ta, NULL);
+        pthread_join(tb, NULL);
+        check((a.result == 1) + (b.result == 1) == 1, "exactly one stop succeeds");
+        check(a.result == -1 || b.result == -1, "the other is refused");
+        ores_rt_domain_destroy(d);
+    }
+    puts("concurrent stop: OK");
+}
+
+/* If a start fails (e.g. SCHED_FIFO refused), the domain cannot be restarted. */
+static void no_restart_after_failed_start(void) {
+    uint32_t placement[1] = {0};
+    OresRtDomainOptions o = {
+        .core_count = 1, .actor_count = 1, .actor_core = placement,
+        .ring_capacity = 8, .on_data = noop_data,
+        .sched_fifo_priority = sched_get_priority_max(SCHED_FIFO),
+    };
+    OresRtDomain* d = ores_rt_domain_open(&o);
+    check(d != NULL, "open");
+    if (ores_rt_domain_start(d)) {
+        puts("restart after failed start: SCHED_FIFO allowed here, case not reachable");
+        check(ores_rt_domain_stop(d), "stop");
+    } else {
+        check(!ores_rt_domain_start(d), "a failed domain cannot be restarted");
+        puts("restart after failed start: refused: OK");
+    }
+    ores_rt_domain_destroy(d);
+}
+
 static void noop(void* ctx, OresRtSender* self, uint32_t actor, uint64_t payload) {
     (void)ctx; (void)self; (void)actor; (void)payload;
 }
@@ -532,6 +655,9 @@ int main(void) {
     timed_stop_and_budget();
     sender_handoff();
     stop_contract_violation();
+    control_flood_does_not_starve_data();
+    concurrent_stop();
+    no_restart_after_failed_start();
     park_handoff(0);
     park_handoff(2000);
     stress(0);
