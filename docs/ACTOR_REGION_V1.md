@@ -137,13 +137,15 @@ intentionally narrower than the actor scheduler:
   the region and requires successful quiescent destruction. It does not sweep
   leaked objects as a substitute for generated destructors.
 
-**ABA constraint:** a bare compact offset cannot distinguish an old reference
-from a new object at the same physical slot. The guest bridge therefore marks
-every slot as issued for the whole scope and aborts if the allocator attempts
-to reuse it after drop. This v1 contract intentionally bounds the number of
-allocations to the configured slot count, not merely the peak live-object
-count. A future ABI may use a distinct opaque generation-bearing guest handle,
-but it must not pretend the raw 32-bit offset is a capability.
+**ABA constraint:** a bare physical 32-bit offset cannot distinguish an old
+reference from a new object at a reused physical slot. The guest bridge
+therefore assigns monotonically increasing *logical* offsets for the lifetime
+of the scope. Its trusted TLS sidecar maps each logical offset to the original
+generation-checked physical `OresActorRegionV1Ref`. The backing allocator may
+reuse physical slots after a drop, but the guest logical offset is never
+reissued; stale offsets remain disarmed. The number of allocations in one
+scope is bounded by the configured slot count, while peak live allocations
+may be lower.
 
 **Execution constraint:** this bridge is thread-affine and synchronous. It
 does not integrate with `NativeActorScheduler`, actor migration, task
