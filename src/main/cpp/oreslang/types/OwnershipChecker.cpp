@@ -396,8 +396,13 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             if (!expr.left)
                 reject(expr, "native Array<int> operation requires a named owner");
             array_owner(*expr.left, locals, false);
-            if (expr.name != "get" || expr.arguments.size() != 1)
-                reject(expr, "native Array<int> expression supports only get(index)");
+            const bool checked_copy = expr.name == "get_copy";
+            if ((expr.name != "get" && !checked_copy) || expr.arguments.size() != 1)
+                reject(expr, "native Array<int> expression requires get(index) or typed get_copy(index)");
+            // A raw i64 may NEVER be reinterpreted as a tagged Option handle.
+            // This source-owned tag is set only by the explicit sum binding.
+            if (checked_copy && expr.sum_type != "Option<int>")
+                reject(expr, "native checked copy requires explicit Option<int> provenance");
             check_value(*expr.arguments[0], locals, functions);
             return;
         }
