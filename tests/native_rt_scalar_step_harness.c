@@ -264,6 +264,10 @@ int main(void) {
 #ifdef __linux__
     for (int scenario = 0; scenario != 16; ++scenario)
         require_guest_trap(scenario);
+    puts("SCALAR_FRAME_AOT_INVALID_FRAME_TRAPS_16_PASS");
+#else
+    fprintf(stderr, "native trap proof requires Linux fork/waitpid/SIGILL\n");
+    return 1;
 #endif
     require_bounded_peer_progress();
     require_cancelled_peer_is_isolated();
