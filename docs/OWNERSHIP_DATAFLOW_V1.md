@@ -16,7 +16,7 @@ The analysis takes a compiler-owned CFG with unique owner identities and explici
 
 Every reachable CFG block must have successors or an explicit exit. Join points require **identical** owner states and borrow counts on every incoming edge. This safely rejects differing branch ownership until a future path-sensitive/SSA ownership representation can prove and reconcile it.
 
-Bounds are explicit: 64 owners, 4,096 blocks, 16,384 edges and 1,024 operations per block. Unknown operations, invalid successors, unbalanced borrows, duplicate identities, cycles that alter ownership state, and non-normal exits fail closed.
+Bounds are explicit: 64 owners, 4,096 blocks, 16,384 edges and 1,024 operations per block. Unknown operations, invalid successors, unbalanced borrows, duplicate identities, all reachable CFGs must be acyclic in v1, and non-normal exits fail closed. A cycle is rejected even if another branch reaches a normal exit; a separate bounded-loop termination proof is required before cyclic CFGs can be admitted.
 
 ## Current integration
 
@@ -24,7 +24,7 @@ ActorRegionV2 constructs a small CFG: all lexical objects are created in the ent
 
 ## Tests
 
-`native_ownership_dataflow_v1` contains five positive scenarios and eight negative scenarios. It checks cleanup order, moved and explicitly dropped owners, shared/mutable borrow release, double destruction, use after move, dropping with a loan, conflicting aliases, mismatched join states, suspend exit, missing explicit exit and duplicate owner identities.
+`native_ownership_dataflow_v1` contains five positive scenarios and nine negative scenarios. It checks cleanup order, moved and explicitly dropped owners, shared/mutable borrow release, double destruction, use after move, dropping with a loan, conflicting aliases, mismatched join states, suspend exit, missing explicit exit and duplicate owner identities, and an ownership-changing/nonterminating CFG cycle.
 
 The tests are authored and registered. They are **not reported as passing** until a nonzero-step native CTest job runs on the exact PR head. They do not prove LLVM guest execution or a process-wide no-GC link closure.
 
