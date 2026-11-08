@@ -363,5 +363,49 @@ int main() {
         invalid.blocks = {{{}, {2}}};
         verify(invalid);
     }));
+
+    // A physical carrier change never makes a live borrow safe. The
+    // ownership CFG must reject every logical suspension with an active
+    // loan, including loans on another tracked allocation.
+    Graph suspension;
+    suspension.entry = {{"owned", cell(kOwned)}, {"borrowed", cell(kOwned)}};
+    suspension.blocks = {{{
+        {Kind::BorrowShared, "borrowed"},
+        {Kind::Suspend, ""},
+        {Kind::ReleaseShared, "borrowed"}
+    }, {}}};
+    assert(rejected([&] { verify(suspension); }));
+    suspension.blocks[0].operations = {
+        {Kind::BorrowExclusive, "borrowed"},
+        {Kind::Suspend, ""},
+        {Kind::ReleaseExclusive, "borrowed"}
+    };
+    assert(rejected([&] { verify(suspension); }));
+    suspension.blocks[0].operations = {
+        {Kind::BorrowShared, "borrowed"},
+        {Kind::ReleaseShared, "borrowed"},
+        {Kind::Suspend, ""},
+        {Kind::Move, "owned"}
+    };
+    verify(suspension);
+
+    // Branch-local borrows that are fully released before an await are safe,
+    // but a loan live on either predecessor must not be dropped at the join.
+    suspension.blocks = {
+        {{}, {1, 2}},
+        {{{Kind::BorrowShared, "borrowed"},
+          {Kind::ReleaseShared, "borrowed"}}, {3}},
+        {{}, {3}},
+        {{{Kind::Suspend, ""}, {Kind::Read, "owned"}}, {}}
+    };
+    verify(suspension);
+    suspension.blocks[1].operations.pop_back();
+    assert(rejected([&] { verify(suspension); }));
+
+    State direct_suspend = {{"x", cell(kOwned)}, {"y", cell(kOwned)}};
+    apply({Kind::BorrowShared, "y", 37}, direct_suspend);
+    assert(rejected([&] { apply({Kind::Suspend, ""}, direct_suspend); }));
+    apply({Kind::ReleaseShared, "y", 37}, direct_suspend);
+    apply({Kind::Suspend, ""}, direct_suspend);
     return 0;
 }
