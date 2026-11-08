@@ -926,6 +926,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     if (actor_region_v1) {
         if (!native_main || !source.actors.empty())
             throw std::runtime_error("actor-region-v1 requires a synchronous native main without actors");
+        for (const auto& function : source.functions) {
+            if (!function.return_class.empty() ||
+                std::any_of(function.parameters.begin(), function.parameters.end(),
+                    [](const Parameter& parameter) { return !parameter.class_name.empty(); }))
+                throw std::runtime_error(
+                    "actor-region-v1 forbids class-valued function parameters and returns");
+        }
         for (const auto& local : main_it->locals) {
             if (local.class_name.empty()) continue;
             ++actor_region_slots;
