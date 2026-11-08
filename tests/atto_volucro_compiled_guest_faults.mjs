@@ -3,13 +3,14 @@
 // wasm32 actor and Volucro's real Wasmi guest CLI. All inputs are local only.
 // This is NOT source-level exploit generation or an OS sandbox certification.
 import assert from 'node:assert/strict';
-import {readFileSync, writeFileSync, mkdtempSync, rmSync, statSync} from 'node:fs';
+import {readFileSync, writeFileSync, mkdtempSync, rmSync, statSync, createReadStream} from 'node:fs';
+import {createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import {dirname, isAbsolute, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
 import {mutateActorWasmExport, mutateActorWasmOutOfBounds, mutateActorWasmOutOfBoundsStore, wasmSha256} from './atto_volucro_compiled_guest_faults_lib.mjs';
-import {assertCompiledActorProfile, assertInjectedOutOfBounds, assertVmOutcome, MAX_ACTOR_WASM_BYTES} from './atto_volucro_compiled_guest_guard.mjs';
+import {assertCompiledActorProfile, assertInjectedOutOfBounds, assertVmOutcome, selectCargoGuestExecutable, MAX_ACTOR_WASM_BYTES} from './atto_volucro_compiled_guest_guard.mjs';
 
 const options = new Map();
 for(let i=2;i<process.argv.length;i+=2){
@@ -27,8 +28,8 @@ const llvmRoot=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const volucroRoot=resolve(options.get('--volucro-root'));
 const fixture=join(llvmRoot,'tests/fixtures/wasm32-single-source-actor.ores');
 
-function command(program,args,{cwd,input}={}) {
-  const result=spawnSync(program,args,{cwd,input,encoding:'utf8',timeout:120000,maxBuffer:16*1024*1024});
+function command(program,args,{cwd,input,timeout=120000}={}) {
+  const result=spawnSync(program,args,{cwd,input,encoding:'utf8',timeout,maxBuffer:16*1024*1024});
   if(result.error || result.signal || result.status===null)
     throw Error('command unavailable or timed out: '+program+': '+String(result.error||result.signal));
   return result;
@@ -53,10 +54,24 @@ for(const entry of ['oreslang_wasm_actor_init','oreslang_wasm_actor_on_message',
   assert.ok(ir.includes('@'+entry+'('),'real compiler output missing '+entry);
 assert.ok(!ir.includes('declare void @oreslang_source_actor_'),'unexpected native actor host ABI import');
 
+// Build once and identify the exact Rust executable from structured Cargo JSON.
+// Every negative probe subsequently invokes that binary DIRECTLY, not Cargo:
+// otherwise Cargo's own build/tool errors can mask the guest's exit status.
+const rustBuild=mustPass(options.get('--cargo'),['build','--manifest-path',
+  join(volucroRoot,'Cargo.toml'),'-p','vm-core',
+  '--bin','atto_actor_isolation_smoke','--message-format=json'],
+  {cwd:volucroRoot,timeout:300000});
+const vmBinary=selectCargoGuestExecutable(rustBuild,'atto_actor_isolation_smoke');
+const vmBinaryInfo=statSync(vmBinary);
+assert.ok(vmBinaryInfo.isFile() && vmBinaryInfo.size>0,'Cargo emitted an invalid guest executable');
+async function hashFile(path) {
+  const hash=createHash('sha256');
+  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  return hash.digest('hex');
+}
 const temp=mkdtempSync(join(tmpdir(),'atto-volucro-negative-'));
 function runVm(file){
-  return command(options.get('--cargo'),['run','--quiet','--manifest-path',join(volucroRoot,'Cargo.toml'),
-    '-p','vm-core','--bin','atto_actor_isolation_smoke','--',file],{cwd:volucroRoot});
+  return command(vmBinary,[file],{cwd:volucroRoot});
 }
 function expectPositive(file,label){
   assertVmOutcome(runVm(file),'positive',label);
@@ -106,6 +121,7 @@ try {
     evidence_scope:'actual AttoLang LLVM compiler -> Wasm mutation -> Volucro Wasmi, process recovery only',
     not_proved:['source-level malicious actor','same-VM sibling survival','OS process sandbox','native LLVM arbitrary-pointer isolation'],
     llvm_head:llvmHead,volucro_head:volucroHead,node_engine_version:process.version,
+    volucro_native_guest_binary_sha256:await hashFile(vmBinary),
     source_sha256:wasmSha256(source),compiler_sha256:wasmSha256(readFileSync(options.get('--compiler'))),
     validated_actor_memory_pages:compiledProfile.memory,
     original_wasm_sha256:wasmSha256(baseline),missing_abi_sha256:wasmSha256(abi),oob_load_sha256:wasmSha256(fault),oob_store_sha256:wasmSha256(storeFault),
