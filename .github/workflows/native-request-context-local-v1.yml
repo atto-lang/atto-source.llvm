@@ -21,6 +21,7 @@ on:
       - "CMakeLists.txt"
       - "tests/native_request_lifecycle_registry_v1_test.cpp"
       - "tests/native_actor_stop_notice_v1_test.c"
+      - "tests/native_dual_actor_handoff_commit_v1_test.c"
       - ".github/workflows/native-request-context-local-v1.yml"
   workflow_dispatch:
 permissions:
@@ -69,6 +70,7 @@ jobs:
           test "$(git hash-object tests/native_request_actor_lifecycle_guard_v1_test.cpp)" = "ebba397307a27451492d0c3aa20d8b259807d80f"
           test "$(git hash-object tests/native_request_lifecycle_registry_v1_test.cpp)" = "69a1ca1e849aade0e430a8e70d4b9bb163b6def5"
           test "$(git hash-object tests/native_actor_stop_notice_v1_test.c)" = "467c31db374b55c4ed43ca590bb2ca0cdea01019"
+          test "$(git hash-object tests/native_dual_actor_handoff_commit_v1_test.c)" = "5af3174f3df18a36ed827f697aae22c86a8b41a8"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestLifecycleRegistryV1.hpp)" = "2a173e2597ad5af40cfe4b7213c46222e17d76e6"
       - name: Compile and execute real actor two-request isolation
         shell: bash
@@ -179,6 +181,12 @@ jobs:
           "$CC" -std=c11 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
             -Isrc/main/cpp tests/native_actor_stop_notice_v1_test.c \
             "$tmp/scheduler.o" -o "$tmp/stop-notice-contract"
+          "$CC" -std=c11 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp tests/native_dual_actor_handoff_commit_v1_test.c \
+            "$tmp/scheduler.o" -o "$tmp/dual-actor-commit"
+          "$tmp/dual-actor-commit" | tee "$tmp/dual-actor-commit.log"
+          test "$(grep -c '^DUAL_ACTOR_COMMIT_PASS ' "$tmp/dual-actor-commit.log")" = "16"
+          grep -qx 'NATIVE_DUAL_ACTOR_COMMIT_16_C_CASES_PASS' "$tmp/dual-actor-commit.log"
           "$tmp/stop-notice-contract" | tee "$tmp/stop-notice-contract.log"
           test "$(grep -c '^STOP_NOTICE_CASE_PASS ' "$tmp/stop-notice-contract.log")" = "17"
           grep -qx 'NATIVE_ACTOR_STOP_NOTICE_17_C_CASES_PASS' "$tmp/stop-notice-contract.log"
