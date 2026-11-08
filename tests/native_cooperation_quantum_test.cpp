@@ -42,6 +42,16 @@ static_assert(oreslang::runtime::detail::saturatingBackedgeSuccessor(
                   std::numeric_limits<std::uint64_t>::max())
                   == std::numeric_limits<std::uint64_t>::max(),
               "a wrapped reduction counter could bypass the budget");
+static_assert(oreslang::runtime::detail::saturatingBackedgeBatch(
+                  std::numeric_limits<std::uint64_t>::max() - 127, 128)
+                  == std::numeric_limits<std::uint64_t>::max(),
+              "cold batch addition must saturate instead of wrapping");
+static_assert(oreslang::runtime::detail::saturatingBackedgeBatch(
+                  std::numeric_limits<std::uint64_t>::max(), 128)
+                  == std::numeric_limits<std::uint64_t>::max(),
+              "saturation must be sticky without disabling subsequent polls");
+static_assert(oreslang::runtime::detail::saturatingBackedgeBatch(512, 127) == 639,
+              "the incomplete reduction window must count exactly");
 
 static void require(bool ok) {
     if (!ok) throw std::runtime_error("native cooperation-quantum invariant failed");
@@ -60,6 +70,7 @@ static void reduction_fast_path() {
     for (int i = 1; i <= 512; ++i) {
         const bool checkDue = q.completedBackedgeNeedsCheck();
         require(checkDue == (i % 128 == 0));
+        require(q.completedBackedgesThisDispatch() == static_cast<std::uint64_t>(i));
         if (checkDue) require(q.shouldCooperateAtCheck() == (i == 512));
     }
     require(FakeClock::reads.load() == 5);
@@ -83,6 +94,33 @@ static void overdue_no_yield_region_preserves_poll_cadence() {
     require(q.shouldCooperateAtCheck());
     require(q.completedBackedgesThisDispatch() == 640);
     require(FakeClock::reads.load() == 2);
+}
+
+static void long_overdue_quantum_never_polls_every_iteration() {
+    reset_clock();
+    Quantum q;
+    q.beginDispatch();
+    int checks = 0;
+    for (int i = 1; i <= 1'000'000; ++i) {
+        const bool due = q.completedBackedgeNeedsCheck();
+        require(due == (i % 128 == 0));
+        if (due) {
+            ++checks;
+            require(q.shouldCooperateAtCheck() == (i >= 512));
+        }
+    }
+    require(checks == 7'812);
+    require(q.completedBackedgesThisDispatch() == 1'000'000);
+    // The cold timer is sampled only in the first three sub-budget windows.
+    require(FakeClock::reads.load() == 5);
+    q.beginDispatch();
+    require(q.completedBackedgesThisDispatch() == 0);
+    for (int i = 1; i < 128; ++i) {
+        require(!q.completedBackedgeNeedsCheck());
+        require(q.completedBackedgesThisDispatch() == static_cast<std::uint64_t>(i));
+    }
+    require(q.completedBackedgeNeedsCheck());
+    require(q.completedBackedgesThisDispatch() == 128);
 }
 
 static void timer_slow_path() {
@@ -143,6 +181,7 @@ static void repeated_dispatches_keep_task_context() {
 int main() {
     reduction_fast_path();
     overdue_no_yield_region_preserves_poll_cadence();
+    long_overdue_quantum_never_polls_every_iteration();
     timer_slow_path();
     independent_watchdog_requests_next_safe_boundary();
     await_is_not_cooperate();
