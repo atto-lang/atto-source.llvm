@@ -115,10 +115,13 @@ set(source_no_guard
 "${class_prefix}${owner_prefix}  return second.answer;\n}\n")
 set(source_nonliteral
 "define class Pair as\n  pub final int flag: 1 + 1;\n  pub final int answer: 42;\nend\npub fnc main(): int {\n${owner_prefix}  if (first.flag eq 1) { return first.flag; } fi\n  return second.answer;\n}\n")
+set(source_exit_truncation
+"define class Pair as\n  pub final int flag: 1;\n  pub final int answer: 258;\nend\npub fnc main(): int {\n${owner_prefix}  if (first.flag eq 1) { return first.answer; } fi\n  return second.answer;\n}\n")
 set(source_wrong_profile "${source_early}")
 set(negatives 0)
 foreach(case IN ITEMS third_owner mutable borrow unknown extra_root
-                 dynamic_call two_guards no_guard nonliteral)
+                 dynamic_call two_guards no_guard nonliteral
+                 exit_truncation)
   set(dir "${work}/rejected-${case}")
   file(MAKE_DIRECTORY "${dir}")
   file(WRITE "${dir}/main.atto" "${source_${case}}")
@@ -144,7 +147,7 @@ if(denied STREQUAL "0" OR NOT ir STREQUAL "")
 else()
   math(EXPR negatives "${negatives}+1")
 endif()
-if(NOT native_successes EQUAL 4 OR NOT negatives EQUAL 10)
-  message(FATAL_ERROR "ActorRegionV2 native guest incomplete: ${native_successes}/4 native executions, ${negatives}/10 rejections")
+if(NOT native_successes EQUAL 4 OR NOT negatives EQUAL 11)
+  message(FATAL_ERROR "ActorRegionV2 native guest incomplete: ${native_successes}/4 native executions, ${negatives}/11 rejections")
 endif()
-message(STATUS "PASS ActorRegionV2: 4 compiled native guests + 10 rejected source/profile cases")
+message(STATUS "PASS ActorRegionV2: 4 compiled native guests + 11 rejected source/profile cases")
