@@ -67,9 +67,56 @@ struct Builder {
         return next;
     }
 
+    // Calculate the maximum *simultaneously live* operand values emitted by
+    // expression(): left-to-right binaries retain the left operand while the
+    // right operand is evaluated, and unary negate first pushes an i64 zero.
+    // A compiler-admitted .atto graph must fit the bounded 16-cell VM stack.
+    // Reject at source admission rather than allowing runtime tag/stack failure.
+    std::size_t operand_peak(const Expression& e, unsigned depth = 0) const {
+        if (depth > 48) deny("expression AST too deep for typed frames");
+        using K = Expression::Kind;
+        switch (e.kind) {
+            case K::Integer:
+            case K::Variable:
+                return 1;
+            case K::Negate:
+                if (!e.left) deny("malformed scalar negate");
+                return 1 + operand_peak(*e.left, depth + 1);
+            case K::LogicalNot:
+                if (!e.left) deny("malformed boolean not");
+                return operand_peak(*e.left, depth + 1);
+            case K::Call:
+                if (e.arguments.size() != 1 || !e.arguments[0])
+                    deny("missing scalar call argument");
+                // The argument is consumed by CALL before its i64 result is
+                // pushed. The callee has a separate actor-owned frame.
+                return operand_peak(*e.arguments[0], depth + 1);
+            case K::Add:
+            case K::Subtract:
+            case K::Multiply:
+            case K::Equal:
+            case K::NotEqual:
+            case K::Less:
+            case K::LessEqual:
+            case K::Greater:
+            case K::GreaterEqual:
+                if (!e.left || !e.right)
+                    deny("malformed scalar binary");
+                return std::max(
+                    operand_peak(*e.left, depth + 1),
+                    1 + operand_peak(*e.right, depth + 1));
+            default:
+                // scan() reports the detailed unsupported expression/effect.
+                return 1;
+        }
+    }
+
     // Reaches every possible call edge without executing guest instructions.
     void scan(const Expression& e, unsigned depth = 0) {
         if (depth > 48) deny("expression AST too deep for typed frames");
+        if (depth == 0 &&
+            operand_peak(e) > ORES_SCALAR_MAX_OPERAND_SLOTS)
+            deny("typed scalar operand stack exceeds 16 slots");
         using K = Expression::Kind;
         switch (e.kind) {
             case K::Integer:
