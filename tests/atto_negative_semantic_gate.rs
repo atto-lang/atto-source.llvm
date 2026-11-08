@@ -21,19 +21,19 @@ struct Case {
 const CASES: [Case; 8] = [
     Case { name:"removed-modulo", path:"contracts/atto-scalar-v1/negative/removed-modulo.atto",
         git_blob:"45d5794870e93074d9b11b90833a849e96aaa4c1",
-        subjects:&["%", "modulo"], policies:&["operator", "removed", "forbidden", "unsupported"] },
+        subjects:&["%", "modulo"], policies:&["operator", "removed", "forbidden", "unsupported operator"] },
     Case { name:"removed-caret", path:"contracts/atto-scalar-v1/negative/removed-caret.atto",
         git_blob:"6889c7e83c8d94b906fbfe78723caee9580da6aa",
-        subjects:&["^", "caret"], policies:&["operator", "removed", "forbidden", "unsupported"] },
+        subjects:&["^", "caret"], policies:&["operator", "removed", "forbidden", "unsupported operator"] },
     Case { name:"removed-double-caret", path:"contracts/atto-scalar-v1/negative/removed-double-caret.atto",
         git_blob:"7ee99948018e927cce74c9ad0edc1975e4251689",
-        subjects:&["^^", "caret"], policies:&["operator", "removed", "forbidden", "unsupported"] },
+        subjects:&["^^", "caret"], policies:&["operator", "removed", "forbidden", "unsupported operator"] },
     Case { name:"type-first-reassignment", path:"contracts/atto-scalar-v1/negative/type-first-reassignment.atto",
         git_blob:"b118f53e68565dcb9e6acd58deb8ee47dca67606",
-        subjects:&["x", "binding", "value"], policies:&["immutable", "readonly", "const", "reassign", "cannot assign"] },
+        subjects:&["x", "binding", "value"], policies:&["immutable", "readonly", "constant binding", "reassign", "cannot assign"] },
     Case { name:"typed-const-reassignment", path:"contracts/atto-scalar-v1/negative/typed-const-reassignment.atto",
         git_blob:"784ebd47a50211e6f00cb732cc74319ed1e58fac",
-        subjects:&["x", "binding", "const"], policies:&["immutable", "readonly", "const", "reassign", "cannot assign"] },
+        subjects:&["x", "binding", "const"], policies:&["immutable", "readonly", "constant binding", "reassign", "cannot assign"] },
     Case { name:"legacy-async-modifier", path:"tests/formal-policy-atto/negative/legacy-async-modifier.atto",
         git_blob:"26d392c8f609a730e81b503d9495de7e29b46755",
         subjects:&["async"], policies:&["unsupported", "forbidden", "disallowed", "modifier", "use suspends"] },
@@ -58,7 +58,10 @@ fn git(root: &Path, args: &[&str]) -> Result<String, String> {
 }
 fn matches_policy(c: &Case, stderr: &str) -> bool {
     let d = stderr.to_ascii_lowercase();
-    c.subjects.iter().any(|word| d.contains(word)) &&
+    c.subjects.iter().any(|word| if *word == "x" {
+        d.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+            .any(|token| token == "x")
+    } else { d.contains(word) }) &&
     c.policies.iter().any(|word| d.contains(word)) &&
     !d.contains("internal error") && !d.contains("stack overflow")
 }
@@ -150,6 +153,8 @@ mod tests {
         assert!(!matches_policy(c, "error: unexpected token"));
         assert!(!matches_policy(c, "error: unknown symbol modulo"));
         assert!(matches_policy(c, "error: removed modulo operator"));
+        let caret = &CASES[1];
+        assert!(!matches_policy(caret, "error: unsupported character ^"));
     }
     #[test]
     fn error_from_wrong_semantic_stage_does_not_qualify() {
