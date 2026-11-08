@@ -26,7 +26,13 @@ ActorRegionV2 constructs a small CFG: all lexical objects are created in the ent
 
 ## Tests
 
-`native_ownership_dataflow_v1` contains seven positive scenarios and twenty-one negative scenarios. It checks cleanup order, moved and explicitly dropped owners, shared/mutable borrow release, double destruction, use after move, dropping with a loan, conflicting aliases, mismatched join states, suspend exit, missing explicit exit and duplicate owner identities, unbounded cycles, missing/invalid transfer destinations, transfer into an initialized destination, use-before-create, unknown operation kinds, unreachable blocks, unbalanced borrows, mutable access during shared borrowing, incompatible acquisition histories at joins, ending a nonexistent loan, stray transfer metadata, reading through the owner during an active mutable loan, and invalid exit operations.
+`native_ownership_dataflow_v1` contains seven positive scenarios and twenty-six negative scenarios. It checks cleanup order, moved and explicitly dropped owners, shared/mutable borrow release, double destruction, use after move, dropping with a loan, conflicting aliases, mismatched join states, suspend exit, missing explicit exit and duplicate owner identities, unbounded cycles, missing/invalid transfer destinations, transfer into an initialized destination, use-before-create, unknown operation kinds, unreachable blocks, unbalanced borrows, mutable access during shared borrowing, incompatible acquisition histories at joins, ending a nonexistent loan, stray transfer metadata, reading through the owner during an active mutable loan, and invalid exit operations.
+
+The negative fixtures assert their exact expected ownership diagnostic (rather than accepting
+any rejection). Valid take-to-destination fixtures isolate use-after-move and CFG join
+mismatch. Additional negatives separately reject exceptional and cancellation exits,
+transfer during an outstanding shared loan, mutation through a missing exclusive
+loan, and ending a nonexistent mutable loan.
 
 The tests are authored and registered. They are **not reported as passing** until a nonzero-step native CTest job runs on the exact PR head. They do not prove LLVM guest execution or a process-wide no-GC link closure.
 
