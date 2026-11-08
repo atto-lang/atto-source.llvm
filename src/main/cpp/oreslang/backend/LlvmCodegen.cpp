@@ -932,6 +932,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     [](const Parameter& parameter) { return !parameter.class_name.empty(); }))
                 throw std::runtime_error(
                     "actor-region-v1 forbids class-valued function parameters and returns");
+            if (&function != &*main_it &&
+                std::any_of(function.locals.begin(), function.locals.end(),
+                    [](const LocalBinding& local) { return !local.class_name.empty(); }))
+                throw std::runtime_error(
+                    "actor-region-v1 forbids class owners outside native main/0");
         }
         for (const auto& local : main_it->locals) {
             if (local.class_name.empty()) continue;
