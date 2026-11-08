@@ -152,6 +152,43 @@ int main() {
         require(!admitted(module));
     }
     {
+        llvm::Module module("wrong-arity", context);
+        auto* step = define_four(module);
+        auto* framePointer = step->getFunctionType()->getParamType(0);
+        step->eraseFromParent();
+        define_frame_method(module, "oreslang_rt_scalar_frame_step_v1",
+                            llvm::Type::getInt32Ty(context), framePointer, false);
+        require(!admitted(module));
+    }
+    {
+        llvm::Module module("wrong-pointer-parameter", context);
+        auto* init = define_four(module);
+        (void)init;
+        auto* fn = module.getFunction("oreslang_rt_scalar_frame_init_v1");
+        fn->eraseFromParent();
+        define_frame_method(module, "oreslang_rt_scalar_frame_init_v1",
+                            llvm::Type::getVoidTy(context),
+                            llvm::Type::getInt64Ty(context), true);
+        require(!admitted(module));
+    }
+    {
+        llvm::Module module("variadic-abi", context);
+        define_four(module);
+        auto* fn = module.getFunction("oreslang_rt_scalar_frame_init_v1");
+        auto* framePointer = fn->getFunctionType()->getParamType(0);
+        fn->eraseFromParent();
+        auto* varargs = llvm::Function::Create(
+            llvm::FunctionType::get(
+                llvm::Type::getVoidTy(context),
+                {framePointer, llvm::Type::getInt64Ty(context)}, true),
+            llvm::Function::ExternalLinkage,
+            "oreslang_rt_scalar_frame_init_v1", module);
+        llvm::IRBuilder<> builder(
+            llvm::BasicBlock::Create(context, "entry", varargs));
+        builder.CreateRetVoid();
+        require(!admitted(module));
+    }
+    {
         llvm::Module module("wrong-linkage", context);
         define_four(module);
         module.getFunction("oreslang_rt_scalar_frame_step_v1")
