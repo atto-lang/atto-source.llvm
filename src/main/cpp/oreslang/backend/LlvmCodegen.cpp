@@ -939,6 +939,19 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         if (!actor_region_slots || actor_region_slots > 4096u ||
             actor_region_stride > 1024u * 1024u)
             throw std::runtime_error("actor-region-v1 requires 1..4096 bounded class owners");
+        std::function<void(const Statement&)> reject_branch_owner =
+            [&](const Statement& statement) {
+                if (statement.branch_local && !statement.branch_local->class_name.empty())
+                    throw std::runtime_error(
+                        "actor-region-v1 rejects branch-scoped class owners");
+                for (const auto& child : statement.then_statements)
+                    reject_branch_owner(child);
+                for (const auto& child : statement.else_statements)
+                    reject_branch_owner(child);
+            };
+        for (const auto& function : source.functions)
+            for (const auto& statement : function.statements)
+                reject_branch_owner(statement);
     }
     if (native_main) {
         if (!main_it->parameters.empty())
