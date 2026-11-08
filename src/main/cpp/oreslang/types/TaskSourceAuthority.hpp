@@ -130,6 +130,7 @@ inline void require_source_task_i64(
         const SourceTaskI64Binding& task) {
     const auto current = source_task_i64_fingerprint(task);
     if (!task.ownership_admitted ||
+            task.ownership_boundary_identity != &task ||
             !task.ownership_authority_fingerprint || !current ||
             task.ownership_authority_fingerprint != current)
         throw std::runtime_error(
