@@ -47,6 +47,18 @@ struct TaskCaptureProof {
  * boundary identity, ownership-check epoch and execution domain are retained
  * so a reparsed/cloned/stale boundary cannot reuse this admission.
  */
+/**
+ * The auto-trait lattice proves Send/Sync/Share, not Copy. Until the
+ * frontend supplies an independent trusted Copy witness for aggregates and
+ * synchronized handles, only the exact intrinsic scalar leaf may be copied
+ * across a Task boundary. A Send Box/RefCell/nominal is move-only.
+ */
+inline bool compiler_proven_task_copy(const AutoType& type) noexcept {
+    return type.kind == AutoTypeKind::Scalar &&
+        type.parameters.empty() && type.dyn_bounds.empty() &&
+        !type.complete_nominal_layout && !type.shareable_domain;
+}
+
 class TaskCaptureAdmission final {
 public:
     static TaskCaptureAdmission admit(
@@ -75,6 +87,9 @@ public:
                 if (!caps.send)
                     throw std::invalid_argument(
                         "Copy Task capture lacks derived Send proof: " + capture.name);
+                if (!compiler_proven_task_copy(capture.type))
+                    throw std::invalid_argument(
+                        "Copy Task capture lacks independent Copy proof: " + capture.name);
                 proofs.push_back({capture.name, TaskCaptureTransfer::Copy, caps});
                 break;
             case TaskCaptureSource::OwnedValue:
