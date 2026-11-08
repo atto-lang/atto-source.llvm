@@ -9,6 +9,7 @@ import {dirname, isAbsolute, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
 import {mutateActorWasmExport, mutateActorWasmOutOfBounds, mutateActorWasmOutOfBoundsStore, wasmSha256} from './atto_volucro_compiled_guest_faults_lib.mjs';
+import {assertCompiledActorProfile, assertInjectedOutOfBounds, assertVmOutcome} from './atto_volucro_compiled_guest_guard.mjs';
 
 const options = new Map();
 for(let i=2;i<process.argv.length;i+=2){
@@ -57,19 +58,11 @@ function runVm(file){
   return command(options.get('--cargo'),['run','--quiet','--manifest-path',join(volucroRoot,'Cargo.toml'),
     '-p','vm-core','--bin','atto_actor_isolation_smoke','--',file],{cwd:volucroRoot});
 }
-const positive=/^ATTO_VOLUCRO_WASM32_ACTOR_REAL_GUEST_PASS A=\[1,3,6\] B=\[7,8\] A_restart=\[5\]$/;
 function expectPositive(file,label){
-  const result=runVm(file);
-  assert.equal(result.status,0,label+' must actually run the guest successfully: '+result.stderr.slice(-1000));
-  assert.match(result.stdout.trim(),positive,label+' canonical output not demonstrated');
-  assert.ok(!result.stderr.includes('ATTO_VOLUCRO_WASM32_ACTOR_REAL_GUEST_FAIL'),label+' reported failure');
+  assertVmOutcome(runVm(file),'positive',label);
 }
 function expectNegative(file,expected,label){
-  const result=runVm(file);
-  assert.notEqual(result.status,0,label+' must be rejected by Volucro Wasmi');
-  assert.match(result.stderr,/ATTO_VOLUCRO_WASM32_ACTOR_REAL_GUEST_FAIL:/,label+' expected typed VM denial, not missing cargo/tool');
-  assert.match(result.stderr,expected,label+' must fail for the intended security reason');
-  assert.ok(!result.stdout.includes('ATTO_VOLUCRO_WASM32_ACTOR_REAL_GUEST_PASS'),label+' printed false PASS');
+  assertVmOutcome(runVm(file),expected,label);
 }
 try {
   const original=join(temp,'compiled-actor.wasm');
@@ -81,9 +74,16 @@ try {
   assert.ok(WebAssembly.validate(baseline),'real compiler produced invalid wasm');
   assert.deepEqual(WebAssembly.Module.imports(new WebAssembly.Module(baseline)),[],
     'real compiler output unexpectedly has imports');
+  // Validate the exact scalar AttoLang actor ABI and bounded two-page memory
+  // BEFORE injecting any faults or allowing a runtime PASS classification.
+  const compiledProfile=assertCompiledActorProfile(baseline);
   const abi=mutateActorWasmExport(baseline);
   const fault=mutateActorWasmOutOfBounds(baseline);
   const storeFault=mutateActorWasmOutOfBoundsStore(baseline);
+  assert.throws(()=>assertCompiledActorProfile(abi),/missing\/invalid actor function export/,
+    'ABI mutation did not actually revoke the required handler');
+  assertInjectedOutOfBounds(fault,'read');
+  assertInjectedOutOfBounds(storeFault,'write');
   const abiFile=join(temp,'mutated-missing-abi.wasm');
   const faultFile=join(temp,'mutated-oob-i64-load.wasm');
   const storeFaultFile=join(temp,'mutated-oob-i64-store.wasm');
@@ -93,9 +93,9 @@ try {
   // A successful initial guest run is mandatory; failure mutations must not
   // pass when the original compiler/runtime path was never functional.
   expectPositive(original,'baseline');
-  expectNegative(abiFile,/Wasm\(MissingExport\)/,'renamed compiled on_message export');
-  expectNegative(faultFile,/Wasm\(ExecutionTrapped\)/,'out-of-bounds compiled guest load');
-  expectNegative(storeFaultFile,/Wasm\(ExecutionTrapped\)/,'out-of-bounds compiled guest store');
+  expectNegative(abiFile,'MissingExport','renamed compiled on_message export');
+  expectNegative(faultFile,'ExecutionTrapped','out-of-bounds compiled guest load');
+  expectNegative(storeFaultFile,'ExecutionTrapped','out-of-bounds compiled guest store');
   // This recovery is a NEW VM invocation, not evidence of same-VM sibling
   // survival. Separate Volucro vm-core tests must prove same-VM survival.
   expectPositive(original,'recovery control');
@@ -104,6 +104,7 @@ try {
     not_proved:['source-level malicious actor','same-VM sibling survival','OS process sandbox','native LLVM arbitrary-pointer isolation'],
     llvm_head:llvmHead,volucro_head:volucroHead,
     source_sha256:wasmSha256(source),compiler_sha256:wasmSha256(readFileSync(options.get('--compiler'))),
+    validated_actor_memory_pages:compiledProfile.memory,
     original_wasm_sha256:wasmSha256(baseline),missing_abi_sha256:wasmSha256(abi),oob_load_sha256:wasmSha256(fault),oob_store_sha256:wasmSha256(storeFault),
     probes:{baseline:'PASS',abi_mutation:'EXPECTED_MISSING_EXPORT',oob_load:'EXPECTED_EXECUTION_TRAPPED',oob_store:'EXPECTED_EXECUTION_TRAPPED',recovery:'PASS'}}));
 } finally {
