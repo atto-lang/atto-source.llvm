@@ -124,6 +124,7 @@ function(reject_closed_world_case name text)
     RESULT_VARIABLE status
     OUTPUT_VARIABLE stdout
     ERROR_VARIABLE stderr
+    WORKING_DIRECTORY "${dir}"
     TIMEOUT 20)
   if(NOT status MATCHES "^[0-9]+$" OR status EQUAL 0)
     fail_case("${name}: closed-world rejection missing (compiler status ${status})")
@@ -132,7 +133,15 @@ function(reject_closed_world_case name text)
   elseif(stderr STREQUAL "")
     fail_case("${name}: rejection had no diagnostic on stderr")
   else()
-    message(STATUS "PASS closed-world ${name}")
+    # Any accidental emitted LLVM/native sidecar must be inside the isolated
+    # working directory and must cause a negative compilation test failure.
+    file(GLOB emitted "${dir}/*.ll" "${dir}/*.bc" "${dir}/*.o"
+      "${dir}/*.obj" "${dir}/*.s" "${dir}/*.exe")
+    if(emitted)
+      fail_case("${name}: invalid source emitted a code artifact: ${emitted}")
+    else()
+      message(STATUS "PASS closed-world ${name}")
+    endif()
   endif()
   set(failures ${failures} PARENT_SCOPE)
 endfunction()
