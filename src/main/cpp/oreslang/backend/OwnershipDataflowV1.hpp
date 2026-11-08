@@ -127,6 +127,8 @@ public:
                     op.kind == OwnershipV1OpKind::ExitCancel) {
                     if (op_index + 1 != block.operations.size())
                         fail("exit operation must terminate its basic block");
+                    if (op.owner != 0 || op.target != NoOwner)
+                        fail("exit operation must not carry owner or transfer metadata");
                     if (!block.successors.empty())
                         fail("exit block must not have successors");
                     if (op.kind != OwnershipV1OpKind::ExitNormal)
