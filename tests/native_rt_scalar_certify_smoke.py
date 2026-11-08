@@ -15,6 +15,9 @@ def fixture(root: Path, *, tamper: bool):
     shim.write_text('#!/bin/sh\ncase "$1" in --version) echo 17.0.0 ;; '
                     '--cmakedir) echo "' + str(root) + '" ;; *) exit 2 ;; esac\n')
     shim.chmod(0o755)
+    fake_clang = root / 'clang'
+    fake_clang.write_text('#!/bin/sh\nif [ \"$1\" = \"-dumpversion\" ]; then echo 17.0.0; else exit 2; fi\n')
+    fake_clang.chmod(0o755)
     (source / 'noop.c').write_text('int main(void) { return 0; }\n')
     cmake = ['cmake_minimum_required(VERSION 3.20)',
              'project(synthetic_proof LANGUAGES C)', 'enable_testing()']
@@ -32,7 +35,7 @@ def fixture(root: Path, *, tamper: bool):
     git('config', 'user.email', 'synthetic@example.invalid')
     git('add', '.')
     git('commit', '-qm', 'synthetic fixture')
-    return source, git('rev-parse', 'HEAD'), str(shim)
+    return source, git('rev-parse', 'HEAD'), str(shim), str(fake_clang)
 
 
 def main():
@@ -41,8 +44,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix='synthetic-exact-head-') as td:
         root = Path(td) / 'positive'
         root.mkdir()
-        source, head, llvm_config = fixture(root, tamper=False)
-        result = certify(source, head, llvm_config, 'clang', root / 'proof')
+        source, head, llvm_config, clang = fixture(root, tamper=False)
+        result = certify(source, head, llvm_config, clang, root / 'proof')
         if (result['status'] != 'EXACT_HEAD_EXECUTED_PASS' or
                 result['tests']['executed_cases'] != len(TESTS) or
                 result.get('post_build_source') != result['source'] or
@@ -51,9 +54,9 @@ def main():
 
         root = Path(td) / 'tampered'
         root.mkdir()
-        source, head, llvm_config = fixture(root, tamper=True)
+        source, head, llvm_config, clang = fixture(root, tamper=True)
         try:
-            certify(source, head, llvm_config, 'clang', root / 'proof')
+            certify(source, head, llvm_config, clang, root / 'proof')
         except GateFailed:
             receipt = json.loads((root / 'proof' / 'receipt.json').read_text())
             if receipt['status'] != 'FAILED_OR_NOT_EXECUTED':
