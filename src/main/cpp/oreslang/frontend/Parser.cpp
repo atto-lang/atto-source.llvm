@@ -4,6 +4,7 @@
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/types/OwnershipChecker.hpp"
+#include "oreslang/types/TaskSourceAuthority.hpp"
 #include "oreslang/frontend/MethodResolver.hpp"
 #include "oreslang/types/NativeScalarTypes.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
@@ -6258,11 +6259,16 @@ void resolve_and_validate_program(Program& program) {
         validate_native_scalar_types(program);
     } catch (...) {
         // Preserve the established diagnostic/check ordering for the native
-        // compiler while ensuring a later scalar-type failure revokes every
-        // lowering authorization published by the ownership pass.
-        for (auto& function : program.functions)
-            for (auto& pipeline : function.future_pipelines)
+        // compiler while ensuring a later scalar-type failure revokes EVERY
+        // Task/Future lowering authority published by the ownership pass.
+        for (auto& function : program.functions) {
+            for (auto& task : function.source_tasks)
+                types::revoke_source_task_i64(task);
+            for (auto& pipeline : function.future_pipelines) {
                 pipeline.ownership_admitted = false;
+                pipeline.ownership_authority_fingerprint = 0;
+            }
+        }
         throw;
     }
 }
