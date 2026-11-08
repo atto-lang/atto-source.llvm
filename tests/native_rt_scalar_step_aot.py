@@ -37,10 +37,16 @@ def main():
         assert "requires verified LLVM continuation lowering" in denied.stderr, denied.stderr
         accepted = compile_source(fixture)
         assert accepted.returncode == 0, accepted.stderr
-        assert "define i32 @oreslang_rt_scalar_frame_step" in accepted.stdout, "not compiled guest step"
-        assert "define void @oreslang_rt_scalar_frame_cancel" in accepted.stdout
-        assert "define void @oreslang_rt_scalar_frame_init" in accepted.stdout
-        assert "define i64 @oreslang_rt_scalar_frame_result" in accepted.stdout
+        assert "define i32 @oreslang_rt_scalar_frame_step_v1" in accepted.stdout, "not compiled guest step"
+        assert "define void @oreslang_rt_scalar_frame_cancel_v1" in accepted.stdout
+        assert "define void @oreslang_rt_scalar_frame_init_v1" in accepted.stdout
+        assert "define i64 @oreslang_rt_scalar_frame_result_v1" in accepted.stdout
+        # Reject the v0 24-byte ABI: an old caller must fail to link rather
+        # than corrupt the extended 32-byte persistent-fuel guest frame.
+        assert "define void @oreslang_rt_scalar_frame_init(" not in accepted.stdout
+        assert "define i32 @oreslang_rt_scalar_frame_step(" not in accepted.stdout
+        assert "fuel.remaining.logical" in accepted.stdout, "missing committed lifetime fuel debit"
+        assert "fuel.logical.exhausted" in accepted.stdout, "missing immutable quota denial"
         llvm_ir = out / "guest.ll"
         llvm_ir.write_text(accepted.stdout)
         exe = out / "run-guest"
@@ -53,6 +59,7 @@ def main():
         assert "SCALAR_FRAME_AOT_TWO_TASKS_PASS" in execution.stdout
         assert "SCALAR_FRAME_AOT_THREE_PEERS_BOUNDED_PROGRESS_PASS" in execution.stdout
         assert "SCALAR_FRAME_AOT_CANCELLED_PEER_ISOLATION_PASS" in execution.stdout
+        assert "SCALAR_FRAME_AOT_LOGICAL_FUEL_CONSERVATION_PASS" in execution.stdout
         for i, (original, replacement) in enumerate(cases):
             assert original in source
             file = out / f"invalid-{i}.ores"
@@ -61,7 +68,7 @@ def main():
             assert wrong.returncode != 0 and not wrong.stdout.strip(), (i, wrong.stdout)
         missing = run([compiler, "--experimental-rt-scalar-loop", "--target=wasm32", str(fixture)])
         assert missing.returncode != 0 and not missing.stdout.strip()
-        print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: 3 peer frames, cancellation isolation, bounded progress, negatives")
+        print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: 3 peers, logical fuel lifetime across resumption, cancellation, negative traps")
 
 if __name__ == "__main__":
     main()
