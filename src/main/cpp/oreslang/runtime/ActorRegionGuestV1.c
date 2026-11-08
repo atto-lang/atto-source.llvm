@@ -15,6 +15,7 @@ typedef struct {
     uint32_t slots;
     uint32_t stride;
     uint32_t live_count;
+    uint32_t next_guest_slot;
     OresActorRegionV1Ref refs[ORES_GUEST_REGION_MAX_SLOTS];
     unsigned char live[ORES_GUEST_REGION_MAX_SLOTS];
     /* A compact offset cannot distinguish a reused physical slot. Therefore
@@ -41,10 +42,11 @@ static uint32_t checked_index(uint32_t offset) {
     if ((zero_based % guest_scope.stride) != 0)
         deny_guest_bridge();
     const uint32_t index = zero_based / guest_scope.stride;
-    if (index >= guest_scope.slots || !guest_scope.live[index])
+    if (index >= guest_scope.next_guest_slot || !guest_scope.live[index])
         deny_guest_bridge();
-    if (guest_scope.refs[index].offset.storage != offset)
-        deny_guest_bridge();
+    /* Guest offsets are monotonically assigned logical slots. The trusted
+     * sidecar maps them to generation-checked physical allocator refs; the
+     * physical slot may be reused without reissuing an old guest offset. */
     return index;
 }
 
@@ -72,6 +74,7 @@ void ores_actor_region_guest_v1_begin(uint32_t object_slots,
     guest_scope.slots = object_slots;
     guest_scope.stride = slot_bytes;
     guest_scope.live_count = 0;
+    guest_scope.next_guest_slot = 0;
 }
 
 uint32_t ores_actor_region_guest_v1_alloc(uint32_t object_bytes) {
@@ -81,19 +84,17 @@ uint32_t ores_actor_region_guest_v1_alloc(uint32_t object_bytes) {
         deny_guest_bridge();
     const OresActorRegionV1Ref ref = ores_actor_region_v1_alloc(
         guest_scope.region, guest_scope.turn, object_bytes);
-    const uint32_t index = (uint32_t)ref.proof.index;
-    if (index >= guest_scope.slots || guest_scope.live[index] ||
-        guest_scope.issued[index])
+    if (guest_scope.next_guest_slot >= guest_scope.slots)
         deny_guest_bridge();
-    const uint64_t expected =
+    const uint32_t index = guest_scope.next_guest_slot++;
+    const uint64_t logical_offset =
         (uint64_t)index * guest_scope.stride + UINT64_C(1);
-    if (expected > UINT32_MAX || ref.offset.storage != (uint32_t)expected)
+    if (logical_offset > UINT32_MAX || guest_scope.live[index])
         deny_guest_bridge();
     guest_scope.refs[index] = ref;
     guest_scope.live[index] = 1;
-    guest_scope.issued[index] = 1;
     ++guest_scope.live_count;
-    return ref.offset.storage;
+    return (uint32_t)logical_offset;
 }
 
 int64_t ores_actor_region_guest_v1_read_i64(uint32_t offset,
