@@ -26,7 +26,7 @@ template <typename Clock = std::chrono::steady_clock>
 class BasicSourceCooperationQuantum final {
 public:
     using time_point = typename Clock::time_point;
-    static constexpr std::uint32_t kLoopCheckInterval = 64;
+    static constexpr std::uint32_t kLoopCheckInterval = 128;
     static constexpr std::uint32_t kMaxBackedgesPerDispatch = 512;
     static constexpr auto kSoftDispatchQuantum = std::chrono::milliseconds(2);
 
@@ -51,11 +51,11 @@ public:
     // No wall-clock sampling and no scheduler/FFI calls here.
     bool completedBackedgeNeedsCheck() noexcept {
         backedges_ = detail::saturatingBackedgeSuccessor(backedges_);
-        // After an over-budget no-yield region, do not defer a newly
-        // available safe handoff for another 64 backedges. The caller still
-        // decides whether a protected lexical scope forbids suspension.
-        return backedges_ >= kMaxBackedgesPerDispatch ||
-            (backedges_ & (kLoopCheckInterval - 1)) == 0;
+        // The expensive runtime poll is NEVER invoked on every backedge,
+        // even after the fairness budget expires inside a no-yield scope.
+        // A newly safe handoff can be delayed by at most 127 backedges;
+        // hard untrusted fuel limits require separate charged instrumentation.
+        return (backedges_ & (kLoopCheckInterval - 1)) == 0;
     }
 
     // Cold path: independent watchdog request, reduction cap, or active
