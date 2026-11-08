@@ -1,0 +1,7 @@
+// and/or/xor in comments are never operator tokens.
+fnc combine(bool candy, bool android, bool origin): int {
+  return (candy and android or origin) ? 42 : 7;
+}
+pub fnc main(): int {
+  return combine(true, true, false);
+}
