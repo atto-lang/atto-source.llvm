@@ -64,7 +64,7 @@ test('more than two bounded memory pages are denied',()=>{
 test('oversize binary denied before Wasm compilation',()=>{
   const m=Buffer.alloc(MAX_ACTOR_WASM_BYTES+1);
   m.set(good);
-  assert.throws(()=>assertCompiledActorProfile(m),/oversized module/);
+  assert.throws(()=>assertCompiledActorProfile(m),/bounded byte array/);
 });
 test('explicit start function is denied even though baseline would otherwise validate',()=>{
   // Function 0 is type ()->(), so a valid Wasm start section can invoke it.
