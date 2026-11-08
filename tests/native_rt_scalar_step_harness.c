@@ -15,16 +15,27 @@
 #include <unistd.h>
 #endif
 
-extern void oreslang_rt_scalar_frame_init(void *);
-extern int oreslang_rt_scalar_frame_step(void *, uint64_t);
-extern void oreslang_rt_scalar_frame_cancel(void *);
-extern int64_t oreslang_rt_scalar_frame_result(void *);
+/* Explicit v1 symbols prevent accidental 24-byte ABI-v0 frame usage. */
+extern void oreslang_rt_scalar_frame_init_v1(void *, uint64_t);
+extern int oreslang_rt_scalar_frame_step_v1(void *, uint64_t);
+extern void oreslang_rt_scalar_frame_cancel_v1(void *);
+extern int64_t oreslang_rt_scalar_frame_result_v1(void *);
+
+#define DEFAULT_LOGICAL_FUEL UINT64_C(1000000)
 
 typedef struct {
     uint64_t state;
     uint64_t counter;
     uint64_t magic;
+    uint64_t remaining_logical_fuel;
 } ScalarFrame;
+
+_Static_assert(sizeof(ScalarFrame) == 32, "v1 scalar frame must be 32 bytes");
+
+/* Every new task owns a finite, non-refillable logical quota. */
+static void init_frame(ScalarFrame *frame) {
+    oreslang_rt_scalar_frame_init_v1(frame, DEFAULT_LOGICAL_FUEL);
+}
 
 #ifdef __linux__
 /* Real llvm.trap must fail closed in a child, not silently return a code or
@@ -36,21 +47,26 @@ static void require_guest_trap(int scenario) {
     if (pid == 0) {
         ScalarFrame frame = {0};
         switch (scenario) {
-        case 0: (void)oreslang_rt_scalar_frame_step(&frame, 1); break;
-        case 1: oreslang_rt_scalar_frame_cancel(&frame); break;
-        case 2: oreslang_rt_scalar_frame_init(&frame);
-                oreslang_rt_scalar_frame_init(&frame); break;
-        case 3: oreslang_rt_scalar_frame_init(&frame);
-                (void)oreslang_rt_scalar_frame_step(&frame, 513); break;
-        case 4: oreslang_rt_scalar_frame_init(&frame);
+        case 0: (void)oreslang_rt_scalar_frame_step_v1(&frame, 1); break;
+        case 1: oreslang_rt_scalar_frame_cancel_v1(&frame); break;
+        case 2: init_frame(&frame);
+                init_frame(&frame); break;
+        case 3: init_frame(&frame);
+                (void)oreslang_rt_scalar_frame_step_v1(&frame, 513); break;
+        case 4: init_frame(&frame);
                 frame.magic = 0;
-                (void)oreslang_rt_scalar_frame_step(&frame, 1); break;
-        case 5: oreslang_rt_scalar_frame_init(&frame);
-                (void)oreslang_rt_scalar_frame_result(&frame); break;
-        case 6: oreslang_rt_scalar_frame_init(&frame);
+                (void)oreslang_rt_scalar_frame_step_v1(&frame, 1); break;
+        case 5: init_frame(&frame);
+                (void)oreslang_rt_scalar_frame_result_v1(&frame); break;
+        case 6: init_frame(&frame);
                 frame.state = 99;
-                (void)oreslang_rt_scalar_frame_step(&frame, 1); break;
-        case 7: (void)oreslang_rt_scalar_frame_step(NULL, 1); break;
+                (void)oreslang_rt_scalar_frame_step_v1(&frame, 1); break;
+        case 7: (void)oreslang_rt_scalar_frame_step_v1(NULL, 1); break;
+        case 8: oreslang_rt_scalar_frame_init_v1(&frame, 0); break;
+        case 9: oreslang_rt_scalar_frame_init_v1(&frame, 100000001); break;
+        case 10: oreslang_rt_scalar_frame_init_v1(&frame, 3);
+                 CHECK(oreslang_rt_scalar_frame_step_v1(&frame, 3) == 3);
+                 (void)oreslang_rt_scalar_frame_result_v1(&frame); break;
         default: _Exit(99);
         }
         _Exit(0); /* An invalid operation returning constitutes a failure. */
@@ -76,7 +92,7 @@ static void require_bounded_peer_progress(void) {
     for (unsigned i = 0; i < 3; ++i) {
         frames[i] = calloc(1, sizeof(*frames[i]));
         CHECK(frames[i] != NULL);
-        oreslang_rt_scalar_frame_init(frames[i]);
+        init_frame(frames[i]);
         CHECK(frames[i]->counter == 0 && frames[i]->state == 1);
     }
     uint64_t dispatches[3] = {0, 0, 0};
@@ -88,14 +104,14 @@ static void require_bounded_peer_progress(void) {
             const uint64_t expected_advance =
                 before < 1000 && fuel[i] < 1000 - before
                     ? fuel[i] : (before < 1000 ? 1000 - before : 0);
-            const int result = oreslang_rt_scalar_frame_step(frames[i], fuel[i]);
+            const int result = oreslang_rt_scalar_frame_step_v1(frames[i], fuel[i]);
             ++dispatches[i];
             CHECK(result == 0 || result == 1);
             CHECK(frames[i]->counter == before + expected_advance);
             CHECK(frames[i]->counter <= 1000);
             if (result == 0) {
                 CHECK(frames[i]->state == 2);
-                CHECK(oreslang_rt_scalar_frame_result(frames[i]) == 1000);
+                CHECK(oreslang_rt_scalar_frame_result_v1(frames[i]) == 1000);
                 ++retired;
             } else {
                 CHECK(frames[i]->state == 1);
@@ -112,8 +128,8 @@ static void require_bounded_peer_progress(void) {
     CHECK(dispatches[1] == 143);
     CHECK(dispatches[2] == 143);
     for (unsigned i = 0; i < 3; ++i) {
-        CHECK(oreslang_rt_scalar_frame_step(frames[i], 0) == 0);
-        CHECK(oreslang_rt_scalar_frame_result(frames[i]) == 1000);
+        CHECK(oreslang_rt_scalar_frame_step_v1(frames[i], 0) == 0);
+        CHECK(oreslang_rt_scalar_frame_result_v1(frames[i]) == 1000);
         free(frames[i]); // after terminal guest dispatch has returned
     }
 }
@@ -128,26 +144,26 @@ static void require_cancelled_peer_is_isolated(void) {
     ScalarFrame *survive_a = calloc(1, sizeof(ScalarFrame));
     ScalarFrame *survive_b = calloc(1, sizeof(ScalarFrame));
     CHECK(cancel && survive_a && survive_b);
-    oreslang_rt_scalar_frame_init(cancel);
-    oreslang_rt_scalar_frame_init(survive_a);
-    oreslang_rt_scalar_frame_init(survive_b);
-    CHECK(oreslang_rt_scalar_frame_step(cancel, 64) == 1);
+    init_frame(cancel);
+    init_frame(survive_a);
+    init_frame(survive_b);
+    CHECK(oreslang_rt_scalar_frame_step_v1(cancel, 64) == 1);
     CHECK(cancel->counter == 64);
-    CHECK(oreslang_rt_scalar_frame_step(survive_a, 31) == 1);
-    CHECK(oreslang_rt_scalar_frame_step(survive_b, 29) == 1);
+    CHECK(oreslang_rt_scalar_frame_step_v1(survive_a, 31) == 1);
+    CHECK(oreslang_rt_scalar_frame_step_v1(survive_b, 29) == 1);
     const uint64_t before_a = survive_a->counter;
     const uint64_t before_b = survive_b->counter;
-    oreslang_rt_scalar_frame_cancel(cancel);
-    CHECK(oreslang_rt_scalar_frame_step(cancel, 7) == 2);
-    CHECK(oreslang_rt_scalar_frame_step(cancel, 512) == 2);
+    oreslang_rt_scalar_frame_cancel_v1(cancel);
+    CHECK(oreslang_rt_scalar_frame_step_v1(cancel, 7) == 2);
+    CHECK(oreslang_rt_scalar_frame_step_v1(cancel, 512) == 2);
     CHECK(cancel->counter == 64 && cancel->state == 3);
     CHECK(survive_a->counter == before_a && survive_b->counter == before_b);
     unsigned rounds = 0;
     while (survive_a->state != 2 || survive_b->state != 2) {
         const uint64_t a_before = survive_a->counter;
         const uint64_t b_before = survive_b->counter;
-        const int sa = oreslang_rt_scalar_frame_step(survive_a, 31);
-        const int sb = oreslang_rt_scalar_frame_step(survive_b, 29);
+        const int sa = oreslang_rt_scalar_frame_step_v1(survive_a, 31);
+        const int sb = oreslang_rt_scalar_frame_step_v1(survive_b, 29);
         CHECK(sa == 0 || sa == 1);
         CHECK(sb == 0 || sb == 1);
         CHECK(survive_a->counter >= a_before &&
@@ -157,11 +173,63 @@ static void require_cancelled_peer_is_isolated(void) {
         CHECK(cancel->counter == 64 && cancel->state == 3);
         CHECK(++rounds <= 36);
     }
-    CHECK(oreslang_rt_scalar_frame_result(survive_a) == 1000);
-    CHECK(oreslang_rt_scalar_frame_result(survive_b) == 1000);
+    CHECK(oreslang_rt_scalar_frame_result_v1(survive_a) == 1000);
+    CHECK(oreslang_rt_scalar_frame_result_v1(survive_b) == 1000);
     free(survive_b);
     free(survive_a);
     free(cancel);
+}
+
+/* Distinct from the per-dispatch reduction quantum: logical guest fuel
+ * must monotonically decrease across scheduler handoffs, including 127-step
+ * turns, zero-fuel calls, cancellation, and resumed 512-slice calls. */
+static void require_no_refill_across_127_step_dispatches(void) {
+    ScalarFrame frame = {0};
+    oreslang_rt_scalar_frame_init_v1(&frame, 513);
+    CHECK(frame.remaining_logical_fuel == 513);
+    for (int turn = 0; turn < 4; ++turn) {
+        CHECK(oreslang_rt_scalar_frame_step_v1(&frame, 127) == 1);
+        CHECK(frame.counter == (uint64_t)(turn + 1) * 127);
+        CHECK(frame.remaining_logical_fuel == 513 - (uint64_t)(turn + 1) * 127);
+        CHECK(oreslang_rt_scalar_frame_step_v1(&frame, 0) == 1);
+        CHECK(frame.remaining_logical_fuel == 513 - (uint64_t)(turn + 1) * 127);
+    }
+    CHECK(frame.counter == 508 && frame.remaining_logical_fuel == 5);
+    // The fifth call depletes the entire lifetime budget; passing a fresh
+    // 512-unit per-dispatch allowance cannot renew it.
+    CHECK(oreslang_rt_scalar_frame_step_v1(&frame, 512) == 3);
+    CHECK(frame.state == 4 && frame.counter == 513);
+    CHECK(frame.remaining_logical_fuel == 0);
+    for (int i = 0; i < 32; ++i) {
+        CHECK(oreslang_rt_scalar_frame_step_v1(&frame, i % 2 ? 512 : 0) == 3);
+        CHECK(frame.counter == 513 && frame.remaining_logical_fuel == 0);
+    }
+    // A cancellation request cannot revive or reclassify a denied tenant.
+    oreslang_rt_scalar_frame_cancel_v1(&frame);
+    CHECK(oreslang_rt_scalar_frame_step_v1(&frame, 7) == 3);
+    CHECK(frame.state == 4 && frame.counter == 513);
+}
+
+static void require_exact_quota_completes_and_peers_are_isolated(void) {
+    ScalarFrame exact = {0};
+    ScalarFrame short_lived = {0};
+    ScalarFrame healthy = {0};
+    oreslang_rt_scalar_frame_init_v1(&exact, 1000);
+    oreslang_rt_scalar_frame_init_v1(&short_lived, 1);
+    oreslang_rt_scalar_frame_init_v1(&healthy, 1000);
+    CHECK(oreslang_rt_scalar_frame_step_v1(&exact, 512) == 1);
+    CHECK(exact.counter == 512 && exact.remaining_logical_fuel == 488);
+    CHECK(oreslang_rt_scalar_frame_step_v1(&exact, 512) == 0);
+    CHECK(exact.counter == 1000 && exact.remaining_logical_fuel == 0);
+    CHECK(oreslang_rt_scalar_frame_result_v1(&exact) == 1000);
+    CHECK(oreslang_rt_scalar_frame_step_v1(&exact, 0) == 0);
+    CHECK(oreslang_rt_scalar_frame_step_v1(&short_lived, 1) == 1);
+    CHECK(short_lived.counter == 1 && short_lived.remaining_logical_fuel == 0);
+    CHECK(oreslang_rt_scalar_frame_step_v1(&short_lived, 0) == 3);
+    CHECK(oreslang_rt_scalar_frame_step_v1(&healthy, 512) == 1);
+    CHECK(oreslang_rt_scalar_frame_step_v1(&healthy, 512) == 0);
+    CHECK(healthy.state == 2 && healthy.counter == 1000);
+    CHECK(healthy.remaining_logical_fuel == 0);
 }
 
 int main(void) {
@@ -171,32 +239,32 @@ int main(void) {
     ScalarFrame *b = calloc(1, sizeof(*b));
     ScalarFrame *cancelled = calloc(1, sizeof(*cancelled));
     CHECK(a && b && cancelled);
-    oreslang_rt_scalar_frame_init(a);
-    oreslang_rt_scalar_frame_init(b);
-    oreslang_rt_scalar_frame_init(cancelled);
-    CHECK(oreslang_rt_scalar_frame_step(a, 0) == 1);
+    init_frame(a);
+    init_frame(b);
+    init_frame(cancelled);
+    CHECK(oreslang_rt_scalar_frame_step_v1(a, 0) == 1);
     CHECK(a->counter == 0 && a->state == 1);
-    CHECK(oreslang_rt_scalar_frame_step(a, 1) == 1);
+    CHECK(oreslang_rt_scalar_frame_step_v1(a, 1) == 1);
     CHECK(a->counter == 1 && a->state == 1);
     // Exactly 512 backedges per dispatch, no replay on handoff.
-    CHECK(oreslang_rt_scalar_frame_step(b, 512) == 1);
+    CHECK(oreslang_rt_scalar_frame_step_v1(b, 512) == 1);
     CHECK(b->counter == 512);
-    CHECK(oreslang_rt_scalar_frame_step(a, 512) == 1);
+    CHECK(oreslang_rt_scalar_frame_step_v1(a, 512) == 1);
     CHECK(a->counter == 513);
     // A separate task cancellation must not mutate or replay other frames.
-    CHECK(oreslang_rt_scalar_frame_step(cancelled, 9) == 1);
+    CHECK(oreslang_rt_scalar_frame_step_v1(cancelled, 9) == 1);
     CHECK(cancelled->counter == 9);
-    oreslang_rt_scalar_frame_cancel(cancelled);
-    CHECK(oreslang_rt_scalar_frame_step(cancelled, 512) == 2);
+    oreslang_rt_scalar_frame_cancel_v1(cancelled);
+    CHECK(oreslang_rt_scalar_frame_step_v1(cancelled, 512) == 2);
     CHECK(cancelled->counter == 9 && cancelled->state == 3);
-    oreslang_rt_scalar_frame_cancel(cancelled);
-    CHECK(oreslang_rt_scalar_frame_step(cancelled, 1) == 2);
+    oreslang_rt_scalar_frame_cancel_v1(cancelled);
+    CHECK(oreslang_rt_scalar_frame_step_v1(cancelled, 1) == 2);
 
     uint64_t prevA = a->counter, prevB = b->counter;
     unsigned rounds = 0;
     while (a->state != 2 || b->state != 2) {
-        int sa = oreslang_rt_scalar_frame_step(a, 7);
-        int sb = oreslang_rt_scalar_frame_step(b, 11);
+        int sa = oreslang_rt_scalar_frame_step_v1(a, 7);
+        int sb = oreslang_rt_scalar_frame_step_v1(b, 11);
         CHECK(sa == 0 || sa == 1);
         CHECK(sb == 0 || sb == 1);
         CHECK(a->counter >= prevA && a->counter <= prevA + 7);
@@ -205,16 +273,19 @@ int main(void) {
         prevB = b->counter;
         CHECK(++rounds < 300);
     }
-    CHECK(oreslang_rt_scalar_frame_result(a) == 1000);
-    CHECK(oreslang_rt_scalar_frame_result(b) == 1000);
-    CHECK(oreslang_rt_scalar_frame_step(a, 512) == 0);
+    CHECK(oreslang_rt_scalar_frame_result_v1(a) == 1000);
+    CHECK(oreslang_rt_scalar_frame_result_v1(b) == 1000);
+    CHECK(oreslang_rt_scalar_frame_step_v1(a, 512) == 0);
     CHECK(a->counter == 1000);
 #ifdef __linux__
-    for (int scenario = 0; scenario != 8; ++scenario)
+    for (int scenario = 0; scenario != 11; ++scenario)
         require_guest_trap(scenario);
 #endif
     require_bounded_peer_progress();
     require_cancelled_peer_is_isolated();
+    require_no_refill_across_127_step_dispatches();
+    require_exact_quota_completes_and_peers_are_isolated();
+    puts("SCALAR_FRAME_AOT_LOGICAL_FUEL_CONSERVATION_PASS");
     puts("SCALAR_FRAME_AOT_CANCELLED_PEER_ISOLATION_PASS");
     puts("SCALAR_FRAME_AOT_THREE_PEERS_BOUNDED_PROGRESS_PASS");
     puts("SCALAR_FRAME_AOT_TWO_TASKS_PASS");
