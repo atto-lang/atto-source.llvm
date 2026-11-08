@@ -8,7 +8,8 @@ The analysis takes a compiler-owned CFG with unique owner identities and explici
 
 - `Create`: initialize a previously uninitialized owner.
 - `Use`: read a live owned value; it is allowed under shared loans but not a mutable loan.
-- `UseMutable`: mutate a live owned value only when no shared or mutable loan exists.
+- `UseMutable`: mutate through the owner only when no shared or mutable loan exists.
+- `UseThroughMutableBorrow`: mutate through an active exclusive mutable loan.
 - `BorrowShared` / `EndBorrowShared`: maintain a bounded shared-loan count.
 - `BorrowMutable` / `EndBorrowMutable`: enforce exclusive mutable loan.
 - `Take(source, destination)`: transfer the live resource into a distinct uninitialized owner; the source becomes moved and the destination inherits the original acquisition order.
@@ -25,7 +26,7 @@ ActorRegionV2 constructs a small CFG: all lexical objects are created in the ent
 
 ## Tests
 
-`native_ownership_dataflow_v1` contains six positive scenarios and eighteen negative scenarios. It checks cleanup order, moved and explicitly dropped owners, shared/mutable borrow release, double destruction, use after move, dropping with a loan, conflicting aliases, mismatched join states, suspend exit, missing explicit exit and duplicate owner identities, unbounded cycles, missing/invalid transfer destinations, transfer into an initialized destination, use-before-create, unknown operation kinds, unreachable blocks, unbalanced borrows, mutable access during shared borrowing, incompatible acquisition histories at joins, and ending a nonexistent loan.
+`native_ownership_dataflow_v1` contains seven positive scenarios and twenty negative scenarios. It checks cleanup order, moved and explicitly dropped owners, shared/mutable borrow release, double destruction, use after move, dropping with a loan, conflicting aliases, mismatched join states, suspend exit, missing explicit exit and duplicate owner identities, unbounded cycles, missing/invalid transfer destinations, transfer into an initialized destination, use-before-create, unknown operation kinds, unreachable blocks, unbalanced borrows, mutable access during shared borrowing, incompatible acquisition histories at joins, ending a nonexistent loan, stray transfer metadata, and reading through the owner during an active mutable loan.
 
 The tests are authored and registered. They are **not reported as passing** until a nonzero-step native CTest job runs on the exact PR head. They do not prove LLVM guest execution or a process-wide no-GC link closure.
 
@@ -37,5 +38,7 @@ The tests are authored and registered. They are **not reported as passing** unti
 4. Add explicit unwind/defer/recover, exception, cancel and suspension exit kinds with cleanup order and continuation ownership.
 5. Integrate scheduler-issued actor identity, loans, callback/FFI quiescence and supervisor restart.
 6. Run sanitizer builds and cross-backend canonical fixtures before widening sealed native runtime admission.
+
+The V1 analyzer also rejects unreachable blocks, unknown enum operation values, and non-Take operations carrying a transfer target. Take must name a distinct uninitialized destination and preserves the original acquisition sequence so cleanup order follows the actual resource lifetime rather than local declaration indexes.
 
 No existing frontend, runtime, actor heap or codegen path was deleted. The analysis is compile-time metadata and does not allocate guest objects.
