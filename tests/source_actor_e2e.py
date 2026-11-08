@@ -34,7 +34,8 @@ def expected_prefix_last(name, actor_index, processed):
             value = 2 * (value + n)
         return value
     if name in {"atto-actor-scalar-tail100k.atto",
-                "atto-actor-scalar-nontail-overflow.atto"}:
+                "atto-actor-scalar-nontail-overflow.atto",
+                "atto-actor-scalar-runaway-fuel.atto"}:
         return 0
     if name == "atto-actor-scalar-mutual-tail.atto":
         return 1 if processed else 0
@@ -103,6 +104,7 @@ def main():
         ("atto-actor-scalar-tail100k.atto", 1, 1, 0),
         ("atto-actor-scalar-nontail-overflow.atto", 1, 1, 0),
         ("atto-actor-scalar-mutual-tail.atto", 1, 1, 1),
+        ("atto-actor-scalar-runaway-fuel.atto", 1, 1, 0),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
@@ -199,6 +201,7 @@ def main():
                 "atto-actor-scalar-tail100k.atto",
                 "atto-actor-scalar-nontail-overflow.atto",
                 "atto-actor-scalar-mutual-tail.atto",
+                "atto-actor-scalar-runaway-fuel.atto",
             }
             if m3:
                 vm_calls = [line for line in guest.stdout.splitlines()
@@ -370,7 +373,10 @@ def main():
                     error = scalar_records[i]["error"]
                     allowed_errors = (
                         {0, 1, 5} if name ==
-                        "atto-actor-scalar-nontail-overflow.atto" else {0, 5})
+                        "atto-actor-scalar-nontail-overflow.atto"
+                        else ({0, 2, 5} if name ==
+                              "atto-actor-scalar-runaway-fuel.atto"
+                              else {0, 5}))
                     assert error in allowed_errors, (name, i, scalar_records[i])
                     if not processed:
                         assert error == 0 and scalar_records[i]["steps"] == 0
@@ -380,11 +386,16 @@ def main():
                             assert name == "atto-actor-scalar-nontail-overflow.atto"
                             assert scalar_records[i]["non_tail_calls"] >= 63
                             assert scalar_records[i]["peak_frames"] == 64
+                        if error == 2:
+                            assert name == "atto-actor-scalar-runaway-fuel.atto"
+                            assert scalar_records[i]["steps"] == 2000000
                         if error == 5:
                             assert scalar_records[i]["checkpoints"] >= 1, (
                                 name, scalar_records[i])
                         if error == 0:
-                            assert name != "atto-actor-scalar-nontail-overflow.atto"
+                            assert name not in {
+                                "atto-actor-scalar-nontail-overflow.atto",
+                                "atto-actor-scalar-runaway-fuel.atto"}
                             assert scalar_records[i]["tail_calls"] >= 100000, (
                                 name, scalar_records[i])
                             assert scalar_records[i]["peak_frames"] == 1, (
@@ -467,8 +478,14 @@ def main():
                 assert int(real_fields["steps"]) > 0
                 assert int(real_fields["error"]) == (
                     1 if name == "atto-actor-scalar-nontail-overflow.atto"
+                    else 2 if name == "atto-actor-scalar-runaway-fuel.atto"
                     else 0), (name, real_fields)
-                if name == "atto-actor-scalar-nontail-overflow.atto":
+                if name == "atto-actor-scalar-runaway-fuel.atto":
+                    assert int(real_fields["steps"]) == 2000000
+                    assert int(real_fields["peak_frames"]) == 1
+                    assert int(real_fields["checkpoints"]) == 2000000 // 256
+                    assert int(real_fields["tail_calls"]) >= 999999
+                elif name == "atto-actor-scalar-nontail-overflow.atto":
                     assert int(real_fields["non_tail_calls"]) == 63
                     assert int(real_fields["peak_frames"]) == 64
                 else:
