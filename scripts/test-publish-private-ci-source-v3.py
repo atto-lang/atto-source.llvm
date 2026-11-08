@@ -66,6 +66,59 @@ def carrier_contract(review_pr=None):
 
 
 class LlvmPrivateCiV3Test(unittest.TestCase):
+    def test_2048_blob_capacity_acceptance_and_2049_pre_fetch_denial(self):
+        # Entirely synthetic, source-free tree metadata and identical test
+        # blobs. No GitHub transfer, source checkout or real carrier access.
+        self.assertEqual(v3.MAX_FILES, 2048)
+        self.assertEqual(v3.MAX_TREE_ENTRIES, 4096)
+        self.assertEqual(v3.MAX_TOTAL, 40 * 1024 * 1024)
+        self.assertEqual(v3.MAX_FILE, 10 * 1024 * 1024)
+        head = "9" * 40
+        def simulate(count):
+            entries = [
+                {
+                    "path": "src/synthetic/file_%04d.ores" % n,
+                    "type": "blob", "mode": "100644",
+                    "sha": BLOB, "size": len(DATA),
+                }
+                for n in range(count)
+            ]
+            routes = []
+            def api(route, method="GET", payload=None):
+                routes.append(route)
+                if route == f"repos/{v3.SOURCE_REPO}/git/commits/{head}":
+                    return {"sha": head, "tree": {"sha": SOURCE_TREE}}
+                if route == f"repos/{v3.SOURCE_REPO}/git/trees/{SOURCE_TREE}?recursive=1":
+                    return {"sha": SOURCE_TREE, "truncated": False, "tree": entries}
+                if route == f"repos/{v3.SOURCE_REPO}/git/blobs/{BLOB}":
+                    return {
+                        "sha": BLOB,
+                        "encoding": "base64",
+                        "content": base64.b64encode(DATA).decode("ascii"),
+                    }
+                raise AssertionError("unexpected API request")
+            with (
+                patch.object(v3, "verify_source_pr", return_value=v3.SOURCE_REPO_ID),
+                patch.object(v3, "gh_api", side_effect=api),
+            ):
+                if count > v3.MAX_FILES:
+                    with self.assertRaisesRegex(v3.Denied, "bounded capacity"):
+                        v3.exact_source_tree(669, head)
+                    self.assertFalse(any("/git/blobs/" in value for value in routes))
+                else:
+                    tree, files, rows, digest = v3.exact_source_tree(669, head)
+                    self.assertEqual(tree, SOURCE_TREE)
+                    self.assertEqual(len(files), count)
+                    self.assertEqual(len(rows), count)
+                    self.assertEqual(
+                        digest, hashlib.sha256(v3.canonical_bytes(rows)).hexdigest()
+                    )
+                    self.assertEqual(
+                        sum(1 for value in routes if "/git/blobs/" in value), count
+                    )
+        simulate(2048)
+        simulate(2049)
+
     def test_incident_gate_contract_is_complete_and_unique(self):
         expected = (
             (22, 5832921751,
