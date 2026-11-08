@@ -2,6 +2,8 @@
 
 #include <stdexcept>
 
+#include "llvm/Config/llvm-config.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
@@ -57,6 +59,18 @@ inline void require_closed_scalar_guest_calls(const llvm::Module& module) {
     auto* i64 = llvm::Type::getInt64Ty(context);
     auto* i32 = llvm::Type::getInt32Ty(context);
     auto* voidTy = llvm::Type::getVoidTy(context);
+    // This is an actual four-u64 32-byte C frame, not an arbitrary ptr.
+    // In opaque pointer LLVM, function signatures cannot expose the pointee,
+    // so also validate the named struct GEP's source type/shape.
+    auto* frameTy = llvm::StructType::getTypeByName(
+        context, "oreslang.rt.scalar.frame.v1");
+    if (!frameTy || frameTy->isOpaque() || frameTy->isPacked() ||
+            frameTy->getNumElements() != 4)
+        throw std::runtime_error("scalar guest lacks the unambiguous v1 frame layout");
+    for (unsigned element = 0; element < 4; ++element) {
+        if (frameTy->getElementType(element) != i64)
+            throw std::runtime_error("scalar guest v1 frame has non-u64 field");
+    }
     const llvm::Type* framePointer = nullptr;
     const auto check_abi = [&](const char* name, llvm::Type* returnType,
                                unsigned parameterCount) {
@@ -73,6 +87,12 @@ inline void require_closed_scalar_guest_calls(const llvm::Module& module) {
             throw std::runtime_error("scalar guest has incompatible v1 frame ABI");
         if (!framePointer)
             framePointer = fn->getFunctionType()->getParamType(0);
+#if LLVM_VERSION_MAJOR < 15
+        // Typed pointers carry the pointee: reject i64* even if the four
+        // function names and argument counts match the v1 ABI.
+        if (fn->getFunctionType()->getParamType(0) != frameTy->getPointerTo())
+            throw std::runtime_error("scalar guest uses non-frame typed pointer");
+#endif
         else if (framePointer != fn->getFunctionType()->getParamType(0))
             throw std::runtime_error("scalar guest frame pointer ABI differs across functions");
     };
