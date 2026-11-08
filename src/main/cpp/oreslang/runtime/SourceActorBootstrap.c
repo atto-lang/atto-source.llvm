@@ -405,35 +405,6 @@ int oreslang_source_actor_scalar_vm_execute(
         const OresActorScalarInstruction ins = program->instructions[pc];
         uint64_t lhs = 0, rhs = 0;
         ++executed;
-        /* Only one comparatively expensive cancellation/actor-state probe
-         * per 256 dispatched instructions. Do not poll scheduler/clock or
-         * acquire mutexes on the ordinary opcode fast path. */
-        if ((executed & (SOURCE_SCALAR_CHECK_INTERVAL - 1u)) == 0) {
-            atomic_fetch_add_explicit(&actor->frame_vm_checkpoints,
-                1, memory_order_release);
-#ifdef ORESLANG_SOURCE_ACTOR_TESTING
-            /* The only test-only carrier pause is behind a compile flag;
-             * production builds never park a carrier here. */
-            if (atomic_load_explicit(&test_hold_scalar_checkpoint,
-                    memory_order_acquire)) {
-                atomic_store_explicit(&test_scalar_checkpoint_entered, 1,
-                    memory_order_release);
-                while (atomic_load_explicit(&test_hold_scalar_checkpoint,
-                            memory_order_acquire)
-                        && !atomic_load_explicit(&actor->stop_requested,
-                            memory_order_acquire))
-                    sched_yield();
-            }
-#endif
-            if (atomic_load_explicit(&actor->stop_requested,
-                    memory_order_acquire)) {
-                status = ORES_SCALAR_CANCELLED;
-                goto cleanup;
-            }
-            if (atomic_load_explicit(&actor->frame_vm_error,
-                    memory_order_acquire) != ORES_SCALAR_OK)
-                goto cleanup;
-        }
         frame[4] = pc + 1;
         switch (ins.opcode) {
             case ORES_SCALAR_PUSH_I64:
@@ -537,6 +508,35 @@ int oreslang_source_actor_scalar_vm_execute(
                 break;
             }
             default:
+                goto cleanup;
+        }
+        /* Only one comparatively expensive cancellation/actor-state probe
+         * per 256 dispatched instructions. Do not poll scheduler/clock or
+         * acquire mutexes on the ordinary opcode fast path. */
+        if ((executed & (SOURCE_SCALAR_CHECK_INTERVAL - 1u)) == 0) {
+            atomic_fetch_add_explicit(&actor->frame_vm_checkpoints,
+                1, memory_order_release);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+            /* The only test-only carrier pause is behind a compile flag;
+             * production builds never park a carrier here. */
+            if (atomic_load_explicit(&test_hold_scalar_checkpoint,
+                    memory_order_acquire)) {
+                atomic_store_explicit(&test_scalar_checkpoint_entered, 1,
+                    memory_order_release);
+                while (atomic_load_explicit(&test_hold_scalar_checkpoint,
+                            memory_order_acquire)
+                        && !atomic_load_explicit(&actor->stop_requested,
+                            memory_order_acquire))
+                    sched_yield();
+            }
+#endif
+            if (atomic_load_explicit(&actor->stop_requested,
+                    memory_order_acquire)) {
+                status = ORES_SCALAR_CANCELLED;
+                goto cleanup;
+            }
+            if (atomic_load_explicit(&actor->frame_vm_error,
+                    memory_order_acquire) != ORES_SCALAR_OK)
                 goto cleanup;
         }
     }
