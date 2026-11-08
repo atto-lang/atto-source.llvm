@@ -60,6 +60,24 @@ int main() {
     assert(denied([&] { require_source_task_i64(task); }));
     task.offset--;
     require_source_task_i64(task);
+    // The same source expression with different type-checker metadata must
+    // never inherit an earlier native ownership admission.
+    task.result->resolved_type = oreslang::ScalarType::Bool;
+    assert(denied([&] { require_source_task_i64(task); }));
+    task.result->resolved_type = oreslang::ScalarType::I64;
+    require_source_task_i64(task);
+    task.result->resolved_class = "unverified";
+    assert(denied([&] { require_source_task_i64(task); }));
+    task.result->resolved_class.clear();
+    require_source_task_i64(task);
+    task.result->sum_type = "Result<int,int>";
+    assert(denied([&] { require_source_task_i64(task); }));
+    task.result->sum_type.clear();
+    require_source_task_i64(task);
+    task.result->type_arguments_present = true;
+    assert(denied([&] { require_source_task_i64(task); }));
+    task.result->type_arguments_present = false;
+    require_source_task_i64(task);
     task.result->right = expr(Expression::Kind::Variable);
     task.result->right->name = "parent_owned";
     assert(!source_task_i64_fingerprint(task));
