@@ -1143,7 +1143,8 @@ if(BUILD_TESTING)
             --ir "define" --run 0 --stdout "42" --clang "${ORE_CLANG}")
     endif()
     oreslang_contract_test(native_logical_borrow_use_after_take_reject
-        logical-borrow-compiler-v1/use-after-take-reject.atto --diagnostic "moved")
+        logical-borrow-compiler-v1/use-after-take-reject.atto
+        --diagnostic "use of explicitly moved int 'owner'")
 
     # Durable M0 language declarations are compiler-metadata only in Java.
     # LLVM does not have the history/manifest/replay ABI, so native compilation
