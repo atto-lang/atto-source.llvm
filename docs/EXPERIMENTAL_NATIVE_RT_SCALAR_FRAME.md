@@ -53,3 +53,19 @@ This does **not** implement a generic LLVM 128-safepoint compiler pass:
 general actors, recursive call cycles, critical sections and arbitrary loops
 remain fail-closed until ownership-safe continuation and post-optimization
 checkpoint coverage are independently verified.
+
+
+## Hardened frame admission and optimized regression contract
+
+A frame must be all-zero before initialization, not merely state=0. A live,
+completed or cancelled frame must have a counter in the compiler-proven
+[initial, upperBound] interval before step or cancellation. Published DONE
+results require an exact terminal counter equal to upperBound. Invalid frames
+trap through `llvm.trap`; never skip ahead or return a forged result.
+
+The AOT harness executes 14 independent bad-frame/invalid-operation trap
+scenarios on Linux, the exact 0/1/127/128/129/511/512 dispatch-fuel
+boundaries, and three-frame cancellation/fairness isolation. It must pass at
+Clang `-O0`, `-O2` and `-O3`. All tests require an actual compiler-generated
+LLVM module and linked native guest executable, not host-only mock receipts.
+These tests remain unverified on hosted CI while Actions jobs have zero steps.
