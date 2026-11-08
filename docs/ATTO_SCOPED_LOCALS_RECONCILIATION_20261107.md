@@ -403,8 +403,21 @@ is not itself proof of full language or backend parity.
 - Merge status is NOT resolved: at least nine main-vs-PR paths differ
   (parser, codegen, scheduler, DATA/WAKE, RequestLocal and CMake). See
   `docs/ATTO_SCOPED_LOCAL_MERGE_RECONCILIATION_20261107.md`.
-- Outstanding release gate: pending handoff tickets need automatic
-  lifecycle-managed revocation when the intended recipient STOPs.
-  A currently unredeemed ticket is bounded by table capacity and the
-  explicit `revoke_recipient`/`sweep` APIs but is not automatically
-  closed by the registry. Do not claim complete universal cleanup yet.
+- Pending handoff tickets now have an automatic lifecycle hook:
+  recipient STOP detaches its unredeemed envelopes on the CONTROL worker.
+  No C++ value destructor is run under the scheduler or ticket-table lock.
+  The ticket table's callback uses only a weak reference to owned State,
+  and a two-actor scheduler gate rejects seal after source/recipient STOP.
+- Cancellation `sweep()` no longer inspects parent graph authority while
+  holding the envelope-table mutex. It snapshots candidates, validates
+  cancellation externally and rechecks generation before discarding.
+- The handoff suite authors **70** named assertions (previously 30);
+  a new C two-actor scheduler suite authors **16**. Together with the prior
+  219 registry/STOP/scoped checks and 17 header-coexistence checks there
+  are now **322 authored host assertions**. Three negative handoff mutations
+  target derived admission, automatic STOP revocation and sender-only
+  publication; none are yet evidenced by executed runner steps.
+- This does NOT establish universal guest lifecycle safety: compiled
+  `.atto` lowering, issuer-authenticated tenant/isolate identities, hot
+  upgrade/restart, bounded destructor progress and actual sanitizer
+  execution remain release holds.
