@@ -93,7 +93,7 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         auto* invalid = llvm::BasicBlock::Create(context, "frame.invalid", step);
         llvm::Value* magic = b.CreateLoad(i64, field(b, frame, 2));
         llvm::Value* cap = b.CreateICmpULE(fuel, constant(
-            runtime::SourceCooperationQuantum::kMaxBackedgesPerDispatch));
+            ::oreslang::runtime::SourceCooperationQuantum::kMaxBackedgesPerDispatch));
         b.CreateCondBr(b.CreateAnd(b.CreateICmpEQ(magic, constant(kMagic)), cap),
                        valid, invalid);
         b.SetInsertPoint(invalid);
