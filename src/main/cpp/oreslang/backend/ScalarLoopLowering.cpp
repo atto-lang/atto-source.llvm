@@ -63,7 +63,16 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         auto* stateAddress = field(b, frame, 0);
         auto* fresh = llvm::BasicBlock::Create(context, "fresh", init);
         auto* invalid = llvm::BasicBlock::Create(context, "already.initialized", init);
-        b.CreateCondBr(b.CreateICmpEQ(b.CreateLoad(i64, stateAddress), constant(0)),
+        // Even though state=0 alone would permit initialization, accepting
+        // dirty frame words can silently resurrect a recycled incarnation.
+        // The ABI explicitly requires a fresh, zero-initialized owned frame.
+        auto* freshState = b.CreateICmpEQ(b.CreateLoad(i64, stateAddress), constant(0));
+        auto* freshCounter = b.CreateICmpEQ(
+            b.CreateLoad(i64, field(b, frame, 1)), constant(0));
+        auto* freshMagic = b.CreateICmpEQ(
+            b.CreateLoad(i64, field(b, frame, 2)), constant(0));
+        b.CreateCondBr(b.CreateAnd(freshState,
+                                  b.CreateAnd(freshCounter, freshMagic)),
                        fresh, invalid);
         b.SetInsertPoint(invalid);
         fail(b);
@@ -97,6 +106,17 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         b.SetInsertPoint(invalid);
         fail(b);
         b.SetInsertPoint(valid);
+        // A corrupted actor frame must not claim DONE by setting its counter
+        // past the source limit, nor run from a negative/stale counter. Check
+        // once per dispatch BEFORE any guest reduction is committed.
+        auto* countAtEntry = b.CreateLoad(i64, counterAddress, "frame.counter");
+        auto* counterInRange = b.CreateAnd(
+            b.CreateICmpSGE(countAtEntry, llvm::ConstantInt::getSigned(i64, loop.initial)),
+            b.CreateICmpSLE(countAtEntry, llvm::ConstantInt::getSigned(i64, loop.upper_bound)));
+        auto* verifiedCounter = llvm::BasicBlock::Create(
+            context, "frame.counter.valid", step);
+        b.CreateCondBr(counterInRange, verifiedCounter, invalid);
+        b.SetInsertPoint(verifiedCounter);
 
         auto* active = llvm::BasicBlock::Create(context, "active", step);
         auto* done = llvm::BasicBlock::Create(context, "done", step);
@@ -195,10 +215,19 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         entryGuard(result, frame, b);
         auto* valid = llvm::BasicBlock::Create(context, "result.ready", result);
         auto* invalid = llvm::BasicBlock::Create(context, "result.invalid", result);
-        b.CreateCondBr(b.CreateAnd(
-            b.CreateICmpEQ(b.CreateLoad(i64, field(b, frame, 0)), constant(2)),
-            b.CreateICmpEQ(b.CreateLoad(i64, field(b, frame, 2)), constant(kMagic))),
-            valid, invalid);
+        // DONE is not enough to authorize a result: a forged terminal
+        // state with an incomplete counter must trap instead of publishing
+        // a silently truncated scalar guest result.
+        auto* stateIsDone = b.CreateICmpEQ(
+            b.CreateLoad(i64, field(b, frame, 0)), constant(2));
+        auto* magicValid = b.CreateICmpEQ(
+            b.CreateLoad(i64, field(b, frame, 2)), constant(kMagic));
+        auto* resultComplete = b.CreateICmpEQ(
+            b.CreateLoad(i64, field(b, frame, 1)),
+            llvm::ConstantInt::getSigned(i64, loop.upper_bound));
+        b.CreateCondBr(b.CreateAnd(stateIsDone,
+                                  b.CreateAnd(magicValid, resultComplete)),
+                       valid, invalid);
         b.SetInsertPoint(invalid);
         fail(b);
         b.SetInsertPoint(valid);
