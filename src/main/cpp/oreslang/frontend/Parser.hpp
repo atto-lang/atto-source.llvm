@@ -177,6 +177,10 @@ struct SourceTaskI64Binding {
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool awaited = false;
+    // Only the completed compiler ownership pass may publish this authority.
+    // Codegen verifies the exact expression shape again before IR emission.
+    bool ownership_admitted = false;
+    std::uint64_t ownership_authority_fingerprint = 0;
 };
 
 struct SourceFuturePipelineI64Binding {
