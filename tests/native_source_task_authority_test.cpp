@@ -48,7 +48,30 @@ int main() {
     const auto fingerprint = admit_source_task_i64(task, 37);
     assert(fingerprint && fingerprint == source_task_i64_fingerprint(task));
     task.ownership_authority_fingerprint = fingerprint;
+    task.ownership_boundary_identity = &task;
     task.ownership_admitted = true;
+    require_source_task_i64(task);
+
+    // Copying both the proof bit and its content fingerprint cannot give
+    // authority to a different AST allocation. Only the originally checked
+    // Task boundary may enter codegen; clones need their own proof pass.
+    SourceTaskI64Binding clone;
+    clone.name = task.name;
+    clone.offset = task.offset;
+    clone.awaited = task.awaited;
+    clone.result = expr(Expression::Kind::Add);
+    clone.result->left = expr(Expression::Kind::Integer);
+    clone.result->left->integer = 41;
+    clone.result->right = expr(Expression::Kind::Integer);
+    clone.result->right->integer = 1;
+    clone.ownership_authority_fingerprint = fingerprint;
+    clone.ownership_boundary_identity = &task;
+    clone.ownership_admitted = true;
+    assert(source_task_i64_fingerprint(clone) == fingerprint);
+    assert(denied([&] { require_source_task_i64(clone); }));
+    task.ownership_boundary_identity = nullptr;
+    assert(denied([&] { require_source_task_i64(task); }));
+    task.ownership_boundary_identity = &task;
     require_source_task_i64(task);
 
     // Modifying an already checked Task must invalidate its IR permission.
