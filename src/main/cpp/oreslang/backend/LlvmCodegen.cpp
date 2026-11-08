@@ -2722,7 +2722,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         auto* one = llvm::ConstantInt::get(i64, 1);
         auto* two = llvm::ConstantInt::get(i64, 2);
         auto* max_fuel = llvm::ConstantInt::get(i64,
-            runtime::SourceCooperationQuantum::kMaxBackedgesPerDispatch);
+            ::oreslang::runtime::SourceCooperationQuantum::kMaxBackedgesPerDispatch);
         auto* init_value = llvm::ConstantInt::getSigned(i64, loop.initial);
 
         // INIT: only an uninitialized (zero-tagged) frame can be published.
