@@ -27,6 +27,14 @@ def main():
         ("val count: int = 0;", "const count: int = 0;"),
         ("count = count + 1;", "other = other + 1;"),
         ("while (count < 1000)", "while (count < 1000) { count = count + 1; } while (count < 2000)"),
+        # Runtime supervision cannot rescue a compiler that accidentally
+        # accepts effects/critical sections in the scalar-only AOT subset.
+        # Until CFG exit/ownership instrumentation is proven, fail closed.
+        ("count = count + 1;", "count = count + 1; critical { count = count + 1; }"),
+        ("count = count + 1;", "count = count + 1; rt cooperate;"),
+        ("count = count + 1;", "count = count + 1; count = count + 1;"),
+        ("count = count + 1;", "count = count + unknown();"),
+        ("count = count + 1;", "count = count + 1; defer { count = count + 1; }"),
     ]
     source = fixture.read_text()
     with tempfile.TemporaryDirectory(prefix="oreslang-rt-frame-") as folder:
