@@ -48,7 +48,9 @@ jobs:
             src/main/cpp/oreslang/runtime/ActorFrameArena.hpp \
             tests/source_actor_e2e.py \
             tests/source_actor_scalar_vm_runtime_test.c \
-            tests/fixtures/atto-actor-scalar-runaway-fuel.atto; do
+            tests/fixtures/atto-actor-scalar-runaway-fuel.atto \
+            tests/fixtures/atto-actor-scalar-stack16-accept.atto \
+            tests/fixtures/atto-actor-scalar-stack17-reject.atto; do
             test -f "$path"
             test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"
             printf '%s %s\n' "$(git hash-object "$path")" "$path"
@@ -86,7 +88,7 @@ jobs:
           set -euo pipefail
           python3 -I tests/source_actor_e2e.py --compiler "$RUNNER_TEMP/actor-merged-build/oreslang-llvmc" \
             --clang /usr/bin/clang-19 --root . | tee "$RUNNER_TEMP/integration-atto-tests.txt"
-          test "$(grep -c '^PASS actual compiler-backed M3 actor VM:' "$RUNNER_TEMP/integration-atto-tests.txt")" -eq 4
+          test "$(grep -c '^PASS actual compiler-backed M3 actor VM:' "$RUNNER_TEMP/integration-atto-tests.txt")" -eq 5
       - name: Re-run current-main branch CFG ternary and Boolean scalar execution
         shell: bash
         run: |
@@ -104,7 +106,7 @@ jobs:
           set -euo pipefail
           python3 -I tests/source_actor_e2e.py --compiler "$RUNNER_TEMP/actor-merged-build/oreslang-llvmc" \
             --clang /usr/bin/clang-19 --root . --sanitize | tee "$RUNNER_TEMP/integration-atto-sanitized.txt"
-          test "$(grep -c '^PASS actual compiler-backed M3 actor VM:' "$RUNNER_TEMP/integration-atto-sanitized.txt")" -eq 4
+          test "$(grep -c '^PASS actual compiler-backed M3 actor VM:' "$RUNNER_TEMP/integration-atto-sanitized.txt")" -eq 5
           ctest --test-dir "$RUNNER_TEMP/actor-merged-build" --output-on-failure \
             -R '^(native_source_conditional_cfg_asan_ubsan|native_source_ternary_expression_asan_ubsan|native_source_bool_scalars_asan_ubsan)$' \
             | tee "$RUNNER_TEMP/integration-mainline-sanitized.txt"
@@ -122,7 +124,7 @@ jobs:
             printf 'tree_sha=%s\n' "$(git rev-parse 'HEAD^{tree}')"
             printf 'run_id=%s\nrun_attempt=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
             printf 'M1_M2_M3_CTest=5_EXECUTED\n'
-            printf 'M3_source_actor_guest=4_EXECUTED\n'
+            printf 'M3_source_actor_guest=5_EXECUTED\n'
             printf 'current_main_scalar_native=3_EXECUTED\n'
             printf 'guest_and_scalar_sanitizers=EXECUTED\n'
             printf 'SourceTask_suspension_continuations=NOT_VERIFIED\n'
