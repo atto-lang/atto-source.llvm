@@ -2739,6 +2739,19 @@ if(BUILD_TESTING)
     set_tests_properties(native_task_capture_admission_host_only
         PROPERTIES TIMEOUT 20)
 
+    # Capture-free guest Task<int> currently lowers to a native producer.
+    # Verify its compiler-owned exact-AST proof before allowing LLVM IR.
+    add_executable(oreslang-native-source-task-authority-test
+        tests/native_source_task_authority_test.cpp)
+    target_include_directories(oreslang-native-source-task-authority-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-source-task-authority-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_source_task_authority_host_only
+        COMMAND oreslang-native-source-task-authority-test)
+    set_tests_properties(native_source_task_authority_host_only
+        PROPERTIES TIMEOUT 20)
+
     # First executable source Task<int> slice. Producer work is admitted to one
     # shared NativeActorScheduler carrier and never invoked inline by submit.
     # Await is trusted external-host glue only; the checked runtime API must
