@@ -73,9 +73,11 @@ function(native_positive name code expected)
         message(STATUS "PASS compiler-backed ActorRegionV1 native guest ${name} O${opt} exit=${result} sha256=${binary_sha}")
       endif()
     endif()
-    math(EXPR count "${positives}+1")
-    set(positives "${count}" PARENT_SCOPE)
   endforeach()
+  # Count both optimization modes once. Updating a parent-scope variable
+  # inside foreach does not mutate this function's local variable.
+  math(EXPR count "${positives}+2")
+  set(positives "${count}" PARENT_SCOPE)
   set(failures "${failures}" PARENT_SCOPE)
 endfunction()
 function(native_negative name code)
