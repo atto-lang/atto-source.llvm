@@ -51,6 +51,7 @@ def main():
         assert build.returncode == 0, build.stderr
         execution = run([str(exe)])
         assert execution.returncode == 0, execution.stderr
+        assert "SCALAR_FRAME_AOT_COMPILED_FUEL_BOUNDARIES_PASS" in execution.stdout
         assert "SCALAR_FRAME_AOT_TWO_TASKS_PASS" in execution.stdout
         assert "SCALAR_FRAME_AOT_THREE_PEERS_BOUNDED_PROGRESS_PASS" in execution.stdout
         assert "SCALAR_FRAME_AOT_CANCELLED_PEER_ISOLATION_PASS" in execution.stdout
