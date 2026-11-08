@@ -326,11 +326,11 @@ int main(int argc, char** argv) {
             }
         } else if (arg.rfind("--aot-profile=", 0) == 0) {
             if (sealed_scalar_aot) {
-                std::cerr << "duplicate AOT profile option\\n"; return 2;
+                std::cerr << "duplicate AOT profile option\n"; return 2;
             }
             const std::string profile = arg.substr(std::string_view("--aot-profile=").size());
             if (profile != "sealed-scalar-v1") {
-                std::cerr << "unsupported AOT profile (expected sealed-scalar-v1)\\n";
+                std::cerr << "unsupported AOT profile (expected sealed-scalar-v1)\n";
                 return 2;
             }
             sealed_scalar_aot = true;
@@ -454,7 +454,7 @@ int main(int argc, char** argv) {
          rt_entry_seen || rt_report_seen || tree_shake ||
          !tree_shake_roots.empty() || isolate_entry_seen ||
          bounded_allocator_provider || constraint_descriptors_only)) {
-        std::cerr << "sealed scalar AOT only supports isolated host scalar codegen\\n";
+        std::cerr << "sealed scalar AOT only supports isolated host scalar codegen\n";
         return 2;
     }
     if (constraint_descriptors_only &&
