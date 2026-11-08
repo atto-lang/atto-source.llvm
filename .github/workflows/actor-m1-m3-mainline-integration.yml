@@ -1,0 +1,153 @@
+name: LLVM M1 M2 M3 integrated actor frames and mainline regression
+on:
+  pull_request:
+    paths:
+      - CMakeLists.txt
+      - src/main/cpp/oreslang/backend/**
+      - src/main/cpp/oreslang/frontend/**
+      - src/main/cpp/oreslang/runtime/**
+      - tests/source_actor_e2e.py
+      - tests/source_actor_*.c
+      - tests/actor_frame_arena_test.cpp
+      - tests/native_actor_frame_integration_test.cpp
+      - tests/fixtures/atto-actor-*.atto
+      - .github/workflows/actor-m1-m3-mainline-integration.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  actor-frame-mainline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    steps:
+      - name: Checkout immutable integration head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Pin exact compiler/parser/runtime/fixture source blobs
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          git rev-parse HEAD > "$RUNNER_TEMP/integration-head.txt"
+          git rev-parse 'HEAD^{tree}' > "$RUNNER_TEMP/integration-tree.txt"
+          for path in CMakeLists.txt \
+            src/main/cpp/oreslang/backend/LlvmCodegen.cpp \
+            src/main/cpp/oreslang/frontend/Parser.cpp \
+            src/main/cpp/oreslang/frontend/Parser.hpp \
+            src/main/cpp/oreslang/backend/ActorScalarFrameLowering.hpp \
+            src/main/cpp/oreslang/runtime/SourceActorBootstrap.c \
+            src/main/cpp/oreslang/runtime/SourceActorBootstrap.h \
+            src/main/cpp/oreslang/runtime/SourceActorScalarVM.h \
+            src/main/cpp/oreslang/runtime/HungryCarrier.cpp \
+            src/main/cpp/oreslang/runtime/ActorFrameArena.hpp \
+            tests/source_actor_e2e.py \
+            tests/source_actor_scalar_vm_runtime_test.c \
+            tests/fixtures/atto-actor-scalar-runaway-fuel.atto; do
+            test -f "$path"
+            test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"
+            printf '%s %s\n' "$(git hash-object "$path")" "$path"
+          done | tee "$RUNNER_TEMP/integration-blobs.txt"
+      - name: Install native Clang LLVM19 and CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-19 llvm-19-dev cmake ninja-build python3
+      - name: Configure mainline and compile M1 M2 M3 targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B "$RUNNER_TEMP/actor-merged-build" -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTING=ON -DLLVM_DIR=/usr/lib/llvm-19/lib/cmake/llvm
+          cmake --build "$RUNNER_TEMP/actor-merged-build" --parallel 2 --target \
+            oreslang-llvmc \
+            oreslang-actor-frame-arena-test \
+            oreslang-native-actor-frame-integration-test \
+            oreslang-source-actor-await-trace-runtime-test \
+            oreslang-source-actor-frame-isolation-runtime-test \
+            oreslang-source-actor-scalar-vm-runtime-test
+      - name: Execute five real native M1 M2 M3 CTests
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir "$RUNNER_TEMP/actor-merged-build" --output-on-failure \
+            -R '^(native_actor_frame_arena_owner_suspend_migrate|native_actor_frame_suspension_sibling_survival|source_actor_await_trace_runtime|source_actor_frame_isolation_restart_and_denial|source_actor_scalar_vm_tail_quota_sibling)$' \
+            | tee "$RUNNER_TEMP/integration-actor-tests.txt"
+          grep -F '100% tests passed, 0 tests failed out of 5' "$RUNNER_TEMP/integration-actor-tests.txt"
+      - name: Compile and execute actual AttoLang actors with four M3 proofs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I tests/source_actor_e2e.py --compiler "$RUNNER_TEMP/actor-merged-build/oreslang-llvmc" \
+            --clang /usr/bin/clang-19 --root . | tee "$RUNNER_TEMP/integration-atto-tests.txt"
+          test "$(grep -c '^PASS actual compiler-backed M3 actor VM:' "$RUNNER_TEMP/integration-atto-tests.txt")" -eq 4
+      - name: Re-run current-main branch CFG ternary and Boolean scalar execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir "$RUNNER_TEMP/actor-merged-build" --output-on-failure \
+            -R '^(native_source_conditional_cfg|native_source_ternary_expression|native_source_bool_scalars)$' \
+            | tee "$RUNNER_TEMP/integration-mainline-tests.txt"
+          grep -F '100% tests passed, 0 tests failed out of 3' "$RUNNER_TEMP/integration-mainline-tests.txt"
+      - name: Execute generated guest and current-main programs under ASan UBSan
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1
+        run: |
+          set -euo pipefail
+          python3 -I tests/source_actor_e2e.py --compiler "$RUNNER_TEMP/actor-merged-build/oreslang-llvmc" \
+            --clang /usr/bin/clang-19 --root . --sanitize | tee "$RUNNER_TEMP/integration-atto-sanitized.txt"
+          test "$(grep -c '^PASS actual compiler-backed M3 actor VM:' "$RUNNER_TEMP/integration-atto-sanitized.txt")" -eq 4
+          ctest --test-dir "$RUNNER_TEMP/actor-merged-build" --output-on-failure \
+            -R '^(native_source_conditional_cfg_asan_ubsan|native_source_ternary_expression_asan_ubsan|native_source_bool_scalars_asan_ubsan)$' \
+            | tee "$RUNNER_TEMP/integration-mainline-sanitized.txt"
+          grep -F '100% tests passed, 0 tests failed out of 3' "$RUNNER_TEMP/integration-mainline-sanitized.txt"
+      - name: Record exact-head executed source and guest receipts only after all tests
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          {
+            printf 'evidence_class=INTEGRATED_COMPILER_BACKED_M1_M3_ACTOR_FRAMES\n'
+            printf 'head_sha=%s\n' "$EXPECTED_HEAD"
+            printf 'tree_sha=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+            printf 'run_id=%s\nrun_attempt=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            printf 'M1_M2_M3_CTest=5_EXECUTED\n'
+            printf 'M3_source_actor_guest=4_EXECUTED\n'
+            printf 'current_main_scalar_native=3_EXECUTED\n'
+            printf 'guest_and_scalar_sanitizers=EXECUTED\n'
+            printf 'SourceTask_suspension_continuations=NOT_VERIFIED\n'
+            printf 'Java_full_parity=NOT_VERIFIED\n'
+            sha256sum "$RUNNER_TEMP/actor-merged-build/oreslang-llvmc" \
+              "$RUNNER_TEMP/integration-actor-tests.txt" \
+              "$RUNNER_TEMP/integration-atto-tests.txt" \
+              "$RUNNER_TEMP/integration-mainline-tests.txt" \
+              "$RUNNER_TEMP/integration-atto-sanitized.txt" \
+              "$RUNNER_TEMP/integration-mainline-sanitized.txt"
+          } | tee "$RUNNER_TEMP/integration-receipts.txt"
+      - name: Preserve immutable head/tree and all available executed logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: llvm-m1-m3-mainline-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/integration-head.txt
+            ${{ runner.temp }}/integration-tree.txt
+            ${{ runner.temp }}/integration-blobs.txt
+            ${{ runner.temp }}/integration-actor-tests.txt
+            ${{ runner.temp }}/integration-atto-tests.txt
+            ${{ runner.temp }}/integration-mainline-tests.txt
+            ${{ runner.temp }}/integration-atto-sanitized.txt
+            ${{ runner.temp }}/integration-mainline-sanitized.txt
+            ${{ runner.temp }}/integration-receipts.txt
+          if-no-files-found: warn
+          retention-days: 7
