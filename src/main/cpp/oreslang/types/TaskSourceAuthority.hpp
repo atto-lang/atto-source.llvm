@@ -19,6 +19,14 @@ inline bool source_task_i64_pure(
     std::size_t local_count = 0;
     if (!count) count = &local_count;
     if (depth >= 128 || ++*count > 4096) return false;
+    // Source Task producers are closed scalar expressions. Hidden type or
+    // identifier metadata cannot turn an i64 ownership proof into a String
+    // pointer or otherwise redirect code generation.
+    if (!expr.name.empty() || !expr.resolved_class.empty() ||
+            !expr.sum_type.empty() || expr.resolved_type == ScalarType::String ||
+            expr.type_arguments_present || !expr.type_arguments.empty() ||
+            !expr.argument_names.empty())
+        return false;
 
     using K = Expression::Kind;
     const bool no_side_operands = !expr.condition && !expr.condition_lhs &&
