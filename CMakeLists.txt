@@ -3607,6 +3607,23 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_heap_no_tracing_gc
              COMMAND oreslang-actor-heap-test)
 
+    # M3 compiler admission uses only the native AST and bounded bytecode
+    # descriptor, not LLVM libraries, scheduler threads or host runtimes.
+    # These synthetic AST witnesses prove the exact 16-cell boundary,
+    # conservative left-to-right peak accounting and malformed/effectful
+    # handler/routine/import denial without requiring a generated .atto guest.
+    add_executable(oreslang-actor-scalar-compiler-admission-test
+        tests/actor_scalar_compiler_admission_test.cpp)
+    target_include_directories(oreslang-actor-scalar-compiler-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-scalar-compiler-admission-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-actor-scalar-compiler-admission-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_scalar_compiler_admission
+        COMMAND oreslang-actor-scalar-compiler-admission-test)
+    set_tests_properties(native_actor_scalar_compiler_admission
+        PROPERTIES TIMEOUT 20)
+
     # Native actor-incarnation logical frame bytes. This is host/runtime
     # evidence only; not source compiler frame lowering or OS stack isolation.
     add_executable(oreslang-actor-frame-arena-test tests/actor_frame_arena_test.cpp)
