@@ -122,12 +122,13 @@ public:
         auto hook = std::make_shared<StopCleanupV1>(std::move(cleanup));
         std::lock_guard<std::mutex> lock(mutex_);
         if (shutdown_ || stop_cleanups_.size() >= 64) return false;
-        for (const auto& entry : entries_) {
-            if (entry->notified.load(std::memory_order_acquire) ||
-                ores_native_actor_scheduler_is_stopping_v1(
-                    scheduler_, entry->actor))
-                return false;
-        }
+        // A STOP of an unrelated actor MUST NOT poison future handoff
+        // tables serving remaining live generations. This hook is installed
+        // before the NEW table can publish any envelope; a prior STOP has
+        // no ticket in that new table to reclaim. The dual-actor scheduler
+        // commit fence rejects any subsequent publication to the stopped
+        // incarnation. Hooks may observe an already-queued STOP, which is
+        // harmless for an initially empty table.
         stop_cleanups_.push_back(hook);
         if (token) *token = std::move(hook);
         return true;
