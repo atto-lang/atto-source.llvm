@@ -35,6 +35,18 @@ void oreslang_source_actor_test_hold_initialization(int hold);
 int oreslang_source_actor_test_initialization_entered(void);
 void oreslang_source_actor_test_hold_readiness_publication(int hold);
 int oreslang_source_actor_test_readiness_publication_entered(void);
+/* Compiler-backed guest harness: read only completed DATA deliveries.
+ * Test-only, never linked as a guest-callable source runtime capability.
+ * Valid until trusted outer stop/join releases the opaque actor ref. */
+uint64_t oreslang_source_actor_test_processed(void* actor);
+/* Deterministic cancellation-race fixture. Pause only a test-built actor
+ * interpreter after a slow-path admission, not any production carrier. */
+void oreslang_source_actor_test_hold_scalar_checkpoint(int hold);
+int oreslang_source_actor_test_scalar_checkpoint_entered(void);
+uint64_t oreslang_source_actor_test_scalar_checkpoint_count(void* actor);
+uint64_t oreslang_source_actor_test_scalar_dispatched_steps(void* actor);
+/* Test-only nested interpreter entry mutation: cannot steal live PC/locals. */
+void oreslang_source_actor_test_reenter_scalar_vm_once(void);
 #endif
 
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
@@ -44,6 +56,23 @@ void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
  * host error; a typed guest overload result still needs compiler lowering.
  */
 void oreslang_source_actor_send(void* actor, int64_t payload);
+
+/* Compiler-only restricted scalar frame ABI. The runtime grants exactly one
+ * physical actor callback turn after validating the native actor heap owner.
+ * A source-compiled synchronous on_message places its parameter, cached
+ * fields and owned scalar locals into separate actor-incarnation-owned
+ * 64-KiB native frame bytes. Index is an i64 slot (0..8191); this is not an
+ * arbitrary guest pointer API and MUST NOT be exposed by the parser/imports.
+ * The slot pointer is valid only until the current actor callback returns;
+ * no async/capture/return of the pointer is permitted. Native recursion or
+ * C/FFI stack overflow is NOT contained by this logical scalar storage.
+ */
+int64_t* oreslang_source_actor_frame_i64_slot(
+    uint64_t domain, uint64_t epoch, uint64_t slot);
+/* Host-only negative-check API, never callable from guest source. On failure
+ * output is cleared to NULL and no pointer authority is returned. */
+int oreslang_source_actor_frame_i64_slot_checked(
+    uint64_t domain, uint64_t epoch, uint64_t slot, int64_t** output);
 
 /*
  * Compiler/runtime stop phases. request_stop is nonblocking and only asks the

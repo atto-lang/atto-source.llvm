@@ -3,6 +3,7 @@
 #include "oreslang/runtime/BoundedMpscQueue.hpp"
 #include "oreslang/runtime/BoundedSpscQueue.hpp"
 #include "oreslang/runtime/ActorHeap.hpp"
+#include "oreslang/runtime/ActorFrameArena.hpp"
 #include "oreslang/runtime/ParkingSignal.hpp"
 #include "oreslang/runtime/SupervisorControlTurn.hpp"
 #include <atomic>
@@ -75,9 +76,13 @@ class HungryCarrier final {
     struct ProducerGate;
 public:
     using NativeHeap = ActorHeap<64, 256>;
+    using NativeStack = ActorFrameArena<64, 64 * 1024>;
     // Available only while executing on the actor's carrier.
     // Do not retain across actor termination.
     static NativeHeap* active_heap() noexcept;
+    // Only trusted actor callbacks can access the live logical stack.
+    // This is frame byte storage, not a separate native pthread stack.
+    static NativeStack* active_stack() noexcept;
 
     // Handles hold an independent shared lifetime gate. They may be copied,
     // sent to other native producer threads and survive carrier destruction.
@@ -184,6 +189,7 @@ private:
 
     void* actor_state_;
     NativeHeap actor_heap_; // separate native heap for each dedicated carrier
+    NativeStack actor_stack_; // distinct logical frame storage per actor incarnation
     ActorHandler handler_ = nullptr;
     ActorHandlerV2 handler_v2_ = nullptr;
     void* broker_state_;
@@ -218,6 +224,7 @@ private:
     bool cooperating_ = false;
     ActorMessage current_{};
     std::uint64_t generation_ = 0;
+    std::uint64_t logical_execution_ = 0; // preserved across await/cooperate
     // Atomic telemetry allows reads without touching actor-local state.
     std::atomic<std::uint64_t> accepted_{0}, completed_{0}, io_done_{0},
         parked_{0}, canceled_{0}, stale_{0}, failures_{0}, thread_tag_{0},

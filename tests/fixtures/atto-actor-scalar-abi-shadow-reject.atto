@@ -1,0 +1,7 @@
+// A guest is forbidden to forge the runtime's scalar frame VM symbol.
+pub fnc oreslang_source_actor_scalar_vm_execute(): int {
+  return 7;
+}
+pub fnc main(): int {
+  return 43;
+}
