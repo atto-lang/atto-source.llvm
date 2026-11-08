@@ -519,15 +519,15 @@ void test_unattached_recipient_cannot_receive_derived_context() {
                                f.selection()).value_or(0);
     });
     send(f.w, f.w.a, 1);
-    registered_case("13_unattached_B_ticket_still_data_only",
-                    ticket && f.table->pending() == 1);
+    registered_case("13_unattached_B_ticket_denied_before_slot_charge",
+                    ticket == 0 && f.table->pending() == 0);
     on(f.w, 1, [&](std::uint64_t payload) {
         rejected = !f.table->redeem(f.w.b, payload);
     });
     send(f.w, f.w.b, ticket);
     registered_case("14_unattached_B_redeem_fail_closed", rejected);
-    registered_case("15_rejected_one_shot_ticket_not_replayable",
-                    f.table->pending() == 0);
+    registered_case("15_rejected_ticket_never_charged_a_slot",
+                    !ticket && f.table->pending() == 0);
     registered_case("16_rejection_does_not_affect_sender_or_create_B_registry",
                     f.request->active() &&
                     !f.lifecycle->wait_cleaned(
@@ -944,6 +944,35 @@ void test_new_table_after_unrelated_STOP_still_services_survivors() {
     fresh.reset();
 }
 
+void test_lock_free_attached_generation_snapshot() {
+    Fixture f(8,true,false);
+    registered_case("91_registered_sender_snapshot_visible",
+                    f.lifecycle->attached_generation(f.w.a));
+    registered_case("92_registered_sibling_snapshot_visible",
+                    f.lifecycle->attached_generation(f.w.c));
+    registered_case("93_unattached_B_snapshot_absent",
+                    !f.lifecycle->attached_generation(f.w.b));
+    auto stale=f.w.a; ++stale.generation;
+    registered_case("94_stale_actor_generation_not_enrolled",
+                    !f.lifecycle->attached_generation(stale));
+    auto foreign=f.w.c; ++foreign.scheduler_domain;
+    registered_case("95_foreign_scheduler_domain_not_enrolled",
+                    !f.lifecycle->attached_generation(foreign));
+    auto badslot=f.w.c; badslot.actor_slot=99;
+    registered_case("96_invalid_actor_slot_not_enrolled",
+                    !f.lifecycle->attached_generation(badslot));
+    registered_case("97_unattached_B_can_stop_without_listener",
+                    ores_native_actor_scheduler_stop_sealed(
+                        f.w.scheduler,f.w.b));
+    registered_case("98_stopped_unattached_B_cannot_retroactively_attach",
+                    !f.lifecycle->attach(f.w.b));
+    registered_case("99_stopping_B_does_not_remove_other_attachments",
+                    f.lifecycle->attached_generation(f.w.a) &&
+                    f.lifecycle->attached_generation(f.w.c));
+    registered_case("100_stopped_B_still_not_attached",
+                    !f.lifecycle->attached_generation(f.w.b));
+}
+
 }  // namespace
 
 int main() {
@@ -988,19 +1017,21 @@ int main() {
             test_live_hook_quota_and_release},
         {"new_table_after_unrelated_STOP_still_services_survivors",
             test_new_table_after_unrelated_STOP_still_services_survivors},
+        {"lock_free_attached_generation_snapshot",
+            test_lock_free_attached_generation_snapshot},
     };
     for (auto& t : tests) {
         const int before = failures;
         t.fn();
         std::printf("%s %s\n", failures == before ? "PASS" : "FAIL", t.name);
     }
-    if (registry_handoff_cases != 90) {
-        std::fprintf(stderr, "HANDOFF_REGISTRY_CASE_COUNT_FAILED got=%d expected=90\n",
+    if (registry_handoff_cases != 100) {
+        std::fprintf(stderr, "HANDOFF_REGISTRY_CASE_COUNT_FAILED got=%d expected=100\n",
                      registry_handoff_cases);
         ++failures;
     }
     if (failures) { std::fprintf(stderr, "%d failure(s)\n", failures); return 1; }
-    std::puts("HANDOFF_REGISTRY_90_HOST_CASES_PASS");
+    std::puts("HANDOFF_REGISTRY_100_HOST_CASES_PASS");
     std::printf("REQUEST_CONTEXT_HANDOFF_V1_ALL_PASS\n");
     return 0;
 }
