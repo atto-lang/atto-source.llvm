@@ -14,6 +14,10 @@ handoff, or an enforced untrusted logical fuel quota.
 - At the 512-backedge per-dispatch fairness cap, a mandatory batched poll sets
   a sticky pending-handoff request. Later backedges remain batched rather than
   entering the slow path on every iteration.
+- `beginDispatch()` does **not** acknowledge watchdog/fairness debt.
+  An unrelated await, task resumption, or carrier migration preserves the
+  pending request. Only `recordedCooperate()` acknowledges the real handoff
+  and resets the old exhausted dispatch counter so it cannot relatch.
 - A compiler-inserted `pendingHandoffOnNoYieldExit()` read is **required**
   at every exit of a critical/no-yield region, after releasing all guards,
   including exceptional exits. This read is clock-free and does not yield.
@@ -36,9 +40,19 @@ require independent coverage or fail-closed rejection.
 
 ## Tests and evidence
 
-The host tests check 64/128/256/512 boundaries, 512-cap latch, no post-cap
-per-edge clock polling, watchdog latching, elapsed time, overflow, and
-await-versus-cooperate behavior. The same test runs as a distinct
+The native host tests check 64/128/256/512 boundaries, 512-cap latch,
+no post-cap per-edge slow polling, watchdog latching, debt survival across an
+unrelated await/dispatch reset, once-only true handoff acknowledgement,
+elapsed time, overflow, and await-versus-cooperate behavior.
+
+The opt-in **source-compiled** `.ores` scalar-frame harness also exercises
+fuel 0/1/2/63/64/65/127/128/129/255/256/257/511/512 as compiled machine
+code, checks cancellation/resumption without state replay, and applies two
+negative mutations directly to the compiler-emitted LLVM IR: raising the
+512-unit cap and eliding the per-backedge fuel decrement. The mutated IR must
+still compile as optimized native code but must fail the real guest oracle.
+These tests prove bounded scalar continuation only; they do **not** imply
+general `.atto` actor-loop checkpoints or `critical` lowering. The same test runs as a distinct
 `-O3 -DNDEBUG` CTest so optimized/release builds cannot remove assertions.
 Require exact PR-head CI with nonzero **executed steps**, and separate
 compiler-backed .atto guest and negative mutation receipts, before readiness.
