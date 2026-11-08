@@ -5,15 +5,12 @@
 use std::env;
 #[cfg(not(test))]
 use std::fs;
+use std::path::Path;
 #[cfg(not(test))]
-use std::path::{Path, PathBuf};
-#[cfg(not(test))]
+use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
-#[cfg(not(test))]
 use std::sync::mpsc;
-#[cfg(not(test))]
 use std::thread;
-#[cfg(not(test))]
 use std::time::{Duration, Instant};
 use std::io::Read;
 
@@ -110,9 +107,8 @@ fn read_bounded(reader: impl Read) -> Result<Vec<u8>, String> {
     }
     Ok(data)
 }
-#[cfg(not(test))]
-fn compile_bounded(compiler: &Path, root: &Path, source: &Path)
-        -> Result<(ExitStatus, Vec<u8>, Vec<u8>), String> {
+fn compile_bounded(compiler: &Path, root: &Path, source: &Path,
+        deadline: Duration) -> Result<(ExitStatus, Vec<u8>, Vec<u8>), String> {
     let mut child = Command::new(compiler).arg("--target=host").arg(source)
         .current_dir(root).stdout(Stdio::piped()).stderr(Stdio::piped())
         .spawn().map_err(|e| format!("compiler launch failed: {e}"))?;
@@ -126,12 +122,12 @@ fn compile_bounded(compiler: &Path, root: &Path, source: &Path)
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if start.elapsed() < Duration::from_secs(20) =>
+            Ok(None) if start.elapsed() < deadline =>
                 thread::sleep(Duration::from_millis(10)),
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err("compiler exceeded 20s limit".into());
+                return Err("compiler deadline exceeded".into());
             }
             Err(_) => {
                 let _ = child.kill();
@@ -204,7 +200,8 @@ fn run() -> Result<(), String> {
     }
     for case in &CASES {
         let source = verify_source(&root, case)?;
-        let (exit, stdout, stderr_bytes) = compile_bounded(compiler, &root, &source)
+        let (exit, stdout, stderr_bytes) = compile_bounded(compiler, &root, &source,
+            Duration::from_secs(20))
             .map_err(|e| format!("{}: {e}", case.name))?;
         let status = exit.code();
         if !matches!(status, Some(1..=127)) {
@@ -350,6 +347,60 @@ mod tests {
             assert!(safe_fixture_path(c.path), "{}", c.name);
         }
     }
+    #[cfg(unix)]
+    fn mock_compiler(body: &str, label: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let serial = NEXT.fetch_add(1, Ordering::Relaxed);
+        let script = std::env::temp_dir().join(format!(
+            "atto-negative-mock-{}-{}-{}", std::process::id(), label, serial));
+        std::fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))
+            .unwrap();
+        script
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bounded_compiler_accepts_small_nonzero_failure_for_diagnostic_inspection() {
+        let script = mock_compiler("printf 'error: removed modulo operator %%\\n' >&2; exit 7",
+            "bounded-good");
+        let result = compile_bounded(&script, std::path::Path::new("/tmp"),
+            std::path::Path::new("/tmp/input.atto"), Duration::from_secs(2));
+        std::fs::remove_file(&script).unwrap();
+        let (status, stdout, stderr) = result.unwrap();
+        assert_eq!(status.code(), Some(7));
+        assert!(stdout.is_empty());
+        assert!(String::from_utf8(stderr).unwrap().contains("removed modulo operator"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn infinite_loop_is_killed_by_the_test_deadline() {
+        let script = mock_compiler("while :; do :; done", "bounded-hang");
+        let result = compile_bounded(&script, std::path::Path::new("/tmp"),
+            std::path::Path::new("/tmp/input.atto"), Duration::from_millis(150));
+        std::fs::remove_file(&script).unwrap();
+        assert!(result.unwrap_err().contains("deadline exceeded"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn oversized_stderr_cannot_masquerade_as_successful_compiler_rejection() {
+        let script = mock_compiler("head -c 65537 /dev/zero >&2; exit 7", "bounded-stderr");
+        let result = compile_bounded(&script, std::path::Path::new("/tmp"),
+            std::path::Path::new("/tmp/input.atto"), Duration::from_secs(2));
+        std::fs::remove_file(&script).unwrap();
+        assert!(result.unwrap_err().contains("64KiB cap"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn oversized_stdout_never_counts_as_no_ir() {
+        let script = mock_compiler("head -c 65537 /dev/zero; exit 7", "bounded-stdout");
+        let result = compile_bounded(&script, std::path::Path::new("/tmp"),
+            std::path::Path::new("/tmp/input.atto"), Duration::from_secs(2));
+        std::fs::remove_file(&script).unwrap();
+        assert!(result.unwrap_err().contains("64KiB cap"));
+    }
+
     #[test]
     fn head_and_blob_identifiers_are_not_any_string() {
         assert!(!is_lower_sha40(""));
