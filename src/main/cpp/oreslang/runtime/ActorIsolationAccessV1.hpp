@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <unordered_map>
@@ -29,6 +30,7 @@ private:
     struct Range { std::uint64_t start, end; };
     std::uint64_t tenant_, actor_, generation_, span_;
     std::shared_ptr<const int> issuer_ = std::make_shared<const int>(0);
+    mutable std::mutex gate_;
     std::uint64_t next_id_ = 1;
     std::unordered_map<std::uint64_t, Range> live_;
     bool retired_ = false;
@@ -44,6 +46,7 @@ public:
     ActorIsolationAccessV1& operator=(const ActorIsolationAccessV1&) = delete;
     std::optional<Grant> issue_allocation(std::uint64_t start,
                                            std::uint64_t length) {
+        std::lock_guard<std::mutex> lock(gate_);
         if (retired_ || start % 8 != 0 || !length ||
             start > span_ || length > span_ - start ||
             next_id_ == std::numeric_limits<std::uint64_t>::max())
@@ -57,7 +60,8 @@ public:
         return Grant(issuer_, id);
     }
     std::optional<std::uint64_t> checked_offset(
-        const Grant& grant, std::uint32_t word, std::uint64_t bytes) const noexcept {
+        const Grant& grant, std::uint32_t word, std::uint64_t bytes) const {
+        std::lock_guard<std::mutex> lock(gate_);
         if (retired_ || grant.issuer_ != issuer_ || word == 0 || bytes == 0)
             return std::nullopt;
         const auto it = live_.find(grant.id_);
@@ -68,16 +72,21 @@ public:
             return std::nullopt;
         return offset; // actor-relative offset, NEVER a native address
     }
-    bool release(const Grant& grant) noexcept {
+    bool release(const Grant& grant) {
+        std::lock_guard<std::mutex> lock(gate_);
         // Owning allocator must scrub memory before making region reusable.
         return !retired_ && grant.issuer_ == issuer_ &&
                live_.erase(grant.id_) == 1;
     }
-    void retire() noexcept {
+    void retire() {
+        std::lock_guard<std::mutex> lock(gate_);
         retired_ = true;
         live_.clear();
         // Owning supervisor must first quiesce turns and FFI pins, then scrub.
     }
-    bool retired() const noexcept { return retired_; }
+    bool retired() const {
+        std::lock_guard<std::mutex> lock(gate_);
+        return retired_;
+    }
 };
 } // namespace atto::security
