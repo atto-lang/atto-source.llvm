@@ -13,6 +13,7 @@ on:
       - "src/main/cpp/oreslang/runtime/NativeActorFuture.c"
       - "tests/native_vm_main_control_loop_test.c"
       - "tests/native_vm_main_control_create_failure_test.c"
+      - "tests/native_ores_vm_test.c"
       - "tests/native_vm_nio_lifecycle_test.c"
   workflow_dispatch:
 
@@ -54,6 +55,27 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/test-native-vm-nio-host-sanitizers.sh
+      - name: Execute native scheduler-domain security nonclaim and cross-domain rejection
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_dir="$(mktemp -d)"
+          trap 'rm -rf "$build_dir"' EXIT
+          for cc in gcc clang; do
+            "$cc" -std=c11 -D_GNU_SOURCE -O1 -g -pthread \
+              -Wall -Wextra -Wpedantic -Werror \
+              -fsanitize=address,undefined -fno-omit-frame-pointer \
+              -Isrc/main/cpp \
+              tests/native_ores_vm_test.c \
+              src/main/cpp/oreslang/runtime/NativeOresVM.c \
+              src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+              src/main/cpp/oreslang/runtime/NativeActorFuture.c \
+              -o "$build_dir/native-oresvm-$cc"
+            ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1 \
+              timeout 90s "$build_dir/native-oresvm-$cc"
+            echo "PASS HOST ONLY: $cc native domains not security boundaries"
+          done
       - name: Certify executed HOST-only sanitizer gate and source identity
         shell: bash
         run: |
@@ -63,3 +85,4 @@ jobs:
           printf 'verified_source_tree=%s\n' "$(git rev-parse 'HEAD^{tree}')"
           printf 'native_control_fixture_blob=%s\n' "$(git rev-parse HEAD:tests/native_vm_main_control_loop_test.c)"
           printf 'pthread_failure_fixture_blob=%s\n' "$(git rev-parse HEAD:tests/native_vm_main_control_create_failure_test.c)"
+          printf 'security_nonclaim_fixture_blob=%s\n' "$(git rev-parse HEAD:tests/native_ores_vm_test.c)"
