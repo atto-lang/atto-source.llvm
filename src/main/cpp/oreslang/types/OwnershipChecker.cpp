@@ -2,8 +2,10 @@
 #include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/types/OwnershipCfg.hpp"
+#include "oreslang/types/TaskSourceAuthority.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <functional>
 #include <stdexcept>
 #include <string>
@@ -552,11 +554,16 @@ void validate_i64_ownership(Program& program) {
     // A re-validation attempt must revoke every stale lowering authorization
     // before checking anything. Failed ownership admission therefore cannot
     // leave executable Future-pipeline authority from an earlier pass.
-    for (auto& function : program.functions)
+    for (auto& function : program.functions) {
+        for (auto& task : function.source_tasks) {
+            task.ownership_admitted = false;
+            task.ownership_authority_fingerprint = 0;
+        }
         for (auto& pipeline : function.future_pipelines) {
             pipeline.ownership_admitted = false;
             pipeline.ownership_authority_fingerprint = 0;
         }
+    }
     Functions functions;
     for (const auto& function : program.functions)
         functions.emplace(native_function_slot(function.name, function.parameters.size()), &function);
@@ -1403,9 +1410,23 @@ void validate_i64_ownership(Program& program) {
 
     }
 
-    // Publication is compilation-unit atomic. First validate every ownership
-    // admission without mutating any pipeline authority. Only after all chains
-    // succeed do we mark them executable for LLVM lowering.
+    // Task proof publication is compilation-unit atomic. The checker
+    // independently revalidates the exact capture-free expression after all
+    // ordinary function/CFG ownership checks, not just after parser admission.
+    // A repeat validation revokes old tickets before doing any new work.
+    static std::atomic<std::uint64_t> next_task_epoch{0};
+    const std::uint64_t task_epoch =
+        next_task_epoch.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (!task_epoch)
+        throw std::runtime_error("ownership violation: Task epoch exhausted");
+    std::vector<std::pair<SourceTaskI64Binding*, std::uint64_t>> task_authorities;
+    for (auto& function : program.functions)
+        for (auto& task : function.source_tasks)
+            task_authorities.emplace_back(
+                &task, types::admit_source_task_i64(task, task_epoch));
+
+    // Validate Future-pipeline chains before publishing any Task or Future
+    // authority; failure must not leave an earlier sibling executable.
     for (const auto& function : program.functions) {
         for (const auto& pipeline : function.future_pipelines) {
             std::vector<types::FuturePipelineOwnershipAdmission> admissions;
@@ -1424,6 +1445,10 @@ void validate_i64_ownership(Program& program) {
                     "ownership violation: Future pipeline proof publication "
                     "failed closed");
         }
+    }
+    for (auto& [task, fingerprint] : task_authorities) {
+        task->ownership_authority_fingerprint = fingerprint;
+        task->ownership_admitted = true;
     }
     for (auto& function : program.functions)
         for (auto& pipeline : function.future_pipelines) {
