@@ -10,6 +10,31 @@
 
 namespace oreslang {
 
+// Shared cleanup plan for lexical ActorRegionV1 owners. This is deliberately
+// separate from LLVM emission: every supported normal CFG exit consumes the
+// same reverse-order plan exactly once. Future exit kinds (throw, suspend,
+// cancel, unwind) must be explicitly added to the plan's verified exit set;
+// they cannot silently inherit normal cleanup.
+struct ActorRegionCleanupPlanV1 {
+    std::vector<std::string> owners;
+    std::vector<unsigned> cleanup_order;
+
+    void add_owner(const std::string& name) {
+        if (name.empty() || owners.size() >= 8 ||
+            std::find(owners.begin(), owners.end(), name) != owners.end())
+            throw std::runtime_error("actor-region cleanup plan: invalid/duplicate owner");
+        owners.push_back(name);
+    }
+    void seal_normal_exits(unsigned supported_normal_exits) {
+        if (owners.empty() || supported_normal_exits == 0 ||
+            supported_normal_exits > 2)
+            throw std::runtime_error("actor-region cleanup plan: unsupported exit graph");
+        cleanup_order.clear();
+        for (unsigned i = static_cast<unsigned>(owners.size()); i > 0; --i)
+            cleanup_order.push_back(i - 1);
+    }
+};
+
 // ActorRegionV2 is an opt-in AOT code-generation *slice* over the unchanged
 // ActorRegionV1 native ABI. It admits two lexical owners in ONE authenticated
 // root actor region and one pure guarded early return. Both successor blocks
@@ -52,7 +77,7 @@ inline std::string emit_actor_region_v2_guest_ir(const Program& program) {
 
     const Function& fn = program.functions.front();
     if (fn.name != "main" || !fn.parameters.empty() ||
-        fn.locals.size() != 2 || fn.early_returns.size() != 1 ||
+        fn.locals.empty() || fn.locals.size() > 8 || fn.early_returns.size() != 1 ||
         !fn.statements.empty() || !fn.actor_spawns.empty() ||
         !fn.actor_actions.empty() || !fn.actor_stops.empty() ||
         !fn.actor_sends.empty() || !fn.actor_field_writes.empty() ||
@@ -76,6 +101,7 @@ inline std::string emit_actor_region_v2_guest_ir(const Program& program) {
         reject("hidden effects, native entrypoint or unmodeled scope");
     }
 
+    ActorRegionCleanupPlanV1 cleanup_plan;
     for (const LocalBinding& owner : fn.locals) {
         if (!owner.new_class || owner.class_name != cls.name ||
             owner.name.empty() || owner.record_view || owner.move_class ||
@@ -84,7 +110,9 @@ inline std::string emit_actor_region_v2_guest_ir(const Program& program) {
             !owner.constructor_arguments.empty() || owner.initializer ||
             !owner.task_await_name.empty() || !owner.future_await_name.empty())
             reject("non-fresh, escaping or mutable owner");
+        cleanup_plan.add_owner(owner.name);
     }
+    cleanup_plan.seal_normal_exits(2);
     // The source checker currently produces these metadata fields in a
     // limited class grammar. Fail closed if a future grammar adds ownership
     // transfers, sum payloads or unvalidated aliases alongside 'new'.
@@ -94,9 +122,7 @@ inline std::string emit_actor_region_v2_guest_ir(const Program& program) {
             !owner.constructor_arguments.empty())
             reject("unmodeled owner transfer or hidden constructor");
     }
-    if (fn.locals[0].name == fn.locals[1].name)
-        reject("duplicate lexical owner");
-
+    // add_owner already rejects duplicate owner identities.
     // A four-byte compact offset cannot authorize field access by itself.
     // Resolve every source place to an ORIGINAL trusted owner sidecar before
     // generating LLVM IR; no forged, inherited or dynamically named places.
@@ -110,12 +136,12 @@ inline std::string emit_actor_region_v2_guest_ir(const Program& program) {
             expression->when_true || expression->when_false ||
             !expression->arguments.empty() || expression->name.empty())
             reject("non-direct scalar class field access");
-        unsigned owner_index = 2;
-        for (unsigned i = 0; i != 2; ++i) {
+        unsigned owner_index = static_cast<unsigned>(fn.locals.size());
+        for (unsigned i = 0; i < fn.locals.size(); ++i) {
             if (fn.locals[i].name == expression->left->name)
                 owner_index = i;
         }
-        if (owner_index == 2) reject("field uses unowned receiver");
+        if (owner_index == fn.locals.size()) reject("field uses unowned receiver");
         unsigned field_index = static_cast<unsigned>(cls.fields.size());
         for (unsigned i = 0; i < cls.fields.size(); ++i) {
             if (cls.fields[i].name == expression->name)
@@ -206,18 +232,21 @@ inline std::string emit_actor_region_v2_guest_ir(const Program& program) {
     auto* turn_storage = builder.CreateAlloca(i8, builder.getInt32(16),
                                              "turn.sidecar");
     turn_storage->setAlignment(llvm::Align(8));
-    llvm::Value* refs[2];
-    for (unsigned i = 0; i != 2; ++i) {
-        refs[i] = builder.CreateAlloca(i8, builder.getInt32(32),
-                                       fn.locals[i].name + ".sidecar");
-        llvm::cast<llvm::AllocaInst>(refs[i])->setAlignment(llvm::Align(8));
+    std::vector<llvm::Value*> refs;
+    refs.reserve(cleanup_plan.owners.size());
+    for (const auto& name : cleanup_plan.owners) {
+        auto* storage = builder.CreateAlloca(i8, builder.getInt32(32),
+                                             name + ".sidecar");
+        storage->setAlignment(llvm::Align(8));
+        refs.push_back(storage);
     }
     auto* region = builder.CreateCall(open, {builder.getInt64(1),
-        builder.getInt64(1), builder.getInt32(2),
+        builder.getInt64(1), builder.getInt32(
+            static_cast<std::uint32_t>(cleanup_plan.owners.size())),
         builder.getInt32(slot_bytes), builder.getInt32(64)}, "actor.region");
     builder.CreateCall(enter, {region, builder.getInt64(1),
                                builder.getInt64(1), turn_storage});
-    for (unsigned i = 0; i != 2; ++i) {
+    for (unsigned i = 0; i < cleanup_plan.owners.size(); ++i) {
         builder.CreateCall(alloc, {region, turn_storage,
                                    builder.getInt32(slot_bytes), refs[i]});
         for (unsigned field = 0; field < cls.fields.size(); ++field) {
@@ -256,8 +285,8 @@ inline std::string emit_actor_region_v2_guest_ir(const Program& program) {
     // Both return paths converge here: drop in reverse lexical ownership
     // order, exactly once each, AFTER the scalar return value is snapshotted.
     // This does not cover throw/suspend/cancel; those are rejected above.
-    builder.CreateCall(drop, {region, turn_storage, refs[1]});
-    builder.CreateCall(drop, {region, turn_storage, refs[0]});
+    for (const unsigned owner_index : cleanup_plan.cleanup_order)
+        builder.CreateCall(drop, {region, turn_storage, refs[owner_index]});
     builder.CreateCall(leave, {region, turn_storage});
     builder.CreateCall(retire, {region});
     auto* freed = builder.CreateCall(destroy, {region}, "region.reclaimed");
