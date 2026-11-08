@@ -36,9 +36,9 @@ jobs:
           set -euo pipefail
           # Fail if a required test is missing, before treating CTest success
           # as an ownership verification pass.
-          ownership_tests='^(native_ownership_auto_traits_and_logical_dop|native_source_task_authority_host_only|native_task_capture_admission_host_only|native_ownership_cfg_dataflow_fixed_point|native_logical_borrow_take_accept|native_logical_borrow_use_after_take_reject)$'
+          ownership_tests='^(native_ownership_auto_traits_and_logical_dop|native_source_task_authority_host_only|native_task_capture_admission_host_only|native_ownership_cfg_dataflow_fixed_point|native_source_task_suspend_ownership_checker|native_logical_borrow_take_accept|native_logical_borrow_use_after_take_reject)$'
           selected="$(ctest --test-dir build -N -R "$ownership_tests" | sed -nE 's/^Total Tests: ([0-9]+)$/\1/p')"
-          test "$selected" = 6
+          test "$selected" = 7
           ctest --test-dir build -R "$ownership_tests" --output-on-failure --timeout 120
       - name: Validate shell syntax and run existing native eager Task CTest
         shell: bash
