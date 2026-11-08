@@ -4700,7 +4700,8 @@ private:
                 if (expr.left) receiver = native_place_key(*expr.left);
                 const auto element_slot = variables.find(receiver + ".$element");
                 const ScalarType element = element_slot == variables.end() ? ScalarType::I64 : element_slot->second;
-                const std::size_t expected = expr.name == "get" || expr.name == "add"
+                const std::size_t expected = expr.name == "get" ||
+                    expr.name == "get_copy" || expr.name == "add"
                     ? 1 : expr.name == "set" ? 2 : 0;
                 if (expected == 0 || expr.arguments.size() != expected)
                     throw std::runtime_error("native Array<int> effect supports only add(value) or set(index,value); scalar expression supports only get(index) at byte " +
@@ -4709,7 +4710,8 @@ private:
                     const auto& argument = expr.arguments[i];
                     const ScalarType actual = validate_scalar_expression(
                         *argument, variables, functions, depth + 1);
-                    const bool index = (expr.name == "get" || expr.name == "set") && i == 0;
+                    const bool index = (expr.name == "get" ||
+                        expr.name == "get_copy" || expr.name == "set") && i == 0;
                     if (actual != (index ? ScalarType::I64 : element))
                         throw std::runtime_error(std::string(element == ScalarType::I64
                             ? "native Array<int> arguments require int, got "
@@ -4717,6 +4719,13 @@ private:
                             std::string(scalar_type_name(actual)) + " at byte " +
                             std::to_string(argument->offset));
                 }
+                // A checked Copy read is an opaque tagged Option<int> sum
+                // with i64 ABI handle. The sum resolver proves the element
+                // kind; it must never become an untagged raw int alias.
+                if (expr.name == "get_copy" &&
+                    (element != ScalarType::I64 || expr.sum_type != "Option<int>"))
+                    throw std::runtime_error(
+                        "native Array.get_copy requires proven Copy<int> and Option<int> sum lowering");
                 return expr.resolved_type = expr.name == "get" ? element : ScalarType::I64;
             }
             case Expression::Kind::RecordConstruct:
