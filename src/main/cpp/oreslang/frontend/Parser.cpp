@@ -6248,6 +6248,17 @@ Program parse_unresolved_program(std::string_view source, bool experimental_owne
 }
 
 void resolve_and_validate_program(Program& program) {
+    // A previous successful validation must not survive a new *failed*
+    // attempt, including errors from method/sum resolution or parser gates
+    // before validate_i64_ownership() would normally revoke its own proofs.
+    for (auto& function : program.functions) {
+        for (auto& task : function.source_tasks)
+            types::revoke_source_task_i64(task);
+        for (auto& pipeline : function.future_pipelines) {
+            pipeline.ownership_admitted = false;
+            pipeline.ownership_authority_fingerprint = 0;
+        }
+    }
     if (!program.imports.empty())
         throw std::runtime_error("native imports require filesystem module resolution");
     resolve_native_methods(program);
