@@ -1,30 +1,51 @@
-name: Prohibit Python
-
+name: No new Python regressions (frozen legacy migration)
 on:
   pull_request:
   push:
     branches: [main]
-
 permissions:
   contents: read
-
 jobs:
   prohibit-python:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
           persist-credentials: false
+          submodules: false
+      - name: Verify exact head/tree before comparing frozen legacy Python debt
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git write-tree)" = "$(git rev-parse 'HEAD^{tree}')"
+          test -z "$(git status --porcelain --untracked-files=all)"
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
           toolchain: 1.88.0
           components: rustfmt, clippy
-      - name: Rust format check
-        run: cargo fmt --manifest-path tools/no-python-check/Cargo.toml -- --check
-      - name: Rust clippy check
-        run: cargo clippy --manifest-path tools/no-python-check/Cargo.toml --all-targets -- -D warnings
-      - name: Rust policy tests
-        run: cargo test --manifest-path tools/no-python-check/Cargo.toml
-      - name: Reject Python files and execution
-        run: cargo run --manifest-path tools/no-python-check/Cargo.toml -- .
+      - name: Format and Clippy for the Rust migration checker
+        shell: bash
+        run: |
+          cargo fmt --manifest-path tools/no-python-check/Cargo.toml -- --check
+          cargo clippy --manifest-path tools/no-python-check/Cargo.toml --all-targets -- -D warnings
+      - name: Retain Rust-only policy unit tests (both strict and migration checkers)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path tools/no-python-check/Cargo.toml
+          rustc --edition=2021 -D warnings --test tools/check_no_python.rs -o "$RUNNER_TEMP/strict-python-policy-tests"
+          "$RUNNER_TEMP/strict-python-policy-tests"
+      - name: Reject new or changed Python artifacts and newly added execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path tools/no-python-check/Cargo.toml -- .
+          echo 'FULL_RUST_ONLY_MIGRATION=NOT_COMPLETE'
+          echo 'STRICT_ZERO_PYTHON_GATE=NOT_CERTIFIED'

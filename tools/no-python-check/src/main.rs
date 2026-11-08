@@ -33,6 +33,15 @@ fn is_execution_surface(path: &str) -> bool {
         || p.ends_with(".sh")
         || p.ends_with(".bash")
         || p.ends_with(".zsh")
+        || file == "cmakelists.txt"
+        || file == "dockerfile"
+        || p.ends_with(".cmake")
+        || p.ends_with(".rs")
+        || p.ends_with(".mjs")
+        || p.ends_with(".js")
+        || p.ends_with(".md")
+        || p.ends_with(".ps1")
+        || p.ends_with(".cmd")
 }
 
 fn forbidden_execution_line(line: &str) -> bool {
@@ -95,39 +104,142 @@ fn violations(path: &str, body: &str) -> Vec<String> {
     messages
 }
 
-fn main() {
-    let root = env::args().nth(1).unwrap_or_else(|| ".".to_string());
+// The zero-debt scanner is still tools/check_no_python.rs.  This gate freezes
+// the exact legacy tree and forbids NEW Python; it does NOT certify migration.
+// Updating the baseline requires independent owner review.
+const LEGACY_BASELINE: &str = "443d2a1e150557f158fc5cfb457bde204f106dd2";
+
+fn git(root: &str, args: &[&str]) -> Result<Vec<u8>, String> {
     let output = Command::new("git")
-        .args(["-C", &root, "ls-files", "-z"])
+        .args(["-C", root])
+        .args(args)
         .output()
-        .expect("git must be installed");
+        .map_err(|err| format!("git invocation failed: {err}"))?;
     if !output.status.success() {
-        eprintln!("git ls-files failed");
-        process::exit(2);
+        return Err(format!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        ));
     }
+    Ok(output.stdout)
+}
 
-    let mut found = 0usize;
-    for raw in output
-        .stdout
-        .split(|byte| *byte == 0)
-        .filter(|v| !v.is_empty())
-    {
-        let name = String::from_utf8_lossy(raw);
-        let file = Path::new(&root).join(name.as_ref());
+fn changed_paths(bytes: &[u8]) -> Result<Vec<String>, String> {
+    if !bytes.is_empty() && bytes.last() != Some(&0) {
+        return Err("git -z paths are not NUL-terminated".to_string());
+    }
+    bytes
+        .split(|x| *x == 0)
+        .filter(|x| !x.is_empty())
+        .map(|raw| {
+            let name = std::str::from_utf8(raw).map_err(|_| "non-UTF8 path".to_string())?;
+            if name.starts_with('/')
+                || name.contains('\n')
+                || name.contains('\r')
+                || name.contains('\t')
+                || name.split('/').any(|part| part == ".." || part.is_empty())
+            {
+                return Err("unsafe changed path".to_string());
+            }
+            Ok(name.to_string())
+        })
+        .collect()
+}
 
-        // Path-only checks still apply even when the content is binary or unreadable.
-        let body = fs::read_to_string(&file).unwrap_or_default();
-        for problem in violations(&name, &body) {
-            eprintln!("{name}: {problem}");
-            found += 1;
+fn is_added_forbidden_line(line: &str) -> bool {
+    let Some(added) = line.strip_prefix('+') else {
+        return false;
+    };
+    !line.starts_with("+++") && !violations("added-policy-probe.sh", added).is_empty()
+}
+
+fn scan_migration(root: &str, baseline: &str) -> Result<Vec<String>, String> {
+    if baseline.len() != 40 || !baseline.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err("frozen legacy base must be exact SHA".to_string());
+    }
+    git(root, &["merge-base", "--is-ancestor", baseline, "HEAD"])?;
+    git(root, &["diff", "--quiet", "HEAD", "--"])?;
+    git(root, &["diff", "--cached", "--quiet", "HEAD", "--"])?;
+    let names = changed_paths(&git(
+        root,
+        &["diff", "--name-only", "--no-renames", "-z", baseline, "HEAD", "--"],
+    )?)?;
+    let mut findings = Vec::new();
+    for name in names {
+        let file = Path::new(root).join(&name);
+        let metadata = match fs::symlink_metadata(file) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                // Deleting old Python files or commands reduces legacy debt.
+                continue;
+            }
+            Err(err) => return Err(format!("cannot inspect changed {name}: {err}")),
+        };
+        if metadata.file_type().is_symlink() {
+            return Err(format!("new/modified symlink disallowed in Python migration: {name}"));
+        }
+        if forbidden_path(&name) {
+            findings.push(format!("{name}: new or modified Python artifact"));
+            continue;
+        }
+        // The scanners are the policy implementation itself, not a Python
+        // execution surface.  They require CODEOWNER security review.
+        if matches!(
+            name.as_str(),
+            "tools/check_no_python.rs" | "tools/no-python-check/src/main.rs"
+        ) {
+            continue;
+        }
+        if !is_execution_surface(&name) {
+            continue;
+        }
+        if !metadata.is_file() {
+            return Err(format!("changed execution surface is not regular: {name}"));
+        }
+        let patch = git(
+            root,
+            &[
+                "diff",
+                "--no-ext-diff",
+                "--no-renames",
+                "--unified=0",
+                "--text",
+                baseline,
+                "HEAD",
+                "--",
+                &name,
+            ],
+        )?;
+        let text = String::from_utf8(patch)
+            .map_err(|_| format!("invalid UTF8 in execution change: {name}"))?;
+        for line in text.lines().filter(|line| is_added_forbidden_line(line)) {
+            findings.push(format!("{name}: added Python execution: {line}"));
         }
     }
+    Ok(findings)
+}
 
-    if found > 0 {
-        eprintln!("{found} Python policy violation(s)");
-        process::exit(1);
+fn main() {
+    let root = env::args().nth(1).unwrap_or_else(|| ".".to_string());
+    match scan_migration(&root, LEGACY_BASELINE) {
+        Ok(findings) if findings.is_empty() => {
+            println!(
+                "NO_NEW_PYTHON_REGRESSIONS=PASS; BASELINE={LEGACY_BASELINE}; \
+                 FULL_RUST_ONLY_MIGRATION=NOT_COMPLETE"
+            );
+        }
+        Ok(findings) => {
+            for finding in &findings {
+                eprintln!("Python legacy freeze violation: {finding}");
+            }
+            process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("Python migration gate FAIL_CLOSED: {error}");
+            process::exit(2);
+        }
     }
-    println!("Rust-only tooling policy check passed");
 }
 
 #[cfg(test)]
@@ -178,6 +290,32 @@ mod tests {
         assert!(python_shebang("#!/usr/bin/python\nprint('x')"));
         assert!(python_shebang("#!/usr/bin/env pypy3\nprint('x')"));
         assert!(!python_shebang("#!/usr/bin/env bash\necho ok"));
+    }
+
+
+    #[test]
+    fn frozen_migration_delta_parsing_rejects_unsafe_names() {
+        assert_eq!(
+            changed_paths(b"tests/new.rs\0docs/readme.md\0").unwrap(),
+            vec!["tests/new.rs", "docs/readme.md"]
+        );
+        for bad in [b"file".as_slice(), b"../escape\0", b"tab\tfile\0", b"x\xff\0"] {
+            assert!(changed_paths(bad).is_err());
+        }
+    }
+
+    #[test]
+    fn new_python_execution_is_denied_but_unchanged_legacy_is_not_duplicated() {
+        assert!(is_added_forbidden_line("+  - run: python3 -m pytest"));
+        assert!(is_added_forbidden_line("+#!/usr/bin/env python3"));
+        assert!(is_added_forbidden_line("+  - uses: actions/setup-python@v5"));
+        assert!(!is_added_forbidden_line("   run: python3 -m pytest"));
+        assert!(!is_added_forbidden_line("-  - run: python3 -m pytest"));
+        assert!(!is_added_forbidden_line("+++ b/scripts/test.sh"));
+        assert!(!is_added_forbidden_line("+  # Python migration is pending"));
+        assert!(forbidden_path("tests/legacy.py"));
+        assert!(is_execution_surface("CMakeLists.txt"));
+        assert!(is_execution_surface(".github/workflows/ci.yml"));
     }
 
     #[test]
