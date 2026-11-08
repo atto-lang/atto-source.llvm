@@ -124,7 +124,7 @@ static void direct_slow_path_calls_cannot_skip_sampling_policy() {
     // Adversarial eager caller invokes the expensive API EVERY iteration.
     // The API itself must enforce periodicity, including watchdog requests
     // and already exhausted reduction budgets.
-    for (int i = 1; i <= 8192; ++i) {
+    for (int i = 1; i <= 100000; ++i) {
         const bool due = q.completedBackedgeNeedsCheck();
         require(due == (i % 128 == 0));
         const bool permitted = q.shouldCooperateAtCheck(true);
@@ -132,8 +132,8 @@ static void direct_slow_path_calls_cannot_skip_sampling_policy() {
         if (permitted) ++observed;
         require(!q.shouldCooperateAtCheck(true)); // one-shot ticket
     }
-    require(observed == 8192 / 128);
-    require(q.completedBackedgesThisDispatch() == 8192);
+    require(observed == 100000 / 128);
+    require(q.completedBackedgesThisDispatch() == 100000);
     require(FakeClock::reads.load() == 2); // watchdog fast return, no clock
     q.beginDispatch();
     require(!q.shouldCooperateAtCheck(true)); // reset invalidates stale ticket
