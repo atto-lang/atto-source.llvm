@@ -113,8 +113,10 @@ public:
     // mutex; captured state must be lifetime-safe (weak_ptr recommended).
     // No callback is accepted after a STOP notification or shutdown.
     using StopCleanupV1 = std::function<void(OresNativeActorRef)>;
-    bool register_stop_cleanup(StopCleanupV1 cleanup) {
-        if (!cleanup ||
+    using StopCleanupTokenV1 = std::shared_ptr<StopCleanupV1>;
+    bool register_stop_cleanup(
+            StopCleanupV1 cleanup, StopCleanupTokenV1* token = nullptr) {
+        if (!scheduler_ || !cleanup ||
             ores_native_actor_scheduler_is_any_current_carrier_v1())
             return false;
         auto hook = std::make_shared<StopCleanupV1>(std::move(cleanup));
@@ -126,8 +128,27 @@ public:
                     scheduler_, entry->actor))
                 return false;
         }
-        stop_cleanups_.push_back(std::move(hook));
+        stop_cleanups_.push_back(hook);
+        if (token) *token = std::move(hook);
         return true;
+    }
+
+    // An owning handoff table must deregister its cleanup hook before its
+    // destructor releases State. The worker snapshots shared tokens under
+    // the registry lock and invokes them outside it. Concurrent unregister
+    // therefore cannot invalidate an in-flight token; the weak State still
+    // prevents callback UAF if the table was destroyed.
+    bool unregister_stop_cleanup(const StopCleanupTokenV1& token) {
+        if (!token || ores_native_actor_scheduler_is_any_current_carrier_v1())
+            return false;
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto it = stop_cleanups_.begin();
+             it != stop_cleanups_.end(); ++it) {
+            if (*it != token) continue;
+            stop_cleanups_.erase(it);
+            return true;
+        }
+        return false;
     }
 
     bool attach(OresNativeActorRef actor) {
