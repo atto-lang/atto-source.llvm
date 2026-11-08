@@ -8,6 +8,7 @@
 #include <optional>
 #include <stdexcept>
 #include <unordered_map>
+#include <utility>
 
 namespace atto::security {
 class ActorIsolationAccessV1 final {
