@@ -48,4 +48,21 @@ if(expected_diagnostic EQUAL -1)
   message(FATAL_ERROR "actor-region-v1 negative returned an unexpected diagnostic: ${negative_diagnostic}")
 endif()
 
-message(STATUS "actor-region-v1 compiler IR: alloc/read/write/drop + helper-owner rejection PASS (NOT guest execution)")
+# Branch-scoped class aliases require path-sensitive drops and must also
+# be rejected before any IR is printed, even though the root object is valid.
+set(branch_negative "${CMAKE_CURRENT_BINARY_DIR}/actor-region-v1-branch-owner.atto")
+file(WRITE "${branch_negative}"
+"define class Point as\n  pub final int x: 20;\nend\npub fnc main(): int {\n  let Point point = new Point();\n  if true {\n    const Point alias = point;\n  } fi\n  return point.x;\n}\n")
+execute_process(
+  COMMAND "${COMPILER}" --aot-profile=actor-region-v1 "${branch_negative}"
+  RESULT_VARIABLE branch_status OUTPUT_VARIABLE branch_ir
+  ERROR_VARIABLE branch_diagnostic TIMEOUT 30)
+if(branch_status STREQUAL "0" OR NOT branch_ir STREQUAL "")
+  message(FATAL_ERROR "actor-region-v1 accepted a branch-scoped class alias or emitted partial IR")
+endif()
+string(FIND "${branch_diagnostic}" "branch-scoped class owners" branch_expected)
+if(branch_expected EQUAL -1)
+  message(FATAL_ERROR "actor-region-v1 branch-owner negative returned unexpected diagnostic: ${branch_diagnostic}")
+endif()
+
+message(STATUS "actor-region-v1 compiler IR: allocation/read/write/drop and helper/branch owner rejection PASS (NOT guest execution)")
