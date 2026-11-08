@@ -6,6 +6,9 @@ file(REMOVE_RECURSE "${work}")
 file(MAKE_DIRECTORY "${work}")
 set(cases 0)
 set(failures 0)
+if(NOT EXISTS "${BUILD}/oreslang-llvmc")
+  message(FATAL_ERROR "sealed contrasts: native compiler must be built")
+endif()
 
 function(fail_case reason)
   message(SEND_ERROR "${reason}")
@@ -21,8 +24,9 @@ function(profile_contrast name source needle)
     "${dir}/main.atto" WORKING_DIRECTORY "${dir}"
     RESULT_VARIABLE baseline OUTPUT_VARIABLE baseline_ir
     ERROR_VARIABLE baseline_err TIMEOUT 30)
+  string(FIND "${baseline_ir}" "; ModuleID" module_mark)
   string(FIND "${baseline_ir}" "define " native_function)
-  if(NOT baseline STREQUAL "0" OR native_function EQUAL -1)
+  if(NOT baseline STREQUAL "0" OR module_mark EQUAL -1 OR native_function EQUAL -1)
     fail_case("${name}: ordinary LLVM frontend did not emit function IR: ${baseline} ${baseline_err}")
   else()
     execute_process(COMMAND "${BUILD}/oreslang-llvmc"
