@@ -1,0 +1,65 @@
+name: LLVM scheduler CONTROL exact-head host proof
+
+on:
+  push:
+    branches:
+      - audit/scheduler-control-gate-20261108
+    paths:
+      - ".github/workflows/scheduler-control-exact-head.yml"
+      - "scripts/test-native-vm-nio-host-sanitizers.sh"
+      - "src/main/cpp/oreslang/runtime/NativeOresVM.c"
+      - "src/main/cpp/oreslang/runtime/NativeOresVM.h"
+      - "src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+      - "src/main/cpp/oreslang/runtime/NativeActorFuture.c"
+      - "tests/native_vm_main_control_loop_test.c"
+      - "tests/native_vm_main_control_create_failure_test.c"
+      - "tests/native_vm_nio_lifecycle_test.c"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scheduler-control-exact-head-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  control-and-nio-host-sanitizers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout immutable exact source commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify exact HEAD, clean tree and sanitizer toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --verify HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          command -v gcc
+          command -v g++
+          command -v clang
+          command -v clang++
+          command -v timeout
+          printf 'source_commit=%s\n' "$(git rev-parse HEAD)"
+          printf 'source_tree=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+          printf 'test_script_blob=%s\n' "$(git rev-parse HEAD:scripts/test-native-vm-nio-host-sanitizers.sh)"
+      - name: Execute real native CONTROL/NIO and pthread-failure sanitizer tests
+        shell: bash
+        env:
+          ORES_NIO_EXPECT_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          bash scripts/test-native-vm-nio-host-sanitizers.sh
+      - name: Certify executed HOST-only sanitizer gate and source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'PASS HOST ONLY; no compiled .ores guest parity certified\n'
+          printf 'verified_source_commit=%s\n' "$GITHUB_SHA"
+          printf 'verified_source_tree=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+          printf 'native_control_fixture_blob=%s\n' "$(git rev-parse HEAD:tests/native_vm_main_control_loop_test.c)"
+          printf 'pthread_failure_fixture_blob=%s\n' "$(git rev-parse HEAD:tests/native_vm_main_control_create_failure_test.c)"
