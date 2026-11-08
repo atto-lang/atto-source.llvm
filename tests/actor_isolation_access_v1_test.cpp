@@ -32,6 +32,8 @@ int main() {
     a.retire();
     assert(!a.issue_allocation(0, 8));
     assert(!a.checked_offset(*reused, 2, 8));
+    auto sibling = other_actor.issue_allocation(0, 8);
+    assert(sibling && other_actor.checked_offset(*sibling, 1, 8) == 0);
     const auto span = ActorIsolationAccessV1::max_compressed32_span;
     ActorIsolationAccessV1 max(1, 1, 1, span);
     auto tail = max.issue_allocation(span - 8, 8);
