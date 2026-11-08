@@ -35,6 +35,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <mutex>
 #include <optional>
 #include <utility>
@@ -160,7 +161,9 @@ public:
     RequestContextHandoffTableV1(OresNativeActorScheduler* scheduler,
                                  std::size_t capacity,
                                  UnregisteredHostOnly)
-        : scheduler_(scheduler), slots_(capacity > max_capacity ? max_capacity : capacity) {}
+        : scheduler_(scheduler),
+          state_(std::make_shared<State>(
+              capacity > max_capacity ? max_capacity : capacity)) {}
 
     // Trusted ingress variant: redeemed recipients are registered with the
     // exact-generation lifecycle owner BEFORE their context can be returned.
@@ -169,8 +172,20 @@ public:
     RequestContextHandoffTableV1(OresNativeActorScheduler* scheduler,
                                  std::size_t capacity,
                                  NativeRequestLifecycleRegistryV1& lifecycle)
-        : scheduler_(scheduler), slots_(capacity > max_capacity ? max_capacity : capacity),
-          lifecycle_registry_(&lifecycle) {}
+        : scheduler_(scheduler), lifecycle_registry_(&lifecycle),
+          state_(std::make_shared<State>(
+              capacity > max_capacity ? max_capacity : capacity)) {
+        // Never register a raw 'this' callback: the CONTROL reactor might
+        // process STOP while the table is being destroyed. Its weak State
+        // snapshot is independently refcounted and has no table pointer.
+        std::weak_ptr<State> weak = state_;
+        if (!lifecycle.register_stop_cleanup([weak](OresNativeActorRef actor) {
+                if (auto state = weak.lock())
+                    (void)revoke_state_recipient(*state, actor);
+            }))
+            throw std::invalid_argument(
+                "handoff lifecycle cleanup registration denied");
+    }
     RequestContextHandoffTableV1(const RequestContextHandoffTableV1&) = delete;
     RequestContextHandoffTableV1& operator=(const RequestContextHandoffTableV1&) = delete;
 
@@ -204,24 +219,24 @@ public:
         auto prepared = std::make_unique<Envelope>(std::move(env));
         std::optional<std::uint64_t> published;
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::mutex> lock(state_->mutex);
             source.cancellation_->with_active_authority([&] {
                 auto commit = [&]() -> bool {
-                    for (std::size_t i = 0; i < slots_.size(); ++i) {
-                        Slot& slot = slots_[i];
+                    for (std::size_t i = 0; i < state_->slots.size(); ++i) {
+                        Slot& slot = state_->slots[i];
                         if (slot.envelope) continue;
                         if (++slot.generation > kMaxGeneration)
                             slot.generation = 1;
                         slot.envelope = std::move(prepared);
-                        ++pending_;
+                        ++state_->pending;
                         published = (slot.generation << kSlotBits) |
                                     static_cast<std::uint64_t>(i);
                         return true;
                     }
                     return false;
                 };
-                return ores_native_actor_scheduler_commit_if_live_v1(
-                    scheduler_, sender,
+                return ores_native_actor_scheduler_commit_if_both_live_v1(
+                    scheduler_, sender, recipient,
                     [](void* p) -> int {
                         return (*static_cast<decltype(commit)*>(p))() ? 1 : 0;
                     }, &commit) != 0;
@@ -244,16 +259,16 @@ public:
             !current_mail || current_payload != ticket) return std::nullopt;
         std::unique_ptr<Envelope> env;
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::mutex> lock(state_->mutex);
             const std::size_t index = static_cast<std::size_t>(ticket & kSlotMask);
             const std::uint64_t generation = ticket >> kSlotBits;
-            if (index >= slots_.size() || generation == 0) return std::nullopt;
-            Slot& s = slots_[index];
+            if (index >= state_->slots.size() || generation == 0) return std::nullopt;
+            Slot& s = state_->slots[index];
             if (!s.envelope || s.generation != generation) return std::nullopt;
             if (!same_actor_incarnation_v1(s.envelope->recipient, recipient))
                 return std::nullopt;  // misdirected: do NOT burn it
             env = std::move(s.envelope);  // one-shot
-            --pending_;
+            --state_->pending;
         }
         // Everything below runs outside the table lock (user copy/dtors).
         auto parent = env->request_cancellation.lock();
@@ -289,32 +304,25 @@ public:
         return out;
     }
 
-    // Scheduler calls this when an actor incarnation ends: envelopes sealed
-    // for it can never be redeemed and are dropped now.
+    // CONTROL-only, automatic when constructed with a lifecycle registry.
+    // Pending envelopes are detached while holding their table mutex, then
+    // released outside it, so user destructors cannot deadlock the table.
     std::size_t revoke_recipient(OresNativeActorRef recipient) {
-        std::vector<std::unique_ptr<Envelope>> dropped;
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            for (auto& s : slots_)
-                if (s.envelope && same_actor_incarnation_v1(s.envelope->recipient, recipient)) {
-                    dropped.push_back(std::move(s.envelope));
-                    --pending_;
-                }
-        }
-        return dropped.size();  // values destroyed outside the lock
+        return revoke_state_recipient(*state_, recipient);
     }
 
-    // Drops envelopes whose request has ended or been cancelled.
+    // Drops cancelled envelopes; caller must own the host table lifetime.
     std::size_t sweep() {
         std::vector<std::unique_ptr<Envelope>> dropped;
+        dropped.reserve(state_->slots.size());
         {
-            std::lock_guard<std::mutex> lock(mutex_);
-            for (auto& s : slots_) {
-                if (!s.envelope) continue;
-                auto parent = s.envelope->request_cancellation.lock();
+            std::lock_guard<std::mutex> lock(state_->mutex);
+            for (auto& slot : state_->slots) {
+                if (!slot.envelope) continue;
+                auto parent = slot.envelope->request_cancellation.lock();
                 if (!parent || parent->is_cancelled()) {
-                    dropped.push_back(std::move(s.envelope));
-                    --pending_;
+                    dropped.push_back(std::move(slot.envelope));
+                    --state_->pending;
                 }
             }
         }
@@ -322,8 +330,8 @@ public:
     }
 
     std::size_t pending() const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return pending_;
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        return state_->pending;
     }
 
 private:
@@ -343,11 +351,36 @@ private:
         std::unique_ptr<Envelope> envelope;
     };
 
+    struct State final {
+        explicit State(std::size_t capacity) : slots(capacity) {}
+        mutable std::mutex mutex;
+        std::vector<Slot> slots;
+        std::size_t pending = 0;
+    };
+
+    // Registry callback holds a shared State, not a table pointer. Its
+    // strong lease prevents teardown UAF, and the detached vector drops
+    // envelope payloads outside both registry and table mutexes.
+    static std::size_t revoke_state_recipient(
+            State& state, OresNativeActorRef recipient) {
+        std::vector<std::unique_ptr<Envelope>> dropped;
+        dropped.reserve(state.slots.size()); // allocate before table mutex
+        {
+            std::lock_guard<std::mutex> lock(state.mutex);
+            for (auto& slot : state.slots)
+                if (slot.envelope &&
+                    same_actor_incarnation_v1(
+                        slot.envelope->recipient, recipient)) {
+                    dropped.push_back(std::move(slot.envelope));
+                    --state.pending;
+                }
+        }
+        return dropped.size();
+    }
+
     OresNativeActorScheduler* const scheduler_;
     NativeRequestLifecycleRegistryV1* const lifecycle_registry_ = nullptr;
-    mutable std::mutex mutex_;
-    std::vector<Slot> slots_;
-    std::size_t pending_ = 0;
+    std::shared_ptr<State> state_;
 };
 
 } // namespace oreslang::runtime
