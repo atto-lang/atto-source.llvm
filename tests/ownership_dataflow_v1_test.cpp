@@ -188,6 +188,12 @@ static bool rejects_different_acquisition_order_at_join() {
     g.blocks[3].operations={op(OwnershipV1OpKind::ExitNormal)};
     return expect_reject("different acquisition order at join",std::move(g));
 }
+static bool rejects_exit_with_owner_metadata() {
+    auto g=graph(1);
+    g.blocks[0].operations={op(OwnershipV1OpKind::Create),
+        op(OwnershipV1OpKind::ExitNormal,0,0)};
+    return expect_reject("exit with transfer metadata",std::move(g));
+}
 static bool rejects_stray_transfer_target() {
     auto g=graph(1);
     g.blocks[0].operations={op(OwnershipV1OpKind::Create),
@@ -235,9 +241,10 @@ int main() {
       rejects_mutation_during_shared_borrow() &&
       cleanup_uses_acquisition_not_declaration_order() &&
       rejects_different_acquisition_order_at_join() &&
-      rejects_end_borrow_without_loan() && rejects_stray_transfer_target() &&
+      rejects_end_borrow_without_loan() && rejects_exit_with_owner_metadata() &&
+      rejects_stray_transfer_target() &&
       rejects_read_during_mutable_borrow();
     if (!ok) return 1;
-    std::puts("OWNERSHIP_DATAFLOW_V1|positive=7|negative=20|result=PASS");
+    std::puts("OWNERSHIP_DATAFLOW_V1|positive=7|negative=21|result=PASS");
     return 0;
 }
