@@ -2,12 +2,59 @@
 """Compile actual opt-in Oreslang source and drive two native heap continuations."""
 import argparse
 import pathlib
+import re
 import subprocess
 import tempfile
 
 def run(command, **kwargs):
     return subprocess.run(command, text=True, capture_output=True, check=False,
                           timeout=60, **kwargs)
+
+def mutate_one(ir, label, pattern, replacement):
+    # Mutation MUST produce a syntactically valid LLVM program. Otherwise a
+    # parser rejection would masquerade as a killed security mutation.
+    mutated, count = re.subn(pattern, replacement, ir, count=1, flags=re.MULTILINE)
+    if count != 1 or mutated == ir:
+        raise AssertionError(f"unable to inject LLVM security mutation {label}")
+    return mutated
+
+
+def require_mutations_rejected(ir, out, clang, harness):
+    # Compile and execute each mutated *real guest module*. Every change is
+    # selected to be valid IR but violate an independently asserted semantic:
+    # the bounded fuel cap, exactly-once commit, persisted continuation, or
+    # terminal cancellation classification. These MUST fail the native oracle,
+    # not just an IR textual preflight or syntax checker.
+    mutations = (
+        ("bypass-dispatch-fuel",
+         r"^(\s*%batch\.limit\s*=\s*)select [^\n]+$",
+         r"\g<1>add i64 0, 1000"),
+        ("double-commit",
+         r"^(\s*%counter\.committed\s*=\s*add\s+(?:nsw\s+)?i64\s+[^,\n]+,\s*)1(\s*)$",
+         r"\g<1>2\g<2>"),
+        ("drop-persisted-commit",
+         r"^(\s*store i64 )%counter\.committed(, [^\n]+)$",
+         r"\g<1>%batch.current\g<2>"),
+        ("cancel-status-forgery",
+         r"^(\s*)ret i32 2(\s*)$",
+         r"\g<1>ret i32 0\g<2>"),
+    )
+    for label, pattern, replacement in mutations:
+        changed = mutate_one(ir, label, pattern, replacement)
+        mutant_ir = out / (label + ".ll")
+        mutant_exe = out / (label + ".exe")
+        mutant_ir.write_text(changed)
+        build = run([clang, "-std=c11", "-O2", "-DNDEBUG", "-Wall", "-Wextra",
+                     "-Werror", "-Wno-error=override-module", "-pedantic",
+                     str(harness), "-x", "ir", str(mutant_ir), "-o", str(mutant_exe)])
+        assert build.returncode == 0, (label, "mutated IR did not compile", build.stderr)
+        execution = run([str(mutant_exe)])
+        assert execution.returncode != 0, (label, "security mutant unexpectedly passed",
+                                           execution.stdout)
+        assert "SCALAR_FRAME_AOT_TWO_TASKS_PASS" not in execution.stdout, (
+            label, "mutant printed successful exact-guest receipt")
+    print("SCALAR_FRAME_AOT_FOUR_REAL_IR_MUTATIONS_REJECTED")
+
 
 def main():
     # Python -O strips assert statements. Never let a release or wrapper
@@ -74,6 +121,7 @@ def main():
             assert execution.returncode == 0, (opt, execution.stderr)
             for receipt in expected_receipts:
                 assert receipt in execution.stdout, (opt, receipt, execution.stdout)
+        require_mutations_rejected(accepted.stdout, out, args.clang, args.harness)
         for i, (original, replacement) in enumerate(cases):
             assert original in source
             file = out / f"invalid-{i}.ores"
@@ -82,7 +130,7 @@ def main():
             assert wrong.returncode != 0 and not wrong.stdout.strip(), (i, wrong.stdout)
         missing = run([compiler, "--experimental-rt-scalar-loop", "--target=wasm32", str(fixture)])
         assert missing.returncode != 0 and not missing.stdout.strip()
-        print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: O0/O2/O3 batched fuel, 16 invalid frames, 7 boundaries, peer/cancel isolation, negatives")
+        print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: O0/O2/O3 batched fuel, 4 compiled IR mutants, 16 invalid frames, 7 boundaries, peer/cancel isolation, negatives")
 
 if __name__ == "__main__":
     main()
