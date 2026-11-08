@@ -25,6 +25,11 @@ static int happy_path(void) {
     CHECK(ores_actor_region_guest_v1_read_i64(first, 8) == 22);
     CHECK(ores_actor_region_guest_v1_read_i64(second, 0) == 9);
     ores_actor_region_guest_v1_drop(second);
+    const uint32_t third = ores_actor_region_guest_v1_alloc(16);
+    CHECK(third == 129u && third != second);
+    ores_actor_region_guest_v1_write_i64(third, 0, INT64_C(11));
+    CHECK(ores_actor_region_guest_v1_read_i64(third, 0) == 11);
+    ores_actor_region_guest_v1_drop(third);
     ores_actor_region_guest_v1_drop(first);
     ores_actor_region_guest_v1_end();
     return 0;
@@ -45,7 +50,9 @@ static void child_failure(enum FailureCase which) {
         (void)ores_actor_region_guest_v1_read_i64(object + 1u, 0);
     } else if (which == SLOT_REUSE) {
         ores_actor_region_guest_v1_drop(object);
-        (void)ores_actor_region_guest_v1_alloc(16);
+        const uint32_t replacement = ores_actor_region_guest_v1_alloc(16);
+        if (replacement == object) _exit(89);
+        (void)ores_actor_region_guest_v1_read_i64(object, 0);
     } else {
         ores_actor_region_guest_v1_end();
     }
