@@ -169,7 +169,7 @@ static void short_resumptions_cannot_evade_poll_phase() {
         require(q.completedBackedgesThisDispatch() == 127);
     }
     require(polls == 7);
-    require(FakeClock::reads.load() == 2 + 8 + 7);
+    require(FakeClock::reads.load() == 1 + 8 + 7);
 }
 
 static void million_fast_backedges_do_not_read_the_clock() {
