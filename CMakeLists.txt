@@ -22,17 +22,28 @@ if(ORESLANG_ACTOR_REGION_HOST_ONLY)
     endif()
     find_package(Threads REQUIRED)
     foreach(level IN ITEMS 0 2)
-        foreach(kind IN ITEMS adapter supervisor)
+        foreach(kind IN ITEMS adapter supervisor guest-bridge)
             set(target "oreslang-actor-region-v1-${kind}-O${level}")
             if(kind STREQUAL "adapter")
                 set(test_file tests/actor_region_v1_test.c)
-            else()
+                set(runtime_sources
+                    src/main/cpp/oreslang/runtime/ActorRegionV1.c
+                    src/main/cpp/oreslang/runtime/ActorArena.c)
+            elseif(kind STREQUAL "supervisor")
                 set(test_file tests/actor_region_v1_fault_supervisor_test.c)
+                set(runtime_sources
+                    src/main/cpp/oreslang/runtime/ActorRegionV1.c
+                    src/main/cpp/oreslang/runtime/ActorArena.c)
+            else()
+                set(test_file tests/actor_region_guest_v1_bridge_test.c)
+                set(runtime_sources
+                    src/main/cpp/oreslang/runtime/ActorRegionGuestV1.c
+                    src/main/cpp/oreslang/runtime/ActorRegionV1.c
+                    src/main/cpp/oreslang/runtime/ActorArena.c)
             endif()
             add_executable(${target}
                 ${test_file}
-                src/main/cpp/oreslang/runtime/ActorRegionV1.c
-                src/main/cpp/oreslang/runtime/ActorArena.c)
+                ${runtime_sources})
             target_include_directories(${target} PRIVATE
                 "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
             target_compile_features(${target} PRIVATE c_std_11)
@@ -3573,6 +3584,24 @@ if(BUILD_TESTING)
         set_tests_properties(native_actor_region_v1_fault_isolation_host_only
             PROPERTIES TIMEOUT 45)
     endif()
+
+    # Compiler-facing adapter prototype: compact offsets are guest values;
+    # generation/domain/turn proofs stay in a trusted TLS sidecar. This proves
+    # the ABI contract only, not actual LLVM/.atto lowering.
+    add_executable(oreslang-native-actor-region-guest-v1-test
+        tests/actor_region_guest_v1_bridge_test.c
+        src/main/cpp/oreslang/runtime/ActorRegionGuestV1.c
+        src/main/cpp/oreslang/runtime/ActorRegionV1.c
+        src/main/cpp/oreslang/runtime/ActorArena.c)
+    target_include_directories(oreslang-native-actor-region-guest-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-region-guest-v1-test PRIVATE c_std_11)
+    target_compile_options(oreslang-native-actor-region-guest-v1-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_region_guest_v1_sidecar_contract_host_only
+        COMMAND oreslang-native-actor-region-guest-v1-test)
+    set_tests_properties(native_actor_region_guest_v1_sidecar_contract_host_only
+        PROPERTIES TIMEOUT 45)
 
     # Trusted host-only shared-region capability and read/write lease prototype.
     add_executable(oreslang-native-shared-domain-arena-test
