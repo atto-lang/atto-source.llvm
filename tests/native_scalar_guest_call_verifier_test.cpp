@@ -48,7 +48,13 @@ static llvm::Function* define_frame_method(
 static llvm::Function* define_four(llvm::Module& module) {
     auto& context = module.getContext();
     auto* i64 = llvm::Type::getInt64Ty(context);
-    auto* frameTy = llvm::StructType::get(context, {i64, i64, i64, i64});
+    auto* frameTy = llvm::StructType::getTypeByName(
+        context, "oreslang.rt.scalar.frame.v1");
+    if (!frameTy) {
+        frameTy = llvm::StructType::create(
+            context, {i64, i64, i64, i64},
+            "oreslang.rt.scalar.frame.v1");
+    }
     auto* framePtr = oreslang::native_pointer_type(context, frameTy);
     define_frame_method(module, "oreslang_rt_scalar_frame_init_v1",
                         llvm::Type::getVoidTy(context), framePtr, true);
@@ -212,5 +218,38 @@ int main() {
             "unauthorized_global");
         require(!admitted(module));
     }
+    {
+        // Wrong layout is rejected even when the named frame and four
+        // function signatures otherwise look plausible.
+        llvm::LLVMContext wrongContext;
+        llvm::Module module("malformed-frame-layout", wrongContext);
+        auto* i64 = llvm::Type::getInt64Ty(wrongContext);
+        auto* i32 = llvm::Type::getInt32Ty(wrongContext);
+        (void)llvm::StructType::create(
+            wrongContext, {i64, i64, i32, i64},
+            "oreslang.rt.scalar.frame.v1");
+        define_four(module);
+        require(!admitted(module));
+    }
+#if LLVM_VERSION_MAJOR < 15
+    {
+        llvm::LLVMContext wrongContext;
+        llvm::Module module("wrong-typed-frame-pointer", wrongContext);
+        auto* i64 = llvm::Type::getInt64Ty(wrongContext);
+        (void)llvm::StructType::create(
+            wrongContext, {i64, i64, i64, i64},
+            "oreslang.rt.scalar.frame.v1");
+        auto* wrongPtr = i64->getPointerTo();
+        define_frame_method(module, "oreslang_rt_scalar_frame_init_v1",
+                            llvm::Type::getVoidTy(wrongContext), wrongPtr, true);
+        define_frame_method(module, "oreslang_rt_scalar_frame_step_v1",
+                            llvm::Type::getInt32Ty(wrongContext), wrongPtr, true);
+        define_frame_method(module, "oreslang_rt_scalar_frame_cancel_v1",
+                            llvm::Type::getVoidTy(wrongContext), wrongPtr, false);
+        define_frame_method(module, "oreslang_rt_scalar_frame_result_v1",
+                            i64, wrongPtr, false);
+        require(!admitted(module));
+    }
+#endif
     std::cout << "SCALAR_GUEST_CALL_ADMISSION_PASS\n";
 }
