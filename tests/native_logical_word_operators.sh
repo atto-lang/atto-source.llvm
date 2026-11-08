@@ -105,6 +105,7 @@ reject_non_boolean() {
 }
 
 compile_and_run scalar-parity.atto 42
+compile_and_run keyword-boundaries.atto 42
 compile_and_run short-circuit-and.atto 1
 compile_and_run short-circuit-or.atto 1
 compile_and_run xor-eager.atto 42
