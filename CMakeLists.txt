@@ -1029,12 +1029,23 @@ if(BUILD_TESTING)
     endif()
     # This isolated AOT source-to-native frame test does not relax the nine
     # default compiler-negative RT admission contracts.
-    if(ORE_CLANG)
+    # Prefer LLVM-SDK-major Clang over a generic PATH clang, and verify the
+    # major again in the Python AOT test. A mismatched Clang is NOT a pass.
+    find_program(ORE_RT_SCALAR_MATCHING_CLANG
+        NAMES "clang-${LLVM_VERSION_MAJOR}"
+        HINTS "${LLVM_TOOLS_BINARY_DIR}")
+    if(ORE_RT_SCALAR_MATCHING_CLANG)
+        set(ORE_RT_SCALAR_CLANG "${ORE_RT_SCALAR_MATCHING_CLANG}")
+    else()
+        set(ORE_RT_SCALAR_CLANG "${ORE_CLANG}")
+    endif()
+    if(ORE_RT_SCALAR_CLANG)
         add_test(NAME native_rt_scalar_frame_aot_two_tasks
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_step_aot.py"
                 --compiler "$<TARGET_FILE:oreslang-llvmc>"
-                --clang "${ORE_CLANG}"
+                --clang "${ORE_RT_SCALAR_CLANG}"
+                --llvm-major "${LLVM_VERSION_MAJOR}"
                 --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-rt-scalar-step-positive.ores"
                 --harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_step_harness.c")
         set_tests_properties(native_rt_scalar_frame_aot_two_tasks PROPERTIES TIMEOUT 120)
