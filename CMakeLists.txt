@@ -1795,6 +1795,10 @@ if(BUILD_TESTING)
     # Proven-nonescaping integer-field classes are stack-only and emit no
     # malloc, tracing collector roots, or native heap calls.
     oreslang_contract_test(owned_stack_class owned-stack-class.ores --ir "alloca %Box")
+    # Nonescaping class state passed by exclusive scoped borrow must remain
+    # a direct stack-allocated aggregate, not a heap/GC-backed proxy.
+    oreslang_contract_test(native_owned_inventory_stack_allocation
+        native-owned-inventory-reservation.ores --ir "alloca %Inventory")
     oreslang_contract_test(reject_owned_stack_escape owned-stack-escape.ores --diagnostic "class is non-Copy")
     oreslang_contract_test(reject_owned_stack_unknown_field owned-stack-bad-field.ores --diagnostic "unknown class field")
     oreslang_contract_test(reject_owned_stack_duplicate_field owned-stack-double-field.ores --diagnostic "duplicate class field")
@@ -2847,6 +2851,8 @@ if(BUILD_TESTING)
     # Both spellings must fail closed with no IR until implementation lands.
     oreslang_contract_test(reject_unsupported_native_io_blocking unsupported-native-io-blocking.ores --diagnostic "unknown function or wrong call arity")
     oreslang_contract_test(reject_unsupported_native_io_bare unsupported-native-io-bare.ores --diagnostic "unknown function or wrong call arity")
+    oreslang_contract_test(reject_unsupported_native_io_global_launder unsupported-native-io-global-launder.ores --diagnostic "native I/O callable name is compiler-owned")
+    oreslang_contract_test(reject_unsupported_native_io_method_launder unsupported-native-io-method-launder.ores --diagnostic "native I/O callable name is compiler-owned")
     oreslang_contract_test(reject_unverified_target_header unsupported-target-header.ores --diagnostic "native target admission unsupported")
     # Neither naming style is permitted without a typed I/O registry, async
     # transport and continuation lowering. No IR may be emitted on failure.
@@ -3311,11 +3317,17 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_epoch_deterministic_drop PROPERTIES TIMEOUT 20)
 
     oreslang_contract_test(reject_native_private_array_mutation class-private-array-mutation-reject.ores --diagnostic "private class field")
+    oreslang_contract_test(reject_native_private_inventory_bypass
+        native-private-inventory-bypass-reject.ores --diagnostic "private class field")
     oreslang_contract_test(reject_native_private_filled_commit class-private-filled-array-commit-reject.ores --diagnostic "private class field")
 
     if(ORE_CLANG)
         oreslang_contract_test(native_public_class_field_read class-public-field-read-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
         oreslang_contract_test(class_exec_mutable_borrow class-mutable-borrow-native.ores --run 42 --clang "${ORE_CLANG}")
+        # Native guest execution: synchronous borrowed state mutation, overdraw
+        # rejection, and joint two-field invariant. Not a GC/no-heap proof.
+        oreslang_contract_test(native_exec_owned_inventory_reservation
+            native-owned-inventory-reservation.ores --run 74 --clang "${ORE_CLANG}")
 
         oreslang_contract_test(native_projection_shared_clang
             class-projection-shared-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
@@ -3477,6 +3489,19 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_arena_persistent_scratch
         COMMAND oreslang-native-actor-arena-test)
     set_tests_properties(native_actor_arena_persistent_scratch PROPERTIES TIMEOUT 25)
+
+    # Trusted host-only shared-region capability and read/write lease prototype.
+    add_executable(oreslang-native-shared-domain-arena-test
+        tests/native_shared_domain_arena_test.cpp)
+    target_include_directories(oreslang-native-shared-domain-arena-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-shared-domain-arena-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-native-shared-domain-arena-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-shared-domain-arena-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_shared_domain_arena_leases
+        COMMAND oreslang-native-shared-domain-arena-test)
+    set_tests_properties(native_shared_domain_arena_leases PROPERTIES TIMEOUT 25)
 
     # Persist actor-native data across message turns and carrier migration.
     # Retirement denies new admissions; physical free waits for active loans.
@@ -5518,4 +5543,22 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND oreslang-native-actor-nio-fd-lease-test)
     set_tests_properties(native_actor_nio_fd_lease_exclusive_rearm
         PROPERTIES TIMEOUT 20)
+endif()
+
+
+# Stacked OresVM actor resource-retirement acceptance gate.
+# Accounting only: physical external I/O retirement must be signaled by its adapter.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-oresvm-resource-retirement-test
+        tests/native_oresvm_resource_retirement_test.cpp)
+    target_include_directories(oreslang-native-oresvm-resource-retirement-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-oresvm-resource-retirement-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-native-oresvm-resource-retirement-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-oresvm-resource-retirement-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_oresvm_actor_resource_retirement
+        COMMAND oreslang-native-oresvm-resource-retirement-test)
+    set_tests_properties(native_oresvm_actor_resource_retirement PROPERTIES TIMEOUT 30)
 endif()

@@ -3,6 +3,7 @@
 #include "oreslang/types/NativeSumTypes.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
+#include "oreslang/runtime/OresIsolateAbi.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -700,7 +701,8 @@ llvm::Value* lower(const Expression& expr,
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool cortex_m_target,
-                                  bool bounded_allocator_provider) {
+                                  bool bounded_allocator_provider,
+                                  const std::string& isolate_entry) {
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
@@ -708,6 +710,55 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_string_", 0) == 0)
             throw std::runtime_error("reserved native string runtime symbol collision");
+
+    // First OresVM entry is deliberately a one-function, pure scalar state
+    // transition. Runtime-owned state is injected, never a mutable LLVM global.
+    if (!isolate_entry.empty()) {
+        if (wasm32_target || cortex_m_target || source.functions.size() != 1 ||
+            !source.imports.empty() || !source.actors.empty() ||
+            !source.classes.empty() || !source.generators.empty() ||
+            !source.cooperative_loops.empty() || !source.sum_types.empty())
+            throw std::runtime_error("isolate entry requires one native scalar function");
+        const auto& fn = source.functions.front();
+        if (fn.name != isolate_entry || fn.name == "main" ||
+            fn.name == "ores_guest_entry" || !fn.exported || fn.native_internal ||
+            fn.async_source_i64 || fn.returns_void || fn.return_type != ScalarType::I64 ||
+            !fn.return_class.empty() || !fn.return_sum.empty() ||
+            fn.parameters.size() != 2 || !fn.locals.empty() ||
+            !fn.statements.empty() || !fn.early_returns.empty() ||
+            !fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
+            !fn.actor_stops.empty() || !fn.actor_actions.empty() ||
+            !fn.actor_field_writes.empty() || !fn.source_tasks.empty() ||
+            !fn.future_pipelines.empty() || !fn.ready_await_actor.empty() ||
+            !fn.done_await_actor.empty() || fn.scalar_while ||
+            fn.caught_throw_value || !fn.method_owner.empty() ||
+            !fn.result || !fn.generic_parameters.empty())
+            throw std::runtime_error("isolate entry requires pure pub fnc (int,int): int");
+        for (const auto& param : fn.parameters)
+            if (param.mode != Parameter::Mode::Value ||
+                param.scalar_type != ScalarType::I64 || !param.class_name.empty() ||
+                !param.sum_type.empty() || !param.generic_type.empty())
+                throw std::runtime_error("isolate entry requires i64 value arguments");
+        const auto pure = [&](const auto& self, const Expression& expr) -> bool {
+            using K = Expression::Kind;
+            switch (expr.kind) {
+                case K::Integer: return true;
+                case K::Variable:
+                    return expr.name == fn.parameters[0].name ||
+                           expr.name == fn.parameters[1].name;
+                case K::Negate: return expr.left && self(self, *expr.left);
+                case K::Add: case K::Subtract: case K::Multiply:
+                    return expr.left && expr.right && self(self, *expr.left) &&
+                           self(self, *expr.right);
+                default: return false;
+            }
+        };
+        if (!pure(pure, *fn.result))
+            throw std::runtime_error("isolate entry requires arithmetic-only result");
+    }
+    for (const auto& fn : source.functions)
+        if (fn.name == "ores_guest_entry")
+            throw std::runtime_error("reserved isolate ABI symbol collision");
     if (!source.imports.empty())
         throw std::runtime_error("unresolved native module imports cannot reach LLVM emission");
     for (const auto& actor : source.actors) {
@@ -3068,6 +3119,125 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         }
     }
 
+
+    if (!isolate_entry.empty()) {
+        // Isolate guest entry ABI v2: status is distinct from signed i64 output.
+        // Tenant mutable state is accessed only through context callbacks.
+        // No writable process-global guest state is emitted by this wrapper.
+        auto* ctx_type = llvm::StructType::get(context,
+            {i32, i32, i64, native_ptr, native_ptr, native_ptr});
+        auto* wrapper = llvm::Function::Create(
+            llvm::FunctionType::get(i32, {native_ptr, i64, native_ptr}, false),
+            llvm::Function::ExternalLinkage, "ores_guest_entry", module);
+        auto* entry = llvm::BasicBlock::Create(context, "entry", wrapper);
+        auto* validate = llvm::BasicBlock::Create(context, "validate", wrapper);
+        auto* read = llvm::BasicBlock::Create(context, "read", wrapper);
+        auto* execute = llvm::BasicBlock::Create(context, "execute", wrapper);
+        auto* success = llvm::BasicBlock::Create(context, "success", wrapper);
+        auto* bad_context = llvm::BasicBlock::Create(context, "bad.context", wrapper);
+        auto* bad_load = llvm::BasicBlock::Create(context, "bad.load", wrapper);
+        auto* bad_store = llvm::BasicBlock::Create(context, "bad.store", wrapper);
+        auto* bad_arithmetic = llvm::BasicBlock::Create(context, "bad.arithmetic", wrapper);
+        llvm::IRBuilder<> b(entry);
+        auto* ctx = wrapper->getArg(0);
+        auto* input = wrapper->getArg(1);
+        auto* out = wrapper->getArg(2);
+        auto* pointers_valid = b.CreateAnd(b.CreateIsNotNull(ctx),
+                                           b.CreateIsNotNull(out));
+        b.CreateCondBr(pointers_valid, validate, bad_context);
+        b.SetInsertPoint(validate);
+        auto* typed_ctx = b.CreateBitCast(ctx, ctx_type->getPointerTo());
+        auto* version = b.CreateLoad(i32, b.CreateStructGEP(ctx_type, typed_ctx, 0));
+        auto* slots = b.CreateLoad(i32, b.CreateStructGEP(ctx_type, typed_ctx, 1));
+        auto* data = b.CreateLoad(native_ptr, b.CreateStructGEP(ctx_type, typed_ctx, 3));
+        auto* load_fn = b.CreateLoad(native_ptr, b.CreateStructGEP(ctx_type, typed_ctx, 4));
+        auto* store_fn = b.CreateLoad(native_ptr, b.CreateStructGEP(ctx_type, typed_ctx, 5));
+        auto* compatible = b.CreateAnd(
+            b.CreateAnd(b.CreateICmpEQ(version, llvm::ConstantInt::get(i32, ORES_ISOLATE_ABI_VERSION)),
+                        b.CreateICmpEQ(slots, llvm::ConstantInt::get(i32, ORES_ISOLATE_I64_SLOTS))),
+            b.CreateAnd(b.CreateIsNotNull(data),
+                b.CreateAnd(b.CreateIsNotNull(load_fn), b.CreateIsNotNull(store_fn))));
+        b.CreateCondBr(compatible, read, bad_context);
+        b.SetInsertPoint(read);
+        auto* old_slot = b.CreateAlloca(i64, nullptr, "tenant.old");
+        auto* load_type = llvm::FunctionType::get(i32, {native_ptr, i32, native_ptr}, false);
+        // LLVM 14-17 typed pointers require an actual function pointer type;
+        // LLVM 18+ opaque pointers naturally collapse this to the same ptr.
+        auto* load_callee = b.CreateBitCast(load_fn, load_type->getPointerTo());
+        auto* load_ok = b.CreateCall(load_type, load_callee,
+            {data, llvm::ConstantInt::get(i32, 0), b.CreateBitCast(old_slot, native_ptr)});
+        b.CreateCondBr(b.CreateICmpEQ(load_ok, llvm::ConstantInt::get(i32, 1)),
+                       execute, bad_load);
+        b.SetInsertPoint(execute);
+        auto* old = b.CreateLoad(i64, old_slot);
+        // In isolate-entry mode, lower the already-validated pure Oreslang AST
+        // directly into the status-producing guest wrapper. Calling the
+        // ordinary i64 function would use llvm.trap on signed overflow and
+        // terminate the entire in-process OresVM, not just this tenant.
+        // Each arithmetic operation branches to a recoverable ABI failure
+        // before any state store. The ordinary function is internal-only.
+        const auto& source_step = source.functions.front();
+        const auto emit_checked_pure = [&](const auto& self,
+                                           const Expression& expr) -> llvm::Value* {
+            using K = Expression::Kind;
+            switch (expr.kind) {
+                case K::Integer:
+                    return llvm::ConstantInt::getSigned(i64, expr.integer);
+                case K::Variable:
+                    if (expr.name == source_step.parameters[0].name) return old;
+                    if (expr.name == source_step.parameters[1].name) return input;
+                    throw std::logic_error("invalid isolate scalar parameter");
+                case K::Negate:
+                case K::Add:
+                case K::Subtract:
+                case K::Multiply: {
+                    const bool negative = expr.kind == K::Negate;
+                    auto* lhs = negative
+                        ? static_cast<llvm::Value*>(llvm::ConstantInt::get(i64, 0))
+                        : self(self, *expr.left);
+                    auto* rhs = negative
+                        ? self(self, *expr.left)
+                        : self(self, *expr.right);
+                    const auto op = (negative || expr.kind == K::Subtract)
+                        ? llvm::Intrinsic::ssub_with_overflow
+                        : (expr.kind == K::Multiply)
+                            ? llvm::Intrinsic::smul_with_overflow
+                            : llvm::Intrinsic::sadd_with_overflow;
+                    auto* intrinsic = llvm::Intrinsic::getDeclaration(
+                        &module, op, {i64});
+                    auto* pair = b.CreateCall(intrinsic, {lhs, rhs},
+                                               "isolate.arithmetic.checked");
+                    auto* value = b.CreateExtractValue(pair, {0}, "isolate.arithmetic.value");
+                    auto* overflow = b.CreateExtractValue(pair, {1}, "isolate.arithmetic.overflow");
+                    auto* proceed = llvm::BasicBlock::Create(
+                        context, "isolate.arithmetic.ok", wrapper);
+                    b.CreateCondBr(overflow, bad_arithmetic, proceed);
+                    b.SetInsertPoint(proceed);
+                    return value;
+                }
+                default:
+                    throw std::logic_error("unvalidated isolate expression");
+            }
+        };
+        auto* next = emit_checked_pure(emit_checked_pure, *source_step.result);
+        auto* store_type = llvm::FunctionType::get(i32, {native_ptr, i32, i64}, false);
+        auto* store_callee = b.CreateBitCast(store_fn, store_type->getPointerTo());
+        auto* saved = b.CreateCall(store_type, store_callee,
+            {data, llvm::ConstantInt::get(i32, 0), next});
+        b.CreateCondBr(b.CreateICmpEQ(saved, llvm::ConstantInt::get(i32, 1)),
+                       success, bad_store);
+        b.SetInsertPoint(success);
+        b.CreateStore(next, out);
+        b.CreateRet(llvm::ConstantInt::get(i32, 0));
+        b.SetInsertPoint(bad_context);
+        b.CreateRet(llvm::ConstantInt::get(i32, 1));
+        b.SetInsertPoint(bad_load);
+        b.CreateRet(llvm::ConstantInt::get(i32, 2));
+        b.SetInsertPoint(bad_store);
+        b.CreateRet(llvm::ConstantInt::get(i32, ORES_GUEST_STORE_DENIED));
+        b.SetInsertPoint(bad_arithmetic);
+        b.CreateRet(llvm::ConstantInt::get(i32, ORES_GUEST_OVERFLOW));
+    }
     std::string diagnostics;
     llvm::raw_string_ostream errors(diagnostics);
     if (llvm::verifyModule(module, &errors)) {

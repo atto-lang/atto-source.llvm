@@ -287,6 +287,23 @@ public:
                 return {Kind::Symbol, source_.substr(start, 2), start};
             }
         }
+        // Injected mutable state changes ownership and runtime lifetime.
+        // No native annotation HIR exists yet: reject before '@' can be
+        // treated as a generic symbol or discarded during source lowering.
+        // This lexer only reaches executable tokens (not comments/strings).
+        if (ch == '@') {
+            std::size_t after_name = start + 1;
+            while (after_name < source_.size() && identifier_part(source_[after_name]))
+                ++after_name;
+            const auto annotation = source_.substr(start + 1, after_name - start - 1);
+            if (annotation == "Inject" || annotation == "StateBacked" ||
+                    annotation == "MutableStateContainer" || annotation == "StateContainer") {
+                throw std::runtime_error(
+                    "STATE_INJECTION_UNSUPPORTED: @" + std::string(annotation) +
+                    " requires native typed region and borrow lowering at byte " +
+                    std::to_string(start));
+            }
+        }
         if (ch == '@' && source_.substr(start, 15) == "@DefaultArgVals") {
             throw std::runtime_error("native @DefaultArgVals declaration requires "
                                      "checked named defaults, ownership and ABI lowering at byte "
@@ -583,6 +600,43 @@ bool callable_nominal_name(std::string_view name) {
 // forgeable as an ordinary user class/actor nominal.
 bool entry_builtin_name(std::string_view name) {
     return name == "Entry";
+}
+
+/*
+ * The async-only I/O contract names a closed set of future standard-library
+ * operations. Until the native frontend has typed I/O registry resolution,
+ * suspension-aware effects and continuation lowering, user declarations must
+ * not impersonate those spellings and thereby turn an unsupported I/O call
+ * into an ordinary synchronous native function. This is intentionally NOT a
+ * blanket "_async"/"_blocking" suffix reservation: ordinary user functions
+ * such as pure_math_blocking remain legal.
+ */
+bool native_reserved_io_callable_name(std::string_view name) {
+    const auto dot = name.rfind('.');
+    if (dot != std::string_view::npos) name.remove_prefix(dot + 1);
+    static constexpr std::string_view reserved[] = {
+        "read_text",
+        "write_text",
+        "read_text_blocking",
+        "read_text_async",
+        "write_text_blocking",
+        "write_text_async",
+        "connect_blocking",
+        "connect_async",
+        "read_line_blocking",
+        "read_line_async",
+        "socket_write_text_blocking",
+        "socket_write_text_async",
+        "http_get_text_blocking",
+        "http_get_text_async",
+        "http_post_text_blocking",
+        "http_post_text_async",
+        "println_blocking",
+        "println_async"
+    };
+    for (const auto candidate : reserved)
+        if (name == candidate) return true;
+    return false;
 }
 
 [[noreturn]] void reject_native_entry_boundary(std::size_t offset) {
@@ -1977,6 +2031,9 @@ private:
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
         value.name = owner.empty() ? identifier() : owner + "." + identifier();
+        if (native_reserved_io_callable_name(value.name))
+            fail("native I/O callable name is compiler-owned until typed registry, "
+                 "nonblocking transport and continuation lowering are available");
         if (!owner.empty() && token_.text == "<") fail("native generic methods require typed receiver monomorphization");
         if (accept("<")) {
             if (accept(">")) fail("native generic declaration cannot be empty");
