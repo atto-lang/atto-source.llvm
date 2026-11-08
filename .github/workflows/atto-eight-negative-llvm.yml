@@ -2,7 +2,7 @@ name: AttoLang eight compiler-negative semantic gates (LLVM)
 on:
   pull_request:
     paths:
-      - 'contracts/atto-scalar-v1/negative/**'
+      - 'contracts/atto-scalar-v1/**'
       - 'tests/formal-policy-atto/negative/**'
       - 'tests/atto_negative_semantic_gate.rs'
       - '.github/workflows/atto-eight-negative-llvm.yml'
@@ -48,7 +48,8 @@ jobs:
         run: |
           set -euo pipefail
           cmake -G Ninja -S . -B "$RUNNER_TEMP/atto-negative-build" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DLLVM_DIR="$(llvm-config --cmakedir)"
-          cmake --build "$RUNNER_TEMP/atto-negative-build" --target oreslang-llvmc --parallel 2
+          cmake --build "$RUNNER_TEMP/atto-negative-build" --target oreslang-llvmc oreslang-no-gc-ir-audit-build --parallel 2
+          test -x "$RUNNER_TEMP/atto-negative-build/oreslang-no-gc-ir-audit"
           test -x "$RUNNER_TEMP/atto-negative-build/oreslang-llvmc"
           sha256sum "$RUNNER_TEMP/atto-negative-build/oreslang-llvmc"
       - name: Reject all eight canonical AttoLang sources before LLVM IR
@@ -59,3 +60,58 @@ jobs:
           set -euo pipefail
           "$RUNNER_TEMP/atto-negative-gate"
           echo 'ATTO_LLVM_NEGATIVE_SOURCE_ONLY; native guest execution not proven'
+      - name: Reject executable publication through the actual AOT linker route
+        env:
+          ORESLANG_LLVMC: ${{ runner.temp }}/atto-negative-build/oreslang-llvmc
+          ORES_NO_GC_IR_AUDIT: ${{ runner.temp }}/atto-negative-build/oreslang-no-gc-ir-audit
+          CLANG: clang
+        shell: bash
+        run: |
+          set -euo pipefail
+          reject_dir="$RUNNER_TEMP/atto-negative-artifacts"
+          mkdir -p "$reject_dir"
+          for id in removed-modulo removed-caret removed-double-caret type-first-reassignment typed-const-reassignment; do
+            source="contracts/atto-scalar-v1/negative/$id.atto"
+            target="$reject_dir/$id"
+            status=0
+            timeout 30s bash scripts/compile-aot.sh "$source" "$target" > "$target.out" 2> "$target.err" || status=$?
+            test "$status" -gt 0
+            test "$status" -lt 128
+            test ! -e "$target"
+            test -s "$target.err"
+            echo "ATTO_LLVM_AOT_ARTIFACT_DENIED|case=$id|status=$status|artifact=no"
+          done
+          for id in legacy-async-modifier critical-suspends-modifier suspends-critical-modifier; do
+            source="tests/formal-policy-atto/negative/$id.atto"
+            target="$reject_dir/$id"
+            status=0
+            timeout 30s bash scripts/compile-aot.sh "$source" "$target" > "$target.out" 2> "$target.err" || status=$?
+            test "$status" -gt 0
+            test "$status" -lt 128
+            test ! -e "$target"
+            test -s "$target.err"
+            echo "ATTO_LLVM_AOT_ARTIFACT_DENIED|case=$id|status=$status|artifact=no"
+          done
+      - name: Positive controls with canonical native guest execution
+        env:
+          ORESLANG_LLVMC: ${{ runner.temp }}/atto-negative-build/oreslang-llvmc
+          CLANG: clang
+          ATTO_RECEIPT_PATH: ${{ runner.temp }}/atto-negative-positive-controls.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v node
+          node --version
+          node tests/atto_scalar_v1_execution.mjs
+          test -s "$ATTO_RECEIPT_PATH"
+          node --input-type=module -e '
+            import {readFileSync} from "node:fs";
+            const r=JSON.parse(readFileSync(process.env.ATTO_RECEIPT_PATH, "utf8"));
+            const positive=r.cases.filter(c=>c.kind==="positive");
+            if(r.cases.length!==19 || positive.length!==10 ||
+              positive.some(c=>c.executed!==true || c.result_i64!==c.expected_i64 ||
+                !/^[a-f0-9]{64}$/.test(c.artifact_sha256)))process.exit(1);
+            console.log("ATTO_LLVM_POSITIVE_CONTROL_GUESTS=10");
+          '
+          echo 'Receipt is internal evidence, not independent GitHub step attestation.'
+
