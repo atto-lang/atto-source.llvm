@@ -4,6 +4,7 @@ import argparse
 import pathlib
 import re
 import subprocess
+import sys
 import tempfile
 
 def run(command, **kwargs):
@@ -105,4 +106,8 @@ def main():
         print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: O0/O2/O3, 3 peers, conserved logical fuel, cancellation, negative traps")
 
 if __name__ == "__main__":
+    # This legacy harness still has many assertion-based end-to-end checks.
+    # Never report a false PASS when PYTHONOPTIMIZE/-O would disable them.
+    if sys.flags.optimize:
+        raise SystemExit("native AOT security tests require Python assertions enabled")
     main()
