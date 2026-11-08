@@ -8,6 +8,10 @@
 #include <stdlib.h>
 #include <sched.h>
 #include <time.h>
+#include <signal.h>
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 static atomic_int tail_processed;
 static atomic_int quota_processed;
@@ -307,6 +311,30 @@ static int64_t malformed_message(
 }
 
 int main(void) {
+    /* Invalid host protocol cannot silently acquire another stop claim.
+     * Fork BEFORE native schedulers start (never fork live carrier threads),
+     * disable core dumps, and assert the second outer stop is rejected. */
+    const pid_t reject_double_stop = fork();
+    check(reject_double_stop >= 0);
+    if (reject_double_stop == 0) {
+        const struct rlimit no_core = {0, 0};
+        check(setrlimit(RLIMIT_CORE, &no_core) == 0);
+        void* must_fail = oreslang_source_actor_spawn(
+            init, malformed_message, 1);
+        check(must_fail != NULL);
+        oreslang_source_actor_send(must_fail, 1);
+        check(wait_for(&malformed_processed, 1));
+        oreslang_source_actor_request_stop(must_fail);
+        /* An auto-failstop and a root-stop both confer only ONE outer claim. */
+        oreslang_source_actor_request_stop(must_fail);
+        _exit(123);
+    }
+    int child_status = 0;
+    check(waitpid(reject_double_stop, &child_status, 0)
+        == reject_double_stop);
+    check(WIFSIGNALED(child_status)
+        && WTERMSIG(child_status) == SIGABRT);
+
     int64_t outsider = -1;
     check(oreslang_source_actor_scalar_vm_execute(
         &tail_program, 1, &outsider) == ORES_SCALAR_INVALID_FRAME
