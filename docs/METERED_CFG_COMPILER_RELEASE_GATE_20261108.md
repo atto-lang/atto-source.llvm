@@ -97,6 +97,52 @@ Execute the portable CTest under both GCC and Clang, with warnings as errors,
 and at least one `-fsanitize=address,undefined` runtime. Keep the test live
 when `NDEBUG` is defined. An assert-disabled test is not an executed proof.
 
+## Independent exact-head runner (new fail-closed gate)
+
+`tests/native_rt_scalar_certify.py` is the one-command entrypoint for a
+trusted, exclusive **full Git checkout** on an approved private runner.
+Do not invoke it on a partial source export or a stale carrier mirror.
+The operator must independently obtain the *full* exact commit SHA from
+the current reviewed PR (not by blindly using local `git rev-parse HEAD`).
+
+```sh
+# From the root of a private, complete, clean checkout of the reviewed PR:
+: "${APPROVED_PR_HEAD_SHA:?set exact SHA independently from GitHub PR}"
+python3 tests/native_rt_scalar_certify.py \
+  --repo "${PWD}" \
+  --expected-head "${APPROVED_PR_HEAD_SHA}" \
+  --llvm-config llvm-config-19 --clang clang-19 \
+  --out "../llvm-scalar-cert-${APPROVED_PR_HEAD_SHA}"
+```
+
+Use the LLVM and Clang majors actually installed on the approved runner;
+the example uses 19. The script **does not clone, mirror, or upload**
+source. It verifies every tracked worktree blob against the exact commit,
+including executable bits and symlink targets. It rejects untracked/dirty
+files, unsupported submodule entries, `assume-unchanged` content mismatch,
+missing LLVM CMake SDK, and major-version-mismatched Clang.
+
+It configures/builds the compiler and native test targets and requires
+exactly six named CTest cases to appear in the executed JUnit report.
+Any missing, skipped, failed or duplicate case fails certification.
+Crucially it verifies the complete tree and SHA **again after execution**,
+to detect intervening source mutations. The isolated runner must exclude
+concurrent source writers even though pre/post checks defend against
+accidental checkout races.
+
+All generated output is outside the source checkout and includes
+`receipt.json`, build/configure/CTest logs, JUnit XML, toolchain versions,
+commit/tree SHA, per-blob count, and SHA-256 hashes of native binaries
+and evidence files. Only a full positive result can carry
+`EXACT_HEAD_EXECUTED_PASS`. A preflight failure, missing toolchain,
+zero-step runner failure or absent guest execution never carries that label.
+
+The 13 independent negative/preflight tests are registered as
+`native_rt_scalar_exact_tree_preflight_negatives` in CTest on Unix.
+They exercise clean Git fixtures, forged SHAs, malicious symlinks, altered
+executable modes, untracked changes, `assume-unchanged`, submodule/dirty
+checkouts, missing/duplicate JUnit cases, and LLVM-Clang mismatch.
+
 ## Required full compiler and compiled guest gate
 
 ```sh
