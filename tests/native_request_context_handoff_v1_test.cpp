@@ -801,9 +801,13 @@ void test_old_cancel_does_not_sweep_new_generation_ticket() {
     });
     send(f.w,f.w.b,second);
     registered_case("68_new_generation_ticket_redeems",second_ok);
+    bool replay_denied=false;
+    on(f.w,1,[&](std::uint64_t payload) {
+        replay_denied=!f.table->redeem(f.w.b,payload);
+    });
+    send(f.w,f.w.b,second);
     registered_case("69_after_redeem_no_pending_or_replay",
-                    f.table->pending()==0 &&
-                    !f.table->redeem(f.w.b,second));
+                    f.table->pending()==0 && replay_denied);
     registered_case("70_new_request_not_poisoned_by_old_cancellation",
                     f.request->active() && !f.request_cancel->is_cancelled());
     old_parent->retire();
