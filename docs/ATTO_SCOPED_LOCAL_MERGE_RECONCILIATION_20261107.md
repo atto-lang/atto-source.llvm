@@ -172,7 +172,7 @@ selection is not acceptable evidence.
   and an exact-head source-free admission + GCC/Clang native/sanitizer
   workflow with a deliberate lifecycle-bypass negative mutation.
   It must NOT be merged before independent review and real stepful tests.
-- PR #1583 Actions run #42437688734 had an assigned-runner failure:
+- PR #1583 Actions run #42437688734 had a runner-admission failure:
   the admission job completed FAILURE with runner_id=null and steps=null;
   dependent native job SKIPPED. This is not an execution failure. The
   integration PR is DRAFT and does not claim full #1389 parity.
