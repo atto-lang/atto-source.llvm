@@ -360,7 +360,7 @@ LLVM 18 in that VM, whose IR the macOS run lowered. x86_64 is under QEMU emulati
 | ASan+UBSan on host | Clean, core and lowered, 42 + 21 cases | Linux |
 | TSan on host | No races in 39 cases and in real programs, including pipelines, but it cannot cover pure-spin kills: it defers async signals to its next interceptor | Linux |
 | Host built with gcc | 42 + 21 cases | Linux |
-| The compiler's whole suite, against `main` | 725 tests on an idle 14-vCPU Linux VM with g++ and LLVM 19: the same 13 do not pass on `main` at `2bc5b2c45` and on this branch, and none only here. A `-Werror=misleading-indentation` in `Parser.cpp` stops the full build on both | Linux |
+| The compiler's whole suite, against `main` | 783 tests on an idle 14-vCPU Linux VM with g++ and LLVM 19, built with keep-going: the same 24 do not pass on `main` at `0ee037ca3` and on this branch merged with it, and none only here. Both builds hit the same 209 compile errors from `main` | Linux |
 | Wasmtime targeted kill | 6 spinning tenants ended one at a time, none early, worst about 2 ms | macOS |
 | Wasmtime: 1000 Stores | 200,000 turns at about 1.3M/s, contained faults and memory bomb | macOS |
 | .NET hosts 1000 VMs through the loader | 30,000 correct turns under CoreCLR JIT and NativeAOT, while the CLR forced 706 and 981 GCs and caught 1.4M and 2.0M null faults; wrong digest refused | Linux |
