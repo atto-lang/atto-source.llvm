@@ -134,6 +134,28 @@ static uint64_t reserve_source_actor_id(void) {
 static _Thread_local OresNativeExecutionHandle current_source_execution;
 static _Thread_local SourceActor* current_source_frame_actor;
 static void ensure(int condition);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+static atomic_int test_hold_scalar_checkpoint;
+static atomic_int test_scalar_checkpoint_entered;
+void oreslang_source_actor_test_hold_scalar_checkpoint(int hold) {
+    if (hold)
+        atomic_store_explicit(&test_scalar_checkpoint_entered, 0,
+            memory_order_release);
+    atomic_store_explicit(&test_hold_scalar_checkpoint, hold != 0,
+        memory_order_release);
+}
+int oreslang_source_actor_test_scalar_checkpoint_entered(void) {
+    return atomic_load_explicit(&test_scalar_checkpoint_entered,
+        memory_order_acquire);
+}
+uint64_t oreslang_source_actor_test_scalar_checkpoint_count(void* raw) {
+    SourceActor* actor = (SourceActor*)raw;
+    if (!actor || actor->magic != SOURCE_ACTOR_MAGIC)
+        return UINT64_MAX;
+    return atomic_load_explicit(&actor->frame_vm_checkpoints,
+        memory_order_acquire);
+}
+#endif
 
 /*
  * The C ABI for compiler-owned scalar actor frame places. The native heap
@@ -389,6 +411,20 @@ int oreslang_source_actor_scalar_vm_execute(
         if ((executed & (SOURCE_SCALAR_CHECK_INTERVAL - 1u)) == 0) {
             atomic_fetch_add_explicit(&actor->frame_vm_checkpoints,
                 1, memory_order_release);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+            /* The only test-only carrier pause is behind a compile flag;
+             * production builds never park a carrier here. */
+            if (atomic_load_explicit(&test_hold_scalar_checkpoint,
+                    memory_order_acquire)) {
+                atomic_store_explicit(&test_scalar_checkpoint_entered, 1,
+                    memory_order_release);
+                while (atomic_load_explicit(&test_hold_scalar_checkpoint,
+                            memory_order_acquire)
+                        && !atomic_load_explicit(&actor->stop_requested,
+                            memory_order_acquire))
+                    sched_yield();
+            }
+#endif
             if (atomic_load_explicit(&actor->stop_requested,
                     memory_order_acquire)) {
                 status = ORES_SCALAR_CANCELLED;
