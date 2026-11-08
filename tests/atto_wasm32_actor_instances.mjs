@@ -57,7 +57,8 @@ export function verifyAttoWasmActorInstances(wasmBytes) {
   // Negative binary mutation: even if bytes are corrupted after compilation,
   // the runtime must not treat the altered binary as an admitted guest.
   const malformed = Uint8Array.from(wasmBytes);
-  malformed[0] = 0;
+  // WebAssembly magic starts with 0x00: writing zero is a NO-OP.
+  malformed[0] = 0xff;
   assert.equal(WebAssembly.validate(malformed), false,
     'malformed compiled Wasm was admitted');
   assert.throws(() => new WebAssembly.Module(malformed),
