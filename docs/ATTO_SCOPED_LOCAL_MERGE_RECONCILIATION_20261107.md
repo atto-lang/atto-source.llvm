@@ -62,10 +62,12 @@ no native/sanitizer or compiled `.atto` receipt has been established.
 
 1. Preserve every main-side compiler/scheduler evolution in a genuine
    resolved merge; do NOT replace main's whole files with PR copies.
-2. Automatic rejection/revocation of **unredeemed** handoff tickets on
-   recipient STOP still requires lifecycle-managed ticket-table cleanup.
-   Derived contexts are now registered, but pending ticket envelopes remain
-   a distinct bounded-lifetime obligation.
+2. **Authored but not executed:** recipient STOP now uses one bounded
+   CONTROL-plane lifecycle cleanup hook to revoke all unredeemed envelopes
+   for its exact actor generation. A sender+recipient scheduler gate rejects
+   new publications if either STOP won first, and a weak-owned table State
+   prevents callback use-after-free. Full STOP-vs-seal, cancellation-vs-sweep,
+   stale-slot ABA and destructor/lock-order runtime proof is still required.
 3. Require issuer-authenticated tenant/isolate/request identity and
    compile-time ownership/Sendable descriptors before exposing guest ABI.
 4. Restore source-free runner admission and obtain exact-head GCC/Clang,
@@ -73,6 +75,36 @@ no native/sanitizer or compiled `.atto` receipt has been established.
    `steps=[]`/`steps=null` proves no test was executed.
 5. Keep PR #1389 draft until conflicts are resolved, independent review
    counts under GitHub rules and all mandatory CI/security gates pass.
+
+## Handoff STOP and ticket-table hardening (later 2026-11-07 batch)
+
+- Scheduler adds `commit_if_both_live_v1` for a trusted-host,
+  allocation-free two-incarnation commit under one STOP lifecycle mutex.
+  A recipient that stopped before a sender's final seal may never gain
+  a new envelope, even if the sender is still running.
+- Lifecycle registry now admits at most 64 CONTROL-plane cleanup callbacks
+  before any attached actor can STOP. Its STOP observer remains a single
+  lock-free atomic store; handlers execute only on CONTROL, outside registry
+  and scheduler mutexes.
+- Handoff slots, generations and pending count live in a shared State.
+  Registry holds a weak reference, never a raw handoff table pointer.
+  A table may be destroyed before a delayed actor STOP without callback UAF.
+  STOP hooks detach matching pending envelopes under the State mutex, then
+  destroy selected values **outside** that mutex.
+- Cancellation `sweep()` snapshots envelope {slot, generation, weak parent},
+  checks parent cancellation outside the table lock, then revalidates the
+  generation before detaching. This avoids the previous cancellation-graph
+  versus table-mutex inversion.
+- The handoff suite now authors **70 named host assertions** (40 more than
+  the previous 30); a new native C ABI suite authors **16**. Including the
+  prior 219 host checks and 17 merged-header coexistence checks, the
+  cumulative authored count is **322**. Both STOP-notice removal and
+  sender-only ticket admission mutations are configured to fail named cases.
+  These are source-level expectations, **not executed CI or guest proof**.
+- Runtime semantics remain under validation; cancellation and STOP are
+  separate ownership events. Source STOP does not automatically cancel a
+  shared request parent or revoke B's already-redeemed independent copy.
+  Pending *recipient* tickets are the cleanup boundary addressed here.
 
 ## Negative-merge rule
 
