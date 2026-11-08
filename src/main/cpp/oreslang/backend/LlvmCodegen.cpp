@@ -2,6 +2,7 @@
 #include "oreslang/backend/NativeFlatClasses.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
+#include "oreslang/runtime/SourceCooperationQuantum.h"
 #include "oreslang/runtime/TargetAbi.hpp"
 #include "oreslang/runtime/OresIsolateAbi.h"
 
@@ -2720,7 +2721,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         auto* zero = llvm::ConstantInt::get(i64, 0);
         auto* one = llvm::ConstantInt::get(i64, 1);
         auto* two = llvm::ConstantInt::get(i64, 2);
-        auto* max_fuel = llvm::ConstantInt::get(i64, 512);
+        auto* max_fuel = llvm::ConstantInt::get(i64,
+            runtime::SourceCooperationQuantum::kMaxBackedgesPerDispatch);
         auto* init_value = llvm::ConstantInt::getSigned(i64, loop.initial);
 
         // INIT: only an uninitialized (zero-tagged) frame can be published.
