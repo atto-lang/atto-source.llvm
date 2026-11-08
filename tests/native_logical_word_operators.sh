@@ -116,6 +116,8 @@ reject_non_boolean reject-int-or.atto
 reject_non_boolean reject-int-xor.atto
 reject_removed_caret_operator reject-caret-xor.atto
 reject_removed_caret_operator reject-double-caret-xor.atto
+reject_reserved_operator_name reject-and-as-name.atto
+reject_reserved_operator_name reject-or-as-name.atto
 reject_reserved_operator_name reject-word-as-name.atto
 
 echo "PASS: AttoLang logical word operators - truth/precedence, -O0/-O2, short-circuit, eager left-to-right XOR, and bool-only rejection"
