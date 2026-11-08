@@ -1,0 +1,17 @@
+// 16 concurrently live i64 operands in compiler-owned scalar frames.
+// Exactly 16 operand cells are valid; compiler must emit M3 bytecode.
+fnc nested(int n): int {
+  return 1 + (1 + (1 + (1 + (1 + (1 + (1 + (1 + (1 + (1 + (1 + (1 + (1 + (1 + (1 + (n)))))))))))))));
+}
+define actor Worker as {
+  let seen: int = 0;
+  pub fnc on_message(int n): int {
+    return nested(n);
+  }
+}
+pub fnc main(): int {
+  const a: ActorRef<Worker> = spawn Worker();
+  a.send(7);
+  stop a;
+  return 43;
+}
