@@ -102,6 +102,14 @@ static bool rejects_duplicate_identity() {
     g.blocks[0].operations={op(OwnershipV1OpKind::ExitNormal)};
     return expect_reject("duplicate owner",std::move(g));
 }
+static bool rejects_unbounded_cycle() {
+    auto g=graph(1,3);
+    g.blocks[0].operations={op(OwnershipV1OpKind::Create)};
+    g.blocks[0].successors={1,2};
+    g.blocks[1].successors={1};
+    g.blocks[2].operations={op(OwnershipV1OpKind::ExitNormal)};
+    return expect_reject("unbounded ownership cycle",std::move(g));
+}
 int main() {
     const bool ok =
       normal_cleanup_reverse_order() && take_disarms_cleanup() &&
@@ -110,8 +118,8 @@ int main() {
       rejects_use_after_take() && rejects_borrowed_drop() &&
       rejects_mutable_alias() && rejects_join_mismatch() &&
       rejects_unmodeled_exit() && rejects_implicit_exit() &&
-      rejects_duplicate_identity();
+      rejects_duplicate_identity() && rejects_unbounded_cycle();
     if (!ok) return 1;
-    std::puts("OWNERSHIP_DATAFLOW_V1|positive=5|negative=8|result=PASS");
+    std::puts("OWNERSHIP_DATAFLOW_V1|positive=5|negative=9|result=PASS");
     return 0;
 }
