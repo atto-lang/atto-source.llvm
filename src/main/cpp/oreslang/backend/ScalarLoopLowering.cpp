@@ -103,7 +103,9 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         auto* cancelled = llvm::BasicBlock::Create(context, "cancelled", step);
         auto* loopHead = llvm::BasicBlock::Create(context, "loop.check", step);
         auto* budget = llvm::BasicBlock::Create(context, "loop.fuel", step);
+        auto* batchStart = llvm::BasicBlock::Create(context, "batch.start", step);
         auto* advance = llvm::BasicBlock::Create(context, "loop.commit", step);
+        auto* batchEnd = llvm::BasicBlock::Create(context, "batch.end", step);
         auto* exhausted = llvm::BasicBlock::Create(context, "cooperate", step);
         auto* complete = llvm::BasicBlock::Create(context, "loop.complete", step);
         auto* state = b.CreateLoad(i64, stateAddress, "state");
@@ -119,27 +121,40 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         b.SetInsertPoint(active);
         b.CreateBr(loopHead);
         b.SetInsertPoint(loopHead);
-        auto* remaining = b.CreatePHI(i64, 2, "dispatch.fuel");
-        remaining->addIncoming(fuel, active);
         auto* current = b.CreateLoad(i64, counterAddress, "counter.before");
-        b.CreateCondBr(b.CreateICmpSLT(current,
-            llvm::ConstantInt::getSigned(i64, loop.upper_bound)), budget, complete);
+        auto* upperBound = llvm::ConstantInt::getSigned(i64, loop.upper_bound);
+        b.CreateCondBr(b.CreateICmpSLT(current, upperBound), budget, complete);
 
         b.SetInsertPoint(complete);
         b.CreateStore(constant(2), stateAddress);
         b.CreateRet(llvm::ConstantInt::get(i32, 0));
         b.SetInsertPoint(budget);
-        b.CreateCondBr(b.CreateICmpEQ(remaining, constant(0)), exhausted, advance);
+        // Charge the dispatch fuel once per call, not on every backedge.
+        // The source body is precisely a proven nonthrowing +1 effect.
+        b.CreateCondBr(b.CreateICmpEQ(fuel, constant(0)), exhausted, batchStart);
+        b.SetInsertPoint(batchStart);
+        // 0 < fuel <= 512, current < upperBound <= 1e9; current + fuel
+        // cannot signed-overflow even for an unexpectedly negative frame.
+        auto* requestedEnd = b.CreateNSWAdd(current, fuel, "batch.requested_end");
+        auto* batchLimit = b.CreateSelect(
+            b.CreateICmpSLT(requestedEnd, upperBound), requestedEnd,
+            upperBound, "batch.limit");
+        b.CreateBr(advance);
         b.SetInsertPoint(exhausted);
         b.CreateRet(llvm::ConstantInt::get(i32, 1));
         b.SetInsertPoint(advance);
-        // Source body has exactly one nonthrowing, bounded +1 effect.
-        // Commit the i64 counter BEFORE any subsequent cooperation request.
-        auto* next = b.CreateNSWAdd(current, constant(1), "counter.committed");
+        auto* index = b.CreatePHI(i64, 2, "batch.current");
+        index->addIncoming(current, batchStart);
+        // Commit before deciding to return COOPERATE. The only in-loop test
+        // is the native counted-loop boundary, not a runtime fuel/clock poll.
+        auto* next = b.CreateNSWAdd(index, constant(1), "counter.committed");
         b.CreateStore(next, counterAddress);
-        auto* nextFuel = b.CreateSub(remaining, constant(1), "fuel.remaining");
-        b.CreateBr(loopHead);
-        remaining->addIncoming(nextFuel, advance);
+        b.CreateCondBr(b.CreateICmpSLT(next, batchLimit), advance, batchEnd);
+        index->addIncoming(next, advance);
+        b.SetInsertPoint(batchEnd);
+        // The last committed tick either completed the source loop or used
+        // exactly the caller-approved fuel. No live guest native stack yields.
+        b.CreateCondBr(b.CreateICmpEQ(next, upperBound), complete, exhausted);
     }
 
     auto* cancel = llvm::Function::Create(
