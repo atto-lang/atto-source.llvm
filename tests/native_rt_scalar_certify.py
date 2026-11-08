@@ -211,6 +211,15 @@ def certify(repo: Path, expected_head: str, llvm_config: str, clang: str, out: P
         receipt["binaries"] = {
             b.name: hashlib.sha256(b.read_bytes()).hexdigest()
             for b in (build / "oreslang-llvmc", build / "oreslang-native-scalar-call-verifier-test")}
+        # The proof receipt names the exact command/CTest evidence. Hash the
+        # underlying logs and test report so later tampering is detectable.
+        evidence_files = ("configure.log", "build.log", "discovery.log", "ctest.log", "ctest.xml")
+        for name in evidence_files:
+            if not (out / name).is_file():
+                raise GateFailed(f"required executed evidence file missing: {name}")
+        receipt["evidence_sha256"] = {
+            name: hashlib.sha256((out / name).read_bytes()).hexdigest()
+            for name in evidence_files}
         receipt["status"] = "EXACT_HEAD_EXECUTED_PASS"
         save()
         return receipt
