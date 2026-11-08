@@ -12,8 +12,8 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-POLICIES = #[".github/private-ci-approved-repositories.txt"]#
-FORMER_CANDIDATES = #["streempilot-test/browser-studio-e2e"]#
+POLICIES = [".github/private-ci-approved-repositories.txt"]
+FORMER_CANDIDATES = ["streempilot-test/browser-studio-e2e"]
 PROFILE = 'llvm'
 
 
