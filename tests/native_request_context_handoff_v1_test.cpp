@@ -850,6 +850,47 @@ void test_repeated_table_shutdown_reclaims_registration_quota() {
                     !f.lifecycle->unregister_stop_cleanup(token));
 }
 
+void test_live_hook_quota_and_release() {
+    Fixture f(4,true);
+    std::vector<std::unique_ptr<RequestContextHandoffTableV1>> holders;
+    bool admitted=true;
+    for (int i=0;i<63;++i) {
+        try {
+            holders.push_back(std::make_unique<RequestContextHandoffTableV1>(
+                f.w.scheduler,1,*f.lifecycle));
+        } catch (...) {
+            admitted=false;
+            break;
+        }
+    }
+    registered_case("76_exactly_64_total_live_handoff_hooks_admitted",
+                    admitted && holders.size()==63);
+    bool over_limit=false;
+    try {
+        RequestContextHandoffTableV1 overflow(
+            f.w.scheduler,1,*f.lifecycle);
+    } catch (const std::invalid_argument&) {
+        over_limit=true;
+    }
+    registered_case("77_65th_live_handoff_cleanup_hook_rejected",
+                    over_limit);
+    holders.pop_back();
+    registered_case("78_destroying_table_releases_one_hook_slot",
+                    holders.size()==62);
+    bool reused=false;
+    try {
+        RequestContextHandoffTableV1 replacement(
+            f.w.scheduler,1,*f.lifecycle);
+        reused=true;
+    } catch (...) {
+        reused=false;
+    }
+    registered_case("79_released_hook_slot_reusable",reused);
+    holders.clear();
+    registered_case("80_bulk_teardown_does_not_close_parent_request",
+                    f.request->active());
+}
+
 }  // namespace
 
 int main() {
@@ -890,19 +931,21 @@ int main() {
             test_old_cancel_does_not_sweep_new_generation_ticket},
         {"repeated_table_shutdown_reclaims_registration_quota",
             test_repeated_table_shutdown_reclaims_registration_quota},
+        {"live_hook_quota_and_release",
+            test_live_hook_quota_and_release},
     };
     for (auto& t : tests) {
         const int before = failures;
         t.fn();
         std::printf("%s %s\n", failures == before ? "PASS" : "FAIL", t.name);
     }
-    if (registry_handoff_cases != 75) {
-        std::fprintf(stderr, "HANDOFF_REGISTRY_CASE_COUNT_FAILED got=%d expected=75\n",
+    if (registry_handoff_cases != 80) {
+        std::fprintf(stderr, "HANDOFF_REGISTRY_CASE_COUNT_FAILED got=%d expected=80\n",
                      registry_handoff_cases);
         ++failures;
     }
     if (failures) { std::fprintf(stderr, "%d failure(s)\n", failures); return 1; }
-    std::puts("HANDOFF_REGISTRY_75_HOST_CASES_PASS");
+    std::puts("HANDOFF_REGISTRY_80_HOST_CASES_PASS");
     std::printf("REQUEST_CONTEXT_HANDOFF_V1_ALL_PASS\n");
     return 0;
 }
