@@ -139,8 +139,9 @@ export function assertCompiledActorProfile(bytes) {
         type.results.some((v, j) => v !== expected[i][1][j]))
       deny('wrong actor function ABI: ' + ACTOR[i]);
   }
-  // wasm-ld exports `memory` for this scalar ABI; additional guest-visible
-  // functions, memories, globals and tables are not admitted by this profile.
+  // wasm-ld exports `memory` for the current scalar ABI, but no other
+  // guest-visible entry points, globals or memories are authorized here.
+  // Prevent a syntactically valid module from smuggling an undeclared API.
   for (const [name, entry] of exports) {
     if (ACTOR.includes(name)) continue;
     if (name === 'memory' && entry.kind === 2 && entry.index === 0) continue;
@@ -169,9 +170,9 @@ export function assertVmOutcome(result, expected, label) {
     throw Error('unsupported typed guest failure expected');
   assert.equal(result.status, 1, label + ' must be a typed host error, not build/tool failure');
   assert.equal(result.stdout.trim(), '', label + ' emitted success output on failure');
-  // The Rust binary is invoked directly, never through a Cargo wrapper.
-  // Every stderr byte must belong to the single expected typed error line.
-  // A planted marker in an unrelated tool failure cannot become a PASS.
+  // The smoke executable is invoked directly, not through Cargo. It should
+  // emit exactly one typed error line; extra diagnostic text would otherwise
+  // let an unrelated tool failure masquerade as a proved guest trap.
   assert.equal(result.stderr.trim(), FAIL + ' tenant A: Wasm(' + expected + ')',
     label + ' has extra, forged, missing, or misclassified Rust guest stderr');
 }
