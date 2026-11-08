@@ -9,7 +9,7 @@
 #endif
 
 #define CHECK(x) do { if (!(x)) { \
-    fprintf(stderr, "ActorRegionGuestV1 bridge failed at %d: %s\\n", __LINE__, #x); \
+    fprintf(stderr, "ActorRegionGuestV1 bridge failed at %d: %s\n", __LINE__, #x); \
     return 1; \
 } } while (0)
 
