@@ -154,6 +154,32 @@ public:
             }
         }
         if (result.normal_exits.empty()) fail("CFG has no reachable normal exit");
+
+        // V1 is intentionally a terminating acyclic CFG subset. Merely
+        // reaching one exit does not prove that a second path cannot loop
+        // forever while retaining an owned region. Loops need a separate
+        // bounded-iteration/liveness proof before they can be admitted.
+        std::vector<std::size_t> indegree(graph.blocks.size(), 0);
+        std::size_t reachable_count = 0;
+        for (std::size_t from = 0; from < graph.blocks.size(); ++from) {
+            if (!reached[from]) continue;
+            ++reachable_count;
+            for (const auto to : graph.blocks[from].successors)
+                if (reached[to]) ++indegree[to];
+        }
+        std::deque<std::size_t> ready;
+        for (std::size_t i = 0; i < graph.blocks.size(); ++i)
+            if (reached[i] && indegree[i] == 0) ready.push_back(i);
+        std::size_t topological_count = 0;
+        while (!ready.empty()) {
+            const auto from = ready.front();
+            ready.pop_front();
+            ++topological_count;
+            for (const auto to : graph.blocks[from].successors)
+                if (reached[to] && --indegree[to] == 0) ready.push_back(to);
+        }
+        if (topological_count != reachable_count)
+            fail("cyclic CFG requires a separate bounded-loop ownership proof");
         (void)processed;
         return result;
     }
