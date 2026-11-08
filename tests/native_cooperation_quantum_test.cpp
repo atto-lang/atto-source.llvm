@@ -176,6 +176,8 @@ static void overdue_debt_survives_unrelated_await_and_dispatch_reset() {
         require(q.shouldCooperateAtCheck()); // sticky even without elapsed time
         require(FakeClock::reads.load() == readsAtCap + 1);
         q.recordedCooperate(); // only actual scheduler handoff acknowledges debt
+        require(!q.pendingHandoffOnNoYieldExit());
+        require(q.completedBackedgesThisDispatch() == 0);
         q.beginDispatch();
         require(!q.pendingHandoffOnNoYieldExit());
     }
@@ -242,7 +244,12 @@ static void repeated_dispatches_keep_task_context() {
         }
         q.recordedCooperate();
     }
-    require(q.completedBackedgesThisDispatch() == 512);
+    // Recording a real handoff consumes the old quantum rather than
+    // relatching stale cap debt on the next dispatch.
+    require(q.completedBackedgesThisDispatch() == 0);
+    require(!q.pendingHandoffOnNoYieldExit());
+    q.beginDispatch();
+    require(!q.pendingHandoffOnNoYieldExit());
     require(q.timeSinceLastCooperate() == std::chrono::nanoseconds::zero());
 }
 int main() {
