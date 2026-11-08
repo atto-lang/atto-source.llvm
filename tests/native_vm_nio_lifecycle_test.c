@@ -106,6 +106,25 @@ static void on_data(void* ignored, size_t slot, uint64_t value) {
     (void)ignored; (void)slot; (void)value;
     abort(); /* no guest callbacks may be delivered on NIO-only test path */
 }
+typedef struct {
+    OresNativeVM* vm;
+    int fd;
+    atomic_int attempted;
+    atomic_int bare_watch_result;
+} ActorNioProbe;
+
+static void on_actor_nio_probe(void* opaque, size_t slot, uint64_t value) {
+    ActorNioProbe* probe = (ActorNioProbe*)opaque;
+    check(probe != NULL && probe->vm != NULL && probe->fd >= 0);
+    check(slot == 0 && value == UINT64_C(77));
+    OresNativeNioWatch watch = {0};
+    const int accepted = ores_native_vm_nio_try_watch(
+        probe->vm, probe->fd, EPOLLIN, &watch);
+    atomic_store_explicit(
+        &probe->bare_watch_result, accepted, memory_order_release);
+    atomic_store_explicit(&probe->attempted, 1, memory_order_release);
+}
+
 static OresNativeVMConfig config(void) {
     OresNativeVMConfig cfg = {0};
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
@@ -217,6 +236,75 @@ int main(void) {
             close(pipes[i][1]);
         }
         check(ores_native_vm_close(batch_vm));
+    }
+
+    // Bare VM NIO is outer-host plumbing. Even with an already attached
+    // backend, an actor carrier cannot bypass the ActorRef resource/continuation
+    // ownership path. The actual VM ActorRef resource loan also fences DONE.
+    {
+        ActorNioProbe probe = {
+            .vm = NULL,
+            .fd = -1,
+            .attempted = ATOMIC_VAR_INIT(0),
+            .bare_watch_result = ATOMIC_VAR_INIT(-1)
+        };
+        OresNativeVMConfig actor_cfg = config();
+        actor_cfg.domains[ORES_NATIVE_VM_MAIN].on_message = on_actor_nio_probe;
+        actor_cfg.domains[ORES_NATIVE_VM_MAIN].context = &probe;
+
+        OresNativeVM* actor_vm = ores_native_vm_open(&actor_cfg);
+        check(actor_vm != NULL);
+        check(ores_native_vm_enable_nio(actor_vm, 1, 0, 1));
+        int actor_pipe[2] = {-1, -1};
+        check(pipe2(actor_pipe, O_NONBLOCK | O_CLOEXEC) == 0);
+        probe.vm = actor_vm;
+        probe.fd = actor_pipe[0];
+
+        const OresNativeActorRef actor_ref =
+            ores_native_vm_spawn(actor_vm, ORES_NATIVE_VM_MAIN, 0);
+        check(actor_ref.scheduler_domain != 0);
+        check(ores_native_vm_try_send(
+            actor_vm, ORES_NATIVE_VM_MAIN, actor_ref, UINT64_C(77))
+            == ORES_NATIVE_SEND_ACCEPTED);
+        for (int retry = 0; retry < 3000
+                && !atomic_load_explicit(&probe.attempted, memory_order_acquire);
+                ++retry) {
+            struct timespec pause = {0, 1000000};
+            nanosleep(&pause, NULL);
+        }
+        check(atomic_load_explicit(&probe.attempted, memory_order_acquire));
+        check(atomic_load_explicit(
+            &probe.bare_watch_result, memory_order_acquire) == 0);
+        check(ores_native_vm_nio_started(actor_vm) == 0);
+
+        check(ores_native_vm_actor_resource_retain(
+            actor_vm, ORES_NATIVE_VM_MAIN, actor_ref));
+        check(ores_native_vm_stop_sealed(
+            actor_vm, ORES_NATIVE_VM_MAIN, actor_ref));
+        check(!ores_native_vm_actor_resource_retain(
+            actor_vm, ORES_NATIVE_VM_MAIN, actor_ref));
+        check(!ores_native_vm_poll_done(
+            actor_vm, ORES_NATIVE_VM_MAIN, actor_ref));
+
+        OresNativeActorRef stale = actor_ref;
+        ++stale.generation;
+        check(!ores_native_vm_actor_resource_release(
+            actor_vm, ORES_NATIVE_VM_MAIN, stale));
+        check(!ores_native_vm_poll_done(
+            actor_vm, ORES_NATIVE_VM_MAIN, actor_ref));
+
+        check(ores_native_vm_actor_resource_release(
+            actor_vm, ORES_NATIVE_VM_MAIN, actor_ref));
+        check(!ores_native_vm_actor_resource_release(
+            actor_vm, ORES_NATIVE_VM_MAIN, actor_ref));
+        check(ores_native_vm_wait_done(
+            actor_vm, ORES_NATIVE_VM_MAIN, actor_ref));
+        check(ores_native_vm_poll_done(
+            actor_vm, ORES_NATIVE_VM_MAIN, actor_ref));
+
+        close(actor_pipe[0]);
+        close(actor_pipe[1]);
+        check(ores_native_vm_close(actor_vm));
     }
 
     // Once the first actor is admitted, adding a reactor is no longer a
