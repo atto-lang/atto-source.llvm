@@ -27,8 +27,9 @@ and narrows further:
   mutations or unsupported expression/statement roots.
 
 The helper-function positive/negative distinction is explicit: scalar helpers
-may be called, but they cannot own a class value in v1. Unsupported programs
-must fail before LLVM IR is emitted.
+may be called, but they cannot own a class value in v1. Branch-scoped class
+aliases are also rejected until path-sensitive cleanup is proven. Unsupported
+programs must fail before LLVM IR is emitted.
 
 ## Generated native ABI
 
@@ -83,6 +84,9 @@ alloc, read, write, drop and end symbols. It also verifies that class owners
 inside ordinary helper functions are rejected before IR output.
 
 The host-only tests separately exercise allocator generations, sidecar
-mapping, stale and double-drop rejection, explicit leak refusal and physical
-slot reuse. Exact-head nonzero-step execution and sanitizer receipts remain
+mapping, stale and double-drop rejection, explicit leak refusal, supervisor
+survival after child faults, and physical slot reuse. The allocator, bridge
+and supervisor suites are registered at both `-O0` and `-O2`; set
+`ORESLANG_ACTOR_REGION_SANITIZERS=ON` to instrument each target with ASan and
+UBSan. Exact-head nonzero-step execution and sanitizer receipts remain
 required before promoting this prototype beyond draft.
