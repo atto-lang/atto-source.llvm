@@ -85,6 +85,32 @@ static void overdue_no_yield_region_checks_every_new_boundary() {
     require(FakeClock::reads.load() == 2);
 }
 
+static void configurable_soft_poll_interval_preserves_hard_cap() {
+    for (std::uint32_t interval : {128u, 256u, 512u}) {
+        reset_clock();
+        Quantum q(interval);
+        q.beginDispatch();
+        require(FakeClock::reads.load() == 2);
+        for (std::uint32_t n = 1; n <= 512; ++n) {
+            const bool due = q.completedBackedgeNeedsCheck();
+            require(due == (n % interval == 0));
+            if (due) require(q.shouldCooperateAtCheck() == (n == 512));
+        }
+        // At 512 the hard cap is clock-free, regardless of chosen batch.
+        require(FakeClock::reads.load() == 2 + 512 / static_cast<int>(interval) - 1);
+        // Existing no-yield invariant: after hard cap each new backedge is
+        // actionable, even if it is not a multiple of the soft interval.
+        for (int n = 513; n < 530; ++n) {
+            require(q.completedBackedgeNeedsCheck());
+            require(q.shouldCooperateAtCheck());
+        }
+        require(FakeClock::reads.load() == 2 + 512 / static_cast<int>(interval) - 1);
+    }
+    bool rejected = false;
+    try { Quantum bad(100); } catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected);
+}
+
 static void timer_slow_path() {
     reset_clock();
     Quantum q;
@@ -142,6 +168,7 @@ static void repeated_dispatches_keep_task_context() {
 }
 int main() {
     reduction_fast_path();
+    configurable_soft_poll_interval_preserves_hard_cap();
     overdue_no_yield_region_checks_every_new_boundary();
     timer_slow_path();
     independent_watchdog_requests_next_safe_boundary();
