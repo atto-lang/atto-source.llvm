@@ -146,18 +146,30 @@ fn compile_bounded(compiler: &Path, root: &Path, source: &Path)
         .map_err(|_| "compiler stderr pipe did not close".to_owned())??;
     Ok((status, out, err))
 }
+fn safe_fixture_path(path: &str) -> bool {
+    !path.starts_with('/') && !path.contains('\\') && path.ends_with(".atto") &&
+        path.split('/').all(|part| !part.is_empty() && part != "." && part != "..")
+}
 #[cfg(not(test))]
 fn verify_source(root: &Path, c: &Case) -> Result<PathBuf, String> {
     let path = root.join(c.path);
-    if !c.path.split('/').all(|s| !s.is_empty() && s != "." && s != "..") {
+    if !safe_fixture_path(c.path) {
         return Err(format!("{}: unsafe path", c.name));
     }
+    let parts: Vec<&str> = c.path.split('/').collect();
     let mut partial = root.to_path_buf();
-    for segment in c.path.split('/') {
+    for (i, segment) in parts.iter().enumerate() {
         partial.push(segment);
         let meta = fs::symlink_metadata(&partial)
             .map_err(|_| format!("{}: missing source", c.name))?;
         if meta.file_type().is_symlink() { return Err(format!("{}: symlink", c.name)); }
+        if i + 1 == parts.len() {
+            if !meta.file_type().is_file() {
+                return Err(format!("{}: non-regular source", c.name));
+            }
+        } else if !meta.file_type().is_dir() {
+            return Err(format!("{}: non-directory source prefix", c.name));
+        }
     }
     let contents = fs::read(&path).map_err(|e| format!("{}: read failed: {e}", c.name))?;
     if contents.is_empty() || contents.len() > 8192 || std::str::from_utf8(&contents).is_err() {
@@ -327,6 +339,17 @@ mod tests {
         assert!(!matches_policy(&CASES[0], &"error: removed modulo operator".repeat(4000)));
     }
 
+    #[test]
+    fn fixture_path_admission_denies_traversal_aliases_and_non_atto_targets() {
+        for bad in ["", "/tmp/evil.atto", "../secret.atto",
+            "tests//bad.atto", "tests/./bad.atto", "tests/../bad.atto",
+            "tests\\bad.atto", "tests/not-source.txt"] {
+            assert!(!safe_fixture_path(bad), "{bad}");
+        }
+        for c in CASES {
+            assert!(safe_fixture_path(c.path), "{}", c.name);
+        }
+    }
     #[test]
     fn head_and_blob_identifiers_are_not_any_string() {
         assert!(!is_lower_sha40(""));
