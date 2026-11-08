@@ -34,30 +34,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Fixed six-test gate: missing test registration must fail closed.
-          # The semantic negative must reject a moved owner, not a syntax gap.
-          ownership_tests='^(native_ownership_auto_traits_and_logical_dop|native_source_task_authority_host_only|native_task_capture_admission_host_only|native_ownership_cfg_dataflow_fixed_point|native_logical_borrow_take_accept|native_logical_borrow_use_after_take_reject)
-        run: |
-          set -euo pipefail
-          bash -n scripts/compile-aot.sh scripts/test-source-task-atto-aot.sh
-          if grep -Fq '\${' scripts/compile-aot.sh scripts/test-source-task-atto-aot.sh; then echo 'Escaped Bash expansion detected' >&2; exit 1; fi
-          ctest --test-dir build -R native_source_task_i64_shared_scheduler_runtime --output-on-failure --timeout 30
-      - name: Execute exact-head source Task .atto guest O0 and O2
-        shell: bash
-        env:
-          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          set -euo pipefail
-          bash scripts/test-source-task-atto-aot.sh | tee build/task-v1-guest.log
-          test "$(grep -c '^TASK_I64_ATTO_GUEST_PASS|' build/task-v1-guest.log)" = 2
-          test "$(grep -c '^TASK_I64_ATTO_NEGATIVE_PASS|' build/task-v1-guest.log)" = 4
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: task-v1-llvm-source-local
-          path: build/task-v1-guest.log
-          if-no-files-found: ignore
-
+          # Fail if a required test is missing, before treating CTest success
+          # as an ownership verification pass.
+          ownership_tests='^(native_ownership_auto_traits_and_logical_dop|native_source_task_authority_host_only|native_task_capture_admission_host_only|native_ownership_cfg_dataflow_fixed_point|native_logical_borrow_take_accept|native_logical_borrow_use_after_take_reject)$'
           selected="$(ctest --test-dir build -N -R "$ownership_tests" | sed -nE 's/^Total Tests: ([0-9]+)$/\1/p')"
           test "$selected" = 6
           ctest --test-dir build -R "$ownership_tests" --output-on-failure --timeout 120
