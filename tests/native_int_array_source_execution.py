@@ -113,6 +113,23 @@ NATIVE_ABORT = {
 
 
 NEGATIVE = {
+    "get-copy-untyped": ("""pub fnc main(): int {
+ let mut Array<int> values = new Array<int>();
+ return values.get_copy(0);
+}
+""", "get_copy"),
+    "get-copy-wrong-option": ("""pub fnc main(): int {
+ let mut Array<int> values = new Array<int>();
+ val Option<bool> result = values.get_copy(0);
+ return 42;
+}
+""", "get_copy requires"),
+    "get-copy-string-element": ("""pub fnc main(): int {
+ let mut Array<String> values = new Array<String>();
+ val Option<int> result = values.get_copy(0);
+ return 42;
+}
+""", "get_copy requires Array<int>"),
     "reserved-abi-symbol": ("""fnc oreslang_int_array_get(int x): int {
   return x;
 }
