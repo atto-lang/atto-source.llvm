@@ -607,6 +607,163 @@ void test_sender_STOP_does_not_corrupt_derived_recipient() {
                     !held->context().active() && !f.request->active());
 }
 
+void test_pending_ticket_automatically_reclaimed_on_recipient_STOP() {
+    Fixture f(8, true);
+    std::uint64_t b_ticket = 0, c_ticket = 0;
+    registered_case("31_source_live_before_pending_ticket",
+                    f.request && f.request->active());
+    on(f.w, 0, [&](std::uint64_t) {
+        CHECK(f.bind_source_mail());
+        CHECK(f.request->set(f.trace, std::string("pending")));
+        b_ticket=f.table->seal(f.w.a,*f.request,f.w.b,f.selection()).value_or(0);
+        c_ticket=f.table->seal(f.w.a,*f.request,f.w.c,f.selection()).value_or(0);
+    });
+    send(f.w,f.w.a,1);
+    registered_case("32_two_distinct_pending_tickets",
+                    b_ticket && c_ticket && b_ticket!=c_ticket &&
+                    f.table->pending()==2);
+    auto stale=f.w.b; ++stale.generation;
+    registered_case("33_stale_revoke_cannot_destroy_live_B_ticket",
+                    f.table->revoke_recipient(stale)==0 &&
+                    f.table->pending()==2);
+    registered_case("34_recipient_sealed_STOP_commits",
+                    ores_native_actor_scheduler_stop_sealed(f.w.scheduler,f.w.b));
+    registered_case("35_recipient_CONTROL_cleanup_receipt",
+                    f.lifecycle->wait_cleaned(
+                        f.w.b,std::chrono::milliseconds(8000)));
+    registered_case("36_pending_B_ticket_auto_reclaimed",
+                    f.table->pending()==1);
+    registered_case("37_source_remains_open_after_B_STOP",
+                    f.request->active());
+    bool c_read=false;
+    on(f.w,2,[&](std::uint64_t payload){
+        auto value=f.table->redeem(f.w.c,payload);
+        c_read=value && value->context().get_copy(f.trace)==std::string("pending");
+    });
+    send(f.w,f.w.c,c_ticket);
+    registered_case("38_unrelated_C_ticket_survives_B_STOP",c_read);
+    registered_case("39_all_pending_envelopes_accounted",
+                    f.table->pending()==0);
+}
+
+void test_recipient_STOP_before_seal_denies_ticket_publication() {
+    Fixture f(8,true);
+    registered_case("40_stop_B_before_sender_DATA",
+                    ores_native_actor_scheduler_stop_sealed(f.w.scheduler,f.w.b));
+    registered_case("41_B_CONTROL_cleanup_finishes",
+                    f.lifecycle->wait_cleaned(
+                        f.w.b,std::chrono::milliseconds(8000)));
+    bool b_denied=false, c_allowed=false;
+    std::uint64_t c_ticket=0;
+    on(f.w,0,[&](std::uint64_t) {
+        CHECK(f.bind_source_mail());
+        CHECK(f.request->set(f.trace,std::string("source-alive")));
+        b_denied=!f.table->seal(
+            f.w.a,*f.request,f.w.b,f.selection());
+        c_ticket=f.table->seal(
+            f.w.a,*f.request,f.w.c,f.selection()).value_or(0);
+        c_allowed=c_ticket!=0;
+    });
+    send(f.w,f.w.a,1);
+    registered_case("42_stopped_B_cannot_receive_new_ticket",b_denied);
+    registered_case("43_live_C_still_accepts_ticket",c_allowed);
+    registered_case("44_only_C_is_pending",f.table->pending()==1);
+    bool received=false;
+    on(f.w,2,[&](std::uint64_t payload){
+        received=f.table->redeem(f.w.c,payload).has_value();
+    });
+    send(f.w,f.w.c,c_ticket);
+    registered_case("45_live_C_redeems_without_B_revival",
+                    received && f.table->pending()==0 &&
+                    !ores_native_actor_scheduler_poll_ready(
+                        f.w.scheduler,f.w.b));
+}
+
+void test_recipient_STOP_wins_during_sender_snapshot_copy() {
+    Fixture f(8,true);
+    auto pause=std::make_shared<HandoffCopyPause>();
+    RequestLocalKeyV1<BlockingHandoffValue> key;
+    bool denied=false;
+    on(f.w,0,[&](std::uint64_t){
+        CHECK(f.bind_source_mail());
+        CHECK(f.request->set(key,BlockingHandoffValue(pause)));
+        RequestContextHandoffTableV1::Selection selection;
+        selection.include(key);
+        denied=!f.table->seal(f.w.a,*f.request,f.w.b,selection);
+    });
+    registered_case("46_sender_DATA_mail_accepted",
+        ores_native_actor_scheduler_try_send(f.w.scheduler,f.w.a,88)
+            == ORES_NATIVE_SEND_ACCEPTED);
+    const bool entered=pause->await();
+    registered_case("47_snapshot_copy_paused_before_publish",entered);
+    const bool stopped=ores_native_actor_scheduler_stop_sealed(
+        f.w.scheduler,f.w.b);
+    registered_case("48_recipient_STOP_wins_during_snapshot",stopped);
+    registered_case("49_recipient_cleanup_without_sender_carrier_block",
+        f.lifecycle->wait_cleaned(f.w.b,std::chrono::milliseconds(8000)));
+    pause->resume();
+    {
+        std::unique_lock<std::mutex> guard(f.w.mutex);
+        CHECK(f.w.cv.wait_for(guard,std::chrono::seconds(8),
+                             [&]{return f.w.completed>=1;}));
+    }
+    registered_case("50_late_two_actor_commit_rejected",denied);
+    registered_case("51_no_orphan_ticket_after_STOP_race",
+                    f.table->pending()==0 && f.request->active());
+}
+
+void test_destroyed_table_leaves_no_dangling_CONTROL_callback() {
+    Fixture f(8,true);
+    std::uint64_t ticket=0;
+    on(f.w,0,[&](std::uint64_t) {
+        CHECK(f.bind_source_mail());
+        ticket=f.table->seal(f.w.a,*f.request,f.w.b,f.selection()).value_or(0);
+    });
+    send(f.w,f.w.a,1);
+    registered_case("52_ticket_created_before_table_destruction",
+                    ticket!=0 && f.table->pending()==1);
+    f.table.reset();
+    registered_case("53_table_destroyed_before_STOP",!f.table);
+    registered_case("54_B_STOP_after_table_destruction",
+                    ores_native_actor_scheduler_stop_sealed(f.w.scheduler,f.w.b));
+    registered_case("55_weak_callback_survives_expired_table",
+                    f.lifecycle->wait_cleaned(
+                        f.w.b,std::chrono::milliseconds(8000)));
+    registered_case("56_A_still_live_after_weak_cleanup",
+                    f.request->active());
+}
+
+void test_new_cleanup_hooks_denied_after_actor_STOP() {
+    Fixture f(8,true);
+    registered_case("57_stop_B_before_late_cleanup_registration",
+                    ores_native_actor_scheduler_stop_sealed(f.w.scheduler,f.w.b));
+    registered_case("58_post_STOP_cleanup_hook_denied",
+                    !f.lifecycle->register_stop_cleanup(
+                        [](OresNativeActorRef){}) &&
+                    f.lifecycle->wait_cleaned(
+                        f.w.b,std::chrono::milliseconds(8000)));
+}
+
+void test_forged_recipient_cannot_seal_ticket() {
+    Fixture f(8,true);
+    bool stale_denied=false, slot_denied=false, domain_denied=false;
+    on(f.w,0,[&](std::uint64_t) {
+        CHECK(f.bind_source_mail());
+        auto stale=f.w.b; ++stale.generation;
+        auto slot=f.w.b; slot.actor_slot=99;
+        auto domain=f.w.b; ++domain.scheduler_domain;
+        stale_denied=!f.table->seal(f.w.a,*f.request,stale,f.selection());
+        slot_denied=!f.table->seal(f.w.a,*f.request,slot,f.selection());
+        domain_denied=!f.table->seal(f.w.a,*f.request,domain,f.selection());
+    });
+    send(f.w,f.w.a,1);
+    registered_case("59_stale_generation_denied_at_ticket_commit",
+                    stale_denied);
+    registered_case("60_invalid_recipient_slot_denied_at_commit",slot_denied);
+    registered_case("61_wrong_scheduler_domain_denied_at_commit",
+                    domain_denied && f.table->pending()==0);
+}
+
 }  // namespace
 
 int main() {
@@ -631,19 +788,31 @@ int main() {
             test_parent_cancellation_reaches_registered_derived_scope},
         {"sender_STOP_does_not_corrupt_derived_recipient",
             test_sender_STOP_does_not_corrupt_derived_recipient},
+        {"pending_ticket_automatically_reclaimed_on_recipient_STOP",
+            test_pending_ticket_automatically_reclaimed_on_recipient_STOP},
+        {"recipient_STOP_before_seal_denies_ticket_publication",
+            test_recipient_STOP_before_seal_denies_ticket_publication},
+        {"recipient_STOP_wins_during_sender_snapshot_copy",
+            test_recipient_STOP_wins_during_sender_snapshot_copy},
+        {"destroyed_table_leaves_no_dangling_CONTROL_callback",
+            test_destroyed_table_leaves_no_dangling_CONTROL_callback},
+        {"new_cleanup_hooks_denied_after_actor_STOP",
+            test_new_cleanup_hooks_denied_after_actor_STOP},
+        {"forged_recipient_cannot_seal_ticket",
+            test_forged_recipient_cannot_seal_ticket},
     };
     for (auto& t : tests) {
         const int before = failures;
         t.fn();
         std::printf("%s %s\n", failures == before ? "PASS" : "FAIL", t.name);
     }
-    if (registry_handoff_cases != 30) {
-        std::fprintf(stderr, "HANDOFF_REGISTRY_CASE_COUNT_FAILED got=%d expected=30\n",
+    if (registry_handoff_cases != 61) {
+        std::fprintf(stderr, "HANDOFF_REGISTRY_CASE_COUNT_FAILED got=%d expected=61\n",
                      registry_handoff_cases);
         ++failures;
     }
     if (failures) { std::fprintf(stderr, "%d failure(s)\n", failures); return 1; }
-    std::puts("HANDOFF_REGISTRY_30_HOST_CASES_PASS");
+    std::puts("HANDOFF_REGISTRY_61_HOST_CASES_PASS");
     std::printf("REQUEST_CONTEXT_HANDOFF_V1_ALL_PASS\n");
     return 0;
 }
