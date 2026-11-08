@@ -82,7 +82,7 @@ fn matches_policy(c: &Case, stderr: &str) -> bool {
             word(&d, "x") &&
             any_phrase(&d, &["immutable", "readonly", "read-only", "constant binding",
                 "const binding", "const variable"]) &&
-            any_phrase(&d, &["assign", "rebind", "mutation", "write"]),
+            any_phrase(&d, &["assign", "rebind", "mutation"]),
         "legacy-async-modifier" =>
             word(&d, "async") &&
             any_phrase(&d, &["unsupported", "forbidden", "disallowed",
@@ -252,6 +252,7 @@ mod tests {
         assert!(!matches_policy(c, "error: syntax error: unexpected const"));
         assert!(!matches_policy(c, "error: syntax error: x unexpected"));
         assert!(!matches_policy(c, "error: unknown identifier x"));
+        assert!(!matches_policy(c, "error: immutable x in unrelated write scope"));
         assert!(matches_policy(c, "error: immutable binding x cannot reassign"));
     }
     #[test]
