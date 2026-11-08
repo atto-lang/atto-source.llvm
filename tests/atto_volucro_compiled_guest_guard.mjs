@@ -139,6 +139,13 @@ export function assertCompiledActorProfile(bytes) {
         type.results.some((v, j) => v !== expected[i][1][j]))
       deny('wrong actor function ABI: ' + ACTOR[i]);
   }
+  // wasm-ld exports `memory` for this scalar ABI; additional guest-visible
+  // functions, memories, globals and tables are not admitted by this profile.
+  for (const [name, entry] of exports) {
+    if (ACTOR.includes(name)) continue;
+    if (name === 'memory' && entry.kind === 2 && entry.index === 0) continue;
+    deny('unexpected actor export: ' + name);
+  }
   return {memory, module};
 }
 export function assertInjectedOutOfBounds(wasm, kind) {
@@ -162,9 +169,11 @@ export function assertVmOutcome(result, expected, label) {
     throw Error('unsupported typed guest failure expected');
   assert.equal(result.status, 1, label + ' must be a typed host error, not build/tool failure');
   assert.equal(result.stdout.trim(), '', label + ' emitted success output on failure');
-  const lines = result.stderr.split(/\r?\n/).map(s => s.trim()).filter(s => s.startsWith(FAIL));
-  assert.deepEqual(lines, [FAIL + ' tenant A: Wasm(' + expected + ')'],
-    label + ' has a forged, missing, or misclassified Rust guest failure');
+  // The Rust binary is invoked directly, never through a Cargo wrapper.
+  // Every stderr byte must belong to the single expected typed error line.
+  // A planted marker in an unrelated tool failure cannot become a PASS.
+  assert.equal(result.stderr.trim(), FAIL + ' tenant A: Wasm(' + expected + ')',
+    label + ' has extra, forged, missing, or misclassified Rust guest stderr');
 }
 
 // Bind a Cargo build to its actual emitted executable, rather than using
