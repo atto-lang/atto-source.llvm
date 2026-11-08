@@ -166,3 +166,31 @@ export function assertVmOutcome(result, expected, label) {
   assert.deepEqual(lines, [FAIL + ' tenant A: Wasm(' + expected + ')'],
     label + ' has a forged, missing, or misclassified Rust guest failure');
 }
+
+// Bind a Cargo build to its actual emitted executable, rather than using
+// 'cargo run' as both a build tool and a negative guest exit-code oracle.
+export function selectCargoGuestExecutable(stdout, targetName) {
+  if (typeof stdout !== 'string' || typeof targetName !== 'string')
+    deny('invalid Cargo artifact transcript');
+  const paths = new Set();
+  let finished = false;
+  for (const line of stdout.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let record;
+    try { record = JSON.parse(line); }
+    catch { deny('invalid Cargo JSON artifact transcript'); }
+    if (record.reason === 'build-finished') {
+      if (finished || record.success !== true) deny('incomplete or failed Cargo build');
+      finished = true;
+    }
+    if (record.reason === 'compiler-artifact' && record.target?.name === targetName &&
+        Array.isArray(record.target?.kind) && record.target.kind.includes('bin')) {
+      if (finished || typeof record.executable !== 'string' ||
+          !record.executable.startsWith('/') || record.executable.includes('\0'))
+        deny('invalid Cargo executable artifact');
+      paths.add(record.executable);
+    }
+  }
+  if (!finished || paths.size !== 1) deny('Cargo build did not identify one exact guest executable');
+  return [...paths][0];
+}
