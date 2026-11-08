@@ -122,6 +122,29 @@ static void configurable_soft_poll_interval_preserves_hard_cap() {
     require(rejected);
 }
 
+// When a compiler-proven no-yield scope defers all scheduler polling, its
+// mandatory exit check must still notice a 512-edge hard-cap violation.
+// This protects against codegen accidentally assuming the slow poll ran.
+static void long_unpolled_no_yield_scope_preserves_cap_debt() {
+    for (std::uint32_t interval : {64u, 128u, 256u, 512u}) {
+        reset_clock();
+        Quantum q(interval);
+        q.beginDispatch();
+        for (std::uint32_t i = 1; i <= 4096; ++i) {
+            const bool due = q.completedBackedgeNeedsCheck();
+            require(due == (i % interval == 0));
+            require(q.pendingHandoffOnNoYieldExit() == (i >= 512));
+        }
+        require(FakeClock::reads.load() == 2); // zero expensive polls in scope
+        q.beginDispatch(); // unrelated await must not pay off the debt
+        require(q.pendingHandoffOnNoYieldExit());
+        require(q.completedBackedgesThisDispatch() == 0);
+        q.recordedCooperate();
+        q.beginDispatch();
+        require(!q.pendingHandoffOnNoYieldExit());
+    }
+}
+
 static void timer_slow_path() {
     reset_clock();
     Quantum q;
@@ -256,6 +279,7 @@ int main() {
     reduction_fast_path();
     configurable_soft_poll_interval_preserves_hard_cap();
     overdue_no_yield_region_latches_handoff_without_per_edge_polls();
+    long_unpolled_no_yield_scope_preserves_cap_debt();
     timer_slow_path();
     independent_watchdog_requests_next_safe_boundary();
     overdue_debt_survives_unrelated_await_and_dispatch_reset();
