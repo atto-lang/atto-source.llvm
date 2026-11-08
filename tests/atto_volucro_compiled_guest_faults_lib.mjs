@@ -34,6 +34,9 @@ function writeU32(value) {
 const concat = (...blocks) => Buffer.concat(blocks.map(x=>Buffer.from(x)));
 function inspect(bytes) {
   const source=Buffer.from(bytes);
+  // Align the test mutator's resource budget with the actual Volucro guest CLI.
+  // Never invoke the Node Wasm compiler on an oversized untrusted artifact.
+  need(source.length <= 1024 * 1024,'compiled wasm32 module exceeds 1 MiB admission cap');
   need(source.length>=8 && source.subarray(0,8).equals(Buffer.from(MAGIC)),'not wasm32 binary');
   need(WebAssembly.validate(source),'baseline Wasm is invalid');
   need(WebAssembly.Module.imports(new WebAssembly.Module(source)).length===0,'host imports forbidden');
