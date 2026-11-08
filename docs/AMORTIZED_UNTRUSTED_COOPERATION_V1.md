@@ -2,7 +2,7 @@
 
 ## Contract
 
-- Default slow-poll interval: **128 completed guest reductions**. The compiler's hot path uses an integer counter/increment and a predictable branch. A clock read, scheduler inspection, cancellation delivery, or runtime FFI is never performed on every iteration.
+- Default slow-poll interval: **128 completed guest reductions**. The instrumented hot path uses a small integer countdown and a predictable branch; 64-bit aggregate accounting occurs only on the 128th reduction. A clock read, scheduler inspection, cancellation delivery, or runtime FFI is never performed on every iteration.
 - A 512-backedge value is a *fairness handoff target*, not the hard tenant execution quota. After 512, slow polls remain at 128-edge boundaries; do not change to a slow poll on every overdue iteration. A separate safe critical-section exit may request one immediate poll.
 - Replenishing a fairness slice must **never replenish hard tenant fuel**. Counter overflow saturates total accounting without disabling the independent window counter.
 - Only committed backedges and compiler-verified call sites count. Untrusted source cannot mutate or bypass compiler-private counter state. Optimizer/codegen must retain checkpoint coverage; uninstrumented loop/cycle admission must fail closed.
@@ -11,9 +11,7 @@
 
 ## Current backend status (2026-11-07)
 
-Host quantum wired as a 128-backedge gating primitive; no compiler-wide mandatory guest pass yet. ScalarLoopLowering.cpp is a separate experimental 0..512 fuel/frame ABI and remains opt-in.
-
-Relevant files: src/main/cpp/oreslang/runtime/SourceCooperationQuantum.h; tests/native_cooperation_quantum_test.cpp.
+The native host cooperation quantum uses a single 32-bit countdown on every committed backedge and 64-bit accounting once every 128. The opt-in scalar-loop LLVM AOT emitter now computes one bounded batch per `step(frame,fuel)`, with no per-backedge dispatch fuel test, and the source guest AOT harness checks 0/1/127/128/129/511/512 fuel plus exactly-once commit and sibling progress. This is still a narrow scalar-loop prototype, not arbitrary source actor/checkpoint lowering.
 
 ## Missing compiler-backed gate
 
