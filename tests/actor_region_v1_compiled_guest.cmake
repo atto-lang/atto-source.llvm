@@ -30,16 +30,28 @@ function(native_positive name code expected)
     RESULT_VARIABLE frontend OUTPUT_VARIABLE ir ERROR_VARIABLE diagnostic
     TIMEOUT 35)
   string(FIND "${ir}" "define i32 @main()" entry)
-  string(FIND "${ir}" "@ores_actor_region_v1_compiler_alloc" allocated)
-  string(FIND "${ir}" "@ores_actor_region_v1_compiler_drop" dropped)
-  string(FIND "${ir}" "@ores_actor_region_v1_compiler_read_i64" read)
+  # A declaration alone is not evidence that the generated native guest
+  # allocates, reads or destroys an object; count real IR call instructions.
+  string(REGEX MATCHALL "call void @ores_actor_region_v1_compiler_alloc\\("
+    allocate_calls "${ir}")
+  string(REGEX MATCHALL "call void @ores_actor_region_v1_compiler_drop\\("
+    drop_calls "${ir}")
+  string(REGEX MATCHALL "call i64 @ores_actor_region_v1_compiler_read_i64\\("
+    read_calls "${ir}")
+  list(LENGTH allocate_calls alloc_count)
+  list(LENGTH drop_calls drop_count)
+  list(LENGTH read_calls read_count)
   if(NOT frontend STREQUAL "0" OR entry EQUAL -1 OR
-     allocated EQUAL -1 OR dropped EQUAL -1 OR read EQUAL -1)
+     NOT alloc_count EQUAL 1 OR NOT drop_count EQUAL 1 OR
+     NOT read_count EQUAL 1)
     fail_case("${name}: missing compiler-generated guest allocation/read/drop: ${frontend} ${diagnostic}")
     set(failures "${failures}" PARENT_SCOPE)
     return()
   endif()
   file(WRITE "${dir}/program.ll" "${ir}")
+  file(SHA256 "${dir}/main.atto" source_sha)
+  file(SHA256 "${dir}/program.ll" ir_sha)
+  file(SHA256 "${BUILD}/oreslang-llvmc" compiler_sha)
   execute_process(COMMAND "${BUILD}/oreslang-no-gc-ir-audit"
     "${dir}/program.ll"
     RESULT_VARIABLE screened OUTPUT_VARIABLE audit_out
@@ -70,7 +82,7 @@ function(native_positive name code expected)
          NOT stderr STREQUAL "")
         fail_case("${name}: compiled guest O${opt}: expected exit ${expected} with no output, got ${result}, stdout=[${stdout}], stderr=[${stderr}]")
       else()
-        message(STATUS "PASS compiler-backed ActorRegionV1 native guest ${name} O${opt} exit=${result} sha256=${binary_sha}")
+        message(STATUS "PASS compiler-backed ActorRegionV1 native guest ${name} O${opt} exit=${result} source_sha256=${source_sha} compiler_sha256=${compiler_sha} ir_sha256=${ir_sha} binary_sha256=${binary_sha}")
       endif()
     endif()
   endforeach()
@@ -95,6 +107,15 @@ function(native_negative name code)
   if(status STREQUAL "0" OR NOT status MATCHES "^[0-9]+$" OR
      NOT ir STREQUAL "" OR artifact)
     fail_case("${name}: unsupported guest silently admitted/emitted IR: ${status} ${diagnostic}")
+  elseif(ARGC GREATER 2)
+    # A valid source's refusal must originate from this profile, not from
+    # a missing compiler, parser regression, or unrelated syntax error.
+    string(FIND "${diagnostic}" "${ARGV2}" diagnostic_match)
+    if(diagnostic_match EQUAL -1)
+      fail_case("${name}: expected profile refusal '${ARGV2}', got '${diagnostic}'")
+    else()
+      message(STATUS "PASS native guest profile-specific rejection: ${name}")
+    endif()
   else()
     message(STATUS "PASS fail-closed native guest rejection: ${name}")
   endif()
