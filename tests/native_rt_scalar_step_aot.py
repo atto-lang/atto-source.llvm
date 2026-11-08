@@ -51,6 +51,11 @@ def require_mutations_rejected(ir, out, clang, harness):
         execution = run([str(mutant_exe)])
         assert execution.returncode != 0, (label, "security mutant unexpectedly passed",
                                            execution.stdout)
+        # An unrelated launcher/crash failure is not proof the native
+        # acceptance oracle caught the changed execution semantics.
+        assert "frame check failed at " in execution.stderr, (
+            label, "mutation failed without a real native frame invariant",
+            execution.returncode, execution.stderr)
         assert "SCALAR_FRAME_AOT_TWO_TASKS_PASS" not in execution.stdout, (
             label, "mutant printed successful exact-guest receipt")
     print("SCALAR_FRAME_AOT_FOUR_REAL_IR_MUTATIONS_REJECTED")
