@@ -44,6 +44,9 @@ enum {
     ORES_RT_MAX_RING = 65536,
     ORES_RT_MAX_IDLE_SPIN_NS = 1000000
 };
+/* Upper bound on preallocated ring slot memory (lanes x senders x cores x
+ * ring_capacity x 16 bytes). open() fails beyond it. */
+#define ORES_RT_MAX_RING_BYTES (1ull << 30) /* 1 GiB */
 
 typedef struct {
     uint32_t core_count;          /* 1..ORES_RT_MAX_CORES */
@@ -98,7 +101,9 @@ uint64_t ores_rt_sender_accepted(const OresRtSender* sender);
 /* Hand an external sender to another thread. Only its current owner may
  * call this; the next thread to send becomes the owner, ordered after
  * everything the previous owner published. Returns 0 if the caller is not
- * the owner or the sender belongs to a core. */
+ * the owner or the sender belongs to a core. A thread that exits while
+ * owning a sender leaves it unusable: there is deliberately no forced
+ * reclaim, since nothing could order it after the dead owner's last push. */
 int ores_rt_sender_release(OresRtSender* sender);
 
 /* Waits until every accepted message (including ones sent by handlers while

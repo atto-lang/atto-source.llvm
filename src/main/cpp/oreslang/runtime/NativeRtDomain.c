@@ -161,19 +161,38 @@ static void wake_core(RtCore* c) {
 /* The park mutex is the only lock a SCHED_FIFO carrier ever takes. A
  * low-priority sender holds it briefly to wake the carrier; with priority
  * inheritance that sender cannot be preempted indefinitely while holding it. */
-static void init_park_mutex(pthread_mutex_t* m) {
+static int init_park_mutex(pthread_mutex_t* m) {
     pthread_mutexattr_t attr;
     if (pthread_mutexattr_init(&attr) == 0) {
 #if defined(_POSIX_THREAD_PRIO_INHERIT) && _POSIX_THREAD_PRIO_INHERIT >= 0
         if (pthread_mutexattr_setprotocol(&attr, PTHREAD_PRIO_INHERIT) == 0
                 && pthread_mutex_init(m, &attr) == 0) {
             pthread_mutexattr_destroy(&attr);
-            return;
+            return 1;
         }
 #endif
         pthread_mutexattr_destroy(&attr);
     }
-    pthread_mutex_init(m, NULL);
+    return pthread_mutex_init(m, NULL) == 0;
+}
+
+/* Frees everything open() allocated; `cores_ready` cores have a live park
+ * mutex + cond, `domain_sync` says whether start_mutex/cond are live. */
+static void free_domain(OresRtDomain* d, uint32_t cores_ready, int domain_sync) {
+    for (uint32_t c = 0; c < cores_ready; ++c) {
+        pthread_mutex_destroy(&d->core[c].park_mutex);
+        pthread_cond_destroy(&d->core[c].park_cond);
+    }
+    if (domain_sync) {
+        pthread_mutex_destroy(&d->start_mutex);
+        pthread_cond_destroy(&d->start_cond);
+    }
+    free(d->actor_core);
+    free(d->core);
+    free(d->senders);
+    free(d->rings);
+    free(d->slots);
+    free(d);
 }
 
 OresRtDomain* ores_rt_domain_open(const OresRtDomainOptions* o) {
@@ -212,9 +231,14 @@ OresRtDomain* ores_rt_domain_open(const OresRtDomainOptions* o) {
             for (uint32_t j = i + 1; j < o->core_count; ++j)
                 if (o->cpus[i] == o->cpus[j]) return NULL;
     {
-        const size_t rings = (size_t)2 * (o->core_count + o->external_senders) * o->core_count;
-        if ((size_t)o->ring_capacity > (SIZE_MAX / sizeof(RtMsg)) / rings)
-            return NULL; /* slot array size would overflow size_t */
+        /* All ring memory is allocated AND touched at open. Cap it so a large
+         * but individually valid configuration fails here instead of pushing
+         * the host into swap or the OOM killer. Also guards size_t overflow
+         * (including the 64-byte alignment padding). */
+        const uint64_t rings = 2ull * (o->core_count + o->external_senders) * o->core_count;
+        const uint64_t bytes = rings * o->ring_capacity * sizeof(RtMsg);
+        if (bytes > ORES_RT_MAX_RING_BYTES || bytes > (uint64_t)(SIZE_MAX - 64))
+            return NULL;
     }
 
     OresRtDomain* d = calloc(1, sizeof(*d));
@@ -237,8 +261,7 @@ OresRtDomain* ores_rt_domain_open(const OresRtDomainOptions* o) {
     d->rings = aligned_alloc(64, ((rings * sizeof(RtRing) + 63) / 64) * 64);
     d->slots = aligned_alloc(64, ((slots * sizeof(RtMsg) + 63) / 64) * 64);
     if (!d->actor_core || !d->core || !d->senders || !d->rings || !d->slots) {
-        free(d->actor_core); free(d->core); free(d->senders);
-        free(d->rings); free(d->slots); free(d);
+        free_domain(d, 0, 0);
         return NULL;
     }
     memcpy(d->actor_core, o->actor_core, o->actor_count * sizeof(uint32_t));
@@ -264,8 +287,17 @@ OresRtDomain* ores_rt_domain_open(const OresRtDomainOptions* o) {
         RtCore* core = &d->core[c];
         core->domain = d;
         core->index = c;
-        init_park_mutex(&core->park_mutex);
-        pthread_cond_init(&core->park_cond, NULL);
+        /* An unchecked init failure would surface later as undefined
+         * behaviour on the park path; fail open() instead. */
+        if (!init_park_mutex(&core->park_mutex)) {
+            free_domain(d, c, 0);
+            return NULL;
+        }
+        if (pthread_cond_init(&core->park_cond, NULL) != 0) {
+            pthread_mutex_destroy(&core->park_mutex);
+            free_domain(d, c, 0);
+            return NULL;
+        }
         atomic_init(&core->sleeping, 0);
         atomic_init(&core->control_hint, 0);
         atomic_init(&core->processed, 0);
@@ -274,8 +306,15 @@ OresRtDomain* ores_rt_domain_open(const OresRtDomainOptions* o) {
         atomic_init(&core->max_turn_ns, 0);
         atomic_init(&core->budget_overruns, 0);
     }
-    pthread_mutex_init(&d->start_mutex, NULL);
-    pthread_cond_init(&d->start_cond, NULL);
+    if (pthread_mutex_init(&d->start_mutex, NULL) != 0) {
+        free_domain(d, d->cores, 0);
+        return NULL;
+    }
+    if (pthread_cond_init(&d->start_cond, NULL) != 0) {
+        pthread_mutex_destroy(&d->start_mutex);
+        free_domain(d, d->cores, 0);
+        return NULL;
+    }
     atomic_init(&d->accepting, 0);
     atomic_init(&d->stop, 0);
     atomic_init(&d->stopping, 0);
@@ -627,16 +666,5 @@ int ores_rt_domain_core_stats(OresRtDomain* d, uint32_t core, OresRtCoreStats* o
 void ores_rt_domain_destroy(OresRtDomain* d) {
     if (!d) return;
     if (d->started && !d->stopped) abort(); /* carriers still reference d */
-    for (uint32_t c = 0; c < d->cores; ++c) {
-        pthread_mutex_destroy(&d->core[c].park_mutex);
-        pthread_cond_destroy(&d->core[c].park_cond);
-    }
-    pthread_mutex_destroy(&d->start_mutex);
-    pthread_cond_destroy(&d->start_cond);
-    free(d->actor_core);
-    free(d->core);
-    free(d->senders);
-    free(d->rings);
-    free(d->slots);
-    free(d);
+    free_domain(d, d->cores, 1);
 }

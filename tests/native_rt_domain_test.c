@@ -633,6 +633,23 @@ static void contract(void) {
     check(!ores_rt_domain_open(&bad), "missing handler");
     bad = o; bad.idle_spin_ns = ORES_RT_MAX_IDLE_SPIN_NS + 1;
     check(!ores_rt_domain_open(&bad), "spin cap");
+    {
+        /* Individually valid limits whose product is ~17 GiB of touched ring
+         * memory: open must refuse it, not try to allocate it. */
+        static uint32_t big_place[ORES_RT_MAX_CORES];
+        for (uint32_t i = 0; i < ORES_RT_MAX_CORES; ++i) big_place[i] = i;
+        OresRtDomainOptions big = o;
+        big.core_count = ORES_RT_MAX_CORES;
+        big.actor_count = ORES_RT_MAX_CORES;
+        big.actor_core = big_place;
+        big.external_senders = ORES_RT_MAX_EXTERNAL;
+        big.ring_capacity = ORES_RT_MAX_RING;
+        check(!ores_rt_domain_open(&big), "ring memory above ORES_RT_MAX_RING_BYTES rejected");
+        big.ring_capacity = 64; /* 2*128*64*64*16 = 16 MiB: fine */
+        OresRtDomain* ok = ores_rt_domain_open(&big);
+        check(ok != NULL, "large-but-capped config opens");
+        ores_rt_domain_destroy(ok);
+    }
 
     uint32_t cpus[2] = {0, 1};
     bad = o; bad.cpus = cpus;
