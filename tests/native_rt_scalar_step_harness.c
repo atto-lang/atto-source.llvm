@@ -150,6 +150,77 @@ static void require_compiled_fuel_boundaries(void) {
 }
 
 /*
+ * Real .ores -> LLVM -> native checkpoint batching: one committed scalar
+ * effect per cheap budget decrement, then one host-visible cooperative return
+ * for a 64/128/256/512 quantum. No scheduler/clock/FFI call may occur inside
+ * the compiled hot CFG; that independent property is checked against emitted
+ * IR by native_rt_scalar_step_aot.py.
+ */
+static void require_compiled_batched_quanta(void) {
+    static const uint64_t quantum[] = {64, 128, 256, 512};
+    static const uint64_t expected_dispatches[] = {16, 8, 4, 2};
+    for (size_t k = 0; k < sizeof(quantum) / sizeof(quantum[0]); ++k) {
+        ScalarFrame *frame = calloc(1, sizeof(*frame));
+        CHECK(frame != NULL);
+        oreslang_rt_scalar_frame_init(frame);
+        uint64_t committed = 0;
+        uint64_t dispatches = 0;
+        while (committed < 1000) {
+            const uint64_t previous = committed;
+            const uint64_t remaining = 1000 - previous;
+            const uint64_t advance =
+                remaining < quantum[k] ? remaining : quantum[k];
+            const int status = oreslang_rt_scalar_frame_step(frame, quantum[k]);
+            committed += advance;
+            ++dispatches;
+            CHECK(frame->counter == committed);
+            CHECK(committed > previous && committed <= 1000);
+            CHECK(status == (committed == 1000 ? 0 : 1));
+            CHECK(frame->state == (committed == 1000 ? 2u : 1u));
+            CHECK(dispatches <= expected_dispatches[k]);
+        }
+        CHECK(dispatches == expected_dispatches[k]);
+        CHECK(oreslang_rt_scalar_frame_result(frame) == 1000);
+        CHECK(oreslang_rt_scalar_frame_step(frame, quantum[k]) == 0);
+        free(frame);
+    }
+}
+
+/*
+ * A hard logical-task quota belongs to the HOST supervisor, not this
+ * experimental 24-byte guest frame. Show an approved host scheduling recipe
+ * that stops dispatching a tenant after exactly 3*128 committed effects.
+ * A separate tenant continues: no cross-task fuel transfer. This is a
+ * compiled-guest orchestration test, NOT a compiler-enforced tenant quota.
+ */
+static void require_host_owned_lifetime_quota_boundary(void) {
+    ScalarFrame *limited = calloc(1, sizeof(*limited));
+    ScalarFrame *sibling = calloc(1, sizeof(*sibling));
+    CHECK(limited != NULL && sibling != NULL);
+    oreslang_rt_scalar_frame_init(limited);
+    oreslang_rt_scalar_frame_init(sibling);
+    uint64_t task_remaining_fuel = 384;
+    for (unsigned dispatch = 0; dispatch < 3; ++dispatch) {
+        CHECK(task_remaining_fuel >= 128);
+        CHECK(oreslang_rt_scalar_frame_step(limited, 128) == 1);
+        task_remaining_fuel -= 128;
+        CHECK(limited->counter == (uint64_t)(dispatch + 1u) * 128u);
+        CHECK(oreslang_rt_scalar_frame_step(sibling, 128) == 1);
+    }
+    CHECK(task_remaining_fuel == 0 && limited->counter == 384);
+    // DO NOT call the untrusted guest again when its logical task fuel is 0.
+    // The owner cancels it, after the native continuation has returned.
+    oreslang_rt_scalar_frame_cancel(limited);
+    CHECK(oreslang_rt_scalar_frame_step(limited, 128) == 2);
+    CHECK(limited->counter == 384 && limited->state == 3);
+    CHECK(oreslang_rt_scalar_frame_step(sibling, 128) == 1);
+    CHECK(sibling->counter == 512 && sibling->state == 1);
+    oreslang_rt_scalar_frame_cancel(sibling);
+    free(sibling);
+    free(limited);
+}
+
+/*
  * In a mixed scheduler cohort, retiring a cancelled source continuation
  * must not mutate another frame or halt its bounded forward progress.
  * This is deliberately executed through the compiled guest ABI.
@@ -245,9 +316,13 @@ int main(void) {
         require_guest_trap(scenario);
 #endif
     require_compiled_fuel_boundaries();
+    require_compiled_batched_quanta();
+    require_host_owned_lifetime_quota_boundary();
     require_bounded_peer_progress();
     require_cancelled_peer_is_isolated();
     puts("SCALAR_FRAME_AOT_COMPILED_FUEL_BOUNDARIES_PASS");
+    puts("SCALAR_FRAME_AOT_COMPILED_BATCHED_QUANTA_PASS");
+    puts("SCALAR_FRAME_AOT_HOST_OWNED_LIFETIME_QUOTA_PASS");
     puts("SCALAR_FRAME_AOT_CANCELLED_PEER_ISOLATION_PASS");
     puts("SCALAR_FRAME_AOT_THREE_PEERS_BOUNDED_PROGRESS_PASS");
     puts("SCALAR_FRAME_AOT_TWO_TASKS_PASS");
