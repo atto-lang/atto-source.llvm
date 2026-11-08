@@ -1,8 +1,8 @@
-# ActorRegionV2: guarded-return cleanup for two real native guest owners
+# ActorRegionV2: bounded multi-owner cleanup across a guarded return
 
-**Stage:** opt-in compiler-backed LLVM guest slice, not general runtime AOT,
-zero process-wide GC proof, concurrent actor scheduling or supervisor-managed
-life-cycle.
+**Stage:** opt-in compiler-backed LLVM guest slice. It does not certify
+arbitrary CFG cleanup, exceptions/cancellation, live source actors, general
+runtime AOT or process-wide zero-GC.
 
 Command:
 
@@ -10,52 +10,55 @@ Command:
 oreslang-llvmc --actor-region-v2-guest --target=host main.atto
 ```
 
-Unlike v1, this experimental codegen recognizes **two** freshly allocated,
-lexically owned instances of one immutable class. The production parser,
-module resolver and ownership checker run before LLVM generation.
-Every admitted class has 1–16 public, final, literal i64 fields. The main
-function has a single pure equality guard with an early scalar field return
-and one final scalar field return. It emits native allocations and writes for
-both objects, a real checked field comparison, two branches and one shared
-cleanup block containing two drops (reverse declaration order), turn leave,
-retirement and a checked post-quiescence destruction before returning the
-snapshot result. All references use the existing four-byte region-relative
-offset with original trusted host sidecars; neither raw addresses nor actor
-identities are guest values.
+The production parser, module resolver and ownership checker run before LLVM
+generation. The first ActorRegionV2 cleanup planner admits **1–8 fresh,
+immutable, lexically owned instances** of one class with 1–16 public, final,
+literal integer fields. A single pure equality guard has an early scalar
+field return and one normal scalar field return.
 
-In particular, the false branch MUST NOT run the early return's effects
-and an early return MUST NOT skip destruction of the second owner.
-The shared block contains a PHI for the return snapshot and both drops.
-This supports exactly one guard, not generalized exception/cancellation CFG
-or nested ownership, and no borrowed reference may escape.
+The compiler creates an `ActorRegionCleanupPlanV1` separately from LLVM
+emission. It records each unique local owner in declaration order, seals the
+supported normal-exit set, and constructs a reverse-order destruction list.
+The code generator allocates one authenticated reference sidecar per owner,
+emits the runtime allocation and initialization for each, and checks every
+field read against the corresponding original sidecar. Both branches converge
+on one LLVM cleanup block. The selected scalar result is snapshotted in a PHI
+before the planner's reverse-order drops, turn leave, retirement and checked
+region destruction.
 
-## Native evidence required
+The planner is a **bounded cleanup plan**, not yet a general dataflow solver:
+it currently admits exactly one guarded early return and one final return.
+It does not infer drops for arbitrary loops, nested scopes or exception edges.
+A future exit kind must be added to an explicit, validated exit set before
+it can be admitted. Throw, recover, defer, await, cancellation, actor
+termination callbacks and FFI pins remain rejected.
+
+## Native tests
 
 The registered `native_actor_region_v2_multiowner_guarded_cleanup` CTest
-must compile two actual `.atto` programs (guard taken and not taken), check
-exactly two generated native allocation and two destruction calls, audit
-emitted LLVM IR, link to the REAL `ActorRegionV1.c` + `ActorArena.c`,
-execute at `-O0` and `-O2`, and check exact status/stdout/stderr plus
-binary SHA-256. Ten negative compiler/profile cases reject nonclosed
-source or incompatible compiler modes with no output.
+must compile three real `.atto` programs: the guard-taken and guard-not-taken
+two-owner paths, plus a three-owner path. It checks that the emitted LLVM IR
+has the expected number of native allocation/drop calls, screens the module
+with the existing no-GC IR auditor, links the real `ActorRegionV1.c` and
+`ActorArena.c`, and executes each guest at Clang `-O0` and `-O2`.
+Eleven negative cases check that owner counts above eight, mutable/borrowed
+owners, unmodeled roots/guards/calls and exit-status truncation reject before
+LLVM IR/artifact output.
 
-The CTest is a **planned validation until it actually executes**.
-Require real exact-head workflow jobs with nonzero executed steps, clang
-and LLVM diagnostics, native artefact hashes, and independent approval.
-A mere emitted IR string or source-free native oracle does not establish
-that AttoLang generated working executable code.
+The test is **authored and registered, not passed**, until executed on an
+exact source head with nonzero CI steps and retained native binary hashes.
+An IR string or host-only model is not guest execution evidence.
 
-## Deliberately unsupported (fail closed)
+## Unsupported and future work
 
-- More than two owned allocations or more than one guard/early return.
-- Mutations, constructor arguments/method calls, dynamic imports, closures,
-  generics, loops, actor handlers, tasks, await, exceptions, cancellation,
-  FFI and ownership transfer.
-- Converting a compact location into full authorization; supervisor-issued
-  actor identity and generation authority remain external.
-- General actor heap closure, multi-tenant safety, whole-process no-GC
-  linking, and cross-backend .NET/Java/Wasm/Forge parity.
+- More than eight owners, arbitrary numbers of CFG exits, nested scopes,
+  loops and branch-local ownership.
+- Class methods, dynamic dispatch, constructors with arguments, generics,
+  imports, macros, actors, tasks, await, exceptions, cancellation and FFI.
+- Real scheduler-issued actor identity/turn authority and supervisor lifecycle.
+- Transitive runtime/FFI link certification, a controlled guest fault boundary,
+  complete linked-process no-tracing-GC proof, and Java/.NET/Wasm/Forge parity.
 
-The existing compiler, stack class path, V1 codegen, ActorRegionV1 native
-allocator and C ABI are preserved. Certified strict sealed AOT linkage
-remains independently gated by LLVM PR #1590.
+All existing compiler and runtime implementations are preserved. ActorRegionV2
+is opt-in and does not replace V1 or legacy LLVM lowering. Strict sealed runtime
+admission remains independently gated by LLVM PR #1590.
