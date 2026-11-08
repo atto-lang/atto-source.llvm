@@ -482,6 +482,20 @@ if(BUILD_TESTING)
     set_tests_properties(native_reduction_quantum_watchdog_host_only
         PROPERTIES TIMEOUT 15)
 
+    # Run the same invariant oracle with optimized code and assertions
+    # disabled. Plain assert() mutations must never become a green receipt.
+    add_executable(oreslang-native-reduction-quantum-release-test
+        tests/native_cooperation_quantum_test.cpp)
+    target_include_directories(oreslang-native-reduction-quantum-release-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_definitions(oreslang-native-reduction-quantum-release-test PRIVATE NDEBUG)
+    target_compile_options(oreslang-native-reduction-quantum-release-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-O3 -Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_reduction_quantum_release_host_only
+        COMMAND oreslang-native-reduction-quantum-release-test)
+    set_tests_properties(native_reduction_quantum_release_host_only
+        PROPERTIES TIMEOUT 15)
+
     # Native Array<int> substrate, independent of source-level admission.
     # Invalid operations must abort even in Release/NDEBUG.
     add_executable(oreslang-native-int-array-region-test
