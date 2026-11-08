@@ -2413,6 +2413,15 @@ private:
                     (sum_first.text == "Option" || sum_first.text == "Result")) {
                 const auto mode = token_.text; advance(); binding.assignable = mode == "let"; binding.owner_mutable = mode == "val" || mode == "let"; if (mode == "let") accept("mut");
                 binding.sum_type = type_identifier(); binding.name = identifier(); require("="); binding.initializer = expression();
+                if (binding.initializer->kind == Expression::Kind::ArrayCall
+                        && binding.initializer->name == "get_copy") {
+                    // Versioned candidate: only an explicit Option<int> local
+                    // can own the checked scalar copy's tagged sum result.
+                    // Never reinterpret an untyped i64 or Option<bool> as a sum.
+                    if (binding.sum_type != "Option<int>")
+                        fail("native Array<int>.get_copy requires val Option<int> result");
+                    binding.initializer->sum_type = binding.sum_type;
+                }
             } else if (array_effect_ahead()) {
                 binding.name = "$effect" + std::to_string(value.locals.size());
                 binding.initializer = primary();
@@ -4700,16 +4709,21 @@ private:
                 if (expr.left) receiver = native_place_key(*expr.left);
                 const auto element_slot = variables.find(receiver + ".$element");
                 const ScalarType element = element_slot == variables.end() ? ScalarType::I64 : element_slot->second;
-                const std::size_t expected = expr.name == "get" || expr.name == "add"
+                const bool checked_copy = expr.name == "get_copy";
+                if (checked_copy && expr.sum_type != "Option<int>")
+                    throw std::runtime_error("native get_copy requires explicit Option<int> result at byte " +
+                        std::to_string(expr.offset));
+                const std::size_t expected = expr.name == "get" || expr.name == "add" || checked_copy
                     ? 1 : expr.name == "set" ? 2 : 0;
                 if (expected == 0 || expr.arguments.size() != expected)
-                    throw std::runtime_error("native Array<int> effect supports only add(value) or set(index,value); scalar expression supports only get(index) at byte " +
+                    throw std::runtime_error("native Array<int> effect supports only add(value) or set(index,value); scalar expression supports get(index) or typed get_copy(index) at byte " +
                         std::to_string(expr.offset));
                 for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
                     const auto& argument = expr.arguments[i];
                     const ScalarType actual = validate_scalar_expression(
                         *argument, variables, functions, depth + 1);
-                    const bool index = (expr.name == "get" || expr.name == "set") && i == 0;
+                    const bool index = (expr.name == "get" || expr.name == "get_copy"
+                            || expr.name == "set") && i == 0;
                     if (actual != (index ? ScalarType::I64 : element))
                         throw std::runtime_error(std::string(element == ScalarType::I64
                             ? "native Array<int> arguments require int, got "
@@ -4717,6 +4731,8 @@ private:
                             std::string(scalar_type_name(actual)) + " at byte " +
                             std::to_string(argument->offset));
                 }
+                if (checked_copy && element != ScalarType::I64)
+                    throw std::runtime_error("native get_copy requires Array<int>; move-only and String elements are unsupported");
                 return expr.resolved_type = expr.name == "get" ? element : ScalarType::I64;
             }
             case Expression::Kind::RecordConstruct:
