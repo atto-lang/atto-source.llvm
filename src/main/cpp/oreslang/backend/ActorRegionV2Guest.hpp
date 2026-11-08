@@ -2,6 +2,7 @@
 
 #include "oreslang/backend/ActorRegionV1Guest.hpp"
 #include "oreslang/backend/OwnershipDataflowV1.hpp"
+#include "oreslang/backend/OwnershipSourceLoweringV1.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -140,7 +141,23 @@ inline std::string emit_actor_region_v2_guest_ir(const Program& program) {
         cleanup_plan.add_owner(owner.name);
     }
     cleanup_plan.seal_normal_exits(2);
+    // Analyze the actual resolver/typechecker-owned Program AST, rather than
+    // only a synthetic list of owners. The source adapter maps its lexical
+    // allocations, field reads, guard and both return expressions to CFG ops.
+    const auto source_ownership =
+        OwnershipSourceLoweringV1::lower_guarded_owned_class_function(
+            program, fn, cls);
+    if (source_ownership.normal_exits.size() != 2)
+        reject("source ownership CFG did not prove both return paths");
+    const auto& source_cleanup =
+        source_ownership.normal_exits.front().cleanup_reverse_order;
+    for (const auto& exit : source_ownership.normal_exits)
+        if (exit.cleanup_reverse_order != source_cleanup)
+            reject("source ownership CFG has path-dependent unmerged cleanup");
     cleanup_plan.verify_normal_exits_with_dataflow(2);
+    if (cleanup_plan.cleanup_order != source_cleanup)
+        reject("source and backend cleanup plans disagree");
+    cleanup_plan.cleanup_order = source_cleanup;
     // The source checker currently produces these metadata fields in a
     // limited class grammar. Fail closed if a future grammar adds ownership
     // transfers, sum payloads or unvalidated aliases alongside 'new'.
