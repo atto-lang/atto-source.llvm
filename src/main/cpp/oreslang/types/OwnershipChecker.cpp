@@ -407,7 +407,15 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             // This source-owned tag is set only by the explicit sum binding.
             if (checked_copy && expr.sum_type != "Option<int>")
                 reject(expr, "native checked copy requires explicit Option<int> provenance");
-            check_value(*expr.arguments[0], locals, functions);
+            if (checked_copy) {
+                // No compiler-owned interprocedural loan reservation exists
+                // for arbitrary index effects yet. Require a pure scalar
+                // expression so mutation/transfer cannot occur between
+                // checking the owner and its native checked-copy call.
+                check_pure_guard(*expr.arguments[0], locals, functions);
+            } else {
+                check_value(*expr.arguments[0], locals, functions);
+            }
             return;
         }
         case Expression::Kind::SumConstruct:
