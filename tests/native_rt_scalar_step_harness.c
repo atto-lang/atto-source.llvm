@@ -51,6 +51,23 @@ static void require_guest_trap(int scenario) {
                 frame.state = 99;
                 (void)oreslang_rt_scalar_frame_step(&frame, 1); break;
         case 7: (void)oreslang_rt_scalar_frame_step(NULL, 1); break;
+        case 8: frame.counter = 1; /* dirty zero-state frame */
+                oreslang_rt_scalar_frame_init(&frame); break;
+        case 9: frame.magic = 7; /* dirty magic cannot resurrect a frame */
+                oreslang_rt_scalar_frame_init(&frame); break;
+        case 10: oreslang_rt_scalar_frame_init(&frame);
+                 frame.counter = 1001; /* cannot skip past upper bound */
+                 (void)oreslang_rt_scalar_frame_step(&frame, 512); break;
+        case 11: oreslang_rt_scalar_frame_init(&frame);
+                 frame.counter = UINT64_MAX; /* signed-negative counter */
+                 (void)oreslang_rt_scalar_frame_step(&frame, 128); break;
+        case 12: oreslang_rt_scalar_frame_init(&frame);
+                 frame.state = 2; frame.counter = 999; /* forged DONE */
+                 (void)oreslang_rt_scalar_frame_result(&frame); break;
+        case 13: oreslang_rt_scalar_frame_init(&frame);
+                 frame.counter = 1001;
+                 oreslang_rt_scalar_frame_cancel(&frame);
+                 (void)oreslang_rt_scalar_frame_step(&frame, 1); break;
         default: _Exit(99);
         }
         _Exit(0); /* An invalid operation returning constitutes a failure. */
@@ -239,7 +256,7 @@ int main(void) {
     CHECK(oreslang_rt_scalar_frame_step(a, 512) == 0);
     CHECK(a->counter == 1000);
 #ifdef __linux__
-    for (int scenario = 0; scenario != 8; ++scenario)
+    for (int scenario = 0; scenario != 14; ++scenario)
         require_guest_trap(scenario);
 #endif
     require_bounded_peer_progress();
