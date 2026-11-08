@@ -32,6 +32,12 @@
           "allowed_prs": [
             787
           ]
+        },
+        "ci/test-plans/llvm-pr1603-checked-copy.json": {
+          "blob_sha": "a8c542967ddc983a0a28a7187c329b72506d7afe",
+          "allowed_prs": [
+            1603
+          ]
         }
       }
     }
