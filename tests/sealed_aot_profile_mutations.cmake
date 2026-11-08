@@ -1,14 +1,30 @@
 # Ordinary-vs-sealed contrast tests; not compiler-implementation mutation.
 # Exact-head stepful CI is required before any test result is claimed.
 cmake_minimum_required(VERSION 3.20)
-set(work "${BUILD}/sealed-aot-profile-mutations")
+# Never remove a guessed workspace when BUILD/ROOT is absent or aliased.
+# The test's work directory is deleted recursively below: validate before IO.
+if(NOT DEFINED BUILD OR NOT IS_DIRECTORY "${BUILD}" OR
+   NOT DEFINED ROOT OR NOT IS_DIRECTORY "${ROOT}")
+  message(FATAL_ERROR "sealed contrasts: existing BUILD and ROOT directories required")
+endif()
+file(REAL_PATH "${BUILD}" build_real)
+file(REAL_PATH "${ROOT}" root_real)
+if(NOT "${BUILD}" STREQUAL "${build_real}" OR
+   "${build_real}" STREQUAL "/" OR
+   "${build_real}" STREQUAL "${root_real}")
+  message(FATAL_ERROR "sealed contrasts: canonical separate build directory required")
+endif()
+set(work "${build_real}/sealed-aot-profile-mutations")
+if(IS_SYMLINK "${work}")
+  message(FATAL_ERROR "sealed contrasts: symlinked test workspace denied")
+endif()
+if(NOT EXISTS "${build_real}/oreslang-llvmc")
+  message(FATAL_ERROR "sealed contrasts: native compiler must be built")
+endif()
 file(REMOVE_RECURSE "${work}")
 file(MAKE_DIRECTORY "${work}")
 set(cases 0)
 set(failures 0)
-if(NOT EXISTS "${BUILD}/oreslang-llvmc")
-  message(FATAL_ERROR "sealed contrasts: native compiler must be built")
-endif()
 
 function(fail_case reason)
   message(SEND_ERROR "${reason}")
