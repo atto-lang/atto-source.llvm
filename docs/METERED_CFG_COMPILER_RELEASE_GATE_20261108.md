@@ -18,6 +18,16 @@ committed loop body and applies `every_cycle_contains_meter` to the actual
 LLVM basic-block CFG. Every cyclic control-flow route must pass through that
 designated metered block; an alternative unmetered cycle fails compilation.
 The graph verifier is independent of LLVM for deterministic unit testing.
+The verifier rejects graphs exceeding 262,144 blocks or 1,048,576 edges.
+Its portable tests exhaustively compare the algorithm with an independent
+topological-sort oracle on 3,584 small graph/meter combinations.
+
+`ScalarGuestCallVerifier.hpp` also enforces a deliberately closed scalar
+guest call surface on the **actual emitted LLVM Module**: four v1 frame
+functions, no recursion, FFI, indirect calls, inline assembly, or additional
+imports beyond `llvm.trap`. The new LLVM-backed test
+`native_scalar_guest_calls_fail_closed` constructs positive and adversarial
+LLVM Modules. This is call rejection, not general interprocedural metering.
 
 This is not a general-purpose untrusted guest verifier. It does not yet
 establish safety of arbitrary indirect calls, recursion, host FFI, mutable
@@ -47,9 +57,10 @@ cmake -S . -B build-llvm -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 cmake --build build-llvm --target oreslang-llvmc \
   oreslang-native-metered-cfg-verifier-test \
-  oreslang-native-reduction-quantum-test
+  oreslang-native-reduction-quantum-test \
+  oreslang-native-scalar-call-verifier-test
 ctest --test-dir build-llvm --output-on-failure \
-  -R '^(native_metered_cfg_cycles_fail_closed|native_reduction_quantum_watchdog_host_only|native_rt_scalar_frame_aot_two_tasks)$'
+  -R '^(native_metered_cfg_cycles_fail_closed|native_scalar_guest_calls_fail_closed|native_reduction_quantum_watchdog_host_only|native_rt_scalar_frame_aot_two_tasks)
 ```
 
 The native frame AOT Python CTest compiles **generated** LLVM IR with Clang
@@ -67,18 +78,22 @@ jobs as successful.
 
 ## Evidence and release status
 
-- 2026-11-08 UTC: exact Git blob hashes for the portable verifier source and
-  CTest: `f213db2ef89df9d0e47f7771e4ef65bd5955cae2` and
-  `ab88c7a92131d9ad7fa81b79fa9c9f629463d202`.
-- Portable verifier: local GCC, Clang, `NDEBUG`, and GCC
-  AddressSanitizer/UndefinedBehaviorSanitizer executions **passed**.
-- The source-org PR GitHub Actions jobs failed before usable job steps;
-  compiled LLVM scalar AOT exact-head O0/O2/O3 and full guest runtime
-  certification remain **NOT_EXECUTED**.
-- The accessible private `numerics-atto/mirror-oreslang-source.llvm`
-  default branch has a different `CMakeLists.txt` blob from source `main`;
-  it cannot be assumed to be an exact-head mirror without additional
-  full-tree reconstruction and SHA verification.
+- 2026-11-08 UTC: the portable CFG verifier source and test are Git blobs
+  `98dcd686f4df7b7e8e11906d1a74da69b1a0492e` and
+  `2ee535e649ad423611d9778e82be3b9430909678`. Local GCC and Clang
+  Release/NDEBUG tests **PASSED**; GCC ASan/UBSan also **PASSED**. The tests
+  include exhaustive 3-node graphs, malformed CFGs and resource ceilings.
+- LLVM-backed call verifier source and test Git blobs are
+  `0f6359bec88447aab7d1537400384440a926d7b7` and
+  `2a78c98f0f4492f8b45f4711fe98496f18db65bc`.
+  **LLVM-backed negative CTest NOT_EXECUTED**: local LLVM C++ SDK is absent.
+- Exact-head LLVM AOT O0/O2/O3 guest execution **NOT_EXECUTED**. Source Actions
+  jobs fail without usable executed steps. Do not treat admission failures,
+  metadata-only jobs, pending or skipped jobs as successful evidence.
+- The accessible private `numerics-atto/mirror-oreslang-source.llvm` default
+  branch has a different `CMakeLists.txt` blob from source `main`. It cannot
+  be used as exact-head evidence without full-tree mirroring and independent
+  SHA verification.
 
 **Do not merge this PR or enable untrusted general source-loop execution
 until the remaining gates are green.**
