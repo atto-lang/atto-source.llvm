@@ -46,6 +46,21 @@ def main():
     require_rejected(IR + "\n  invoke void @llvm.trap() to label %ok unwind label %bad\n")
     require_rejected(IR + "\n  callbr void @llvm.trap() to label %ok []\n")
     require_rejected(IR.replace("declare void @llvm.trap()", ""))
+    # ABI-incompatible symbols must be rejected, even when names are intact.
+    require_rejected(IR.replace("define i32 @oreslang_rt_scalar_frame_step_v1",
+                                "define i64 @oreslang_rt_scalar_frame_step_v1"))
+    require_rejected(IR.replace("ptr %x, i64 %fuel", "ptr %x", 1))
+    require_rejected(IR.replace("ptr %x, i64 %fuel", "i64 %x, i64 %fuel", 1))
+    require_rejected(IR.replace("ptr %x, i64 %fuel", "i64* %x, i64 %fuel", 1))
+    require_rejected(IR.replace("ptr %x)", "ptr %x, ...)", 1))
+    require_rejected(IR.replace("define void @oreslang_rt_scalar_frame_cancel_v1",
+                                "define internal void @oreslang_rt_scalar_frame_cancel_v1"))
+    require_rejected(IR.replace("define void @oreslang_rt_scalar_frame_init_v1",
+                                "define void @oreslang_rt_scalar_frame_init_v1") +
+                     "\ndefine i32 @oreslang_rt_scalar_frame_step_v1(ptr %x) { ret i32 0 }\n")
+    # Typed-pointer LLVM 14-style output remains accepted with the correct
+    # struct frame pointer; do not accidentally re-allow untyped i64*.
+    verify_closed_guest_ir(IR.replace("ptr %x", "%oreslang.rt.scalar.frame.v1* %x"))
     # AOT Clang and linked LLVM SDK must be the same major. Mocking only
     # the version probe ensures this negative test is portable and executes
     # without installed LLVM/Clang developer libraries.
