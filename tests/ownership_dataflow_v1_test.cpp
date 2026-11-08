@@ -64,6 +64,15 @@ static bool mutable_borrow_release() {
     g.blocks[0].operations={op(OwnershipV1OpKind::Create),op(OwnershipV1OpKind::BorrowMutable),op(OwnershipV1OpKind::EndBorrowMutable),op(OwnershipV1OpKind::Use),op(OwnershipV1OpKind::ExitNormal)};
     return OwnershipDataflowV1::analyze(g).normal_exits[0].cleanup_reverse_order.size()==1;
 }
+static bool mutable_borrow_allows_exclusive_write() {
+    auto g=graph(1);
+    g.blocks[0].operations={op(OwnershipV1OpKind::Create),
+        op(OwnershipV1OpKind::BorrowMutable),
+        op(OwnershipV1OpKind::UseThroughMutableBorrow),
+        op(OwnershipV1OpKind::EndBorrowMutable),
+        op(OwnershipV1OpKind::ExitNormal)};
+    return OwnershipDataflowV1::analyze(g).normal_exits[0].cleanup_reverse_order.size()==1;
+}
 static bool expect_reject(const char* name, OwnershipV1Graph g) {
     try { (void)OwnershipDataflowV1::analyze(g); }
     catch (const std::runtime_error&) { return true; }
@@ -179,6 +188,22 @@ static bool rejects_different_acquisition_order_at_join() {
     g.blocks[3].operations={op(OwnershipV1OpKind::ExitNormal)};
     return expect_reject("different acquisition order at join",std::move(g));
 }
+static bool rejects_stray_transfer_target() {
+    auto g=graph(1);
+    g.blocks[0].operations={op(OwnershipV1OpKind::Create),
+        op(OwnershipV1OpKind::Drop,0,9),
+        op(OwnershipV1OpKind::ExitNormal)};
+    return expect_reject("stray transfer target",std::move(g));
+}
+static bool rejects_read_during_mutable_borrow() {
+    auto g=graph(1);
+    g.blocks[0].operations={op(OwnershipV1OpKind::Create),
+        op(OwnershipV1OpKind::BorrowMutable),
+        op(OwnershipV1OpKind::Use),
+        op(OwnershipV1OpKind::EndBorrowMutable),
+        op(OwnershipV1OpKind::ExitNormal)};
+    return expect_reject("read via owner during mutable borrow",std::move(g));
+}
 static bool rejects_end_borrow_without_loan() {
     auto g=graph(1);
     g.blocks[0].operations={op(OwnershipV1OpKind::Create),
@@ -198,7 +223,8 @@ int main() {
     const bool ok =
       normal_cleanup_reverse_order() && take_transfers_to_destination() &&
       explicit_drop_not_repeated() && shared_borrow_release() &&
-      mutable_borrow_release() && rejects_double_drop() &&
+      mutable_borrow_release() && mutable_borrow_allows_exclusive_write() &&
+      rejects_double_drop() &&
       rejects_use_after_take() && rejects_borrowed_drop() &&
       rejects_mutable_alias() && rejects_join_mismatch() &&
       rejects_unmodeled_exit() && rejects_implicit_exit() &&
@@ -209,8 +235,9 @@ int main() {
       rejects_mutation_during_shared_borrow() &&
       cleanup_uses_acquisition_not_declaration_order() &&
       rejects_different_acquisition_order_at_join() &&
-      rejects_end_borrow_without_loan();
+      rejects_end_borrow_without_loan() && rejects_stray_transfer_target() &&
+      rejects_read_during_mutable_borrow();
     if (!ok) return 1;
-    std::puts("OWNERSHIP_DATAFLOW_V1|positive=6|negative=18|result=PASS");
+    std::puts("OWNERSHIP_DATAFLOW_V1|positive=7|negative=20|result=PASS");
     return 0;
 }
