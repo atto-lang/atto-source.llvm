@@ -69,6 +69,7 @@ typedef struct {
     atomic_int startup_state;
     atomic_int constructor_started;
     atomic_int stop_requested;
+    atomic_int owner_stop_claimed; /* exactly one outer stop, auto-failstop separate */
     atomic_int join_started;
     atomic_uint_fast64_t processed;
     atomic_int_fast64_t last_result;
@@ -1116,6 +1117,7 @@ void* oreslang_source_actor_spawn(
         &instance->startup_state, ORES_SOURCE_ACTOR_STARTUP_PENDING);
     atomic_init(&instance->constructor_started, 0);
     atomic_init(&instance->stop_requested, 0);
+    atomic_init(&instance->owner_stop_claimed, 0);
     atomic_init(&instance->join_started, 0);
     atomic_init(&instance->processed, 0);
     atomic_init(&instance->last_result, 0);
@@ -1380,11 +1382,18 @@ void oreslang_source_actor_request_stop(void* opaque) {
         1,
         memory_order_acq_rel,
         memory_order_acquire);
-    /* Automatic fail-stop is the one authorized source of a previously
-     * requested stop. Manual double-stop remains a hard protocol failure. */
-    ensure(won_request || (expected == 1 &&
-        atomic_load_explicit(&instance->frame_vm_error,
-            memory_order_acquire) != ORES_SCALAR_OK));
+    /* A fail-stopped actor still has one externally owned stop/join.
+     * Do not let an earlier internal fail-stop accidentally authorize
+     * unlimited manual request_stop repetitions. This independent claim
+     * is consumed exactly once by the trusted outer owner. */
+    const int auto_stopped = !won_request && expected == 1
+        && atomic_load_explicit(&instance->frame_vm_error,
+            memory_order_acquire) != ORES_SCALAR_OK;
+    ensure(won_request || auto_stopped);
+    int unclaimed_outer = 0;
+    ensure(atomic_compare_exchange_strong_explicit(
+        &instance->owner_stop_claimed, &unclaimed_outer, 1,
+        memory_order_acq_rel, memory_order_acquire));
 
     const size_t slot = (size_t)instance->ref.actor_slot;
     ensure(group.vm && slot < group.next_slot
