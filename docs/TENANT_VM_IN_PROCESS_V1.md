@@ -38,6 +38,16 @@ Outside guest mode the same fault is a host bug, and stays fatal. So every byte 
 reads or writes on a guest's behalf must be checked first: that is how the first version could be
 crashed by any tenant (see [Audit](#audit-findings)).
 
+**Stack quota.** `actor_stack_bytes` limits how much stack each turn of a VM's actors may use, host
+calls included. Every turn starts at the same depth on every carrier, so a second guard placed that far
+below the start gives every carrier the same limit, and an actor overflows at the same depth wherever it
+runs. The guard moves only when the next turn's quota differs from the last one's on that carrier, so
+VMs that share a quota cost no system call per turn. Running past the quota is an ordinary
+`StackOverflow`. With no quota (`0`, the default) a turn has the carrier's whole stack. A quota must be
+at least 320 KiB, and must fit within the carrier's stack together with its guard. If the guard cannot move,
+the turn runs without its quota and `stack_quota_misses` counts it, because the carrier's own guard
+still contains the overflow.
+
 Host calls run on the guest's stack, and a guest chooses how deep that is, so each host call checks for
 256 KiB of remaining stack before leaving guest mode. A shortage counts as out of carrier stack, like any other overflow. Carrier stacks must
 therefore be at least 512 KiB.

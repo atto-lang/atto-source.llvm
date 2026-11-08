@@ -86,6 +86,7 @@ constexpr std::size_t kCarrierGuardBytes = std::size_t{1} << 20;
 constexpr std::size_t kSignalStackBytes = std::size_t{64} << 10;
 constexpr std::uint32_t kMaxRestartBudget = 65535;
 constexpr std::uint32_t kMaxRestartWindowMs = 24u * 60 * 60 * 1000;
+constexpr std::size_t kTurnEntryBytes = std::size_t{128} << 10; // the host frames above a turn, with room to spare
 constexpr std::size_t kHostCallStackBytes = std::size_t{256} << 10; // malloc, locks, a first dynamic link
 constexpr std::uint32_t kAlignment = 16;
 constexpr std::uint32_t kMaxActorBytes = std::uint32_t{1} << 30;
@@ -199,6 +200,9 @@ struct Carrier {
     bool started = false;
     void* stack = nullptr;
     std::uint8_t* stack_guard_low = nullptr;
+    // A second guard, moved to wherever this turn's stack quota ends. Only this thread changes it.
+    std::uintptr_t quota_guard_low = 0;
+    std::uintptr_t stack_floor = 0; // lowest address this turn may use: the top of whichever guard applies
     void* signal_stack = nullptr;
 
     // Odd while inside a turn. Interrupts name the sequence they target, so a late signal
@@ -393,6 +397,7 @@ struct TenantVmHost::Core {
 
     std::atomic<std::uint64_t> queued_bytes{0};
     std::atomic<std::uint64_t> actor_restarts{0};
+    std::atomic<std::uint64_t> stack_quota_misses{0};
 
     // A min-heap on the time, of actors waiting to run again after a restart.
     struct Backoff {
@@ -699,6 +704,8 @@ struct TenantVmHost::Core {
         }
         const auto guard = reinterpret_cast<std::uintptr_t>(c->stack_guard_low);
         if (address >= guard && address - guard < kCarrierGuardBytes) return FailReason::StackOverflow;
+        if (c->quota_guard_low && address >= c->quota_guard_low && address - c->quota_guard_low < kCarrierGuardBytes)
+            return FailReason::StackOverflow;
         wild_accesses.fetch_add(1, std::memory_order_relaxed);
         if (limits.abort_on_wild_access) std::abort();
         return FailReason::WildAccess;
@@ -729,6 +736,34 @@ struct TenantVmHost::Core {
         return true;
     }
 
+    // Puts a guard where this turn's stack quota ends, measured from where turns start, which is the same
+    // depth on every carrier. The guard moves only when the quota differs from the last turn's, so a host
+    // whose VMs share a quota makes no system call here. If it cannot move, the turn runs with the
+    // carrier's whole stack: the quota is for predictable depth, and the carrier's guard still contains.
+    void place_stack_guard(Carrier* c, std::uintptr_t entry, std::uint32_t quota) {
+        const auto carrier_floor = reinterpret_cast<std::uintptr_t>(c->stack_guard_low) + kCarrierGuardBytes;
+        std::uintptr_t wanted = 0;
+        if (quota) {
+            const std::uintptr_t top = (entry - quota) & ~(page_size() - 1);
+            if (top >= carrier_floor + kCarrierGuardBytes) wanted = top - kCarrierGuardBytes;
+            else stack_quota_misses.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (wanted != c->quota_guard_low) {
+            if (wanted && mprotect(reinterpret_cast<void*>(wanted), kCarrierGuardBytes, PROT_NONE) != 0) {
+                stack_quota_misses.fetch_add(1, std::memory_order_relaxed);
+                wanted = 0;
+            }
+            if (c->quota_guard_low && c->quota_guard_low != wanted) {
+                // Restoring part of a mapping this thread owns. If even that fails, a guard would be left
+                // inside the stack where later turns expect memory, so the host cannot go on.
+                if (mprotect(reinterpret_cast<void*>(c->quota_guard_low), kCarrierGuardBytes, PROT_READ | PROT_WRITE) != 0)
+                    std::abort();
+            }
+            c->quota_guard_low = wanted;
+        }
+        c->stack_floor = wanted ? wanted + kCarrierGuardBytes : carrier_floor;
+    }
+
     TurnResult execute(Carrier* c, const std::shared_ptr<Vm>& shared, Actor& actor, std::uint32_t slot, const Mail& mail) {
         Vm& vm = *shared;
         TurnResult result;
@@ -757,6 +792,7 @@ struct TenantVmHost::Core {
         bool completed = false;
         // Pairs with fail(): it publishes the phase and then scans carriers, this announces
         // the turn and then reads the phase, so at least one of the two sees the other.
+        place_stack_guard(c, reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0)), vm.spec.limits.actor_stack_bytes);
         if (vm.current_phase() == Phase::Running || vm.current_phase() == Phase::Quiescing) {
             completed = enter_guest(c, kind, &api, actor.instance.get(), vm.cage, self, actor.region, scratch,
                                     input_length, output, capacity, &value);
@@ -920,8 +956,7 @@ struct TenantVmHost::Core {
     static Carrier* host_enter() {
         Carrier* c = t_carrier;
         const auto sp = reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0));
-        const auto stack_low = reinterpret_cast<std::uintptr_t>(c->stack_guard_low) + kCarrierGuardBytes;
-        if (sp < stack_low + kHostCallStackBytes) {
+        if (sp < c->stack_floor + kHostCallStackBytes) {
             c->in_guest = 0;
             c->fault_address = 0;
             c->trap_reason = FailReason::StackOverflow;
@@ -1295,6 +1330,7 @@ TenantVmHost::TenantVmHost(HostLimits limits) : core_(std::make_shared<Core>(lim
         carrier->stack = stack == MAP_FAILED ? nullptr : stack;
         carrier->signal_stack = signal_stack == MAP_FAILED ? nullptr : signal_stack;
         carrier->stack_guard_low = static_cast<std::uint8_t*>(carrier->stack);
+        carrier->stack_floor = reinterpret_cast<std::uintptr_t>(carrier->stack) + kCarrierGuardBytes;
         core->carriers.push_back(std::move(carrier));
         if (stack == MAP_FAILED || signal_stack == MAP_FAILED || mprotect(stack, kCarrierGuardBytes, PROT_NONE) != 0)
             give_up("TenantVmHost: carrier stack");
@@ -1351,7 +1387,10 @@ VmOpenResult TenantVmHost::open(VmSpec spec) {
         // A zero window would let no failure count, so the budget would never end a crash loop. The
         // budget's timestamps are host memory per actor, and these bounds keep the backoff from overflowing.
         l.restart_window_ms == 0 || l.restart_window_ms > kMaxRestartWindowMs || l.restart_budget > kMaxRestartBudget ||
-        l.restart_backoff_ms > l.restart_window_ms)
+        l.restart_backoff_ms > l.restart_window_ms ||
+        // A quota must leave room for host calls, and fit below where turns start with its own guard.
+        (l.actor_stack_bytes && (l.actor_stack_bytes < kHostCallStackBytes + (std::size_t{64} << 10) ||
+            std::uint64_t{l.actor_stack_bytes} + kCarrierGuardBytes + kTurnEntryBytes > core_->limits.carrier_stack_bytes)))
         return refuse(Status::InvalidArgument);
     if (!handlers_are_ours()) return refuse(Status::SignalHandlerLost);
 
@@ -1502,6 +1541,7 @@ HostStats TenantVmHost::stats() const {
     out.wild_accesses = core_->wild_accesses.load();
     out.queued_bytes = core_->queued_bytes.load();
     out.actor_restarts = core_->actor_restarts.load();
+    out.stack_quota_misses = core_->stack_quota_misses.load();
     return out;
 }
 

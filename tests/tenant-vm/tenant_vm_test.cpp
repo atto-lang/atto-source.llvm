@@ -1315,6 +1315,80 @@ void restart_limits_are_checked() {
     CHECK_STATUS(host.open(s).status, Status::InvalidArgument);
 }
 
+VmSpec stack_spec(const std::string& id, std::uint32_t stack_bytes) {
+    VmSpec s = spec(id);
+    s.limits.actor_stack_bytes = stack_bytes;
+    s.limits.restart_budget = 65535;
+    s.limits.restart_backoff_ms = 0;
+    return s;
+}
+
+// An actor's stack quota sets how deep it can go, the same on every carrier. Without one it gets the
+// carrier's whole stack.
+void an_actor_stack_quota_sets_its_depth() {
+    HostLimits limits;
+    limits.carriers = 4;
+    TenantVmHost host(limits);
+    auto small = host.open(stack_spec("small", 512 << 10));
+    auto whole = host.open(stack_spec("whole", 0));
+    REQUIRE_OK(small);
+    REQUIRE_OK(whole);
+    std::vector<VmActor> actors;
+    for (int i = 0; i < 8; ++i) actors.push_back(host.spawn_actor(small.handle, KIND_RESTARTABLE).actor);
+    auto deep = host.spawn_actor(whole.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(deep);
+    // Many turns at once, so that every carrier runs some: the same depth fits or fails on all of them.
+    for (int round = 0; round < 10; ++round) {
+        std::vector<std::future<TurnResult>> fits, fails;
+        for (auto& a : actors) fits.push_back(host.call(a, words({RESTART_RECURSE_N, 300})));
+        for (auto& a : actors) fails.push_back(host.call(a, words({RESTART_RECURSE_N, 700})));
+        for (auto& f : fits) CHECK_STATUS(f.get().status, Status::Ok);
+        for (auto& f : fails) {
+            const TurnResult r = f.get();
+            CHECK_STATUS(r.status, Status::ActorRestarted);
+            CHECK_REASON(r.failure, FailReason::StackOverflow);
+        }
+    }
+    CHECK_STATUS(host.call(deep.actor, words({RESTART_RECURSE_N, 2000})).get().status, Status::Ok);
+    CHECK(host.stats().stack_quota_misses == 0);
+}
+
+// One carrier runs VMs with different quotas in turn, and each gets its own.
+void stack_quotas_switch_between_vms() {
+    HostLimits limits;
+    limits.carriers = 1;
+    TenantVmHost host(limits);
+    auto small = host.open(stack_spec("small", 512 << 10));
+    auto large = host.open(stack_spec("large", 4 << 20));
+    auto whole = host.open(stack_spec("whole", 0));
+    auto a = host.spawn_actor(small.handle, KIND_RESTARTABLE);
+    auto b = host.spawn_actor(large.handle, KIND_RESTARTABLE);
+    auto c = host.spawn_actor(whole.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(a);
+    REQUIRE_OK(b);
+    REQUIRE_OK(c);
+    for (int round = 0; round < 5; ++round) {
+        CHECK_STATUS(host.call(a.actor, words({RESTART_RECURSE_N, 700})).get().status, Status::ActorRestarted);
+        CHECK_STATUS(host.call(b.actor, words({RESTART_RECURSE_N, 2000})).get().status, Status::Ok);
+        CHECK_STATUS(host.call(b.actor, words({RESTART_RECURSE_N, 5000})).get().status, Status::ActorRestarted);
+        CHECK_STATUS(host.call(c.actor, words({RESTART_RECURSE_N, 5000})).get().status, Status::Ok);
+        CHECK_STATUS(host.call(a.actor, words({RESTART_RECURSE_N, 300})).get().status, Status::Ok);
+    }
+    // Running out inside a host call is still only a stack overflow, at the quota and not the carrier's end.
+    const TurnResult r = host.call(a.actor, words({RESTART_STACK_IN_HOST_CALLS})).get();
+    CHECK_STATUS(r.status, Status::ActorRestarted);
+    CHECK_REASON(r.failure, FailReason::StackOverflow);
+    CHECK(host.snapshot(small.handle).phase == Phase::Running);
+}
+
+// A quota must leave room for host calls, and fit in the carrier's stack with its guard.
+void stack_quota_limits_are_checked() {
+    TenantVmHost host;
+    CHECK_STATUS(host.open(stack_spec("tiny", 64 << 10)).status, Status::InvalidArgument);
+    CHECK_STATUS(host.open(stack_spec("huge", 8 << 20)).status, Status::InvalidArgument);
+    CHECK_STATUS(host.open(stack_spec("fits", 2 << 20)).status, Status::Ok);
+}
+
 // Restart is for faults shown to be confined. Everything else still ends the VM.
 void an_unconfined_fault_still_fails_the_vm() {
     TenantVmHost host;
@@ -1452,6 +1526,9 @@ const Case cases[] = {
     {"the_restart_budget_refills_with_time", the_restart_budget_refills_with_time},
     {"a_failed_turn_leaves_nothing_outside_its_actor", a_failed_turn_leaves_nothing_outside_its_actor},
     {"restart_limits_are_checked", restart_limits_are_checked},
+    {"an_actor_stack_quota_sets_its_depth", an_actor_stack_quota_sets_its_depth},
+    {"stack_quotas_switch_between_vms", stack_quotas_switch_between_vms},
+    {"stack_quota_limits_are_checked", stack_quota_limits_are_checked},
     {"a_restart_waits_before_the_next_turn", a_restart_waits_before_the_next_turn},
     {"an_unconfined_fault_still_fails_the_vm", an_unconfined_fault_still_fails_the_vm},
     {"a_clean_stop_still_reports_failures", a_clean_stop_still_reports_failures},

@@ -85,6 +85,9 @@ struct VmLimits {
     std::uint64_t cpu_budget_ms = 0;       // cumulative turn time, 0 = unlimited
     // Restarts one actor may have in the window. One more failure ends that actor for good, and
     // the rest of the VM goes on. A crash loop has to end somewhere, and stored state can be its cause.
+    // Stack each turn may use, host calls included, the same on every carrier. 0 gives a turn the
+    // carrier's whole stack. Otherwise at least 320 KiB, and it must fit the carrier's stack with a guard.
+    std::uint32_t actor_stack_bytes = 0;
     std::uint32_t restart_budget = 3;          // at most 65535
     std::uint32_t restart_window_ms = 10000;   // 1 ms to 1 day
     std::uint32_t restart_backoff_ms = 10;     // before the next turn, doubling, capped by the window
@@ -178,6 +181,7 @@ struct HostStats {
     std::uint64_t kills_delivered = 0;
     std::uint64_t wild_accesses = 0;  // nonzero means a compiler-path bug, see HostLimits
     std::uint64_t queued_bytes = 0;
+    std::uint64_t stack_quota_misses = 0; // turns run without their stack quota, because the guard could not move
     std::uint64_t actor_restarts = 0;
 };
 
