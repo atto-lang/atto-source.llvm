@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/ActorRegionV1Guest.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
@@ -195,6 +196,7 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
 int main(int argc, char** argv) {
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
+    bool actor_region_v1_guest = false; // opt-in compiler-backed native class proof
     bool wasm32_target = false;
     bool cortex_m_target = false;
     bool target_seen = false;
@@ -220,7 +222,13 @@ int main(int argc, char** argv) {
     std::string coreLogLevel = envLevel ? envLevel : "off";
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
-        if (arg.rfind("--allocator-provider=", 0) == 0) {
+        if (arg == "--actor-region-v1-guest") {
+            if (actor_region_v1_guest) {
+                std::cerr << "duplicate actor-region-v1-guest option\n";
+                return 2;
+            }
+            actor_region_v1_guest = true;
+        } else if (arg.rfind("--allocator-provider=", 0) == 0) {
             if (allocator_provider_seen) {
                 std::cerr << "duplicate allocator-provider option\n";
                 return 2;
@@ -436,6 +444,26 @@ int main(int argc, char** argv) {
             admitted_provider_bits);
         source_module = ast.module;
         source_namespace = ast.namespace_name;
+
+        // Explicitly selected, compiler-backed experimental native guest path.
+        // It consumes the production parser/type/ownership-checked AST, not a
+        // text rewrite, an interpreter or an independently trusted fixture.
+        // Keep all ordinary LLVM/actor lowering untouched. This narrow slice
+        // rejects async, exceptions, mutation, ownership escapes and other
+        // unmodeled edges before emitting even one LLVM IR byte.
+        if (actor_region_v1_guest) {
+            if (wasm32_target || cortex_m_target || tree_shake ||
+                experimental_owned_int || experimental_rt_scalar_loop ||
+                native_hard_rt_profile || rt_check_only || rt_report_seen ||
+                constraint_descriptors_only || bounded_allocator_provider ||
+                isolate_entry_seen) {
+                throw std::runtime_error(
+                    "actor-region-v1 guest AOT rejects incompatible compiler profiles");
+            }
+            std::cout << oreslang::emit_actor_region_v1_guest_ir(ast);
+            std::cout.flush();
+            return 0;
+        }
 
         if (constraint_descriptors_only) {
             for (const auto& descriptor : ast.type_constraint_descriptors) {
