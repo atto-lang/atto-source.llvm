@@ -80,6 +80,19 @@ if(BUILD_TESTING)
         COMMAND oreslang-atto-saxpy-three-buffer-test)
     set_tests_properties(atto_gpu_saxpy_three_buffer_state_machine PROPERTIES TIMEOUT 30)
 
+    # Physical negative probe: undersized device buffers are refused before enqueue.
+    add_executable(oreslang-opencl-saxpy-buffer-capacity-probe
+        tests/opencl_saxpy_buffer_capacity_probe.cpp)
+    target_include_directories(oreslang-opencl-saxpy-buffer-capacity-probe PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-opencl-saxpy-buffer-capacity-probe PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+    target_compile_options(oreslang-opencl-saxpy-buffer-capacity-probe PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME atto_gpu_saxpy_buffer_capacity_physical_v1
+        COMMAND oreslang-opencl-saxpy-buffer-capacity-probe)
+    set_tests_properties(atto_gpu_saxpy_buffer_capacity_physical_v1 PROPERTIES
+        TIMEOUT 60 SKIP_RETURN_CODE 77)
+
     add_executable(oreslang-atto-saxpy-physical-probe
         tests/opencl_saxpy_physical_probe.cpp)
     target_include_directories(oreslang-atto-saxpy-physical-probe PRIVATE

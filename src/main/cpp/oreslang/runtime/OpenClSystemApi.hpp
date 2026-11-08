@@ -64,6 +64,7 @@ class SystemApi final : public Api, public SaxpyHardware {
     static constexpr cl_uint CL_DEVICE_ENDIAN_LITTLE = 0x1026;
     static constexpr cl_uint CL_DEVICE_NAME = 0x102B;
     static constexpr cl_uint CL_EVENT_COMMAND_EXECUTION_STATUS = 0x11D3;
+    static constexpr cl_uint CL_MEM_SIZE = 0x1102;
 
     using ContextNotify = void (*)(
             const char*, const void*, std::size_t, void*);
@@ -87,6 +88,8 @@ class SystemApi final : public Api, public SaxpyHardware {
         cl_mem (*create_buffer)(
                 cl_context, cl_mem_flags, std::size_t, void*, cl_int*) = nullptr;
         cl_int (*release_mem_object)(cl_mem) = nullptr;
+        cl_int (*get_mem_object_info)(
+                cl_mem, cl_uint, std::size_t, void*, std::size_t*) = nullptr;
         cl_program (*create_program_with_source)(
                 cl_context, cl_uint, const char**, const std::size_t*, cl_int*) = nullptr;
         cl_int (*build_program)(
@@ -225,6 +228,23 @@ public:
         delete prepared;
     }
 
+    // Driver-reported byte size of a memory object. Kernel/transfer bounds are
+    // checked against this, never against a caller-supplied row count, so a
+    // mismatched handle cannot turn the kernel's i < n guard into a device
+    // out-of-bounds access.
+    std::uint64_t buffer_bytes(cl_mem memory, const char* what) const {
+        if (!memory || !dispatch_.get_mem_object_info)
+            throw std::invalid_argument(std::string("OpenCL buffer size unavailable: ") + what);
+        std::size_t size = 0;
+        std::size_t written = 0;
+        require_success(dispatch_.get_mem_object_info(
+                memory, CL_MEM_SIZE, sizeof(size), &size, &written),
+                "clGetMemObjectInfo(CL_MEM_SIZE)");
+        if (written != sizeof(size) || size == 0)
+            throw std::runtime_error(std::string("OpenCL reported no buffer size: ") + what);
+        return static_cast<std::uint64_t>(size);
+    }
+
     Handle allocate(std::uint64_t bytes) override {
         if (bytes == 0
                 || bytes > maximum_allocation_bytes_
@@ -259,6 +279,8 @@ public:
             std::size_t length) override {
         if (!destination || !bytes || length == 0)
             throw std::invalid_argument("invalid OpenCL upload");
+        if (length > buffer_bytes(reinterpret_cast<cl_mem>(destination), "upload destination"))
+            throw std::invalid_argument("OpenCL upload exceeds destination buffer");
         auto event = std::make_unique<Event>();
         cl_event raw = nullptr;
         const auto status = dispatch_.enqueue_write_buffer(
@@ -336,6 +358,14 @@ public:
             x_mem == y_mem || x_mem == out_mem || y_mem == out_mem ||
             !std::isfinite(alpha) || rows == 0)
             throw std::invalid_argument("invalid three-buffer OpenCL SAXPY submission");
+        // The kernel reads x[i], y[i] and writes out[i] for every i < n.
+        if (rows > std::numeric_limits<std::uint64_t>::max() / sizeof(float))
+            throw std::invalid_argument("three-buffer SAXPY row count overflows bytes");
+        const std::uint64_t needed = rows * sizeof(float);
+        if (buffer_bytes(x_mem, "saxpy x") < needed
+                || buffer_bytes(y_mem, "saxpy y") < needed
+                || buffer_bytes(out_mem, "saxpy out") < needed)
+            throw std::invalid_argument("SAXPY n exceeds a bound device buffer's capacity");
         const cl_ulong n = rows;
         const std::size_t global[] = {checked_size(rows)};
         require_success(dispatch_.set_kernel_arg(
@@ -367,6 +397,8 @@ public:
             std::size_t length) override {
         if (!source || !bytes || length == 0)
             throw std::invalid_argument("invalid OpenCL download");
+        if (length > buffer_bytes(reinterpret_cast<cl_mem>(source), "download source"))
+            throw std::invalid_argument("OpenCL download exceeds source buffer");
         auto event = std::make_unique<Event>();
         cl_event raw = nullptr;
         const auto status = dispatch_.enqueue_read_buffer(
@@ -644,6 +676,7 @@ private:
         ORES_LOAD_OPENCL(flush, "clFlush");
         ORES_LOAD_OPENCL(create_buffer, "clCreateBuffer");
         ORES_LOAD_OPENCL(release_mem_object, "clReleaseMemObject");
+        ORES_LOAD_OPENCL(get_mem_object_info, "clGetMemObjectInfo");
         ORES_LOAD_OPENCL(create_program_with_source, "clCreateProgramWithSource");
         ORES_LOAD_OPENCL(build_program, "clBuildProgram");
         ORES_LOAD_OPENCL(release_program, "clReleaseProgram");
