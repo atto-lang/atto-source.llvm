@@ -558,6 +558,7 @@ void validate_i64_ownership(Program& program) {
         for (auto& task : function.source_tasks) {
             task.ownership_admitted = false;
             task.ownership_authority_fingerprint = 0;
+            task.ownership_boundary_identity = nullptr;
         }
         for (auto& pipeline : function.future_pipelines) {
             pipeline.ownership_admitted = false;
@@ -1448,6 +1449,7 @@ void validate_i64_ownership(Program& program) {
     }
     for (auto& [task, fingerprint] : task_authorities) {
         task->ownership_authority_fingerprint = fingerprint;
+        task->ownership_boundary_identity = task;
         task->ownership_admitted = true;
     }
     for (auto& function : program.functions)
