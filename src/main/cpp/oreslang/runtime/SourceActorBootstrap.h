@@ -45,6 +45,8 @@ void oreslang_source_actor_test_hold_scalar_checkpoint(int hold);
 int oreslang_source_actor_test_scalar_checkpoint_entered(void);
 uint64_t oreslang_source_actor_test_scalar_checkpoint_count(void* actor);
 uint64_t oreslang_source_actor_test_scalar_dispatched_steps(void* actor);
+/* Test-only nested interpreter entry mutation: cannot steal live PC/locals. */
+void oreslang_source_actor_test_reenter_scalar_vm_once(void);
 #endif
 
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
