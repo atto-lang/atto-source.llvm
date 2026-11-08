@@ -27,6 +27,17 @@ static void positives(void) {
     oreslang_int_array_set(r,a,4095,INT64_MAX);
     require(oreslang_int_array_get(r,a,0) == INT64_MIN);
     require(oreslang_int_array_get(r,a,4095) == INT64_MAX);
+    int64_t copy = 424242;
+    require(oreslang_int_array_try_get_copy(r,a,-1,&copy) == 0);
+    require(copy == 424242);
+    require(oreslang_int_array_try_get_copy(r,a,4096,&copy) == 0);
+    require(copy == 424242);
+    require(oreslang_int_array_try_get_copy(r,a,INT64_MAX,&copy) == 0);
+    require(copy == 424242);
+    require(oreslang_int_array_try_get_copy(r,a,0,&copy) == 1);
+    require(copy == INT64_MIN);
+    require(oreslang_int_array_try_get_copy(r,a,4095,&copy) == 1);
+    require(copy == INT64_MAX);
     oreslang_int_array_add(r,b,99);
     require(oreslang_int_array_get(r,b,0) == 99);
     oreslang_int_array_drop(r,a);
@@ -100,6 +111,16 @@ static void must_abort(int type) {
             (void)oreslang_int_array_new(r);
         }
 #endif
+        else if (type == 16) {
+            int64_t out = 0;
+            (void)oreslang_int_array_try_get_copy(other,a,-1,&out);
+        } else if (type == 17) {
+            (void)oreslang_int_array_try_get_copy(r,a,-1,NULL);
+        } else if (type == 18) {
+            int64_t out = 0;
+            oreslang_int_array_drop(r,a);
+            (void)oreslang_int_array_try_get_copy(r,a,-1,&out);
+        }
         else abort();
         _exit(0);
     }
@@ -113,6 +134,7 @@ int main(void) {
     positives();
 #if defined(__unix__) || defined(__APPLE__)
     for (int i = 0; i <= 14; ++i) must_abort(i);
+    for (int i = 16; i <= 18; ++i) must_abort(i);
 #ifdef ORESLANG_NATIVE_TEST_TOKEN_EXHAUSTION
     must_abort(15);
 #endif
