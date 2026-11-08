@@ -977,6 +977,14 @@ if(BUILD_TESTING)
             "-DBUILD=${CMAKE_CURRENT_BINARY_DIR}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/sealed_aot_profile_guard_selftest.cmake")
     set_tests_properties(native_sealed_aot_workspace_guard PROPERTIES TIMEOUT 30)
+    # Mock-tool regression: prove strict link-closure rejection without
+    # suggesting the fake compiler or Clang produced real guest evidence.
+    if(UNIX)
+        add_test(NAME native_sealed_aot_link_closure_sourcefree
+            COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-sealed-aot-link-closure.sh")
+        set_tests_properties(native_sealed_aot_link_closure_sourcefree
+            PROPERTIES TIMEOUT 45)
+    endif()
     # Positive compiler-only contracts must assemble the emitted IR, not just
     # accept an expected substring after the textual ModuleID header.
     if(ORE_CLANG)
