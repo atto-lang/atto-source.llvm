@@ -149,7 +149,7 @@ fnc touch(borrow mut Pair p): bool {
   return true;
 }
 fnc probe(borrow mut Pair p): bool {
-  return false xor touch(rt mut borrow p);
+  return false ^^ touch(rt mut borrow p);
 }
 pub fnc main(): int {
   let mut Pair p = new Pair();
@@ -249,8 +249,7 @@ def execute(cmd):
 
 
 def compile_and_run(root, name, source, expected, compiler, clang, sanitize):
-    extension = ".atto" if name.startswith("logical-word-") else ".ores"
-    src = root / (name + extension)
+    src = root / (name + ".ores")
     src.write_text(source, encoding="utf-8")
     produced = execute([compiler, "--tree-shake", str(src)])
     if "define class" in source:
@@ -291,19 +290,6 @@ def main():
         for name, (source, expected) in POSITIVE.items():
             compile_and_run(root, name, source, expected, a.compiler, a.clang, a.sanitize)
 
-        word_fixtures = Path(__file__).resolve().parent / "fixtures" / "logical-word-operators-v1"
-        # These are real .atto programs, not string-rewritten stand-ins.
-        for filename, expected in (
-            ("scalar-parity.atto", 42),
-            ("short-circuit-and.atto", 1),
-            ("short-circuit-or.atto", 1),
-            ("xor-eager.atto", 42),
-            ("xor-left-to-right.atto", 42),
-        ):
-            source = (word_fixtures / filename).read_text(encoding="utf-8")
-            name = "logical-word-" + filename.removesuffix(".atto")
-            compile_and_run(root, name, source, expected, a.compiler, a.clang, a.sanitize)
-
         for name, (source, diagnostic) in NEGATIVE.items():
             src = root / (name + ".ores")
             src.write_text(source, encoding="utf-8")
@@ -311,17 +297,6 @@ def main():
             assert rejected.returncode != 0 and not rejected.stdout, (
                 name, rejected.returncode, rejected.stdout)
             assert diagnostic in rejected.stderr, (name, diagnostic, rejected.stderr)
-
-        for filename in ("reject-int-and.atto", "reject-int-or.atto", "reject-int-xor.atto"):
-            name = "logical-word-" + filename.removesuffix(".atto")
-            source = (word_fixtures / filename).read_text(encoding="utf-8")
-            src = root / (name + ".atto")
-            src.write_text(source, encoding="utf-8")
-            rejected = execute([a.compiler, str(src)])
-            assert rejected.returncode != 0 and not rejected.stdout, (
-                name, rejected.returncode, rejected.stdout)
-            assert "logical operator requires bool" in rejected.stderr, (
-                name, rejected.stderr)
 
     print(
         "PASS:",
