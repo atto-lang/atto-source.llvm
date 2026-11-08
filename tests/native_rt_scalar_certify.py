@@ -168,7 +168,7 @@ def certify(repo: Path, expected_head: str, llvm_config: str, clang: str, out: P
     out = out.resolve()
     if repo.resolve() in out.parents or out == repo.resolve():
         raise GateFailed("artifacts must be stored outside the source checkout")
-    if out.exists() and any(out.iterdir()):
+    if out.exists() and (not out.is_dir() or any(out.iterdir())):
         raise GateFailed("evidence output directory must be new/empty")
     out.mkdir(parents=True, exist_ok=True)
     receipt = {"status": "NOT_CERTIFIED", "source": source, "toolchain": toolchain,
@@ -198,6 +198,13 @@ def certify(repo: Path, expected_head: str, llvm_config: str, clang: str, out: P
         command(["ctest", "--test-dir", str(build), "--output-on-failure", "--output-junit",
                  str(junit), "-R", expression], timeout=1800, log=out / "ctest.log")
         receipt["tests"] = verify_junit(junit)
+        # A source checkout can change while a long native build is running.
+        # Require the exact original head/tree/blobs again AFTER all tests;
+        # an exclusive isolated runner remains mandatory against TOCTOU.
+        post_source = verify_checkout(repo, expected_head)
+        if post_source != source:
+            raise GateFailed("source checkout changed during native certification")
+        receipt["post_build_source"] = post_source
         for binary in (build / "oreslang-llvmc", build / "oreslang-native-scalar-call-verifier-test"):
             if not binary.is_file():
                 raise GateFailed(f"required native test binary missing: {binary.name}")
