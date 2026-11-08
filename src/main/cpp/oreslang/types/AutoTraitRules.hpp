@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <set>
 #include <stdexcept>
 #include <vector>
@@ -37,6 +38,16 @@ struct AutoType {
     std::set<AutoTrait> negative;
 };
 
+// A single proof budget must flow through every child and trait check.
+// Otherwise an attacker-controlled recursive/wide type can reset the limit
+// at each nominal field, causing unbounded compilation work or stack depth.
+struct AutoTraitProofBudget {
+    std::size_t remaining = 4096;
+};
+inline constexpr std::size_t kAutoTraitMaxDepth = 128;
+
+inline Capabilities infer_auto_traits_bounded(
+        const AutoType& type, std::size_t depth, AutoTraitProofBudget& budget);
 inline Capabilities infer_auto_traits(const AutoType& type);
 
 inline const AutoType& exactly_one(const AutoType& type) {
@@ -45,10 +56,18 @@ inline const AutoType& exactly_one(const AutoType& type) {
     return type.parameters.front();
 }
 
-inline bool all_have(const std::vector<AutoType>& values, AutoTrait trait) {
+inline bool all_have_bounded(const std::vector<AutoType>& values,
+        AutoTrait trait, std::size_t depth, AutoTraitProofBudget& budget) {
     for (const auto& value : values)
-        if (!infer_auto_traits(value).has(trait)) return false;
+        if (!infer_auto_traits_bounded(value, depth, budget).has(trait)) return false;
     return true;
+}
+
+// Preserve the existing direct helper API for host callers; internal nominal
+// recursion must use all_have_bounded to retain the shared budget.
+inline bool all_have(const std::vector<AutoType>& values, AutoTrait trait) {
+    AutoTraitProofBudget budget;
+    return all_have_bounded(values, trait, 0, budget);
 }
 
 inline Capabilities apply_negative(Capabilities caps, const std::set<AutoTrait>& negative) {
@@ -67,7 +86,11 @@ inline Capabilities apply_negative(Capabilities caps, const std::set<AutoTrait>&
  * separate from Send: moving a unique owner never grants shared actor-domain
  * aliases to its backing allocation.
  */
-inline Capabilities infer_auto_traits(const AutoType& type) {
+inline Capabilities infer_auto_traits_bounded(
+        const AutoType& type, std::size_t depth, AutoTraitProofBudget& budget) {
+    if (depth >= kAutoTraitMaxDepth || budget.remaining == 0)
+        return {false, false, false};
+    --budget.remaining;
     Capabilities caps;
     switch (type.kind) {
     case AutoTypeKind::Scalar:
@@ -84,19 +107,19 @@ inline Capabilities infer_auto_traits(const AutoType& type) {
             break;
         }
         caps = {
-            all_have(type.parameters, AutoTrait::Send),
-            all_have(type.parameters, AutoTrait::Sync),
-            type.shareable_domain && all_have(type.parameters, AutoTrait::Share)
+            all_have_bounded(type.parameters, AutoTrait::Send, depth + 1, budget),
+            all_have_bounded(type.parameters, AutoTrait::Sync, depth + 1, budget),
+            type.shareable_domain && all_have_bounded(type.parameters, AutoTrait::Share, depth + 1, budget)
         };
         break;
     case AutoTypeKind::Box: {
-        const auto nested = infer_auto_traits(exactly_one(type));
+        const auto nested = infer_auto_traits_bounded(exactly_one(type), depth + 1, budget);
         caps = {nested.send, nested.sync, false};
         break;
     }
     case AutoTypeKind::Arc:
     case AutoTypeKind::Weak: {
-        const auto nested = infer_auto_traits(exactly_one(type));
+        const auto nested = infer_auto_traits_bounded(exactly_one(type), depth + 1, budget);
         const bool concurrent =
             type.shareable_domain && nested.send && nested.sync;
         caps = {concurrent, concurrent, concurrent && nested.share};
@@ -107,17 +130,17 @@ inline Capabilities infer_auto_traits(const AutoType& type) {
         caps = {false, false, false};
         break;
     case AutoTypeKind::RefCell: {
-        const auto nested = infer_auto_traits(exactly_one(type));
+        const auto nested = infer_auto_traits_bounded(exactly_one(type), depth + 1, budget);
         caps = {nested.send, false, false};
         break;
     }
     case AutoTypeKind::Mutex: {
-        const auto nested = infer_auto_traits(exactly_one(type));
+        const auto nested = infer_auto_traits_bounded(exactly_one(type), depth + 1, budget);
         caps = {nested.send, nested.send, false};
         break;
     }
     case AutoTypeKind::RwLock: {
-        const auto nested = infer_auto_traits(exactly_one(type));
+        const auto nested = infer_auto_traits_bounded(exactly_one(type), depth + 1, budget);
         caps = {nested.send, nested.send && nested.sync, false};
         break;
     }
@@ -133,6 +156,11 @@ inline Capabilities infer_auto_traits(const AutoType& type) {
         break;
     }
     return apply_negative(caps, type.negative);
+}
+
+inline Capabilities infer_auto_traits(const AutoType& type) {
+    AutoTraitProofBudget budget;
+    return infer_auto_traits_bounded(type, 0, budget);
 }
 
 } // namespace oreslang::types
