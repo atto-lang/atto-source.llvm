@@ -92,6 +92,12 @@ export function mutateActorWasmExport(wasm) {
   return output;
 }
 export function mutateActorWasmOutOfBounds(wasm) {
+  return mutateActorWasmFault(wasm,'read');
+}
+export function mutateActorWasmOutOfBoundsStore(wasm) {
+  return mutateActorWasmFault(wasm,'write');
+}
+function mutateActorWasmFault(wasm, kind) {
   const {source,sections}=inspect(wasm);
   const entry=messageExport(source,sections);
   const funcSection=only(sections,3);
@@ -121,9 +127,12 @@ export function mutateActorWasmOutOfBounds(wasm) {
         lp.i++; // locally declared numeric or ref type
       }
       need(lp.i<body.length,'empty function instruction stream');
-      // i32.const -1; i64.load align=0 offset=0; drop.
-      // This is valid guest bytecode but traps at effective address 0xffffffff.
-      const fault=Uint8Array.from([0x41,0x7f,0x29,0x00,0x00,0x1a]);
+      // Both variants are valid Wasm bytecode and must trap at address 0xffffffff.
+      // read: i32.const -1; i64.load align=0 offset=0; drop.
+      // write: i32.const -1; i64.const 42; i64.store align=0 offset=0.
+      const fault = kind==='write'
+        ? Uint8Array.from([0x41,0x7f,0x42,0x2a,0x37,0x00,0x00])
+        : Uint8Array.from([0x41,0x7f,0x29,0x00,0x00,0x1a]);
       body=concat(body.subarray(0,lp.i),fault,body.subarray(lp.i));
     }
     bodies.push(concat(writeU32(body.length),body));
