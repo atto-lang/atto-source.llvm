@@ -229,12 +229,22 @@ static void require_sealed_scalar_aot_graph(const oreslang::Program& program,
             if (cls.fields.empty() || cls.fields.size() > 16)
                 throw std::runtime_error("sealed class-field AOT requires 1-16 static fields");
             for (const auto& field : cls.fields) {
+                const auto* initial = field.initializer_expression.get();
                 if (!field.final_field || field.mutable_referent || field.int_array ||
                     !field.class_name.empty() || !field.sum_type.empty() ||
                     field.constructor_argument || field.scalar_type == ScalarType::String ||
-                    !field.initializer_expression ||
-                    (field.initializer_expression->kind != Expression::Kind::Integer &&
-                     field.initializer_expression->kind != Expression::Kind::Boolean))
+                    !initial ||
+                    (initial->kind != Expression::Kind::Integer &&
+                     initial->kind != Expression::Kind::Boolean) ||
+                    // A literal is a leaf in the checked AST. The kind alone
+                    // is not an authorization to ignore future child edges.
+                    initial->left || initial->right || initial->condition ||
+                    initial->condition_lhs || initial->condition_rhs ||
+                    initial->when_true || initial->when_false ||
+                    !initial->arguments.empty() ||
+                    !initial->argument_names.empty() ||
+                    initial->type_arguments_present ||
+                    !initial->type_arguments.empty())
                     throw std::runtime_error(
                         "sealed class fields require immutable literal scalar defaults");
             }
@@ -291,7 +301,8 @@ static void require_sealed_scalar_aot_graph(const oreslang::Program& program,
                     !local.new_class || local.record_view || local.move_class ||
                     !local.move_source.empty() || local.initializer ||
                     !local.constructor_arguments.empty() || local.heap_owned ||
-                    local.int_array || !local.sum_type.empty())
+                    local.int_array || !local.sum_type.empty() ||
+                    local.owner_mutable || local.field_mutable)
                     throw std::runtime_error(
                         "sealed class-field AOT requires a fresh stack-only class local");
             } else if (local.new_class || local.record_view || local.move_class ||
@@ -306,7 +317,11 @@ static void require_sealed_scalar_aot_graph(const oreslang::Program& program,
         // establish field identity: a future expression kind must not get
         // implicit AOT admission merely by reporting StateRead.
         std::unordered_map<std::string, const ClassDecl*> owned_locals;
+        std::unordered_set<std::string> local_names;
         for (const auto& local : function.locals) {
+            if (!local_names.insert(local.name).second)
+                throw std::runtime_error(
+                    "sealed AOT rejects duplicate local binding identities");
             if (local.class_name.empty()) continue;
             const auto cls = std::find_if(
                 program.classes.begin(), program.classes.end(),
@@ -354,10 +369,37 @@ static void require_sealed_scalar_aot_graph(const oreslang::Program& program,
         };
         const auto verify_statement = [&](const auto& self,
                                          const Statement& statement) -> void {
+            // This list is explicit: a new AST statement kind must never
+            // inherit admission by relying on a stale effect scanner.
+            switch (statement.kind) {
+                case Statement::Kind::Call:
+                case Statement::Kind::Conditional:
+                case Statement::Kind::ScopedLocal:
+                case Statement::Kind::Return:
+                    break;
+                case Statement::Kind::FieldWrite:
+                case Statement::Kind::ScalarWrite:
+                case Statement::Kind::Defer:
+                case Statement::Kind::ArrayCommitFilled:
+                case Statement::Kind::ForEach:
+                case Statement::Kind::ForIndex:
+                default:
+                    throw std::runtime_error(
+                        "sealed AOT rejects unmodeled or mutating statement kinds");
+            }
             if (statement.branch_local) {
+                if (owned_locals.count(statement.branch_local->name))
+                    throw std::runtime_error(
+                        "sealed class-field AOT rejects shadowed class owner");
                 if (!statement.branch_local->class_name.empty() ||
                     statement.branch_local->new_class ||
-                    statement.branch_local->record_view)
+                    statement.branch_local->record_view ||
+                    statement.branch_local->move_class ||
+                    !statement.branch_local->move_source.empty() ||
+                    statement.branch_local->heap_owned ||
+                    statement.branch_local->int_array ||
+                    !statement.branch_local->sum_type.empty() ||
+                    !statement.branch_local->constructor_arguments.empty())
                     throw std::runtime_error(
                         "sealed class-field AOT rejects unverified scoped class owners");
                 verify_expression(verify_expression,
