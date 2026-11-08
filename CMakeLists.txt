@@ -5,6 +5,28 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Portable fail-closed CFG proof: works without installed LLVM headers or the
+# native Oreslang compiler. This gate is intentionally NOT evidence of actual
+# source-to-AOT guest execution, which requires the full compiler CTest.
+option(ORESLANG_METERED_CFG_HOST_ONLY
+    "Build only the standalone metered CFG cycle-proof CTest" OFF)
+if(ORESLANG_METERED_CFG_HOST_ONLY)
+    include(CTest)
+    if(NOT BUILD_TESTING)
+        message(FATAL_ERROR "CFG cycle proof requires BUILD_TESTING=ON")
+    endif()
+    add_executable(oreslang-native-metered-cfg-verifier-test
+        tests/native_metered_cfg_verifier_test.cpp)
+    target_include_directories(oreslang-native-metered-cfg-verifier-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-metered-cfg-verifier-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_metered_cfg_cycles_fail_closed
+        COMMAND oreslang-native-metered-cfg-verifier-test)
+    set_tests_properties(native_metered_cfg_cycles_fail_closed PROPERTIES TIMEOUT 30)
+    return()
+endif()
+
 # Isolated native host test entrypoint: no LLVM development package, Rust
 # harness, guest frontend or network access is required to verify the real
 # C ActorArena + C++20 proxy slab + actor-owned scheduler contract.
