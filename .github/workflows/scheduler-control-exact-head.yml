@@ -69,7 +69,17 @@ jobs:
           ORES_NIO_EXPECT_HEAD: ${{ github.sha }}
         run: |
           set -euo pipefail
-          bash scripts/test-native-vm-nio-host-sanitizers.sh
+          # Retain an execution receipt per toolchain and insist on the
+          # CONTROL and injected pthread-create cases independently.
+          proof_log="$(mktemp)"
+          trap 'rm -f "$proof_log"' EXIT
+          bash scripts/test-native-vm-nio-host-sanitizers.sh | tee "$proof_log"
+          for cc in gcc clang; do
+            grep -Fxq "PASS: $cc VM main CONTROL thread startup and retirement (ASan+UBSan)" "$proof_log" \
+              || { echo "::error::Missing CONTROL lifecycle receipt for $cc"; exit 1; }
+            grep -Fxq "PASS: $cc CONTROL pthread-create failure and retry (ASan+UBSan)" "$proof_log" \
+              || { echo "::error::Missing pthread-create retry receipt for $cc"; exit 1; }
+          done
       - name: Certify executed HOST-only sanitizer gate and source identity
         shell: bash
         run: |
