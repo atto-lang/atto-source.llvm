@@ -118,3 +118,55 @@ the compiler's ownership CFG and the full transitive native linker
 closure are reviewed should `sealed-class-fields-v1` be expanded or
 a separate `actor-region-v1` profile be enabled. Preserve existing
 profiles and default code paths.
+
+## Compiler-facing guest sidecar prototype (host ABI only)
+
+`ActorRegionGuestV1.{h,c}` is an intermediate bridge between the trusted
+host ABI above and a future compiler profile. Its current semantics are
+intentionally narrower than the actor scheduler:
+
+- `begin` mints a host identity and opens one prefaulted region on the
+  current physical thread. The source guest supplies neither actor id,
+  incarnation nor turn credentials.
+- `alloc` returns only the fixed-width 32-bit region offset. The complete
+  `OresActorRegionV1Ref` remains in a trusted thread-local sidecar indexed by
+  the physical slot.
+- checked i64 field reads/writes and drops resolve the offset to that exact
+  sidecar ref before calling the authenticated ActorRegionV1 API.
+- `end` rejects any remaining live object, leaves the physical turn, retires
+  the region and requires successful quiescent destruction. It does not sweep
+  leaked objects as a substitute for generated destructors.
+
+**ABA constraint:** a bare compact offset cannot distinguish an old reference
+from a new object at the same physical slot. The guest bridge therefore marks
+every slot as issued for the whole scope and aborts if the allocator attempts
+to reuse it after drop. This v1 contract intentionally bounds the number of
+allocations to the configured slot count, not merely the peak live-object
+count. A future ABI may use a distinct opaque generation-bearing guest handle,
+but it must not pretend the raw 32-bit offset is a capability.
+
+**Execution constraint:** this bridge is thread-affine and synchronous. It
+does not integrate with `NativeActorScheduler`, actor migration, task
+continuations, cancellation, FFI callbacks or concurrent regions. It is not
+safe to use across `await` or from multiple worker threads. The host
+`abort()` behavior is still fail-stop, so this is not a production sandbox
+or a recoverable guest exception ABI.
+
+The CTest `native_actor_region_guest_v1_sidecar_contract_host_only` exercises
+allocation, checked reads/writes, explicit drops, leak refusal, stale/double
+drop, forged offsets and no-reuse ABA refusal. It is host-only evidence until
+built and executed on a trusted exact source head. **No compiler lowering or
+sealed AOT linker admission is included in this change.**
+
+### Next compiler integration gate
+
+A compiler may only emit this bridge after an independent audit and test
+execution. The restricted source profile must keep class owners opaque, place
+offsets only in compiler-generated storage, forbid user integer conversion,
+unsafe/FFI calls and suspension, statically assign every object slot, and
+insert `guest_v1_drop` on every reachable exit. The native `main` wrapper
+must bracket the guest entry with `guest_v1_begin/end`; no asynchronous or
+general actor code can enter this ABI. Sealed AOT must continue to reject
+these newly discovered imports until the transitive runtime dependency closure
+and process fault boundary are certified. The existing sealed scalar/class
+profiles and default codegen remain unchanged.
