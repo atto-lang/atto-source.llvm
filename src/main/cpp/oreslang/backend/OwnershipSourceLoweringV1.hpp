@@ -79,7 +79,7 @@ public:
                       initial->condition_lhs || initial->condition_rhs ||
                       initial->when_true || initial->when_false ||
                       !initial->arguments.empty() || !initial->argument_names.empty() ||
-                      !initial->type_arguments.empty() || initial->type_arguments_present,
+                      !initial->type_arguments.empty() || initial->type_arguments_present || !initial->sum_type.empty(),
                       "class field is not an immutable literal scalar");
         }
 
@@ -95,14 +95,14 @@ public:
                       !expression->left->type_arguments.empty() ||
                       expression->left->type_arguments_present ||
                       !expression->left->sum_type.empty() ||
-                      !expression->left->arguments.empty() ||
+                      !expression->left->arguments.empty() || !expression->left->argument_names.empty() || expression->left->type_arguments_present || !expression->left->sum_type.empty() ||
                       !expression->left->type_arguments.empty() ||
                       expression->right || expression->condition ||
                       expression->condition_lhs || expression->condition_rhs ||
                       expression->when_true || expression->when_false ||
                       !expression->arguments.empty() ||
                       !expression->argument_names.empty() ||
-                      !expression->type_arguments.empty() || expression->type_arguments_present,
+                      !expression->type_arguments.empty() || expression->type_arguments_present || !expression->sum_type.empty(),
                       "field access is not a direct owner.field expression");
             const auto found = owner_ids.find(expression->left->name);
             if (found == owner_ids.end()) reject("field access uses a non-owned receiver");
@@ -123,13 +123,13 @@ public:
                   guard.condition->right->condition_rhs ||
                   guard.condition->right->when_true ||
                   guard.condition->right->when_false ||
-                  !guard.condition->right->arguments.empty() ||
+                  !guard.condition->right->arguments.empty() || !guard.condition->right->argument_names.empty() || guard.condition->right->type_arguments_present || !guard.condition->right->sum_type.empty() ||
                   !guard.condition->right->type_arguments.empty() ||
                   guard.condition->condition || guard.condition->condition_lhs ||
                   guard.condition->condition_rhs || guard.condition->when_true ||
                   guard.condition->when_false || !guard.condition->arguments.empty() ||
                   !guard.condition->argument_names.empty() ||
-                  !guard.condition->type_arguments.empty() ||
+                  !guard.condition->type_arguments.empty() || !guard.condition->sum_type.empty() ||
                   guard.condition->type_arguments_present,
                   "guard is not a pure equality against an integer literal");
 
