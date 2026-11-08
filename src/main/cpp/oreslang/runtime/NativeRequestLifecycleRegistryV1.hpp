@@ -29,6 +29,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -102,6 +103,31 @@ public:
             if (!entry->finished.load(std::memory_order_acquire) ||
                 !entry->cleaned.load(std::memory_order_acquire))
                 std::terminate();
+    }
+
+    // Trusted host CONTROL bootstrap: register a pending-envelope
+    // revocation callback before any attached actor can STOP. The callback
+    // executes exactly once per stopped generation on the CONTROL worker,
+    // AFTER request admission has closed and OUTSIDE the registry/scheduler
+    // locks. It must be nonblocking and reclaim values outside its table
+    // mutex; captured state must be lifetime-safe (weak_ptr recommended).
+    // No callback is accepted after a STOP notification or shutdown.
+    using StopCleanupV1 = std::function<void(OresNativeActorRef)>;
+    bool register_stop_cleanup(StopCleanupV1 cleanup) {
+        if (!cleanup ||
+            ores_native_actor_scheduler_is_any_current_carrier_v1())
+            return false;
+        auto hook = std::make_shared<StopCleanupV1>(std::move(cleanup));
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (shutdown_ || stop_cleanups_.size() >= 64) return false;
+        for (const auto& entry : entries_) {
+            if (entry->notified.load(std::memory_order_acquire) ||
+                ores_native_actor_scheduler_is_stopping_v1(
+                    scheduler_, entry->actor))
+                return false;
+        }
+        stop_cleanups_.push_back(std::move(hook));
+        return true;
     }
 
     bool attach(OresNativeActorRef actor) {
@@ -230,6 +256,22 @@ private:
                     } catch (...) {
                         started = false;
                     }
+                    if (started) {
+                        // Snapshot callback pointers while holding the
+                        // registry lock, invoke only after releasing it.
+                        // At most 64 hooks; no scheduler carrier is held.
+                        try {
+                            std::vector<std::shared_ptr<StopCleanupV1>> hooks;
+                            {
+                                std::lock_guard<std::mutex> lock(mutex_);
+                                hooks = stop_cleanups_;
+                            }
+                            for (const auto& hook : hooks)
+                                (*hook)(selected->actor);
+                        } catch (...) {
+                            started = false;
+                        }
+                    }
                     if (!started) {
                         selected->cleaned.store(false, std::memory_order_release);
                         selected->finished.store(true, std::memory_order_release);
@@ -259,6 +301,7 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable changed_;
     std::vector<std::unique_ptr<Entry>> entries_;
+    std::vector<std::shared_ptr<StopCleanupV1>> stop_cleanups_;
     bool shutdown_ = false;
     std::thread control_;
 };
