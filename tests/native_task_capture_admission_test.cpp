@@ -1,5 +1,9 @@
 #include "oreslang/types/TaskCaptureAdmission.hpp"
 
+// Ownership tests are safety gates: Release builds must execute assertions.
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <cassert>
 #include <cstdint>
 #include <functional>
@@ -133,6 +137,57 @@ int main() {
                 &boundary_a, 9, TaskExecutionDomain::Cpu,
                 {{"arc_refcell", TaskCaptureSource::OwnedValue,
                     wrapped(AutoTypeKind::Arc, refcell, true)}});
+        },
+        "Send proof");
+
+
+    // Send does not imply Copy. A unique owned Box/RefCell or a nominal
+    // value can move between Tasks, but duplicating its ownership is invalid.
+    for (const auto kind : {AutoTypeKind::Box, AutoTypeKind::RefCell,
+                            AutoTypeKind::Mutex, AutoTypeKind::RwLock}) {
+        rejects(
+            [&] {
+                TaskCaptureAdmission::admit(
+                    &boundary_a, 9, TaskExecutionDomain::Cpu,
+                    {{"send_but_not_copy", TaskCaptureSource::CopyValue,
+                      wrapped(kind, scalar())}});
+            },
+            "independent Copy proof");
+    }
+    AutoType owned_nominal;
+    owned_nominal.kind = AutoTypeKind::Nominal;
+    owned_nominal.complete_nominal_layout = true;
+    owned_nominal.parameters.push_back(scalar());
+    rejects(
+        [&] {
+            TaskCaptureAdmission::admit(
+                &boundary_a, 9, TaskExecutionDomain::Cpu,
+                {{"nominal", TaskCaptureSource::CopyValue, owned_nominal}});
+        },
+        "independent Copy proof");
+
+    // A forged Scalar/Dyn type shape with a hidden Rc payload must not
+    // acquire Send/Sync from its outer label.
+    AutoType malformed_scalar = scalar();
+    malformed_scalar.parameters.push_back(
+        wrapped(AutoTypeKind::Rc, scalar()));
+    rejects(
+        [&] {
+            TaskCaptureAdmission::admit(
+                &boundary_a, 9, TaskExecutionDomain::Cpu,
+                {{"hidden_rc", TaskCaptureSource::CopyValue, malformed_scalar}});
+        },
+        "Send proof");
+    AutoType malformed_dyn;
+    malformed_dyn.kind = AutoTypeKind::Dyn;
+    malformed_dyn.dyn_bounds = {AutoTrait::Send, AutoTrait::Sync, AutoTrait::Share};
+    malformed_dyn.shareable_domain = true;
+    malformed_dyn.parameters.push_back(wrapped(AutoTypeKind::Rc, scalar()));
+    rejects(
+        [&] {
+            TaskCaptureAdmission::admit(
+                &boundary_a, 9, TaskExecutionDomain::Cpu,
+                {{"dyn_hidden_rc", TaskCaptureSource::OwnedValue, malformed_dyn}});
         },
         "Send proof");
 
