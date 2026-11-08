@@ -49,11 +49,18 @@ public:
     BasicSourceCooperationQuantum(BasicSourceCooperationQuantum&&) = delete;
     BasicSourceCooperationQuantum& operator=(BasicSourceCooperationQuantum&&) = delete;
 
-    // Calling this after await restarts *only* the fairness quantum.
+    // Calling this after await restarts *only* the per-dispatch fairness
+    // counter/clock. A watchdog or overdue cooperation request survives
+    // suspension and carrier migration until an actual legal handoff calls
+    // recordedCooperate(). Erasing debt here would lose critical-exit wakeup.
     void beginDispatch() noexcept {
+        // A caller may resume a task after its 512-backedge cap while the
+        // no-yield scope was still live. Latch debt before resetting the
+        // transient counter; resetting must never forgive overdue work.
+        pendingHandoff_ = pendingHandoff_ ||
+            backedges_ >= kMaxBackedgesPerDispatch;
         dispatchStarted_ = Clock::now();
         backedges_ = 0;
-        pendingHandoff_ = false;
     }
 
     // One cheap integer counter/bit-mask on the committed loop backedge.
