@@ -593,10 +593,20 @@ if(BUILD_TESTING)
     # it never edits the source checkout or uploads any private source.
     if(UNIX)
         add_test(NAME native_rt_scalar_exact_tree_preflight_negatives
-            COMMAND "${Python3_EXECUTABLE}"
+            COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_certify_test.py")
         set_tests_properties(native_rt_scalar_exact_tree_preflight_negatives
             PROPERTIES TIMEOUT 45)
+
+        # Synthetic CMake/CTest plumbing test only: deliberately fake C
+        # targets, NEVER a proof of real LLVM guest AOT execution.
+        add_test(NAME native_rt_scalar_synthetic_certification_mechanics
+            COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_certify_smoke.py")
+        set_tests_properties(native_rt_scalar_synthetic_certification_mechanics
+            PROPERTIES TIMEOUT 120)
     endif()
     # Portable regression for the emitted IR ABI/import scanner; catches
     # broken escaping or relaxed call matching without LLVM C++ headers.
