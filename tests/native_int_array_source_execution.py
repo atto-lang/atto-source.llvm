@@ -251,9 +251,11 @@ def verify(compiler: Path, clang: Path, root: Path, sanitized: bool):
                 raise AssertionError(f"{name}: legacy aborting allocator remains in generated IR")
             if name == "checked-copy-option-hit-miss":
                 for required in (b"@oreslang_int_array_try_get_copy",
-                                 b"@ores_record_new", b"@ores_record_region_begin"):
+                                 b"@ores_record_new", b"@ores_record_region_begin",
+                                 b"array.copy.tag.invalid:", b"array.copy.option.invalid:",
+                                 b"@llvm.trap"):
                     if required not in ir:
-                        raise AssertionError(f"{name}: missing compiler-owned Option ABI {required!r}")
+                        raise AssertionError(f"{name}: missing checked Option ABI guard {required!r}")
             if not ir or b"define i32 @main()" not in ir:
                 raise AssertionError(f"{name}: missing native compiler-generated entrypoint")
             ll = work / f"{name}.ll"
@@ -274,6 +276,49 @@ def verify(compiler: Path, clang: Path, root: Path, sanitized: bool):
                 raise AssertionError(
                     f"{name}: native exit={result.returncode}, expected={exit_code}, "
                     f"stdout={result.stdout!r}, stderr={result.stderr!r}")
+        # Corrupt ABI status and failed Option record allocation must never
+        # become a guest Some/None. Linux-only link-time fault injection tests
+        # the ACTUAL compiled .ores source, not a host-only ABI fixture.
+        if sys.platform.startswith("linux") and not sanitized:
+            injected = work / "checked-copy-fault-injection.c"
+            injected.write_text("""#include "oreslang/runtime/NativeIntArrayRegion.h"
+#include "oreslang/runtime/NativeRecordRegion.h"
+int __wrap_oreslang_int_array_try_get_copy(
+    OresNativeIntArrayRegion* r, OresNativeIntArrayHandle h,
+    int64_t index, int64_t* out) {
+  (void)r; (void)h; (void)index;
+  if (out) *out = 42;
+  return 2; /* malformed tag must not become Some */
+}
+int64_t __wrap_ores_record_new(
+    int64_t schema, int64_t fields, const int64_t* values) {
+  (void)schema; (void)fields; (void)values;
+  return 0; /* simulated exhausted record region */
+}
+""", encoding="utf-8")
+            ll = work / "checked-copy-option-hit-miss.ll"
+            for target, flag in (
+                ("invalid-presence", "oreslang_int_array_try_get_copy"),
+                ("unallocated-option", "ores_record_new"),
+            ):
+                exe = work / ("checked-copy-" + target)
+                link = [
+                    str(clang), "-O1", "-Wno-override-module", "-std=c11",
+                    "-Wl,--wrap=" + flag,
+                    "-x", "ir", str(ll), "-x", "c", str(c_runtime),
+                    str(record_runtime), str(injected),
+                    "-I", str(include), "-o", str(exe),
+                ]
+                linked = run(link)
+                if linked.returncode != 0:
+                    raise AssertionError(
+                        f"{target}: fault-injection guest link failed: {linked.stderr!r}")
+                observed = run([str(exe)])
+                if observed.returncode not in (-signal.SIGILL, -signal.SIGTRAP) or observed.stdout:
+                    raise AssertionError(
+                        f"{target}: expected llvm.trap without a guest result, "
+                        f"rc={observed.returncode}, stdout={observed.stdout!r}, "
+                        f"stderr={observed.stderr[:1200]!r}")
         # Invalid native accesses must terminate by the runtime bounds guard,
         # not by an LLVM miscompile or by ordinary successful process exit.
         # The ABI deliberately uses SIGABRT for invalid accesses. This is a
