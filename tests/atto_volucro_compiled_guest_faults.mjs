@@ -69,6 +69,7 @@ async function hashFile(path) {
   for await (const chunk of createReadStream(path)) hash.update(chunk);
   return hash.digest('hex');
 }
+const pinnedVmBinarySha=await hashFile(vmBinary);
 const temp=mkdtempSync(join(tmpdir(),'atto-volucro-negative-'));
 function runVm(file){
   return command(vmBinary,[file],{cwd:volucroRoot});
@@ -117,11 +118,13 @@ try {
   // This recovery is a NEW VM invocation, not evidence of same-VM sibling
   // survival. Separate Volucro vm-core tests must prove same-VM survival.
   expectPositive(original,'recovery control');
+  assert.equal(await hashFile(vmBinary),pinnedVmBinarySha,
+    'Volucro guest runner binary changed between positive and negative probes');
   console.log(JSON.stringify({status:'COMPILED_WASM_MUTATION_GUEST_EXECUTED',
     evidence_scope:'actual AttoLang LLVM compiler -> Wasm mutation -> Volucro Wasmi, process recovery only',
     not_proved:['source-level malicious actor','same-VM sibling survival','OS process sandbox','native LLVM arbitrary-pointer isolation'],
     llvm_head:llvmHead,volucro_head:volucroHead,node_engine_version:process.version,
-    volucro_native_guest_binary_sha256:await hashFile(vmBinary),
+    volucro_native_guest_binary_sha256:pinnedVmBinarySha,
     source_sha256:wasmSha256(source),compiler_sha256:wasmSha256(readFileSync(options.get('--compiler'))),
     validated_actor_memory_pages:compiledProfile.memory,
     original_wasm_sha256:wasmSha256(baseline),missing_abi_sha256:wasmSha256(abi),oob_load_sha256:wasmSha256(fault),oob_store_sha256:wasmSha256(storeFault),
