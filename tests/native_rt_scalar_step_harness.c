@@ -68,6 +68,12 @@ static void require_guest_trap(int scenario) {
                  frame.counter = 1001;
                  oreslang_rt_scalar_frame_cancel(&frame);
                  (void)oreslang_rt_scalar_frame_step(&frame, 1); break;
+        case 14: oreslang_rt_scalar_frame_init(&frame);
+                 frame.state = 2; frame.counter = 999; /* forged DONE */
+                 (void)oreslang_rt_scalar_frame_step(&frame, 1); break;
+        case 15: oreslang_rt_scalar_frame_init(&frame);
+                 frame.state = 2; frame.counter = 999; /* forged DONE */
+                 oreslang_rt_scalar_frame_cancel(&frame); break;
         default: _Exit(99);
         }
         _Exit(0); /* An invalid operation returning constitutes a failure. */
@@ -256,7 +262,7 @@ int main(void) {
     CHECK(oreslang_rt_scalar_frame_step(a, 512) == 0);
     CHECK(a->counter == 1000);
 #ifdef __linux__
-    for (int scenario = 0; scenario != 14; ++scenario)
+    for (int scenario = 0; scenario != 16; ++scenario)
         require_guest_trap(scenario);
 #endif
     require_bounded_peer_progress();
