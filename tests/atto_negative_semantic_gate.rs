@@ -142,6 +142,26 @@ fn compile_bounded(compiler: &Path, root: &Path, source: &Path,
         .map_err(|_| "compiler stderr pipe did not close".to_owned())??;
     Ok((status, out, err))
 }
+// This exact-head workflow builds a Linux C++ native executable. A shell
+// script masquerading as ORESLANG_LLVMC must never earn compiler proof.
+fn is_native_elf_magic(bytes: [u8; 4]) -> bool {
+    bytes == [0x7f, b'E', b'L', b'F']
+}
+#[cfg(not(test))]
+fn native_compiler_file(path: &Path) -> Result<(), String> {
+    let meta = std::fs::symlink_metadata(path)
+        .map_err(|_| "native compiler missing".to_owned())?;
+    if !meta.file_type().is_file() || meta.file_type().is_symlink() {
+        return Err("compiler must be a regular native executable, not a symlink".into());
+    }
+    let mut input = std::fs::File::open(path).map_err(|_| "compiler open failed".to_owned())?;
+    let mut magic = [0; 4];
+    input.read_exact(&mut magic).map_err(|_| "compiler header truncated".to_owned())?;
+    if !is_native_elf_magic(magic) {
+        return Err("compiler must be a native Linux ELF, not a script/interpreter".into());
+    }
+    Ok(())
+}
 fn safe_fixture_path(path: &str) -> bool {
     !path.starts_with('/') && !path.contains('\\') && path.ends_with(".atto") &&
         path.split('/').all(|part| !part.is_empty() && part != "." && part != "..")
@@ -189,9 +209,10 @@ fn run() -> Result<(), String> {
     let compiler = env::var("ORESLANG_LLVMC")
         .map_err(|_| "ORESLANG_LLVMC absolute compiler path required".to_owned())?;
     let compiler = Path::new(&compiler);
-    if !compiler.is_absolute() || !compiler.is_file() {
-        return Err("real LLVM compiler executable missing".into());
+    if !compiler.is_absolute() {
+        return Err("compiler path must be absolute".into());
     }
+    native_compiler_file(compiler)?;
     let tree = git(&root, &["rev-parse", "HEAD^{tree}"])?;
     let script = "tests/atto_negative_semantic_gate.rs";
     if git(&root, &["rev-parse", &format!("HEAD:{script}")])?
@@ -401,6 +422,13 @@ mod tests {
         assert!(result.unwrap_err().contains("64KiB cap"));
     }
 
+    #[test]
+    fn compiler_file_magic_denies_host_script_and_forged_text() {
+        assert!(is_native_elf_magic([0x7f, b'E', b'L', b'F']));
+        assert!(!is_native_elf_magic([b'#', b'!', b'/', b'b']));
+        assert!(!is_native_elf_magic([b'M', b'Z', 0, 0]));
+        assert!(!is_native_elf_magic([0, 0, 0, 0]));
+    }
     #[test]
     fn head_and_blob_identifiers_are_not_any_string() {
         assert!(!is_lower_sha40(""));
