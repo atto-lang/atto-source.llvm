@@ -7,8 +7,9 @@
 using namespace oreslang;
 #define CHECK(x) do { if (!(x)) { std::fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #x); return false; } } while (0)
 
-static OwnershipV1Op op(OwnershipV1OpKind kind, std::size_t owner = 0) {
-    return {kind, owner};
+static OwnershipV1Op op(OwnershipV1OpKind kind, std::size_t owner = 0,
+                         std::size_t target = static_cast<std::size_t>(-1)) {
+    return {kind, owner, target};
 }
 static OwnershipV1Graph graph(std::size_t owners, std::size_t blocks = 1) {
     OwnershipV1Graph g;
@@ -32,13 +33,18 @@ static bool normal_cleanup_reverse_order() {
     }
     return true;
 }
-static bool take_disarms_cleanup() {
-    auto g = graph(2);
-    g.blocks[0].operations = {op(OwnershipV1OpKind::Create,0),op(OwnershipV1OpKind::Create,1),op(OwnershipV1OpKind::Take,1),op(OwnershipV1OpKind::ExitNormal)};
+static bool take_transfers_to_destination() {
+    auto g = graph(3);
+    g.blocks[0].operations = {
+        op(OwnershipV1OpKind::Create,0),
+        op(OwnershipV1OpKind::Create,1),
+        op(OwnershipV1OpKind::Take,1,2),
+        op(OwnershipV1OpKind::ExitNormal)};
     auto r=OwnershipDataflowV1::analyze(g);
     CHECK(r.normal_exits.size()==1);
-    CHECK(r.normal_exits[0].cleanup_reverse_order.size()==1);
-    CHECK(r.normal_exits[0].cleanup_reverse_order[0]==0);
+    CHECK(r.normal_exits[0].cleanup_reverse_order.size()==2);
+    CHECK(r.normal_exits[0].cleanup_reverse_order[0]==2);
+    CHECK(r.normal_exits[0].cleanup_reverse_order[1]==0);
     return true;
 }
 static bool explicit_drop_not_repeated() {
@@ -102,6 +108,44 @@ static bool rejects_duplicate_identity() {
     g.blocks[0].operations={op(OwnershipV1OpKind::ExitNormal)};
     return expect_reject("duplicate owner",std::move(g));
 }
+static bool rejects_take_without_destination() {
+    auto g=graph(1);
+    g.blocks[0].operations={op(OwnershipV1OpKind::Create),
+        op(OwnershipV1OpKind::Take),op(OwnershipV1OpKind::ExitNormal)};
+    return expect_reject("take without destination",std::move(g));
+}
+static bool rejects_take_into_live_destination() {
+    auto g=graph(2);
+    g.blocks[0].operations={op(OwnershipV1OpKind::Create,0),
+        op(OwnershipV1OpKind::Create,1),op(OwnershipV1OpKind::Take,0,1),
+        op(OwnershipV1OpKind::ExitNormal)};
+    return expect_reject("take into live destination",std::move(g));
+}
+static bool rejects_use_before_create() {
+    auto g=graph(1);
+    g.blocks[0].operations={op(OwnershipV1OpKind::Use),
+        op(OwnershipV1OpKind::ExitNormal)};
+    return expect_reject("use before create",std::move(g));
+}
+static bool rejects_unknown_operation() {
+    auto g=graph(1);
+    g.blocks[0].operations={{static_cast<OwnershipV1OpKind>(255),0},
+        op(OwnershipV1OpKind::ExitNormal)};
+    return expect_reject("unknown operation kind",std::move(g));
+}
+static bool rejects_unreachable_block() {
+    auto g=graph(1,2);
+    g.blocks[0].operations={op(OwnershipV1OpKind::Create),
+        op(OwnershipV1OpKind::ExitNormal)};
+    g.blocks[1].operations={{static_cast<OwnershipV1OpKind>(255),0}};
+    return expect_reject("unreachable hidden block",std::move(g));
+}
+static bool rejects_unbalanced_borrow() {
+    auto g=graph(1);
+    g.blocks[0].operations={op(OwnershipV1OpKind::Create),
+        op(OwnershipV1OpKind::BorrowShared),op(OwnershipV1OpKind::ExitNormal)};
+    return expect_reject("unbalanced shared borrow",std::move(g));
+}
 static bool rejects_unbounded_cycle() {
     auto g=graph(1,3);
     g.blocks[0].operations={op(OwnershipV1OpKind::Create)};
@@ -112,14 +156,17 @@ static bool rejects_unbounded_cycle() {
 }
 int main() {
     const bool ok =
-      normal_cleanup_reverse_order() && take_disarms_cleanup() &&
+      normal_cleanup_reverse_order() && take_transfers_to_destination() &&
       explicit_drop_not_repeated() && shared_borrow_release() &&
       mutable_borrow_release() && rejects_double_drop() &&
       rejects_use_after_take() && rejects_borrowed_drop() &&
       rejects_mutable_alias() && rejects_join_mismatch() &&
       rejects_unmodeled_exit() && rejects_implicit_exit() &&
-      rejects_duplicate_identity() && rejects_unbounded_cycle();
+      rejects_duplicate_identity() && rejects_unbounded_cycle() &&
+      rejects_take_without_destination() && rejects_take_into_live_destination() &&
+      rejects_use_before_create() && rejects_unknown_operation() &&
+      rejects_unreachable_block() && rejects_unbalanced_borrow();
     if (!ok) return 1;
-    std::puts("OWNERSHIP_DATAFLOW_V1|positive=5|negative=9|result=PASS");
+    std::puts("OWNERSHIP_DATAFLOW_V1|positive=5|negative=15|result=PASS");
     return 0;
 }
