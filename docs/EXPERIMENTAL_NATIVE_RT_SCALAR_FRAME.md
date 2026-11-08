@@ -17,7 +17,10 @@ The generated LLVM module exports four C functions:
   exclusively owned 24-byte frame; state transitions 0 → 1.
 - `int32_t oreslang_rt_scalar_frame_step(void* frame, uint64_t fuel)`: a bounded
   dispatch slice with fuel 0..512, returning 0 DONE, 1 COOPERATE or 2 CANCELLED.
-  The counter is committed before returning 1.
+  The counter is committed before returning 1. The compiler computes the
+  bounded dispatch limit once per step and uses a counted native loop: no
+  fuel-decrement, clock read, scheduler call or FFI poll on each backedge.
+  A cheap loop-bound comparison still executes for every committed tick.
 - `void oreslang_rt_scalar_frame_cancel(void* frame)`: owner-turn cancellation
   transitions active state 1 → 3; terminal states are idempotent.
 - `int64_t oreslang_rt_scalar_frame_result(void* frame)`: requires state 2.
@@ -36,3 +39,17 @@ host test interleaves **two frames on one thread** and proves bounds, progress,
 cancel isolation and exactly-once increments. Subsequent work must integrate
 this frame contract with HungryCarrier, source actors, pinned loans, watchdog
 requests and real task scheduling before expanding the supported grammar.
+
+## Amortized batch hardening
+
+The opt-in emitter computes `batch.limit = min(counter + fuel, upperBound)`
+before entering `loop.commit`. For all valid fuel values (0..512), the
+loop commits no more than that many increments and returns DONE if it reaches
+the source upper bound or COOPERATE otherwise. No source stack survives a
+handoff. The AOT harness executes real compiled guest code at fuel boundaries
+0/1/127/128/129/511/512 and rejects a generated `fuel.remaining` loop.
+
+This does **not** implement a generic LLVM 128-safepoint compiler pass:
+general actors, recursive call cycles, critical sections and arbitrary loops
+remain fail-closed until ownership-safe continuation and post-optimization
+checkpoint coverage are independently verified.
