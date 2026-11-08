@@ -56,7 +56,7 @@ struct TaskCaptureProof {
 inline bool compiler_proven_task_copy(const AutoType& type) noexcept {
     return type.kind == AutoTypeKind::Scalar &&
         type.parameters.empty() && type.dyn_bounds.empty() &&
-        !type.complete_nominal_layout && !type.shareable_domain;
+        !type.complete_nominal_layout;
 }
 
 class TaskCaptureAdmission final {
