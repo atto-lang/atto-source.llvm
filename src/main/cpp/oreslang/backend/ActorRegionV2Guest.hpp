@@ -149,6 +149,17 @@ inline std::string emit_actor_region_v2_guest_ir(const Program& program) {
     const FieldAccess guard_field = checked_field(guard.condition->left.get());
     const FieldAccess early_value = checked_field(guard.result.get());
     const FieldAccess normal_value = checked_field(fn.result.get());
+    // This first guest uses the OS process exit code as its observable
+    // result. POSIX exposes at most 8 bits of that code. Do not silently
+    // truncate a 64-bit AttoLang int and misreport source semantics; the
+    // future full-AOT launcher must return a true i64 guest result via a
+    // versioned typed ABI rather than using process exit status.
+    for (const FieldAccess returned : {early_value, normal_value}) {
+        const auto value = cls.fields[returned.field].initial;
+        if (value < 0 || value > 255)
+            reject("return field outside exact host exit-status range");
+    }
+
     const std::int64_t compare_literal = guard.condition->right->integer;
 
     llvm::LLVMContext context;
