@@ -1361,6 +1361,21 @@ void validate_i64_ownership(Program& program) {
         };
         const std::size_t guard_count = function.early_returns.size();
         cfg.blocks.resize(guard_count * 2 + 1);
+        // Source Task/Future await is a real continuation boundary. The
+        // currently executable scalar forms are admitted only in zero-argument
+        // main and are awaited as the first local; likewise the supported
+        // actor lifecycle await has no movable borrowed frame. Retain that
+        // restriction: model the suspension at the CFG entry, not merely in
+        // an isolated host-only ownership lattice. Any pre-existing parameter
+        // or projected loan must therefore fail before Task/native IR.
+        // General mid-function await/select lowering requires instruction-
+        // ordered CFG edges and cannot reuse this entry-only shortcut.
+        if (!function.source_tasks.empty() ||
+                !function.future_pipelines.empty() ||
+                !function.ready_await_actor.empty() ||
+                !function.done_await_actor.empty()) {
+            cfg.blocks.front().operations.push_back({OpKind::Suspend, ""});
+        }
         // Record returns can move an owner in either lazy arm. Preserve those
         // terminal edges instead of flattening both arms into sequential reads.
         std::function<void(const Expression*, std::size_t)> append_return_path;
