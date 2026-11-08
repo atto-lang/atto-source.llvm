@@ -8,6 +8,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
+#include "oreslang/runtime/SourceCooperationQuantum.h"
 #include "oreslang/backend/LlvmCompat.hpp"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
@@ -91,7 +92,8 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         auto* valid = llvm::BasicBlock::Create(context, "frame.valid", step);
         auto* invalid = llvm::BasicBlock::Create(context, "frame.invalid", step);
         llvm::Value* magic = b.CreateLoad(i64, field(b, frame, 2));
-        llvm::Value* cap = b.CreateICmpULE(fuel, constant(512));
+        llvm::Value* cap = b.CreateICmpULE(fuel, constant(
+            runtime::SourceCooperationQuantum::kMaxBackedgesPerDispatch));
         b.CreateCondBr(b.CreateAnd(b.CreateICmpEQ(magic, constant(kMagic)), cap),
                        valid, invalid);
         b.SetInsertPoint(invalid);
