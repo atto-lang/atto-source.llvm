@@ -1,0 +1,57 @@
+// Two pipelines in one tenant. Fragile fails on every message from 5 on, so it spends its restart budget
+// and ends. Its pipeline must stop around it, and the healthy one must not notice. Each Sink traps on a
+// gap, so a lost or reordered message in the healthy pipeline would show as a restart.
+fnc next_in_order(int seen, int n): int {
+  if (n eq seen + 1) { return n; } fi
+  return 9223372036854775807 + n;
+}
+fnc fails_from_five(int n): int {
+  if (n < 5) { return n; } fi
+  return 9223372036854775807 + n;
+}
+define actor Sink as {
+  let seen: int = 0;
+  pub fnc on_message(int n): int {
+    seen = next_in_order(seen, n);
+    return seen;
+  }
+}
+define actor Fragile as {
+  const sink = spawn Sink();
+  let forwarded: int = 0;
+  pub fnc on_message(int n): int {
+    sink.send(n);
+    forwarded = forwarded + fails_from_five(n);
+    return forwarded;
+  }
+}
+define actor Healthy as {
+  const sink = spawn Sink();
+  let forwarded: int = 0;
+  pub fnc on_message(int n): int {
+    sink.send(n);
+    forwarded = forwarded + 1;
+    return forwarded;
+  }
+}
+define actor FragileHead as {
+  const next = spawn Fragile();
+  let forwarded: int = 0;
+  pub fnc on_message(int n): int {
+    next.send(n);
+    forwarded = forwarded + 1;
+    return forwarded;
+  }
+}
+define actor HealthyHead as {
+  const next = spawn Healthy();
+  let forwarded: int = 0;
+  pub fnc on_message(int n): int {
+    next.send(n);
+    forwarded = forwarded + 1;
+    return forwarded;
+  }
+}
+pub fnc main(): int {
+  return 0;
+}

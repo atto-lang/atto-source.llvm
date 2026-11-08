@@ -53,7 +53,8 @@ enum class Status {
     HostClosed,
     SignalHandlerLost, // another component replaced our fault handler, so a guest fault would be fatal
     ActorRestarted,    // this turn failed. The actor restarted from its stored state and goes on
-    ActorTerminated    // the actor spent its restart budget and has ended; the rest of the VM goes on
+    ActorTerminated,   // the actor spent its restart budget and has ended; the rest of the VM goes on
+    PipelineAborted    // queued for an actor upstream of one that ended: its pipeline stopped
 };
 const char* to_string(Status status) noexcept;
 
@@ -119,6 +120,8 @@ struct VmTerminal {
     std::uint64_t mail_lost = 0; // restarts whose failed turn had no caller to tell
     std::uint64_t actors_terminated = 0; // spent their restart budget
     std::uint64_t mail_abandoned = 0;    // queued for an actor that then ended this way
+    std::uint64_t pipelines_aborted = 0; // a stage ended, so the stages feeding it stopped
+    std::uint64_t actors_aborted = 0;    // those upstream stages
     std::string detail;
 };
 
@@ -136,6 +139,8 @@ struct VmSnapshot {
     std::uint64_t mail_lost = 0;
     std::uint64_t actors_terminated = 0;
     std::uint64_t mail_abandoned = 0;
+    std::uint64_t pipelines_aborted = 0;
+    std::uint64_t actors_aborted = 0;
 };
 
 struct TurnResult {

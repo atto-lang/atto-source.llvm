@@ -227,11 +227,25 @@ when the VM stops cleanly.
 **A turn commits whole.** A handler's sends are held until its turn commits, as `ACTOR_RUNTIME_RESILIENCE_V1`
 section 9 proposes, so a restart can never resend them. See [Actors messaging actors](#what-atto-can-do-in-a-vm).
 
+**When a stage ends, its pipeline stops.** This is the abort barrier proposed in `ACTOR_RUNTIME_RESILIENCE_V1`
+section 9, for a pipeline built as a tree of owners:
+
+- The stages after it finish the mail they accepted, then stop.
+- Each owner before it, up to the actor that started the pipeline, would only forward into a stage that is
+  gone. So its queued mail is reported as abandoned, its callers get `PipelineAborted`, and it stops.
+- An owner that cannot restart, such as `main`'s actor or one the host spawned with a native kind, is where
+  the pipeline began. It and the rest of the tenant go on.
+- `pipelines_aborted` and `actors_aborted` are reported, even when the VM later stops cleanly.
+
+A pipeline edge is the owner's child field. It names the current incarnation, so a restart of a stage does
+not break it, and a stage that ends is not replaced.
+
 **Not built yet:**
 
-- What a pipeline does when a stage ends for good. The contract's proposal is an abort barrier: the stages
-  after it finish their accepted mail and stop, marked as failed upstream, and the rest of the tenant keeps
-  running.
+- An explicit upstream-failed signal to downstream stages. They drain and stop, but source has no way to see
+  why, because nothing in source can observe a stop.
+- `main` sending to a pipeline that has stopped still ends the VM, since `main` cannot restart and cannot
+  see that its send was refused.
 - Stages fail rather than wait when a mailbox is full. The contract proposes reserving capacity during the
   turn, so that `send` can report admission, and that is not done.
 - A failed actor reports through the VM's counters and the failed call. There is no supervisor to tell yet.
@@ -309,6 +323,8 @@ LLVM 18 in that VM, whose IR the macOS run lowered. x86_64 is under QEMU emulati
 | Commit is all or nothing | Three sends to a mailbox with room for two: none go. Unknown target: none go, and state does not move | macOS, Linux, x86_64 under QEMU |
 | A tenant cannot overflow the host's stack by nesting | A chain 25,000 actors deep, stopped from the front | macOS, Linux, x86_64 under QEMU |
 | Wrong uses of references | 13 refused by the compiler, with no IR emitted | Linux |
+| A stage that ends stops its pipeline only | Two pipelines in one tenant. One stage spends its restart budget: its pipeline stops, its queued mail is reported, and the other pipeline delivers all 41 messages in order | macOS, Linux, x86_64 under QEMU |
+| An owner stops when its child ends | Its 18 queued calls are told `PipelineAborted`, deterministic across plain, ASan, TSan and gcc builds | macOS, Linux, x86_64 under QEMU |
 | A failed actor restarts alone | From its last finished turn, with queued mail in order and siblings unaffected: trap, stack overflow and CPU deadline, in test guests and real `.atto` | macOS, Linux, x86_64 under QEMU |
 | A spinning actor does not stop its siblings | 2000 sibling turns complete alongside it in one VM | macOS, Linux, x86_64 under QEMU |
 | Kills cannot tear stored state | Deterministic fault in a commit keeps fields consistent; **control** without the flip tears. Also 300 kills at random points | macOS, Linux, x86_64 under QEMU |
@@ -331,14 +347,14 @@ LLVM 18 in that VM, whose IR the macOS run lowered. x86_64 is under QEMU emulati
 | Mail quota holds | Per VM and host; a dead VM returns all of it | macOS, Linux |
 | 1000 VMs, 100,000 test actors | About 20 ms to create, 300,000 turns in 0.5-0.7 s; RSS +100 MiB on Linux, +440 MiB on macOS (larger pages) | macOS, Linux |
 | Kill spinning code without cooperation | Under 1 ms | macOS, Linux |
-| ASan+UBSan on host | Clean, core and lowered, 39 + 19 cases | Linux |
+| ASan+UBSan on host | Clean, core and lowered, 42 + 21 cases | Linux |
 | TSan on host | No races in 39 cases and in real programs, including pipelines, but it cannot cover pure-spin kills: it defers async signals to its next interceptor | Linux |
-| Host built with gcc | 39 + 19 cases | Linux |
+| Host built with gcc | 42 + 21 cases | Linux |
 | The compiler's whole suite, against `main` | 725 tests on an idle 14-vCPU Linux VM with g++ and LLVM 19: the same 13 do not pass on `main` at `2bc5b2c45` and on this branch, and none only here. A `-Werror=misleading-indentation` in `Parser.cpp` stops the full build on both | Linux |
 | Wasmtime targeted kill | 6 spinning tenants ended one at a time, none early, worst about 2 ms | macOS |
 | Wasmtime: 1000 Stores | 200,000 turns at about 1.3M/s, contained faults and memory bomb | macOS |
 | .NET hosts 1000 VMs through the loader | 30,000 correct turns under CoreCLR JIT and NativeAOT, while the CLR forced 706 and 981 GCs and caught 1.4M and 2.0M null faults; wrong digest refused | Linux |
-| x86_64 under emulation | 39 of 39 core cases, 19 of 19 lowered, including `.atto` lowered from IR. Timings mean nothing here | QEMU TCG, Ubuntu 24.04 |
+| x86_64 under emulation | 42 of 42 core cases, 21 of 21 lowered, including `.atto` lowered from IR. Timings mean nothing here | QEMU TCG, Ubuntu 24.04 |
 | Real x86_64 hardware, other kernels, PKU | **Not run** | |
 | Wasmtime on Linux, .NET on macOS | **Not run** | |
 | GitHub Actions | **Not run**: source-org jobs fail to start on billing, and `.github/workflows/tenant-vm.yml` is ready for when that is resolved. Private source was deliberately not mirrored to another org | |

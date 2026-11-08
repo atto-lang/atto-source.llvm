@@ -712,6 +712,57 @@ void atto_a_failed_turn_sent_nothing() {
     std::printf("  a failed turn reaches no one; with sends made straight away, it reaches the next actor\n");
 }
 
+// A stage that spends its restart budget ends, and its pipeline stops around it: the stage after it finishes
+// what it had accepted, and the one feeding it stops with its queued mail reported. Another pipeline in the
+// same tenant carries on, in order. Kinds: Sink 0, Fragile 1, Healthy 2, FragileHead 3, HealthyHead 4.
+void atto_a_stage_that_ends_stops_its_pipeline_only() {
+    const LoadedGuest guest = load("atto_abort");
+    if (!guest.module) return;
+    TenantVmHost host;
+    VmSpec s = spec("two-pipelines", guest);
+    s.limits.restart_backoff_ms = 1;
+    auto v = host.open(s);
+    REQUIRE_OK(v);
+    auto fragile = host.spawn_actor(v.handle, 3);
+    auto healthy = host.spawn_actor(v.handle, 4);
+    REQUIRE_OK(fragile);
+    REQUIRE_OK(healthy);
+    std::vector<std::future<TurnResult>> fragile_calls, healthy_calls;
+    for (int i = 1; i <= 40; ++i) {
+        fragile_calls.push_back(host.call(fragile.actor, one(i)));
+        healthy_calls.push_back(host.call(healthy.actor, one(i)));
+    }
+    int fragile_ok = 0, fragile_aborted = 0;
+    for (auto& f : fragile_calls) {
+        const Status status = f.get().status;
+        if (status == Status::Ok) ++fragile_ok;
+        else if (status == Status::PipelineAborted) ++fragile_aborted;
+        else CHECK_STATUS(status, Status::Ok);
+    }
+    for (auto& f : healthy_calls) CHECK_STATUS(f.get().status, Status::Ok);
+    for (int i = 0; i < 5000 && host.snapshot(v.handle).live_actors != 3; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    const auto snapshot = host.snapshot(v.handle);
+    CHECK(snapshot.phase == Phase::Running);          // the rest of the tenant goes on
+    CHECK(snapshot.live_actors == 3);                  // HealthyHead, Healthy and its Sink; all of the other pipeline gone
+    CHECK(snapshot.actors_terminated == 1);            // Fragile
+    CHECK(snapshot.pipelines_aborted == 1);
+    CHECK(snapshot.actors_aborted == 1);               // FragileHead
+    CHECK(snapshot.actor_restarts == 3);               // Fragile's budget, and no one else's
+    CHECK(fragile_ok + fragile_aborted == 40); // the head may have forwarded everything before the stage ended
+    CHECK(snapshot.mail_abandoned > 0);        // then the stage's own queued mail is what gets reported
+    // Later calls to the stopped head are refused, not queued.
+    CHECK_STATUS(host.call(fragile.actor, one(1)).get().status, Status::ActorTerminated);
+    // The healthy pipeline still works, in order, after all of that.
+    CHECK(word(host.call(healthy.actor, one(41)).get().payload) == 41);
+    CHECK_STATUS(host.begin_shutdown(v.handle), Status::Ok);
+    const VmTerminal terminal = host.wait_closed(v.handle);
+    CHECK(terminal.phase == Phase::Stopped);
+    CHECK(terminal.pipelines_aborted == 1); // a clean stop still says so
+    std::printf("  a stage ended: %d calls to its pipeline served, %d aborted; the other pipeline delivered all 41 in order\n",
+                fragile_ok, fragile_aborted);
+}
+
 // The stated requirement, with real compiled source instead of test guests.
 void atto_thousand_tenants_in_one_process() {
     const LoadedGuest counter = load("atto_counter");
@@ -817,6 +868,7 @@ const Case cases[] = {
     {"atto_pipeline_of_actors", atto_pipeline_of_actors},
     {"atto_shutdown_drains_the_whole_pipeline", atto_shutdown_drains_the_whole_pipeline},
     {"atto_a_failed_turn_sent_nothing", atto_a_failed_turn_sent_nothing},
+    {"atto_a_stage_that_ends_stops_its_pipeline_only", atto_a_stage_that_ends_stops_its_pipeline_only},
     {"atto_thousand_tenants_run_programs", atto_thousand_tenants_run_programs},
 #endif
 };

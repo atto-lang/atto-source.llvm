@@ -1231,6 +1231,7 @@ void the_restart_budget_refills_with_time() {
     s.limits.restart_budget = 1;
     s.limits.restart_window_ms = 50;
     s.limits.restart_backoff_ms = 0;
+    s.limits.turn_deadline_ms = 30000;
     auto v = host.open(s);
     REQUIRE_OK(v);
     auto a = host.spawn_actor(v.handle, KIND_RESTARTABLE);
@@ -1406,6 +1407,52 @@ void stopping_an_owner_stops_what_it_owns() {
     CHECK_STATUS(host.stop_actor(parent.actor), Status::Ok);
 }
 
+// The abort barrier, upstream: an owner whose child ends still has mail queued. That mail would only be
+// forwarded into a stage that is gone, so it is reported, and the owner stops. Its caller is told why.
+void an_owner_stops_when_its_child_ends() {
+    TenantVmHost host;
+    VmSpec s = spec("t");
+    s.limits.max_parallel_turns = 1; // owner and child take turns, so the owner still has mail queued
+    s.limits.restart_budget = 2;
+    s.limits.restart_backoff_ms = 0;
+    auto v = host.open(s);
+    REQUIRE_OK(v);
+    auto owner = host.spawn_actor(v.handle, KIND_RESTARTABLE);
+    auto bystander = host.spawn_actor(v.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(owner);
+    REQUIRE_OK(bystander);
+    const auto child = word(host.call(owner.actor, words({RESTART_SPAWN, KIND_RESTARTABLE})).get().payload);
+    CHECK(child != 0);
+    // Hold the VM's one turn while every call queues, so all of them are admitted before the child runs,
+    // however slowly this thread submits them (as under a sanitizer).
+    auto burner = host.spawn_actor(v.handle, KIND_BURN);
+    REQUIRE_OK(burner);
+    auto holding = host.call(burner.actor, words({300000000}));
+    std::this_thread::sleep_for(Ms(20));
+    // Three sends the child will fail on, which spends a budget of 2, then plenty queued behind them.
+    std::vector<std::future<TurnResult>> calls;
+    calls.push_back(host.call(owner.actor, words({RESTART_COMMIT, 1, child})));
+    for (int i = 0; i < 20; ++i) calls.push_back(host.call(owner.actor, words({RESTART_ADD, 1})));
+    CHECK_STATUS(holding.get().status, Status::Ok);
+    int ok = 0, aborted = 0;
+    for (auto& f : calls) {
+        const Status status = f.get().status;
+        if (status == Status::Ok) ++ok;
+        else if (status == Status::PipelineAborted) ++aborted;
+        else CHECK_STATUS(status, Status::Ok);
+    }
+    CHECK(aborted > 0);
+    const auto snapshot = host.snapshot(v.handle);
+    CHECK_EQ(snapshot.actors_terminated, std::uint64_t{1});
+    CHECK_EQ(snapshot.pipelines_aborted, std::uint64_t{1});
+    CHECK_EQ(snapshot.actors_aborted, std::uint64_t{1});
+    CHECK(snapshot.mail_abandoned >= static_cast<std::uint64_t>(aborted));
+    CHECK(snapshot.phase == Phase::Running);
+    CHECK_STATUS(host.call(owner.actor, words({RESTART_ADD, 1})).get().status, Status::ActorTerminated);
+    CHECK_EQ(word(host.call(bystander.actor, words({RESTART_ADD, 5})).get().payload), 5); // the rest of the tenant goes on
+    std::printf("  owner served %d calls, then %d were reported as aborted when its child ended\n", ok, aborted);
+}
+
 // Many actors failing, stopping and being killed at once, for the sanitizers to look at.
 void restart_stress() {
     TenantVmHost host;
@@ -1491,6 +1538,7 @@ const Case cases[] = {
     {"a_clean_stop_still_reports_failures", a_clean_stop_still_reports_failures},
     {"a_commit_is_all_or_nothing", a_commit_is_all_or_nothing},
     {"stopping_an_owner_stops_what_it_owns", stopping_an_owner_stops_what_it_owns},
+    {"an_owner_stops_when_its_child_ends", an_owner_stops_when_its_child_ends},
     {"restart_stress", restart_stress},
     {"thousand_vms_in_one_process", thousand_vms_in_one_process},
 };

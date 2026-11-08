@@ -54,6 +54,7 @@ const char* to_string(Status s) noexcept {
         case Status::SignalHandlerLost: return "SignalHandlerLost";
         case Status::ActorRestarted: return "ActorRestarted";
         case Status::ActorTerminated: return "ActorTerminated";
+        case Status::PipelineAborted: return "PipelineAborted";
     }
     return "Unknown";
 }
@@ -152,6 +153,9 @@ struct Actor {
     std::uint64_t backoff_until_ns = 0;           // not schedulable until the watchdog clears this
     std::uint32_t terminated_generation = std::numeric_limits<std::uint32_t>::max();
     std::vector<std::uint64_t> children; // refs of actors this one spawned; dead ones are pruned
+    std::uint64_t parent = 0;            // the actor that spawned this one, 0 for the host
+    std::uint32_t slot = 0;
+    bool aborted = false;                // stopped because a stage after it ended
     std::size_t children_live_estimate = 8;
     std::deque<Mail> mailbox;
     bool live = false;
@@ -183,6 +187,8 @@ struct Vm {
     std::uint64_t mail_lost = 0;
     std::uint64_t actors_terminated = 0;
     std::uint64_t mail_abandoned = 0;
+    std::uint64_t pipelines_aborted = 0;
+    std::uint64_t actors_aborted = 0;
     std::uint32_t running = 0;
     bool enqueued = false;
     bool retired = false;
@@ -525,13 +531,21 @@ struct TenantVmHost::Core {
         bool restarted = false;
         bool terminated = false;
         std::deque<Mail> abandoned;
+        std::deque<Mail> aborted;
         bool over_budget = false;
         bool escalate = trapped && reason != FailReason::HostKill;
         {
             std::lock_guard<std::mutex> lock(vm->mutex);
             const Phase phase = vm->current_phase();
             const bool alive = phase == Phase::Running || phase == Phase::Quiescing;
-            if (trapped && alive && confined_to_actor(*actor, reason, checked)) {
+            if (trapped && alive && actor->aborted && confined_to_actor(*actor, reason, checked)) {
+                // Its pipeline is stopping. A turn that fails now, likely sending to the stage that
+                // ended, needs no restart: the actor is released as soon as it finishes.
+                escalate = false;
+                result = TurnResult{};
+                result.status = Status::PipelineAborted;
+                result.failure = reason;
+            } else if (trapped && alive && confined_to_actor(*actor, reason, checked)) {
                 if (!mail.has_promise) ++vm->mail_lost;
                 escalate = false;
                 if (restart_allowed_locked(vm, *actor, slot)) {
@@ -540,6 +554,7 @@ struct TenantVmHost::Core {
                     actor_restarts.fetch_add(1, std::memory_order_relaxed);
                     restarted = true;
                 } else {
+                    abort_upstream_locked(*vm, *actor, aborted);
                     terminate_actor_locked(*vm, *actor, slot, abandoned);
                     terminated = true;
                 }
@@ -559,6 +574,13 @@ struct TenantVmHost::Core {
                 if (!queued.has_promise) continue;
                 TurnResult r;
                 r.status = Status::ActorTerminated;
+                r.failure = reason;
+                queued.promise.set_value(std::move(r));
+            }
+            for (auto& queued : aborted) {
+                if (!queued.has_promise) continue;
+                TurnResult r;
+                r.status = Status::PipelineAborted;
                 r.failure = reason;
                 queued.promise.set_value(std::move(r));
             }
@@ -653,6 +675,41 @@ struct TenantVmHost::Core {
         ++vm.actors_terminated;
         actor.terminated_generation = actor.generation;
         release_actor_locked(vm, actor, slot);
+    }
+
+    // The abort barrier of ACTOR_RUNTIME_RESILIENCE_V1 section 9, for a pipeline built as a tree of owners.
+    // Downstream, the stages after the one that ended finish the mail they accepted and stop, through the
+    // ordinary release of its children. Upstream, each owner up to the actor that started the pipeline would
+    // only forward into a stage that is gone, so its queued mail is reported as abandoned and it stops. An
+    // owner that cannot restart, such as main, is where the pipeline began, and it and the rest of the tenant
+    // go on.
+    void abort_upstream_locked(Vm& vm, Actor& ended, std::deque<Mail>& abandoned) {
+        std::uint64_t ref = ended.parent;
+        bool any = false;
+        for (std::size_t hops = 0; ref != 0 && hops < vm.actors.size(); ++hops) {
+            Actor* owner = resolve_actor_locked(vm, ref);
+            if (!owner || owner->aborted || !(owner->kind->flags & ORES_VM_KIND_RESTARTABLE)) break;
+            const std::uint64_t next = owner->parent;
+            owner->aborted = true;
+            owner->stopping = true;
+            for (auto& mail : owner->mailbox) {
+                refund_mail_locked(vm, mail.bytes.size());
+                --vm.inflight;
+                ++vm.mail_abandoned;
+                abandoned.push_back(std::move(mail));
+            }
+            owner->mailbox.clear();
+            if (owner->queued) { // waiting for a carrier, which must not find it with nothing to do
+                vm.ready.erase(std::remove(vm.ready.begin(), vm.ready.end(), owner->slot), vm.ready.end());
+                owner->queued = false;
+            }
+            ++vm.actors_aborted;
+            any = true;
+            owner->terminated_generation = owner->generation;
+            if (!owner->running) release_actor_locked(vm, *owner, owner->slot);
+            ref = next;
+        }
+        if (any) ++vm.pipelines_aborted;
     }
 
     bool was_terminated_locked(Vm& vm, std::uint64_t ref) const {
@@ -859,6 +916,9 @@ struct TenantVmHost::Core {
         }
         Actor& actor = *v.actors[slot];
         actor.kind = kind;
+        actor.slot = slot;
+        actor.parent = 0;
+        actor.aborted = false;
         actor.region = region;
         actor.region_bytes = bytes;
         actor.heap_used = 0;
@@ -1085,6 +1145,9 @@ struct TenantVmHost::Core {
         if (spawn_locked(shared, kind, ref) != Status::Ok) return 0;
         const std::uint64_t reference = ref | (std::uint64_t{1} << 63); // so slot 0, generation 0 is not the failure value
         remember_child_locked(*shared, parent, reference);
+        // Bit 63 as in any guest-held reference, so that slot 0, generation 0 is not "no parent".
+        shared->actors[static_cast<std::uint32_t>(ref)]->parent =
+            (std::uint64_t{parent.generation} << 32) | parent.slot | (std::uint64_t{1} << 63);
         return reference;
     }
 
@@ -1251,6 +1314,8 @@ struct TenantVmHost::Core {
             terminal.mail_lost = vm->mail_lost;
             terminal.actors_terminated = vm->actors_terminated;
             terminal.mail_abandoned = vm->mail_abandoned;
+            terminal.pipelines_aborted = vm->pipelines_aborted;
+            terminal.actors_aborted = vm->actors_aborted;
         }
         {
             std::lock_guard<std::mutex> lock(registry_mutex);
@@ -1571,6 +1636,8 @@ VmSnapshot TenantVmHost::snapshot(const VmHandle& handle) const {
     out.mail_lost = vm->mail_lost;
     out.actors_terminated = vm->actors_terminated;
     out.mail_abandoned = vm->mail_abandoned;
+    out.pipelines_aborted = vm->pipelines_aborted;
+    out.actors_aborted = vm->actors_aborted;
     return out;
 }
 

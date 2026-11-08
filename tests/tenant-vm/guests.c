@@ -201,7 +201,8 @@ static int64_t restartable(const OresVmHostApi* h, void* inst, uint8_t* cage, ui
         }
         case RESTART_COMMIT: { /* one turn's effects: a to the state, and three sends to the child in b */
             const int64_t b = READ_I64(cage, in + 16);
-            const OresVmSend sends[3] = {{(uint64_t)b, 1}, {(uint64_t)b, 2}, {(uint64_t)b, 3}};
+            /* 1 is RESTART_ADD_THEN_TRAP, so a restartable child fails on each of these. */
+            const OresVmSend sends[3] = {{(uint64_t)b, 1}, {(uint64_t)b, 1}, {(uint64_t)b, 1}};
             const int64_t total = READ_I64(cage, state) + a;
             *stored = total;
             WRITE_I64(cage, out, total);
