@@ -9,6 +9,7 @@ on:
       - tests/source_actor_e2e.py
       - tests/source_actor_*.c
       - tests/actor_frame_arena_test.cpp
+      - tests/actor_scalar_compiler_admission_test.cpp
       - tests/native_actor_frame_integration_test.cpp
       - tests/fixtures/atto-actor-*.atto
       - .github/workflows/actor-m1-m3-mainline-integration.yml
