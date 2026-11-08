@@ -53,7 +53,7 @@ inline void require_closed_scalar_guest_calls(const llvm::Module& module) {
     // wrong return type, argument count, variadic signature, linkage or
     // calling convention would make the C11 carrier invoke incompatible IR.
     // Preserve the exact expected four-function v1 ABI before emitting IR.
-    const auto& context = module.getContext();
+    auto& context = module.getContext();
     auto* i64 = llvm::Type::getInt64Ty(context);
     auto* i32 = llvm::Type::getInt32Ty(context);
     auto* voidTy = llvm::Type::getVoidTy(context);
