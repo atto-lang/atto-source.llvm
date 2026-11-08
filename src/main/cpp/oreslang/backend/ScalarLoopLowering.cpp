@@ -129,6 +129,17 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         auto* exhausted = llvm::BasicBlock::Create(context, "cooperate", step);
         auto* complete = llvm::BasicBlock::Create(context, "loop.complete", step);
         auto* state = b.CreateLoad(i64, stateAddress, "state");
+        // The scheduler consumes DONE without necessarily calling result().
+        // A forged terminal state must therefore trap directly in step(),
+        // even when its counter is otherwise within the legal range.
+        auto* stateConsistent = b.CreateOr(
+            b.CreateICmpNE(state, constant(2)),
+            b.CreateICmpEQ(countAtEntry,
+                llvm::ConstantInt::getSigned(i64, loop.upper_bound)));
+        auto* stateVerified = llvm::BasicBlock::Create(
+            context, "frame.state.consistent", step);
+        b.CreateCondBr(stateConsistent, stateVerified, invalid);
+        b.SetInsertPoint(stateVerified);
         auto* sw = b.CreateSwitch(state, invalid, 3);
         sw->addCase(constant(1), active);
         sw->addCase(constant(2), done);
@@ -194,9 +205,14 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         auto* counterInRange = b.CreateAnd(
             b.CreateICmpSGE(counter, llvm::ConstantInt::getSigned(i64, loop.initial)),
             b.CreateICmpSLE(counter, llvm::ConstantInt::getSigned(i64, loop.upper_bound)));
+        auto* doneCounterValid = b.CreateOr(
+            b.CreateICmpNE(s, constant(2)),
+            b.CreateICmpEQ(counter,
+                llvm::ConstantInt::getSigned(i64, loop.upper_bound)));
         b.CreateCondBr(b.CreateAnd(known,
-            b.CreateAnd(counterInRange, b.CreateICmpEQ(
-                b.CreateLoad(i64, field(b, frame, 2)), constant(kMagic)))),
+            b.CreateAnd(counterInRange,
+                b.CreateAnd(doneCounterValid, b.CreateICmpEQ(
+                    b.CreateLoad(i64, field(b, frame, 2)), constant(kMagic))))),
             valid, invalid);
         b.SetInsertPoint(invalid);
         fail(b);
