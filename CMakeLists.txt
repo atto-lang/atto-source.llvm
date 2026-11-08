@@ -591,6 +591,13 @@ if(BUILD_TESTING)
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_scalar_ir_surface_test.py")
     set_tests_properties(native_scalar_ir_surface_scan PROPERTIES TIMEOUT 15)
+    # The negative scanner must not become a no-op under python -O.
+    add_test(NAME native_scalar_ir_surface_scan_python_optimized
+        COMMAND "${CMAKE_COMMAND}" -E env PYTHONOPTIMIZE=1
+            "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_scalar_ir_surface_test.py")
+    set_tests_properties(native_scalar_ir_surface_scan_python_optimized
+        PROPERTIES TIMEOUT 15)
     add_test(NAME native_realtime_profile_cli
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
             realtime-profile "$<TARGET_FILE:oreslang-llvmc>")
