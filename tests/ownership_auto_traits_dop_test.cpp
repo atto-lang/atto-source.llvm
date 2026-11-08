@@ -149,6 +149,42 @@ int main() {
     const auto empty_caps = oreslang::types::infer_auto_traits(proven_empty_nominal);
     REQUIRE(empty_caps.send && empty_caps.sync && !empty_caps.share);
 
+    // Like Java TypeModel.scalar(), primitive payloads are Copy/Send/Sync
+    // regardless of the harmless domain metadata bit. No hidden parameter or
+    // dyn-bound metadata can be smuggled through the primitive leaf.
+    AutoType scalar_with_domain = scalar();
+    REQUIRE(oreslang::types::infer_auto_traits(scalar_with_domain).share);
+    scalar_with_domain.parameters.push_back(
+        wrap(AutoTypeKind::Rc, scalar()));
+    REQUIRE(!oreslang::types::infer_auto_traits(scalar_with_domain).send);
+
+    // Type descriptions come from source-driven frontends and may be
+    // adversarially deep or wide. Every recursive trait walk must share
+    // a bounded budget; rejecting an expensive type is safer than overflow.
+    AutoType deep = scalar();
+    for (int i = 0; i < 160; ++i)
+        deep = wrap(AutoTypeKind::Box, std::move(deep));
+    const auto too_deep = oreslang::types::infer_auto_traits(deep);
+    REQUIRE(!too_deep.send && !too_deep.sync && !too_deep.share);
+
+    AutoType wide;
+    wide.kind = AutoTypeKind::Nominal;
+    wide.complete_nominal_layout = true;
+    wide.shareable_domain = true;
+    wide.parameters.reserve(5000);
+    for (int i = 0; i < 5000; ++i)
+        wide.parameters.push_back(scalar());
+    const auto too_wide = oreslang::types::infer_auto_traits(wide);
+    REQUIRE(!too_wide.send && !too_wide.sync && !too_wide.share);
+
+    AutoType ordinary;
+    ordinary.kind = AutoTypeKind::Nominal;
+    ordinary.complete_nominal_layout = true;
+    ordinary.shareable_domain = true;
+    ordinary.parameters = {scalar(), scalar()};
+    const auto small = oreslang::types::infer_auto_traits(ordinary);
+    REQUIRE(small.send && small.sync && small.share);
+
     for (auto layout : {oreslang::dop::Layout::AoS,
                         oreslang::dop::Layout::SoA,
                         oreslang::dop::Layout::AoSoA}) {
