@@ -84,12 +84,12 @@ def main():
         killed_mutants = [
             require_killed_guest_mutant(
                 "fuel-cap",
-                r"^(\\s*%[\\w.]+ = icmp ule i64 [^,\\n]+, )512(\\s*)$",
-                r"\\g<1>4096\\g<2>"),
+                r"^(\s*%[\w.]+ = icmp ule i64 [^,\n]+, )512(\s*)$",
+                r"\g<1>4096\g<2>"),
             require_killed_guest_mutant(
                 "charge-elision",
-                r"^(\\s*%fuel\\.remaining = sub i64 [^,\\n]+, )1(\\s*)$",
-                r"\\g<1>0\\g<2>"),
+                r"^(\s*%fuel\.remaining = sub i64 [^,\n]+, )1(\s*)$",
+                r"\g<1>0\g<2>"),
         ]
         assert len(killed_mutants) == 2
 
