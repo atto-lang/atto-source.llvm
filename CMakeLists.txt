@@ -969,6 +969,14 @@ if(BUILD_TESTING)
             "-DBUILD=${CMAKE_CURRENT_BINARY_DIR}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/sealed_aot_profile_mutations.cmake")
     set_tests_properties(native_sealed_aot_profile_mutations PROPERTIES TIMEOUT 240)
+    # Independently prove invalid/missing build roots cannot trigger recursive
+    # cleanup before the native compiler or a guest exists.
+    add_test(NAME native_sealed_aot_workspace_guard
+        COMMAND "${CMAKE_COMMAND}"
+            "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+            "-DBUILD=${CMAKE_CURRENT_BINARY_DIR}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/sealed_aot_profile_guard_selftest.cmake")
+    set_tests_properties(native_sealed_aot_workspace_guard PROPERTIES TIMEOUT 30)
     # Positive compiler-only contracts must assemble the emitted IR, not just
     # accept an expected substring after the textual ModuleID header.
     if(ORE_CLANG)
