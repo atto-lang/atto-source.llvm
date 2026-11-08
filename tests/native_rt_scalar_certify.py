@@ -198,7 +198,9 @@ def certify(repo: Path, expected_head: str, llvm_config: str, clang: str, out: P
         if not set(TESTS).issubset(present):
             raise GateFailed("required security CTest targets absent from configured tree")
         junit = out / "ctest.xml"
-        expression = "^(?:" + "|".join(re.escape(name) for name in TESTS) + ")$"
+        # CTest uses its own POSIX-like regex dialect: (?:...) silently
+        # matches zero tests, sometimes with a successful CTest exit code.
+        expression = "^(" + "|".join(re.escape(name) for name in TESTS) + ")$"
         command(["ctest", "--test-dir", str(build), "--output-on-failure", "--output-junit",
                  str(junit), "-R", expression], timeout=1800, log=out / "ctest.log")
         receipt["tests"] = verify_junit(junit)
