@@ -1807,6 +1807,8 @@ if(BUILD_TESTING)
         Threads::Threads)
     target_compile_options(oreslang-source-actor-scalar-vm-runtime-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_compile_definitions(oreslang-source-actor-scalar-vm-runtime-test
+        PRIVATE ORESLANG_SOURCE_ACTOR_TESTING)
     add_test(NAME source_actor_scalar_vm_tail_quota_sibling
         COMMAND oreslang-source-actor-scalar-vm-runtime-test)
     set_tests_properties(source_actor_scalar_vm_tail_quota_sibling
