@@ -152,6 +152,70 @@ static void independent_watchdog_requests_next_safe_boundary() {
     require(!q.pendingHandoffOnNoYieldExit());
 }
 
+static void overdue_debt_survives_unrelated_await_and_dispatch_reset() {
+    for (std::uint32_t interval : {64u, 128u, 256u, 512u}) {
+        reset_clock();
+        Quantum q(interval);
+        q.beginDispatch();
+        for (std::uint32_t i = 1; i <= 512; ++i) {
+            const bool due = q.completedBackedgeNeedsCheck();
+            require(due == (i % interval == 0));
+            if (due) (void)q.shouldCooperateAtCheck();
+        }
+        require(q.pendingHandoffOnNoYieldExit());
+        const int readsAtCap = FakeClock::reads.load();
+        // A task might be suspended for a reason other than rt cooperate:
+        // resetting a dispatch MUST NOT discard the old request.
+        q.beginDispatch();
+        require(q.completedBackedgesThisDispatch() == 0);
+        require(q.pendingHandoffOnNoYieldExit());
+        require(FakeClock::reads.load() == readsAtCap + 1);
+        for (std::uint32_t i = 1; i <= interval; ++i) {
+            require(q.completedBackedgeNeedsCheck() == (i == interval));
+        }
+        require(q.shouldCooperateAtCheck()); // sticky even without elapsed time
+        require(FakeClock::reads.load() == readsAtCap + 1);
+        q.recordedCooperate(); // only actual scheduler handoff acknowledges debt
+        q.beginDispatch();
+        require(!q.pendingHandoffOnNoYieldExit());
+    }
+}
+
+static void watchdog_debt_survives_dispatch_reset() {
+    reset_clock();
+    Quantum q(128);
+    q.beginDispatch();
+    for (int i = 0; i < 128; ++i)
+        (void)q.completedBackedgeNeedsCheck();
+    require(q.shouldCooperateAtCheck(true));
+    require(q.pendingHandoffOnNoYieldExit());
+    q.beginDispatch();
+    require(q.pendingHandoffOnNoYieldExit());
+    require(q.completedBackedgesThisDispatch() == 0);
+    q.recordedCooperate();
+    q.beginDispatch();
+    require(!q.pendingHandoffOnNoYieldExit());
+}
+
+static void over_cap_reset_latches_debt_without_expensive_poll() {
+    reset_clock();
+    Quantum q(512);
+    q.beginDispatch();
+    for (int i = 0; i < 513; ++i) {
+        require(q.completedBackedgeNeedsCheck() == (i == 511));
+        // The host deliberately omitted the one periodic slow poll while
+        // holding a no-yield guard. beginDispatch cannot forgive that debt.
+    }
+    require(q.pendingHandoffOnNoYieldExit());
+    const int before = FakeClock::reads.load();
+    q.beginDispatch();
+    require(FakeClock::reads.load() == before + 1);
+    require(q.pendingHandoffOnNoYieldExit());
+    q.recordedCooperate();
+    q.beginDispatch();
+    require(!q.pendingHandoffOnNoYieldExit());
+}
+
 static void await_is_not_cooperate() {
     reset_clock();
     Quantum q;
@@ -187,6 +251,9 @@ int main() {
     overdue_no_yield_region_latches_handoff_without_per_edge_polls();
     timer_slow_path();
     independent_watchdog_requests_next_safe_boundary();
+    overdue_debt_survives_unrelated_await_and_dispatch_reset();
+    watchdog_debt_survives_dispatch_reset();
+    over_cap_reset_latches_debt_without_expensive_poll();
     await_is_not_cooperate();
     repeated_dispatches_keep_task_context();
     std::cout << "native quantum 64/128/256/512 sticky pending: PASS (host-only, no guest await parity)\n";
