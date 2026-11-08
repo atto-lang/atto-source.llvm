@@ -31,7 +31,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq llvm-18-dev clang-18 lld-18 libzstd-dev cmake file
+          sudo apt-get install -y -qq llvm-18-dev clang-18 lld-18 libzstd-dev wabt cmake file
           clang-18 --version
           test -d "$LLVM_DIR"
       - name: Build native LLVM compiler from exact reviewed source
@@ -46,8 +46,13 @@ jobs:
         run: |
           set -euo pipefail
           python3 tests/guard_native_e2e.py --compiler build/guard-native/oreslang-llvmc --clang /usr/bin/clang-18
+      - name: Reexecute original compiler-backed Wasm32 tenant actor guests and admission negatives
+        env:
+          ATTO_E2E_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          ATTO_BUILD_JOBS: '2'
+        run: bash tools/tenant-vm/verify-atto-e2e.sh
       - name: Explicit evidence boundary
         run: |
-          echo 'ATTO_GUARD_GUEST_SCOPE=ONLY_RESTRICTED_LLVM_SCALAR_NATIVE_GUARD_V1'
+          echo 'ATTO_GUARD_GUEST_SCOPE=RESTRICTED_LLVM_SCALAR_GUARD_AND_EXISTING_TENANT_WASM32_REGRESSIONS'
           echo 'ATTO_GUARD_AOT_CERTIFICATION=false'
           echo 'ATTO_GUARD_GRAAL_DOTNET_WASM_FORGE_PARITY=NOT_EXECUTED'
