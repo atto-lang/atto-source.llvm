@@ -31,7 +31,7 @@ static int happy_path(void) {
 }
 
 #if defined(__unix__) || defined(__APPLE__)
-enum FailureCase { STALE_OFFSET, DOUBLE_DROP, FORGED_OFFSET, LEAK_AT_END };
+enum FailureCase { STALE_OFFSET, DOUBLE_DROP, FORGED_OFFSET, LEAK_AT_END, SLOT_REUSE };
 static void child_failure(enum FailureCase which) {
     ores_actor_region_guest_v1_begin(2, 64, 64);
     const uint32_t object = ores_actor_region_guest_v1_alloc(16);
@@ -43,6 +43,9 @@ static void child_failure(enum FailureCase which) {
         ores_actor_region_guest_v1_drop(object);
     } else if (which == FORGED_OFFSET) {
         (void)ores_actor_region_guest_v1_read_i64(object + 1u, 0);
+    } else if (which == SLOT_REUSE) {
+        ores_actor_region_guest_v1_drop(object);
+        (void)ores_actor_region_guest_v1_alloc(16);
     } else {
         ores_actor_region_guest_v1_end();
     }
@@ -70,6 +73,7 @@ int main(void) {
     CHECK(must_abort(DOUBLE_DROP));
     CHECK(must_abort(FORGED_OFFSET));
     CHECK(must_abort(LEAK_AT_END));
+    CHECK(must_abort(SLOT_REUSE));
 #endif
     puts("ACTOR_REGION_GUEST_V1_HOST_ONLY|sidecar=1|drop=exactly_once|PASS");
     return 0;
