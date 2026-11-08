@@ -8,7 +8,14 @@ use std::fs;
 #[cfg(not(test))]
 use std::path::{Path, PathBuf};
 #[cfg(not(test))]
-use std::process::{Command, Output};
+use std::process::{Command, ExitStatus, Stdio};
+#[cfg(not(test))]
+use std::sync::mpsc;
+#[cfg(not(test))]
+use std::thread;
+#[cfg(not(test))]
+use std::time::{Duration, Instant};
+use std::io::Read;
 
 #[derive(Clone, Copy)]
 struct Case {
@@ -56,14 +63,94 @@ fn git(root: &Path, args: &[&str]) -> Result<String, String> {
     String::from_utf8(output.stdout).map(|x| x.trim().to_owned())
         .map_err(|_| "non-utf8 git output".into())
 }
+fn any_phrase(d: &str, terms: &[&str]) -> bool {
+    terms.iter().any(|term| d.contains(term))
+}
+fn word(d: &str, term: &str) -> bool {
+    d.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+        .any(|token| token == term)
+}
 fn matches_policy(c: &Case, stderr: &str) -> bool {
+    if stderr.is_empty() || stderr.len() > 65536 { return false; }
     let d = stderr.to_ascii_lowercase();
-    c.subjects.iter().any(|word| if *word == "x" {
-        d.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
-            .any(|token| token == "x")
-    } else { d.contains(word) }) &&
-    c.policies.iter().any(|word| d.contains(word)) &&
-    !d.contains("internal error") && !d.contains("stack overflow")
+    if any_phrase(&d, &["syntax error", "parse error", "unexpected token",
+        "unexpected character", "unsupported character", "unexpected const",
+        "unrecognized token", "unresolved identifier", "unknown identifier",
+        "internal error", "stack overflow"]) { return false; }
+    let removed = || d.contains("operator") &&
+        any_phrase(&d, &["removed", "unsupported", "forbidden", "not allowed", "invalid"]);
+    match c.name {
+        "removed-modulo" =>
+            (d.contains('%') || d.contains("modulo")) && removed(),
+        "removed-caret" =>
+            (d.contains('^') || d.contains("caret"))
+                && !d.contains("^^") && !any_phrase(&d, &["double caret", "double-caret"])
+                && removed(),
+        "removed-double-caret" =>
+            (d.contains("^^") || any_phrase(&d, &["double caret", "double-caret"])) && removed(),
+        "type-first-reassignment" | "typed-const-reassignment" =>
+            word(&d, "x") &&
+            any_phrase(&d, &["immutable", "readonly", "read-only", "constant binding",
+                "const binding", "const variable"]) &&
+            any_phrase(&d, &["assign", "rebind", "mutation", "write"]),
+        "legacy-async-modifier" =>
+            word(&d, "async") &&
+            any_phrase(&d, &["unsupported", "forbidden", "disallowed",
+                "not allowed", "deprecated", "use suspends", "invalid modifier"]),
+        "critical-suspends-modifier" | "suspends-critical-modifier" =>
+            word(&d, "critical") && word(&d, "suspends") &&
+            any_phrase(&d, &["invalid", "forbidden", "disallowed", "cannot",
+                "not allowed", "incompatible", "mutually exclusive"]),
+        _ => false
+    }
+}
+const MAX_COMPILER_STREAM_BYTES: usize = 65536;
+// Bound each compiler stream in memory. If the child exceeds the cap the
+// reader closes its pipe; this cannot become a valid negative receipt.
+fn read_bounded(mut reader: impl Read) -> Result<Vec<u8>, String> {
+    let mut data = Vec::new();
+    reader.take((MAX_COMPILER_STREAM_BYTES + 1) as u64)
+        .read_to_end(&mut data).map_err(|_| "compiler stream read failed".to_owned())?;
+    if data.len() > MAX_COMPILER_STREAM_BYTES {
+        return Err("compiler stream exceeded 64KiB cap".into());
+    }
+    Ok(data)
+}
+#[cfg(not(test))]
+fn compile_bounded(compiler: &Path, root: &Path, source: &Path)
+        -> Result<(ExitStatus, Vec<u8>, Vec<u8>), String> {
+    let mut child = Command::new(compiler).arg("--target=host").arg(source)
+        .current_dir(root).stdout(Stdio::piped()).stderr(Stdio::piped())
+        .spawn().map_err(|e| format!("compiler launch failed: {e}"))?;
+    let stdout = child.stdout.take().ok_or("missing child stdout")?;
+    let stderr = child.stderr.take().ok_or("missing child stderr")?;
+    let (out_tx, out_rx) = mpsc::channel();
+    let (err_tx, err_rx) = mpsc::channel();
+    thread::spawn(move || { let _ = out_tx.send(read_bounded(stdout)); });
+    thread::spawn(move || { let _ = err_tx.send(read_bounded(stderr)); });
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if start.elapsed() < Duration::from_secs(20) =>
+                thread::sleep(Duration::from_millis(10)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("compiler exceeded 20s limit".into());
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("compiler wait failed".into());
+            }
+        }
+    };
+    let out = out_rx.recv_timeout(Duration::from_secs(2))
+        .map_err(|_| "compiler stdout pipe did not close".to_owned())??;
+    let err = err_rx.recv_timeout(Duration::from_secs(2))
+        .map_err(|_| "compiler stderr pipe did not close".to_owned())??;
+    Ok((status, out, err))
 }
 #[cfg(not(test))]
 fn verify_source(root: &Path, c: &Case) -> Result<PathBuf, String> {
@@ -104,24 +191,30 @@ fn run() -> Result<(), String> {
         return Err("real LLVM compiler executable missing".into());
     }
     let tree = git(&root, &["rev-parse", "HEAD^{tree}"])?;
+    let script = "tests/atto_negative_semantic_gate.rs";
+    if git(&root, &["rev-parse", &format!("HEAD:{script}")])?
+            != git(&root, &["hash-object", "--no-filters", script])? {
+        return Err("native negative gate script differs from exact PR head".into());
+    }
     for case in &CASES {
         let source = verify_source(&root, case)?;
-        let result: Output = Command::new(compiler).arg("--target=host").arg(&source)
-            .current_dir(&root).output()
-            .map_err(|e| format!("{}: compiler launch: {e}", case.name))?;
-        let status = result.status.code();
+        let (exit, stdout, stderr_bytes) = compile_bounded(compiler, &root, &source)
+            .map_err(|e| format!("{}: {e}", case.name))?;
+        let status = exit.code();
         if !matches!(status, Some(1..=127)) {
             return Err(format!("{}: compiler accepted, crashed, or returned invalid status: {:?}",
                 case.name, status));
         }
-        if !result.stdout.is_empty() {
+        if !stdout.is_empty() {
             return Err(format!("{}: forbidden input emitted LLVM IR bytes", case.name));
         }
-        let stderr = String::from_utf8(result.stderr)
+        let stderr = String::from_utf8(stderr_bytes)
             .map_err(|_| format!("{}: invalid compiler diagnostic encoding", case.name))?;
         if !matches_policy(case, &stderr) {
             return Err(format!("{}: wrong or generic compiler diagnostic", case.name));
         }
+        // Do not accept a compiler that mutates its input fixture while parsing.
+        verify_source(&root, case)?;
         println!("ATTO_LLVM_NEGATIVE_SOURCE_REJECT|head={expected}|tree={tree}|case={}|blob={}|no_ir=yes",
             case.name, case.git_blob);
     }
