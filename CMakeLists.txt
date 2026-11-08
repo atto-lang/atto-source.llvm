@@ -3528,6 +3528,48 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-arena-test)
     set_tests_properties(native_actor_arena_persistent_scratch PROPERTIES TIMEOUT 25)
 
+    # Real ActorRegionV1 generational offset/drop ABI. Host-only evidence;
+    # not compiler-generated guest execution.
+    add_executable(oreslang-native-actor-region-v1-test
+        tests/actor_region_v1_test.c
+        src/main/cpp/oreslang/runtime/ActorRegionV1.c
+        src/main/cpp/oreslang/runtime/ActorArena.c)
+    target_include_directories(oreslang-native-actor-region-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-region-v1-test PRIVATE c_std_11)
+    target_compile_options(oreslang-native-actor-region-v1-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_region_v1_offsets_generation_drop
+        COMMAND oreslang-native-actor-region-v1-test)
+    set_tests_properties(native_actor_region_v1_offsets_generation_drop PROPERTIES TIMEOUT 30)
+
+    # Guest bridge contract: sidecar proofs stay host-only; stale guest offsets
+    # must remain invalid after the physical ActorArena slot is reused.
+    add_executable(oreslang-native-actor-region-guest-v1-test
+        tests/actor_region_guest_v1_bridge_test.c
+        src/main/cpp/oreslang/runtime/ActorRegionGuestV1.c
+        src/main/cpp/oreslang/runtime/ActorRegionV1.c
+        src/main/cpp/oreslang/runtime/ActorArena.c)
+    target_include_directories(oreslang-native-actor-region-guest-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-region-guest-v1-test PRIVATE c_std_11)
+    target_compile_options(oreslang-native-actor-region-guest-v1-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_region_guest_v1_sidecar_contract_host_only
+        COMMAND oreslang-native-actor-region-guest-v1-test)
+    set_tests_properties(native_actor_region_guest_v1_sidecar_contract_host_only
+        PROPERTIES TIMEOUT 45)
+
+    # Compiler-generated LLVM IR proof. This does NOT link or execute a guest;
+    # compile-aot.sh still refuses the unchecked ActorRegion native closure.
+    add_test(NAME actor_region_v1_compiler_generated_ir_and_negative_admission
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+            "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_region_v1_compiler_lowering_v1.cmake")
+    set_tests_properties(actor_region_v1_compiler_generated_ir_and_negative_admission
+        PROPERTIES TIMEOUT 45)
+
     # Trusted host-only shared-region capability and read/write lease prototype.
     add_executable(oreslang-native-shared-domain-arena-test
         tests/native_shared_domain_arena_test.cpp)
