@@ -4,17 +4,7 @@ on:
   push:
     branches:
       - audit/scheduler-control-gate-20261108
-    paths:
-      - ".github/workflows/scheduler-control-exact-head.yml"
-      - "scripts/test-native-vm-nio-host-sanitizers.sh"
-      - "src/main/cpp/oreslang/runtime/NativeOresVM.c"
-      - "src/main/cpp/oreslang/runtime/NativeOresVM.h"
-      - "src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
-      - "src/main/cpp/oreslang/runtime/NativeActorFuture.c"
-      - "tests/native_vm_main_control_loop_test.c"
-      - "tests/native_vm_main_control_create_failure_test.c"
-      - "tests/native_ores_vm_test.c"
-      - "tests/native_vm_nio_lifecycle_test.c"
+    # No paths filter: any new branch commit invalidates an earlier exact-SHA test.
   workflow_dispatch:
 
 permissions:
@@ -48,13 +38,6 @@ jobs:
           printf 'source_commit=%s\n' "$(git rev-parse HEAD)"
           printf 'source_tree=%s\n' "$(git rev-parse 'HEAD^{tree}')"
           printf 'test_script_blob=%s\n' "$(git rev-parse HEAD:scripts/test-native-vm-nio-host-sanitizers.sh)"
-      - name: Execute real native CONTROL/NIO and pthread-failure sanitizer tests
-        shell: bash
-        env:
-          ORES_NIO_EXPECT_HEAD: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          bash scripts/test-native-vm-nio-host-sanitizers.sh
       - name: Execute native scheduler-domain security nonclaim and cross-domain rejection
         shell: bash
         run: |
@@ -73,13 +56,26 @@ jobs:
               -o "$build_dir/native-oresvm-$cc"
             ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
             UBSAN_OPTIONS=halt_on_error=1 \
-              timeout 90s "$build_dir/native-oresvm-$cc"
+              timeout 90s "$build_dir/native-oresvm-$cc" | tee "$build_dir/security-$cc.log"
+            # Do not rely on a zero shell exit alone: this exact fixture emits
+            # the success sentinel only after the negative-domain assertions.
+            grep -Fxq 'NATIVE_ORES_VM_PASS domains=4 default_workers=5 control=priority' \
+              "$build_dir/security-$cc.log"
             echo "PASS HOST ONLY: $cc native domains not security boundaries"
           done
+      - name: Execute real native CONTROL/NIO and pthread-failure sanitizer tests
+        shell: bash
+        env:
+          ORES_NIO_EXPECT_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          bash scripts/test-native-vm-nio-host-sanitizers.sh
       - name: Certify executed HOST-only sanitizer gate and source identity
         shell: bash
         run: |
           set -euo pipefail
+          test "$(git rev-parse --verify HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
           printf 'PASS HOST ONLY; no compiled .ores guest parity certified\n'
           printf 'verified_source_commit=%s\n' "$GITHUB_SHA"
           printf 'verified_source_tree=%s\n' "$(git rev-parse 'HEAD^{tree}')"
