@@ -512,7 +512,10 @@ if(BUILD_TESTING)
     add_executable(oreslang-native-scalar-call-verifier-test
         tests/native_scalar_guest_call_verifier_test.cpp)
     target_include_directories(oreslang-native-scalar-call-verifier-test PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    # LLVM SDK headers are third-party dependencies; keep project -Werror
+    # scoped to our verifier/test, not diagnostics from LLVM headers.
+    target_include_directories(oreslang-native-scalar-call-verifier-test SYSTEM PRIVATE
         "${LLVM_INCLUDE_DIRS}")
     target_compile_options(oreslang-native-scalar-call-verifier-test PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
