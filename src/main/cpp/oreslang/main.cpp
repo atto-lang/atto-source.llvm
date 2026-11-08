@@ -212,6 +212,8 @@ int main(int argc, char** argv) {
     std::string rt_entry = "main/0";
     std::string rt_report_path;
     bool tree_shake = false;
+    bool isolate_entry_seen = false;
+    std::string isolate_entry;
     std::vector<std::string> tree_shake_roots;
     const char* path = nullptr;
     // Host-only severity policy: last CLI flag overrides the environment.
@@ -290,6 +292,11 @@ int main(int argc, char** argv) {
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
+        } else if (arg.rfind("--isolate-entry=", 0) == 0) {
+            if (isolate_entry_seen) { std::cerr << "duplicate isolate entry\n"; return 2; }
+            isolate_entry_seen = true;
+            isolate_entry = arg.substr(std::string("--isolate-entry=").size());
+            if (isolate_entry.empty()) { std::cerr << "empty isolate entry\n"; return 2; }
         } else if (arg == "--tree-shake") {
             if (tree_shake) { std::cerr << "duplicate tree-shake option\n"; return 2; }
             tree_shake = true;
@@ -364,6 +371,13 @@ int main(int argc, char** argv) {
              experimental_owned_int || experimental_rt_scalar_loop ||
              target_seen || allocator_provider_seen)) {
         std::cerr << "constraint-descriptors is a metadata-only mode and cannot be combined with execution/codegen options\n";
+        return 2;
+    }
+    if (isolate_entry_seen && (tree_shake || !tree_shake_roots.empty() ||
+            wasm32_target || cortex_m_target || experimental_owned_int ||
+            experimental_rt_scalar_loop || native_hard_rt_profile ||
+            bounded_allocator_provider || rt_check_only || rt_report_seen)) {
+        std::cerr << "isolate entry supports only ordinary host scalar codegen\n";
         return 2;
     }
     if (!tree_shake && !tree_shake_roots.empty()) {
@@ -740,7 +754,7 @@ int main(int argc, char** argv) {
             // so unsupported target features cannot hide in unreachable code.
             (void)oreslang::emit_verified_llvm_ir(
                 ast, wasm32_target, cortex_m_target,
-                bounded_allocator_provider, tenant_vm_guest);
+                bounded_allocator_provider, {}, tenant_vm_guest);
 
             // The shipped pass is deliberately function-only. Richer Program
             // owners have hidden semantic/ABI roots that are not represented
@@ -752,7 +766,7 @@ int main(int argc, char** argv) {
         }
         std::cout << oreslang::emit_verified_llvm_ir(
                 ast, wasm32_target, cortex_m_target,
-                bounded_allocator_provider, tenant_vm_guest);
+                bounded_allocator_provider, isolate_entry, tenant_vm_guest);
         std::cout.flush();
         if (coreLog) coreLog->dump(stderr);
         return 0;

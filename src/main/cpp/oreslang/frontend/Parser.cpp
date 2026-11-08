@@ -287,6 +287,23 @@ public:
                 return {Kind::Symbol, source_.substr(start, 2), start};
             }
         }
+        // Injected mutable state changes ownership and runtime lifetime.
+        // No native annotation HIR exists yet: reject before '@' can be
+        // treated as a generic symbol or discarded during source lowering.
+        // This lexer only reaches executable tokens (not comments/strings).
+        if (ch == '@') {
+            std::size_t after_name = start + 1;
+            while (after_name < source_.size() && identifier_part(source_[after_name]))
+                ++after_name;
+            const auto annotation = source_.substr(start + 1, after_name - start - 1);
+            if (annotation == "Inject" || annotation == "StateBacked" ||
+                    annotation == "MutableStateContainer" || annotation == "StateContainer") {
+                throw std::runtime_error(
+                    "STATE_INJECTION_UNSUPPORTED: @" + std::string(annotation) +
+                    " requires native typed region and borrow lowering at byte " +
+                    std::to_string(start));
+            }
+        }
         if (ch == '@' && source_.substr(start, 15) == "@DefaultArgVals") {
             throw std::runtime_error("native @DefaultArgVals declaration requires "
                                      "checked named defaults, ownership and ABI lowering at byte "
@@ -349,6 +366,9 @@ bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
             expr.kind == Expression::Kind::Subtract ||
             expr.kind == Expression::Kind::Multiply ||
             expr.kind == Expression::Kind::Remainder ||
+            expr.kind == Expression::Kind::ShiftLeft ||
+            expr.kind == Expression::Kind::ShiftRight ||
+            expr.kind == Expression::Kind::ShiftUnsignedRight ||
             expr.kind == Expression::Kind::Equal ||
             expr.kind == Expression::Kind::NotEqual ||
             expr.kind == Expression::Kind::Less ||
@@ -381,7 +401,9 @@ bool native_capture_free_task_tree(
     if ((expr.kind == K::Negate || expr.kind == K::LogicalNot) && expr.left)
         return native_capture_free_task_tree(*expr.left, depth + 1);
     if ((expr.kind == K::Add || expr.kind == K::Subtract ||
-            expr.kind == K::Multiply || expr.kind == K::Equal ||
+            expr.kind == K::Multiply || expr.kind == K::ShiftLeft ||
+            expr.kind == K::ShiftRight || expr.kind == K::ShiftUnsignedRight ||
+            expr.kind == K::Equal ||
             expr.kind == K::NotEqual || expr.kind == K::Less ||
             expr.kind == K::LessEqual || expr.kind == K::Greater ||
             expr.kind == K::GreaterEqual || expr.kind == K::LogicalAnd ||
@@ -416,7 +438,9 @@ bool native_async_i64_tree(
         return native_async_i64_tree(
             *expr.left, allowed_parameter, depth + 1);
     if ((expr.kind == K::Add || expr.kind == K::Subtract ||
-            expr.kind == K::Multiply || expr.kind == K::Equal ||
+            expr.kind == K::Multiply || expr.kind == K::ShiftLeft ||
+            expr.kind == K::ShiftRight || expr.kind == K::ShiftUnsignedRight ||
+            expr.kind == K::Equal ||
             expr.kind == K::NotEqual || expr.kind == K::Less ||
             expr.kind == K::LessEqual || expr.kind == K::Greater ||
             expr.kind == K::GreaterEqual || expr.kind == K::LogicalAnd ||
@@ -476,6 +500,8 @@ bool native_constructor_scalar_tree(const Expression& expr,
         return expr.left && native_constructor_scalar_tree(*expr.left, depth + 1);
     if (expr.kind == Kind::Add || expr.kind == Kind::Subtract ||
             expr.kind == Kind::Multiply || expr.kind == Kind::Remainder ||
+            expr.kind == Kind::ShiftLeft || expr.kind == Kind::ShiftRight ||
+            expr.kind == Kind::ShiftUnsignedRight ||
             expr.kind == Kind::Equal ||
             expr.kind == Kind::NotEqual || expr.kind == Kind::Less ||
             expr.kind == Kind::LessEqual || expr.kind == Kind::Greater ||
@@ -576,6 +602,43 @@ bool entry_builtin_name(std::string_view name) {
     return name == "Entry";
 }
 
+/*
+ * The async-only I/O contract names a closed set of future standard-library
+ * operations. Until the native frontend has typed I/O registry resolution,
+ * suspension-aware effects and continuation lowering, user declarations must
+ * not impersonate those spellings and thereby turn an unsupported I/O call
+ * into an ordinary synchronous native function. This is intentionally NOT a
+ * blanket "_async"/"_blocking" suffix reservation: ordinary user functions
+ * such as pure_math_blocking remain legal.
+ */
+bool native_reserved_io_callable_name(std::string_view name) {
+    const auto dot = name.rfind('.');
+    if (dot != std::string_view::npos) name.remove_prefix(dot + 1);
+    static constexpr std::string_view reserved[] = {
+        "read_text",
+        "write_text",
+        "read_text_blocking",
+        "read_text_async",
+        "write_text_blocking",
+        "write_text_async",
+        "connect_blocking",
+        "connect_async",
+        "read_line_blocking",
+        "read_line_async",
+        "socket_write_text_blocking",
+        "socket_write_text_async",
+        "http_get_text_blocking",
+        "http_get_text_async",
+        "http_post_text_blocking",
+        "http_post_text_async",
+        "println_blocking",
+        "println_async"
+    };
+    for (const auto candidate : reserved)
+        if (name == candidate) return true;
+    return false;
+}
+
 [[noreturn]] void reject_native_entry_boundary(std::size_t offset) {
     throw std::runtime_error(
         "native Entry<K,V> requires nominal product lowering and ownership parity"
@@ -596,6 +659,41 @@ public:
             advance();
             if (token_.text == "contract")
                 fail("native contract imports require a validated cross-unit linker");
+            if (accept("fnc")) {
+                // Java-compatible named function import: `import fnc a, b from "p";`
+                // or `import fnc a as b from "p";`. One import record per name;
+                // the module loader binds each to the target file's pub function.
+                std::vector<ModuleImport> selected;
+                const std::size_t offset = token_.offset;
+                do {
+                    ModuleImport imported;
+                    imported.offset = offset;
+                    imported.selected_function = true;
+                    imported.selected_module = identifier();
+                    imported.local_name = imported.selected_module;
+                    selected.push_back(std::move(imported));
+                } while (accept(","));
+                if (accept("as")) {
+                    if (selected.size() != 1) fail("named import aliases require exactly one selected name");
+                    selected.front().local_name = identifier();
+                }
+                require("from");
+                if (token_.kind != Kind::String) fail("native function import requires a quoted source path");
+                const std::string path(token_.text);
+                if (path.empty() || path.size() > 4096) fail("native import path must contain 1..4096 bytes");
+                for (unsigned char ch : path)
+                    if (ch < 32 || ch == 127 || ch == '\\')
+                        fail("native import path escapes/control characters unsupported");
+                advance();
+                require(";");
+                for (auto& imported : selected) {
+                    if (module_names_.count(imported.local_name) || !function_import_names_.insert(imported.local_name).second)
+                        fail("duplicate imported function binding '" + imported.local_name + "'");
+                    imported.path = path;
+                    program.imports.push_back(std::move(imported));
+                }
+                continue;
+            }
             ModuleImport imported;
             imported.offset = token_.offset;
             imported.selected_class = accept("class");
@@ -650,10 +748,12 @@ public:
                 continue;
             }
             if (token_.text == "state" && peek_next().text == "container")
-                    fail("STATE_CONTAINER_BACKEND_UNSUPPORTED: protected heap region and critical guard lowering required");
-                if (token_.text == "virtual" && peek_next().text == "actor")
-                    fail("VIRTUAL_ACTOR_BACKEND_UNSUPPORTED: logical key and activation fencing required");
-                if (token_.text == "model")
+                fail("STATE_CONTAINER_BACKEND_UNSUPPORTED: protected heap region and critical guard lowering required");
+            if (token_.text == "virtual" && peek_next().text == "actor")
+                fail("VIRTUAL_ACTOR_BACKEND_UNSUPPORTED: logical key and activation fencing required");
+            if (token_.text == "supervisor")
+                fail("NATIVE_SUPERVISOR_UNSUPPORTED: source supervisor requires immutable typed Failure and compiler-owned CONTROL lowering");
+            if (token_.text == "model")
                 fail("MODEL_BACKEND_UNSUPPORTED: native model graph requires verified operation provenance, configuration and codegen parity");
             if (accept("enum")) {
                 if (token_.text != "MaxActorThreads")
@@ -715,6 +815,51 @@ public:
             bool public_class = token_.text == "pub" && peek_next().text == "define";
             if (public_class) advance();
             if (accept("@")) {
+                if (accept("CExportU32")) {
+                    // Deliberately one exact host ABI slot; extending to
+                    // parameters, pointers, uint64 or other host symbols
+                    // requires a separate typed ownership and calling
+                    // convention lowering contract.
+                    require("(");
+                    if (token_.kind != Kind::String)
+                        fail("C_EXPORT_U32_REJECT: required literal C symbol");
+                    const std::string c_symbol(token_.text);
+                    advance();
+                    require(")");
+                    if (c_symbol != "ores_browser_abi_version")
+                        fail("C_EXPORT_U32_REJECT: unsupported C symbol");
+                    if (!program.module.empty() || !program.namespace_name.empty())
+                        fail("C_EXPORT_U32_REJECT: module and namespace exports unsupported");
+                    Function fn = function();
+                    if (!fn.exported || fn.async_source_i64 ||
+                        !fn.method_owner.empty() || !fn.parameters.empty() ||
+                        !fn.generic_parameters.empty() ||
+                        fn.returns_void || fn.return_type != ScalarType::I64 ||
+                        !fn.pending_return_type_alias.empty() ||
+                        !fn.return_class.empty() || !fn.return_sum.empty() ||
+                        fn.has_declared_effects || !fn.result ||
+                        fn.result->kind != Expression::Kind::Integer ||
+                        fn.result->integer != 1 ||
+                        !fn.locals.empty() || !fn.statements.empty() ||
+                        !fn.early_returns.empty() || !fn.actor_spawns.empty() ||
+                        !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
+                        !fn.actor_actions.empty() || !fn.actor_field_writes.empty() ||
+                        !fn.ready_await_actor.empty() || !fn.done_await_actor.empty() ||
+                        !fn.ready_future_name.empty() || !fn.ready_future_actor.empty() ||
+                        !fn.source_tasks.empty() ||
+                        !fn.future_pipelines.empty() || fn.scalar_while ||
+                        fn.caught_throw_value || !fn.caught_throw_defers.empty())
+                        fail("C_EXPORT_U32_REJECT: initial browser version export must be literal int 1 without effects");
+                    if (fn.name == c_symbol || fn.name == "main")
+                        fail("C_EXPORT_U32_REJECT: guest symbol collides with C ABI");
+                    for (const auto& prior : program.functions)
+                        if (prior.c_export_u32_symbol == c_symbol ||
+                            prior.name == c_symbol)
+                            fail("C_EXPORT_U32_REJECT: duplicate or colliding C ABI symbol");
+                    fn.c_export_u32_symbol = c_symbol;
+                    program.functions.push_back(std::move(fn));
+                    continue;
+                }
                 const MaxActorThreads cap = actor_max_threads_attribute();
                 require("define");
                 require("actor");
@@ -743,6 +888,8 @@ public:
                     fail("STATE_CONTAINER_BACKEND_UNSUPPORTED: protected heap region and critical guard lowering required");
                 if (token_.text == "virtual" && peek_next().text == "actor")
                     fail("VIRTUAL_ACTOR_BACKEND_UNSUPPORTED: logical key and activation fencing required");
+                if (token_.text == "supervisor")
+                    fail("NATIVE_SUPERVISOR_UNSUPPORTED: source supervisor requires immutable typed Failure and compiler-owned CONTROL lowering");
                 if (token_.text == "model")
                     fail("MODEL_BACKEND_UNSUPPORTED: native model graph requires verified operation provenance, configuration and codegen parity");
                 if (public_class && token_.text != "class") fail("native pub define currently supports only class declarations");
@@ -784,6 +931,20 @@ public:
                 program.cooperative_loops.empty() && program.generators.empty() &&
                 program.type_only_declarations.empty())
             fail("expected at least one function, generator, actor or type-only declaration");
+        // P0 C host exposure is deliberately *version-only*. Without this
+        // whole-source check a second unannotated guest function would retain
+        // external LLVM linkage and become a callable ELF export, bypassing
+        // the supposedly closed one-symbol browser ABI.
+        for (const auto& fn : program.functions) {
+            if (fn.c_export_u32_symbol.empty()) continue;
+            if (program.functions.size() != 1 ||
+                !program.actors.empty() || !program.classes.empty() ||
+                !program.generators.empty() || !program.cooperative_loops.empty() ||
+                !program.type_only_declarations.empty() ||
+                !program.contracts.empty() || !program.imports.empty() ||
+                !sum_types_.empty())
+                fail("C_EXPORT_U32_REJECT: version-only host source may contain only one guest function and no other declarations");
+        }
         if (!program.cooperative_loops.empty() &&
                 (program.cooperative_loops.size() != 1 || !program.functions.empty() ||
                  !program.generators.empty() || !program.actors.empty() ||
@@ -1319,12 +1480,16 @@ private:
             field.offset = token_.offset;
             field.field_mutable = token_.text == "let";
             advance();
+            // Canonical type-first `let int total = 0;` or native `let total: int = 0;`.
+            const bool type_first = accept("int");
             field.name = identifier();
             if (!names.insert(field.name).second) fail("duplicate actor field '" + field.name + "'");
             // A child this actor owns: spawned when it starts, and stopped after it ends.
             bool child = false;
             std::string declared_child;
-            if (accept(":")) {
+            if (type_first) {
+                require("=");
+            } else if (accept(":")) {
                 if (accept("ActorRef")) {
                     require("<");
                     declared_child = identifier();
@@ -1339,6 +1504,7 @@ private:
                 child = true;
             }
             if (child || token_.text == "spawn") {
+                if (type_first) fail("actor child reference must be declared ActorRef<T> or inferred, not int");
                 if (field.field_mutable) fail("actor child reference must be const");
                 require("spawn");
                 field.actor_ref_type = identifier();
@@ -1397,6 +1563,8 @@ private:
         require(":");
         require("int");
         require("{");
+        actor_handler_active_ = true;
+        struct HandlerScope { bool& flag; ~HandlerScope() { flag = false; } } handler_scope{actor_handler_active_};
         // The first compiler-lowered per-message owned value slice is
         // deliberately synchronous and immutable. Handler temporaries are
         // allocated in the existing actor heap and dropped before returning;
@@ -1433,6 +1601,7 @@ private:
             }
             ActorFieldWrite write;
             write.offset = token_.offset;
+            if (accept("self")) require(".");
             write.field = identifier();
             if (accept(".")) {
                 // Sent when this turn commits, along with its field writes, or not at all.
@@ -1907,6 +2076,9 @@ private:
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
         value.name = owner.empty() ? identifier() : owner + "." + identifier();
+        if (native_reserved_io_callable_name(value.name))
+            fail("native I/O callable name is compiler-owned until typed registry, "
+                 "nonblocking transport and continuation lowering are available");
         if (!owner.empty() && token_.text == "<") fail("native generic methods require typed receiver monomorphization");
         if (accept("<")) {
             if (accept(">")) fail("native generic declaration cannot be empty");
@@ -2659,8 +2831,8 @@ private:
                 if (token_.text == "if" && !finally_scope) {
                     advance(); statement.kind = Statement::Kind::Conditional;
                     statement.condition = expression();
-                    if (accept(";")) {
-                        if (!accept("then")) require("do"); statement.then_statements = branch_arm(false, true);
+                    if (accept_keyword_if_header()) {
+                        statement.then_statements = branch_arm(false, true);
                         if (accept("else")) statement.else_statements = branch_arm(false, true);
                     } else {
                         require("{"); statement.then_statements = branch_arm(false, false); require("}");
@@ -3032,12 +3204,8 @@ private:
                 auto condition = expression();
                 if (terminal_try_finally && !native_pure_scalar_tree(*condition))
                     fail("native protected try guard requires a pure nonthrowing bool expression");
-                const bool then_form = accept(";");
-                if (then_form) {
-                    if (!accept("then")) require("do");
-                } else {
-                    require("{");
-                }
+                const bool then_form = accept_keyword_if_header();
+                if (!then_form) require("{");
                 if (accept("return")) {
                     if (value.returns_void)
                         fail("guarded early return requires a scalar result");
@@ -3205,6 +3373,27 @@ private:
             }
             Statement statement;
             statement.offset = token_.offset;
+            // Java/canonical spelling `worker.stop();` is the same request as
+            // the native `stop worker;` statement on a direct ActorRef. `stop` is
+            // a keyword, so recognise it by lookahead before expression parsing.
+            if (token_.kind == Kind::Identifier && !reserved(token_.text) && [&] {
+                    Lexer look = lexer_;
+                    return look.next().text == "." && look.next().text == "stop"
+                        && look.next().text == "(";
+                }()) {
+                const std::string reference = identifier();
+                require(".");
+                require("stop");
+                require("(");
+                require(")");
+                require(";");
+                if (!value.done_await_actor.empty())
+                    fail("actor effects after await get_done are unsupported");
+                value.actor_stops.push_back(reference);
+                value.actor_actions.push_back({ActorAction::Kind::Stop,
+                                               value.actor_stops.size() - 1});
+                continue;
+            }
             auto action = primary();
             if (action->kind == Expression::Kind::Field && action->name == "send"
                     && accept("(")) {
@@ -3380,7 +3569,7 @@ private:
     }
 
     std::unique_ptr<Expression> comparison() {
-        auto left = additive();
+        auto left = shift();
         while (token_.text == "<" || token_.text == "<=" ||
                 token_.text == ">" || token_.text == ">=") {
             const auto offset = token_.offset;
@@ -3390,6 +3579,41 @@ private:
                 : op == "<=" ? Expression::Kind::LessEqual
                 : op == ">" ? Expression::Kind::Greater
                 : Expression::Kind::GreaterEqual;
+            auto expr = make_expression(kind, offset);
+            expr->left = std::move(left);
+            expr->right = shift();
+            left = std::move(expr);
+        }
+        return left;
+    }
+
+    // Java/Graal precedence: shift binds less tightly than additive and
+    // more tightly than numeric comparison. Keep '<' and '>' as SINGLE
+    // tokens in the lexer: native nested generic type closers must not be
+    // reinterpreted as arithmetic operators.
+    std::unique_ptr<Expression> shift() {
+        auto left = additive();
+        for (;;) {
+            const bool left_shift = token_.text == "<";
+            const bool right_shift = token_.text == ">";
+            if (!left_shift && !right_shift) break;
+            const Token next = peek_next();
+            if (next.text != token_.text || next.offset != token_.offset + 1)
+                break; // x > > y is not x >> y; adjacent only.
+            const auto offset = token_.offset;
+            auto kind = left_shift ? Expression::Kind::ShiftLeft
+                                   : Expression::Kind::ShiftRight;
+            std::size_t width = 2;
+            if (right_shift) {
+                Lexer lookahead = lexer_;
+                (void)lookahead.next();
+                const Token third = lookahead.next();
+                if (third.text == ">" && third.offset == next.offset + 1) {
+                    kind = Expression::Kind::ShiftUnsignedRight;
+                    width = 3;
+                }
+            }
+            for (std::size_t n = 0; n < width; ++n) advance();
             auto expr = make_expression(kind, offset);
             expr->left = std::move(left);
             expr->right = additive();
@@ -3786,7 +4010,24 @@ private:
         if (accept("stdio")) {
             require(".");
             auto expr = make_expression(Expression::Kind::Console, offset);
+            // String unless the native type checker proves an int/bool argument.
+            expr->resolved_type = ScalarType::String;
             expr->name = identifier();
+            if (expr->name == "stdout") {
+                // Java stdio.stdout.write/println take exactly one argument and
+                // render it like stdio.print/println; write adds no newline.
+                // Lower onto the same Console node so output is byte-identical.
+                require(".");
+                const std::string member = identifier();
+                if (member == "write") expr->name = "print";
+                else if (member == "println") expr->name = "println";
+                else fail("unsupported native stdio.stdout operation");
+                require("(");
+                expr->left = expression();
+                if (token_.text == ",") fail("stdio.stdout." + member + " takes exactly one argument");
+                require(")");
+                return expr;
+            }
             if (expr->name != "print" && expr->name != "println") fail("unsupported native stdio operation");
             // Java stdio.print/println concatenate arguments without an
             // inserted separator and append at most one newline. Lower all
@@ -3861,6 +4102,13 @@ private:
             token_.text == "ActorGroupJoinCapability")
             fail("native ActorGroup source lowering unsupported: "
                  "typed membership capabilities and lifecycle authority required");
+        if (actor_handler_active_ && token_.text == "self") {
+            advance();
+            require(".");
+            auto field = make_expression(Expression::Kind::Variable, offset);
+            field->name = identifier();
+            return field;
+        }
         const bool extension_self = extension_header_active_ && token_.text == "self";
         if (token_.kind != Kind::Identifier || (reserved(token_.text) && token_.text != "pattern" &&
                 !sum_variant(token_.text) &&
@@ -3952,13 +4200,22 @@ private:
             const bool actor_send = field->name == "send" && !named_class_receiver;
             if (!actor_send && accept("(")) {
                 field->kind = Expression::Kind::ArrayCall;
+                // Member syntax is also used by extension-call lowering. Do not
+                // let it bypass the duplicate/ordering rules of direct calls.
+                bool member_named_seen = false;
+                std::unordered_set<std::string> member_labels;
                 if (!accept(")")) {
                     do {
                         if (named_argument_ahead()) {
                             std::string label = identifier();
                             require(":");
+                            if (!member_labels.insert(label).second)
+                                fail("duplicate named member argument '" + label + "'");
+                            member_named_seen = true;
                             field->argument_names.push_back(std::move(label));
                         } else {
+                            if (member_named_seen)
+                                fail("positional member argument cannot follow named argument");
                             field->argument_names.emplace_back();
                         }
                         field->arguments.push_back(expression());
@@ -3997,6 +4254,16 @@ private:
         if (token_.text != text) return false;
         advance();
         return true;
+    }
+
+    // Keyword-delimited `if` header after the condition, matching the Java
+    // reference: the `;` is optional, `then` is canonical and `do` is the
+    // deprecated spelling. Returns false when the caller must parse a `{` block.
+    bool accept_keyword_if_header() {
+        const bool semicolon = accept(";");
+        if (accept("then") || accept("do")) return true;
+        if (semicolon) require("then");
+        return false;
     }
 
     // Consult a copy of the scanner rather than merging arithmetic tokens.
@@ -4251,6 +4518,18 @@ private:
                 validate_expression(*expr.left, parameters, functions, depth + 1);
                 return;
             case Expression::Kind::ArrayCall:
+                // Named extension calls are lowered to ordinary Call nodes
+                // before this validation. Remaining ArrayCall nodes have no
+                // checked label-to-formal mapping: never silently discard
+                // source labels when invoking a native array operation.
+                if (!expr.argument_names.empty() &&
+                    expr.argument_names.size() != expr.arguments.size())
+                    throw std::runtime_error("invalid native member argument layout");
+                for (const auto& label : expr.argument_names)
+                    if (!label.empty())
+                        throw std::runtime_error(
+                            "named native array/member arguments require checked lowering at byte " +
+                            std::to_string(expr.offset));
                 validate_expression(*expr.left, parameters, functions, depth + 1);
                 for (const auto& arg : expr.arguments)
                     validate_expression(*arg, parameters, functions, depth + 1);
@@ -4267,7 +4546,8 @@ private:
                 if (found == functions.end() ||
                     found->second.count(expr.arguments.size()) == 0) {
                     throw std::runtime_error("unknown function or wrong call arity '"
-                                             + expr.name + "' at byte "
+                                             + expr.name + (found == functions.end() ? "': unknown function" : "': call arity mismatch")
+                                             + " at byte "
                                              + std::to_string(expr.offset));
                 }
                 if (!expr.argument_names.empty() &&
@@ -4345,7 +4625,10 @@ private:
                             throw std::runtime_error("positional argument after named argument");
                         ++positional;
                     }
-                    if (slot >= formals.size() || bound[slot])
+                    if (slot >= formals.size())
+                        throw std::runtime_error(
+                            "native positional argument exceeds declared arity for " + expr.name);
+                    if (bound[slot])
                         throw std::runtime_error("duplicate binding of parameter '"
                                                  + formals[slot] + "'");
                     bound[slot] = true;
@@ -4367,6 +4650,9 @@ private:
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
             case Expression::Kind::Remainder:
+            case Expression::Kind::ShiftLeft:
+            case Expression::Kind::ShiftRight:
+            case Expression::Kind::ShiftUnsignedRight:
             case Expression::Kind::Equal:
             case Expression::Kind::NotEqual:
             case Expression::Kind::Less:
@@ -4422,9 +4708,14 @@ private:
                 return ScalarType::Bool;
             case Expression::Kind::String:
                 return expr.resolved_type = ScalarType::String;
-            case Expression::Kind::Console:
-                require_type(validate_scalar_expression(*expr.left, variables, functions, depth + 1), ScalarType::String, "stdio");
+            case Expression::Kind::Console: {
+                // String, int or bool; int/bool are rendered as text by codegen.
+                const ScalarType argument = validate_scalar_expression(*expr.left, variables, functions, depth + 1);
+                if (argument != ScalarType::I64 && argument != ScalarType::Bool)
+                    require_type(argument, ScalarType::String, "stdio");
+                expr.resolved_type = argument;
                 return ScalarType::I64;
+            }
             case Expression::Kind::Variable: {
                 const auto found = variables.find(expr.name);
                 // Non-scalar class/array/actor names are rejected by ownership
@@ -4440,6 +4731,16 @@ private:
                 return ScalarType::I64;
             }
             case Expression::Kind::ArrayCall: {
+                // Defensive duplicate gate: scalar analysis must also reject
+                // any unlowered member labels independently of other passes.
+                if (!expr.argument_names.empty() &&
+                    expr.argument_names.size() != expr.arguments.size())
+                    throw std::runtime_error("invalid native member argument layout");
+                for (const auto& label : expr.argument_names)
+                    if (!label.empty())
+                        throw std::runtime_error(
+                            "named native array/member arguments require checked lowering at byte " +
+                            std::to_string(expr.offset));
                 std::string receiver;
                 if (expr.left) receiver = native_place_key(*expr.left);
                 const auto element_slot = variables.find(receiver + ".$element");
@@ -4472,7 +4773,7 @@ private:
                 if (family == functions.end() ||
                         !family->second.count(expr.arguments.size()))
                     throw std::runtime_error("unknown function or wrong call arity '" +
-                        expr.name + "' at byte " + std::to_string(expr.offset));
+                        expr.name + (family == functions.end() ? "': unknown function" : "': call arity mismatch") + " at byte " + std::to_string(expr.offset));
                 const auto& signature = family->second.at(expr.arguments.size());
                 if (signature.async_source_i64)
                     throw std::runtime_error(
@@ -4546,7 +4847,10 @@ private:
             }
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
-            case Expression::Kind::Remainder: {
+            case Expression::Kind::Remainder:
+            case Expression::Kind::ShiftLeft:
+            case Expression::Kind::ShiftRight:
+            case Expression::Kind::ShiftUnsignedRight: {
                 ScalarType left = validate_scalar_expression(
                     *expr.left, variables, functions, depth + 1);
                 ScalarType right = validate_scalar_expression(
@@ -5837,6 +6141,7 @@ private:
     Lexer lexer_;
     Token token_;
     std::unordered_set<std::string> module_names_;
+    std::unordered_set<std::string> function_import_names_;
     std::string method_scope_;
     std::unordered_set<std::string> class_receivers_;
     std::vector<Function> methods_;
@@ -5851,6 +6156,8 @@ private:
         std::unordered_map<std::string, std::unordered_set<std::size_t>>> extension_methods_;
     std::unordered_set<std::string> extension_public_slots_;
     bool extension_header_active_ = false;
+    // Inside a native actor on_message body: `self.field` names the actor field.
+    bool actor_handler_active_ = false;
     std::string extension_receiver_alias_;
     std::string extension_method_name_;
     std::size_t extension_offset_ = 0;
@@ -5981,17 +6288,13 @@ void resolve_future_pipeline_contracts(Program& program) {
                     : types::pipeline_internal_ownership();
                 plan.root_stage = i == 0;
                 if (stage.async_source_i64) {
-                    // This first async-stage slice is capture-free and cannot
-                    // suspend internally, so LLVM may fuse its freshly-created
-                    // ready Future into the already scheduler-owned pipeline
-                    // task. The checked semantic plan still records one-level
-                    // flattening and cancellation ownership before that
-                    // representation optimization.
-                    plan.flattens_future = true;
-                    plan.produced_future_ownership =
-                        types::PipelineStageFutureOwnership::OwnedStageResult;
-                    plan.produced_future_provenance =
-                        types::PipelineStageFutureProvenance::FreshCheckedProducer;
+                    // An async stage returns Future<int>. The value-pipeline
+                    // operator is not an explicit flatten operation, so its
+                    // result type must remain Future<Future<int>>. This scalar
+                    // v1 pipeline has no nested-Future representation yet;
+                    // reject rather than fusing away the wrapper.
+                    throw std::runtime_error(
+                        "async Future pipeline stage returns Future<int>; implicit |> Future flattening is forbidden; explicit flatten/flat_map lowering is required");
                 }
                 types::validate_executable_future_pipeline_plan(plan);
                 prior = plan.cumulative_effects;

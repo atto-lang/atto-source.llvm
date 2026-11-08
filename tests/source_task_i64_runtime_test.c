@@ -1,6 +1,8 @@
 #include "oreslang/runtime/SourceTaskRuntime.h"
 
 #include <assert.h>
+#include <errno.h>
+#include <time.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdatomic.h>
@@ -8,6 +10,19 @@
 
 static _Atomic(uintptr_t) published_task = 0;
 static _Atomic(int) carrier_await_status = -1;
+
+/* Bounded guest-carrier observation: the producer must run before await. */
+static pthread_mutex_t eager_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t eager_cond = PTHREAD_COND_INITIALIZER;
+static int eager_started = 0;
+static int64_t eager_producer(void) {
+    assert(pthread_mutex_lock(&eager_mutex) == 0);
+    eager_started = 1;
+    assert(pthread_cond_signal(&eager_cond) == 0);
+    assert(pthread_mutex_unlock(&eager_mutex) == 0);
+    return 42;
+}
+
 
 typedef struct {
     void* task;
@@ -64,6 +79,37 @@ int main(void) {
         == ORES_SOURCE_TASK_ALREADY_CONSUMED);
 
     assert(oreslang_source_task_runtime_shutdown() == 1);
+    assert(oreslang_source_task_runtime_shutdown() == 1);
+
+    /*
+     * Submit without immediately awaiting. A lazily scheduled Task deadlocks
+     * this bounded condition-variable wait: no call to await can wake the
+     * producer. Do not use sleep duration as the concurrency assertion.
+     */
+    void* eager_task = NULL;
+    assert(oreslang_source_task_start_i64_checked(
+        eager_producer, &eager_task) == ORES_SOURCE_TASK_OK);
+    assert(eager_task != NULL);
+    void* rejected_second = (void*)1;
+    assert(oreslang_source_task_start_i64_checked(
+        simple_producer, &rejected_second)
+        == ORES_SOURCE_TASK_RESOURCE_EXHAUSTED);
+    assert(rejected_second == NULL);
+
+    struct timespec deadline;
+    assert(timespec_get(&deadline, TIME_UTC) == TIME_UTC);
+    deadline.tv_sec += 15;
+    assert(pthread_mutex_lock(&eager_mutex) == 0);
+    while (!eager_started) {
+        const int waiting = pthread_cond_timedwait(
+            &eager_cond, &eager_mutex, &deadline);
+        assert(waiting == 0);
+    }
+    assert(pthread_mutex_unlock(&eager_mutex) == 0);
+    int64_t eager_result = 0;
+    assert(oreslang_source_task_await_i64_checked(
+        eager_task, &eager_result) == ORES_SOURCE_TASK_OK);
+    assert(eager_result == 42);
     assert(oreslang_source_task_runtime_shutdown() == 1);
 
     /*

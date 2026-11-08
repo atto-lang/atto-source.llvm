@@ -1,0 +1,50 @@
+name: Browser native AOT scalar export prerequisite (not browser ABI)
+on:
+  pull_request:
+    paths:
+      - 'tests/fixtures/browser-aot-scalar-export.ores'
+      - 'tests/browser_aot_scalar_export_host.c'
+      - 'scripts/test-host-export-harness.sh'
+      - 'scripts/verify-browser-aot-scalar-export.sh'
+      - '.github/workflows/browser-native-aot-export.yml'
+      - 'src/main/cpp/oreslang/**'
+      - 'CMakeLists.txt'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  actual-oreslang-llvm-aot-scalar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prove synthetic host harness rejects invalid exports (not Oreslang)
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/test-host-export-harness.sh
+          bash -n scripts/verify-browser-aot-scalar-export.sh
+          bash scripts/test-host-export-harness.sh
+      - name: Install native LLVM compiler dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-dev clang cmake ninja-build
+      - name: Build real Oreslang LLVM source compiler outside checkout
+        run: |
+          set -euo pipefail
+          cmake -S . -B "$RUNNER_TEMP/oreslang-llvm-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+          cmake --build "$RUNNER_TEMP/oreslang-llvm-build" --target oreslang-llvmc --parallel 2
+      - name: Execute real guest-to-IR-to-AOT-dlopen proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          export EXPECTED_SOURCE_SHA="$GITHUB_SHA"
+          export ORESLANG_LLVMC="$RUNNER_TEMP/oreslang-llvm-build/oreslang-llvmc"
+          export ORESLANG_COMPILER_SHA256="$(sha256sum "$ORESLANG_LLVMC" | cut -d ' ' -f 1)"
+          # Compiler SHA is recorded for this source-tree CI build. An independent
+          # release attestation is additionally required for a shipped backend.
+          bash scripts/verify-browser-aot-scalar-export.sh

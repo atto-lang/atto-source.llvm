@@ -27,6 +27,12 @@ Notes on the compiler and runtime:
 * OresLang must be built around excellent tree-shaking so we can get final binary executables as small as possible and reduce startup overhead etc.
 
 
+## OresVM root host and tenant IsolateVM architecture
+
+**OresVM** is the root supervisor and tenant admission runtime; each **IsolateVM** is a tenant-owned execution domain containing many Oreslang actors. The OresIsolateContext is a temporary guest-call ABI view, not a separate VM. This distinction and the relevant V8 isolate/context, pointer-compression and security lessons are documented in [OresVM vs IsolateVM](docs/ORESVM_VS_ISOLATEVM.md).
+
+The host uses a concrete, privately owned IsolateVM C++ class. There is also a narrow opt-in synchronous scalar .ores-to-LLVM isolate entry, but general guest source lowering, the actor scheduler and OS-process sandboxing remain outstanding. See [OresVM tenant-isolate substrate status](docs/ORESVM_TENANT_ISOLATES.md).
+
 **Parity commitment: LLVM and Java/GraalVM are first-class Oreslang backends with the same language and observable runtime semantics.** Full feature parity is a standing requirement for the compiler, type system, standard library, actors, supervision, ownership/borrowing, scheduling, async/await, I/O and error handling—not an optional stretch goal. Features added to either backend must be tracked against the other backend and covered by shared conformance tests. LLVM must not be treated as a permanently restricted dialect of Oreslang.
 
 **Current verification status (October 2026):** LLVM has a tested but incomplete native source-to-IR/AOT implementation. **Full end-to-end parity has not yet been verified.** The inventory below documents implementation gaps to close, not exceptions to the parity requirement. Unsupported source fails closed rather than silently compiling with different semantics.
@@ -169,7 +175,11 @@ building blocks, not a substitute for the remaining guest-language support.
   capability limits without weakening the full host backend parity target.
 
 The detailed status matrix and open obligations live in the
-[source parity contract](docs/SOURCE_PARITY.md).
+[source parity contract](docs/SOURCE_PARITY.md). The first strict source-level
+Java/GraalVM ↔ LLVM execution gate is documented in
+[Java/LLVM source-execution qualification](docs/JAVA_LLVM_SOURCE_EXECUTION_GATE.md).
+LLVM-only native CTests are important regression evidence, but never count as
+completed Java differential execution without a pinned, executed Java run.
 
 Native I/O API naming: blocking I/O operations will require the `_blocking` suffix; async I/O may use `_async`. This is a documented target contract, **not yet an implemented compiler check**.
 

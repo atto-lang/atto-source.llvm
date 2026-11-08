@@ -38,9 +38,12 @@ links and runs without an OS". CI runs it in
 1. Compiles `tests/fixtures/core_baremetal/app.ores` (imports
    `ores.core/numeric`) with `--target=thumbv7m-none-eabi
    --library-profile=core`, and requires the IR to declare no external
-   functions other than LLVM intrinsics.
+   functions other than LLVM intrinsics, and to contain no external globals,
+   module-level assembly or inline assembly (an `svc` would bypass every
+   symbol audit). Compiling without `--library-profile` must give the same
+   module, so the target cannot silently default away from `core`.
 2. Compiles the IR to an ARM object and requires every undefined symbol to be
-   in the **freestanding support ABI**: `memcpy`/`memmove`/`memset`/`memcmp`
+   (including weak `w`/`v` references)   in the **freestanding support ABI**: `memcpy`/`memmove`/`memset`/`memcmp`
    and the ARM RTABI memory and 64-bit arithmetic helpers (`__aeabi_*`,
    `__mulodi4`). The list lives in `tools/core-baremetal-gate/src/audit.rs`.
    libc, allocator, thread, unwinder, TLS and Oreslang runtime symbols
@@ -61,7 +64,10 @@ links and runs without an OS". CI runs it in
    and an `ores.core` import.
 5. Boots a second image whose harness feeds `INT64_MAX` to a checked
    multiply, and requires the Oreslang overflow trap to land in the
-   platform's `HardFault_Handler`. Failure policy belongs to the platform,
+   platform's `HardFault_Handler`. The fault must follow the probe's start
+   line and happen exactly once, so a fault from a broken reset path or vector
+   table cannot pass. The passing image must print no trap, failure or
+   unexpected-exception line. Failure policy belongs to the platform,
    not to an OS abort.
 6. Requires the compiler to reject: an `ores.std` import, a transitive
    allocator requirement with no granted provider, an ambient project import,
