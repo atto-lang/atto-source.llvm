@@ -935,11 +935,38 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         }
         for (const auto& local : main_it->locals) {
             if (local.class_name.empty()) continue;
+            if (!local.new_class || local.record_view || local.move_class ||
+                !local.move_source.empty() || local.heap_owned || local.int_array ||
+                !local.constructor_arguments.empty() || local.owner_mutable ||
+                local.field_mutable)
+                throw std::runtime_error(
+                    "actor-region-v1 direct codegen requires fresh immutable class owners");
             ++actor_region_slots;
             const auto cls = std::find_if(source.classes.begin(), source.classes.end(),
                 [&](const ClassDecl& candidate) { return candidate.name == local.class_name; });
             if (cls == source.classes.end())
                 throw std::runtime_error("actor-region-v1 local has no resolved class layout");
+            if (!cls->methods.empty() || cls->explicit_constructor ||
+                !cls->constructor_parameters.empty() ||
+                cls->fields.empty() || cls->fields.size() > 16)
+                throw std::runtime_error(
+                    "actor-region-v1 direct codegen requires 1..16 fields and no methods or explicit constructor");
+            for (const auto& field : cls->fields) {
+                const auto* initial = field.initializer_expression.get();
+                if (!field.final_field || field.mutable_referent || field.int_array ||
+                    !field.class_name.empty() || !field.sum_type.empty() ||
+                    field.constructor_argument || field.scalar_type == ScalarType::String ||
+                    !initial ||
+                    (initial->kind != Expression::Kind::Integer &&
+                     initial->kind != Expression::Kind::Boolean) ||
+                    initial->left || initial->right || initial->condition ||
+                    initial->condition_lhs || initial->condition_rhs ||
+                    initial->when_true || initial->when_false ||
+                    !initial->arguments.empty() || !initial->argument_names.empty() ||
+                    initial->type_arguments_present || !initial->type_arguments.empty())
+                    throw std::runtime_error(
+                        "actor-region-v1 direct codegen requires immutable literal scalar defaults");
+            }
             actor_region_stride = std::max(actor_region_stride,
                 static_cast<std::uint32_t>(cls->fields.size() * sizeof(std::int64_t)));
         }
