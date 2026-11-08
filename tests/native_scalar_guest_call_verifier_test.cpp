@@ -1,4 +1,5 @@
 #include "oreslang/backend/ScalarGuestCallVerifier.hpp"
+#include "oreslang/backend/LlvmCompat.hpp"
 
 #include <iostream>
 #include <stdexcept>
@@ -49,7 +50,7 @@ int main() {
         llvm::Module module("valid-trap-only", context);
         auto* step = define_four(module);
         llvm::IRBuilder<> builder(step->getEntryBlock().getTerminator());
-        auto* trap = llvm::Intrinsic::getDeclaration(&module, llvm::Intrinsic::trap);
+        auto* trap = oreslang::native_trap(module);
         builder.CreateCall(trap);
         require(admitted(module)); // legitimate fail-closed trap is the only guest call
     }
@@ -72,7 +73,9 @@ int main() {
         llvm::Module module("indirect-call", context);
         auto* step = define_four(module);
         llvm::IRBuilder<> builder(step->getEntryBlock().getTerminator());
-        auto* pointer = llvm::ConstantPointerNull::get(llvm::PointerType::get(context, 0));
+        auto* pointer = llvm::ConstantPointerNull::get(
+            llvm::cast<llvm::PointerType>(
+                oreslang::native_pointer_type(context, step->getFunctionType())));
         builder.CreateCall(step->getFunctionType(), pointer, {});
         require(!admitted(module));
     }
@@ -98,7 +101,11 @@ int main() {
     {
         llvm::Module module("unexpected-intrinsic", context);
         define_four(module);
+#if LLVM_VERSION_MAJOR >= 20
+        llvm::Intrinsic::getOrInsertDeclaration(&module, llvm::Intrinsic::donothing);
+#else
         llvm::Intrinsic::getDeclaration(&module, llvm::Intrinsic::donothing);
+#endif
         require(!admitted(module));
     }
     std::cout << "SCALAR_GUEST_CALL_ADMISSION_PASS\n";
