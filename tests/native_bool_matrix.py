@@ -298,6 +298,7 @@ def main():
             ("short-circuit-and.atto", 1),
             ("short-circuit-or.atto", 1),
             ("xor-eager.atto", 42),
+            ("xor-left-to-right.atto", 42),
         ):
             source = (word_fixtures / filename).read_text(encoding="utf-8")
             name = "logical-word-" + filename.removesuffix(".atto")
