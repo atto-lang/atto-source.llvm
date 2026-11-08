@@ -49,6 +49,26 @@ compile_and_run() {
   done
 }
 
+reject_removed_caret_operator() {
+  local fixture="$1"
+  local source="$fixtures/$fixture"
+  local ir="$tmp/$fixture.ll"
+  local diagnostic="$tmp/$fixture.stderr"
+  if "$compiler" "$source" >"$ir" 2>"$diagnostic"; then
+    echo "compiler unexpectedly accepted removed caret operator: $fixture" >&2
+    exit 1
+  fi
+  if [[ -s "$ir" ]]; then
+    echo "removed caret operator emitted executable LLVM IR: $fixture" >&2
+    exit 1
+  fi
+  if ! grep -Fq "removed scalar operator" "$diagnostic"; then
+    echo "missing removed-caret diagnostic for $fixture" >&2
+    cat "$diagnostic" >&2
+    exit 1
+  fi
+}
+
 reject_non_boolean() {
   local fixture="$1"
   local source="$fixtures/$fixture"
@@ -78,5 +98,7 @@ compile_and_run xor-left-to-right.atto 42
 reject_non_boolean reject-int-and.atto
 reject_non_boolean reject-int-or.atto
 reject_non_boolean reject-int-xor.atto
+reject_removed_caret_operator reject-caret-xor.atto
+reject_removed_caret_operator reject-double-caret-xor.atto
 
 echo "PASS: AttoLang logical word operators - truth/precedence, -O0/-O2, short-circuit, eager left-to-right XOR, and bool-only rejection"
