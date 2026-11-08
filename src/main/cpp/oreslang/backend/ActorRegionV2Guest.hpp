@@ -27,6 +27,14 @@ struct ActorRegionCleanupPlanV1 {
         owners.push_back(name);
     }
     void seal_normal_exits(unsigned supported_normal_exits) {
+        if (owners.empty() || supported_normal_exits == 0 ||
+            supported_normal_exits > 2)
+            throw std::runtime_error("actor-region cleanup plan: unsupported exit graph");
+        cleanup_order.clear();
+        for (unsigned i = static_cast<unsigned>(owners.size()); i > 0; --i)
+            cleanup_order.push_back(i - 1);
+    }
+    void verify_normal_exits_with_dataflow(unsigned supported_normal_exits) {
         if (owners.empty() || supported_normal_exits != 2)
             throw std::runtime_error("actor-region cleanup plan: unsupported exit graph");
         OwnershipV1Graph graph;
@@ -43,10 +51,12 @@ struct ActorRegionCleanupPlanV1 {
         const auto analysis = OwnershipDataflowV1::analyze(graph);
         if (analysis.normal_exits.size() != supported_normal_exits)
             throw std::runtime_error("actor-region cleanup plan: CFG exit proof mismatch");
-        cleanup_order = analysis.normal_exits.front().cleanup_reverse_order;
+        const auto verified_order = analysis.normal_exits.front().cleanup_reverse_order;
         for (const auto& exit : analysis.normal_exits)
-            if (exit.cleanup_reverse_order != cleanup_order)
+            if (exit.cleanup_reverse_order != verified_order)
                 throw std::runtime_error("actor-region cleanup plan: cleanup differs by exit");
+        if (verified_order != cleanup_order)
+            throw std::runtime_error("actor-region cleanup plan: legacy order disagrees with dataflow");
     }
 };
 
@@ -128,6 +138,7 @@ inline std::string emit_actor_region_v2_guest_ir(const Program& program) {
         cleanup_plan.add_owner(owner.name);
     }
     cleanup_plan.seal_normal_exits(2);
+    cleanup_plan.verify_normal_exits_with_dataflow(2);
     // The source checker currently produces these metadata fields in a
     // limited class grammar. Fail closed if a future grammar adds ownership
     // transfers, sum payloads or unvalidated aliases alongside 'new'.
