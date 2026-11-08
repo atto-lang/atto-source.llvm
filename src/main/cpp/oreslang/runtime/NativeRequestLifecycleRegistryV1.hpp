@@ -42,6 +42,17 @@ class NativeRequestLifecycleRegistryV1 final {
     // notice flag MUST compile to a lock-free atomic store on this target.
     static_assert(std::atomic<bool>::is_always_lock_free,
                   "native STOP notices require a lock-free atomic flag");
+    // Immutable, generation-keyed attachment nodes are published by
+    // CONTROL only and are never reclaimed until registry destruction.
+    // The carrier read path does exactly one lock-free atomic pointer load,
+    // without taking the registry mutex or allocating.
+    struct AttachedNode final {
+        explicit AttachedNode(OresNativeActorRef value) : actor(value) {}
+        OresNativeActorRef actor;
+        const AttachedNode* next = nullptr;
+    };
+    static_assert(std::atomic<const AttachedNode*>::is_always_lock_free,
+                  "carrier attachment lookup requires lock-free pointers");
     struct Entry final {
         explicit Entry(OresNativeActorScheduler* scheduler,
                        OresNativeActorRef actor)
@@ -75,6 +86,7 @@ public:
         {
             std::lock_guard<std::mutex> lock(mutex_);
             shutdown_ = true; // Reject racing ingress before unregistration.
+            ingress_closed_.store(true, std::memory_order_release);
             for (const auto& entry : entries_) {
                 // Lock order is registry -> scheduler. Scheduler STOP notice
                 // callbacks only do a lock-free atomic store: never acquire
@@ -152,22 +164,43 @@ public:
         return false;
     }
 
+    // Carrier-safe read-only attachment proof. STOP fencing remains at
+    // the final scheduler two-incarnation commit, not in this snapshot.
+    // This does NOT grant guest authority or tenant/isolate provenance.
+    bool attached_generation(OresNativeActorRef actor) const noexcept {
+        if (!actor.scheduler_domain || !actor.generation ||
+            ingress_closed_.load(std::memory_order_acquire))
+            return false;
+        const AttachedNode* node =
+            attached_head_.load(std::memory_order_acquire);
+        for (; node; node = node->next)
+            if (same_actor(node->actor, actor))
+                return !ingress_closed_.load(std::memory_order_acquire);
+        return false;
+    }
+
     bool attach(OresNativeActorRef actor) {
         if (!scheduler_ || !actor.scheduler_domain || !actor.generation ||
             ores_native_actor_scheduler_is_any_current_carrier_v1())
             return false;
         auto entry = std::make_unique<Entry>(scheduler_, actor);
+        auto node = std::make_unique<AttachedNode>(actor);
         std::lock_guard<std::mutex> lock(mutex_);
         if (shutdown_) return false;
         for (const auto& old : entries_)
             if (same_actor(old->actor, actor)) return false;
-        // Allocate registry capacity first to ensure a failing allocation
-        // never leaves a dangling callback at an unrecorded Entry address.
+        // Allocate all registry/storage capacity BEFORE publishing the
+        // native STOP callback. Both vector insertions are then noexcept.
         entries_.reserve(entries_.size() + 1);
+        attached_nodes_.reserve(attached_nodes_.size() + 1);
         if (!ores_native_actor_scheduler_register_stop_notice_v1(
                 scheduler_, actor, &stop_notice, entry.get()))
             return false;
-        entries_.push_back(std::move(entry)); // capacity already reserved
+        entries_.push_back(std::move(entry));
+        node->next = attached_head_.load(std::memory_order_relaxed);
+        const AttachedNode* published = node.get();
+        attached_nodes_.push_back(std::move(node));
+        attached_head_.store(published, std::memory_order_release);
         return true;
     }
 
@@ -323,6 +356,9 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable changed_;
     std::vector<std::unique_ptr<Entry>> entries_;
+    std::vector<std::unique_ptr<AttachedNode>> attached_nodes_;
+    std::atomic<const AttachedNode*> attached_head_{nullptr};
+    std::atomic<bool> ingress_closed_{false};
     std::vector<std::shared_ptr<StopCleanupV1>> stop_cleanups_;
     bool shutdown_ = false;
     std::thread control_;
