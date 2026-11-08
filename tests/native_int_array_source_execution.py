@@ -188,7 +188,7 @@ pub fnc main(): int {
  let mut Array<int> a = new Array<int>();
  return a.add(2);
 }
-""", "scalar expression supports get(index) or typed get_copy(index)"),
+""", "expression requires get(index) or typed get_copy(index)"),
     "bad-set-arity": ("""pub fnc main(): int {
  let mut Array<int> a = new Array<int>();
  a.set(0);
