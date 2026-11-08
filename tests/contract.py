@@ -118,6 +118,7 @@ def main():
     parser.add_argument("--ir")
     parser.add_argument("--diagnostic")
     parser.add_argument("--run", type=int)
+    parser.add_argument("--stdout", help="exact stdout from compiled native guest")
     parser.add_argument("--clang")
     parser.add_argument("--target")
     parser.add_argument("--native-runtime")
@@ -130,14 +131,17 @@ def main():
     if args.diagnostic is not None:
         require(bool(args.diagnostic), "--diagnostic requires nonempty text")
         require(args.run is None and args.ir is None and
-                not args.no_native_abi and not args.no_main_link and
-                not args.verify_object and args.native_runtime is None,
+                args.stdout is None and not args.no_native_abi and
+                not args.no_main_link and not args.verify_object and
+                args.native_runtime is None,
                 "--diagnostic cannot be combined with positive test modes")
     if args.ir is not None:
         require(bool(args.ir), "--ir requires nonempty text")
     if args.run is not None:
         require(0 <= args.run <= 255,
                 "--run requires an OS exit code in [0, 255]")
+    require(args.stdout is None or args.run is not None,
+            "--stdout requires --run and a native executable")
     require(not (args.no_main_link and args.run is not None),
             "--no-main-link cannot request successful execution")
     require(args.native_runtime is None or args.run is not None,
@@ -290,6 +294,11 @@ def main():
         )
         require(result.returncode == args.run,
                 f"native exit {result.returncode}, expected {args.run}")
+        if args.stdout is not None:
+            require(result.stdout == args.stdout,
+                    "native guest stdout did not match exact expected bytes")
+            require(result.stderr == "",
+                    "native guest unexpectedly wrote to stderr")
 
 
 if __name__ == "__main__":
