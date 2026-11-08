@@ -51,16 +51,16 @@ def main():
         # This opt-in scalar source subset has no calls or recursion; the
         # compiler must reject new unverified guest functions/imports rather
         # than silently creating an uncharged call-graph cycle.
-        definitions = set(re.findall(r'(?m)^define\\s+[^@\\n]+@([A-Za-z0-9_.]+)\\(', accepted.stdout))
+        definitions = set(re.findall(r'(?m)^define\s+[^@\n]+@([A-Za-z0-9_.]+)\(', accepted.stdout))
         assert definitions == {
             "oreslang_rt_scalar_frame_init_v1",
             "oreslang_rt_scalar_frame_step_v1",
             "oreslang_rt_scalar_frame_cancel_v1",
             "oreslang_rt_scalar_frame_result_v1",
         }, ("unapproved compiled guest function", definitions)
-        declarations = set(re.findall(r'(?m)^declare\\s+[^@\\n]+@([A-Za-z0-9_.]+)\\(', accepted.stdout))
+        declarations = set(re.findall(r'(?m)^declare\s+[^@\n]+@([A-Za-z0-9_.]+)\(', accepted.stdout))
         assert declarations == {"llvm.trap"}, ("unapproved guest import or FFI", declarations)
-        assert not re.search(r'(?m)^\\s*(?:%[\\w.]+\\s*=\\s*)?(?:invoke|callbr)\\b',
+        assert not re.search(r'(?m)^\s*(?:%[\w.]+\s*=\s*)?(?:invoke|callbr)\b',
                              accepted.stdout), "unverified interprocedural transfer"
         llvm_ir = out / "guest.ll"
         llvm_ir.write_text(accepted.stdout)
