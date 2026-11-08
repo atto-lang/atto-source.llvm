@@ -49,17 +49,20 @@ def main():
         assert "fuel.logical.exhausted" in accepted.stdout, "missing immutable quota denial"
         llvm_ir = out / "guest.ll"
         llvm_ir.write_text(accepted.stdout)
-        exe = out / "run-guest"
-        build = run([args.clang, "-std=c11", "-O2", "-DNDEBUG", "-Wall", "-Wextra",
-                     "-Werror", "-Wno-error=override-module", "-pedantic", str(args.harness),
-                     "-x", "ir", str(llvm_ir), "-o", str(exe)])
-        assert build.returncode == 0, build.stderr
-        execution = run([str(exe)])
-        assert execution.returncode == 0, execution.stderr
-        assert "SCALAR_FRAME_AOT_TWO_TASKS_PASS" in execution.stdout
-        assert "SCALAR_FRAME_AOT_THREE_PEERS_BOUNDED_PROGRESS_PASS" in execution.stdout
-        assert "SCALAR_FRAME_AOT_CANCELLED_PEER_ISOLATION_PASS" in execution.stdout
-        assert "SCALAR_FRAME_AOT_LOGICAL_FUEL_CONSERVATION_PASS" in execution.stdout
+        for optimization in ("-O0", "-O2", "-O3"):
+            exe = out / f"run-guest-{optimization[2:]}"
+            build = run([args.clang, "-std=c11", optimization, "-DNDEBUG",
+                         "-Wall", "-Wextra", "-Werror",
+                         "-Wno-error=override-module", "-pedantic",
+                         str(args.harness), "-x", "ir", str(llvm_ir),
+                         "-o", str(exe)])
+            assert build.returncode == 0, (optimization, build.stderr)
+            execution = run([str(exe)])
+            assert execution.returncode == 0, (optimization, execution.stderr)
+            assert "SCALAR_FRAME_AOT_TWO_TASKS_PASS" in execution.stdout
+            assert "SCALAR_FRAME_AOT_THREE_PEERS_BOUNDED_PROGRESS_PASS" in execution.stdout
+            assert "SCALAR_FRAME_AOT_CANCELLED_PEER_ISOLATION_PASS" in execution.stdout
+            assert "SCALAR_FRAME_AOT_LOGICAL_FUEL_CONSERVATION_PASS" in execution.stdout
         for i, (original, replacement) in enumerate(cases):
             assert original in source
             file = out / f"invalid-{i}.ores"
@@ -68,7 +71,7 @@ def main():
             assert wrong.returncode != 0 and not wrong.stdout.strip(), (i, wrong.stdout)
         missing = run([compiler, "--experimental-rt-scalar-loop", "--target=wasm32", str(fixture)])
         assert missing.returncode != 0 and not missing.stdout.strip()
-        print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: 3 peers, logical fuel lifetime across resumption, cancellation, negative traps")
+        print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: O0/O2/O3, 3 peers, conserved logical fuel, cancellation, negative traps")
 
 if __name__ == "__main__":
     main()
