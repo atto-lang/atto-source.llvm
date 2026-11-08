@@ -357,19 +357,25 @@ def main():
                 accepted = receipt["accepted"]
                 processed = receipt["processed"]
                 if m3:
-                    expected_error = (1 if name ==
-                        "atto-actor-scalar-nontail-overflow.atto"
-                        and processed else 0)
-                    assert scalar_records[i]["error"] == expected_error, (
-                        name, i, scalar_records[i])
-                    if processed:
+                    # The source main's immediate STOP may race an already
+                    # admitted DATA turn; M3 cooperatively cancels at the next
+                    # 256-op checkpoint. The deterministic wait-harness below,
+                    # not this racy ordinary-main path, proves full execution.
+                    error = scalar_records[i]["error"]
+                    allowed_errors = (
+                        {0, 1, 5} if name ==
+                        "atto-actor-scalar-nontail-overflow.atto" else {0, 5})
+                    assert error in allowed_errors, (name, i, scalar_records[i])
+                    if not processed:
+                        assert error == 0 and scalar_records[i]["steps"] == 0
+                    else:
                         assert scalar_records[i]["steps"] > 0
-                        if name in {"atto-actor-scalar-tail100k.atto",
-                                    "atto-actor-scalar-mutual-tail.atto"}:
+                        if error == 1:
+                            assert name == "atto-actor-scalar-nontail-overflow.atto"
+                            assert scalar_records[i]["non_tail_calls"] >= 63
+                        if error == 0:
+                            assert name != "atto-actor-scalar-nontail-overflow.atto"
                             assert scalar_records[i]["tail_calls"] >= 100000, (
-                                name, scalar_records[i])
-                        if name == "atto-actor-scalar-nontail-overflow.atto":
-                            assert scalar_records[i]["non_tail_calls"] >= 63, (
                                 name, scalar_records[i])
                 if processed:
                     assert frame_records[i]["high_water"] >= 2, (name, i)
@@ -386,8 +392,9 @@ def main():
                 assert 0 <= processed <= accepted, (name, i, processed, accepted)
                 assert abandoned == accepted - processed, (
                     name, i, accepted, processed, abandoned)
-                assert observed_last == expected_prefix_last(
-                    name, i, processed), (
+                expected_last = (0 if m3 and scalar_records[i]["error"] == 5
+                                 else expected_prefix_last(name, i, processed))
+                assert observed_last == expected_last, (
                     name, i, processed, observed_last)
             if name in {"source-actor-two-owned-heaps.ores",
                         "atto-actor-frame-two-heaps.atto"}:
