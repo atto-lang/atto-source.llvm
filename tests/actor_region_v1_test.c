@@ -91,7 +91,7 @@ enum Misuse {
     FORGED_OFFSET, FORGED_GENERATION, FORGED_DOMAIN, CROSS_ACTOR,
     FIELD_OVERRUN, DROP_WITH_LOAN, WRITE_WITH_LOAN, STALE_SLOT_REUSE,
     DOUBLE_DROP, USE_AFTER_TURN, WRONG_OWNER, OVERSIZED_REGION,
-    LOAN_DOUBLE_RELEASE
+    LOAN_DOUBLE_RELEASE, LOAN_SIDECAR_TAMPER, LOAN_OFFSET_TAMPER
 };
 static void attempt(enum Misuse what) {
     if (what == OVERSIZED_REGION) {
@@ -141,6 +141,11 @@ static void attempt(enum Misuse what) {
         OresActorRegionV1Loan loan = ores_actor_region_v1_borrow(a, turn, h);
         ores_actor_region_v1_release(a, loan);
         ores_actor_region_v1_release(a, loan);
+    } else if (what == LOAN_SIDECAR_TAMPER || what == LOAN_OFFSET_TAMPER) {
+        OresActorRegionV1Loan loan = ores_actor_region_v1_borrow(a, turn, h);
+        if (what == LOAN_SIDECAR_TAMPER) ++loan.proof.generation;
+        else ++loan.ref.offset.storage;
+        ores_actor_region_v1_release(a, loan);
     }
 }
 static int must_abort(enum Misuse what) {
@@ -162,7 +167,7 @@ int main(void) {
     CHECK(basic_recycling_and_loan() == 0);
     CHECK(repeated_slot_recycling() == 0);
 #if defined(__unix__) || defined(__APPLE__)
-    for (int scenario = FORGED_OFFSET; scenario <= LOAN_DOUBLE_RELEASE; ++scenario)
+    for (int scenario = FORGED_OFFSET; scenario <= LOAN_OFFSET_TAMPER; ++scenario)
         CHECK(must_abort((enum Misuse)scenario));
 #endif
     puts("ACTOR_REGION_V1_HOST_ONLY|offset_bits=32|generational=1|scrub=1|result=PASS");
