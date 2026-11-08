@@ -3,6 +3,7 @@
 
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
@@ -27,11 +28,36 @@ static llvm::Function* define_noop(llvm::Module& module, const char* name) {
     return fn;
 }
 
+static llvm::Function* define_frame_method(
+        llvm::Module& module, const char* name, llvm::Type* resultType,
+        llvm::Type* framePointer, bool takesFuel) {
+    auto& context = module.getContext();
+    std::vector<llvm::Type*> parameters{framePointer};
+    if (takesFuel) parameters.push_back(llvm::Type::getInt64Ty(context));
+    auto* fn = llvm::Function::Create(
+        llvm::FunctionType::get(resultType, parameters, false),
+        llvm::Function::ExternalLinkage, name, module);
+    llvm::IRBuilder<> builder(llvm::BasicBlock::Create(context, "entry", fn));
+    if (resultType->isVoidTy())
+        builder.CreateRetVoid();
+    else
+        builder.CreateRet(llvm::Constant::getNullValue(resultType));
+    return fn;
+}
+
 static llvm::Function* define_four(llvm::Module& module) {
-    define_noop(module, "oreslang_rt_scalar_frame_init_v1");
-    auto* step = define_noop(module, "oreslang_rt_scalar_frame_step_v1");
-    define_noop(module, "oreslang_rt_scalar_frame_cancel_v1");
-    define_noop(module, "oreslang_rt_scalar_frame_result_v1");
+    auto& context = module.getContext();
+    auto* i64 = llvm::Type::getInt64Ty(context);
+    auto* frameTy = llvm::StructType::get(context, {i64, i64, i64, i64});
+    auto* framePtr = oreslang::native_pointer_type(context, frameTy);
+    define_frame_method(module, "oreslang_rt_scalar_frame_init_v1",
+                        llvm::Type::getVoidTy(context), framePtr, true);
+    auto* step = define_frame_method(module, "oreslang_rt_scalar_frame_step_v1",
+                                    llvm::Type::getInt32Ty(context), framePtr, true);
+    define_frame_method(module, "oreslang_rt_scalar_frame_cancel_v1",
+                        llvm::Type::getVoidTy(context), framePtr, false);
+    define_frame_method(module, "oreslang_rt_scalar_frame_result_v1",
+                        i64, framePtr, false);
     return step;
 }
 
@@ -66,25 +92,30 @@ int main() {
         llvm::Module module("direct-recursion", context);
         auto* step = define_four(module);
         llvm::IRBuilder<> builder(step->getEntryBlock().getTerminator());
-        builder.CreateCall(step);
+        builder.CreateCall(step, {
+            llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(
+                step->getFunctionType()->getParamType(0))),
+            llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 1)});
         require(!admitted(module)); // even bounded-looking recursion needs metering
     }
     {
         llvm::Module module("indirect-call", context);
         auto* step = define_four(module);
         llvm::IRBuilder<> builder(step->getEntryBlock().getTerminator());
+        auto* noargs = llvm::FunctionType::get(llvm::Type::getVoidTy(context), false);
         auto* pointer = llvm::ConstantPointerNull::get(
             llvm::cast<llvm::PointerType>(
-                oreslang::native_pointer_type(context, step->getFunctionType())));
-        builder.CreateCall(step->getFunctionType(), pointer, {});
+                oreslang::native_pointer_type(context, noargs)));
+        builder.CreateCall(noargs, pointer, {});
         require(!admitted(module));
     }
     {
         llvm::Module module("inline-assembly", context);
         auto* step = define_four(module);
         llvm::IRBuilder<> builder(step->getEntryBlock().getTerminator());
-        auto* assembly = llvm::InlineAsm::get(step->getFunctionType(), "", "", true);
-        builder.CreateCall(step->getFunctionType(), assembly, {});
+        auto* noargs = llvm::FunctionType::get(llvm::Type::getVoidTy(context), false);
+        auto* assembly = llvm::InlineAsm::get(noargs, "", "", true);
+        builder.CreateCall(noargs, assembly, {});
         require(!admitted(module));
     }
     {
@@ -106,6 +137,42 @@ int main() {
 #else
         llvm::Intrinsic::getDeclaration(&module, llvm::Intrinsic::donothing);
 #endif
+        require(!admitted(module));
+    }
+    // The ABI must be checked by argument types, arity, return type,
+    // calling convention and linkage, not merely the allowed symbol names.
+    {
+        llvm::Module module("wrong-return", context);
+        define_four(module);
+        auto* result = module.getFunction("oreslang_rt_scalar_frame_result_v1");
+        auto* framePointer = result->getFunctionType()->getParamType(0);
+        result->eraseFromParent();
+        define_frame_method(module, "oreslang_rt_scalar_frame_result_v1",
+                            llvm::Type::getVoidTy(context), framePointer, false);
+        require(!admitted(module));
+    }
+    {
+        llvm::Module module("wrong-linkage", context);
+        define_four(module);
+        module.getFunction("oreslang_rt_scalar_frame_step_v1")
+            ->setLinkage(llvm::GlobalValue::InternalLinkage);
+        require(!admitted(module));
+    }
+    {
+        llvm::Module module("wrong-calling-convention", context);
+        define_four(module);
+        module.getFunction("oreslang_rt_scalar_frame_step_v1")
+            ->setCallingConv(llvm::CallingConv::Fast);
+        require(!admitted(module));
+    }
+    {
+        llvm::Module module("unapproved-global", context);
+        define_four(module);
+        new llvm::GlobalVariable(
+            module, llvm::Type::getInt64Ty(context), false,
+            llvm::GlobalValue::InternalLinkage,
+            llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 1),
+            "unauthorized_global");
         require(!admitted(module));
     }
     std::cout << "SCALAR_GUEST_CALL_ADMISSION_PASS\n";
