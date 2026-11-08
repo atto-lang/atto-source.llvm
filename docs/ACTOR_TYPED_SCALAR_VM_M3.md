@@ -161,3 +161,42 @@ the acceptance witness for full guest execution.
 **CI remains unproven until an exact-head hosted run executes real steps.**
 All new CTests, fixture counts, and workflow artifacts are *authored*; a
 zero-step run cannot validate their behavior.
+
+## Integrated M3 compiler admission and frame-size boundary (PR #1580)
+
+The current-main integration candidate adds an explicit **compile-time
+maximum-live-operand proof** for the already restricted M3 expression grammar.
+The compiler now computes the peak number of operand cells using the *actual
+left-to-right bytecode evaluation order*: a binary keeps its first value live
+while evaluating the right expression; negate first pushes a zero; a unary
+CALL consumes its argument before producing its result. A pure expression
+requiring more than **16** simultaneously live operand cells is rejected
+with `typed scalar operand stack exceeds 16 slots`, before LLVM IR or
+any actor callback is emitted. This avoids incorrectly treating a
+compiler-admitted expression as a runtime frame-integrity fault.
+
+The end-to-end source fixtures are deliberately adjacent:
+`atto-actor-scalar-stack16-accept.atto` must compile and **actually execute**
+a 16-cell nested arithmetic expression, producing 22 for input 7 with
+32 interpreted instructions, one owned frame, zero tail calls and zero
+checkpoints. `atto-actor-scalar-stack17-reject.atto` must fail compilation
+with the admission diagnostic and **no emitted LLVM IR**. Neither can be
+replaced by an unrelated host mock. The source-backed M3 positive matrix
+now requires **five** completed guest execution witnesses.
+
+An independent, **compiler-frontend-only C++17 test**
+`tests/actor_scalar_compiler_admission_test.cpp` covers the exact
+operand boundary, cheap left-associative evaluation (32 arithmetic
+operators but only two live stack cells), nested-negate peak accounting,
+missing actor-handler parameters, effectful handler metadata, named
+arguments, `routine` recursion prohibition and imported graph refusal.
+It has a separate fast GitHub Actions build job, and is also registered
+as `native_actor_scalar_compiler_admission` in CTest. Its result must
+be labeled AST-only; it is **not** a guest compiler execution receipt.
+
+The integrated acceptance gate now requires six CTests, five actual
+compiled actor guest cases, the prior current-main scalar regression
+matrices and ASan/UBSan coverage. All remain `NOT_EXECUTED` until hosted
+exact-head CI has nonzero admitted steps. As before, M4 real suspended
+continuations, Java/LLVM complete parity, native fault containment and
+independent approval are still outstanding.
