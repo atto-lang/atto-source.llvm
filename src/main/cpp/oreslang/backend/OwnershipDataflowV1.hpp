@@ -297,16 +297,19 @@ private:
                     fail("take destination is already initialized");
                 destination.state = OwnerState::Owned;
                 destination.acquisition_order = owner.acquisition_order;
+                // Retain the historical sequence on the moved source slot.
+                // The destination inherits this same resource identity; keeping
+                // history prevents later allocations from reusing an old order.
                 owner.state = OwnerState::Moved;
-                owner.acquisition_order = 0;
                 break;
             }
             case OwnershipV1OpKind::Drop:
                 require_owned(owner);
                 if (owner.shared_borrows || owner.mutable_borrow)
                     fail("drop while borrow is outstanding");
+                // Keep acquisition history after destruction. A subsequent
+                // allocation on this path must receive a strictly newer order.
                 owner.state = OwnerState::Destroyed;
-                owner.acquisition_order = 0;
                 break;
             case OwnershipV1OpKind::ExitNormal:
             case OwnershipV1OpKind::ExitExceptional:
