@@ -24,9 +24,10 @@ static OresActorRegionV1Ref checked_ref(OresActorRegionV1* r,
     /* The one-based offset is a four-byte guest representation, not a
      * capability or a host memory address. The ORIGINAL proof must remain
      * in trusted sidecar metadata; never infer a new proof from the offset. */
+    if (ref.proof.index >= r->slots) deny();
     const uint64_t encoded = (uint64_t)ref.proof.index * r->stride + 1u;
-    if (ref.proof.index >= r->slots || encoded > UINT32_MAX ||
-        !ref.offset.storage || (uint64_t)ref.offset.storage != encoded)
+    if (encoded > UINT32_MAX || !ref.offset.storage ||
+        (uint64_t)ref.offset.storage != encoded)
         deny();
     return ref;
 }
@@ -114,6 +115,9 @@ OresActorRegionV1Loan ores_actor_region_v1_borrow(OresActorRegionV1* r,
 void ores_actor_region_v1_release(OresActorRegionV1* r, OresActorRegionV1Loan loan) {
     r = require_region(r);
     checked_ref(r, loan.ref);
+    if (!loan.proof.nonce || loan.proof.domain != loan.ref.proof.domain ||
+        loan.proof.index != loan.ref.proof.index ||
+        loan.proof.generation != loan.ref.proof.generation) deny();
     /* The underlying arena authenticates loan nonce, generation and domain;
      * release intentionally remains legal during retirement. */
     ores_actor_arena_release(r->arena, loan.proof);
