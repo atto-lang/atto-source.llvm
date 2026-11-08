@@ -592,6 +592,15 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
+    # Canonical bool word operators are tested as real .atto guest source:
+    # compiler -> LLVM IR -> Clang -> native process at O0/O2, including
+    # lazy AND/OR, eager left-to-right XOR, and fail-closed bool-only typing.
+    add_test(NAME native_logical_word_operators
+        COMMAND bash
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_logical_word_operators.sh"
+            "$<TARGET_FILE:oreslang-llvmc>"
+            "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_logical_word_operators PROPERTIES TIMEOUT 120)
     # Source-executable Java-style signed integer remainder subset:
     # nonzero positive/negative i64 literals only. MIN % -1 is lowered
     # without LLVM srem poison; dynamic/zero divisors still fail closed.
