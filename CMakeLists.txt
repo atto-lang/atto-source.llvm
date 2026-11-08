@@ -585,6 +585,12 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    # Portable regression for the emitted IR ABI/import scanner; catches
+    # broken escaping or relaxed call matching without LLVM C++ headers.
+    add_test(NAME native_scalar_ir_surface_scan
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_scalar_ir_surface_test.py")
+    set_tests_properties(native_scalar_ir_surface_scan PROPERTIES TIMEOUT 15)
     add_test(NAME native_realtime_profile_cli
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
             realtime-profile "$<TARGET_FILE:oreslang-llvmc>")
