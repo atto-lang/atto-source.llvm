@@ -26,7 +26,7 @@ template <typename Clock = std::chrono::steady_clock>
 class BasicSourceCooperationQuantum final {
 public:
     using time_point = typename Clock::time_point;
-    static constexpr std::uint32_t kLoopCheckInterval = 64;
+    static constexpr std::uint32_t kLoopCheckInterval = 128;
     static constexpr std::uint32_t kMaxBackedgesPerDispatch = 512;
     static constexpr auto kSoftDispatchQuantum = std::chrono::milliseconds(2);
 
@@ -45,17 +45,23 @@ public:
     void beginDispatch() noexcept {
         dispatchStarted_ = Clock::now();
         backedges_ = 0;
+        windowTicks_ = 0;
     }
 
     // One cheap integer counter/bit-mask on the committed loop backedge.
     // No wall-clock sampling and no scheduler/FFI calls here.
     bool completedBackedgeNeedsCheck() noexcept {
         backedges_ = detail::saturatingBackedgeSuccessor(backedges_);
-        // After an over-budget no-yield region, do not defer a newly
-        // available safe handoff for another 64 backedges. The caller still
-        // decides whether a protected lexical scope forbids suspension.
-        return backedges_ >= kMaxBackedgesPerDispatch ||
-            (backedges_ & (kLoopCheckInterval - 1)) == 0;
+        // Poll only every 128 committed backedges, even after the fairness
+        // cap expires or when a critical section cannot yield. Checking on
+        // every overdue iteration defeats amortization and reads scheduler
+        // state needlessly. A critical-section EXIT may explicitly call
+        // shouldCooperateAtCheck() once with a proven resumable frame.
+        // Keep a separate window counter: a saturating uint64_t total
+        // would otherwise freeze its low bits at UINT64_MAX forever.
+        if (++windowTicks_ != kLoopCheckInterval) return false;
+        windowTicks_ = 0;
+        return true;
     }
 
     // Cold path: independent watchdog request, reduction cap, or active
@@ -84,6 +90,7 @@ private:
     time_point lastCooperate_;
     time_point dispatchStarted_;
     std::uint64_t backedges_ = 0;
+    std::uint32_t windowTicks_ = 0;
 };
 
 using SourceCooperationQuantum = BasicSourceCooperationQuantum<>;
