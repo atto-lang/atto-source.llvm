@@ -29,5 +29,8 @@ jobs:
           node --check tests/atto_volucro_compiled_guest_faults.mjs
           node --check tests/atto_volucro_compiled_guest_guard.mjs
           node --test tests/atto_volucro_compiled_guest_faults.test.mjs tests/atto_volucro_compiled_guest_guard.test.mjs
+          node --check tests/atto_volucro_compiled_guest_linker_canary.mjs
+          node tests/atto_volucro_compiled_guest_linker_canary.mjs
+          echo "ATTO_C_TO_LLVM_IR_WASM32_LINKER_CANARY_EXECUTED_HEAD=$ATTO_EXPECTED_HEAD"
           echo "ATTO_COMPILED_WASM_NODE_GUARD_TESTS_EXECUTED_HEAD=$ATTO_EXPECTED_HEAD"
           echo "NODE_WASM_ENGINE_ONLY_NOT_ATTO_COMPILER_OR_VOLUCRO_WASMI"
