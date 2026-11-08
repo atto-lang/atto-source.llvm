@@ -114,16 +114,22 @@ public:
 
     // Trusted allocator release: scrub the backing bytes WHILE holding the
     // same lock that protects checked access and allocation/reuse. If scrub
-    // throws, retain the live grant; no region may be reused. Do not retain
-    // the range, suspend or reenter this gate from the callback.
+    // throws, permanently retire the incarnation and quarantine its backing
+    // memory: no subsequent access or reissue is allowed before external
+    // supervisor scrubbing. Never reenter or suspend inside the callback.
     template <typename Scrub>
     bool release_after_scrub(const Grant& grant, Scrub&& scrub) {
         std::lock_guard<std::mutex> lock(gate_);
         if (retired_ || grant.issuer_ != issuer_) return false;
         const auto it = live_.find(grant.id_);
         if (it == live_.end()) return false;
-        std::forward<Scrub>(scrub)(it->second.start,
-                                   it->second.end - it->second.start);
+        try {
+            std::forward<Scrub>(scrub)(it->second.start,
+                                       it->second.end - it->second.start);
+        } catch (...) {
+            retired_ = true; // fail closed if only part of the bytes were scrubbed
+            throw;
+        }
         live_.erase(it);
         return true;
     }
