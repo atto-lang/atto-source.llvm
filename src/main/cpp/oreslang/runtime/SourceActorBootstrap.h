@@ -39,6 +39,11 @@ int oreslang_source_actor_test_readiness_publication_entered(void);
  * Test-only, never linked as a guest-callable source runtime capability.
  * Valid until trusted outer stop/join releases the opaque actor ref. */
 uint64_t oreslang_source_actor_test_processed(void* actor);
+/* Deterministic cancellation-race fixture. Pause only a test-built actor
+ * interpreter after a slow-path admission, not any production carrier. */
+void oreslang_source_actor_test_hold_scalar_checkpoint(int hold);
+int oreslang_source_actor_test_scalar_checkpoint_entered(void);
+uint64_t oreslang_source_actor_test_scalar_checkpoint_count(void* actor);
 #endif
 
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
