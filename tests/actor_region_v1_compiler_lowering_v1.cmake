@@ -65,4 +65,36 @@ if(branch_expected EQUAL -1)
   message(FATAL_ERROR "actor-region-v1 branch-owner negative returned unexpected diagnostic: ${branch_diagnostic}")
 endif()
 
-message(STATUS "actor-region-v1 compiler IR: allocation/read/write/drop and helper/branch owner rejection PASS (NOT guest execution)")
+# Class-typed parameters and returns would transfer an owner across the
+# root frame. The initial profile has no ABI for that transfer and must reject.
+set(parameter_negative "${CMAKE_CURRENT_BINARY_DIR}/actor-region-v1-class-parameter.atto")
+file(WRITE "${parameter_negative}"
+"define class Point as\n  pub final int x: 20;\nend\nfnc read(Point value): int { return value.x; }\npub fnc main(): int {\n  let Point point = new Point();\n  return read(point);\n}\n")
+execute_process(
+  COMMAND "${COMPILER}" --aot-profile=actor-region-v1 "${parameter_negative}"
+  RESULT_VARIABLE parameter_status OUTPUT_VARIABLE parameter_ir
+  ERROR_VARIABLE parameter_diagnostic TIMEOUT 30)
+if(parameter_status STREQUAL "0" OR NOT parameter_ir STREQUAL "")
+  message(FATAL_ERROR "actor-region-v1 accepted a class-valued helper parameter or emitted partial IR")
+endif()
+string(FIND "${parameter_diagnostic}" "class-valued function parameters and returns" parameter_expected)
+if(parameter_expected EQUAL -1)
+  message(FATAL_ERROR "actor-region-v1 class-parameter negative returned unexpected diagnostic: ${parameter_diagnostic}")
+endif()
+
+set(return_negative "${CMAKE_CURRENT_BINARY_DIR}/actor-region-v1-class-return.atto")
+file(WRITE "${return_negative}"
+"define class Point as\n  pub final int x: 20;\nend\nfnc make(): Point {\n  let Point point = new Point();\n  return point;\n}\npub fnc main(): int {\n  let Point point = new Point();\n  return point.x;\n}\n")
+execute_process(
+  COMMAND "${COMPILER}" --aot-profile=actor-region-v1 "${return_negative}"
+  RESULT_VARIABLE return_status OUTPUT_VARIABLE return_ir
+  ERROR_VARIABLE return_diagnostic TIMEOUT 30)
+if(return_status STREQUAL "0" OR NOT return_ir STREQUAL "")
+  message(FATAL_ERROR "actor-region-v1 accepted a class-valued return or emitted partial IR")
+endif()
+string(FIND "${return_diagnostic}" "class-valued function parameters and returns" return_expected)
+if(return_expected EQUAL -1)
+  message(FATAL_ERROR "actor-region-v1 class-return negative returned unexpected diagnostic: ${return_diagnostic}")
+endif()
+
+message(STATUS "actor-region-v1 compiler IR: alloc/read/write/drop + helper, branch, parameter and return rejection PASS (NOT guest execution)")
