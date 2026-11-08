@@ -588,6 +588,16 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    # Fail-closed exact-tree/SHA/capability + executed-CTest receipt admission.
+    # Runs adversarial tests in disposable synthetic Git repositories;
+    # it never edits the source checkout or uploads any private source.
+    if(UNIX)
+        add_test(NAME native_rt_scalar_exact_tree_preflight_negatives
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_certify_test.py")
+        set_tests_properties(native_rt_scalar_exact_tree_preflight_negatives
+            PROPERTIES TIMEOUT 45)
+    endif()
     # Portable regression for the emitted IR ABI/import scanner; catches
     # broken escaping or relaxed call matching without LLVM C++ headers.
     add_test(NAME native_scalar_ir_surface_scan
