@@ -22,19 +22,24 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
             loop.upper_bound > 1000000000LL)
         throw std::runtime_error("invalid experimental scalar loop bounds");
 
-    // ABI v0: caller allocates an exclusively owned, pinned, zero-initialized
-    // 24-byte frame. [state, counter, magic] are never stack slots across a
-    // return-to-scheduler boundary. A real actor carrier must serially own
-    // all calls; this compiler fragment does NOT implement actor dispatch.
+    // ABI v1 is intentionally named separately from the older 24-byte v0
+    // symbols so a caller cannot silently pass an undersized legacy frame.
+    // A trusted carrier allocates a pinned, exclusively owned 32-byte
+    // [state, counter, magic, logical_fuel] heap frame. The logical budget
+    // persists across every physical dispatch and cannot be refilled by
+    // repeatedly supplying a new per-dispatch quantum. No native stack
+    // survives the return-to-scheduler boundary. Actor dispatch is still a
+    // separate, unimplemented security requirement.
     llvm::LLVMContext context;
     llvm::Module module("oreslang-native-scalar-loop", context);
     auto* i64 = llvm::Type::getInt64Ty(context);
     auto* i32 = llvm::Type::getInt32Ty(context);
     auto* voidTy = llvm::Type::getVoidTy(context);
     auto* ptr = native_pointer_type(context, i64);
-    auto* frameTy = llvm::StructType::create(context, {i64, i64, i64},
-                                             "oreslang.rt.scalar.frame");
-    constexpr std::uint64_t kMagic = 0x4f5245534c4f4f50ULL;
+    auto* frameTy = llvm::StructType::create(context, {i64, i64, i64, i64},
+                                             "oreslang.rt.scalar.frame.v1");
+    constexpr std::uint64_t kMagic = 0x4f5245534c4f4f51ULL;
+    constexpr std::uint64_t kMaxLogicalFuel = 100'000'000ULL;
     const auto constant = [&](std::uint64_t n) { return llvm::ConstantInt::get(i64, n); };
     const auto field = [&](llvm::IRBuilder<>& b, llvm::Value* frame, unsigned index) {
         return b.CreateStructGEP(frameTy, frame, index, "frame.field");
@@ -53,13 +58,27 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         b.SetInsertPoint(ok);
     };
 
+    // ABI v1 explicitly admits one immutable logical fuel allowance per
+    // guest frame; zero/oversized allocations trap before writing any bytes.
+    // Callers may NOT replenish this quota on subsequent scheduler handoffs.
     auto* init = llvm::Function::Create(
-        llvm::FunctionType::get(voidTy, {ptr}, false),
-        llvm::Function::ExternalLinkage, "oreslang_rt_scalar_frame_init", module);
+        llvm::FunctionType::get(voidTy, {ptr, i64}, false),
+        llvm::Function::ExternalLinkage, "oreslang_rt_scalar_frame_init_v1", module);
     {
+        auto args = init->arg_begin();
+        auto* frame = &*args++;
+        auto* logicalFuel = &*args;
         llvm::IRBuilder<> b(llvm::BasicBlock::Create(context, "entry", init));
-        auto* frame = &*init->arg_begin();
         entryGuard(init, frame, b);
+        auto* fuelValid = b.CreateAnd(
+            b.CreateICmpUGT(logicalFuel, constant(0)),
+            b.CreateICmpULE(logicalFuel, constant(kMaxLogicalFuel)));
+        auto* approved = llvm::BasicBlock::Create(context, "fuel.approved", init);
+        auto* denied = llvm::BasicBlock::Create(context, "fuel.invalid", init);
+        b.CreateCondBr(fuelValid, approved, denied);
+        b.SetInsertPoint(denied);
+        fail(b);
+        b.SetInsertPoint(approved);
         auto* stateAddress = field(b, frame, 0);
         auto* fresh = llvm::BasicBlock::Create(context, "fresh", init);
         auto* invalid = llvm::BasicBlock::Create(context, "already.initialized", init);
@@ -71,15 +90,18 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         b.CreateStore(constant(1), stateAddress);
         b.CreateStore(constant(static_cast<std::uint64_t>(loop.initial)), field(b, frame, 1));
         b.CreateStore(constant(kMagic), field(b, frame, 2));
+        b.CreateStore(logicalFuel, field(b, frame, 3));
         b.CreateRetVoid();
     }
 
-    // Status: 0 DONE, 1 COOPERATE, 2 CANCELLED. Zero fuel is a harmless
-    // handoff without guest side effects. Fuel >512 traps, not an exemption
-    // from the carrier reduction cap. No native stack survives a return.
+    // Status: 0 DONE, 1 COOPERATE, 2 CANCELLED, 3 LOGICAL_FUEL_EXHAUSTED.
+    // Zero physical fuel requests an ordinary handoff while logical fuel
+    // remains. An exhausted tenant cannot evade terminal quota denial by
+    // repeatedly requesting zero physical fuel. Fuel >512 traps.
+    // On a completed loop, DONE wins even when the last unit of fuel is used.
     auto* step = llvm::Function::Create(
         llvm::FunctionType::get(i32, {ptr, i64}, false),
-        llvm::Function::ExternalLinkage, "oreslang_rt_scalar_frame_step", module);
+        llvm::Function::ExternalLinkage, "oreslang_rt_scalar_frame_step_v1", module);
     {
         auto arg = step->arg_begin();
         llvm::Value* frame = &*arg++;
@@ -101,21 +123,27 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         auto* active = llvm::BasicBlock::Create(context, "active", step);
         auto* done = llvm::BasicBlock::Create(context, "done", step);
         auto* cancelled = llvm::BasicBlock::Create(context, "cancelled", step);
+        auto* expired = llvm::BasicBlock::Create(context, "fuel.expired", step);
         auto* loopHead = llvm::BasicBlock::Create(context, "loop.check", step);
         auto* budget = llvm::BasicBlock::Create(context, "loop.fuel", step);
         auto* advance = llvm::BasicBlock::Create(context, "loop.commit", step);
         auto* exhausted = llvm::BasicBlock::Create(context, "cooperate", step);
+        auto* logicalReady = llvm::BasicBlock::Create(context, "fuel.logical.available", step);
+        auto* logicalExhausted = llvm::BasicBlock::Create(context, "fuel.logical.exhausted", step);
         auto* complete = llvm::BasicBlock::Create(context, "loop.complete", step);
         auto* state = b.CreateLoad(i64, stateAddress, "state");
-        auto* sw = b.CreateSwitch(state, invalid, 3);
+        auto* sw = b.CreateSwitch(state, invalid, 4);
         sw->addCase(constant(1), active);
         sw->addCase(constant(2), done);
         sw->addCase(constant(3), cancelled);
+        sw->addCase(constant(4), expired);
 
         b.SetInsertPoint(done);
         b.CreateRet(llvm::ConstantInt::get(i32, 0));
         b.SetInsertPoint(cancelled);
         b.CreateRet(llvm::ConstantInt::get(i32, 2));
+        b.SetInsertPoint(expired);
+        b.CreateRet(llvm::ConstantInt::get(i32, 3));
         b.SetInsertPoint(active);
         b.CreateBr(loopHead);
         b.SetInsertPoint(loopHead);
@@ -129,6 +157,15 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         b.CreateStore(constant(2), stateAddress);
         b.CreateRet(llvm::ConstantInt::get(i32, 0));
         b.SetInsertPoint(budget);
+        // Check the lifetime quota BEFORE the physical dispatch slice:
+        // repeated step(frame, 0) cannot mask a depleted logical tenant.
+        auto* logicalRemaining = b.CreateLoad(i64, field(b, frame, 3), "logical.remaining");
+        b.CreateCondBr(b.CreateICmpEQ(logicalRemaining, constant(0)),
+                       logicalExhausted, logicalReady);
+        b.SetInsertPoint(logicalExhausted);
+        b.CreateStore(constant(4), stateAddress);
+        b.CreateRet(llvm::ConstantInt::get(i32, 3));
+        b.SetInsertPoint(logicalReady);
         b.CreateCondBr(b.CreateICmpEQ(remaining, constant(0)), exhausted, advance);
         b.SetInsertPoint(exhausted);
         b.CreateRet(llvm::ConstantInt::get(i32, 1));
@@ -137,14 +174,17 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         // Commit the i64 counter BEFORE any subsequent cooperation request.
         auto* next = b.CreateNSWAdd(current, constant(1), "counter.committed");
         b.CreateStore(next, counterAddress);
-        auto* nextFuel = b.CreateSub(remaining, constant(1), "fuel.remaining");
+        auto* nextLogical = b.CreateSub(logicalRemaining, constant(1),
+                                        "fuel.remaining.logical");
+        b.CreateStore(nextLogical, field(b, frame, 3));
+        auto* nextFuel = b.CreateSub(remaining, constant(1), "fuel.remaining.dispatch");
         b.CreateBr(loopHead);
         remaining->addIncoming(nextFuel, advance);
     }
 
     auto* cancel = llvm::Function::Create(
         llvm::FunctionType::get(voidTy, {ptr}, false),
-        llvm::Function::ExternalLinkage, "oreslang_rt_scalar_frame_cancel", module);
+        llvm::Function::ExternalLinkage, "oreslang_rt_scalar_frame_cancel_v1", module);
     {
         llvm::IRBuilder<> b(llvm::BasicBlock::Create(context, "entry", cancel));
         auto* frame = &*cancel->arg_begin();
@@ -154,7 +194,7 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         auto* valid = llvm::BasicBlock::Create(context, "valid", cancel);
         auto* invalid = llvm::BasicBlock::Create(context, "invalid", cancel);
         auto* known = b.CreateAnd(b.CreateICmpUGE(s, constant(1)),
-                                   b.CreateICmpULE(s, constant(3)));
+                                   b.CreateICmpULE(s, constant(4)));
         b.CreateCondBr(b.CreateAnd(known,
             b.CreateICmpEQ(b.CreateLoad(i64, field(b, frame, 2)), constant(kMagic))),
             valid, invalid);
@@ -173,7 +213,7 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
 
     auto* result = llvm::Function::Create(
         llvm::FunctionType::get(i64, {ptr}, false),
-        llvm::Function::ExternalLinkage, "oreslang_rt_scalar_frame_result", module);
+        llvm::Function::ExternalLinkage, "oreslang_rt_scalar_frame_result_v1", module);
     {
         llvm::IRBuilder<> b(llvm::BasicBlock::Create(context, "entry", result));
         auto* frame = &*result->arg_begin();
