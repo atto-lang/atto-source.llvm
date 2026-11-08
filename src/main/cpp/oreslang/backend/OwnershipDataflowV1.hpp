@@ -18,6 +18,7 @@ namespace oreslang {
 enum class OwnershipV1OpKind : std::uint8_t {
     Create,
     Use,
+    UseMutable,
     BorrowShared,
     BorrowMutable,
     EndBorrowShared,
@@ -85,8 +86,9 @@ public:
         for (const auto& block : graph.blocks) {
             if (block.operations.size() > MaxOperationsPerBlock)
                 fail("operation budget exceeded");
+            if (block.successors.size() > MaxEdges - edge_count)
+                fail("edge budget exceeded");
             edge_count += block.successors.size();
-            if (edge_count > MaxEdges) fail("edge budget exceeded");
             for (const auto next : block.successors)
                 if (next >= graph.blocks.size()) fail("invalid CFG successor");
         }
@@ -243,7 +245,12 @@ private:
                 break;
             case OwnershipV1OpKind::Use:
                 require_owned(owner);
-                if (owner.mutable_borrow) fail("use conflicts with mutable borrow");
+                if (owner.mutable_borrow) fail("read conflicts with mutable borrow");
+                break;
+            case OwnershipV1OpKind::UseMutable:
+                require_owned(owner);
+                if (owner.shared_borrows || owner.mutable_borrow)
+                    fail("mutable access conflicts with outstanding borrow");
                 break;
             case OwnershipV1OpKind::BorrowShared:
                 require_owned(owner);
