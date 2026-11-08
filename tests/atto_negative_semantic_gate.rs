@@ -67,32 +67,36 @@ fn matches_policy(c: &Case, stderr: &str) -> bool {
         "unexpected character", "unsupported character", "unexpected const",
         "unrecognized token", "unresolved identifier", "unknown identifier",
         "internal error", "stack overflow"]) { return false; }
-    let removed = || d.contains("operator") &&
-        any_phrase(&d, &["removed", "unsupported", "forbidden", "not allowed", "invalid"]);
-    match c.name {
+    for line in d.lines() {
+    let removed = || line.contains("operator") &&
+        any_phrase(&line, &["removed", "unsupported", "forbidden", "not allowed", "invalid"]);
+    let accepted = match c.name {
         "removed-modulo" =>
-            (d.contains('%') || d.contains("modulo")) && removed(),
+            (line.contains('%') || line.contains("modulo")) && removed(),
         "removed-caret" =>
-            (d.contains('^') || d.contains("caret"))
-                && !d.contains("^^") && !any_phrase(&d, &["double caret", "double-caret"])
+            (line.contains('^') || line.contains("caret"))
+                && !line.contains("^^") && !any_phrase(&line, &["double caret", "double-caret"])
                 && removed(),
         "removed-double-caret" =>
-            (d.contains("^^") || any_phrase(&d, &["double caret", "double-caret"])) && removed(),
+            (line.contains("^^") || any_phrase(&line, &["double caret", "double-caret"])) && removed(),
         "type-first-reassignment" | "typed-const-reassignment" =>
-            word(&d, "x") &&
-            any_phrase(&d, &["immutable", "readonly", "read-only", "constant binding",
+            word(&line, "x") &&
+            any_phrase(&line, &["immutable", "readonly", "read-only", "constant binding",
                 "const binding", "const variable"]) &&
-            any_phrase(&d, &["assign", "rebind", "mutation"]),
+            any_phrase(&line, &["assign", "rebind", "mutation"]),
         "legacy-async-modifier" =>
-            word(&d, "async") &&
-            any_phrase(&d, &["unsupported", "forbidden", "disallowed",
+            word(&line, "async") &&
+            any_phrase(&line, &["unsupported", "forbidden", "disallowed",
                 "not allowed", "deprecated", "use suspends", "invalid modifier"]),
         "critical-suspends-modifier" | "suspends-critical-modifier" =>
-            word(&d, "critical") && word(&d, "suspends") &&
-            any_phrase(&d, &["invalid", "forbidden", "disallowed", "cannot",
+            word(&line, "critical") && word(&line, "suspends") &&
+            any_phrase(&line, &["invalid", "forbidden", "disallowed", "cannot",
                 "not allowed", "incompatible", "mutually exclusive"]),
         _ => false
+    };
+    if accepted { return true; }
     }
+    false
 }
 const MAX_COMPILER_STREAM_BYTES: usize = 65536;
 // Bound each compiler stream in memory. If the child exceeds the cap the
@@ -314,6 +318,8 @@ mod tests {
         assert!(word("immutable binding x", "x"));
         assert!(!matches_policy(&CASES[6], "error: critical function is invalid"));
         assert!(!matches_policy(&CASES[7], "error: suspends modifier invalid"));
+        assert!(!matches_policy(&CASES[6], "error: critical function is invalid\nsource: suspends"));
+        assert!(!matches_policy(&CASES[3], "error: immutable binding\nsource: x cannot assign"));
     }
     #[test]
     fn oversized_and_empty_diagnostics_never_count() {
