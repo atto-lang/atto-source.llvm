@@ -65,6 +65,17 @@ inline std::string emit_actor_region_v2_guest_ir(const Program& program) {
         !fn.generic_parameters.empty() || !fn.result)
         reject("nonlexical owner lifetime or unmodeled control flow");
 
+    // A checked AST is not permission for implicit effect promotion or
+    // hidden linker-owned function entrypoints. The actor-region subset is
+    // strictly synchronous, effect-free and source-defined.
+    if (fn.has_declared_effects || fn.native_internal ||
+        !fn.method_owner.empty() || !fn.c_export_u32_symbol.empty() ||
+        !fn.pending_return_type_alias.empty() ||
+        !fn.ready_future_name.empty() || !fn.ready_future_actor.empty() ||
+        !fn.catch_binding.empty()) {
+        reject("hidden effects, native entrypoint or unmodeled scope");
+    }
+
     for (const LocalBinding& owner : fn.locals) {
         if (!owner.new_class || owner.class_name != cls.name ||
             owner.name.empty() || owner.record_view || owner.move_class ||
@@ -73,6 +84,15 @@ inline std::string emit_actor_region_v2_guest_ir(const Program& program) {
             !owner.constructor_arguments.empty() || owner.initializer ||
             !owner.task_await_name.empty() || !owner.future_await_name.empty())
             reject("non-fresh, escaping or mutable owner");
+    }
+    // The source checker currently produces these metadata fields in a
+    // limited class grammar. Fail closed if a future grammar adds ownership
+    // transfers, sum payloads or unvalidated aliases alongside 'new'.
+    for (const LocalBinding& owner : fn.locals) {
+        if (!owner.move_source.empty() || !owner.sum_type.empty() ||
+            !owner.pending_type_alias.empty() ||
+            !owner.constructor_arguments.empty())
+            reject("unmodeled owner transfer or hidden constructor");
     }
     if (fn.locals[0].name == fn.locals[1].name)
         reject("duplicate lexical owner");
@@ -112,6 +132,20 @@ inline std::string emit_actor_region_v2_guest_ir(const Program& program) {
         guard.condition->right->kind != Expression::Kind::Integer ||
         guard.condition->right->left || guard.condition->right->right)
         reject("guard is not a pure equality with an integer literal");
+    // The admitted equality itself may only contain the two operands.
+    // Reject any additional AST fields if future parsers extend the shape.
+    if (guard.condition->condition || guard.condition->when_true ||
+        guard.condition->when_false || guard.condition->condition_lhs ||
+        guard.condition->condition_rhs || !guard.condition->arguments.empty() ||
+        guard.condition->type_arguments_present ||
+        !guard.condition->type_arguments.empty() ||
+        !guard.condition->argument_names.empty() ||
+        guard.condition->right->condition ||
+        guard.condition->right->when_true ||
+        guard.condition->right->when_false ||
+        !guard.condition->right->arguments.empty()) {
+        reject("unmodeled guard expressions or side effects");
+    }
     const FieldAccess guard_field = checked_field(guard.condition->left.get());
     const FieldAccess early_value = checked_field(guard.result.get());
     const FieldAccess normal_value = checked_field(fn.result.get());
