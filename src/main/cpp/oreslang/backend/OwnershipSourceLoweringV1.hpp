@@ -21,9 +21,14 @@ class OwnershipSourceLoweringV1 final {
 public:
     static OwnershipV1Result lower_guarded_owned_class_function(
         const Program& program, const Function& fn, const ClassDecl& cls) {
-        reject_if(!program.imports.empty() || program.classes.size() != 1 ||
-                  program.functions.size() != 1 || program.functions.front().name != fn.name,
-                  "program roots are not closed");
+        reject_if(!program.imports.empty() || !program.actors.empty() ||
+                  !program.generators.empty() || !program.cooperative_loops.empty() ||
+                  !program.sum_types.empty() || !program.type_only_declarations.empty() ||
+                  !program.type_constraint_descriptors.empty() ||
+                  !program.contracts.empty() || !program.conforms.empty() ||
+                  program.classes.size() != 1 || program.functions.size() != 1 ||
+                  &program.functions.front() != &fn || &program.classes.front() != &cls,
+                  "program roots are not closed or AST references are not canonical");
         reject_if(fn.name != "main" || !fn.parameters.empty() ||
                   fn.locals.empty() || fn.locals.size() > 8 ||
                   fn.statements.size() != 0 || fn.early_returns.size() != 1 ||
@@ -82,10 +87,14 @@ public:
             reject_if(!expression || expression->kind != Expression::Kind::Field ||
                       !expression->left ||
                       expression->left->kind != Expression::Kind::Variable ||
-                      !expression->left->left || expression->left->right ||
+                      expression->left->left || expression->left->right ||
                       expression->left->condition || expression->left->when_true ||
                       expression->left->when_false || expression->left->condition_lhs ||
                       expression->left->condition_rhs ||
+                      !expression->left->argument_names.empty() ||
+                      !expression->left->type_arguments.empty() ||
+                      expression->left->type_arguments_present ||
+                      !expression->left->sum_type.empty() ||
                       !expression->left->arguments.empty() ||
                       !expression->left->type_arguments.empty() ||
                       expression->right || expression->condition ||
