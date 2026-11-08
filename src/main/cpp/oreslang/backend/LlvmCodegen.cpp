@@ -53,8 +53,6 @@ struct ActorRegionFieldLowering {
 };
 
 struct RegionMoveLowering {
-    const std::unordered_map<std::string, ActorRegionFieldLowering>* actor_region_fields = nullptr;
-    llvm::FunctionCallee actor_region_read_i64;
     llvm::Value* region = nullptr;
     llvm::FunctionCallee read;
     llvm::FunctionCallee drop;
@@ -79,6 +77,8 @@ struct RegionMoveLowering {
     const NativeClassLayouts* layouts = nullptr;
     const Program* sum_program = nullptr;
     llvm::FunctionCallee sum_check;
+    const std::unordered_map<std::string, ActorRegionFieldLowering>* actor_region_fields = nullptr;
+    llvm::FunctionCallee actor_region_read_i64;
 };
 
 llvm::Value* receiver_array_region(const Expression& receiver, const RegionMoveLowering* moves) {
@@ -921,6 +921,25 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 ? "native strings currently require a synchronous host main region without actors, suspension or exception frames"
                 : "native records/owning results currently require a synchronous host main region without actors, suspension or exception frames");
     }
+    std::uint32_t actor_region_slots = 0;
+    std::uint32_t actor_region_stride = 8;
+    if (actor_region_v1) {
+        if (!native_main || !source.actors.empty())
+            throw std::runtime_error("actor-region-v1 requires a synchronous native main without actors");
+        for (const auto& local : main_it->locals) {
+            if (local.class_name.empty()) continue;
+            ++actor_region_slots;
+            const auto cls = std::find_if(source.classes.begin(), source.classes.end(),
+                [&](const ClassDecl& candidate) { return candidate.name == local.class_name; });
+            if (cls == source.classes.end())
+                throw std::runtime_error("actor-region-v1 local has no resolved class layout");
+            actor_region_stride = std::max(actor_region_stride,
+                static_cast<std::uint32_t>(cls->fields.size() * sizeof(std::int64_t)));
+        }
+        if (!actor_region_slots || actor_region_slots > 4096u ||
+            actor_region_stride > 1024u * 1024u)
+            throw std::runtime_error("actor-region-v1 requires 1..4096 bounded class owners");
+    }
     if (native_main) {
         if (!main_it->parameters.empty())
             throw std::runtime_error("native main() must have zero arguments");
@@ -1594,6 +1613,41 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 continue;
             }
             if (binding.new_class || binding.move_class) {
+                if (actor_region_v1) {
+                    if (!binding.new_class || binding.move_class)
+                        throw std::runtime_error("actor-region-v1 requires a fresh immutable class owner");
+                    const auto& cls = flat_classes.at(binding.class_name);
+                    const std::uint32_t object_bytes =
+                        static_cast<std::uint32_t>(cls.fields.size() * sizeof(std::int64_t));
+                    auto* i32 = llvm::Type::getInt32Ty(context);
+                    llvm::Value* offset_slot = builder.CreateAlloca(
+                        i32, nullptr, binding.name + ".actor.region.offset.slot");
+                    llvm::Value* offset = builder.CreateCall(
+                        actorRegionGuestAlloc,
+                        {llvm::ConstantInt::get(i32, object_bytes)},
+                        binding.name + ".actor.region.alloc");
+                    builder.CreateStore(offset, offset_slot);
+                    storage.emplace(binding.name, offset_slot);
+                    for (std::size_t field_index = 0; field_index < cls.fields.size(); ++field_index) {
+                        const auto& field = cls.fields[field_index];
+                        if (!field.initializer_expression)
+                            throw std::runtime_error("actor-region-v1 class field initializer missing");
+                        const std::uint32_t byte_offset =
+                            static_cast<std::uint32_t>(field_index * sizeof(std::int64_t));
+                        const std::unordered_map<std::string, llvm::Value*> no_fields;
+                        llvm::Value* initial = lower(*field.initializer_expression,
+                            builder, i64, no_fields, no_fields, declarations, &region_moves);
+                        builder.CreateCall(actorRegionGuestWrite,
+                            {offset, llvm::ConstantInt::get(i32, byte_offset), initial});
+                        actor_region_fields.emplace(field_key(binding.name, field.name),
+                            ActorRegionFieldLowering{offset_slot, byte_offset});
+                    }
+                    const std::uint64_t object_size =
+                        static_cast<std::uint64_t>(cls.fields.size() * sizeof(std::int64_t));
+                    lexical_slots.push_back({binding.name, offset_slot, false,
+                        object_size, false, {}, true});
+                    continue;
+                }
                 if (class_has_arrays.at(binding.class_name))
                     class_array_regions.emplace(binding.name, binding.move_class
                         ? class_array_regions.at(binding.move_source) : array_region);
@@ -2349,7 +2403,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             for (auto it = ordered_root_scopes.rbegin(); it != ordered_root_scopes.rend(); ++it)
                 finish_scope(*it);
             for (auto it = lexical_slots.rbegin(); it != lexical_slots.rend(); ++it) {
-                if (it->int_array) {
+                if (it->actor_region_object) {
+                    auto* i32 = llvm::Type::getInt32Ty(context);
+                    llvm::Value* offset = builder.CreateLoad(i32, it->address,
+                        it->name + ".actor.region.drop.offset");
+                    builder.CreateCall(actorRegionGuestDrop, {offset});
+                    builder.CreateStore(llvm::ConstantInt::get(i32, 0), it->address);
+                } else if (it->int_array) {
                     llvm::Value* handle = builder.CreateLoad(i64,
                         it->address, it->name + ".array.drop.handle");
                     // A lexical rt take disarms its previous owner slot.
@@ -3118,6 +3178,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         auto* entry = llvm::BasicBlock::Create(context, "entry", host_main);
         llvm::IRBuilder<> builder(entry);
         llvm::Function* guest = declarations.at(native_function_slot("main", 0));
+        if (actor_region_v1) {
+            auto* i32 = llvm::Type::getInt32Ty(context);
+            builder.CreateCall(actorRegionGuestBegin, {
+                llvm::ConstantInt::get(i32, actor_region_slots),
+                llvm::ConstantInt::get(i32, actor_region_stride),
+                llvm::ConstantInt::get(i32, 64)});
+        }
         llvm::FunctionCallee string_end;
         llvm::FunctionCallee record_end;
         if (string_runtime) {
@@ -3145,6 +3212,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             builder.SetInsertPoint(ready);
         }
         llvm::Value* result = builder.CreateCall(guest);
+        if (actor_region_v1)
+            builder.CreateCall(actorRegionGuestEnd);
         llvm::Value* tasks_ok = has_source_tasks
             ? builder.CreateICmpEQ(
                 builder.CreateCall(taskShutdown),
