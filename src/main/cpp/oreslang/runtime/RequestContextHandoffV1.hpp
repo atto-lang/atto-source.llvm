@@ -206,6 +206,13 @@ public:
             recipient.scheduler_domain != sender.scheduler_domain ||
             !request_local_current_actor_turn_v1(scheduler_, sender, source))
             return std::nullopt;
+        // Unattached recipient cannot be cleaned by the lifecycle STOP
+        // registry. Deny its ticket BEFORE value snapshots or slot charge.
+        // This check is lock-free even on an actor carrier; final scheduler
+        // commit still arbitrates STOP against BOTH actor generations.
+        if (lifecycle_registry_ &&
+            !lifecycle_registry_->attached_generation(recipient))
+            return std::nullopt;
         Envelope env;
         env.identity = source.identity();
         env.recipient = recipient;
