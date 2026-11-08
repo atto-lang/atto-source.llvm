@@ -1137,8 +1137,11 @@ if(BUILD_TESTING)
     # Byte-identical .atto source fixtures from Java and platform conformance.
     # Positive: real frontend must emit IR. Negative: semantic use-after-move
     # diagnostic must fire before IR; unsupported syntax is not a passing proof.
-    oreslang_contract_test(native_logical_borrow_take_accept
-        logical-borrow-compiler-v1/owned-take-positive.atto --ir "define")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_logical_borrow_take_accept
+            logical-borrow-compiler-v1/owned-take-positive.atto
+            --ir "define" --run 0 --stdout "42" --clang "${ORE_CLANG}")
+    endif()
     oreslang_contract_test(native_logical_borrow_use_after_take_reject
         logical-borrow-compiler-v1/use-after-take-reject.atto --diagnostic "moved")
 
