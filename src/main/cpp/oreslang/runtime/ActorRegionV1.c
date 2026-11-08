@@ -132,3 +132,50 @@ int ores_actor_region_v1_try_destroy(OresActorRegionV1* r) {
     free(r);
     return 1;
 }
+
+/* Compiler-generated native guest ABI; these shims operate only on sidecars
+ * allocated by validated LLVM IR. Neither a compact offset nor a naked
+ * generation is an authorization token. Exact sizes/alignments are part of
+ * this opt-in ABI; never silently reinterpret a different target layout.
+ * The compiler must lower cancellation/error cleanups before admitting them. */
+_Static_assert(sizeof(OresArenaTurn) == 16, "LLVM turn sidecar ABI drift");
+_Static_assert(sizeof(OresActorRegionV1Ref) == 32, "LLVM region sidecar ABI drift");
+_Static_assert(offsetof(OresActorRegionV1Ref, proof) == 8,
+               "LLVM region ref sidecar alignment drift");
+
+void ores_actor_region_v1_compiler_enter(OresActorRegionV1* region,
+        uint64_t owner, uint64_t incarnation, OresArenaTurn* out) {
+    if (!out) deny();
+    *out = ores_actor_region_v1_enter(region, owner, incarnation);
+}
+void ores_actor_region_v1_compiler_alloc(OresActorRegionV1* region,
+        const OresArenaTurn* turn, uint32_t bytes, OresActorRegionV1Ref* out) {
+    if (!turn || !out) deny();
+    *out = ores_actor_region_v1_alloc(region, *turn, bytes);
+}
+void ores_actor_region_v1_compiler_write_i64(OresActorRegionV1* region,
+        const OresArenaTurn* turn, const OresActorRegionV1Ref* ref,
+        uint32_t field_offset, int64_t value) {
+    if (!turn || !ref) deny();
+    ores_actor_region_v1_write(region, *turn, *ref,
+                              field_offset, &value, sizeof(value));
+}
+int64_t ores_actor_region_v1_compiler_read_i64(OresActorRegionV1* region,
+        const OresArenaTurn* turn, const OresActorRegionV1Ref* ref,
+        uint32_t field_offset) {
+    if (!turn || !ref) deny();
+    int64_t value = 0;
+    ores_actor_region_v1_read(region, *turn, *ref,
+                             field_offset, &value, sizeof(value));
+    return value;
+}
+void ores_actor_region_v1_compiler_drop(OresActorRegionV1* region,
+        const OresArenaTurn* turn, OresActorRegionV1Ref* ref) {
+    if (!turn || !ref) deny();
+    ores_actor_region_v1_drop(region, *turn, ref);
+}
+void ores_actor_region_v1_compiler_leave(OresActorRegionV1* region,
+        const OresArenaTurn* turn) {
+    if (!turn) deny();
+    ores_actor_region_v1_leave(region, *turn);
+}
