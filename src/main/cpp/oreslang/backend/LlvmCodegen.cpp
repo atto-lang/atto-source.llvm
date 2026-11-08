@@ -1,6 +1,7 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/backend/NativeFlatClasses.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
+#include "oreslang/types/TaskSourceAuthority.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 #include "oreslang/runtime/OresIsolateAbi.h"
@@ -1414,6 +1415,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
 
         std::unordered_map<std::string, llvm::Value*> source_task_handles;
         for (const auto& task : fn.source_tasks) {
+            // Never emit a producer before checking the exact AST that the
+            // completed ownership pass authorized. Parser-only acceptance or
+            // a stale/injected Task node is insufficient lowering authority.
+            types::require_source_task_i64(task);
             if (!has_source_tasks || !task.result)
                 throw std::runtime_error(
                     "source Task<int> lacks runtime/result lowering");
