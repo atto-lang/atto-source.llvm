@@ -1,0 +1,6 @@
+fnc xor(): bool {
+  return true;
+}
+pub fnc main(): int {
+  return 0;
+}
