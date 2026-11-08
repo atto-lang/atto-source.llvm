@@ -1564,6 +1564,38 @@ int ores_native_actor_scheduler_commit_if_live_v1(
     return ok;
 }
 
+// Both incarnation predicates and the bounded publication run within a
+// single scheduler lifecycle critical section. A recipient STOP racing a
+// source DATA-mail seal cannot create a ticket after STOP has won.
+int ores_native_actor_scheduler_commit_if_both_live_v1(
+        OresNativeActorScheduler* s, OresNativeActorRef sender,
+        OresNativeActorRef recipient, OresNativeActorBoundedCommitV1 commit,
+        void* opaque) {
+    if (!s || !commit) return 0;
+    lock(s);
+    int live = !s->retired && matching(s, sender) && matching(s, recipient);
+    if (live) {
+        ActorLane* from = &s->actors[sender.actor_slot];
+        ActorLane* to = &s->actors[recipient.actor_slot];
+        live = !from->retired && !to->retired;
+        if (live) {
+            const OresExecutionPhase from_phase =
+                ores_execution_phase(&from->authority);
+            const OresExecutionPhase to_phase =
+                ores_execution_phase(&to->authority);
+            live = (from_phase == ORES_EXEC_READY ||
+                    from_phase == ORES_EXEC_RUNNING ||
+                    from_phase == ORES_EXEC_SUSPENDED)
+                && (to_phase == ORES_EXEC_READY ||
+                    to_phase == ORES_EXEC_RUNNING ||
+                    to_phase == ORES_EXEC_SUSPENDED);
+        }
+    }
+    const int ok = live ? (commit(opaque) != 0) : 0;
+    unlock(s);
+    return ok;
+}
+
 int ores_native_actor_scheduler_is_stopping_v1(
         OresNativeActorScheduler* s, OresNativeActorRef actor) {
     if (!s) return 0;
