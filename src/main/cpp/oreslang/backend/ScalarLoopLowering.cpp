@@ -41,9 +41,13 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
     auto* i64 = llvm::Type::getInt64Ty(context);
     auto* i32 = llvm::Type::getInt32Ty(context);
     auto* voidTy = llvm::Type::getVoidTy(context);
-    auto* ptr = native_pointer_type(context, i64);
     auto* frameTy = llvm::StructType::create(context, {i64, i64, i64, i64},
                                              "oreslang.rt.scalar.frame.v1");
+    // The ABI's first parameter addresses the whole four-field frame.
+    // On typed-pointer LLVM this MUST be frameTy*, not i64*: emitting
+    // CreateStructGEP(frameTy, i64*, ...) is ill-typed on older toolchains.
+    // Opaque-pointer LLVM retains the same C ABI while using ptr.
+    auto* ptr = native_pointer_type(context, frameTy);
     constexpr std::uint64_t kMagic = 0x4f5245534c4f4f51ULL;
     constexpr std::uint64_t kMaxLogicalFuel = 100'000'000ULL;
     const auto constant = [&](std::uint64_t n) { return llvm::ConstantInt::get(i64, n); };
