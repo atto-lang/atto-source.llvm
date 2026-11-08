@@ -64,9 +64,10 @@ public:
         live_.emplace(id, Range{start, end});
         return Grant(issuer_, id);
     }
-    std::optional<std::uint64_t> checked_offset(
+private:
+    // Caller MUST already hold gate_. No pointer or host memory is returned.
+    std::optional<std::uint64_t> checked_offset_locked(
         const Grant& grant, std::uint32_t word, std::uint64_t bytes) const {
-        std::lock_guard<std::mutex> lock(gate_);
         if (retired_ || grant.issuer_ != issuer_ || word == 0 || bytes == 0)
             return std::nullopt;
         const auto it = live_.find(grant.id_);
@@ -77,11 +78,54 @@ public:
             return std::nullopt;
         return offset; // actor-relative offset, NEVER a native address
     }
+public:
+    // Diagnostic-only: releasing the mutex before the subsequent memory
+    // access allows release/retire/reuse to race it. Compiler-generated loads
+    // and stores MUST NOT treat checked_offset() as an access capability.
+    std::optional<std::uint64_t> checked_offset(
+        const Grant& grant, std::uint32_t word, std::uint64_t bytes) const {
+        std::lock_guard<std::mutex> lock(gate_);
+        return checked_offset_locked(grant, word, bytes);
+    }
+
+    // Trusted HOST-only lexical access proof. Hold the same gate used for
+    // release(), retire(), and issue_allocation() across the ENTIRE operation.
+    // The callback must perform the memory access synchronously and must NOT
+    // suspend, retain the offset for later use, or call this gate recursively.
+    // A callback exception propagates but automatically releases the gate.
+    // False means no user callback ran. Not a production/native guest sandbox.
+    template <typename Operation>
+    bool with_checked_access(const Grant& grant, std::uint32_t word,
+                             std::uint64_t bytes, Operation&& operation) const {
+        std::lock_guard<std::mutex> lock(gate_);
+        const auto offset = checked_offset_locked(grant, word, bytes);
+        if (!offset) return false;
+        std::forward<Operation>(operation)(*offset);
+        return true;
+    }
+    // Metadata-only release for existing HOST regression callers. Guest arena
+    // allocators MUST NOT call this directly: it cannot guarantee that memory
+    // has been scrubbed before another allocation reuses the same bytes.
     bool release(const Grant& grant) {
         std::lock_guard<std::mutex> lock(gate_);
-        // Owning allocator must scrub memory before making region reusable.
         return !retired_ && grant.issuer_ == issuer_ &&
                live_.erase(grant.id_) == 1;
+    }
+
+    // Trusted allocator release: scrub the backing bytes WHILE holding the
+    // same lock that protects checked access and allocation/reuse. If scrub
+    // throws, retain the live grant; no region may be reused. Do not retain
+    // the range, suspend or reenter this gate from the callback.
+    template <typename Scrub>
+    bool release_after_scrub(const Grant& grant, Scrub&& scrub) {
+        std::lock_guard<std::mutex> lock(gate_);
+        if (retired_ || grant.issuer_ != issuer_) return false;
+        const auto it = live_.find(grant.id_);
+        if (it == live_.end()) return false;
+        std::forward<Scrub>(scrub)(it->second.start,
+                                   it->second.end - it->second.start);
+        live_.erase(it);
+        return true;
     }
     void retire() {
         std::lock_guard<std::mutex> lock(gate_);
