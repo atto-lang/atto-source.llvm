@@ -23,17 +23,20 @@ def verify_closed_guest_ir(source):
         "oreslang_rt_scalar_frame_cancel_v1",
         "oreslang_rt_scalar_frame_result_v1",
     }
-    assert definitions == expected, ("unapproved compiled guest function", definitions)
+    if definitions != expected:
+        raise AssertionError(("unapproved compiled guest function", definitions))
     declarations = set(re.findall(r'(?m)^declare\s+[^@\n]+@([A-Za-z0-9_.]+)\(', source))
-    assert declarations == {"llvm.trap"}, ("unapproved guest import or FFI", declarations)
-    assert not re.search(r'(?m)^\s*(?:%[\w.]+\s*=\s*)?(?:invoke|callbr)\b',
-                         source), "unverified interprocedural transfer"
+    if declarations != {"llvm.trap"}:
+        raise AssertionError(("unapproved guest import or FFI", declarations))
+    if re.search(r'(?m)^\s*(?:%[\w.]+\s*=\s*)?(?:invoke|callbr)\b', source):
+        raise AssertionError("unverified interprocedural transfer")
     calls = re.findall(
         r'(?m)^\s*(?:%[\w.]+\s*=\s*)?(?:(?:tail|musttail|notail)\s+)?call\b[^\n]*',
         source,
     )
     for call in calls:
-        assert re.search(r'@llvm\.trap\(', call), ("unapproved guest call", call)
+        if not re.search(r'@llvm\.trap\(', call):
+            raise AssertionError(("unapproved guest call", call))
 
 
 def main():
