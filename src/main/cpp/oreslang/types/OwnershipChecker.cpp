@@ -1374,6 +1374,14 @@ void validate_i64_ownership(Program& program) {
                 !function.future_pipelines.empty() ||
                 !function.ready_await_actor.empty() ||
                 !function.done_await_actor.empty()) {
+            // A borrowed parameter already denotes a caller-owned loan,
+            // even though its LocalOwnership counters track only *nested*
+            // lexical borrows. Do not silently treat that ambient loan as
+            // an owned scalar when adding the CFG suspend operation.
+            for (const auto& parameter : function.parameters)
+                if (parameter.mode != Parameter::Mode::Value)
+                    throw std::runtime_error(
+                        "ownership violation: borrowed parameter crosses native suspension");
             cfg.blocks.front().operations.push_back({OpKind::Suspend, ""});
         }
         // Record returns can move an owner in either lazy arm. Preserve those
