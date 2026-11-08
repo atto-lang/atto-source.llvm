@@ -83,3 +83,32 @@ enforced boundaries and adversarial exact-head guest/OS evidence.
 
 **Reinstate source-owned runners** before promoting any security PR:
 `steps=[]` means runner admission failure, not an executed pass.
+
+
+## Real compiled Wasm actor adversarial checks (new)
+
+The source-to-Volucro harness imports
+`tests/atto_wasm32_actor_instances.mjs` to run adversarial lifecycle
+checks against the **same compiler-generated wasm binary**, before
+invoking the Volucro Rust Wasmi consumer. It proves, when executed,
+per-instance state separation and continued sibling execution after
+pre-init, double-init and post-teardown traps. It also rejects a
+deliberately corrupted Wasm header (0x00→0xff). The
+`WebAssembly.Instance` checks are Node/V8 engine evidence. The separate
+`vm-core` invocation is needed for Volucro Wasmi evidence; both must
+succeed before any combined PASS receipt is emitted.
+
+For an already compiler-generated artifact the Node-only checker may be
+invoked independently:
+
+```sh
+node tests/atto_wasm32_actor_instances.mjs /absolute/path/to/compiled-actor.wasm
+```
+
+A lower-tier C-to-Wasm32 engine canary executed locally and passed 15
+checks. This does **not** substitute for the `.ores` source compiler,
+AttoLang heap ownership, real Volucro Wasmi execution or native process
+containment. On the LLVM source repository the latest compiler CI returned
+`steps=[]`; the real source→Volucro integration test has not executed
+on an approved runner. Follow [LLVM runner admission issue #159](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/159)
+and [Volucro runner issue #54](https://github.com/volucro/tenant-vm.rs/issues/54).
