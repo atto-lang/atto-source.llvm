@@ -938,6 +938,8 @@ if(BUILD_TESTING)
     endif()
     # Java-parity syntax as .atto guests: if/then, stdio.stdout.write/println
     # of String/int/bool, Result.expect, and `import fnc` named imports.
+    # Register these gates even when Clang is missing: absent native toolchains
+    # must be visible failed tests, not falsely green CTest selections.
     if(ORE_CLANG)
         add_test(NAME native_atto_parity_syntax
             COMMAND "${CMAKE_COMMAND}"
@@ -946,27 +948,27 @@ if(BUILD_TESTING)
                 "-DCLANG=${ORE_CLANG}"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_parity_syntax.cmake")
         set_tests_properties(native_atto_parity_syntax PROPERTIES TIMEOUT 240)
-        add_test(NAME native_sealed_scalar_aot_v1
-            COMMAND "${CMAKE_COMMAND}"
-                "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
-                "-DBUILD=${CMAKE_CURRENT_BINARY_DIR}"
-                "-DCLANG=${ORE_CLANG}"
-                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/sealed_scalar_aot_v1.cmake")
-        set_tests_properties(native_sealed_scalar_aot_v1 PROPERTIES TIMEOUT 180)
-        add_test(NAME native_sealed_class_fields_reachability_v1
-            COMMAND "${CMAKE_COMMAND}"
-                "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
-                "-DBUILD=${CMAKE_CURRENT_BINARY_DIR}"
-                "-DCLANG=${ORE_CLANG}"
-                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/sealed_class_fields_reachability_v1.cmake")
-        set_tests_properties(native_sealed_class_fields_reachability_v1 PROPERTIES TIMEOUT 240)
-        add_test(NAME native_sealed_aot_profile_mutations
-            COMMAND "${CMAKE_COMMAND}"
-                "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
-                "-DBUILD=${CMAKE_CURRENT_BINARY_DIR}"
-                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/sealed_aot_profile_mutations.cmake")
-        set_tests_properties(native_sealed_aot_profile_mutations PROPERTIES TIMEOUT 240)
     endif()
+    add_test(NAME native_sealed_scalar_aot_v1
+        COMMAND "${CMAKE_COMMAND}"
+            "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+            "-DBUILD=${CMAKE_CURRENT_BINARY_DIR}"
+            "-DCLANG=${ORE_CLANG}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/sealed_scalar_aot_v1.cmake")
+    set_tests_properties(native_sealed_scalar_aot_v1 PROPERTIES TIMEOUT 180)
+    add_test(NAME native_sealed_class_fields_reachability_v1
+        COMMAND "${CMAKE_COMMAND}"
+            "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+            "-DBUILD=${CMAKE_CURRENT_BINARY_DIR}"
+            "-DCLANG=${ORE_CLANG}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/sealed_class_fields_reachability_v1.cmake")
+    set_tests_properties(native_sealed_class_fields_reachability_v1 PROPERTIES TIMEOUT 240)
+    add_test(NAME native_sealed_aot_profile_mutations
+        COMMAND "${CMAKE_COMMAND}"
+            "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+            "-DBUILD=${CMAKE_CURRENT_BINARY_DIR}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/sealed_aot_profile_mutations.cmake")
+    set_tests_properties(native_sealed_aot_profile_mutations PROPERTIES TIMEOUT 240)
     # Positive compiler-only contracts must assemble the emitted IR, not just
     # accept an expected substring after the textual ModuleID header.
     if(ORE_CLANG)
