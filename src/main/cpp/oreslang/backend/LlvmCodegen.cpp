@@ -47,7 +47,14 @@ std::string field_key(const std::string& receiver, const std::string& field) {
 // can escape as a result:
 // native functions return only i64, and the ownership pass restricts rt borrow
 // to nonescaping call arguments.
+struct ActorRegionFieldLowering {
+    llvm::Value* owner_offset_slot = nullptr;
+    std::uint32_t byte_offset = 0;
+};
+
 struct RegionMoveLowering {
+    const std::unordered_map<std::string, ActorRegionFieldLowering>* actor_region_fields = nullptr;
+    llvm::FunctionCallee actor_region_read_i64;
     llvm::Value* region = nullptr;
     llvm::FunctionCallee read;
     llvm::FunctionCallee drop;
@@ -304,6 +311,19 @@ llvm::Value* lower(const Expression& expr,
             return stored;
         }
         case Expression::Kind::Field:
+            if (moves && moves->actor_region_fields) {
+                const auto found = moves->actor_region_fields->find(native_place_key(expr));
+                if (found != moves->actor_region_fields->end()) {
+                    llvm::Value* owner_offset = builder.CreateLoad(
+                        llvm::Type::getInt32Ty(builder.getContext()),
+                        found->second.owner_offset_slot, "actor.region.offset");
+                    return builder.CreateCall(moves->actor_region_read_i64,
+                        {owner_offset, llvm::ConstantInt::get(
+                            llvm::Type::getInt32Ty(builder.getContext()),
+                            found->second.byte_offset)},
+                        expr.left->name + "." + expr.name + ".actor.region.read");
+                }
+            }
             if (expr.name == "size" && expr.left &&
                     expr.left->kind == Expression::Kind::Field) {
                 llvm::Value* handle = builder.CreateLoad(i64,
@@ -702,7 +722,8 @@ llvm::Value* lower(const Expression& expr,
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool cortex_m_target,
                                   bool bounded_allocator_provider,
-                                  const std::string& isolate_entry) {
+                                  const std::string& isolate_entry,
+                                  bool actor_region_v1) {
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
@@ -977,6 +998,31 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             return std::any_of(fn.locals.begin(), fn.locals.end(),
                 [](const LocalBinding& binding) { return binding.heap_owned; });
         });
+    llvm::FunctionCallee actorRegionGuestBegin, actorRegionGuestAlloc;
+    llvm::FunctionCallee actorRegionGuestRead, actorRegionGuestWrite;
+    llvm::FunctionCallee actorRegionGuestDrop, actorRegionGuestEnd;
+    if (actor_region_v1) {
+        auto* i32 = llvm::Type::getInt32Ty(context);
+        actorRegionGuestBegin = module.getOrInsertFunction(
+            "ores_actor_region_guest_v1_begin",
+            llvm::FunctionType::get(voidTy, {i32, i32, i32}, false));
+        actorRegionGuestAlloc = module.getOrInsertFunction(
+            "ores_actor_region_guest_v1_alloc",
+            llvm::FunctionType::get(i32, {i32}, false));
+        actorRegionGuestRead = module.getOrInsertFunction(
+            "ores_actor_region_guest_v1_read_i64",
+            llvm::FunctionType::get(i64, {i32, i32}, false));
+        actorRegionGuestWrite = module.getOrInsertFunction(
+            "ores_actor_region_guest_v1_write_i64",
+            llvm::FunctionType::get(voidTy, {i32, i32, i64}, false));
+        actorRegionGuestDrop = module.getOrInsertFunction(
+            "ores_actor_region_guest_v1_drop",
+            llvm::FunctionType::get(voidTy, {i32}, false));
+        actorRegionGuestEnd = module.getOrInsertFunction(
+            "ores_actor_region_guest_v1_end",
+            llvm::FunctionType::get(voidTy, {}, false));
+    }
+
     llvm::FunctionCallee regionOpen, regionNew, regionRead, regionDrop, regionClose;
     if (has_region_bindings) {
         regionOpen = module.getOrInsertFunction("oreslang_owned_i64_region_open",
@@ -1283,6 +1329,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             std::uint64_t bytes;
             bool int_array = false;
             std::vector<std::string> owned_array_fields;
+            bool actor_region_object = false;
         };
         std::vector<LocalSlot> lexical_slots;
         std::unordered_map<std::string, llvm::Value*> owned_live_flags;
@@ -1380,11 +1427,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             array_region = builder.CreateLoad(native_ptr, open_out, "native.int.array.region");
             }
         }
+        std::unordered_map<std::string, ActorRegionFieldLowering> actor_region_fields;
         RegionMoveLowering region_moves{region, regionRead, regionDrop, &owned_live_flags,
             array_region, arrayAdd, arrayGet, arraySet, arrayLength, &array_names,
             &array_field_keys, array_failure, array_failure_status, &owned_failure_handles,
             &record_classes, &record_schemas, record_new, record_get, record_check,
             &class_array_regions, &class_array_parameters, &owning_results};
+        if (actor_region_v1) {
+            region_moves.actor_region_fields = &actor_region_fields;
+            region_moves.actor_region_read_i64 = actorRegionGuestRead;
+        }
         auto new_checked_array = [&](const std::string& label) -> llvm::Value* {
             if (!array_handle_shadows || next_array_shadow >= array_owner_count)
                 throw std::runtime_error("missing native array failure owner slot");
