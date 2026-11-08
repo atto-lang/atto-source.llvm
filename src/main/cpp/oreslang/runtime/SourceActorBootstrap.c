@@ -157,6 +157,13 @@ uint64_t oreslang_source_actor_test_scalar_checkpoint_count(void* raw) {
     return atomic_load_explicit(&actor->frame_vm_checkpoints,
         memory_order_acquire);
 }
+uint64_t oreslang_source_actor_test_scalar_dispatched_steps(void* raw) {
+    SourceActor* actor = (SourceActor*)raw;
+    if (!actor || actor->magic != SOURCE_ACTOR_MAGIC)
+        return UINT64_MAX;
+    return atomic_load_explicit(&actor->frame_vm_steps,
+        memory_order_acquire);
+}
 #endif
 
 /*
