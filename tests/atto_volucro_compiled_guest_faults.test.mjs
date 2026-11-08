@@ -65,6 +65,13 @@ test('module without on_message export is not mutation-authorized',()=>{
   const missing=mutateActorWasmExport(valid);
   assert.throws(()=>mutateActorWasmOutOfBounds(missing),/missing compiled on_message/);
 });
+test('oversized compiled artifact is denied before Node can compile it',()=>{
+  const oversize=Buffer.alloc(1024*1024+1);
+  valid.copy(oversize);
+  assert.throws(()=>mutateActorWasmExport(oversize),/exceeds 1 MiB admission cap/);
+  assert.throws(()=>mutateActorWasmOutOfBounds(oversize),/exceeds 1 MiB admission cap/);
+  assert.throws(()=>mutateActorWasmOutOfBoundsStore(oversize),/exceeds 1 MiB admission cap/);
+});
 test('malformed truncated magic and source never accepted',()=>{
   for(const m of [Buffer.alloc(0),Buffer.from('not wasm'),valid.subarray(0,15)]){
     assert.throws(()=>mutateActorWasmOutOfBounds(m),/WASM_MUTATION_DENIED/);
