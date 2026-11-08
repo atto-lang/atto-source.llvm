@@ -88,6 +88,13 @@ inline std::uint64_t source_task_i64_fingerprint(
         u64(static_cast<std::uint64_t>(expr.offset));
         u64(static_cast<std::uint64_t>(expr.integer));
         byte(expr.boolean ? 1u : 0u);
+        // Source typing and generic metadata affect native lowering even
+        // when the raw expression tree and scalar literal are unchanged.
+        // A post-check retype must invalidate the exact ownership proof.
+        byte(static_cast<std::uint8_t>(expr.resolved_type));
+        str(expr.resolved_class);
+        str(expr.sum_type);
+        byte(expr.type_arguments_present ? 1u : 0u);
         str(expr.name);
         const auto child = [&](const std::unique_ptr<Expression>& value) {
             byte(value ? 1u : 0u);
