@@ -1,0 +1,40 @@
+# OwnershipDataflowV1 — bounded compiler-time CFG ownership verifier
+
+**Status:** initial conservative analysis, integrated with the restricted ActorRegionV2 guarded-return lowering. It is not yet a general source-language borrow checker or proof of whole-program zero-GC.
+
+## Model
+
+The analysis takes a compiler-owned CFG with unique owner identities and explicit operations:
+
+- `Create`: initialize a previously uninitialized owner.
+- `Use`: require a live owned value and no mutable borrow.
+- `BorrowShared` / `EndBorrowShared`: maintain a bounded shared-loan count.
+- `BorrowMutable` / `EndBorrowMutable`: enforce exclusive mutable loan.
+- `Take`: mark the current owner moved; it is not destroyed at the exit.
+- `Drop`: explicitly destroy once; a later use/drop is rejected.
+- `ExitNormal`: emit a reverse declaration-order cleanup plan for all still owned objects.
+
+Every reachable CFG block must have successors or an explicit exit. Join points require **identical** owner states and borrow counts on every incoming edge. This safely rejects differing branch ownership until a future path-sensitive/SSA ownership representation can prove and reconcile it.
+
+Bounds are explicit: 64 owners, 4,096 blocks, 16,384 edges and 1,024 operations per block. Unknown operations, invalid successors, unbalanced borrows, duplicate identities, cycles that alter ownership state, and non-normal exits fail closed.
+
+## Current integration
+
+ActorRegionV2 constructs a small CFG: all lexical objects are created in the entry block, then both guard outcomes reach separate normal-exit blocks. The analysis derives the reverse destruction list, which the LLVM emitter uses for its shared cleanup block. The compiler still admits only one pure equality guard, at most eight fresh immutable class owners, no actor scheduling, methods, nested scopes, exceptions, await, cancellation or ownership transfer in the source language.
+
+## Tests
+
+`native_ownership_dataflow_v1` contains five positive scenarios and eight negative scenarios. It checks cleanup order, moved and explicitly dropped owners, shared/mutable borrow release, double destruction, use after move, dropping with a loan, conflicting aliases, mismatched join states, suspend exit, missing explicit exit and duplicate owner identities.
+
+The tests are authored and registered. They are **not reported as passing** until a nonzero-step native CTest job runs on the exact PR head. They do not prove LLVM guest execution or a process-wide no-GC link closure.
+
+## Required next work
+
+1. Map real typed source CFG and ownership/borrow AST operations to this IR.
+2. Add branch-local owner introduction and edge-sensitive phi/join proofs.
+3. Model lexical scope exits, loops, `rt take`, `rt borrow` and `rt mut borrow`.
+4. Add explicit unwind/defer/recover, exception, cancel and suspension exit kinds with cleanup order and continuation ownership.
+5. Integrate scheduler-issued actor identity, loans, callback/FFI quiescence and supervisor restart.
+6. Run sanitizer builds and cross-backend canonical fixtures before widening sealed native runtime admission.
+
+No existing frontend, runtime, actor heap or codegen path was deleted. The analysis is compile-time metadata and does not allocate guest objects.
