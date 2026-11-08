@@ -133,6 +133,16 @@ public:
             !block_threads || block_threads>limits_.maximum_threads_per_block ||
             groups>limits_.maximum_grid_x)
             fail("GPU-G1-CUDA-DRV-006: unauthorized kernel/stream/geometry");
+        // The kernel reads x[i], y[i] and writes out[i] for every i < n. Its
+        // own i < n guard cannot protect an undersized or foreign pointer, so
+        // each must lie inside an allocation this driver owns with room for n
+        // f32 elements from that pointer onward.
+        if (n > std::numeric_limits<std::uint64_t>::max() / sizeof(float))
+            fail("GPU-G1-CUDA-DRV-007: SAXPY n overflows device bytes");
+        const std::uint64_t needed = n * sizeof(float);
+        if (owned_bytes_from(x) < needed || owned_bytes_from(y) < needed ||
+            owned_bytes_from(out) < needed)
+            fail("GPU-G1-CUDA-DRV-007: SAXPY n exceeds an owned device allocation");
         ContextGuard guard(context_);
         // Driver API copies these parameter bytes during cuLaunchKernel.
         // ABI matches restricted G1 PTX: f32, device f32 arrays, u64 n.
@@ -154,6 +164,16 @@ private:
         ContextGuard(const ContextGuard&)=delete;
         ContextGuard&operator=(const ContextGuard&)=delete;
     };
+    // Bytes from a device pointer to the end of the owned allocation that
+    // contains it; 0 when the pointer is not inside one. Caller holds mutex_.
+    std::uint64_t owned_bytes_from(Buffer ptr) const {
+        auto it = allocations_.upper_bound(ptr);
+        if (it == allocations_.begin()) return 0;
+        --it;
+        const std::uint64_t into = ptr - it->first;
+        if (into >= it->second) return 0;
+        return it->second - into;
+    }
     [[noreturn]] static void fail(const char* text) { throw std::invalid_argument(text); }
     static void checked(CUresult result, const char* name) {
         if (result==CUDA_SUCCESS) return;
