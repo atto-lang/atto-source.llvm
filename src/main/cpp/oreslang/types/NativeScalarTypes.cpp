@@ -371,7 +371,8 @@ void validate_native_scalar_types(const Program& program) {
             require(expression(*write.expression, locals), scalar(false), write.offset, "actor field requires int");
     };
     for (const auto& fn : program.functions) {
-        if (fn.name == "main" && (fn.return_type != ScalarType::I64 || !fn.return_class.empty() || !fn.return_sum.empty())) fail(fn.offset, "OS entrypoint requires int or void");
+        // main.cpp admits an f64 main only for --wasm-core-abi=f64 and rejects it otherwise.
+        if (fn.name == "main" && ((fn.return_type != ScalarType::I64 && fn.return_type != ScalarType::F64) || !fn.return_class.empty() || !fn.return_sum.empty())) fail(fn.offset, "OS entrypoint requires int or void");
         function(fn, {});
     }
     for (const auto& actor : program.actors) {

@@ -282,7 +282,7 @@ positive oresllm_scoped_gradient 'pub fnc main(): int {
 
 negative f64_abi_main_return 'pub fnc main(): f64 {
   return 42.0;
-}' 'OS entrypoint requires int or void'
+}' 'native main does not admit f64 process ABI'
 negative f64_abi_main_parameter 'pub fnc main(f64 value): int {
   return 42;
 }' 'native main does not admit f64 process ABI'

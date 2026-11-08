@@ -117,7 +117,7 @@ fn main() {
     }
     tools.reject("float_arg_to_int", "fnc f(int x): int { return x; }\npub routine main(): void { stdio.stdout.println(f(1.5)); }\n", "requires int, got f64");
     tools.reject("float_ret_from_int", "fnc f(): int { return 1.5; }\npub routine main(): void { stdio.stdout.println(f()); }\n", "requires int, got f64");
-    tools.reject("float_main", "pub routine main(): float { return 1.0; }\n", "OS entrypoint requires int or void");
+    tools.reject("float_main", "pub routine main(): float { return 1.0; }\n", "native main does not admit f64 process ABI");
     tools.reject("float_field_from_bool", "define class C as\n  pub val float a;\nend\npub routine main(): void { val C c = new C(true); stdio.stdout.println(c.a); }\n", "requires f64, got bool");
 
     // Native rt fail ends the process, so it cannot coexist with cleanup or a

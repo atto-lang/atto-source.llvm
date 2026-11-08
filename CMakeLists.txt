@@ -1524,7 +1524,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_float_division_unavailable numeric-division-float-reject.ores
         --diagnostic "native function return requires int, got f64")
     oreslang_contract_test(native_float_division_precedence_unavailable numeric-division-precedence-reject.ores
-        --diagnostic "native function return requires int, got f64")
+        --diagnostic "requires explicit numeric conversion")
     oreslang_contract_test(native_decimal_suffix_unavailable numeric-decimal-suffix-reject.ores
         --diagnostic "native floating-point/decimal literal unsupported")
     oreslang_contract_test(native_float_exponent_unavailable numeric-floating-exponent-reject.ores
