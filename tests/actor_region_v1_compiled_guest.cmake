@@ -129,16 +129,19 @@ file(READ "${ROOT}/tests/fixtures/class-public-field-read-native.ores" class_fix
 native_positive(single_class "${class_fixture}" 42)
 native_positive(two_fields
   "define class Dual as\n  pub final int first: 19;\n  pub final int second: 23;\nend\npub fnc main(): int {\n  let Dual value = new Dual();\n  return value.second;\n}\n" 23)
-native_negative(no_class "pub fnc main(): int { return 42; }\n")
+native_negative(no_class "pub fnc main(): int { return 42; }\n"
+  "actor-region-v1 guest AOT rejects non-closed declarations or additional roots")
 native_negative(unknown_callable "pub fnc main(): int { return missing(42); }\n")
 native_negative(mutable_field
   "define class Box as\n  pub final mut int token: 42;\nend\npub fnc main(): int {\n  let Box b = new Box();\n  return b.token;\n}\n")
 native_negative(mutable_owner
   "define class Box as\n  pub final int token: 42;\nend\npub fnc main(): int {\n  let mut Box b = new Box();\n  return b.token;\n}\n")
 native_negative(extra_owner
-  "define class Box as\n  pub final int token: 42;\nend\npub fnc main(): int {\n  let Box a = new Box();\n  let Box b = new Box();\n  return a.token;\n}\n")
+  "define class Box as\n  pub final int token: 42;\nend\npub fnc main(): int {\n  let Box a = new Box();\n  let Box b = new Box();\n  return a.token;\n}\n"
+  "actor-region-v1 guest AOT rejects non-synchronous main/0 or nonlexical control flow")
 native_negative(unreachable_function
-  "define class Box as\n  pub final int token: 42;\nend\nfnc other(): int { return 1; }\npub fnc main(): int {\n  let Box b = new Box();\n  return b.token;\n}\n")
+  "define class Box as\n  pub final int token: 42;\nend\nfnc other(): int { return 1; }\npub fnc main(): int {\n  let Box b = new Box();\n  return b.token;\n}\n"
+  "actor-region-v1 guest AOT rejects non-closed declarations or additional roots")
 native_negative(constructor_arguments
   "define class Box as\n  pub final int token: value;\nend\npub fnc main(): int {\n  let Box b = new Box(42);\n  return b.token;\n}\n")
 native_negative(class_method
