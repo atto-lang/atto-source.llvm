@@ -41,9 +41,13 @@ class GateFailed(RuntimeError):
 
 def command(args, *, cwd=None, timeout=600, log=None):
     try:
+        # CTest Python imports must not create __pycache__ inside the audited
+        # source checkout: that would invalidate the post-execution proof.
+        child_env = os.environ.copy()
+        child_env["PYTHONDONTWRITEBYTECODE"] = "1"
         p = subprocess.run(args, cwd=cwd, timeout=timeout, text=True,
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                           check=False)
+                           check=False, env=child_env)
     except (OSError, subprocess.TimeoutExpired) as e:
         raise GateFailed(f"command unavailable or timed out: {args[0]}: {e}") from e
     if log is not None:
