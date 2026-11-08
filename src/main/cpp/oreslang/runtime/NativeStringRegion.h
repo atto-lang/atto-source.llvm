@@ -22,6 +22,7 @@ int64_t ores_string_print(int64_t handle, int64_t newline);
 int64_t ores_string_literal_interned(const char *data, int64_t size);
 int64_t ores_string_print_i64(int64_t value, int64_t newline);
 int64_t ores_string_print_f64(double value, int64_t newline);
+int64_t ores_string_print_bool(int64_t value, int64_t newline);
 int64_t ores_string_from_i64(int64_t value);
 int64_t ores_string_from_f64(double value);
 /* Flushes admitted output, reports the message, exits with status 1. */

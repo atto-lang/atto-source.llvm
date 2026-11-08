@@ -7,9 +7,14 @@ fnc advance(borrow State s, float rate): State {
 }
 pub routine main(): void {
   let State s = new State(0.0, 0);
+  let int until_checkpoint = 0;
   for int i = 0; i < 200000; i++ do
     s = advance(rt borrow s, 0.5);
-    if i % 50000 == 0 then stdio.stdout.println("checkpoint"); fi
+    if until_checkpoint == 0 then
+      stdio.stdout.println("checkpoint");
+      until_checkpoint = 50000;
+    fi
+    until_checkpoint = until_checkpoint - 1;
   done
   stdio.stdout.println(s.w);
   stdio.stdout.println(s.steps);

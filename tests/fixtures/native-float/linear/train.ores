@@ -6,6 +6,7 @@ pub routine main(): void {
   val Sample c = new Sample(2.0, 7.0);
   val Sample d = new Sample(3.0, 9.0);
   let Params p = new Params(0, 0.0);
+  let int until_report = 0;
   for let step = 0; step < 500; step++ do
     val float wa = grad_w(rt borrow p, rt borrow a);
     val float wc = grad_w(rt borrow p, rt borrow c);
@@ -16,7 +17,10 @@ pub routine main(): void {
     val float gw = (wa + wc + wd) / 3;
     val float gb = (ba + bc + bd) / 3;
     p = apply(rt borrow p, gw, gb, 0.05);
-    if step % 100 == 0 then
+    val bool report = until_report == 0;
+    if report then until_report = 100; fi
+    until_report = until_report - 1;
+    if report then
       val float la = loss(rt borrow p, rt borrow a);
       val float lc = loss(rt borrow p, rt borrow c);
       val float ld = loss(rt borrow p, rt borrow d);

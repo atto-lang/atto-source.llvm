@@ -105,7 +105,7 @@ fn main() {
         ("fail_non_string", "rt fail(1);", "rt fail message requires string"),
         ("decimal_suffix", "val float x = 1.5d; stdio.stdout.println(x);", "decimal literal unsupported"),
         ("f32_requires_binary32", "val f32 x = 1.0; stdio.stdout.println(x);", "native f32 requires binary32 lowering"),
-        ("int_remainder_computed", "let int a = 7; let int b = 2; stdio.stdout.println(a % b);", "native remainder requires a nonzero signed integer literal divisor"),
+        ("float_remainder_reserved", "stdio.stdout.println(5.5 % 2.0);", "native remainder requires int operands"),
     ] {
         tools.reject(id, &main_with(body), diagnostic);
     }

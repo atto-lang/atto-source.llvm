@@ -186,6 +186,8 @@ void validate_native_scalar_types(const Program& program) {
                 const auto lhs = expression(*e.left, locals);
                 const auto rhs = expression(*e.right, locals);
                 const Type joined = join(*e.left, lhs, *e.right, rhs, e.offset, "arithmetic requires int or f64");
+                if (e.kind == E::Remainder && joined.kind != Kind::Int)
+                    fail(e.offset, "native remainder requires int operands");
                 // Java: `/` is real division, even for int/int.
                 if (e.kind == E::Divide && joined.kind == Kind::Int) {
                     e.left->widen_to_f64 = e.right->widen_to_f64 = true;

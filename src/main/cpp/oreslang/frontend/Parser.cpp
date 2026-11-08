@@ -4853,6 +4853,9 @@ private:
                     expr.left->widen_to_f64 = expr.right->widen_to_f64 = true;
                     joined = ScalarType::F64;
                 }
+                // `%` is reserved; only the legacy int form remains until it is removed.
+                if (expr.kind == Expression::Kind::Remainder && joined == ScalarType::F64)
+                    throw std::runtime_error("native remainder requires int operands at byte " + std::to_string(expr.offset));
                 if (expr.kind == Expression::Kind::Remainder && joined == ScalarType::I64 &&
                         (expr.right->kind != Expression::Kind::Integer || expr.right->integer == 0))
                     throw std::runtime_error("native remainder requires a nonzero signed integer literal divisor "

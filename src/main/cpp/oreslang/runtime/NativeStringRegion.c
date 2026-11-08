@@ -329,6 +329,17 @@ int64_t ores_string_print_i64(int64_t value, int64_t newline) {
     publish_output(r);
     return 0;
 }
+int64_t ores_string_print_bool(int64_t value, int64_t newline) {
+    Region *r = &region;
+    Output *slot = reserve_output(r);
+    if (!slot) return 1;
+    const size_t size = value ? 4 : 5;
+    memcpy(slot->scalar, value ? "true" : "false", size);
+    slot->value = (String){slot->scalar, size, NULL};
+    slot->newline = newline != 0;
+    publish_output(r);
+    return 0;
+}
 int64_t ores_string_print_f64(double value, int64_t newline) {
     Region *r = &region;
     Output *slot = reserve_output(r);

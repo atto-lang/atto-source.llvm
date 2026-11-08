@@ -297,7 +297,8 @@ llvm::Value* lower_unwidened(const Expression& expr,
             }
             if (expr.left->resolved_type == ScalarType::String) return value;
             if (expr.left->resolved_type == ScalarType::Bool) {
-                auto runtime = module->getOrInsertFunction("ores_string_literal",
+                // Interned: a bool rendered in a loop must not consume region slots.
+                auto runtime = module->getOrInsertFunction("ores_string_literal_interned",
                     llvm::FunctionType::get(i64, {builder.getPtrTy(), i64}, false));
                 auto* is_true = builder.CreateICmpNE(value, llvm::ConstantInt::get(i64, 0));
                 auto* bytes = builder.CreateSelect(is_true,
@@ -315,11 +316,13 @@ llvm::Value* lower_unwidened(const Expression& expr,
             // A lone numeric operand prints without any region allocation.
             if (expr.name != "fail" && expr.left->kind == Expression::Kind::ToText &&
                     (expr.left->left->resolved_type == ScalarType::F64 ||
-                     expr.left->left->resolved_type == ScalarType::I64)) {
+                     expr.left->left->resolved_type == ScalarType::I64 ||
+                     expr.left->left->resolved_type == ScalarType::Bool)) {
                 auto* operand = lower(*expr.left->left, builder, i64, storage, field_storage, functions, moves);
                 const bool real = operand->getType()->isDoubleTy();
+                const bool truth = !real && expr.left->left->resolved_type == ScalarType::Bool;
                 auto print = builder.GetInsertBlock()->getModule()->getOrInsertFunction(
-                    real ? "ores_string_print_f64" : "ores_string_print_i64",
+                    real ? "ores_string_print_f64" : truth ? "ores_string_print_bool" : "ores_string_print_i64",
                     llvm::FunctionType::get(i64, {operand->getType(), i64}, false));
                 return builder.CreateCall(print, {operand, llvm::ConstantInt::get(i64, expr.name == "println")}, "console.status");
             }
@@ -533,11 +536,6 @@ llvm::Value* lower_unwidened(const Expression& expr,
             return builder.CreateFDiv(left, right, "f64.div");
         }
         case Expression::Kind::Remainder: {
-            if (expr.resolved_type == ScalarType::F64) {
-                llvm::Value* dividend = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
-                llvm::Value* divisor = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
-                return builder.CreateFRem(dividend, divisor, "f64.rem");
-            }
             // The frontend normalizes syntactically signed literal divisors.
             // Never trust an externally supplied AST to skip this proof gate.
             if (!expr.left || !expr.right ||
