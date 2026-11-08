@@ -236,7 +236,7 @@ private:
     static void apply(const OwnershipV1Op& op, State& state, std::size_t count,
                       std::uint64_t& next_acquisition_order) {
         if (op.kind != OwnershipV1OpKind::Take &&
-            op.target != static_cast<std::size_t>(-1))
+            op.target != NoOwner)
             fail("unexpected transfer target on non-take operation");
         Owner& owner = get(state, op.owner, count);
         switch (op.kind) {
