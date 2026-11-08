@@ -40,6 +40,36 @@ test('valid Wasm table section is rejected by scalar actor profile',()=>{
   assert.equal(WebAssembly.validate(wasm),true);
   assert.throws(()=>assertCompiledActorProfile(wasm),/wasm tables not admitted/);
 });
+test('legitimate wasm-ld memory export is allowed but extraneous exports are denied',()=>{
+  // The exact LLVM-IR linker can export one bounded `memory` alongside the
+  // three actor lifecycle functions; no arbitrary exports should be accepted.
+  function appendExport(bytes, name, kind, index) {
+    let p=8;
+    while(p<bytes.length) {
+      const start=p, id=bytes[p++];
+      let length=0, shift=0, b;
+      do { b=bytes[p++];length+=(b&127)*2**shift;shift+=7; } while(b&128);
+      const end=p+length;
+      if(id===7) {
+        const payload=bytes.subarray(p,end);
+        assert.equal(payload[0],3, 'fixture exports three actor entrypoints');
+        const changed=Buffer.from(sec(7,[4,...payload.subarray(1),...str(name),kind,index]));
+        return Buffer.concat([bytes.subarray(0,start),changed,bytes.subarray(end)]);
+      }
+      p=end;
+    }
+    throw Error('fixture export section missing');
+  }
+  const memoryExport=appendExport(good,'memory',2,0);
+  assert.equal(WebAssembly.validate(memoryExport),true);
+  assertCompiledActorProfile(memoryExport);
+  const unexpected=appendExport(good,'read_secret',0,1);
+  assert.equal(WebAssembly.validate(unexpected),true);
+  assert.throws(()=>assertCompiledActorProfile(unexpected),/unexpected actor export: read_secret/);
+  const extraMemory=appendExport(good,'other_memory',2,0);
+  assert.equal(WebAssembly.validate(extraMemory),true);
+  assert.throws(()=>assertCompiledActorProfile(extraMemory),/unexpected actor export: other_memory/);
+});
 test('mismatched i32 actor handler ABI is rejected',()=>{
   const bad=binary({wrongType:true});
   assert.equal(WebAssembly.validate(bad),true);
@@ -113,6 +143,15 @@ test('unrelated tool failure with planted trap substring is denied',()=>{
   for(const stderr of bad){
     assert.throws(()=>assertVmOutcome({status:1,stdout:'',stderr},'ExecutionTrapped','fake'));
   }
+});
+test('guest failure accompanied by unrelated stderr cannot forge a typed denial',()=>{
+  const marker=FAIL+' tenant A: Wasm(ExecutionTrapped)';
+  for(const noise of [
+    marker+'\nlinker failed',
+    'fatal: missing binary\n'+marker,
+    marker+'\n    at runCommand',
+  ]) assert.throws(()=>assertVmOutcome({status:1,stdout:'',stderr:noise},'ExecutionTrapped','spoof'),
+      /extra, forged, missing, or misclassified/);
 });
 test('negative guest never writes positive receipt to stdout',()=>{
   assert.throws(()=>assertVmOutcome({status:1,stdout:PASS,stderr:FAIL+' tenant A: Wasm(ExecutionTrapped)'},'ExecutionTrapped','fake'));
