@@ -764,6 +764,51 @@ void test_forged_recipient_cannot_seal_ticket() {
                     domain_denied && f.table->pending()==0);
 }
 
+void test_old_cancel_does_not_sweep_new_generation_ticket() {
+    Fixture f(1,true);
+    auto old_parent=f.request_cancel;
+    std::uint64_t first=0,second=0;
+    bool first_ok=false,second_ok=false;
+    on(f.w,0,[&](std::uint64_t) {
+        CHECK(f.bind_source_mail());
+        first=f.table->seal(f.w.a,*f.request,f.w.b,f.selection()).value_or(0);
+    });
+    send(f.w,f.w.a,1);
+    registered_case("62_first_slot_ticket_issued",first!=0);
+    on(f.w,1,[&](std::uint64_t payload) {
+        first_ok=f.table->redeem(f.w.b,payload).has_value();
+    });
+    send(f.w,f.w.b,first);
+    registered_case("63_first_generation_consumed",
+                    first_ok && f.table->pending()==0);
+    on(f.w,0,[&](std::uint64_t) {
+        f.request_cancel=TaskCancellation::root();
+        f.request=f.lifecycle->open_registered(
+            {7,8,9002,1,f.w.a},f.request_cancel);
+        CHECK(f.request && f.bind_source_mail());
+        second=f.table->seal(f.w.a,*f.request,f.w.b,f.selection()).value_or(0);
+    });
+    send(f.w,f.w.a,2);
+    registered_case("64_new_request_uses_same_slot_with_new_generation",
+                    second && first!=second &&
+                    (first & 0xffff)==(second & 0xffff));
+    registered_case("65_new_ticket_is_pending",f.table->pending()==1);
+    registered_case("66_cancel_old_parent_only",old_parent->cancel("old-done"));
+    registered_case("67_cancelled_old_generation_does_not_sweep_new_ticket",
+                    f.table->sweep()==0 && f.table->pending()==1);
+    on(f.w,1,[&](std::uint64_t payload) {
+        second_ok=f.table->redeem(f.w.b,payload).has_value();
+    });
+    send(f.w,f.w.b,second);
+    registered_case("68_new_generation_ticket_redeems",second_ok);
+    registered_case("69_after_redeem_no_pending_or_replay",
+                    f.table->pending()==0 &&
+                    !f.table->redeem(f.w.b,second));
+    registered_case("70_new_request_not_poisoned_by_old_cancellation",
+                    f.request->active() && !f.request_cancel->is_cancelled());
+    old_parent->retire();
+}
+
 }  // namespace
 
 int main() {
@@ -800,19 +845,21 @@ int main() {
             test_new_cleanup_hooks_denied_after_actor_STOP},
         {"forged_recipient_cannot_seal_ticket",
             test_forged_recipient_cannot_seal_ticket},
+        {"old_cancel_does_not_sweep_new_generation_ticket",
+            test_old_cancel_does_not_sweep_new_generation_ticket},
     };
     for (auto& t : tests) {
         const int before = failures;
         t.fn();
         std::printf("%s %s\n", failures == before ? "PASS" : "FAIL", t.name);
     }
-    if (registry_handoff_cases != 61) {
-        std::fprintf(stderr, "HANDOFF_REGISTRY_CASE_COUNT_FAILED got=%d expected=61\n",
+    if (registry_handoff_cases != 70) {
+        std::fprintf(stderr, "HANDOFF_REGISTRY_CASE_COUNT_FAILED got=%d expected=70\n",
                      registry_handoff_cases);
         ++failures;
     }
     if (failures) { std::fprintf(stderr, "%d failure(s)\n", failures); return 1; }
-    std::puts("HANDOFF_REGISTRY_61_HOST_CASES_PASS");
+    std::puts("HANDOFF_REGISTRY_70_HOST_CASES_PASS");
     std::printf("REQUEST_CONTEXT_HANDOFF_V1_ALL_PASS\n");
     return 0;
 }
