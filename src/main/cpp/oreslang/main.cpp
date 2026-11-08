@@ -228,7 +228,9 @@ int main(int argc, char** argv) {
                 return 2;
             }
             actor_region_v1_guest = true;
-        } else if (arg.rfind("--allocator-provider=", 0) == 0) {
+            continue; // Keep the existing flag decoder byte-for-byte unchanged.
+        }
+        if (arg.rfind("--allocator-provider=", 0) == 0) {
             if (allocator_provider_seen) {
                 std::cerr << "duplicate allocator-provider option\n";
                 return 2;
