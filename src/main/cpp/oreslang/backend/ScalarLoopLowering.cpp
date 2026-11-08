@@ -14,12 +14,52 @@
 #include "oreslang/backend/LlvmCompat.hpp"
 #include "oreslang/backend/MeteredCfgVerifier.hpp"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace oreslang {
+
+// This experimental scalar source subset permits no arbitrary guest calls.
+// Check the *actual emitted module*, not source spelling: recursive, indirect,
+// external/FFI, inline-assembly and invoke/callbr paths are rejected before
+// returning IR to an optimizing AOT toolchain. General actors still need a
+// separate verified interprocedural metering design.
+static void require_closed_scalar_guest_calls(const llvm::Module& module) {
+    unsigned definitions = 0;
+    for (const auto& fn : module) {
+        if (fn.isDeclaration()) {
+            if (fn.getIntrinsicID() != llvm::Intrinsic::trap)
+                throw std::runtime_error("scalar guest module imports unverified foreign call");
+            continue;
+        }
+        const llvm::StringRef name = fn.getName();
+        if (name != "oreslang_rt_scalar_frame_init_v1" &&
+            name != "oreslang_rt_scalar_frame_step_v1" &&
+            name != "oreslang_rt_scalar_frame_cancel_v1" &&
+            name != "oreslang_rt_scalar_frame_result_v1")
+            throw std::runtime_error("scalar guest module contains unapproved guest function");
+        ++definitions;
+        for (const auto& block : fn) {
+            for (const auto& instruction : block) {
+                if (llvm::isa<llvm::IndirectBrInst>(&instruction))
+                    throw std::runtime_error("scalar guest contains indirect CFG edge");
+                const auto* call = llvm::dyn_cast<llvm::CallBase>(&instruction);
+                if (!call) continue;
+                const auto* callee = call->getCalledFunction();
+                if (!llvm::isa<llvm::CallInst>(call) ||
+                    call->isInlineAsm() || callee == nullptr ||
+                    callee->getIntrinsicID() != llvm::Intrinsic::trap ||
+                    !call->arg_empty())
+                    throw std::runtime_error("scalar guest contains unmetered or indirect call");
+            }
+        }
+    }
+    if (definitions != 4)
+        throw std::runtime_error("scalar guest ABI must define exactly four v1 functions");
+}
 
 std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
     if (loop.initial < 0 || loop.upper_bound < loop.initial ||
@@ -261,6 +301,7 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         b.CreateRet(b.CreateLoad(i64, field(b, frame, 1)));
     }
 
+    require_closed_scalar_guest_calls(module);
     std::string errors;
     llvm::raw_string_ostream diagnostic(errors);
     if (llvm::verifyModule(module, &diagnostic))
