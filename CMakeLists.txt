@@ -1795,6 +1795,10 @@ if(BUILD_TESTING)
     # Proven-nonescaping integer-field classes are stack-only and emit no
     # malloc, tracing collector roots, or native heap calls.
     oreslang_contract_test(owned_stack_class owned-stack-class.ores --ir "alloca %Box")
+    # Nonescaping class state passed by exclusive scoped borrow must remain
+    # a direct stack-allocated aggregate, not a heap/GC-backed proxy.
+    oreslang_contract_test(native_owned_inventory_stack_allocation
+        native-owned-inventory-reservation.ores --ir "alloca %Inventory")
     oreslang_contract_test(reject_owned_stack_escape owned-stack-escape.ores --diagnostic "class is non-Copy")
     oreslang_contract_test(reject_owned_stack_unknown_field owned-stack-bad-field.ores --diagnostic "unknown class field")
     oreslang_contract_test(reject_owned_stack_duplicate_field owned-stack-double-field.ores --diagnostic "duplicate class field")
@@ -3313,11 +3317,17 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_epoch_deterministic_drop PROPERTIES TIMEOUT 20)
 
     oreslang_contract_test(reject_native_private_array_mutation class-private-array-mutation-reject.ores --diagnostic "private class field")
+    oreslang_contract_test(reject_native_private_inventory_bypass
+        native-private-inventory-bypass-reject.ores --diagnostic "private class field")
     oreslang_contract_test(reject_native_private_filled_commit class-private-filled-array-commit-reject.ores --diagnostic "private class field")
 
     if(ORE_CLANG)
         oreslang_contract_test(native_public_class_field_read class-public-field-read-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
         oreslang_contract_test(class_exec_mutable_borrow class-mutable-borrow-native.ores --run 42 --clang "${ORE_CLANG}")
+        # Native guest execution: synchronous borrowed state mutation, overdraw
+        # rejection, and joint two-field invariant. Not a GC/no-heap proof.
+        oreslang_contract_test(native_exec_owned_inventory_reservation
+            native-owned-inventory-reservation.ores --run 74 --clang "${ORE_CLANG}")
 
         oreslang_contract_test(native_projection_shared_clang
             class-projection-shared-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
