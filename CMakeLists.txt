@@ -3521,7 +3521,18 @@ if(BUILD_TESTING)
     # Two checked class owners and a genuine guarded early return converge
     # at ONE LLVM-generated drop block. Host runtime from #1599 is unchanged.
     # This verifies compiler-backed native guest execution, not full GC proof.
-    add_test(NAME native_actor_region_v2_multiowner_guarded_cleanup
+        add_executable(oreslang-ownership-dataflow-v1-test
+        tests/ownership_dataflow_v1_test.cpp)
+    target_include_directories(oreslang-ownership-dataflow-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-ownership-dataflow-v1-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-ownership-dataflow-v1-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ownership_dataflow_v1
+        COMMAND oreslang-ownership-dataflow-v1-test)
+    set_tests_properties(native_ownership_dataflow_v1 PROPERTIES TIMEOUT 30)
+
+add_test(NAME native_actor_region_v2_multiowner_guarded_cleanup
         COMMAND "${CMAKE_COMMAND}"
             "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
             "-DBUILD=${CMAKE_CURRENT_BINARY_DIR}"

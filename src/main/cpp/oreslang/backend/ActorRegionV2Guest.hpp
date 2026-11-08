@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/backend/ActorRegionV1Guest.hpp"
+#include "oreslang/backend/OwnershipDataflowV1.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -26,12 +27,26 @@ struct ActorRegionCleanupPlanV1 {
         owners.push_back(name);
     }
     void seal_normal_exits(unsigned supported_normal_exits) {
-        if (owners.empty() || supported_normal_exits == 0 ||
-            supported_normal_exits > 2)
+        if (owners.empty() || supported_normal_exits != 2)
             throw std::runtime_error("actor-region cleanup plan: unsupported exit graph");
-        cleanup_order.clear();
-        for (unsigned i = static_cast<unsigned>(owners.size()); i > 0; --i)
-            cleanup_order.push_back(i - 1);
+        OwnershipV1Graph graph;
+        graph.owners = owners;
+        graph.blocks.resize(3);
+        for (std::size_t i = 0; i < owners.size(); ++i)
+            graph.blocks[0].operations.push_back(
+                {OwnershipV1OpKind::Create, i});
+        graph.blocks[0].successors = {1, 2};
+        graph.blocks[1].operations.push_back(
+            {OwnershipV1OpKind::ExitNormal, 0});
+        graph.blocks[2].operations.push_back(
+            {OwnershipV1OpKind::ExitNormal, 0});
+        const auto analysis = OwnershipDataflowV1::analyze(graph);
+        if (analysis.normal_exits.size() != supported_normal_exits)
+            throw std::runtime_error("actor-region cleanup plan: CFG exit proof mismatch");
+        cleanup_order = analysis.normal_exits.front().cleanup_reverse_order;
+        for (const auto& exit : analysis.normal_exits)
+            if (exit.cleanup_reverse_order != cleanup_order)
+                throw std::runtime_error("actor-region cleanup plan: cleanup differs by exit");
     }
 };
 
