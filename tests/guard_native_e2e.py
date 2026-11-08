@@ -43,6 +43,11 @@ POSITIVE = [
                             "pub fnc main(): int { return pick(true); }\n", 42),
     ("int_helper_comparison", "fnc pick(int value): int { guard value > 0 { return 7; } return 42; }\n"
                              "pub fnc main(): int { return pick(0); }\n", 7),
+    ("portable_identity_helper", "fnc identity(int value): int { return value; }\n"
+                                 "pub fnc main(): int { return identity(42); }\n", 42),
+    ("guard_uses_portable_helper", "fnc identity(int value): int { return value; }\n"
+                                  "fnc choose(bool ready): int { guard ready { return identity(7); } return identity(42); }\n"
+                                  "pub fnc main(): int { return choose(false); }\n", 7),
 ]
 NEGATIVE = [
     ("int_truthiness", program("guard 1 { return 7; }"), "bool"),
@@ -56,6 +61,10 @@ NEGATIVE = [
     ("guard_limit", program("guard true { return 7; }\n" * 9), "8"),
     ("unclosed_guard", program("guard false { return 7; "), None),
     ("unsupported_suspend", program("guard true { await fake; return 7; }"), None),
+    ("unlowered_trait_decl", "define trait Show as { fnc show(int value): int { return value; } }\n"
+                             "pub fnc main(): int { return 7; }\n", None),
+    ("unlowered_typeclass_implementation", "impl Show for int { fnc show(int value): int { return value; } }\n"
+                                           "pub fnc main(): int { return 7; }\n", None),
 ]
 
 class ActualNativeGuard(unittest.TestCase):
