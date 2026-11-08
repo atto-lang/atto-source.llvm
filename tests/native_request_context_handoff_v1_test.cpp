@@ -813,6 +813,43 @@ void test_old_cancel_does_not_sweep_new_generation_ticket() {
     old_parent->retire();
 }
 
+void test_repeated_table_shutdown_reclaims_registration_quota() {
+    Fixture f(4,true);
+    bool churn_ok=true;
+    for (int i=0;i<96;++i) {
+        try {
+            RequestContextHandoffTableV1 short_lived(
+                f.w.scheduler,1,*f.lifecycle);
+        } catch (...) {
+            churn_ok=false;
+            break;
+        }
+    }
+    registered_case("71_weak_cleanup_tokens_recycled_past_64_limit",
+                    churn_ok);
+    std::uint64_t ticket=0;
+    bool redeemed=false;
+    on(f.w,0,[&](std::uint64_t) {
+        CHECK(f.bind_source_mail());
+        ticket=f.table->seal(f.w.a,*f.request,f.w.b,f.selection()).value_or(0);
+    });
+    send(f.w,f.w.a,1);
+    on(f.w,1,[&](std::uint64_t payload) {
+        redeemed=f.table->redeem(f.w.b,payload).has_value();
+    });
+    send(f.w,f.w.b,ticket);
+    registered_case("72_original_long_lived_handoff_still_works",
+                    ticket && redeemed && f.table->pending()==0);
+    NativeRequestLifecycleRegistryV1::StopCleanupTokenV1 token;
+    registered_case("73_explicit_STOP_hook_token_registered",
+                    f.lifecycle->register_stop_cleanup(
+                        [](OresNativeActorRef){},&token) && !!token);
+    registered_case("74_registered_hook_token_released",
+                    f.lifecycle->unregister_stop_cleanup(token));
+    registered_case("75_double_hook_release_denied",
+                    !f.lifecycle->unregister_stop_cleanup(token));
+}
+
 }  // namespace
 
 int main() {
@@ -851,19 +888,21 @@ int main() {
             test_forged_recipient_cannot_seal_ticket},
         {"old_cancel_does_not_sweep_new_generation_ticket",
             test_old_cancel_does_not_sweep_new_generation_ticket},
+        {"repeated_table_shutdown_reclaims_registration_quota",
+            test_repeated_table_shutdown_reclaims_registration_quota},
     };
     for (auto& t : tests) {
         const int before = failures;
         t.fn();
         std::printf("%s %s\n", failures == before ? "PASS" : "FAIL", t.name);
     }
-    if (registry_handoff_cases != 70) {
-        std::fprintf(stderr, "HANDOFF_REGISTRY_CASE_COUNT_FAILED got=%d expected=70\n",
+    if (registry_handoff_cases != 75) {
+        std::fprintf(stderr, "HANDOFF_REGISTRY_CASE_COUNT_FAILED got=%d expected=75\n",
                      registry_handoff_cases);
         ++failures;
     }
     if (failures) { std::fprintf(stderr, "%d failure(s)\n", failures); return 1; }
-    std::puts("HANDOFF_REGISTRY_70_HOST_CASES_PASS");
+    std::puts("HANDOFF_REGISTRY_75_HOST_CASES_PASS");
     std::printf("REQUEST_CONTEXT_HANDOFF_V1_ALL_PASS\n");
     return 0;
 }
