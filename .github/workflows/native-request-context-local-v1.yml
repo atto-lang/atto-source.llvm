@@ -61,8 +61,8 @@ jobs:
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = "e48757ee0d3b68de4998a7917efe5c9fc4c3f102"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.h)" = "6052cc8d1d219564da12b8a8f7a17b9f362da27b"
           test "$(git hash-object src/main/cpp/oreslang/runtime/TaskCancellation.hpp)" = "7eafa420e92ba10e552dade1846f3862cb79aec7"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextHandoffV1.hpp)" = "3162956abbb6d3c53372641fd281ab8eb88e9e70"
-          test "$(git hash-object tests/native_request_context_handoff_v1_test.cpp)" = "5787e5606a35075722a80b5f1d4aceca87d67dbd"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextHandoffV1.hpp)" = "8f92ea1e39ebbecd55dad028c5f0ed1bb13ff15c"
+          test "$(git hash-object tests/native_request_context_handoff_v1_test.cpp)" = "26158acf36a3067f87ae2c8a9ecce6fd2eec5e53"
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalStopGroupV1.hpp)" = "eb888ee35cefb09710723faa50ac23c47e8924d8"
           test "$(git hash-object tests/native_request_stop_cancel_v1_test.cpp)" = "d41874ea2adb7d69c47a855ae4f1a7cce51ee775"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestDataMailGateV1.hpp)" = "6affba5e1b021bf9f4e5b54584241d873f245451"
@@ -71,7 +71,7 @@ jobs:
           test "$(git hash-object tests/native_request_lifecycle_registry_v1_test.cpp)" = "69a1ca1e849aade0e430a8e70d4b9bb163b6def5"
           test "$(git hash-object tests/native_actor_stop_notice_v1_test.c)" = "467c31db374b55c4ed43ca590bb2ca0cdea01019"
           test "$(git hash-object tests/native_dual_actor_handoff_commit_v1_test.c)" = "5af3174f3df18a36ed827f697aae22c86a8b41a8"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestLifecycleRegistryV1.hpp)" = "2a173e2597ad5af40cfe4b7213c46222e17d76e6"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestLifecycleRegistryV1.hpp)" = "bc6f2041fd6c53bee8d82842ea4508ecfae5cccb"
       - name: Compile and execute real actor two-request isolation
         shell: bash
         env:
@@ -102,8 +102,8 @@ jobs:
             -Isrc/main/cpp tests/native_request_context_handoff_v1_test.cpp \
             "$tmp/scheduler.o" -o "$tmp/request-handoff"
           "$tmp/request-handoff" | tee "$tmp/request-handoff-registry.log"
-          test "$(grep -c '^HANDOFF_REGISTRY_CASE_PASS ' "$tmp/request-handoff-registry.log")" = "70"
-          grep -qx 'HANDOFF_REGISTRY_70_HOST_CASES_PASS' "$tmp/request-handoff-registry.log"
+          test "$(grep -c '^HANDOFF_REGISTRY_CASE_PASS ' "$tmp/request-handoff-registry.log")" = "75"
+          grep -qx 'HANDOFF_REGISTRY_75_HOST_CASES_PASS' "$tmp/request-handoff-registry.log"
           grep -qx 'REQUEST_CONTEXT_HANDOFF_V1_ALL_PASS' "$tmp/request-handoff-registry.log"
           # Negative mutation: bypass derived registration. An unattached
           # recipient must no longer be rejectable; the regression MUST fail.
