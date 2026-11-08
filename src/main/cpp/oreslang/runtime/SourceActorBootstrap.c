@@ -24,6 +24,7 @@
 #define SOURCE_SCALAR_TAG_I64 UINT64_C(1)
 #define SOURCE_SCALAR_TAG_BOOL UINT64_C(2)
 #define SOURCE_SCALAR_MAX_FUEL UINT64_C(2000000)
+#define SOURCE_SCALAR_CHECK_INTERVAL UINT64_C(256)
 
 /* Machine/layout invariants are compile-time, not runtime guesses. The
  * shared first 32 words belong solely to the M2 scalar handler places.
@@ -51,6 +52,8 @@ typedef struct {
     uint64_t* frame_words; /* actor-incarnation-owned, not carrier-stack memory */
     atomic_int frame_active; /* admits at most one source callback */
     atomic_int frame_vm_error; /* sticky, per-actor fail-stop reason */
+    atomic_int frame_vm_active; /* forbids nested VM frame overwrite */
+    atomic_uint_fast64_t frame_vm_checkpoints;
     atomic_uint_fast64_t frame_vm_steps;
     atomic_uint_fast64_t frame_vm_tail_calls;
     atomic_uint_fast64_t frame_vm_non_tail_calls;
@@ -335,10 +338,22 @@ int oreslang_source_actor_scalar_vm_execute(
     if (atomic_load_explicit(&actor->frame_vm_error,
             memory_order_acquire) != ORES_SCALAR_OK)
         return ORES_SCALAR_INVALID_FRAME;
+    int expected_vm_active = 0;
+    if (!atomic_compare_exchange_strong_explicit(
+            &actor->frame_vm_active, &expected_vm_active, 1,
+            memory_order_acq_rel, memory_order_acquire)) {
+        /* An accidental nested interpreter call must not overwrite a live
+         * parent PC/locals frame. Poison this actor, not the carrier. */
+        atomic_store_explicit(&actor->frame_vm_error,
+            ORES_SCALAR_INVALID_FRAME, memory_order_release);
+        return ORES_SCALAR_INVALID_FRAME;
+    }
     int status = ORES_SCALAR_INVALID_PROGRAM;
     if (!scalar_preflight(program)) {
         atomic_store_explicit(&actor->frame_vm_error,
             status, memory_order_release);
+        atomic_store_explicit(&actor->frame_vm_active, 0,
+            memory_order_release);
         return status;
     }
     const uint64_t epoch = actor->frame_epoch;
@@ -368,6 +383,21 @@ int oreslang_source_actor_scalar_vm_execute(
         const OresActorScalarInstruction ins = program->instructions[pc];
         uint64_t lhs = 0, rhs = 0;
         ++executed;
+        /* Only one comparatively expensive cancellation/actor-state probe
+         * per 256 dispatched instructions. Do not poll scheduler/clock or
+         * acquire mutexes on the ordinary opcode fast path. */
+        if ((executed & (SOURCE_SCALAR_CHECK_INTERVAL - 1u)) == 0) {
+            atomic_fetch_add_explicit(&actor->frame_vm_checkpoints,
+                1, memory_order_release);
+            if (atomic_load_explicit(&actor->stop_requested,
+                    memory_order_acquire)) {
+                status = ORES_SCALAR_CANCELLED;
+                goto cleanup;
+            }
+            if (atomic_load_explicit(&actor->frame_vm_error,
+                    memory_order_acquire) != ORES_SCALAR_OK)
+                goto cleanup;
+        }
         frame[4] = pc + 1;
         switch (ins.opcode) {
             case ORES_SCALAR_PUSH_I64:
@@ -485,11 +515,17 @@ cleanup:
         tails, memory_order_relaxed);
     atomic_fetch_add_explicit(&actor->frame_vm_non_tail_calls,
         calls, memory_order_relaxed);
+    if (status == ORES_SCALAR_OK &&
+            atomic_load_explicit(&actor->frame_vm_error,
+                memory_order_acquire) != ORES_SCALAR_OK)
+        status = ORES_SCALAR_INVALID_FRAME;
     if (status != ORES_SCALAR_OK) {
         *result = 0;
         atomic_store_explicit(&actor->frame_vm_error,
             status, memory_order_release);
     }
+    atomic_store_explicit(&actor->frame_vm_active, 0,
+        memory_order_release);
     return status;
 }
 
@@ -1015,6 +1051,8 @@ void* oreslang_source_actor_spawn(
     atomic_init(&instance->initialized, 0);
     atomic_init(&instance->frame_active, 0);
     atomic_init(&instance->frame_vm_error, ORES_SCALAR_OK);
+    atomic_init(&instance->frame_vm_active, 0);
+    atomic_init(&instance->frame_vm_checkpoints, 0);
     atomic_init(&instance->frame_vm_steps, 0);
     atomic_init(&instance->frame_vm_tail_calls, 0);
     atomic_init(&instance->frame_vm_non_tail_calls, 0);
