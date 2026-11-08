@@ -8,7 +8,7 @@ import {tmpdir} from 'node:os';
 import {dirname, isAbsolute, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
-import {mutateActorWasmExport, mutateActorWasmOutOfBounds, wasmSha256} from './atto_volucro_compiled_guest_faults_lib.mjs';
+import {mutateActorWasmExport, mutateActorWasmOutOfBounds, mutateActorWasmOutOfBoundsStore, wasmSha256} from './atto_volucro_compiled_guest_faults_lib.mjs';
 
 const options = new Map();
 for(let i=2;i<process.argv.length;i+=2){
@@ -83,15 +83,19 @@ try {
     'real compiler output unexpectedly has imports');
   const abi=mutateActorWasmExport(baseline);
   const fault=mutateActorWasmOutOfBounds(baseline);
+  const storeFault=mutateActorWasmOutOfBoundsStore(baseline);
   const abiFile=join(temp,'mutated-missing-abi.wasm');
   const faultFile=join(temp,'mutated-oob-i64-load.wasm');
+  const storeFaultFile=join(temp,'mutated-oob-i64-store.wasm');
   writeFileSync(abiFile,abi,{mode:0o600});
   writeFileSync(faultFile,fault,{mode:0o600});
+  writeFileSync(storeFaultFile,storeFault,{mode:0o600});
   // A successful initial guest run is mandatory; failure mutations must not
   // pass when the original compiler/runtime path was never functional.
   expectPositive(original,'baseline');
   expectNegative(abiFile,/Wasm\(MissingExport\)/,'renamed compiled on_message export');
   expectNegative(faultFile,/Wasm\(ExecutionTrapped\)/,'out-of-bounds compiled guest load');
+  expectNegative(storeFaultFile,/Wasm\(ExecutionTrapped\)/,'out-of-bounds compiled guest store');
   // This recovery is a NEW VM invocation, not evidence of same-VM sibling
   // survival. Separate Volucro vm-core tests must prove same-VM survival.
   expectPositive(original,'recovery control');
@@ -100,8 +104,8 @@ try {
     not_proved:['source-level malicious actor','same-VM sibling survival','OS process sandbox','native LLVM arbitrary-pointer isolation'],
     llvm_head:llvmHead,volucro_head:volucroHead,
     source_sha256:wasmSha256(source),compiler_sha256:wasmSha256(readFileSync(options.get('--compiler'))),
-    original_wasm_sha256:wasmSha256(baseline),missing_abi_sha256:wasmSha256(abi),oob_load_sha256:wasmSha256(fault),
-    probes:{baseline:'PASS',abi_mutation:'EXPECTED_MISSING_EXPORT',out_of_bounds:'EXPECTED_EXECUTION_TRAPPED',recovery:'PASS'}}));
+    original_wasm_sha256:wasmSha256(baseline),missing_abi_sha256:wasmSha256(abi),oob_load_sha256:wasmSha256(fault),oob_store_sha256:wasmSha256(storeFault),
+    probes:{baseline:'PASS',abi_mutation:'EXPECTED_MISSING_EXPORT',oob_load:'EXPECTED_EXECUTION_TRAPPED',oob_store:'EXPECTED_EXECUTION_TRAPPED',recovery:'PASS'}}));
 } finally {
   rmSync(temp,{recursive:true,force:true});
 }
