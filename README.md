@@ -1,5 +1,8 @@
 # AttoLang Native LLVM backend
 
+> **Security integration (draft):** [AttoLang LLVM wasm32 actor → Volucro authenticated Wasmi Store](docs/ATTO_VOLUCRO_WASM_ACTOR_ISOLATION_V1.md) supplies a real source-to-Wasm-to-Volucro smoke harness, exact-head provenance checks, and documented security gaps. Not production native tenant isolation.
+
+
 **AttoLang** is the current public language name (formerly **Oreslang**).
 This compiler/runtime remains the independent native LLVM implementation; existing tool names, `.ores` fixtures, module identifiers and compiled ABI remain unchanged.
 This branding change does not establish new syntax, source-extension support,
