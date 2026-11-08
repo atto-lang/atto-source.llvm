@@ -4,11 +4,12 @@ import contextlib
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 
-from native_rt_scalar_certify import GateFailed, verify_checkout, verify_junit, major, verify_toolchain
+from native_rt_scalar_certify import GateFailed, verify_checkout, verify_junit, major, verify_toolchain, command
 
 
 def git(repo, *args):
@@ -105,6 +106,13 @@ class TestReportTests(unittest.TestCase):
             path.write_text('<testsuite><testcase name="same"/><testcase name="same"/></testsuite>')
             with self.assertRaisesRegex(GateFailed,'duplicate'):
                 verify_junit(path)
+
+    def test_child_python_does_not_mutate_source_with_pycache(self):
+        with tempfile.TemporaryDirectory() as t:
+            module = Path(t) / 'private_module.py'
+            module.write_text('VALUE = 42\n')
+            command([sys.executable, '-c', 'import private_module; assert private_module.VALUE == 42'], cwd=t)
+            self.assertFalse((Path(t) / '__pycache__').exists())
 
     def test_version_mismatch_fails(self):
         with tempfile.TemporaryDirectory() as t:
