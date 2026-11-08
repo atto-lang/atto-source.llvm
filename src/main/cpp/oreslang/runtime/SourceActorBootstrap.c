@@ -139,6 +139,11 @@ static void ensure(int condition);
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
 static atomic_int test_hold_scalar_checkpoint;
 static atomic_int test_scalar_checkpoint_entered;
+static atomic_int test_inject_nested_scalar_vm;
+void oreslang_source_actor_test_reenter_scalar_vm_once(void) {
+    atomic_store_explicit(&test_inject_nested_scalar_vm, 1,
+        memory_order_release);
+}
 void oreslang_source_actor_test_hold_scalar_checkpoint(int hold) {
     if (hold)
         atomic_store_explicit(&test_scalar_checkpoint_entered, 0,
@@ -548,6 +553,20 @@ int oreslang_source_actor_scalar_vm_execute(
                         && !atomic_load_explicit(&actor->stop_requested,
                             memory_order_acquire))
                     sched_yield();
+            }
+#endif
+            /* A synthesized nested interpreter entry is a deliberate
+             * negative mutation. The inner call must fail BEFORE touching
+             * the parent's frame, and the outer call must fail-stop. */
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+            if (atomic_exchange_explicit(&test_inject_nested_scalar_vm, 0,
+                    memory_order_acq_rel)) {
+                int64_t nested_result = -1;
+                const int nested_status =
+                    oreslang_source_actor_scalar_vm_execute(
+                        program, 0, &nested_result);
+                ensure(nested_status == ORES_SCALAR_INVALID_FRAME
+                    && nested_result == 0);
             }
 #endif
             if (atomic_load_explicit(&actor->stop_requested,
