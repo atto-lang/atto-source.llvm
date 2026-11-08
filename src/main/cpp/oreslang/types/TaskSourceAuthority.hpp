@@ -126,6 +126,15 @@ inline std::uint64_t admit_source_task_i64(
     return fingerprint;
 }
 
+// Compiler publication is invalidated on every new check and on any
+// downstream semantic failure. Runtime codegen must not consume an earlier
+// successful proof after a failed revalidation.
+inline void revoke_source_task_i64(SourceTaskI64Binding& task) noexcept {
+    task.ownership_admitted = false;
+    task.ownership_authority_fingerprint = 0;
+    task.ownership_boundary_identity = nullptr;
+}
+
 inline void require_source_task_i64(
         const SourceTaskI64Binding& task) {
     const auto current = source_task_i64_fingerprint(task);
