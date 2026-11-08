@@ -3,6 +3,7 @@
 #include "oreslang/runtime/SourceActorScalarVM.h"
 #include <stdatomic.h>
 #include <stdint.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sched.h>
@@ -18,6 +19,8 @@ static atomic_int bounded_processed;
 static atomic_int tag_failure_processed;
 static atomic_int fuel_failure_processed;
 static atomic_int cancellation_processed;
+static atomic_int tail_operands_denied;
+static atomic_int scalar_arithmetic_verified;
 
 #define OP(x, y) { x, y }
 /* tail(n) = n <= 0 ? 0 : tail(n-1). Executes 100k recursive guest
@@ -97,6 +100,47 @@ static const OresActorScalarInstruction infinite_code[] = {
 static const OresActorScalarProgram infinite_program = {
     1, sizeof(infinite_code)/sizeof(infinite_code[0]),
     0, entry, infinite_code
+};
+/* Tail transfer with live unrelated operands is an illegal cleanup escape. */
+static const OresActorScalarInstruction invalid_tail_stack_code[] = {
+    OP(ORES_SCALAR_PUSH_I64, 88),
+    OP(ORES_SCALAR_PUSH_I64, 1),
+    OP(ORES_SCALAR_TAIL_CALL, 0)
+};
+static const OresActorScalarProgram invalid_tail_stack_program = {
+    1, sizeof(invalid_tail_stack_code)/sizeof(invalid_tail_stack_code[0]),
+    0, entry, invalid_tail_stack_code
+};
+/* i64 arithmetic must wrap modulo 2^64; ordering remains signed. */
+static const OresActorScalarInstruction wrapping_code[] = {
+    OP(ORES_SCALAR_PUSH_I64, INT64_MAX),
+    OP(ORES_SCALAR_PUSH_I64, 1),
+    OP(ORES_SCALAR_ADD, 0),
+    OP(ORES_SCALAR_PUSH_I64, INT64_MIN),
+    OP(ORES_SCALAR_EQ, 0),
+    OP(ORES_SCALAR_BRANCH_FALSE, 8),
+    OP(ORES_SCALAR_PUSH_I64, 11),
+    OP(ORES_SCALAR_RETURN, 0),
+    OP(ORES_SCALAR_PUSH_I64, -1),
+    OP(ORES_SCALAR_RETURN, 0)
+};
+static const OresActorScalarProgram wrapping_program = {
+    1, sizeof(wrapping_code)/sizeof(wrapping_code[0]),
+    0, entry, wrapping_code
+};
+static const OresActorScalarInstruction signed_code[] = {
+    OP(ORES_SCALAR_PUSH_I64, INT64_MIN),
+    OP(ORES_SCALAR_PUSH_I64, -1),
+    OP(ORES_SCALAR_LT, 0),
+    OP(ORES_SCALAR_BRANCH_FALSE, 6),
+    OP(ORES_SCALAR_PUSH_I64, 12),
+    OP(ORES_SCALAR_RETURN, 0),
+    OP(ORES_SCALAR_PUSH_I64, -1),
+    OP(ORES_SCALAR_RETURN, 0)
+};
+static const OresActorScalarProgram signed_program = {
+    1, sizeof(signed_code)/sizeof(signed_code[0]),
+    0, entry, signed_code
 };
 
 static void check(int condition) { if (!condition) abort(); }
@@ -209,6 +253,35 @@ static int64_t fuel_exhausted_message(
     return 0;
 }
 
+static int64_t invalid_tail_message(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
+        int64_t payload) {
+    (void)heap; (void)domain; (void)epoch; (void)payload;
+    int64_t result = -1;
+    check(oreslang_source_actor_scalar_vm_execute(
+        &invalid_tail_stack_program, 1, &result) == ORES_SCALAR_INVALID_FRAME
+        && result == 0);
+    atomic_fetch_add_explicit(&tail_operands_denied, 1,
+        memory_order_release);
+    return 0;
+}
+static int64_t arithmetic_message(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
+        int64_t payload) {
+    (void)heap;
+    check(domain && epoch && payload == 1);
+    int64_t result = -1;
+    check(oreslang_source_actor_scalar_vm_execute(
+        &wrapping_program, 0, &result) == ORES_SCALAR_OK && result == 11);
+    /* VM active gate releases after a successful root call; a second root
+     * may safely reuse the same scrubbed actor-owned frame allocation. */
+    result = -1;
+    check(oreslang_source_actor_scalar_vm_execute(
+        &signed_program, 0, &result) == ORES_SCALAR_OK && result == 12);
+    atomic_fetch_add_explicit(&scalar_arithmetic_verified, 1,
+        memory_order_release);
+    return result;
+}
 static int64_t cancelled_message(
         OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
         int64_t payload) {
@@ -319,6 +392,20 @@ int main(void) {
     check(wait_for(&cancellation_processed, 1));
     oreslang_source_actor_join_done(cancelled);
     oreslang_source_actor_test_hold_scalar_checkpoint(0);
+
+    void* tail_bad = oreslang_source_actor_spawn(
+        init, invalid_tail_message, 1);
+    check(tail_bad);
+    oreslang_source_actor_send(tail_bad, 1);
+    check(wait_for(&tail_operands_denied, 1));
+    oreslang_source_actor_stop(tail_bad);
+
+    void* arithmetic = oreslang_source_actor_spawn(
+        init, arithmetic_message, 1);
+    check(arithmetic);
+    oreslang_source_actor_send(arithmetic, 1);
+    check(wait_for(&scalar_arithmetic_verified, 1));
+    oreslang_source_actor_stop(arithmetic);
 
     /* The same sibling accepts another message after all three kinds of
      * actor-local failure: quota, malformed program, and typed tag/fuel. */
