@@ -108,7 +108,7 @@ static void independent_watchdog_requests_next_safe_boundary() {
     require(q.shouldCooperateAtCheck(true));
     require(FakeClock::reads.load() == 2); // watcher request needs no clock read
     require(!q.shouldCooperateAtCheck(false));
-    require(FakeClock::reads.load() == 3);
+    require(FakeClock::reads.load() == 2); // consumed ticket cannot poll twice
 }
 
 static void await_is_not_cooperate() {
@@ -140,6 +140,48 @@ static void repeated_dispatches_keep_task_context() {
     require(q.completedBackedgesThisDispatch() == 512);
     require(q.timeSinceLastCooperate() == std::chrono::nanoseconds::zero());
 }
+static void short_resumptions_cannot_evade_poll_phase() {
+    reset_clock();
+    Quantum q;
+    std::uint64_t cumulative = 0;
+    int polls = 0;
+    for (int turn = 0; turn < 8; ++turn) {
+        q.beginDispatch();
+        for (int i = 0; i < 127; ++i) {
+            ++cumulative;
+            const bool due = q.completedBackedgeNeedsCheck();
+            require(due == (cumulative % 128 == 0));
+            if (due) {
+                ++polls;
+                // First ticket is usable. A second invocation with no new
+                // completed backedge cannot re-enter the expensive runtime.
+                require(!q.shouldCooperateAtCheck());
+                const int after = FakeClock::reads.load();
+                require(!q.shouldCooperateAtCheck());
+                require(FakeClock::reads.load() == after);
+            } else {
+                // Even a buggy caller cannot force an expensive per-step poll.
+                const int before = FakeClock::reads.load();
+                require(!q.shouldCooperateAtCheck());
+                require(FakeClock::reads.load() == before);
+            }
+        }
+        require(q.completedBackedgesThisDispatch() == 127);
+    }
+    require(polls == 7);
+    require(FakeClock::reads.load() == 2 + 8 + 7);
+}
+
+static void million_fast_backedges_do_not_read_the_clock() {
+    reset_clock();
+    Quantum q;
+    q.beginDispatch();
+    for (std::uint32_t i = 1; i <= 1'048'576; ++i)
+        require(q.completedBackedgeNeedsCheck() == (i % 128 == 0));
+    require(FakeClock::reads.load() == 2);
+    require(q.completedBackedgesThisDispatch() == 1'048'576);
+}
+
 int main() {
     reduction_fast_path();
     overdue_no_yield_region_checks_every_new_boundary();
@@ -147,5 +189,7 @@ int main() {
     independent_watchdog_requests_next_safe_boundary();
     await_is_not_cooperate();
     repeated_dispatches_keep_task_context();
+    short_resumptions_cannot_evade_poll_phase();
+    million_fast_backedges_do_not_read_the_clock();
     std::cout << "native quantum 128/512/2ms: PASS (host-only, no guest await parity)\n";
 }
