@@ -10,9 +10,10 @@ semantic_failure_exit() {
   (( 10#$1 <= 123 ))
 }
 no_artifacts() {
-  local dir="$1"
+  local dir="$1" entries
   [[ -d "$dir" && ! -L "$dir" ]] || return 1
-  [[ -z "$(find "$dir" -mindepth 1 -print -quit)" ]]
+  entries="$(find "$dir" -mindepth 1 -print -quit)" || return 1
+  [[ -z "$entries" ]]
 }
 self_test() {
   local code dir
@@ -22,8 +23,14 @@ self_test() {
   for code in 0 124 125 126 127 128 137 143 255 -1 a '' 01; do
     if semantic_failure_exit "$code"; then die "accepted invalid exit '$code'"; fi
   done
+  local timed_out=0
+  timeout --signal=TERM --kill-after=1s 0.1s sleep 3 >/dev/null 2>&1 || timed_out=$?
+  [[ "$timed_out" == 124 ]] || die "GNU timeout contract changed: status=$timed_out"
   dir="$(mktemp -d "${TMPDIR:-/tmp}/atto-aot-output-mutants.XXXXXXXX")"
   no_artifacts "$dir" || die 'empty output directory falsely rejected'
+  find() { return 7; }
+  if no_artifacts "$dir"; then die 'failing find falsely accepted'; fi
+  unset -f find
   touch "$dir/guest.o"
   if no_artifacts "$dir"; then die 'object-file sidecar falsely accepted'; fi
   rm "$dir/guest.o"
