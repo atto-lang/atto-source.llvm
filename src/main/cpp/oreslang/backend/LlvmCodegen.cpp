@@ -480,22 +480,44 @@ llvm::Value* lower(const Expression& expr,
                 return builder.CreateAShr(left, distance, "shift.signed.right");
             return builder.CreateLShr(left, distance, "shift.unsigned.right");
         }
-        case Expression::Kind::Remainder: {
-            // The frontend normalizes syntactically signed literal divisors.
-            // Never trust an externally supplied AST to skip this proof gate.
-            if (!expr.left || !expr.right ||
-                    expr.right->kind != Expression::Kind::Integer ||
-                    expr.right->integer == 0)
-                throw std::runtime_error("native remainder lacks proved nonzero signed literal divisor");
+        case Expression::Kind::Remainder:
+        case Expression::Kind::Modulo: {
+            if (!expr.left || !expr.right)
+                throw std::runtime_error("native Integer.rem/mod requires two operands");
+            const bool modulo = expr.kind == Expression::Kind::Modulo;
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
-            // Java's signed remainder is zero for every dividend modulo -1,
-            // including INT64_MIN. LLVM srem INT64_MIN, -1 is poison, so
-            // preserve evaluation of the dividend but emit no srem here.
-            if (expr.right->integer == -1)
-                return llvm::ConstantInt::get(i64, 0);
-            llvm::Value* right = llvm::ConstantInt::get(i64,
-                static_cast<std::uint64_t>(expr.right->integer));
-            return builder.CreateSRem(left, right, "srem");
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            // A zero divisor traps, like checked overflow.
+            auto* module = builder.GetInsertBlock()->getModule();
+            auto* parent = builder.GetInsertBlock()->getParent();
+            auto* failed = llvm::BasicBlock::Create(builder.getContext(), "rem.zero.trap", parent);
+            auto* proceed = llvm::BasicBlock::Create(builder.getContext(), "rem.ok", parent);
+            builder.CreateCondBr(builder.CreateICmpEQ(right, llvm::ConstantInt::get(i64, 0), "rem.zero"),
+                failed, proceed);
+            builder.SetInsertPoint(failed);
+            builder.CreateCall(llvm::Intrinsic::getDeclaration(module, llvm::Intrinsic::trap));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(proceed);
+            // Any value modulo -1 is 0, including INT64_MIN, but LLVM srem INT64_MIN, -1
+            // is poison. srem by 1 is also 0, so divide by 1 in that case instead.
+            llvm::Value* minus_one = builder.CreateICmpEQ(right,
+                llvm::ConstantInt::getSigned(i64, -1), "rem.minus.one");
+            llvm::Value* safe = builder.CreateSelect(minus_one, llvm::ConstantInt::get(i64, 1), right, "rem.divisor");
+            llvm::Value* remainder = builder.CreateSRem(left, safe, "srem");
+            if (!modulo) return remainder;
+            // Euclidean modulus: shift a negative remainder by |divisor|. The true result
+            // lies in [0, |divisor|), so wrapping add/sub is exact even for INT64_MIN.
+            llvm::Value* negative = builder.CreateICmpSLT(remainder, llvm::ConstantInt::get(i64, 0), "mod.negative");
+            llvm::Value* positive_divisor = builder.CreateICmpSGT(right, llvm::ConstantInt::get(i64, 0), "mod.divisor.positive");
+            llvm::Value* adjusted = builder.CreateSelect(positive_divisor,
+                builder.CreateAdd(remainder, right, "mod.add"),
+                builder.CreateSub(remainder, right, "mod.sub"), "mod.adjusted");
+            return builder.CreateSelect(negative, adjusted, remainder, "mod");
+        }
+        case Expression::Kind::BitXor: {
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            return builder.CreateXor(left, right, "bitxor");
         }
         case Expression::Kind::LogicalNot: {
             llvm::Value* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);

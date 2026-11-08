@@ -149,7 +149,7 @@ bool reserved(std::string_view name) {
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
-        "default", "eq", "neq", "and", "or", "xor", "nb", "select", "readch", "writech",
+        "default", "eq", "neq", "and", "or", "xor", "Xor", "nb", "select", "readch", "writech",
         "cb", "shared", "untrusted", "type", "types", "typeof",
         "interface", "trait", "struct", "impl", "abstract", "void", "Iterator", "AsyncIterator",
         "static", "pub", "private", "return", "defer", "throw", "raise",
@@ -299,6 +299,9 @@ public:
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
+        if (ch == '^')
+            throw std::runtime_error("'^' is reserved and is not AttoLang source syntax; use Integer.bitXor(a, b) at byte "
+                                     + std::to_string(start));
         throw std::runtime_error("unsupported Oreslang token at byte "
                                  + std::to_string(start));
     }
@@ -352,6 +355,8 @@ bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
             expr.kind == Expression::Kind::ShiftLeft ||
             expr.kind == Expression::Kind::ShiftRight ||
             expr.kind == Expression::Kind::ShiftUnsignedRight ||
+            expr.kind == Expression::Kind::Modulo ||
+            expr.kind == Expression::Kind::BitXor ||
             expr.kind == Expression::Kind::Equal ||
             expr.kind == Expression::Kind::NotEqual ||
             expr.kind == Expression::Kind::Less ||
@@ -485,6 +490,7 @@ bool native_constructor_scalar_tree(const Expression& expr,
             expr.kind == Kind::Multiply || expr.kind == Kind::Remainder ||
             expr.kind == Kind::ShiftLeft || expr.kind == Kind::ShiftRight ||
             expr.kind == Kind::ShiftUnsignedRight ||
+            expr.kind == Kind::Modulo || expr.kind == Kind::BitXor ||
             expr.kind == Kind::Equal ||
             expr.kind == Kind::NotEqual || expr.kind == Kind::Less ||
             expr.kind == Kind::LessEqual || expr.kind == Kind::Greater ||
@@ -3426,14 +3432,8 @@ private:
 
     std::unique_ptr<Expression> logical_xor() {
         auto left = logical_and();
-        while (token_.text == "^^") {
-            const auto offset = token_.offset;
-            advance();
-            auto expr = make_expression(Expression::Kind::LogicalXor, offset);
-            expr->left = std::move(left);
-            expr->right = logical_and();
-            left = std::move(expr);
-        }
+        if (token_.text == "^^")
+            fail("'^^' is reserved and is not AttoLang source syntax; use Xor(a, b)");
         return left;
     }
 
@@ -3544,31 +3544,13 @@ private:
             if (token_.text == "/")
                 fail("native floating division unsupported: int/int yields float in Java; "
                      "LLVM float typing and zero-divisor semantics are not implemented");
-            const bool remainder = token_.text == "%";
+            if (token_.text == "%")
+                fail("'%' is reserved and is not AttoLang source syntax; "
+                     "use Integer.rem(a, b) or Integer.mod(a, b)");
             const auto offset = token_.offset;
             advance();
             auto right = unary();
-            // Admit exactly nonzero signed integer *literals*. Normalize
-            // unary-negative literal syntax into the already typed integer
-            // node; codegen independently checks the normalized invariant.
-            // Neither computed divisors nor unknown zero-divisor effects are
-            // silently admitted. The special MIN / -1 case is handled by
-            // codegen rather than emitting LLVM poison.
-            if (remainder) {
-                if (right->kind == Expression::Kind::Negate && right->left &&
-                        right->left->kind == Expression::Kind::Integer &&
-                        right->left->integer > 0) {
-                    const auto magnitude = right->left->integer;
-                    right->left.reset();
-                    right->kind = Expression::Kind::Integer;
-                    right->integer = -magnitude; // magnitude fits signed i64
-                }
-                if (right->kind != Expression::Kind::Integer || right->integer == 0)
-                    fail("native remainder requires a nonzero signed integer literal divisor "
-                         "until typed zero-divisor effects are implemented");
-            }
-            auto expr = make_expression(remainder ? Expression::Kind::Remainder
-                                                 : Expression::Kind::Multiply, offset);
+            auto expr = make_expression(Expression::Kind::Multiply, offset);
             expr->left = std::move(left);
             expr->right = std::move(right);
             left = std::move(expr);
@@ -4006,6 +3988,37 @@ private:
             auto field = make_expression(Expression::Kind::Variable, offset);
             field->name = identifier();
             return field;
+        }
+        // Boolean xor is the builtin Xor(a, b); both arguments are always evaluated.
+        if (token_.kind == Kind::Identifier && token_.text == "Xor" && peek_next().text == "(") {
+            advance();
+            require("(");
+            auto call = make_expression(Expression::Kind::LogicalXor, offset);
+            call->left = expression();
+            require(",");
+            call->right = expression();
+            require(")");
+            return call;
+        }
+        // Named integer operations replace the reserved %, ^ and ^^ operators.
+        // A user module named Integer keeps its ordinary qualified calls.
+        if (token_.kind == Kind::Identifier && token_.text == "Integer" &&
+                peek_next().text == "." && !module_names_.count("Integer")) {
+            advance();
+            require(".");
+            const std::string operation = identifier();
+            Expression::Kind kind;
+            if (operation == "rem") kind = Expression::Kind::Remainder;
+            else if (operation == "mod") kind = Expression::Kind::Modulo;
+            else if (operation == "bitXor") kind = Expression::Kind::BitXor;
+            else fail("native Integer." + operation + " is unsupported; use Integer.rem, Integer.mod or Integer.bitXor");
+            require("(");
+            auto call = make_expression(kind, offset);
+            call->left = expression();
+            require(",");
+            call->right = expression();
+            require(")");
+            return call;
         }
         const bool extension_self = extension_header_active_ && token_.text == "self";
         if (token_.kind != Kind::Identifier || (reserved(token_.text) && token_.text != "pattern" &&
@@ -4551,6 +4564,8 @@ private:
             case Expression::Kind::ShiftLeft:
             case Expression::Kind::ShiftRight:
             case Expression::Kind::ShiftUnsignedRight:
+            case Expression::Kind::Modulo:
+            case Expression::Kind::BitXor:
             case Expression::Kind::Equal:
             case Expression::Kind::NotEqual:
             case Expression::Kind::Less:
@@ -4748,7 +4763,9 @@ private:
             case Expression::Kind::Remainder:
             case Expression::Kind::ShiftLeft:
             case Expression::Kind::ShiftRight:
-            case Expression::Kind::ShiftUnsignedRight: {
+            case Expression::Kind::ShiftUnsignedRight:
+            case Expression::Kind::Modulo:
+            case Expression::Kind::BitXor: {
                 ScalarType left = validate_scalar_expression(
                     *expr.left, variables, functions, depth + 1);
                 ScalarType right = validate_scalar_expression(
