@@ -352,14 +352,28 @@ compile_actor_scalar_graph(const Program& program, const ActorDecl& actor) {
         handler.result->kind != Expression::Kind::Call ||
         handler.result->arguments.size() != 1 ||
         handler.result->type_arguments_present ||
+        !handler.result->type_arguments.empty() ||
         (!handler.result->argument_names.empty() &&
             (handler.result->argument_names.size() != 1 ||
              !handler.result->argument_names[0].empty())) ||
+        handler.parameters.size() != 1 ||
+        handler.parameters[0].mode != Parameter::Mode::Value ||
+        handler.parameters[0].scalar_type != ScalarType::I64 ||
+        handler.return_type != ScalarType::I64 ||
+        handler.async_source_i64 || handler.has_declared_effects ||
+        !handler.ready_await_actor.empty() ||
+        !handler.done_await_actor.empty() ||
+        !handler.ready_future_name.empty() ||
+        !handler.ready_future_actor.empty() ||
+        !handler.source_tasks.empty() || !handler.future_pipelines.empty() ||
+        !handler.actor_spawns.empty() || !handler.actor_sends.empty() ||
+        !handler.actor_stops.empty() || !handler.actor_actions.empty() ||
+        !handler.early_returns.empty() || !handler.statements.empty() ||
+        handler.caught_throw_value || !handler.caught_throw_defers.empty() ||
         !handler.locals.empty() || !handler.actor_field_writes.empty() ||
         !handler.result->arguments[0] ||
         handler.result->arguments[0]->kind != Expression::Kind::Variable ||
-        handler.result->arguments[0]->name !=
-            handler.parameters.at(0).name)
+        handler.result->arguments[0]->name != handler.parameters[0].name)
         actor_scalar_m3::deny(
             "actor callback may only directly return pure unary fnc(message)");
     actor_scalar_m3::Builder builder(program);
