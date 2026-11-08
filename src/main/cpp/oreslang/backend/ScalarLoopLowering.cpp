@@ -61,8 +61,18 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
     const auto entryGuard = [&](llvm::Function* fn, llvm::Value* frame, llvm::IRBuilder<>& b) {
         auto* ok = llvm::BasicBlock::Create(context, "frame.nonnull", fn);
         auto* bad = llvm::BasicBlock::Create(context, "frame.null", fn);
-        b.CreateCondBr(b.CreateICmpNE(frame, llvm::ConstantPointerNull::get(
-            llvm::cast<llvm::PointerType>(ptr))), ok, bad);
+        // All v1 entrypoints load/store u64 fields at offsets 0,8,16,24.
+        // A nonnull but misaligned frame pointer must trap before its first
+        // memory access; nonnull alone is insufficient for a valid ABI frame.
+        // Pointer provenance and the full 32-byte allocation size remain
+        // trusted-carrier responsibilities (this is not sandboxing).
+        auto* nonnull = b.CreateICmpNE(frame, llvm::ConstantPointerNull::get(
+            llvm::cast<llvm::PointerType>(ptr)));
+        auto* address = b.CreatePtrToInt(frame, i64, "frame.address");
+        auto* aligned = b.CreateICmpEQ(
+            b.CreateAnd(address, constant(alignof(std::uint64_t) - 1)),
+            constant(0));
+        b.CreateCondBr(b.CreateAnd(nonnull, aligned), ok, bad);
         b.SetInsertPoint(bad);
         fail(b);
         b.SetInsertPoint(ok);
