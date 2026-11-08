@@ -111,3 +111,53 @@ stack isolation and parity remain UNPROVEN**.
    deep mutual recursion, pointer-forgery negative tests and sibling survival.
 5. Obtain independent review on exact head; semantic rebase M1 and stacked M2
    when merging into current main. No unauthorized private-source mirroring.
+
+## M3 security audit addendum — cancellation, reentrancy and stop ownership
+
+The source/runtime hardening follow-up closes four gaps in the original M3
+draft:
+
+1. **Cancellation within a bounded instruction interval.** The VM now probes
+   the actor's external STOP and interpreter fault state **once per 256
+   completed instructions**, using only a cheap counter mask between checks.
+   No lock, clock read or native sleeping call executes on every opcode. STOP
+   raises `ORES_SCALAR_CANCELLED=5`, zeroes all live owned frames and keeps
+   the runtime carrier alive. The deterministic CTest pauses only a
+   **test-only** build at checkpoint #1 and proves exactly 256 real dispatched
+   instructions and one checkpoint before cancellation, while a healthy
+   sibling processes another message. **This is cancellation, not cooperative
+   scheduler suspension:** the VM still occupies its native carrier until
+   a return/cancellation/fuel boundary, and SourceTask frame resumption is
+   pending.
+2. **Nested interpreter denial.** A separate atomic VM-active grant protects
+   the actor's live PC/operand frame against nested interpreter entry during
+   an otherwise valid physical actor turn. Reentrant calls poison only that
+   actor, do not overwrite live frames, and are proven by a test-only
+   fault-injection mutation at a 256-instruction checkpoint.
+3. **Typed frame and tail cleanup.** Terminal TAIL_CALL must consume its
+   argument and leave **zero** pending operand cells before replacing the
+   current frame. Both PUSH and POP reject noncanonical Boolean payloads
+   other than 0 or 1. Negative bytecode tests reject dirty tail transfers
+   and mismatched BOOL tags. Positive arithmetic tests cover i64 wraparound
+   and signed comparisons, plus safe serial reuse of zeroed interpreter
+   storage inside one actor turn.
+4. **Root STOP claim uniqueness.** Automatic per-actor interpreter fail-stop
+   and an externally owned stop/join are different operations. The external
+   claim is consumed once even if an internal fail-stop occurred earlier;
+   duplicate manual stop requests remain protocol violations. A subprocess
+   negative test expects SIGABRT from repeated outer STOP before any host
+   scheduler threads have been forked.
+
+Additional native receipts now expose `peak_frames` and `checkpoints`.
+The Python compiler-backed harness validates 64-frame peak for non-tail
+overflow, one-frame peak for 100,000 tail/mutual-tail calls, and exact two
+million dispatched instructions for a new pure `spin(n)` runaway
+`.atto` source fixture (terminal actor-local fuel error). Ordinary
+`main` sending then immediately stopping is acknowledged as a race: it
+may yield cancellation status 5 and cannot be used alone as proof of
+completed guest calls. The deterministic actual-source wait harness remains
+the acceptance witness for full guest execution.
+
+**CI remains unproven until an exact-head hosted run executes real steps.**
+All new CTests, fixture counts, and workflow artifacts are *authored*; a
+zero-step run cannot validate their behavior.
