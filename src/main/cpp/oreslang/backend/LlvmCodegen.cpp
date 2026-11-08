@@ -1,5 +1,6 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/backend/NativeFlatClasses.hpp"
+#include "oreslang/backend/ActorScalarFrameLowering.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
@@ -705,6 +706,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   const std::string& isolate_entry) {
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
+        if (fn.name.rfind("oreslang_source_actor_", 0) == 0 ||
+            fn.name.rfind("ores_actor_i64_heap_", 0) == 0 ||
+            fn.name.rfind("oreslang_actor_", 0) == 0)
+            throw std::runtime_error("reserved native actor runtime symbol collision");
+    for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
             throw std::runtime_error("reserved native record runtime symbol collision");
     for (const auto& fn : source.functions)
@@ -1064,7 +1070,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceRequestStop,
         sourceAwaitReady, sourceAwaitDone;
-    llvm::FunctionCallee actorScopedNew, actorScopedDrop;
+    llvm::FunctionCallee actorScopedNew, actorScopedDrop, sourceFrameI64Slot, sourceScalarEval;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
     if (!source.actors.empty() && !wasm32_target) {
         auto* voidTy = llvm::Type::getVoidTy(context);
@@ -1082,6 +1088,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         actorScopedDrop = module.getOrInsertFunction("ores_actor_i64_heap_scoped_drop",
             llvm::FunctionType::get(voidTy,
                 {native_ptr, i64, i64, native_ptr}, false));
+        sourceFrameI64Slot = module.getOrInsertFunction(
+            "oreslang_source_actor_frame_i64_slot",
+            llvm::FunctionType::get(native_ptr, {i64, i64, i64}, false));
+        sourceScalarEval = module.getOrInsertFunction(
+            "oreslang_source_actor_scalar_vm_execute",
+            llvm::FunctionType::get(i32, {native_ptr, i64, loan_ptr}, false));
         sourceSpawn = module.getOrInsertFunction("oreslang_source_actor_spawn",
             llvm::FunctionType::get(native_ptr, {native_ptr, native_ptr, i64}, false));
         sourceSend = module.getOrInsertFunction("oreslang_source_actor_send",
@@ -2830,8 +2842,23 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         llvm::Value* currentEpoch = &*args++;
         llvm::Value* incoming = &*args++;
         std::unordered_map<std::string, llvm::Value*> values, emptyFields;
+        // Only this closed synchronous scalar handler subset may borrow a
+        // real actor-owned frame slot. The runtime admits one actor turn,
+        // validates heap turn epoch and scrubs all frame bytes before release.
+        // Opaque heap ownership tokens remain separate compiler scratch.
+        std::size_t next_frame_slot = 0;
+        auto actor_scalar_place = [&](const std::string& name) -> llvm::Value* {
+            if (next_frame_slot >= 8192)
+                throw std::runtime_error("source actor scalar frame exceeds 64 KiB");
+            llvm::Value* address = builder.CreateCall(sourceFrameI64Slot,
+                {currentDomain, currentEpoch,
+                 llvm::ConstantInt::get(i64, next_frame_slot++)},
+                name + ".actor.frame.address");
+            return builder.CreatePointerCast(address, loan_ptr,
+                name + ".actor.frame.i64");
+        };
         const std::string param = actor.on_message.parameters[0].name;
-        llvm::Value* pslot = builder.CreateAlloca(i64, nullptr, param + ".slot");
+        llvm::Value* pslot = actor_scalar_place(param);
         builder.CreateStore(incoming, pslot);
         values.emplace(param, pslot);
         for (std::size_t i=0; i<actor.fields.size(); ++i) {
@@ -2839,7 +2866,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             llvm::Value* value = builder.CreateCall(fieldRead, {
                 actorHeap, currentDomain, currentEpoch, llvm::ConstantInt::get(i64,i)},
                 field.name + ".read");
-            llvm::Value* slot = builder.CreateAlloca(i64, nullptr, field.name + ".slot");
+            llvm::Value* slot = actor_scalar_place(field.name);
             builder.CreateStore(value, slot);
             values.emplace(field.name, slot);
         }
@@ -2856,9 +2883,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 local.name + ".actor.owned.token");
             builder.CreateCall(actorScopedNew,
                 {actorHeap, currentDomain, currentEpoch, initial, token});
-            // Pure reads of an immutable scalar agree with the native payload.
-            llvm::Value* slot = builder.CreateAlloca(i64, nullptr,
-                local.name + ".actor.owned.cached");
+            // Compiler-owned scalar value is stored in actual per-actor frame
+            // bytes instead of a carrier-stack cached local. The independent
+            // 3-word heap token still enforces owned temporary drop.
+            llvm::Value* slot = actor_scalar_place(local.name);
             builder.CreateStore(initial, slot);
             values.emplace(local.name, slot);
             actor_owned_tokens.push_back(token);
@@ -2874,8 +2902,65 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 llvm::ConstantInt::get(i64, index), value});
             builder.CreateStore(value, values.at(write.field));
         }
-        llvm::Value* result = lower(*actor.on_message.result, builder, i64, values,
-            emptyFields, declarations);
+        llvm::Value* result = nullptr;
+        if (const auto compiled = compile_actor_scalar_graph(source, actor)) {
+            // Fail-closed, whole-graph static bytecode. Only a directly
+            // returned source-local pure unary fnc graph may enter M3; all
+            // reachable functions were validated before emission.
+            auto* wordPair = llvm::StructType::get(context, {i64, i64});
+            std::vector<llvm::Constant*> instructionValues;
+            instructionValues.reserve(compiled->code.size());
+            for (const auto& ins : compiled->code) {
+                instructionValues.push_back(llvm::ConstantStruct::get(
+                    wordPair, {
+                        llvm::ConstantInt::get(i64, ins.opcode),
+                        llvm::ConstantInt::getSigned(i64, ins.immediate)
+                    }));
+            }
+            auto* insArray = llvm::ArrayType::get(wordPair, instructionValues.size());
+            auto* insGlobal = new llvm::GlobalVariable(
+                module, insArray, true, llvm::GlobalValue::PrivateLinkage,
+                llvm::ConstantArray::get(insArray, instructionValues),
+                "oreslang.actor.scalar.m3.instructions." + actor.name);
+            std::vector<llvm::Constant*> entryValues;
+            entryValues.reserve(compiled->entries.size());
+            for (const auto entry : compiled->entries)
+                entryValues.push_back(llvm::ConstantInt::get(i64, entry));
+            auto* entriesArray = llvm::ArrayType::get(i64, entryValues.size());
+            auto* entriesGlobal = new llvm::GlobalVariable(
+                module, entriesArray, true, llvm::GlobalValue::PrivateLinkage,
+                llvm::ConstantArray::get(entriesArray, entryValues),
+                "oreslang.actor.scalar.m3.entries." + actor.name);
+            auto* programType = llvm::StructType::get(context, {
+                i64, i64, i64, native_ptr, native_ptr
+            });
+            auto* programConstant = llvm::ConstantStruct::get(programType, {
+                llvm::ConstantInt::get(i64, compiled->entries.size()),
+                llvm::ConstantInt::get(i64, compiled->code.size()),
+                llvm::ConstantInt::get(i64, compiled->root),
+                llvm::ConstantExpr::getPointerCast(entriesGlobal, native_ptr),
+                llvm::ConstantExpr::getPointerCast(insGlobal, native_ptr)
+            });
+            auto* programGlobal = new llvm::GlobalVariable(
+                module, programType, true, llvm::GlobalValue::PrivateLinkage,
+                programConstant, "oreslang.actor.scalar.m3.program." + actor.name);
+            // Only the tiny result transfer uses a trusted pointer. Actual
+            // nested frame PC, typed locals and operand values live in the
+            // actor-incarnation frame arena, never carrier stack recursion.
+            llvm::Value* resultPlace = actor_scalar_place("scalar.vm.result");
+            builder.CreateStore(llvm::ConstantInt::get(i64, 0), resultPlace);
+            llvm::Value* argument = builder.CreateLoad(i64, pslot, "scalar.vm.input");
+            builder.CreateCall(sourceScalarEval, {
+                llvm::ConstantExpr::getPointerCast(programGlobal, native_ptr),
+                argument, resultPlace
+            });
+            // The runtime records nonzero status as actor-local failure and
+            // seals the actor mailbox once this physical callback exits.
+            result = builder.CreateLoad(i64, resultPlace, "scalar.vm.result");
+        } else {
+            result = lower(*actor.on_message.result, builder, i64, values,
+                emptyFields, declarations);
+        }
         // The native actor scheduler admits no next message until the current
         // synchronous handler has dropped all temporary owners in LIFO order.
         for (auto it = actor_owned_tokens.rbegin();

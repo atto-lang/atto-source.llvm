@@ -375,6 +375,7 @@ struct Function {
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
     std::string return_sum;
+    bool direct_only_routine = false; // do not admit recursive routines as fnc
 };
 
 /** Frozen scheduler tier, distinct from ActorGroup-wide parallelism. */
