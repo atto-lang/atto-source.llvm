@@ -53,6 +53,19 @@ inline std::optional<std::uint64_t> straight_line_effect_shape(
     if (!has_class)
         return std::nullopt;
 
+    // A linear source trace cannot silently discard generic Statement slots.
+    // Return no fingerprint if an auxiliary effect appears before sealing,
+    // or a stale fingerprint mismatch if one is injected after sealing.
+    for (const auto& stmt : function.statements) {
+        if ((stmt.kind != Statement::Kind::FieldWrite &&
+             stmt.kind != Statement::Kind::ScalarWrite) ||
+                !stmt.expression || stmt.branch_local || stmt.loop_step ||
+                stmt.array_commit_length || !stmt.array_commit_values.empty() ||
+                stmt.condition || stmt.condition_lhs || stmt.condition_rhs ||
+                !stmt.then_statements.empty() || !stmt.else_statements.empty())
+            return std::nullopt;
+    }
+
     SourceEffectShape hash;
     hash.str("atto/straight-line/source-effect-shape/v1");
     std::size_t total_nodes = 0;
@@ -71,6 +84,41 @@ inline std::optional<std::uint64_t> straight_line_effect_shape(
             return;
         }
         hash.u64(1);
+        // A pure source expression cannot carry an unmodeled call, branch,
+        // generic instantiation or sum edge in an otherwise ignored slot.
+        bool canonical = false;
+        switch (expr->kind) {
+            case Expression::Kind::Integer:
+            case Expression::Kind::Boolean:
+            case Expression::Kind::Variable:
+                canonical = !expr->left && !expr->right;
+                break;
+            case Expression::Kind::Field:
+            case Expression::Kind::Take:
+            case Expression::Kind::Negate:
+            case Expression::Kind::LogicalNot:
+                canonical = expr->left && !expr->right;
+                break;
+            case Expression::Kind::Add:
+            case Expression::Kind::Subtract:
+            case Expression::Kind::Multiply:
+            case Expression::Kind::Equal:
+            case Expression::Kind::NotEqual:
+            case Expression::Kind::Less:
+            case Expression::Kind::LessEqual:
+            case Expression::Kind::Greater:
+            case Expression::Kind::GreaterEqual:
+                canonical = expr->left && expr->right;
+                break;
+            default:
+                break;
+        }
+        if (!canonical || expr->condition || expr->condition_lhs ||
+                expr->condition_rhs || expr->when_true || expr->when_false ||
+                !expr->arguments.empty() || !expr->argument_names.empty() ||
+                expr->type_arguments_present || !expr->type_arguments.empty() ||
+                !expr->resolved_class.empty() || !expr->sum_type.empty())
+            valid = false;
         hash.u64(static_cast<std::uint64_t>(expr->kind));
         hash.u64(expr->offset);
         hash.u64(static_cast<std::uint64_t>(expr->integer));

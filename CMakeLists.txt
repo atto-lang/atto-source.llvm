@@ -251,6 +251,15 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_ownership_straight_line_source_mir_74
         COMMAND oreslang-native-straight-line-mir-74-test)
+    # Negative auxiliary-effects suite, distinct from real LLVM guest gates.
+    add_executable(oreslang-native-straight-line-aux-admission-24-test
+        tests/native_straight_line_mir_aux_admission_24_test.cpp)
+    target_include_directories(oreslang-native-straight-line-aux-admission-24-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-straight-line-aux-admission-24-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_ownership_straight_line_aux_admission_24
+        COMMAND oreslang-native-straight-line-aux-admission-24-test)
 
 
     # Compiler-level trait projection contract: closed-world HasFuture dispatch

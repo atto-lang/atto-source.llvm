@@ -154,20 +154,25 @@ inline std::optional<StraightLineTrace> build_checked_straight_line_trace(
     const auto expression = [&](const auto& self, const Expression& expr,
             SourcePhase phase, std::size_t ordinal,
             std::uint64_t node, std::size_t depth) -> bool {
-        if (depth > 32)
+        if (depth > 32 || expr.condition || expr.condition_lhs ||
+                expr.condition_rhs || expr.when_true || expr.when_false ||
+                !expr.arguments.empty() || !expr.argument_names.empty() ||
+                expr.type_arguments_present || !expr.type_arguments.empty() ||
+                !expr.resolved_class.empty() || !expr.sum_type.empty())
             return false;
         switch (expr.kind) {
             case Expression::Kind::Integer:
             case Expression::Kind::Boolean:
-                return true;
+                return !expr.left && !expr.right;
             case Expression::Kind::Variable:
                 // Reading a whole class requires all of its fields, but is
                 // not in this first simple scalar-place trace.
-                return !class_fields.count(expr.name) &&
+                return !expr.left && !expr.right &&
+                    !class_fields.count(expr.name) &&
                     record(ownership::Operation::Kind::Read, expr.name,
                         phase, ordinal, node, expr.offset);
             case Expression::Kind::Field:
-                if (!expr.left ||
+                if (!expr.left || expr.right ||
                         expr.left->kind != Expression::Kind::Variable ||
                         !class_fields.count(expr.left->name) ||
                         !class_fields.at(expr.left->name).count(expr.name))
@@ -176,7 +181,7 @@ inline std::optional<StraightLineTrace> build_checked_straight_line_trace(
                     expr.left->name + "." + expr.name,
                     phase, ordinal, node, expr.offset);
             case Expression::Kind::Take:
-                if (!expr.left)
+                if (!expr.left || expr.right)
                     return false;
                 if (expr.left->kind == Expression::Kind::Variable &&
                         !class_fields.count(expr.left->name))
@@ -193,7 +198,7 @@ inline std::optional<StraightLineTrace> build_checked_straight_line_trace(
                 return false;
             case Expression::Kind::Negate:
             case Expression::Kind::LogicalNot:
-                return expr.left && self(self, *expr.left,
+                return expr.left && !expr.right && self(self, *expr.left,
                     phase, ordinal, node, depth + 1);
             // Eager scalar operators only. Lazy and/or/conditional, calls,
             // borrowing, sharing, destructuring, arrays and sum operations
@@ -245,6 +250,9 @@ inline std::optional<StraightLineTrace> build_checked_straight_line_trace(
         if (!stmt.expression ||
                 (stmt.kind != Statement::Kind::FieldWrite &&
                  stmt.kind != Statement::Kind::ScalarWrite) ||
+                stmt.branch_local || stmt.loop_step ||
+                stmt.array_commit_length || !stmt.array_commit_values.empty() ||
+                stmt.condition || stmt.condition_lhs || stmt.condition_rhs ||
                 !stmt.then_statements.empty() || !stmt.else_statements.empty())
             return std::nullopt;
         const auto node = stmt.compiler_source_node_id;
