@@ -2,4 +2,8 @@
 # No repositories are approved by default.
 # Changes must be reviewed by maintainers and security owners on a protected branch.
 # Format: one exact owner/repo per uncommented line, no whitespace or wildcards.
-streempilot-test/browser-studio-e2e
+# No active destination: streempilot-test/browser-studio-e2e is NOT
+# authorized until source main is protected, incident #1150 and
+# atomic rollback issue #1154 are independently disposed, the
+# destination's immutable numeric repo ID/workflow/test plan is
+# authenticated, and the security owner approves the exact export.
