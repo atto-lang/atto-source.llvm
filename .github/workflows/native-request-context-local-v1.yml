@@ -123,6 +123,46 @@ jobs:
             grep -Fq 'HANDOFF_REGISTRY_CASE_FAIL 14_unattached_B_redeem_fail_closed' \
               "$tmp/handoff-mutant.log"
             printf 'HANDOFF_DERIVED_ADMISSION_MUTATION_DETECTED compiler=%s\n' "$CXX"
+            # Mutation A: suppress CONTROL-plane STOP ticket cleanup.
+            # A valid native run MUST reject it at named case 36.
+            hook=src/main/cpp/oreslang/runtime/NativeRequestLifecycleRegistryV1.hpp
+            test "$(grep -Fc '(*hook)(selected->actor);' "$hook")" = 1
+            mkdir -p "$tmp/no-stop-hook/oreslang/runtime"
+            sed 's/(\*hook)(selected->actor);/(void)hook;/g' \
+              "$hook" > "$tmp/no-stop-hook/oreslang/runtime/NativeRequestLifecycleRegistryV1.hpp"
+            "$CXX" -std=c++17 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror -pthread \
+              -I"$tmp/no-stop-hook" -Isrc/main/cpp \
+              tests/native_request_context_handoff_v1_test.cpp \
+              "$tmp/scheduler.o" -o "$tmp/no-stop-hook-mutant"
+            set +e
+            timeout 90s "$tmp/no-stop-hook-mutant" > "$tmp/no-stop-hook.log" 2>&1
+            mutation_status=$?
+            set -e
+            test "$mutation_status" -ne 0
+            grep -Fq 'HANDOFF_REGISTRY_CASE_FAIL 36_pending_B_ticket_auto_reclaimed' \
+              "$tmp/no-stop-hook.log"
+            printf 'HANDOFF_PENDING_REVOKE_MUTATION_DETECTED compiler=%s\n' "$CXX"
+
+            # Mutation B: discard the recipient half of atomic STOP fencing.
+            # It MUST reject at named case 42 if the gate is effective.
+            test "$(grep -Fc 'ores_native_actor_scheduler_commit_if_both_live_v1(' "$header")" = 1
+            test "$(grep -Fc 'scheduler_, sender, recipient,' "$header")" = 1
+            mkdir -p "$tmp/sender-only/oreslang/runtime"
+            sed -e 's/ores_native_actor_scheduler_commit_if_both_live_v1(/ores_native_actor_scheduler_commit_if_live_v1(/g' \
+                -e 's/scheduler_, sender, recipient,/scheduler_, sender,/g' \
+                "$header" > "$tmp/sender-only/oreslang/runtime/RequestContextHandoffV1.hpp"
+            "$CXX" -std=c++17 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror -pthread \
+              -I"$tmp/sender-only" -Isrc/main/cpp \
+              tests/native_request_context_handoff_v1_test.cpp \
+              "$tmp/scheduler.o" -o "$tmp/sender-only-mutant"
+            set +e
+            timeout 90s "$tmp/sender-only-mutant" > "$tmp/sender-only.log" 2>&1
+            mutation_status=$?
+            set -e
+            test "$mutation_status" -ne 0
+            grep -Fq 'HANDOFF_REGISTRY_CASE_FAIL 42_stopped_B_cannot_receive_new_ticket' \
+              "$tmp/sender-only.log"
+            printf 'HANDOFF_TWO_ACTOR_STOP_MUTATION_DETECTED compiler=%s\n' "$CXX"
           fi
           "$CXX" -std=c++17 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
             -Isrc/main/cpp tests/native_request_actor_lifecycle_guard_v1_test.cpp \
