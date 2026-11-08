@@ -591,7 +591,7 @@ cleanup:
     atomic_fetch_add_explicit(&actor->frame_vm_non_tail_calls,
         calls, memory_order_relaxed);
     /* One VM owns this actor turn. Peak is max, not an additive charge. */
-    uint64_t old_peak = atomic_load_explicit(
+    uint_fast64_t old_peak = atomic_load_explicit(
         &actor->frame_vm_peak_frames, memory_order_relaxed);
     while (old_peak < peak_frames &&
            !atomic_compare_exchange_weak_explicit(
