@@ -1,0 +1,243 @@
+#pragma once
+
+// OwnershipDataflowV1 is a bounded, conservative CFG verifier. It performs
+// no allocation at runtime and is intended for compiler-time use only.
+// Unknown exits and disagreeing join states fail closed; no tracing-GC or
+// implicit ownership repair is synthesized to hide an invalid program.
+#include <cstddef>
+#include <cstdint>
+#include <deque>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace oreslang {
+
+enum class OwnershipV1OpKind : std::uint8_t {
+    Create,
+    Use,
+    BorrowShared,
+    BorrowMutable,
+    EndBorrowShared,
+    EndBorrowMutable,
+    Take,
+    Drop,
+    ExitNormal,
+    ExitExceptional,
+    ExitSuspend,
+    ExitCancel
+};
+
+struct OwnershipV1Op {
+    OwnershipV1OpKind kind;
+    std::size_t owner = 0;
+};
+
+struct OwnershipV1Block {
+    std::vector<OwnershipV1Op> operations;
+    std::vector<std::size_t> successors;
+};
+
+struct OwnershipV1Graph {
+    std::vector<std::string> owners;
+    std::vector<OwnershipV1Block> blocks;
+    std::size_t entry = 0;
+};
+
+struct OwnershipV1ExitPlan {
+    std::size_t block = 0;
+    std::vector<std::size_t> cleanup_reverse_order;
+};
+
+struct OwnershipV1Result {
+    std::vector<OwnershipV1ExitPlan> normal_exits;
+    std::size_t reachable_blocks = 0;
+    std::size_t analyzed_edges = 0;
+};
+
+class OwnershipDataflowV1 final {
+public:
+    static constexpr std::size_t MaxOwners = 64;
+    static constexpr std::size_t MaxBlocks = 4096;
+    static constexpr std::size_t MaxEdges = 16384;
+    static constexpr std::size_t MaxOperationsPerBlock = 1024;
+    static constexpr std::size_t MaxBorrowsPerOwner = 65535;
+
+    static OwnershipV1Result analyze(const OwnershipV1Graph& graph) {
+        if (graph.owners.empty() || graph.owners.size() > MaxOwners)
+            fail("owner count outside bounded analysis limit");
+        if (graph.blocks.empty() || graph.blocks.size() > MaxBlocks ||
+            graph.entry >= graph.blocks.size())
+            fail("invalid or unbounded CFG");
+        for (std::size_t i = 0; i < graph.owners.size(); ++i) {
+            if (graph.owners[i].empty()) fail("empty owner identity");
+            for (std::size_t j = 0; j < i; ++j)
+                if (graph.owners[i] == graph.owners[j])
+                    fail("duplicate owner identity");
+        }
+
+        std::size_t edge_count = 0;
+        for (const auto& block : graph.blocks) {
+            if (block.operations.size() > MaxOperationsPerBlock)
+                fail("operation budget exceeded");
+            edge_count += block.successors.size();
+            if (edge_count > MaxEdges) fail("edge budget exceeded");
+            for (const auto next : block.successors)
+                if (next >= graph.blocks.size()) fail("invalid CFG successor");
+        }
+
+        State initial(graph.owners.size());
+        std::vector<bool> reached(graph.blocks.size(), false);
+        std::vector<State> incoming(graph.blocks.size());
+        std::deque<std::size_t> work;
+        reached[graph.entry] = true;
+        incoming[graph.entry] = initial;
+        work.push_back(graph.entry);
+        std::vector<bool> processed(graph.blocks.size(), false);
+        OwnershipV1Result result;
+        std::vector<bool> exit_seen(graph.blocks.size(), false);
+
+        while (!work.empty()) {
+            const auto index = work.front();
+            work.pop_front();
+            const auto& block = graph.blocks[index];
+            State state = incoming[index];
+            processed[index] = true;
+            ++result.reachable_blocks;
+
+            bool has_exit = false;
+            for (std::size_t op_index = 0; op_index < block.operations.size(); ++op_index) {
+                const auto& op = block.operations[op_index];
+                if (op.kind == OwnershipV1OpKind::ExitNormal ||
+                    op.kind == OwnershipV1OpKind::ExitExceptional ||
+                    op.kind == OwnershipV1OpKind::ExitSuspend ||
+                    op.kind == OwnershipV1OpKind::ExitCancel) {
+                    if (op_index + 1 != block.operations.size())
+                        fail("exit operation must terminate its basic block");
+                    if (!block.successors.empty())
+                        fail("exit block must not have successors");
+                    if (op.kind != OwnershipV1OpKind::ExitNormal)
+                        fail("exceptional, suspension and cancellation exits are not admitted yet");
+                    if (exit_seen[index]) fail("duplicate exit processing");
+                    exit_seen[index] = true;
+                    OwnershipV1ExitPlan plan;
+                    plan.block = index;
+                    for (std::size_t owner = state.size(); owner > 0; --owner) {
+                        const auto& item = state[owner - 1];
+                        if (item.shared_borrows || item.mutable_borrow)
+                            fail("normal exit with outstanding borrow");
+                        if (item.state == OwnerState::Owned)
+                            plan.cleanup_reverse_order.push_back(owner - 1);
+                    }
+                    result.normal_exits.push_back(std::move(plan));
+                    has_exit = true;
+                    break;
+                }
+                apply(op, state, graph.owners.size());
+            }
+            if (has_exit) continue;
+            if (block.successors.empty())
+                fail("reachable CFG block has no explicit exit");
+            for (const auto successor : block.successors) {
+                ++result.analyzed_edges;
+                if (!reached[successor]) {
+                    reached[successor] = true;
+                    incoming[successor] = state;
+                    work.push_back(successor);
+                } else if (!(incoming[successor] == state)) {
+                    // Conservative SSA-style join: the owner and borrow state
+                    // must be identical on all incoming paths. A future PHI/
+                    // flag-sensitive analysis may relax this with proofs.
+                    fail("ownership states disagree at CFG join");
+                }
+            }
+        }
+        if (result.normal_exits.empty()) fail("CFG has no reachable normal exit");
+        (void)processed;
+        return result;
+    }
+
+private:
+    enum class OwnerState : std::uint8_t { Uninitialized, Owned, Moved, Destroyed };
+    struct Owner {
+        OwnerState state = OwnerState::Uninitialized;
+        std::uint32_t shared_borrows = 0;
+        bool mutable_borrow = false;
+        bool operator==(const Owner& other) const noexcept {
+            return state == other.state && shared_borrows == other.shared_borrows &&
+                   mutable_borrow == other.mutable_borrow;
+        }
+    };
+    using State = std::vector<Owner>;
+
+    [[noreturn]] static void fail(const char* message) {
+        throw std::runtime_error(std::string("OwnershipDataflowV1: ") + message);
+    }
+
+    static Owner& get(State& state, std::size_t owner, std::size_t count) {
+        if (owner >= count) fail("operation references unknown owner");
+        return state[owner];
+    }
+
+    static void require_owned(const Owner& owner) {
+        if (owner.state != OwnerState::Owned)
+            fail("use requires a live owned value");
+    }
+
+    static void apply(const OwnershipV1Op& op, State& state, std::size_t count) {
+        Owner& owner = get(state, op.owner, count);
+        switch (op.kind) {
+            case OwnershipV1OpKind::Create:
+                if (owner.state != OwnerState::Uninitialized)
+                    fail("create on initialized owner");
+                owner.state = OwnerState::Owned;
+                break;
+            case OwnershipV1OpKind::Use:
+                require_owned(owner);
+                if (owner.mutable_borrow) fail("use conflicts with mutable borrow");
+                break;
+            case OwnershipV1OpKind::BorrowShared:
+                require_owned(owner);
+                if (owner.mutable_borrow || owner.shared_borrows == MaxBorrowsPerOwner)
+                    fail("shared borrow conflicts or exceeds quota");
+                ++owner.shared_borrows;
+                break;
+            case OwnershipV1OpKind::BorrowMutable:
+                require_owned(owner);
+                if (owner.mutable_borrow || owner.shared_borrows)
+                    fail("mutable borrow requires exclusive access");
+                owner.mutable_borrow = true;
+                break;
+            case OwnershipV1OpKind::EndBorrowShared:
+                if (owner.state != OwnerState::Owned || owner.shared_borrows == 0)
+                    fail("shared borrow end without matching borrow");
+                --owner.shared_borrows;
+                break;
+            case OwnershipV1OpKind::EndBorrowMutable:
+                if (owner.state != OwnerState::Owned || !owner.mutable_borrow)
+                    fail("mutable borrow end without matching borrow");
+                owner.mutable_borrow = false;
+                break;
+            case OwnershipV1OpKind::Take:
+                require_owned(owner);
+                if (owner.shared_borrows || owner.mutable_borrow)
+                    fail("take while borrow is outstanding");
+                owner.state = OwnerState::Moved;
+                break;
+            case OwnershipV1OpKind::Drop:
+                require_owned(owner);
+                if (owner.shared_borrows || owner.mutable_borrow)
+                    fail("drop while borrow is outstanding");
+                owner.state = OwnerState::Destroyed;
+                break;
+            case OwnershipV1OpKind::ExitNormal:
+            case OwnershipV1OpKind::ExitExceptional:
+            case OwnershipV1OpKind::ExitSuspend:
+            case OwnershipV1OpKind::ExitCancel:
+                fail("exit must be handled by CFG walker");
+        }
+    }
+};
+
+} // namespace oreslang
