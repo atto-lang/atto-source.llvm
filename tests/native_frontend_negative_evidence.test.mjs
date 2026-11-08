@@ -43,7 +43,8 @@ export function assertNativeNegative(result, diagnostic) {
 }
 export function requireBuildIdentity(env) {
   if (!isAbsolute(env.ORESLANG_LLVMC||'') ||
-      !hex(env.ATTO_EXPECTED_LLVM_HEAD,40)) {
+      !hex(env.ATTO_EXPECTED_LLVM_HEAD,40) ||
+      !hex(env.ATTO_EXPECTED_LLVM_COMPILER_SHA256,64)) {
     throw Error('NOT_EXECUTED: absolute native compiler and exact LLVM head required');
   }
   return env;
@@ -85,11 +86,14 @@ test('rejects frontend success, crash, parser-only error, and leaked IR (HOST ON
 test('missing or relative compiler identity cannot substitute for native execution (HOST ONLY)',()=>{
   assert.throws(()=>requireBuildIdentity({}),/NOT_EXECUTED/);
   assert.throws(()=>requireBuildIdentity({ORESLANG_LLVMC:'./compiler',
-    ATTO_EXPECTED_LLVM_HEAD:'a'.repeat(40)}),/NOT_EXECUTED/);
+    ATTO_EXPECTED_LLVM_HEAD:'a'.repeat(40),
+    ATTO_EXPECTED_LLVM_COMPILER_SHA256:'c'.repeat(64)}),/NOT_EXECUTED/);
   assert.throws(()=>requireBuildIdentity({ORESLANG_LLVMC:'/tmp/compiler',
-    ATTO_EXPECTED_LLVM_HEAD:'A'.repeat(40)}),/NOT_EXECUTED/);
+    ATTO_EXPECTED_LLVM_HEAD:'A'.repeat(40),
+    ATTO_EXPECTED_LLVM_COMPILER_SHA256:'c'.repeat(64)}),/NOT_EXECUTED/);
   assert.doesNotThrow(()=>requireBuildIdentity({ORESLANG_LLVMC:'/tmp/compiler',
-    ATTO_EXPECTED_LLVM_HEAD:'a'.repeat(40)}));
+    ATTO_EXPECTED_LLVM_HEAD:'a'.repeat(40),
+    ATTO_EXPECTED_LLVM_COMPILER_SHA256:'c'.repeat(64)}));
 });
 const demand=process.env.ATTO_REQUIRE_NATIVE_LLVM_FRONTEND ?? '0';
 if(!['0','1'].includes(demand))throw Error('ATTO_REQUIRE_NATIVE_LLVM_FRONTEND must be 0 or 1');
@@ -104,6 +108,8 @@ test('production compiler directly rejects eight invalid .atto sources before IR
   assert.equal(head.stdout.trim(),env.ATTO_EXPECTED_LLVM_HEAD,
     'compiler source is not exact CI checkout');
   const compilerBytes=readCompiler(env.ORESLANG_LLVMC);
+  assert.equal(sha256(compilerBytes),env.ATTO_EXPECTED_LLVM_COMPILER_SHA256,
+    'compiled executable bytes differ from expected digest');
   const dir=mkdtempSync(join(tmpdir(),'atto-llvm-negative-'));
   try {
     const compiler=join(dir,'oreslang-llvmc');
