@@ -61,6 +61,57 @@ cmake --build build-llvm --target oreslang-llvmc \
   oreslang-native-scalar-call-verifier-test
 ctest --test-dir build-llvm --output-on-failure \
   -R '^(native_metered_cfg_cycles_fail_closed|native_scalar_guest_calls_fail_closed|native_reduction_quantum_watchdog_host_only|native_rt_scalar_frame_aot_two_tasks)
+
+The native frame AOT Python CTest compiles **generated** LLVM IR with Clang
+`-O0`, `-O2`, `-O3`, then runs the C11 harness. Require terminal logical
+fuel exhaustion across repeated 127-step carrier handoffs, zero-fuel calls,
+exact-budget successful completion, 32 post-exhaustion replays, stale/invalid
+frame traps, and healthy peer progress. Report individual actual executable
+results, not merely a successful parse or an unrelated host test.
+
+For a private-runner mirror, retain the original source PR head SHA and
+verify all source tree blobs against that head before using the results as
+`EXACT_HEAD_PASS`. A stale carrier `CMakeLists.txt` or partial source copy
+is **not** sufficient provenance. Do not mark skipped/pending/failed-to-start
+jobs as successful.
+
+## Portable IR scanner verification
+
+The emitted IR scanner rejects missing/extra v1 frame functions, imports
+other than `llvm.trap`, and unverified direct/indirect/inline-assembly/
+invoke/callbr transfers. CTest runs the negative fixtures normally and with
+`PYTHONOPTIMIZE=1`. The full scalar AOT harness aborts if Python optimization
+would disable its legacy end-to-end assertions. These are *scanner* proofs,
+not compiled guest execution proofs.
+
+## Evidence and release status
+
+- 2026-11-08 UTC: the portable CFG verifier source and test are Git blobs
+  `98dcd686f4df7b7e8e11906d1a74da69b1a0492e` and
+  `2ee535e649ad423611d9778e82be3b9430909678`. Local GCC and Clang
+  Release/NDEBUG tests **PASSED**; GCC ASan/UBSan also **PASSED**. The tests
+  include exhaustive 3-node graphs, malformed CFGs and resource ceilings.
+- LLVM-backed call verifier source and test Git blobs are
+  `0f6359bec88447aab7d1537400384440a926d7b7` and
+  `2a78c98f0f4492f8b45f4711fe98496f18db65bc`.
+  **LLVM-backed negative CTest NOT_EXECUTED**: local LLVM C++ SDK is absent.
+- Exact-head LLVM AOT O0/O2/O3 guest execution **NOT_EXECUTED**. Source Actions
+  jobs fail without usable executed steps. Do not treat admission failures,
+  metadata-only jobs, pending or skipped jobs as successful evidence.
+- The accessible private `numerics-atto/mirror-oreslang-source.llvm` default
+  branch has a different `CMakeLists.txt` blob from source `main`. It cannot
+  be used as exact-head evidence without full-tree mirroring and independent
+  SHA verification.
+
+- Current portable IR scanner source/test Git blobs:
+  `f0c7205656926f87717c4ac5d45734600e25e19d` and
+  `1a4e1f3d25b193093c4ecfbb1db8e05c71eef2ff`.
+  Local Python normal and `PYTHONOPTIMIZE=1` negative suites **PASSED**;
+  AOT harness `-O` fail-closed guard **PASSED**. No full LLVM guest was run.
+
+**Do not merge this PR or enable untrusted general source-loop execution
+until the remaining gates are green.**
+
 ```
 
 The native frame AOT Python CTest compiles **generated** LLVM IR with Clang
