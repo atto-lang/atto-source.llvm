@@ -130,5 +130,13 @@ int main() {
     task.result->kind = Expression::Kind::Add;
     assert(denied([&] { admit_source_task_i64(task, 0); }));
     assert(admit_source_task_i64(task, 39) == fingerprint);
+
+    // A late scalar/typecheck error after ownership publication must revoke
+    // the executable proof, including its AST identity, not merely the bit.
+    oreslang::types::revoke_source_task_i64(task);
+    assert(!task.ownership_admitted);
+    assert(task.ownership_authority_fingerprint == 0);
+    assert(task.ownership_boundary_identity == nullptr);
+    assert(denied([&] { require_source_task_i64(task); }));
     return 0;
 }
