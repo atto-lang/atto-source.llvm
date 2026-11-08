@@ -978,8 +978,11 @@ if(BUILD_TESTING)
     # This isolated AOT source-to-native frame test does not relax the nine
     # default compiler-negative RT admission contracts.
     if(ORE_CLANG)
+        # Disabling Python asserts must NOT erase source admission or
+        # compiled-native negative mutation gates. This script uses explicit
+        # runtime checks even under -O, and guest clang uses -O2 -DNDEBUG.
         add_test(NAME native_rt_scalar_frame_aot_two_tasks
-            COMMAND "${Python3_EXECUTABLE}"
+            COMMAND "${Python3_EXECUTABLE}" -O
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_step_aot.py"
                 --compiler "$<TARGET_FILE:oreslang-llvmc>"
                 --clang "${ORE_CLANG}"
