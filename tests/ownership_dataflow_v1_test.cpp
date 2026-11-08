@@ -210,6 +210,22 @@ static bool rejects_read_during_mutable_borrow() {
         op(OwnershipV1OpKind::ExitNormal)};
     return expect_reject("read via owner during mutable borrow",std::move(g));
 }
+static bool acquisition_history_survives_move_and_drop() {
+    auto g=graph(4);
+    g.blocks[0].operations={
+        op(OwnershipV1OpKind::Create,0),
+        op(OwnershipV1OpKind::Create,1),
+        op(OwnershipV1OpKind::Take,0,2),
+        op(OwnershipV1OpKind::Drop,1),
+        op(OwnershipV1OpKind::Create,3),
+        op(OwnershipV1OpKind::ExitNormal)};
+    auto r=OwnershipDataflowV1::analyze(g);
+    CHECK(r.normal_exits.size()==1);
+    CHECK(r.normal_exits[0].cleanup_reverse_order.size()==2);
+    CHECK(r.normal_exits[0].cleanup_reverse_order[0]==3);
+    CHECK(r.normal_exits[0].cleanup_reverse_order[1]==2);
+    return true;
+}
 static bool rejects_end_borrow_without_loan() {
     auto g=graph(1);
     g.blocks[0].operations={op(OwnershipV1OpKind::Create),
@@ -241,10 +257,11 @@ int main() {
       rejects_mutation_during_shared_borrow() &&
       cleanup_uses_acquisition_not_declaration_order() &&
       rejects_different_acquisition_order_at_join() &&
+      acquisition_history_survives_move_and_drop() &&
       rejects_end_borrow_without_loan() && rejects_exit_with_owner_metadata() &&
       rejects_stray_transfer_target() &&
       rejects_read_during_mutable_borrow();
     if (!ok) return 1;
-    std::puts("OWNERSHIP_DATAFLOW_V1|positive=7|negative=21|result=PASS");
+    std::puts("OWNERSHIP_DATAFLOW_V1|positive=8|negative=21|result=PASS");
     return 0;
 }
