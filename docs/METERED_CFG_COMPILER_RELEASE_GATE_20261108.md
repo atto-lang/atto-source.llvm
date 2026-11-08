@@ -35,6 +35,53 @@ actor stacks, critical/borrow scopes, inter-tenant isolation, or compiler
 optimizations after module emission. Those paths must remain separately
 gated until a real guest execution / continuation correctness proof exists.
 
+## Exact scope of frame integrity, untrusted tenant isolation
+
+The v1 scalar continuation uses a **32-byte caller-owned native frame**.
+A *trusted* carrier must zero-initialize it, retain exclusive ownership
+for its entire lifetime, execute at most one step/cancel/result at a time,
+and never expose its pointer or writable mapping to untrusted guest code.
+
+The compiler now detects *malformed* frames before normal step/cancel/result:
+nonaligned pointers (8-byte alignment), counter outside the admitted
+source-loop bounds, lifetime fuel above the maximum, forged DONE with
+counter below the upper bound, forged EXHAUSTED with nonzero fuel or
+completed counter, and nonpristine reinitialization. The C11 native
+harness exercises **27 fatal-trap scenarios**. A corrupt pointer can still
+reference an invalid allocation; the caller must supply at least 32 bytes
+of valid accessible memory. These checks are defense in depth for a
+trusted carrier, not an authorization or memory-safety guarantee.
+
+**A guest capable of arbitrary writes to the full native frame can still
+zero all 32 bytes and call init again, or forge an in-range counter and
+fuel value.** No in-frame magic or redundant checksum protects against
+that attacker. A true untrusted tenant must use a host-resident, opaque
+capability handle / quota ledger, with controlled revocation and ownership
+checks, or memory isolation enforced outside the guest's writable address
+space. A per-actor heap or scheduler pool alone is insufficient.
+
+Until that broker/protection-domain mechanism and an executed inter-tenant
+corruption test exist, **untrusted-tenant execution on this v1 ABI is
+NOT_SUPPORTED and NOT_CERTIFIED**. Do not promote this experimental scalar
+continuation as an untrusted-tenant runtime. A compiled guest AOT test
+proves bounded execution for a trusted host-created frame only.
+
+## Executed local evidence versus required hosted evidence
+
+- Exact individually SHA-verified portable CFG files tested with GCC/Clang
+  C++17 Release and GCC/Clang ASan+UBSan: **PASS**.
+- New LLVM source changes (frame alignment, pristine init, state range
+  checks, named struct layout) and all 27 native trap scenarios:
+  **NOT_EXECUTED** against the generated guest. They need the LLVM SDK
+  and a full compiler run at `-O0`, `-O2`, `-O3`.
+- This container has Clang 17 but no `llvm-config` or LLVM development
+  headers; attempts to refresh the Debian package index could not
+  resolve the package host. Do not confuse installed `libLLVM19`
+  runtime libraries with a buildable LLVM C++ SDK.
+- Source GitHub Actions runner admission has repeatedly failed before
+  job steps were allocated. Obtain a real nonzero-step exact-tree private
+  runner receipt before considering approval/merge.
+
 ## Reproduce the standalone verifier without LLVM libraries
 
 ```sh
