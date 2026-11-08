@@ -62,7 +62,7 @@ jobs:
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.h)" = "6052cc8d1d219564da12b8a8f7a17b9f362da27b"
           test "$(git hash-object src/main/cpp/oreslang/runtime/TaskCancellation.hpp)" = "7eafa420e92ba10e552dade1846f3862cb79aec7"
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextHandoffV1.hpp)" = "8f92ea1e39ebbecd55dad028c5f0ed1bb13ff15c"
-          test "$(git hash-object tests/native_request_context_handoff_v1_test.cpp)" = "26158acf36a3067f87ae2c8a9ecce6fd2eec5e53"
+          test "$(git hash-object tests/native_request_context_handoff_v1_test.cpp)" = "f1547c8eba2aa348b2c74ea0b40ae2a7eeb9e26b"
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalStopGroupV1.hpp)" = "eb888ee35cefb09710723faa50ac23c47e8924d8"
           test "$(git hash-object tests/native_request_stop_cancel_v1_test.cpp)" = "d41874ea2adb7d69c47a855ae4f1a7cce51ee775"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestDataMailGateV1.hpp)" = "6affba5e1b021bf9f4e5b54584241d873f245451"
@@ -102,8 +102,8 @@ jobs:
             -Isrc/main/cpp tests/native_request_context_handoff_v1_test.cpp \
             "$tmp/scheduler.o" -o "$tmp/request-handoff"
           "$tmp/request-handoff" | tee "$tmp/request-handoff-registry.log"
-          test "$(grep -c '^HANDOFF_REGISTRY_CASE_PASS ' "$tmp/request-handoff-registry.log")" = "75"
-          grep -qx 'HANDOFF_REGISTRY_75_HOST_CASES_PASS' "$tmp/request-handoff-registry.log"
+          test "$(grep -c '^HANDOFF_REGISTRY_CASE_PASS ' "$tmp/request-handoff-registry.log")" = "80"
+          grep -qx 'HANDOFF_REGISTRY_80_HOST_CASES_PASS' "$tmp/request-handoff-registry.log"
           grep -qx 'REQUEST_CONTEXT_HANDOFF_V1_ALL_PASS' "$tmp/request-handoff-registry.log"
           # Negative mutation: bypass derived registration. An unattached
           # recipient must no longer be rejectable; the regression MUST fail.
