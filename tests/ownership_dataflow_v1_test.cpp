@@ -155,6 +155,37 @@ static bool rejects_unbalanced_borrow() {
         op(OwnershipV1OpKind::BorrowShared),op(OwnershipV1OpKind::ExitNormal)};
     return expect_reject("unbalanced shared borrow",std::move(g));
 }
+static bool cleanup_uses_acquisition_not_declaration_order() {
+    auto g=graph(3);
+    g.blocks[0].operations={op(OwnershipV1OpKind::Create,2),
+        op(OwnershipV1OpKind::Create,0),op(OwnershipV1OpKind::Create,1),
+        op(OwnershipV1OpKind::ExitNormal)};
+    auto r=OwnershipDataflowV1::analyze(g);
+    CHECK(r.normal_exits[0].cleanup_reverse_order.size()==3);
+    CHECK(r.normal_exits[0].cleanup_reverse_order[0]==1);
+    CHECK(r.normal_exits[0].cleanup_reverse_order[1]==0);
+    CHECK(r.normal_exits[0].cleanup_reverse_order[2]==2);
+    return true;
+}
+static bool rejects_different_acquisition_order_at_join() {
+    auto g=graph(2,4);
+    g.blocks[0].successors={1,2};
+    g.blocks[1].operations={op(OwnershipV1OpKind::Create,0),
+        op(OwnershipV1OpKind::Create,1)};
+    g.blocks[1].successors={3};
+    g.blocks[2].operations={op(OwnershipV1OpKind::Create,1),
+        op(OwnershipV1OpKind::Create,0)};
+    g.blocks[2].successors={3};
+    g.blocks[3].operations={op(OwnershipV1OpKind::ExitNormal)};
+    return expect_reject("different acquisition order at join",std::move(g));
+}
+static bool rejects_end_borrow_without_loan() {
+    auto g=graph(1);
+    g.blocks[0].operations={op(OwnershipV1OpKind::Create),
+        op(OwnershipV1OpKind::EndBorrowShared),
+        op(OwnershipV1OpKind::ExitNormal)};
+    return expect_reject("end missing shared loan",std::move(g));
+}
 static bool rejects_unbounded_cycle() {
     auto g=graph(1,3);
     g.blocks[0].operations={op(OwnershipV1OpKind::Create)};
@@ -175,8 +206,11 @@ int main() {
       rejects_take_without_destination() && rejects_take_into_live_destination() &&
       rejects_use_before_create() && rejects_unknown_operation() &&
       rejects_unreachable_block() && rejects_unbalanced_borrow() &&
-      rejects_mutation_during_shared_borrow();
+      rejects_mutation_during_shared_borrow() &&
+      cleanup_uses_acquisition_not_declaration_order() &&
+      rejects_different_acquisition_order_at_join() &&
+      rejects_end_borrow_without_loan();
     if (!ok) return 1;
-    std::puts("OWNERSHIP_DATAFLOW_V1|positive=5|negative=16|result=PASS");
+    std::puts("OWNERSHIP_DATAFLOW_V1|positive=6|negative=18|result=PASS");
     return 0;
 }
