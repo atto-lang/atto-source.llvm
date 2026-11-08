@@ -13,6 +13,79 @@ def run(command, **kwargs):
     return subprocess.run(command, text=True, capture_output=True, check=False,
                           timeout=60, **kwargs)
 
+
+def require_generated_loop_contract(ir):
+    """Inspect the actual opt-in compiler's pre-optimization native IR.
+
+    Only scalar .ores frames are admitted here. Backedge budget charging is
+    cheap and exact on every committed effect; costly host scheduler/clock
+    work MUST remain outside the compiled loop, not happen per iteration.
+    This structural receipt complements, never replaces, native execution.
+    """
+    marker = "define i32 @oreslang_rt_scalar_frame_step("
+    if ir.count(marker) != 1:
+        raise AssertionError("missing or duplicate compiled step symbol")
+    step = ir.split(marker, 1)[1].split("\n}", 1)[0]
+    if not step or "\n}" not in ir.split(marker, 1)[1]:
+        raise AssertionError("malformed emitted step function")
+    blocks = {}
+    current = None
+    for line in step.splitlines():
+        label = re.match(r"^([a-zA-Z][a-zA-Z0-9_.]*):", line)
+        if label:
+            current = label.group(1)
+            if current in blocks:
+                raise AssertionError("duplicate native CFG block: " + current)
+            blocks[current] = []
+        elif current is not None:
+            blocks[current].append(line)
+    needed = ("loop.check", "loop.fuel", "loop.commit", "cooperate")
+    if any(name not in blocks for name in needed):
+        raise AssertionError("missing compiler-generated bounded-loop CFG blocks")
+    commit = "\n".join(blocks["loop.commit"])
+    fuel = "\n".join(blocks["loop.fuel"])
+    hot = "\n".join(blocks[name] for name in
+                    ("loop.check", "loop.fuel", "loop.commit"))
+    # Never invoke a scheduler, watchdog, clock, allocation or host FFI from
+    # a compiled scalar backedge. The only hot work is bounded arithmetic,
+    # branch and committed frame effects.
+    if re.search(r"\b(?:call|invoke)\b", hot):
+        raise AssertionError("expensive slow path in compiler-generated loop")
+    if not re.search(r"store i64 [^\n]+", commit):
+        raise AssertionError("missing committed guest frame store")
+    if not re.search(r"%fuel\.remaining = sub i64 [^,\n]+, 1\b", commit):
+        raise AssertionError("missing exact hard-fuel decrement on backedge")
+    if "br label %loop.check" not in commit:
+        raise AssertionError("missing compiled bounded-loop backedge")
+    if "br i1 " not in fuel:
+        raise AssertionError("missing hard-fuel branch")
+    if len(re.findall(r"icmp ule i64 [^,\n]+, 512\b", step)) != 1:
+        raise AssertionError("missing exact 512-unit native admission cap")
+
+
+def prove_structural_guard_catches_mutations(ir):
+    """These are *structural* mutations, separate from executable mutants."""
+    cap = re.sub(r"icmp ule i64 ([^,\n]+), 512\b",
+                 r"icmp ule i64 \g<1>, 4096", ir, count=1)
+    missing_charge = re.sub(r"(%fuel\.remaining = sub i64 [^,\n]+), 1\b",
+                            r"\g<1>, 0", ir, count=1)
+    # A third mutation simulates accidental expensive host polling on every
+    # edge. This is deliberately not compiled; structural rejection is the
+    # evidence category, rather than falsely claiming a killed native guest.
+    injected_slow_path = ir.replace(
+        "loop.commit:", "loop.commit:\n  call void @untrusted_slow_poll()",
+        1)
+    for label, mutated in (("fuel-cap", cap),
+                           ("hard-fuel", missing_charge),
+                           ("every-edge-slow-poll", injected_slow_path)):
+        if mutated == ir:
+            raise AssertionError("structural mutation did not change IR: " + label)
+        try:
+            require_generated_loop_contract(mutated)
+        except AssertionError:
+            continue
+        raise AssertionError("IR structural guard admitted mutation: " + label)
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--compiler", required=True)
@@ -60,6 +133,8 @@ def main():
             raise AssertionError("native AOT assertion failed")
         if not ("define i64 @oreslang_rt_scalar_frame_result" in accepted.stdout):
             raise AssertionError("native AOT assertion failed")
+        require_generated_loop_contract(accepted.stdout)
+        prove_structural_guard_catches_mutations(accepted.stdout)
         llvm_ir = out / "guest.ll"
         llvm_ir.write_text(accepted.stdout)
         exe = out / "run-guest"
