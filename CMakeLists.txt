@@ -3506,6 +3506,18 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_region_v1_offsets_generation_drop
         PROPERTIES TIMEOUT 30)
 
+    # Real checked .atto source -> validated LLVM function IR -> native Clang
+    # executable linked with ActorRegionV1 and the production ActorArena.c.
+    # This is a narrow compiler-backed guest slice; not full general AOT.
+    add_test(NAME native_actor_region_v1_compiled_guest_aot
+        COMMAND "${CMAKE_COMMAND}"
+            "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+            "-DBUILD=${CMAKE_CURRENT_BINARY_DIR}"
+            "-DCLANG=${ORE_CLANG}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_region_v1_compiled_guest.cmake")
+    set_tests_properties(native_actor_region_v1_compiled_guest_aot
+        PROPERTIES TIMEOUT 240)
+
     # Trusted host-only shared-region capability and read/write lease prototype.
     add_executable(oreslang-native-shared-domain-arena-test
         tests/native_shared_domain_arena_test.cpp)
