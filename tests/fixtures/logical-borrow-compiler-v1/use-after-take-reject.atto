@@ -1,5 +1,6 @@
-pub fnc main(): int {
+pub fnc main(): void {
   let int owner = 41;
   let int moved = rt take owner;
-  return owner;
+  stdio.stdout.write(owner);
+  return;
 }
