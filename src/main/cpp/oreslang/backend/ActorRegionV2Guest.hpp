@@ -57,6 +57,8 @@ struct ActorRegionCleanupPlanV1 {
                 throw std::runtime_error("actor-region cleanup plan: cleanup differs by exit");
         if (verified_order != cleanup_order)
             throw std::runtime_error("actor-region cleanup plan: legacy order disagrees with dataflow");
+        // The verified analysis result is authoritative for LLVM emission.
+        cleanup_order = verified_order;
     }
 };
 
