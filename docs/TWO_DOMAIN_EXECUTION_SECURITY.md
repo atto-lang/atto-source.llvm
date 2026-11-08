@@ -2,10 +2,15 @@
 
 Decision: 2026-10-12. Security audit / integration contract.
 
-> **Superseded in part, 2026-11-03.** Untrusted execution moves from one shared isolate to one
-> VM per tenant, up to 1000 in one OS process. Wherever this document fixes a single shared
-> untrusted Engine or pool, that no longer holds. The Java implementation has not changed yet.
-> See [TENANT_VM_IN_PROCESS_V1.md](TENANT_VM_IN_PROCESS_V1.md).
+> **Experimental LLVM topology; NOT a security-policy supersession (2026-11-07).**
+> [TENANT_VM_IN_PROCESS_V1.md](TENANT_VM_IN_PROCESS_V1.md) explores up to 1000 tenant
+> VMs sharing one OS process. Its native loader and cage design are not a proved
+> containment boundary for hostile native code: the guest ABI expressly states
+> that its memory-addressing rule is not enforced by the ABI, and a caller-supplied
+> SHA-256 only verifies byte identity, not compiler provenance or authorization.
+> Keep hostile/untrusted tenants under the separately governed process-isolated
+> execution contract until independent proof, negative tests and review establish
+> a safe alternative. The existing Java topology is not changed by this proposal.
 
 ## Topology
 
