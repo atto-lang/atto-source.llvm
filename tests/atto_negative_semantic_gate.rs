@@ -1,9 +1,13 @@
 //! Native source-compiler negative admission; distinct from native guest execution.
 //! This verifier is intentionally fail-closed: a generic parse error is NOT
 //! the intended operator, immutability or effect-modifier diagnostic.
+#[cfg(not(test))]
 use std::env;
+#[cfg(not(test))]
 use std::fs;
+#[cfg(not(test))]
 use std::path::{Path, PathBuf};
+#[cfg(not(test))]
 use std::process::{Command, Output};
 
 #[derive(Clone, Copy)]
@@ -44,6 +48,7 @@ const CASES: [Case; 8] = [
 fn is_lower_sha40(s: &str) -> bool {
     s.len() == 40 && s.bytes().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
+#[cfg(not(test))]
 fn git(root: &Path, args: &[&str]) -> Result<String, String> {
     let output = Command::new("/usr/bin/git").current_dir(root).args(args)
         .output().map_err(|e| format!("git invocation: {e}"))?;
@@ -57,6 +62,7 @@ fn matches_policy(c: &Case, stderr: &str) -> bool {
     c.policies.iter().any(|word| d.contains(word)) &&
     !d.contains("internal error") && !d.contains("stack overflow")
 }
+#[cfg(not(test))]
 fn verify_source(root: &Path, c: &Case) -> Result<PathBuf, String> {
     let path = root.join(c.path);
     if !c.path.split('/').all(|s| !s.is_empty() && s != "." && s != "..") {
@@ -80,6 +86,7 @@ fn verify_source(root: &Path, c: &Case) -> Result<PathBuf, String> {
     }
     Ok(path)
 }
+#[cfg(not(test))]
 fn run() -> Result<(), String> {
     let root = env::current_dir().map_err(|e| format!("cwd: {e}"))?;
     let expected = env::var("ATTO_NEGATIVE_EXPECTED_HEAD")
