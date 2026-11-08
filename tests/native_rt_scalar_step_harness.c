@@ -170,6 +170,28 @@ static void require_cancelled_peer_is_isolated(void) {
     free(cancel);
 }
 
+/* Real compiler-generated guest step: a short/long quantum must commit
+ * exactly its permitted number of effects. In particular, boundary 127/128
+ * and 511/512 never overrun, duplicate or erase the heap continuation. */
+static void require_batch_fuel_boundary_matrix(void) {
+    ScalarFrame *frame = calloc(1, sizeof(*frame));
+    CHECK(frame != NULL);
+    oreslang_rt_scalar_frame_init(frame);
+    static const uint64_t fuel[] = {0, 1, 126, 1, 128, 255, 1, 0, 488};
+    static const uint64_t after[] = {0, 1, 127, 128, 256, 511, 512, 512, 1000};
+    for (size_t i = 0; i < sizeof(fuel) / sizeof(fuel[0]); ++i) {
+        const int status = oreslang_rt_scalar_frame_step(frame, fuel[i]);
+        CHECK(frame->counter == after[i]);
+        CHECK(status == (after[i] == 1000 ? 0 : 1));
+        CHECK(frame->state == (after[i] == 1000 ? 2 : 1));
+    }
+    CHECK(oreslang_rt_scalar_frame_result(frame) == 1000);
+    CHECK(oreslang_rt_scalar_frame_step(frame, 0) == 0);
+    CHECK(oreslang_rt_scalar_frame_step(frame, 512) == 0);
+    CHECK(frame->counter == 1000 && frame->state == 2);
+    free(frame);
+}
+
 int main(void) {
     // Test real, independent HEAP frame ownership; no C/LLVM stack frame
     // survives an explicit guest yield. Host owns dispatch serially.
@@ -219,6 +241,7 @@ int main(void) {
     for (int scenario = 0; scenario != 10; ++scenario)
         require_guest_trap(scenario);
 #endif
+    require_batch_fuel_boundary_matrix();
     require_bounded_peer_progress();
     require_cancelled_peer_is_isolated();
     puts("SCALAR_FRAME_AOT_CANCELLED_PEER_ISOLATION_PASS");
