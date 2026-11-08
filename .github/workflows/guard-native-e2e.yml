@@ -42,7 +42,7 @@ jobs:
           test -x build/guard-native/oreslang-llvmc
           file build/guard-native/oreslang-llvmc
           sha256sum build/guard-native/oreslang-llvmc
-      - name: Execute 21 real source-compiled native guest and negative cases
+      - name: Execute 25 real source-compiled native guest and negative cases
         run: |
           set -euo pipefail
           python3 tests/guard_native_e2e.py --compiler build/guard-native/oreslang-llvmc --clang /usr/bin/clang-18
