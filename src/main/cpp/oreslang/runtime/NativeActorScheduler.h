@@ -278,6 +278,15 @@ int ores_native_actor_scheduler_commit_if_live_v1(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
     OresNativeActorBoundedCommitV1 commit, void* opaque);
 
+// Trusted-host two-incarnation commit gate for DATA-only handoff ticket
+// publication. Both sender and recipient must still be live under the SAME
+// scheduler lock, excluding STOP/retire on either side. No guest callbacks,
+// dynamic allocation, blocking or scheduler reentrancy in commit.
+int ores_native_actor_scheduler_commit_if_both_live_v1(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef sender,
+    OresNativeActorRef recipient, OresNativeActorBoundedCommitV1 commit,
+    void* opaque);
+
 // Exact-incarnation STOP/retire readback for host CONTROL reconciliation.
 // Unlike !poll_ready, 0 here also denies forged/stale handles and a live
 // actor. A true result does not by itself prove DONE or quiescence.
