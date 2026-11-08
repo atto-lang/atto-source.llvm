@@ -2,6 +2,7 @@
 #include "oreslang/types/DopLogicalAccess.hpp"
 
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 using oreslang::types::AutoTrait;
