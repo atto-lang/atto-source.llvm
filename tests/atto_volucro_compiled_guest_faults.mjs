@@ -3,13 +3,13 @@
 // wasm32 actor and Volucro's real Wasmi guest CLI. All inputs are local only.
 // This is NOT source-level exploit generation or an OS sandbox certification.
 import assert from 'node:assert/strict';
-import {readFileSync, writeFileSync, mkdtempSync, rmSync} from 'node:fs';
+import {readFileSync, writeFileSync, mkdtempSync, rmSync, statSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {dirname, isAbsolute, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
 import {mutateActorWasmExport, mutateActorWasmOutOfBounds, mutateActorWasmOutOfBoundsStore, wasmSha256} from './atto_volucro_compiled_guest_faults_lib.mjs';
-import {assertCompiledActorProfile, assertInjectedOutOfBounds, assertVmOutcome} from './atto_volucro_compiled_guest_guard.mjs';
+import {assertCompiledActorProfile, assertInjectedOutOfBounds, assertVmOutcome, MAX_ACTOR_WASM_BYTES} from './atto_volucro_compiled_guest_guard.mjs';
 
 const options = new Map();
 for(let i=2;i<process.argv.length;i+=2){
@@ -70,6 +70,9 @@ try {
     '-Wl,--no-entry','-Wl,--initial-memory=131072','-Wl,--max-memory=131072',
     '-Wl,--export=oreslang_wasm_actor_init','-Wl,--export=oreslang_wasm_actor_on_message',
     '-Wl,--export=oreslang_wasm_actor_teardown','-o',original,'-'],{input:ir});
+  const generated=statSync(original);
+  assert.ok(generated.isFile() && generated.size>0 && generated.size<=MAX_ACTOR_WASM_BYTES,
+    'compiler-generated Wasm exceeds Volucro 1 MiB admission budget');
   const baseline=readFileSync(original);
   assert.ok(WebAssembly.validate(baseline),'real compiler produced invalid wasm');
   assert.deepEqual(WebAssembly.Module.imports(new WebAssembly.Module(baseline)),[],
@@ -102,7 +105,7 @@ try {
   console.log(JSON.stringify({status:'COMPILED_WASM_MUTATION_GUEST_EXECUTED',
     evidence_scope:'actual AttoLang LLVM compiler -> Wasm mutation -> Volucro Wasmi, process recovery only',
     not_proved:['source-level malicious actor','same-VM sibling survival','OS process sandbox','native LLVM arbitrary-pointer isolation'],
-    llvm_head:llvmHead,volucro_head:volucroHead,
+    llvm_head:llvmHead,volucro_head:volucroHead,node_engine_version:process.version,
     source_sha256:wasmSha256(source),compiler_sha256:wasmSha256(readFileSync(options.get('--compiler'))),
     validated_actor_memory_pages:compiledProfile.memory,
     original_wasm_sha256:wasmSha256(baseline),missing_abi_sha256:wasmSha256(abi),oob_load_sha256:wasmSha256(fault),oob_store_sha256:wasmSha256(storeFault),
