@@ -17,6 +17,7 @@ static atomic_int malformed_processed;
 static atomic_int bounded_processed;
 static atomic_int tag_failure_processed;
 static atomic_int fuel_failure_processed;
+static atomic_int cancellation_processed;
 
 #define OP(x, y) { x, y }
 /* tail(n) = n <= 0 ? 0 : tail(n-1). Executes 100k recursive guest
@@ -112,6 +113,17 @@ static int wait_for(atomic_int* counter, int target) {
     return 0;
 }
 
+static int wait_checkpoint_entry(void) {
+    struct timespec start, now;
+    check(clock_gettime(CLOCK_MONOTONIC, &start) == 0);
+    do {
+        if (oreslang_source_actor_test_scalar_checkpoint_entered()) return 1;
+        sched_yield();
+        check(clock_gettime(CLOCK_MONOTONIC, &now) == 0);
+    } while (now.tv_sec - start.tv_sec < 10);
+    return 0;
+}
+
 static void init(OresActorI64Heap* heap, uint64_t domain, uint64_t epoch) {
     (void)heap;
     check(domain && epoch);
@@ -135,6 +147,12 @@ static int64_t quota_message(
     const int status = oreslang_source_actor_scalar_vm_execute(
         &depth_program, payload, &out);
     check(status == ORES_SCALAR_FRAME_QUOTA && out == 0);
+    /* A caught quota fault poisons the actor for the rest of its physical
+     * callback. It cannot restart an unaccounted scalar root. */
+    out = -1;
+    check(oreslang_source_actor_scalar_vm_execute(
+        &echo_program, payload, &out) == ORES_SCALAR_INVALID_FRAME
+        && out == 0);
     atomic_store_explicit(&observed_quota_error, status, memory_order_release);
     atomic_fetch_add_explicit(&quota_processed, 1, memory_order_release);
     return out;
@@ -188,6 +206,19 @@ static int64_t fuel_exhausted_message(
         && result == 0);
     atomic_fetch_add_explicit(
         &fuel_failure_processed, 1, memory_order_release);
+    return 0;
+}
+
+static int64_t cancelled_message(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
+        int64_t payload) {
+    (void)heap; (void)domain; (void)epoch; (void)payload;
+    int64_t result = -1;
+    check(oreslang_source_actor_scalar_vm_execute(
+        &infinite_program, 1, &result) == ORES_SCALAR_CANCELLED
+        && result == 0);
+    atomic_fetch_add_explicit(&cancellation_processed, 1,
+        memory_order_release);
     return 0;
 }
 
@@ -271,12 +302,30 @@ int main(void) {
     check(wait_for(&fuel_failure_processed, 1));
     oreslang_source_actor_stop(infinite);
 
+    /* Deterministic cancellation while inside the VM: pause only the
+     * *test-compiled* actor at a 256-instruction checkpoint. Healthy sibling
+     * messages still run on another carrier, then an outer STOP releases the
+     * offending actor. Production builds contain no slowpath test pause. */
+    oreslang_source_actor_test_hold_scalar_checkpoint(1);
+    void* cancelled = oreslang_source_actor_spawn(
+        init, cancelled_message, 1);
+    check(cancelled);
+    oreslang_source_actor_send(cancelled, 1);
+    check(wait_checkpoint_entry());
+    check(oreslang_source_actor_test_scalar_checkpoint_count(cancelled) >= 1);
+    oreslang_source_actor_send(sibling, 14);
+    check(wait_for(&sibling_processed, 3));
+    oreslang_source_actor_request_stop(cancelled);
+    check(wait_for(&cancellation_processed, 1));
+    oreslang_source_actor_join_done(cancelled);
+    oreslang_source_actor_test_hold_scalar_checkpoint(0);
+
     /* The same sibling accepts another message after all three kinds of
      * actor-local failure: quota, malformed program, and typed tag/fuel. */
     oreslang_source_actor_send(sibling, 12);
-    check(wait_for(&sibling_processed, 3));
+    check(wait_for(&sibling_processed, 4));
     oreslang_source_actor_stop(tail);
     oreslang_source_actor_stop(sibling);
-    puts("SOURCE_ACTOR_TYPED_SCALAR_VM_PASS tail=100000 quota=64 fuel=2000000 sibling_survives=1");
+    puts("SOURCE_ACTOR_TYPED_SCALAR_VM_PASS tail=100000 quota=64 fuel=2000000 cancellation=256 sibling_survives=1");
     return 0;
 }
