@@ -85,6 +85,8 @@ struct ActorClaim {
     int fd = -1;
     std::uint32_t events = 0;
     OresNativeNioCompletion completion{};
+    bool await_bound = false;
+    OresNativeWakeTicket wake{};
 };
 
 struct HostPending {
@@ -152,6 +154,7 @@ struct VmNioBackend {
             OresNativeActorRef actor,
             int fd,
             std::uint32_t events,
+            const OresNativeWakeTicket* wake,
             OresNativeActorNioWatch* output) noexcept {
         for (std::size_t i = 0; i < claims.size(); ++i) {
             auto& claim = claims[i];
@@ -167,6 +170,8 @@ struct VmNioBackend {
             claim.events = events;
             claim.watch = {};
             claim.completion = {};
+            claim.await_bound = wake != nullptr;
+            claim.wake = wake ? *wake : OresNativeWakeTicket{};
             *output = OresNativeActorNioWatch{
                 {}, domain, actor, static_cast<std::uint32_t>(i + 1),
                 claim.generation};
@@ -273,6 +278,8 @@ struct VmNioBackend {
         OresNativeNio* reactor = nullptr;
         std::array<enum OresNativeVMDomain, kClaimCapacity> domains{};
         std::array<OresNativeActorRef, kClaimCapacity> actors{};
+        std::array<OresNativeWakeTicket, kClaimCapacity> wakes{};
+        std::array<bool, kClaimCapacity> has_wake{};
         std::size_t release_count = 0;
         {
             std::lock_guard<std::mutex> lock(gate);
@@ -287,15 +294,26 @@ struct VmNioBackend {
                 if (release_count >= actors.size()) std::abort();
                 domains[release_count] = claim.domain;
                 actors[release_count] = claim.actor;
+                has_wake[release_count] = claim.await_bound;
+                wakes[release_count] = claim.wake;
                 ++release_count;
                 free_claim_locked(claim);
             }
             for (auto& pending : host_pending) pending = HostPending{};
         }
-        for (std::size_t i = 0; i < release_count; ++i)
+        for (std::size_t i = 0; i < release_count; ++i) {
+            if (has_wake[i]) {
+                const int cancelled = ores_native_vm_actor_cancel_wake(
+                    vm, domains[i], wakes[i]);
+                const int aborted = cancelled ? 0
+                    : ores_native_vm_actor_abort_transferred_wake(
+                        vm, domains[i], wakes[i]);
+                if (!cancelled && !aborted) std::abort();
+            }
             if (!ores_native_vm_actor_resource_release(
                     vm, domains[i], actors[i]))
                 std::abort();
+        }
     }
 };
 
@@ -395,7 +413,7 @@ extern "C" int ores_native_vm_nio_try_watch_actor(
                 && !backend->fd_reserved_locked(fd)) {
             OresNativeActorNioWatch candidate{};
             ActorClaim* claim = backend->reserve_claim_locked(
-                domain, actor, fd, events, &candidate);
+                domain, actor, fd, events, nullptr, &candidate);
             if (claim) {
                 OresNativeNioWatch watch{};
                 if (ores_native_nio_try_watch(
@@ -411,6 +429,74 @@ extern "C" int ores_native_vm_nio_try_watch_actor(
         }
     }
     if (refund) {
+        if (!ores_native_vm_actor_resource_release(vm, domain, actor))
+            std::abort();
+        return 0;
+    }
+    return 1;
+}
+
+extern "C" int ores_native_vm_nio_try_watch_actor_await(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor,
+    int fd, uint32_t events,
+    uint64_t continuation_slot, uint64_t continuation_generation,
+    uint64_t code_generation, uint64_t descriptor_generation,
+    OresNativeActorNioAwait* output) {
+    if (!output || !caller_matches_actor(vm, domain, actor)) return 0;
+    *output = OresNativeActorNioAwait{};
+
+    // Reserve the scheduler wake loan before the kernel operation can suspend.
+    // This means STOP can never observe a gap between NIO ownership and the
+    // continuation that will eventually resume/fail on the actor lane.
+    OresNativeWakeTicket wake{};
+    if (!ores_native_vm_actor_reserve_wake(
+            vm, domain, actor, actor,
+            continuation_slot, continuation_generation,
+            code_generation, descriptor_generation, &wake))
+        return 0;
+
+    NioBackendLease lease(vm);
+    auto* backend = lease.get();
+    if (!backend) {
+        if (!ores_native_vm_actor_cancel_wake(vm, domain, wake))
+            std::abort();
+        return 0;
+    }
+
+    // Retain second. If STOP won after wake reservation, the wake is still in
+    // RESERVED state and can be refunded without admitting an epoll watch.
+    if (!ores_native_vm_actor_resource_retain(vm, domain, actor)) {
+        if (!ores_native_vm_actor_cancel_wake(vm, domain, wake))
+            std::abort();
+        return 0;
+    }
+
+    bool refund = true;
+    {
+        TryGate gate(backend->gate);
+        if (gate.owns_lock() && backend->raw
+                && !backend->fd_reserved_locked(fd)) {
+            OresNativeActorNioWatch candidate{};
+            ActorClaim* claim = backend->reserve_claim_locked(
+                domain, actor, fd, events, &wake, &candidate);
+            if (claim) {
+                OresNativeNioWatch watch{};
+                if (ores_native_nio_try_watch(
+                        backend->raw, fd, events, &watch)) {
+                    claim->watch = watch;
+                    candidate.watch = watch;
+                    output->watch = candidate;
+                    output->wake = wake;
+                    refund = false;
+                } else {
+                    VmNioBackend::free_claim_locked(*claim);
+                }
+            }
+        }
+    }
+    if (refund) {
+        if (!ores_native_vm_actor_cancel_wake(vm, domain, wake))
+            std::abort();
         if (!ores_native_vm_actor_resource_release(vm, domain, actor))
             std::abort();
         return 0;
@@ -476,6 +562,7 @@ extern "C" int ores_native_vm_nio_ack_actor_completion(
     if (!gate.owns_lock()) return 0;
     ActorClaim* claim = backend->match_claim_locked(completion.owner);
     if (!claim || claim->state != ClaimState::delivered
+            || claim->await_bound
             || !same_completion(claim->completion, completion.io))
         return 0;
 
@@ -487,6 +574,92 @@ extern "C" int ores_native_vm_nio_ack_actor_completion(
         return 0;
     VmNioBackend::free_claim_locked(*claim);
     return 1;
+}
+
+extern "C" OresNativeActorNioAwaitDispatchStatus
+ores_native_vm_nio_dispatch_actor_await(
+    OresNativeVM* vm, OresNativeActorNioCompletion completion) {
+    if (on_vm_actor_carrier(vm)) return ORES_NATIVE_NIO_AWAIT_INVALID;
+    NioBackendLease lease(vm);
+    auto* backend = lease.get();
+    if (!backend) return ORES_NATIVE_NIO_AWAIT_INVALID;
+
+    OresNativeWakeTicket wake{};
+    enum OresNativeVMDomain domain = ORES_NATIVE_VM_MAIN;
+    OresNativeActorRef actor{};
+    OresNativeWakeOutcome outcome = ORES_NATIVE_WAKE_FAILED;
+
+    {
+        TryGate gate(backend->gate);
+        if (!gate.owns_lock()) return ORES_NATIVE_NIO_AWAIT_INVALID;
+
+        ActorClaim* claim = backend->match_claim_locked(completion.owner);
+        if (!claim || claim->state != ClaimState::delivered
+                || !claim->await_bound
+                || !same_completion(claim->completion, completion.io))
+            return ORES_NATIVE_NIO_AWAIT_INVALID;
+
+        switch (completion.io.outcome) {
+            case ORES_NATIVE_NIO_READY:
+                outcome = ORES_NATIVE_WAKE_READY;
+                break;
+            case ORES_NATIVE_NIO_CANCELLED:
+                outcome = ORES_NATIVE_WAKE_CANCELLED;
+                break;
+            case ORES_NATIVE_NIO_STOPPED:
+                outcome = ORES_NATIVE_WAKE_FAILED;
+                break;
+            default:
+                std::abort();
+        }
+
+        wake = claim->wake;
+        domain = claim->domain;
+        actor = claim->actor;
+
+        /*
+         * TRANSFER is the irreversible physical-ownership handoff. If actor
+         * STOP won first, transfer rejects while the wake remains RESERVED:
+         * cancel it and release the NIO loan without scheduling guest code.
+         */
+        if (!ores_native_vm_actor_transfer_wake(vm, domain, wake)) {
+            if (!ores_native_vm_actor_cancel_wake(vm, domain, wake))
+                std::abort();
+            if (!ores_native_vm_actor_resource_release(vm, domain, actor))
+                std::abort();
+            VmNioBackend::free_claim_locked(*claim);
+            return ORES_NATIVE_NIO_AWAIT_PRODUCER_RETIRED;
+        }
+
+        /*
+         * A TRANSFERRED wake already blocks physical DONE and cannot lose its
+         * reserved execution credit. It is therefore safe—and necessary for
+         * same-FD continuation rearm—to release the NIO resource/FD claim now,
+         * before the wake becomes runnable. No actor callback can execute from
+         * transfer_wake itself.
+         */
+        if (!ores_native_vm_actor_resource_release(vm, domain, actor))
+            std::abort();
+        VmNioBackend::free_claim_locked(*claim);
+    }
+
+    /*
+     * Publish only after dropping the NIO claim mutex. The actor wake can run
+     * immediately after this call makes the lane runnable; at that point the
+     * prior one-shot FD claim is already gone and a continuation may rearm it.
+     */
+    const OresNativeWakePublishStatus published =
+        ores_native_vm_actor_publish_wake(vm, domain, wake, outcome);
+    if (published == ORES_NATIVE_WAKE_INVALID) {
+        // TRANSFERRED ownership is still live on INVALID. Roll it back so an
+        // internal invariant failure cannot pin actor DONE indefinitely.
+        if (!ores_native_vm_actor_abort_transferred_wake(vm, domain, wake))
+            std::abort();
+        return ORES_NATIVE_NIO_AWAIT_INVALID;
+    }
+    return published == ORES_NATIVE_WAKE_PUBLISHED
+        ? ORES_NATIVE_NIO_AWAIT_PUBLISHED
+        : ORES_NATIVE_NIO_AWAIT_PRODUCER_RETIRED;
 }
 
 extern "C" size_t ores_native_vm_nio_try_pop_batch(

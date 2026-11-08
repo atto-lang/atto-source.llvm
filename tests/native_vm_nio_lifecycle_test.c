@@ -127,6 +127,28 @@ typedef struct {
     OresNativeActorNioWatch watch;
 } OwnedActorNioProbe;
 
+typedef struct {
+    OresNativeVM* vm;
+    enum OresNativeVMDomain domain;
+    OresNativeActorRef actor;
+    int fd;
+    atomic_int active;
+    atomic_int entered;
+    atomic_int go;
+    atomic_int attempted;
+    atomic_int accepted;
+    atomic_int duplicate_rejected;
+    atomic_int wakes;
+    atomic_int wake_outcome;
+    atomic_int wake_errors;
+    atomic_int rearm_attempted;
+    atomic_int rearm_accepted;
+    OresNativeActorNioWatch rearm_watch;
+    OresNativeActorNioAwait await;
+} OwnedActorNioAwaitProbe;
+
+static int same_actor_ref(OresNativeActorRef left, OresNativeActorRef right);
+
 static void on_actor_nio_probe(void* opaque, size_t slot, uint64_t value) {
     ActorNioProbe* probe = (ActorNioProbe*)opaque;
     check(probe != NULL && probe->vm != NULL && probe->fd >= 0);
@@ -159,6 +181,97 @@ static void on_owned_actor_nio(void* opaque, size_t slot, uint64_t value) {
     if (accepted) probe->watch = watch;
     atomic_store_explicit(&probe->accepted, accepted, memory_order_release);
     atomic_store_explicit(&probe->attempted, 1, memory_order_release);
+}
+
+static int same_wake_ticket(
+        OresNativeWakeTicket left, OresNativeWakeTicket right) {
+    return same_actor_ref(left.producer, right.producer)
+        && same_actor_ref(left.target, right.target)
+        && left.slot == right.slot
+        && left.slot_generation == right.slot_generation
+        && left.continuation_slot == right.continuation_slot
+        && left.continuation_generation == right.continuation_generation
+        && left.code_generation == right.code_generation
+        && left.descriptor_generation == right.descriptor_generation;
+}
+
+static void on_owned_actor_nio_await(
+        void* opaque, size_t slot, uint64_t value) {
+    OwnedActorNioAwaitProbe* probe = (OwnedActorNioAwaitProbe*)opaque;
+    check(probe != NULL && probe->vm != NULL && probe->fd >= 0);
+    check(slot == probe->actor.actor_slot && value == UINT64_C(99));
+    check(atomic_fetch_add_explicit(
+        &probe->active, 1, memory_order_acq_rel) == 0);
+    atomic_store_explicit(&probe->entered, 1, memory_order_release);
+    while (!atomic_load_explicit(&probe->go, memory_order_acquire))
+        sched_yield();
+
+    OresNativeActorNioAwait awaiting = {0};
+    const int accepted = ores_native_vm_nio_try_watch_actor_await(
+        probe->vm, probe->domain, probe->actor,
+        probe->fd, EPOLLIN,
+        UINT64_C(101), UINT64_C(5), UINT64_C(7), UINT64_C(11),
+        &awaiting);
+    if (accepted) {
+        probe->await = awaiting;
+
+        // A second suspension on the same FD must reject and refund its
+        // speculative wake/resource loans, leaving exactly the first await.
+        OresNativeActorNioAwait duplicate = {0};
+        const int duplicate_accepted = ores_native_vm_nio_try_watch_actor_await(
+            probe->vm, probe->domain, probe->actor,
+            probe->fd, EPOLLIN,
+            UINT64_C(102), UINT64_C(6), UINT64_C(7), UINT64_C(12),
+            &duplicate);
+        atomic_store_explicit(
+            &probe->duplicate_rejected, !duplicate_accepted,
+            memory_order_release);
+    }
+    atomic_store_explicit(&probe->accepted, accepted, memory_order_release);
+    atomic_store_explicit(&probe->attempted, 1, memory_order_release);
+    check(atomic_fetch_sub_explicit(
+        &probe->active, 1, memory_order_acq_rel) == 1);
+}
+
+static void on_owned_actor_nio_wake(
+        void* opaque, size_t slot, OresNativeWakeTicket ticket,
+        OresNativeWakeOutcome outcome) {
+    OwnedActorNioAwaitProbe* probe = (OwnedActorNioAwaitProbe*)opaque;
+    int errors = 0;
+    if (slot != probe->actor.actor_slot
+            || !ores_native_vm_actor_is_current_wake(
+                probe->vm, probe->domain, ticket)
+            || !same_wake_ticket(ticket, probe->await.wake)
+            || atomic_fetch_add_explicit(
+                &probe->active, 1, memory_order_acq_rel) != 0)
+        ++errors;
+
+    OresNativeWakeTicket forged = ticket;
+    ++forged.continuation_generation;
+    if (ores_native_vm_actor_is_current_wake(
+            probe->vm, probe->domain, forged))
+        ++errors;
+
+    if (outcome == ORES_NATIVE_WAKE_READY) {
+        OresNativeActorNioWatch rearm = {0};
+        const int accepted = ores_native_vm_nio_try_watch_actor(
+            probe->vm, probe->domain, probe->actor,
+            probe->fd, EPOLLIN, &rearm);
+        if (accepted) probe->rearm_watch = rearm;
+        atomic_store_explicit(
+            &probe->rearm_accepted, accepted, memory_order_release);
+        atomic_store_explicit(
+            &probe->rearm_attempted, 1, memory_order_release);
+    }
+
+    atomic_store_explicit(
+        &probe->wake_outcome, (int)outcome, memory_order_release);
+    atomic_fetch_add_explicit(&probe->wakes, 1, memory_order_acq_rel);
+    if (errors)
+        atomic_fetch_add_explicit(
+            &probe->wake_errors, errors, memory_order_acq_rel);
+    check(atomic_fetch_sub_explicit(
+        &probe->active, 1, memory_order_acq_rel) == 1);
 }
 
 static int same_actor_ref(OresNativeActorRef left, OresNativeActorRef right) {
@@ -330,6 +443,17 @@ int main(void) {
             &probe.bare_watch_result, memory_order_acquire) == 0);
         check(ores_native_vm_nio_started(actor_vm) == 0);
 
+        // Legacy VM construction is intentionally wake-free: the new wake
+        // table is opt-in and must not silently change existing VM semantics.
+        OresNativeWakeTicket unsupported_wake = {0};
+        check(!ores_native_vm_actor_reserve_wake(
+            actor_vm, ORES_NATIVE_VM_MAIN, actor_ref, actor_ref,
+            UINT64_C(1), UINT64_C(1), UINT64_C(1), UINT64_C(1),
+            &unsupported_wake));
+        check(unsupported_wake.slot_generation == 0);
+        check(ores_native_vm_actor_outstanding_wake_loans(
+            actor_vm, ORES_NATIVE_VM_MAIN, actor_ref) == 0);
+
         check(ores_native_vm_actor_resource_retain(
             actor_vm, ORES_NATIVE_VM_MAIN, actor_ref));
         check(ores_native_vm_stop_sealed(
@@ -358,6 +482,338 @@ int main(void) {
         close(actor_pipe[0]);
         close(actor_pipe[1]);
         check(ores_native_vm_close(actor_vm));
+    }
+
+
+    // Actor-await readiness handoff: reserve wake escrow before epoll, then
+    // publish the terminal completion onto the producer's single-flight lane.
+    // Plain completion ACK is forbidden because it would bypass the wake loan.
+    {
+        OwnedActorNioAwaitProbe probe = {
+            .vm = NULL,
+            .domain = ORES_NATIVE_VM_MAIN,
+            .actor = {0},
+            .fd = -1,
+            .active = ATOMIC_VAR_INIT(0),
+            .entered = ATOMIC_VAR_INIT(0),
+            .go = ATOMIC_VAR_INIT(0),
+            .attempted = ATOMIC_VAR_INIT(0),
+            .accepted = ATOMIC_VAR_INIT(0),
+            .duplicate_rejected = ATOMIC_VAR_INIT(0),
+            .wakes = ATOMIC_VAR_INIT(0),
+            .wake_outcome = ATOMIC_VAR_INIT(0),
+            .wake_errors = ATOMIC_VAR_INIT(0),
+            .rearm_attempted = ATOMIC_VAR_INIT(0),
+            .rearm_accepted = ATOMIC_VAR_INIT(0),
+            .rearm_watch = {0},
+            .await = {0}
+        };
+        OresNativeVMConfig actor_cfg = config();
+        actor_cfg.domains[ORES_NATIVE_VM_MAIN].on_message =
+            on_owned_actor_nio_await;
+        actor_cfg.domains[ORES_NATIVE_VM_MAIN].context = &probe;
+        OresNativeVMWakeConfig wake_cfg = {0};
+        wake_cfg.domains[ORES_NATIVE_VM_MAIN] = on_owned_actor_nio_wake;
+
+        OresNativeVM* actor_vm =
+            ores_native_vm_open_with_wakes(&actor_cfg, &wake_cfg);
+        check(actor_vm != NULL);
+        check(ores_native_vm_enable_nio(actor_vm, 1, 0, 1));
+        int actor_pipe[2] = {-1, -1};
+        check(pipe2(actor_pipe, O_NONBLOCK | O_CLOEXEC) == 0);
+        probe.vm = actor_vm;
+        probe.fd = actor_pipe[0];
+        probe.actor = ores_native_vm_spawn(
+            actor_vm, ORES_NATIVE_VM_MAIN, 0);
+        check(probe.actor.scheduler_domain != 0);
+
+        // VM wake authority is same-scheduler only in this slice. Do not
+        // surface the scheduler's internal cross-scheduler bridge mode.
+        OresNativeActorRef foreign_target = probe.actor;
+        ++foreign_target.scheduler_domain;
+        OresNativeWakeTicket cross_target = {0};
+        check(!ores_native_vm_actor_reserve_wake(
+            actor_vm, ORES_NATIVE_VM_MAIN, probe.actor, foreign_target,
+            UINT64_C(201), UINT64_C(1), UINT64_C(1), UINT64_C(1),
+            &cross_target));
+        check(cross_target.slot_generation == 0);
+
+        check(ores_native_vm_try_send(
+            actor_vm, ORES_NATIVE_VM_MAIN, probe.actor, UINT64_C(99))
+            == ORES_NATIVE_SEND_ACCEPTED);
+        while (!atomic_load_explicit(&probe.entered, memory_order_acquire))
+            sched_yield();
+        atomic_store_explicit(&probe.go, 1, memory_order_release);
+        while (!atomic_load_explicit(&probe.attempted, memory_order_acquire))
+            sched_yield();
+        check(atomic_load_explicit(&probe.accepted, memory_order_acquire));
+        check(atomic_load_explicit(
+            &probe.duplicate_rejected, memory_order_acquire));
+        check(same_actor_ref(probe.await.watch.actor, probe.actor));
+        check(same_actor_ref(probe.await.wake.producer, probe.actor));
+        check(same_actor_ref(probe.await.wake.target, probe.actor));
+        check(probe.await.wake.continuation_slot == UINT64_C(101));
+        check(probe.await.wake.continuation_generation == UINT64_C(5));
+        check(probe.await.wake.code_generation == UINT64_C(7));
+        check(probe.await.wake.descriptor_generation == UINT64_C(11));
+        check(ores_native_vm_actor_outstanding_wake_loans(
+            actor_vm, ORES_NATIVE_VM_MAIN, probe.actor) == 1);
+
+        check(write(actor_pipe[1], "r", 1) == 1);
+        OresNativeActorNioCompletion ready =
+            await_actor_completion(actor_vm);
+        check(ready.io.outcome == ORES_NATIVE_NIO_READY);
+
+        // Await-bound claims cannot skip scheduler handoff via plain ACK.
+        check(!ores_native_vm_nio_ack_actor_completion(actor_vm, ready));
+        check(atomic_load_explicit(&probe.wakes, memory_order_acquire) == 0);
+        check(ores_native_vm_nio_dispatch_actor_await(actor_vm, ready)
+            == ORES_NATIVE_NIO_AWAIT_PUBLISHED);
+        check(ores_native_vm_nio_dispatch_actor_await(actor_vm, ready)
+            == ORES_NATIVE_NIO_AWAIT_INVALID);
+
+        struct timespec pause = {0, 1000000};
+        for (int i = 0; i < 3000
+                && atomic_load_explicit(&probe.wakes, memory_order_acquire) < 1;
+                ++i)
+            nanosleep(&pause, NULL);
+        check(atomic_load_explicit(&probe.wakes, memory_order_acquire) == 1);
+        check(atomic_load_explicit(&probe.wake_errors, memory_order_acquire) == 0);
+        check(atomic_load_explicit(&probe.wake_outcome, memory_order_acquire)
+            == ORES_NATIVE_WAKE_READY);
+        check(atomic_load_explicit(
+            &probe.rearm_attempted, memory_order_acquire));
+        check(atomic_load_explicit(
+            &probe.rearm_accepted, memory_order_acquire));
+        check(probe.rearm_watch.claim_slot != 0);
+        check(ores_native_vm_actor_outstanding_wake_loans(
+            actor_vm, ORES_NATIVE_VM_MAIN, probe.actor) == 0);
+
+        // The original pipe byte is still readable, so the callback's rearm
+        // should produce a second one-shot READY. Settle its ordinary actor
+        // resource claim explicitly before STOP.
+        OresNativeActorNioCompletion rearmed =
+            await_actor_completion(actor_vm);
+        check(rearmed.io.outcome == ORES_NATIVE_NIO_READY);
+        check(rearmed.io.fd == actor_pipe[0]);
+        check(rearmed.owner.claim_generation
+            == probe.rearm_watch.claim_generation);
+        check(ores_native_vm_nio_ack_actor_completion(
+            actor_vm, rearmed));
+
+        check(ores_native_vm_stop_sealed(
+            actor_vm, ORES_NATIVE_VM_MAIN, probe.actor));
+        check(ores_native_vm_wait_done(
+            actor_vm, ORES_NATIVE_VM_MAIN, probe.actor));
+        close(actor_pipe[0]);
+        close(actor_pipe[1]);
+        check(ores_native_vm_close(actor_vm));
+    }
+
+    // Cancellation uses the same scheduler handoff and resumes exactly once
+    // with CANCELLED rather than running anything on the completion consumer.
+    {
+        OwnedActorNioAwaitProbe probe = {
+            .vm = NULL,
+            .domain = ORES_NATIVE_VM_MAIN,
+            .actor = {0},
+            .fd = -1,
+            .active = ATOMIC_VAR_INIT(0),
+            .entered = ATOMIC_VAR_INIT(0),
+            .go = ATOMIC_VAR_INIT(0),
+            .attempted = ATOMIC_VAR_INIT(0),
+            .accepted = ATOMIC_VAR_INIT(0),
+            .duplicate_rejected = ATOMIC_VAR_INIT(0),
+            .wakes = ATOMIC_VAR_INIT(0),
+            .wake_outcome = ATOMIC_VAR_INIT(0),
+            .wake_errors = ATOMIC_VAR_INIT(0),
+            .rearm_attempted = ATOMIC_VAR_INIT(0),
+            .rearm_accepted = ATOMIC_VAR_INIT(0),
+            .rearm_watch = {0},
+            .await = {0}
+        };
+        OresNativeVMConfig actor_cfg = config();
+        actor_cfg.domains[ORES_NATIVE_VM_MAIN].on_message =
+            on_owned_actor_nio_await;
+        actor_cfg.domains[ORES_NATIVE_VM_MAIN].context = &probe;
+        OresNativeVMWakeConfig wake_cfg = {0};
+        wake_cfg.domains[ORES_NATIVE_VM_MAIN] = on_owned_actor_nio_wake;
+        OresNativeVM* actor_vm =
+            ores_native_vm_open_with_wakes(&actor_cfg, &wake_cfg);
+        check(actor_vm != NULL);
+        check(ores_native_vm_enable_nio(actor_vm, 1, 0, 1));
+        int actor_pipe[2] = {-1, -1};
+        check(pipe2(actor_pipe, O_NONBLOCK | O_CLOEXEC) == 0);
+        probe.vm = actor_vm;
+        probe.fd = actor_pipe[0];
+        probe.actor = ores_native_vm_spawn(
+            actor_vm, ORES_NATIVE_VM_MAIN, 0);
+        check(probe.actor.scheduler_domain != 0);
+        check(ores_native_vm_try_send(
+            actor_vm, ORES_NATIVE_VM_MAIN, probe.actor, UINT64_C(99))
+            == ORES_NATIVE_SEND_ACCEPTED);
+        while (!atomic_load_explicit(&probe.entered, memory_order_acquire))
+            sched_yield();
+        atomic_store_explicit(&probe.go, 1, memory_order_release);
+        while (!atomic_load_explicit(&probe.attempted, memory_order_acquire))
+            sched_yield();
+        check(atomic_load_explicit(&probe.accepted, memory_order_acquire));
+
+        check(ores_native_vm_nio_try_cancel_actor(
+            actor_vm, probe.await.watch));
+        OresNativeActorNioCompletion cancelled =
+            await_actor_completion(actor_vm);
+        check(cancelled.io.outcome == ORES_NATIVE_NIO_CANCELLED);
+        check(ores_native_vm_nio_dispatch_actor_await(
+            actor_vm, cancelled) == ORES_NATIVE_NIO_AWAIT_PUBLISHED);
+
+        struct timespec pause = {0, 1000000};
+        for (int i = 0; i < 3000
+                && atomic_load_explicit(&probe.wakes, memory_order_acquire) < 1;
+                ++i)
+            nanosleep(&pause, NULL);
+        check(atomic_load_explicit(&probe.wakes, memory_order_acquire) == 1);
+        check(atomic_load_explicit(&probe.wake_outcome, memory_order_acquire)
+            == ORES_NATIVE_WAKE_CANCELLED);
+        check(!atomic_load_explicit(&probe.wake_errors, memory_order_acquire));
+
+        check(ores_native_vm_stop_sealed(
+            actor_vm, ORES_NATIVE_VM_MAIN, probe.actor));
+        check(ores_native_vm_wait_done(
+            actor_vm, ORES_NATIVE_VM_MAIN, probe.actor));
+        close(actor_pipe[0]);
+        close(actor_pipe[1]);
+        check(ores_native_vm_close(actor_vm));
+    }
+
+    // STOP before the irreversible wake transfer wins without fabricating a
+    // resume. The reserved wake and NIO resource claim are both consumed, and
+    // physical DONE becomes observable only after that cleanup.
+    {
+        OwnedActorNioAwaitProbe probe = {
+            .vm = NULL,
+            .domain = ORES_NATIVE_VM_MAIN,
+            .actor = {0},
+            .fd = -1,
+            .active = ATOMIC_VAR_INIT(0),
+            .entered = ATOMIC_VAR_INIT(0),
+            .go = ATOMIC_VAR_INIT(0),
+            .attempted = ATOMIC_VAR_INIT(0),
+            .accepted = ATOMIC_VAR_INIT(0),
+            .duplicate_rejected = ATOMIC_VAR_INIT(0),
+            .wakes = ATOMIC_VAR_INIT(0),
+            .wake_outcome = ATOMIC_VAR_INIT(0),
+            .wake_errors = ATOMIC_VAR_INIT(0),
+            .rearm_attempted = ATOMIC_VAR_INIT(0),
+            .rearm_accepted = ATOMIC_VAR_INIT(0),
+            .rearm_watch = {0},
+            .await = {0}
+        };
+        OresNativeVMConfig actor_cfg = config();
+        actor_cfg.domains[ORES_NATIVE_VM_MAIN].on_message =
+            on_owned_actor_nio_await;
+        actor_cfg.domains[ORES_NATIVE_VM_MAIN].context = &probe;
+        OresNativeVMWakeConfig wake_cfg = {0};
+        wake_cfg.domains[ORES_NATIVE_VM_MAIN] = on_owned_actor_nio_wake;
+        OresNativeVM* actor_vm =
+            ores_native_vm_open_with_wakes(&actor_cfg, &wake_cfg);
+        check(actor_vm != NULL);
+        check(ores_native_vm_enable_nio(actor_vm, 1, 0, 1));
+        int actor_pipe[2] = {-1, -1};
+        check(pipe2(actor_pipe, O_NONBLOCK | O_CLOEXEC) == 0);
+        probe.vm = actor_vm;
+        probe.fd = actor_pipe[0];
+        probe.actor = ores_native_vm_spawn(
+            actor_vm, ORES_NATIVE_VM_MAIN, 0);
+        check(probe.actor.scheduler_domain != 0);
+        check(ores_native_vm_try_send(
+            actor_vm, ORES_NATIVE_VM_MAIN, probe.actor, UINT64_C(99))
+            == ORES_NATIVE_SEND_ACCEPTED);
+        while (!atomic_load_explicit(&probe.entered, memory_order_acquire))
+            sched_yield();
+        atomic_store_explicit(&probe.go, 1, memory_order_release);
+        while (!atomic_load_explicit(&probe.attempted, memory_order_acquire))
+            sched_yield();
+        check(atomic_load_explicit(&probe.accepted, memory_order_acquire));
+
+        check(ores_native_vm_stop_sealed(
+            actor_vm, ORES_NATIVE_VM_MAIN, probe.actor));
+        check(!ores_native_vm_poll_done(
+            actor_vm, ORES_NATIVE_VM_MAIN, probe.actor));
+        check(ores_native_vm_nio_try_cancel_actor(
+            actor_vm, probe.await.watch));
+        OresNativeActorNioCompletion terminal =
+            await_actor_completion(actor_vm);
+        check(terminal.io.outcome == ORES_NATIVE_NIO_CANCELLED);
+        check(ores_native_vm_nio_dispatch_actor_await(actor_vm, terminal)
+            == ORES_NATIVE_NIO_AWAIT_PRODUCER_RETIRED);
+        check(atomic_load_explicit(&probe.wakes, memory_order_acquire) == 0);
+        check(ores_native_vm_actor_outstanding_wake_loans(
+            actor_vm, ORES_NATIVE_VM_MAIN, probe.actor) == 0);
+        check(ores_native_vm_wait_done(
+            actor_vm, ORES_NATIVE_VM_MAIN, probe.actor));
+
+        close(actor_pipe[0]);
+        close(actor_pipe[1]);
+        check(ores_native_vm_close(actor_vm));
+    }
+
+    // VM close is an abandonment boundary for an await that never completed.
+    // It must cancel the still-reserved wake before scheduler drain; otherwise
+    // close would hang forever on the wake loan.
+    {
+        OwnedActorNioAwaitProbe probe = {
+            .vm = NULL,
+            .domain = ORES_NATIVE_VM_MAIN,
+            .actor = {0},
+            .fd = -1,
+            .active = ATOMIC_VAR_INIT(0),
+            .entered = ATOMIC_VAR_INIT(0),
+            .go = ATOMIC_VAR_INIT(0),
+            .attempted = ATOMIC_VAR_INIT(0),
+            .accepted = ATOMIC_VAR_INIT(0),
+            .duplicate_rejected = ATOMIC_VAR_INIT(0),
+            .wakes = ATOMIC_VAR_INIT(0),
+            .wake_outcome = ATOMIC_VAR_INIT(0),
+            .wake_errors = ATOMIC_VAR_INIT(0),
+            .rearm_attempted = ATOMIC_VAR_INIT(0),
+            .rearm_accepted = ATOMIC_VAR_INIT(0),
+            .rearm_watch = {0},
+            .await = {0}
+        };
+        OresNativeVMConfig actor_cfg = config();
+        actor_cfg.domains[ORES_NATIVE_VM_MAIN].on_message =
+            on_owned_actor_nio_await;
+        actor_cfg.domains[ORES_NATIVE_VM_MAIN].context = &probe;
+        OresNativeVMWakeConfig wake_cfg = {0};
+        wake_cfg.domains[ORES_NATIVE_VM_MAIN] = on_owned_actor_nio_wake;
+        OresNativeVM* actor_vm =
+            ores_native_vm_open_with_wakes(&actor_cfg, &wake_cfg);
+        check(actor_vm != NULL);
+        check(ores_native_vm_enable_nio(actor_vm, 1, 0, 1));
+        int actor_pipe[2] = {-1, -1};
+        check(pipe2(actor_pipe, O_NONBLOCK | O_CLOEXEC) == 0);
+        probe.vm = actor_vm;
+        probe.fd = actor_pipe[0];
+        probe.actor = ores_native_vm_spawn(
+            actor_vm, ORES_NATIVE_VM_MAIN, 0);
+        check(probe.actor.scheduler_domain != 0);
+        check(ores_native_vm_try_send(
+            actor_vm, ORES_NATIVE_VM_MAIN, probe.actor, UINT64_C(99))
+            == ORES_NATIVE_SEND_ACCEPTED);
+        while (!atomic_load_explicit(&probe.entered, memory_order_acquire))
+            sched_yield();
+        atomic_store_explicit(&probe.go, 1, memory_order_release);
+        while (!atomic_load_explicit(&probe.attempted, memory_order_acquire))
+            sched_yield();
+        check(atomic_load_explicit(&probe.accepted, memory_order_acquire));
+        check(ores_native_vm_actor_outstanding_wake_loans(
+            actor_vm, ORES_NATIVE_VM_MAIN, probe.actor) == 1);
+
+        check(ores_native_vm_close(actor_vm));
+        check(atomic_load_explicit(&probe.wakes, memory_order_acquire) == 0);
+        close(actor_pipe[0]);
+        close(actor_pipe[1]);
     }
 
 

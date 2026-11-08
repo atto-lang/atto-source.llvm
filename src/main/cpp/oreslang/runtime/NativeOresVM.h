@@ -38,8 +38,20 @@ typedef struct {
     OresNativeVMDomainConfig domains[ORES_NATIVE_VM_DOMAIN_COUNT];
 } OresNativeVMConfig;
 
+/* ABI-separate optional continuation wake configuration. Keeping this out of
+ * OresNativeVMDomainConfig preserves the existing public C struct layout for
+ * hosts compiled against the original VM ABI. The wake callback reuses each
+ * domain's existing context pointer from OresNativeVMConfig. */
+typedef struct {
+    OresNativeActorWakeFn domains[ORES_NATIVE_VM_DOMAIN_COUNT];
+} OresNativeVMWakeConfig;
+
 typedef struct OresNativeVM OresNativeVM;
 OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config);
+/* Opt-in wake-capable VM construction for continuation/NIO runtimes. Existing
+ * ores_native_vm_open() remains wake-free and ABI-compatible. */
+OresNativeVM* ores_native_vm_open_with_wakes(
+    const OresNativeVMConfig* config, const OresNativeVMWakeConfig* wakes);
 /* RT bootstrap: prestart every configured carrier in all four domains before
  * exposing the VM to guest work. No carrier will be created on its DATA or
  * CONTROL hot path thereafter. Unlike normal open(), this starts pthreads.
@@ -130,6 +142,36 @@ int ores_native_vm_actor_resource_retain(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
 int ores_native_vm_actor_resource_release(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
+/* Trusted runtime continuation-wake escrow. Source guest code cannot mint
+ * these tickets. Reserve must happen before an external operation can suspend;
+ * publish schedules the configured on_wake callback and never runs guest code
+ * inline on the producer/completion thread. This VM slice accepts only targets
+ * in the producer's exact scheduler domain; cross-scheduler continuation
+ * routing requires a separately authenticated bridge. */
+int ores_native_vm_actor_reserve_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef producer, OresNativeActorRef target,
+    uint64_t continuation_slot, uint64_t continuation_generation,
+    uint64_t code_generation, uint64_t descriptor_generation,
+    OresNativeWakeTicket* out);
+int ores_native_vm_actor_transfer_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeWakeTicket ticket);
+int ores_native_vm_actor_cancel_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeWakeTicket ticket);
+int ores_native_vm_actor_abort_transferred_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeWakeTicket ticket);
+OresNativeWakePublishStatus ores_native_vm_actor_publish_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeWakeTicket ticket, OresNativeWakeOutcome outcome);
+int ores_native_vm_actor_is_current_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeWakeTicket ticket);
+size_t ores_native_vm_actor_outstanding_wake_loans(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef producer);
 /* External trusted host barriers for compiler-generated linear ActorRef
  * stop/teardown. They do not implement source-level suspend or Future<T>.
  * Never call wait_done from a VM carrier callback. */

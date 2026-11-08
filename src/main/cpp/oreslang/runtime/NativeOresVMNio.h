@@ -37,6 +37,18 @@ typedef struct {
     OresNativeActorNioWatch owner;
 } OresNativeActorNioCompletion;
 
+typedef struct {
+    OresNativeActorNioWatch watch;
+    OresNativeWakeTicket wake;
+} OresNativeActorNioAwait;
+
+/* Result of handing one delivered NIO completion into scheduler wake escrow. */
+typedef enum {
+    ORES_NATIVE_NIO_AWAIT_INVALID = 0,
+    ORES_NATIVE_NIO_AWAIT_PUBLISHED = 1,
+    ORES_NATIVE_NIO_AWAIT_PRODUCER_RETIRED = 2
+} OresNativeActorNioAwaitDispatchStatus;
+
 /*
  * Actor-owned readiness bridge. Admission first retains one exact ActorRef
  * physical-resource loan, then registers the kernel watch under a bounded
@@ -51,11 +63,29 @@ typedef struct {
 int ores_native_vm_nio_try_watch_actor(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor,
     int fd, uint32_t events, OresNativeActorNioWatch* output);
+/* Reserve scheduler wake escrow first, then admit the actor-owned kernel
+ * watch under the same exact ActorRef. This creates a continuous physical-DONE
+ * fence: STOP cannot complete between suspension admission and later scheduler
+ * wake publication. target is currently the same actor; cross-actor Future
+ * routing remains a separate capability boundary. */
+int ores_native_vm_nio_try_watch_actor_await(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor,
+    int fd, uint32_t events,
+    uint64_t continuation_slot, uint64_t continuation_generation,
+    uint64_t code_generation, uint64_t descriptor_generation,
+    OresNativeActorNioAwait* output);
 int ores_native_vm_nio_try_cancel_actor(
     OresNativeVM* vm, OresNativeActorNioWatch watch);
 int ores_native_vm_nio_try_pop_actor(
     OresNativeVM* vm, OresNativeActorNioCompletion* output);
 int ores_native_vm_nio_ack_actor_completion(
+    OresNativeVM* vm, OresNativeActorNioCompletion completion);
+/* For await-bound claims, plain ACK is rejected. This operation transfers
+ * the reserved wake, publishes READY/CANCELLED/FAILED onto the actor lane, and
+ * only then releases the NIO resource loan/FD claim. The reactor/completion
+ * thread never invokes guest code. */
+OresNativeActorNioAwaitDispatchStatus
+ores_native_vm_nio_dispatch_actor_await(
     OresNativeVM* vm, OresNativeActorNioCompletion completion);
 
 int ores_native_vm_nio_try_cancel(OresNativeVM* vm, OresNativeNioWatch watch);
