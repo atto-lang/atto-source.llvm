@@ -22,34 +22,24 @@ struct Case {
     name: &'static str,
     path: &'static str,
     git_blob: &'static str,
-    subjects: &'static [&'static str],
-    policies: &'static [&'static str],
 }
 const CASES: [Case; 8] = [
     Case { name:"removed-modulo", path:"contracts/atto-scalar-v1/negative/removed-modulo.atto",
-        git_blob:"45d5794870e93074d9b11b90833a849e96aaa4c1",
-        subjects:&["%", "modulo"], policies:&["operator", "removed", "forbidden", "unsupported operator"] },
+        git_blob:"45d5794870e93074d9b11b90833a849e96aaa4c1" },
     Case { name:"removed-caret", path:"contracts/atto-scalar-v1/negative/removed-caret.atto",
-        git_blob:"6889c7e83c8d94b906fbfe78723caee9580da6aa",
-        subjects:&["^", "caret"], policies:&["operator", "removed", "forbidden", "unsupported operator"] },
+        git_blob:"6889c7e83c8d94b906fbfe78723caee9580da6aa" },
     Case { name:"removed-double-caret", path:"contracts/atto-scalar-v1/negative/removed-double-caret.atto",
-        git_blob:"7ee99948018e927cce74c9ad0edc1975e4251689",
-        subjects:&["^^", "caret"], policies:&["operator", "removed", "forbidden", "unsupported operator"] },
+        git_blob:"7ee99948018e927cce74c9ad0edc1975e4251689" },
     Case { name:"type-first-reassignment", path:"contracts/atto-scalar-v1/negative/type-first-reassignment.atto",
-        git_blob:"b118f53e68565dcb9e6acd58deb8ee47dca67606",
-        subjects:&["x", "binding", "value"], policies:&["immutable", "readonly", "constant binding", "reassign", "cannot assign"] },
+        git_blob:"b118f53e68565dcb9e6acd58deb8ee47dca67606" },
     Case { name:"typed-const-reassignment", path:"contracts/atto-scalar-v1/negative/typed-const-reassignment.atto",
-        git_blob:"784ebd47a50211e6f00cb732cc74319ed1e58fac",
-        subjects:&["x", "binding", "const"], policies:&["immutable", "readonly", "constant binding", "reassign", "cannot assign"] },
+        git_blob:"784ebd47a50211e6f00cb732cc74319ed1e58fac" },
     Case { name:"legacy-async-modifier", path:"tests/formal-policy-atto/negative/legacy-async-modifier.atto",
-        git_blob:"26d392c8f609a730e81b503d9495de7e29b46755",
-        subjects:&["async"], policies:&["unsupported", "forbidden", "disallowed", "modifier", "use suspends"] },
+        git_blob:"26d392c8f609a730e81b503d9495de7e29b46755" },
     Case { name:"critical-suspends-modifier", path:"tests/formal-policy-atto/negative/critical-suspends-modifier.atto",
-        git_blob:"6be781ff89f9ebc48ee5870d3401943d50b0f9db",
-        subjects:&["critical", "suspends"], policies:&["forbidden", "disallowed", "cannot", "modifier", "invalid"] },
+        git_blob:"6be781ff89f9ebc48ee5870d3401943d50b0f9db" },
     Case { name:"suspends-critical-modifier", path:"tests/formal-policy-atto/negative/suspends-critical-modifier.atto",
-        git_blob:"c8bb7c921749f06e9d187a6dfbd71685952e3d88",
-        subjects:&["suspends", "critical"], policies:&["forbidden", "disallowed", "cannot", "modifier", "invalid"] },
+        git_blob:"c8bb7c921749f06e9d187a6dfbd71685952e3d88" },
 ];
 
 fn is_lower_sha40(s: &str) -> bool {
@@ -107,7 +97,7 @@ fn matches_policy(c: &Case, stderr: &str) -> bool {
 const MAX_COMPILER_STREAM_BYTES: usize = 65536;
 // Bound each compiler stream in memory. If the child exceeds the cap the
 // reader closes its pipe; this cannot become a valid negative receipt.
-fn read_bounded(mut reader: impl Read) -> Result<Vec<u8>, String> {
+fn read_bounded(reader: impl Read) -> Result<Vec<u8>, String> {
     let mut data = Vec::new();
     reader.take((MAX_COMPILER_STREAM_BYTES + 1) as u64)
         .read_to_end(&mut data).map_err(|_| "compiler stream read failed".to_owned())?;
@@ -264,6 +254,72 @@ mod tests {
         assert!(!matches_policy(c, "error: unknown identifier x"));
         assert!(matches_policy(c, "error: immutable binding x cannot reassign"));
     }
+    #[test]
+    fn every_semantic_family_rejects_generic_lexer_and_parser_messages() {
+        let decoys = [
+            "error: unexpected token critical suspends",
+            "error: unsupported character ^^",
+            "error: unknown identifier x",
+            "error: unexpected const binding x immutable",
+            "error: unresolved identifier async",
+            "error: internal error: critical suspends forbidden",
+        ];
+        for c in CASES {
+            for fake in decoys {
+                assert!(!matches_policy(&c, fake), "{} credited {fake}", c.name);
+            }
+        }
+    }
+    #[test]
+    fn each_positive_oracle_rejects_other_semantic_families() {
+        let valid = [
+            "error: removed modulo operator %",
+            "error: caret ^ operator is forbidden",
+            "error: double caret ^^ operator is not allowed",
+            "error: cannot assign immutable binding x",
+            "error: cannot reassign const binding x",
+            "error: async modifier is forbidden; use suspends",
+            "error: critical suspends fnc is invalid",
+            "error: suspends critical fnc is incompatible",
+        ];
+        for i in 0..CASES.len() {
+            assert!(matches_policy(&CASES[i], valid[i]), "{}", CASES[i].name);
+            for (j, message) in valid.iter().enumerate() {
+                if i == j || ((3..=4).contains(&i) && (3..=4).contains(&j))
+                   || (i >= 6 && j >= 6) { continue; }
+                assert!(!matches_policy(&CASES[i], message),
+                    "{} credited unrelated case {}", CASES[i].name, CASES[j].name);
+            }
+        }
+    }
+    #[test]
+    fn double_caret_does_not_count_as_single_caret() {
+        assert!(!matches_policy(&CASES[1], "error: ^^ removed operator"));
+        assert!(!matches_policy(&CASES[2], "error: ^ removed operator"));
+        assert!(matches_policy(&CASES[2], "error: double caret ^^ removed operator"));
+    }
+    #[test]
+    fn bounded_reader_enforces_exact_64k_boundary() {
+        let within = vec![b'a'; MAX_COMPILER_STREAM_BYTES];
+        assert_eq!(read_bounded(std::io::Cursor::new(&within)).unwrap().len(),
+            MAX_COMPILER_STREAM_BYTES);
+        let too_big = vec![b'b'; MAX_COMPILER_STREAM_BYTES + 1];
+        assert!(read_bounded(std::io::Cursor::new(too_big)).is_err());
+    }
+    #[test]
+    fn word_boundaries_prevent_incidental_binding_or_modifier_strings() {
+        assert!(!word("syntax", "x"));
+        assert!(!word("asyncer", "async"));
+        assert!(word("immutable binding x", "x"));
+        assert!(!matches_policy(&CASES[6], "error: critical function is invalid"));
+        assert!(!matches_policy(&CASES[7], "error: suspends modifier invalid"));
+    }
+    #[test]
+    fn oversized_and_empty_diagnostics_never_count() {
+        assert!(!matches_policy(&CASES[0], ""));
+        assert!(!matches_policy(&CASES[0], &"error: removed modulo operator".repeat(4000)));
+    }
+
     #[test]
     fn head_and_blob_identifiers_are_not_any_string() {
         assert!(!is_lower_sha40(""));
