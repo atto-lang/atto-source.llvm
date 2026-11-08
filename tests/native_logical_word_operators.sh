@@ -49,6 +49,21 @@ compile_and_run() {
   done
 }
 
+reject_reserved_operator_name() {
+  local fixture="$1"
+  local source="$fixtures/$fixture"
+  local ir="$tmp/$fixture.ll"
+  local diagnostic="$tmp/$fixture.stderr"
+  if "$compiler" "$source" >"$ir" 2>"$diagnostic"; then
+    echo "compiler unexpectedly accepted a reserved logical keyword as a function name" >&2
+    exit 1
+  fi
+  if [[ -s "$ir" ]]; then
+    echo "reserved keyword declaration emitted executable LLVM IR" >&2
+    exit 1
+  fi
+}
+
 reject_removed_caret_operator() {
   local fixture="$1"
   local source="$fixtures/$fixture"
@@ -100,5 +115,6 @@ reject_non_boolean reject-int-or.atto
 reject_non_boolean reject-int-xor.atto
 reject_removed_caret_operator reject-caret-xor.atto
 reject_removed_caret_operator reject-double-caret-xor.atto
+reject_reserved_operator_name reject-word-as-name.atto
 
 echo "PASS: AttoLang logical word operators - truth/precedence, -O0/-O2, short-circuit, eager left-to-right XOR, and bool-only rejection"
