@@ -60,7 +60,8 @@ cmake --build build-llvm --target oreslang-llvmc \
   oreslang-native-reduction-quantum-test \
   oreslang-native-scalar-call-verifier-test
 ctest --test-dir build-llvm --output-on-failure \
-  -R '^(native_metered_cfg_cycles_fail_closed|native_scalar_guest_calls_fail_closed|native_reduction_quantum_watchdog_host_only|native_rt_scalar_frame_aot_two_tasks)
+  -R '^(native_metered_cfg_cycles_fail_closed|native_scalar_guest_calls_fail_closed|native_scalar_ir_surface_scan|native_scalar_ir_surface_scan_python_optimized|native_reduction_quantum_watchdog_host_only|native_rt_scalar_frame_aot_two_tasks)$'
+```
 
 The native frame AOT Python CTest compiles **generated** LLVM IR with Clang
 `-O0`, `-O2`, `-O3`, then runs the C11 harness. Require terminal logical
@@ -102,78 +103,55 @@ invoke/callbr transfers. CTest runs the negative fixtures normally and with
 would disable its legacy end-to-end assertions. These are *scanner* proofs,
 not compiled guest execution proofs.
 
-## Evidence and release status
+## 2026-11-08 audit: frame ABI, verifier and portable evidence
 
-- 2026-11-08 UTC: the portable CFG verifier source and test are Git blobs
-  `98dcd686f4df7b7e8e11906d1a74da69b1a0492e` and
-  `2ee535e649ad423611d9778e82be3b9430909678`. Local GCC and Clang
-  Release/NDEBUG tests **PASSED**; GCC ASan/UBSan also **PASSED**. The tests
-  include exhaustive 3-node graphs, malformed CFGs and resource ceilings.
-- LLVM-backed call verifier source and test Git blobs are
-  `0f6359bec88447aab7d1537400384440a926d7b7` and
-  `2a78c98f0f4492f8b45f4711fe98496f18db65bc`.
-  **LLVM-backed negative CTest NOT_EXECUTED**: local LLVM C++ SDK is absent.
-- Exact-head LLVM AOT O0/O2/O3 guest execution **NOT_EXECUTED**. Source Actions
-  jobs fail without usable executed steps. Do not treat admission failures,
-  metadata-only jobs, pending or skipped jobs as successful evidence.
-- The accessible private `numerics-atto/mirror-oreslang-source.llvm` default
-  branch has a different `CMakeLists.txt` blob from source `main`. It cannot
-  be used as exact-head evidence without full-tree mirroring and independent
-  SHA verification.
+Two source-level hazards were addressed:
 
-- Current portable IR scanner source/test Git blobs:
-  `f0c7205656926f87717c4ac5d45734600e25e19d` and
-  `1a4e1f3d25b193093c4ecfbb1db8e05c71eef2ff`.
-  Local Python normal and `PYTHONOPTIMIZE=1` negative suites **PASSED**;
-  AOT harness `-O` fail-closed guard **PASSED**. No full LLVM guest was run.
+- The scalar v1 entrypoint now takes a pointer to the actual four-field frame
+  type, not an `i64*` that is incompatible with typed-pointer LLVM struct
+  field GEPs. On opaque-pointer LLVM the external pointer ABI remains `ptr`.
+- `ScalarGuestCallVerifier.hpp` now requires exactly four v1 definitions
+  with correct returns, arity, parameter types, linkage and C calling
+  convention. Frame pointer types must agree across methods; globals,
+  aliases, ifuncs, unapproved imports, indirect calls and inline assembly
+  remain rejected. C++ negative fixtures include wrong signatures, linkage,
+  calling conventions and extraneous globals.
 
-- Local 2026-11-08 checkpoint on full source PR head prior to this docs update:
-  the exact Python source/test blobs
-  `a438cc8319baae1f043e8bd98d5fb5d9a48bcd9b` and
-  `b64565563002ecf21c13c2d60375cee96d611f65` pass the
-  positive Clang 17 probe, mismatched Clang 19 negative probe,
-  regular Python and `PYTHONOPTIMIZE=1` IR scanner tests.
-  Exact portable CFG C++ blobs also passed GCC/Clang Release and
-  GCC/Clang ASan/UBSan tests. This is **not** a source-to-guest run.
-- Source-org LLVM smoke run 42519373207, job 128849285764: failure with
-  zero executed steps (runner/setup admission), **NOT_EXECUTED** guest tests.
+The source compiler does **not** yet have certified general actor loops,
+recursion, FFI, borrow/critical-safe resumption, or tenant OS isolation.
+A caller that can mutate raw frame memory can bypass the quota; the C ABI
+is only meaningful inside a trusted, exclusive owner/protection boundary.
 
-**Do not merge this PR or enable untrusted general source-loop execution
-until the remaining gates are green.**
+### Verified individual Git blobs (not a verified full source tree)
 
-```
+- `ScalarLoopLowering.cpp`: `bebeb66931d0745d94aa028b95df4d581e6c222a`
+- `ScalarGuestCallVerifier.hpp`: `4308dc2333a7a835f1edf08117f1d154ae03d7b4`
+- `native_scalar_guest_call_verifier_test.cpp`: `32301b7cda22a9da744c0c505dbbf086d8877160`
+- `native_rt_scalar_step_aot.py`: `5196a13c1849b505f91bd4c21a1ac512dcc56d41`
+- `native_scalar_ir_surface_test.py`: `7f4fca8eeeae5e992aec19c587f85ee672f5a6a0`
+- Portable CFG verifier header/test: `98dcd686f4df7b7e8e11906d1a74da69b1a0492e`
+  and `2ee535e649ad423611d9778e82be3b9430909678`
 
-The native frame AOT Python CTest compiles **generated** LLVM IR with Clang
-`-O0`, `-O2`, `-O3`, then runs the C11 harness. Require terminal logical
-fuel exhaustion across repeated 127-step carrier handoffs, zero-fuel calls,
-exact-budget successful completion, 32 post-exhaustion replays, stale/invalid
-frame traps, and healthy peer progress. Report individual actual executable
-results, not merely a successful parse or an unrelated host test.
+### Executed portable checks
 
-For a private-runner mirror, retain the original source PR head SHA and
-verify all source tree blobs against that head before using the results as
-`EXACT_HEAD_PASS`. A stale carrier `CMakeLists.txt` or partial source copy
-is **not** sufficient provenance. Do not mark skipped/pending/failed-to-start
-jobs as successful.
+- GCC 14 and Clang 17 at `-O3 -DNDEBUG`: **PASS**.
+- GCC and Clang ASan/UBSan in a clean container shell: **PASS**.
+- 3,584 exhaustive three-node directed CFG/meter cases, resource limits and
+  malformed edges: **PASS**.
+- Python normal and `PYTHONOPTIMIZE=1` IR-surface negative checks, including
+  wrong return types, arity, pointer arguments, unverified calls, incorrect
+  toolchain versions, and a correct typed struct-pointer positive: **PASS**.
+- These tests were executed using the exact individual Python/C++ blobs
+  identified above, not a full source checkout of the PR head.
 
-## Evidence and release status
+### Mandatory unexecuted gates
 
-- 2026-11-08 UTC: the portable CFG verifier source and test are Git blobs
-  `98dcd686f4df7b7e8e11906d1a74da69b1a0492e` and
-  `2ee535e649ad423611d9778e82be3b9430909678`. Local GCC and Clang
-  Release/NDEBUG tests **PASSED**; GCC ASan/UBSan also **PASSED**. The tests
-  include exhaustive 3-node graphs, malformed CFGs and resource ceilings.
-- LLVM-backed call verifier source and test Git blobs are
-  `0f6359bec88447aab7d1537400384440a926d7b7` and
-  `2a78c98f0f4492f8b45f4711fe98496f18db65bc`.
-  **LLVM-backed negative CTest NOT_EXECUTED**: local LLVM C++ SDK is absent.
-- Exact-head LLVM AOT O0/O2/O3 guest execution **NOT_EXECUTED**. Source Actions
-  jobs fail without usable executed steps. Do not treat admission failures,
-  metadata-only jobs, pending or skipped jobs as successful evidence.
-- The accessible private `numerics-atto/mirror-oreslang-source.llvm` default
-  branch has a different `CMakeLists.txt` blob from source `main`. It cannot
-  be used as exact-head evidence without full-tree mirroring and independent
-  SHA verification.
+- **NOT_EXECUTED:** full compiler with LLVM C++ SDK,
+  `native_scalar_guest_calls_fail_closed` CTest and source->generated native
+  scalar guest execution under `-O0`, `-O2`, and `-O3`.
+- **NOT_CERTIFIED:** private-runner exact-tree mirroring, token-free
+  independent blob/provenance validation, and guest security isolation.
+- Source-org workflow job failures with `steps=[]` are admission failures,
+  not evidence of a failed or passing guest test.
 
-**Do not merge this PR or enable untrusted general source-loop execution
-until the remaining gates are green.**
+**Keep PR #1571 draft, with no merge/security-certification claim.**
