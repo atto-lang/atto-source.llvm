@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Compile actual opt-in Oreslang source and drive two native heap continuations."""
+"""Compile actual opt-in Oreslang source and drive two native heap continuations.
+
+Verification guards remain active with PYTHONOPTIMIZE/-O and Clang -DNDEBUG.
+"""
 import argparse
 import pathlib
 import re
@@ -42,27 +45,40 @@ def main():
         def compile_source(path, gated=True):
             return run([compiler] + (["--experimental-rt-scalar-loop"] if gated else []) + [str(path)])
         denied = compile_source(fixture, False)
-        assert denied.returncode != 0 and not denied.stdout.strip(), "default loop gate reopened"
-        assert "requires verified LLVM continuation lowering" in denied.stderr, denied.stderr
+        if not (denied.returncode != 0 and not denied.stdout.strip()):
+            raise AssertionError("default loop gate reopened")
+        if not ("requires verified LLVM continuation lowering" in denied.stderr):
+            raise AssertionError(denied.stderr)
         accepted = compile_source(fixture)
-        assert accepted.returncode == 0, accepted.stderr
-        assert "define i32 @oreslang_rt_scalar_frame_step" in accepted.stdout, "not compiled guest step"
-        assert "define void @oreslang_rt_scalar_frame_cancel" in accepted.stdout
-        assert "define void @oreslang_rt_scalar_frame_init" in accepted.stdout
-        assert "define i64 @oreslang_rt_scalar_frame_result" in accepted.stdout
+        if not (accepted.returncode == 0):
+            raise AssertionError(accepted.stderr)
+        if not ("define i32 @oreslang_rt_scalar_frame_step" in accepted.stdout):
+            raise AssertionError("not compiled guest step")
+        if not ("define void @oreslang_rt_scalar_frame_cancel" in accepted.stdout):
+            raise AssertionError("native AOT assertion failed")
+        if not ("define void @oreslang_rt_scalar_frame_init" in accepted.stdout):
+            raise AssertionError("native AOT assertion failed")
+        if not ("define i64 @oreslang_rt_scalar_frame_result" in accepted.stdout):
+            raise AssertionError("native AOT assertion failed")
         llvm_ir = out / "guest.ll"
         llvm_ir.write_text(accepted.stdout)
         exe = out / "run-guest"
         build = run([args.clang, "-std=c11", "-O2", "-DNDEBUG", "-Wall", "-Wextra",
                      "-Werror", "-Wno-error=override-module", "-pedantic", str(args.harness),
                      "-x", "ir", str(llvm_ir), "-o", str(exe)])
-        assert build.returncode == 0, build.stderr
+        if not (build.returncode == 0):
+            raise AssertionError(build.stderr)
         execution = run([str(exe)])
-        assert execution.returncode == 0, execution.stderr
-        assert "SCALAR_FRAME_AOT_COMPILED_FUEL_BOUNDARIES_PASS" in execution.stdout
-        assert "SCALAR_FRAME_AOT_TWO_TASKS_PASS" in execution.stdout
-        assert "SCALAR_FRAME_AOT_THREE_PEERS_BOUNDED_PROGRESS_PASS" in execution.stdout
-        assert "SCALAR_FRAME_AOT_CANCELLED_PEER_ISOLATION_PASS" in execution.stdout
+        if not (execution.returncode == 0):
+            raise AssertionError(execution.stderr)
+        if not ("SCALAR_FRAME_AOT_COMPILED_FUEL_BOUNDARIES_PASS" in execution.stdout):
+            raise AssertionError("native AOT assertion failed")
+        if not ("SCALAR_FRAME_AOT_TWO_TASKS_PASS" in execution.stdout):
+            raise AssertionError("native AOT assertion failed")
+        if not ("SCALAR_FRAME_AOT_THREE_PEERS_BOUNDED_PROGRESS_PASS" in execution.stdout):
+            raise AssertionError("native AOT assertion failed")
+        if not ("SCALAR_FRAME_AOT_CANCELLED_PEER_ISOLATION_PASS" in execution.stdout):
+            raise AssertionError("native AOT assertion failed")
 
         # Negative mutation of the ACTUAL source-compiled LLVM IR: each
         # weakened guard must still compile successfully, but the executable
@@ -72,7 +88,8 @@ def main():
         def require_killed_guest_mutant(label, regex, replacement):
             mutated_ir, mutations = re.subn(regex, replacement, accepted.stdout,
                                               count=1, flags=re.MULTILINE)
-            assert mutations == 1, (label, "missing precise source-IR guard")
+            if not (mutations == 1):
+                raise AssertionError((label, "missing precise source-IR guard"))
             mutated_file = out / f"mutant-{label}.ll"
             mutated_file.write_text(mutated_ir)
             mutant_bin = out / f"mutant-{label}"
@@ -81,13 +98,16 @@ def main():
                 "-Wextra", "-Werror", "-Wno-error=override-module", "-pedantic",
                 str(args.harness), "-x", "ir", str(mutated_file), "-o", str(mutant_bin)
             ])
-            assert mutant_build.returncode == 0, (label, mutant_build.stderr)
+            if not (mutant_build.returncode == 0):
+                raise AssertionError((label, mutant_build.stderr))
             killed = run([str(mutant_bin)])
-            assert killed.returncode != 0, (
-                label, "REMOVING A COMPILER GUARD STILL PASSED GUEST EXECUTION")
-            assert "frame check failed" in killed.stderr, (
+            if not (killed.returncode != 0):
+                raise AssertionError((
+                label, "REMOVING A COMPILER GUARD STILL PASSED GUEST EXECUTION"))
+            if not ("frame check failed" in killed.stderr):
+                raise AssertionError((
                 label, "mutation failed outside the native guest oracle",
-                killed.stderr)
+                killed.stderr))
             return label
 
         killed_mutants = [
@@ -100,16 +120,20 @@ def main():
                 r"^(\s*%fuel\.remaining = sub i64 [^,\n]+, )1(\s*)$",
                 r"\g<1>0\g<2>"),
         ]
-        assert len(killed_mutants) == 2
+        if not (len(killed_mutants) == 2):
+            raise AssertionError("native AOT assertion failed")
 
         for i, (original, replacement) in enumerate(cases):
-            assert original in source
+            if not (original in source):
+                raise AssertionError("native AOT assertion failed")
             file = out / f"invalid-{i}.ores"
             file.write_text(source.replace(original, replacement, 1))
             wrong = compile_source(file)
-            assert wrong.returncode != 0 and not wrong.stdout.strip(), (i, wrong.stdout)
+            if not (wrong.returncode != 0 and not wrong.stdout.strip()):
+                raise AssertionError((i, wrong.stdout))
         missing = run([compiler, "--experimental-rt-scalar-loop", "--target=wasm32", str(fixture)])
-        assert missing.returncode != 0 and not missing.stdout.strip()
+        if not (missing.returncode != 0 and not missing.stdout.strip()):
+            raise AssertionError("native AOT assertion failed")
         print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: 3 peer frames, cancellation isolation, bounded progress, 2 compiled-IR killed mutations, negatives")
 
 if __name__ == "__main__":
