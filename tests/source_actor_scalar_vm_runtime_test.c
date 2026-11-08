@@ -25,6 +25,7 @@ static atomic_int fuel_failure_processed;
 static atomic_int cancellation_processed;
 static atomic_int tail_operands_denied;
 static atomic_int scalar_arithmetic_verified;
+static atomic_int nested_reentry_denied;
 
 #define OP(x, y) { x, y }
 /* tail(n) = n <= 0 ? 0 : tail(n-1). Executes 100k recursive guest
@@ -257,6 +258,20 @@ static int64_t fuel_exhausted_message(
     return 0;
 }
 
+static int64_t nested_entry_message(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
+        int64_t payload) {
+    (void)heap;
+    check(domain && epoch && payload == 1);
+    int64_t result = -1;
+    check(oreslang_source_actor_scalar_vm_execute(
+        &infinite_program, 1, &result) == ORES_SCALAR_INVALID_FRAME
+        && result == 0);
+    atomic_fetch_add_explicit(&nested_reentry_denied, 1,
+        memory_order_release);
+    return 0;
+}
+
 static int64_t invalid_tail_message(
         OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
         int64_t payload) {
@@ -424,6 +439,16 @@ int main(void) {
     check(oreslang_source_actor_test_scalar_checkpoint_count(cancelled) == 1);
     oreslang_source_actor_join_done(cancelled);
     oreslang_source_actor_test_hold_scalar_checkpoint(0);
+
+    /* Mutation at the 256-op checkpoint attempts to recursively enter the
+     * interpreter on the SAME actor. It must never overwrite live PC/slots. */
+    oreslang_source_actor_test_reenter_scalar_vm_once();
+    void* reentrant = oreslang_source_actor_spawn(
+        init, nested_entry_message, 1);
+    check(reentrant);
+    oreslang_source_actor_send(reentrant, 1);
+    check(wait_for(&nested_reentry_denied, 1));
+    oreslang_source_actor_stop(reentrant);
 
     void* tail_bad = oreslang_source_actor_spawn(
         init, invalid_tail_message, 1);
