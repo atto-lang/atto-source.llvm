@@ -95,6 +95,17 @@ class PrivateCiApprovalResetTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 read_regular_policy(link)
 
+    def test_superseded_v3_carrier_contract_is_absent(self):
+        path = ROOT / ".github/private-ci-carrier-contracts.json"
+        self.assertTrue(path.is_file() and not path.is_symlink())
+        raw = path.read_bytes()
+        document = json.loads(raw)
+        self.assertEqual(document["schema"], 1)
+        self.assertIn("opto-sync-test/go-java-validation", document["carriers"])
+        self.assertNotIn("streempilot-test/browser-studio-e2e", document["carriers"])
+        self.assertNotIn(b"1323599136", raw)
+        self.assertNotIn(b"ci/test-plans/llvm-pr787.json", raw)
+
     def test_real_v3_publisher_parser_denies_old_destination(self):
         script = ROOT / "scripts/publish-private-ci-source-v3.py"
         self.assertTrue(script.is_file() and not script.is_symlink())
