@@ -77,3 +77,23 @@ status without fetching a result. The harness must print
 Linux child-signal trap test; a skipped trap suite or Python `-O` test
 invocation is not acceptable evidence. The complete compiler-produced
 guest harness is run independently with Clang `-O0/-O2/-O3`.
+
+
+## Compiler-generated LLVM IR mutation suite
+
+The opt-in AOT regression driver now produces four syntactically valid
+mutated LLVM modules **from the actual compiler output**, compiles them
+with Clang `-O2` and runs the full native frame oracle. The mutations:
+
+- replace `batch.limit` with the global upper bound (fuel cap bypass);
+- double the committed counter increment (non-exactly-once commit);
+- store the previous counter rather than the committed counter (lost
+  heap continuation state);
+- disguise the `CANCELLED` step status as `DONE` (terminal forgery).
+
+A mutation is accepted as *killed* only when it successfully compiles but
+the native oracle fails; a malformed IR parser error does NOT count. The
+ordinary guest matrix still requires all 16 Linux signal-based trap
+scenarios and seven dispatch-fuel boundaries to pass at O0/O2/O3. Neither
+suite proves the general AttoLang loop/recursive-call safepoint pass,
+which remains unimplemented and fail-closed.
