@@ -164,6 +164,35 @@ static void require_cancelled_peer_is_isolated(void) {
     free(cancel);
 }
 
+/* Compiler-backed exact fuel boundaries. The slow fuel decision is
+ * outside the loop body; each invocation commits at most the supplied batch.
+ * The actual generated ABI must not replay or drop a committed increment. */
+static void require_batch_fuel_boundaries(void) {
+    const uint64_t cases[] = {0, 1, 127, 128, 129, 511, 512};
+    for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); ++i) {
+        ScalarFrame *f = calloc(1, sizeof(*f));
+        CHECK(f != NULL);
+        oreslang_rt_scalar_frame_init(f);
+        const uint64_t fuel = cases[i];
+        CHECK(oreslang_rt_scalar_frame_step(f, fuel) == 1);
+        CHECK(f->state == 1 && f->counter == fuel);
+        uint64_t before = fuel;
+        int dispatches = 0;
+        while (f->state != 2) {
+            const uint64_t need = 1000 - before;
+            const uint64_t advance = need < 512 ? need : 512;
+            const int result = oreslang_rt_scalar_frame_step(f, 512);
+            CHECK(f->counter == before + advance);
+            CHECK(result == (f->state == 2 ? 0 : 1));
+            before = f->counter;
+            CHECK(++dispatches <= 2);
+        }
+        CHECK(f->counter == 1000);
+        CHECK(oreslang_rt_scalar_frame_result(f) == 1000);
+        free(f);
+    }
+}
+
 int main(void) {
     // Test real, independent HEAP frame ownership; no C/LLVM stack frame
     // survives an explicit guest yield. Host owns dispatch serially.
@@ -215,6 +244,8 @@ int main(void) {
 #endif
     require_bounded_peer_progress();
     require_cancelled_peer_is_isolated();
+    require_batch_fuel_boundaries();
+    puts("SCALAR_FRAME_AOT_BATCH_FUEL_BOUNDARIES_PASS");
     puts("SCALAR_FRAME_AOT_CANCELLED_PEER_ISOLATION_PASS");
     puts("SCALAR_FRAME_AOT_THREE_PEERS_BOUNDED_PROGRESS_PASS");
     puts("SCALAR_FRAME_AOT_TWO_TASKS_PASS");
