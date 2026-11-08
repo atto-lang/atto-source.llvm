@@ -7,12 +7,13 @@
 The analysis takes a compiler-owned CFG with unique owner identities and explicit operations:
 
 - `Create`: initialize a previously uninitialized owner.
-- `Use`: require a live owned value and no mutable borrow.
+- `Use`: read a live owned value; it is allowed under shared loans but not a mutable loan.
+- `UseMutable`: mutate a live owned value only when no shared or mutable loan exists.
 - `BorrowShared` / `EndBorrowShared`: maintain a bounded shared-loan count.
 - `BorrowMutable` / `EndBorrowMutable`: enforce exclusive mutable loan.
 - `Take(source, destination)`: transfer the live resource into a distinct uninitialized owner; the source becomes moved and the destination inherits the original acquisition order.
 - `Drop`: explicitly destroy once; a later use/drop is rejected.
-- `ExitNormal`: emit a reverse declaration-order cleanup plan for all still owned objects.
+- `ExitNormal`: emit a reverse acquisition-order cleanup plan for all still owned objects.
 
 Every reachable CFG block must have successors or an explicit exit. Join points require **identical** owner states and borrow counts on every incoming edge. This safely rejects differing branch ownership until a future path-sensitive/SSA ownership representation can prove and reconcile it.
 
@@ -24,7 +25,7 @@ ActorRegionV2 constructs a small CFG: all lexical objects are created in the ent
 
 ## Tests
 
-`native_ownership_dataflow_v1` contains five positive scenarios and fifteen negative scenarios. It checks cleanup order, moved and explicitly dropped owners, shared/mutable borrow release, double destruction, use after move, dropping with a loan, conflicting aliases, mismatched join states, suspend exit, missing explicit exit and duplicate owner identities, unbounded cycles, missing/invalid transfer destinations, transfer into an initialized destination, use-before-create, unknown operation kinds, unreachable blocks, and unbalanced borrows.
+`native_ownership_dataflow_v1` contains six positive scenarios and eighteen negative scenarios. It checks cleanup order, moved and explicitly dropped owners, shared/mutable borrow release, double destruction, use after move, dropping with a loan, conflicting aliases, mismatched join states, suspend exit, missing explicit exit and duplicate owner identities, unbounded cycles, missing/invalid transfer destinations, transfer into an initialized destination, use-before-create, unknown operation kinds, unreachable blocks, unbalanced borrows, mutable access during shared borrowing, incompatible acquisition histories at joins, and ending a nonexistent loan.
 
 The tests are authored and registered. They are **not reported as passing** until a nonzero-step native CTest job runs on the exact PR head. They do not prove LLVM guest execution or a process-wide no-GC link closure.
 
