@@ -418,6 +418,10 @@ int main(void) {
     check(wait_for(&sibling_processed, 3));
     oreslang_source_actor_request_stop(cancelled);
     check(wait_for(&cancellation_processed, 1));
+    /* Exact 256 dispatched instructions, not "at most 2M eventually".
+     * Count excludes the next opcode, which cancellation never executed. */
+    check(oreslang_source_actor_test_scalar_dispatched_steps(cancelled) == 256);
+    check(oreslang_source_actor_test_scalar_checkpoint_count(cancelled) == 1);
     oreslang_source_actor_join_done(cancelled);
     oreslang_source_actor_test_hold_scalar_checkpoint(0);
 
