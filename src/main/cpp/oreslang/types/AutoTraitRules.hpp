@@ -71,7 +71,12 @@ inline Capabilities infer_auto_traits(const AutoType& type) {
     Capabilities caps;
     switch (type.kind) {
     case AutoTypeKind::Scalar:
-        caps = {true, true, true};
+        // Scalar is a compiler-verified leaf. Hidden nested types or dyn
+        // bounds must not launder a non-Send payload into a Copy/Send scalar.
+        caps = type.parameters.empty() && type.dyn_bounds.empty() &&
+                !type.complete_nominal_layout && !type.shareable_domain
+            ? Capabilities{true, true, true}
+            : Capabilities{false, false, false};
         break;
     case AutoTypeKind::Nominal:
         if (!type.complete_nominal_layout) {
@@ -117,11 +122,14 @@ inline Capabilities infer_auto_traits(const AutoType& type) {
         break;
     }
     case AutoTypeKind::Dyn:
-        caps = {
-            type.dyn_bounds.count(AutoTrait::Send) != 0,
-            type.dyn_bounds.count(AutoTrait::Sync) != 0,
-            type.shareable_domain && type.dyn_bounds.count(AutoTrait::Share) != 0
-        };
+        // Dyn bounds describe this exact trait object, never hidden
+        // additional captured storage. Invalid mixed shapes fail closed.
+        caps = type.parameters.empty() && !type.complete_nominal_layout
+            ? Capabilities{
+                type.dyn_bounds.count(AutoTrait::Send) != 0,
+                type.dyn_bounds.count(AutoTrait::Sync) != 0,
+                type.shareable_domain && type.dyn_bounds.count(AutoTrait::Share) != 0}
+            : Capabilities{false, false, false};
         break;
     }
     return apply_negative(caps, type.negative);
