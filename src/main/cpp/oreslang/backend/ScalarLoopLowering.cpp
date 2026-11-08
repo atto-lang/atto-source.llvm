@@ -3,12 +3,16 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "oreslang/backend/LlvmCompat.hpp"
+#include "oreslang/backend/MeteredCfgVerifier.hpp"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -159,7 +163,8 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         b.SetInsertPoint(budget);
         // Check the lifetime quota BEFORE the physical dispatch slice:
         // repeated step(frame, 0) cannot mask a depleted logical tenant.
-        auto* logicalRemaining = b.CreateLoad(i64, field(b, frame, 3), "logical.remaining");
+        auto* logicalFuelAddress = field(b, frame, 3);
+        auto* logicalRemaining = b.CreateLoad(i64, logicalFuelAddress, "logical.remaining");
         b.CreateCondBr(b.CreateICmpEQ(logicalRemaining, constant(0)),
                        logicalExhausted, logicalReady);
         b.SetInsertPoint(logicalExhausted);
@@ -176,10 +181,36 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         b.CreateStore(next, counterAddress);
         auto* nextLogical = b.CreateSub(logicalRemaining, constant(1),
                                         "fuel.remaining.logical");
-        b.CreateStore(nextLogical, field(b, frame, 3));
+        auto* logicalFuelDebit = b.CreateStore(nextLogical, logicalFuelAddress);
         auto* nextFuel = b.CreateSub(remaining, constant(1), "fuel.remaining.dispatch");
         b.CreateBr(loopHead);
         remaining->addIncoming(nextFuel, advance);
+
+        // Fail closed at the IR construction boundary: no generated cycle
+        // may bypass the committed lifetime-fuel debit. This independent
+        // graph proof also catches a future newly-added loop backedge that
+        // accidentally bypasses the metered block. It is not a substitute
+        // for optimized AOT execution or recursive/call-graph certification.
+        if (logicalFuelDebit->getParent() != advance ||
+                logicalFuelDebit->getPointerOperand() != logicalFuelAddress ||
+                logicalFuelDebit->getValueOperand() != nextLogical)
+            throw std::runtime_error("scalar guest metering debit is not in committed block");
+        std::unordered_map<const llvm::BasicBlock*, std::size_t> ids;
+        ids.reserve(step->size());
+        std::size_t index = 0;
+        for (const auto& block : *step) ids.emplace(&block, index++);
+        std::vector<std::vector<std::size_t>> edges(step->size());
+        for (const auto& block : *step) {
+            const auto from = ids.at(&block);
+            for (const auto* successor : llvm::successors(&block)) {
+                const auto found = ids.find(successor);
+                if (found == ids.end())
+                    throw std::runtime_error("scalar guest CFG has foreign successor");
+                edges[from].push_back(found->second);
+            }
+        }
+        if (!backend_detail::every_cycle_contains_meter(edges, {ids.at(advance)}))
+            throw std::runtime_error("scalar guest CFG has a cycle without lifetime fuel debit");
     }
 
     auto* cancel = llvm::Function::Create(
