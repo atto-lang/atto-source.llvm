@@ -190,8 +190,13 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         auto* invalid = llvm::BasicBlock::Create(context, "invalid", cancel);
         auto* known = b.CreateAnd(b.CreateICmpUGE(s, constant(1)),
                                    b.CreateICmpULE(s, constant(3)));
+        auto* counter = b.CreateLoad(i64, field(b, frame, 1));
+        auto* counterInRange = b.CreateAnd(
+            b.CreateICmpSGE(counter, llvm::ConstantInt::getSigned(i64, loop.initial)),
+            b.CreateICmpSLE(counter, llvm::ConstantInt::getSigned(i64, loop.upper_bound)));
         b.CreateCondBr(b.CreateAnd(known,
-            b.CreateICmpEQ(b.CreateLoad(i64, field(b, frame, 2)), constant(kMagic))),
+            b.CreateAnd(counterInRange, b.CreateICmpEQ(
+                b.CreateLoad(i64, field(b, frame, 2)), constant(kMagic)))),
             valid, invalid);
         b.SetInsertPoint(invalid);
         fail(b);
