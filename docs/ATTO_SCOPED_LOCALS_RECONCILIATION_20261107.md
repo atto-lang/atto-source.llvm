@@ -421,3 +421,31 @@ is not itself proof of full language or backend parity.
   `.atto` lowering, issuer-authenticated tenant/isolate identities, hot
   upgrade/restart, bounded destructor progress and actual sanitizer
   execution remain release holds.
+
+
+## Ticket table cleanup-hook lifetime and quota audit (2026-11-07)
+
+- Handoff tables now deregister their STOP cleanup hook in the destructor.
+  A shared registration token is held both by the table and the registry;
+  a worker snapshot can finish its callback safely while the table's weak
+  State reference prevents use-after-free. Destruction on a scheduler carrier
+  is not admitted for this registry-connected host resource.
+- Active cleanup hook quota is 64 per scheduler registry. Releasing a table
+  frees one quota slot. Tests cover 96 create/destroy cycles, exhausting all
+  64 live registrations, rejecting registration 65, and accepting a fresh
+  registration once one table is destroyed.
+- The handoff test suite now authors **80 named native-host assertions**
+  (50 more than the initial registered-handoff 30). An independent C suite
+  authors **16** two-incarnation STOP gate assertions. Previously authored
+  suites: 219 lifecycle/STOP/scoped + 17 canonical coexistence, for a total
+  of **332 named host assertions** (219 + 17 + 80 + 16). These counts are
+  SOURCE-ONLY; neither the host suite nor any negative mutation has a
+  verified runner-assigned execution receipt at this head.
+- Optimized-workflow negative witnesses must reject unregistered derived
+  contexts, disabled automatic pending ticket revocation, and omission
+  of the recipient side of dual-actor STOP admission. The cancelled-parent
+  sweep checks generation identity outside cancellation/table mutex nesting.
+- Remaining: real native GCC/Clang/ASan/UBSan/TSan execution, full semantic
+  merge with current main, compiler-issued guest data descriptors and
+  tenant/isolate authentication; actor hot-upgrade/restart/tenant reclaim
+  integration remains unproven.
