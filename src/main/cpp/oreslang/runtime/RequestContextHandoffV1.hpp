@@ -311,16 +311,43 @@ public:
         return revoke_state_recipient(*state_, recipient);
     }
 
-    // Drops cancelled envelopes; caller must own the host table lifetime.
+    // Cancellation graph inspection must NOT occur under the table lock:
+    // seal() takes the table lock before cancellation authority. Reversing
+    // that order in sweep() would deadlock a racing cancellation/seal.
+    // Snapshot {slot,generation,weak_parent} first, check graph authority
+    // outside the table lock, then revalidate the slot generation before
+    // detaching. Never destroy guest value objects under either mutex.
     std::size_t sweep() {
+        struct Candidate {
+            std::size_t index;
+            std::uint64_t generation;
+            std::weak_ptr<TaskCancellation> parent;
+        };
+        std::vector<Candidate> observed;
+        std::vector<std::size_t> cancelled;
         std::vector<std::unique_ptr<Envelope>> dropped;
+        observed.reserve(state_->slots.size());
+        cancelled.reserve(state_->slots.size());
         dropped.reserve(state_->slots.size());
         {
             std::lock_guard<std::mutex> lock(state_->mutex);
-            for (auto& slot : state_->slots) {
-                if (!slot.envelope) continue;
-                auto parent = slot.envelope->request_cancellation.lock();
-                if (!parent || parent->is_cancelled()) {
+            for (std::size_t i = 0; i < state_->slots.size(); ++i) {
+                const auto& slot = state_->slots[i];
+                if (slot.envelope)
+                    observed.push_back({i, slot.generation,
+                                        slot.envelope->request_cancellation});
+            }
+        }
+        for (std::size_t i = 0; i < observed.size(); ++i) {
+            auto parent = observed[i].parent.lock();
+            if (!parent || parent->is_cancelled()) cancelled.push_back(i);
+        }
+        {
+            std::lock_guard<std::mutex> lock(state_->mutex);
+            for (const std::size_t i : cancelled) {
+                const auto& candidate = observed[i];
+                Slot& slot = state_->slots[candidate.index];
+                if (slot.envelope && slot.generation == candidate.generation) {
                     dropped.push_back(std::move(slot.envelope));
                     --state_->pending;
                 }
