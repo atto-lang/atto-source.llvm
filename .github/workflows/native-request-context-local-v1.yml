@@ -61,8 +61,8 @@ jobs:
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = "e48757ee0d3b68de4998a7917efe5c9fc4c3f102"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.h)" = "6052cc8d1d219564da12b8a8f7a17b9f362da27b"
           test "$(git hash-object src/main/cpp/oreslang/runtime/TaskCancellation.hpp)" = "7eafa420e92ba10e552dade1846f3862cb79aec7"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextHandoffV1.hpp)" = "8f92ea1e39ebbecd55dad028c5f0ed1bb13ff15c"
-          test "$(git hash-object tests/native_request_context_handoff_v1_test.cpp)" = "8045a9f0b32d900350245abf7e20dafbfbd040b7"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/RequestContextHandoffV1.hpp)" = "533ad2299b6f5edf91396509fb64bdcb80bc28ba"
+          test "$(git hash-object tests/native_request_context_handoff_v1_test.cpp)" = "b684e8064b554d29559a2f96575d0bf6c9a756f3"
           test "$(git hash-object src/main/cpp/oreslang/runtime/RequestLocalStopGroupV1.hpp)" = "eb888ee35cefb09710723faa50ac23c47e8924d8"
           test "$(git hash-object tests/native_request_stop_cancel_v1_test.cpp)" = "d41874ea2adb7d69c47a855ae4f1a7cce51ee775"
           test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestDataMailGateV1.hpp)" = "6affba5e1b021bf9f4e5b54584241d873f245451"
@@ -71,7 +71,7 @@ jobs:
           test "$(git hash-object tests/native_request_lifecycle_registry_v1_test.cpp)" = "69a1ca1e849aade0e430a8e70d4b9bb163b6def5"
           test "$(git hash-object tests/native_actor_stop_notice_v1_test.c)" = "467c31db374b55c4ed43ca590bb2ca0cdea01019"
           test "$(git hash-object tests/native_dual_actor_handoff_commit_v1_test.c)" = "5af3174f3df18a36ed827f697aae22c86a8b41a8"
-          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestLifecycleRegistryV1.hpp)" = "bc6f2041fd6c53bee8d82842ea4508ecfae5cccb"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeRequestLifecycleRegistryV1.hpp)" = "33742e776bd1929de30b70e076307bbee123102f"
       - name: Compile and execute real actor two-request isolation
         shell: bash
         env:
@@ -102,8 +102,8 @@ jobs:
             -Isrc/main/cpp tests/native_request_context_handoff_v1_test.cpp \
             "$tmp/scheduler.o" -o "$tmp/request-handoff"
           "$tmp/request-handoff" | tee "$tmp/request-handoff-registry.log"
-          test "$(grep -c '^HANDOFF_REGISTRY_CASE_PASS ' "$tmp/request-handoff-registry.log")" = "90"
-          grep -qx 'HANDOFF_REGISTRY_90_HOST_CASES_PASS' "$tmp/request-handoff-registry.log"
+          test "$(grep -c '^HANDOFF_REGISTRY_CASE_PASS ' "$tmp/request-handoff-registry.log")" = "100"
+          grep -qx 'HANDOFF_REGISTRY_100_HOST_CASES_PASS' "$tmp/request-handoff-registry.log"
           grep -qx 'REQUEST_CONTEXT_HANDOFF_V1_ALL_PASS' "$tmp/request-handoff-registry.log"
           # Negative mutation: bypass derived registration. An unattached
           # recipient must no longer be rejectable; the regression MUST fail.
@@ -122,9 +122,27 @@ jobs:
             mutation_status=$?
             set -e
             test "$mutation_status" -ne 0
-            grep -Fq 'HANDOFF_REGISTRY_CASE_FAIL 14_unattached_B_redeem_fail_closed' \
+            grep -Fq 'HANDOFF_REGISTRY_CASE_FAIL 09_derived_scope_closed_and_quota_reclaimed' \
               "$tmp/handoff-mutant.log"
             printf 'HANDOFF_DERIVED_ADMISSION_MUTATION_DETECTED compiler=%s\n' "$CXX"
+            # Distinct negative mutation: allow issuing tickets to a
+            # recipient without a lifecycle STOP observer. Case 13 MUST fail.
+            test "$(grep -Fc '!lifecycle_registry_->attached_generation(recipient)' "$header")" = 1
+            mkdir -p "$tmp/no-attachment/oreslang/runtime"
+            sed 's/!lifecycle_registry_->attached_generation(recipient)/false/g' \
+              "$header" > "$tmp/no-attachment/oreslang/runtime/RequestContextHandoffV1.hpp"
+            "$CXX" -std=c++17 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror -pthread \
+              -I"$tmp/no-attachment" -Isrc/main/cpp \
+              tests/native_request_context_handoff_v1_test.cpp \
+              "$tmp/scheduler.o" -o "$tmp/no-attachment-mutant"
+            set +e
+            timeout 90s "$tmp/no-attachment-mutant" > "$tmp/no-attachment.log" 2>&1
+            attachment_mutation_status=$?
+            set -e
+            test "$attachment_mutation_status" -ne 0
+            grep -Fq 'HANDOFF_REGISTRY_CASE_FAIL 13_unattached_B_ticket_denied_before_slot_charge' \
+              "$tmp/no-attachment.log"
+            printf 'HANDOFF_UNATTACHED_RECIPIENT_MUTATION_DETECTED compiler=%s\n' "$CXX"
             # Mutation A: suppress CONTROL-plane STOP ticket cleanup.
             # A valid native run MUST reject it at named case 36.
             hook=src/main/cpp/oreslang/runtime/NativeRequestLifecycleRegistryV1.hpp
