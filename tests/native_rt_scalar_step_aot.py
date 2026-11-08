@@ -148,6 +148,10 @@ def main():
             raise AssertionError(execution.stderr)
         if not ("SCALAR_FRAME_AOT_COMPILED_FUEL_BOUNDARIES_PASS" in execution.stdout):
             raise AssertionError("native AOT assertion failed")
+        if not ("SCALAR_FRAME_AOT_COMPILED_BATCHED_QUANTA_PASS" in execution.stdout):
+            raise AssertionError("compiler-native batch handoffs not executed")
+        if not ("SCALAR_FRAME_AOT_HOST_OWNED_LIFETIME_QUOTA_PASS" in execution.stdout):
+            raise AssertionError("host lifetime fuel isolation not executed")
         if not ("SCALAR_FRAME_AOT_TWO_TASKS_PASS" in execution.stdout):
             raise AssertionError("native AOT assertion failed")
         if not ("SCALAR_FRAME_AOT_THREE_PEERS_BOUNDED_PROGRESS_PASS" in execution.stdout):
@@ -209,7 +213,7 @@ def main():
         missing = run([compiler, "--experimental-rt-scalar-loop", "--target=wasm32", str(fixture)])
         if not (missing.returncode != 0 and not missing.stdout.strip()):
             raise AssertionError("native AOT assertion failed")
-        print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: 3 peer frames, cancellation isolation, bounded progress, 2 compiled-IR killed mutations, negatives")
+        print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: compiled 64/128/256/512 batching, host lifetime quota, 3 peer frames, 2 killed native IR mutations, 3 killed structural mutations, negatives")
 
 if __name__ == "__main__":
     main()
