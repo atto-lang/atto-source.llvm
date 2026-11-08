@@ -506,6 +506,23 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-metered-cfg-verifier-test)
     set_tests_properties(native_metered_cfg_cycles_fail_closed PROPERTIES TIMEOUT 30)
 
+    # Full LLVM API negative tests for the compiler's fail-closed scalar
+    # call/recursion/FFI boundary. Unlike the portable graph oracle this
+    # target requires LLVM development libraries; run on exact-head CI.
+    add_executable(oreslang-native-scalar-call-verifier-test
+        tests/native_scalar_guest_call_verifier_test.cpp)
+    target_include_directories(oreslang-native-scalar-call-verifier-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_compile_options(oreslang-native-scalar-call-verifier-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-scalar-call-verifier-test PRIVATE
+        ${ORE_LLVM_LIBS})
+    add_test(NAME native_scalar_guest_calls_fail_closed
+        COMMAND oreslang-native-scalar-call-verifier-test)
+    set_tests_properties(native_scalar_guest_calls_fail_closed
+        PROPERTIES TIMEOUT 20)
+
     # Host-only fairness budget; not evidence of compiled Oreslang suspension.
     add_executable(oreslang-native-reduction-quantum-test
         tests/native_cooperation_quantum_test.cpp)
