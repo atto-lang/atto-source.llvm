@@ -104,12 +104,11 @@ static bool rejects_mutable_or_escaping_owner() {
     return false;
 }
 int main() {
-    CHECK(maps_resolved_source_to_two_exit_cfg());
-    CHECK(rejects_unowned_guard_receiver());
-    CHECK(rejects_unknown_return_field());
-    CHECK(rejects_unmodeled_statement_edges());
-    CHECK(rejects_hidden_program_roots());
-    CHECK(rejects_mutable_or_escaping_owner());
+    const bool ok = maps_resolved_source_to_two_exit_cfg() &&
+        rejects_unowned_guard_receiver() && rejects_unknown_return_field() &&
+        rejects_unmodeled_statement_edges() && rejects_hidden_program_roots() &&
+        rejects_mutable_or_escaping_owner();
+    if (!ok) return 1;
     std::puts("OWNERSHIP_SOURCE_LOWERING_V1|positive=1|negative=5|result=PASS");
     return 0;
 }
