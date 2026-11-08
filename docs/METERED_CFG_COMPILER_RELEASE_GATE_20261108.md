@@ -126,7 +126,7 @@ is only meaningful inside a trusted, exclusive owner/protection boundary.
 
 - `ScalarLoopLowering.cpp`: `bebeb66931d0745d94aa028b95df4d581e6c222a`
 - `ScalarGuestCallVerifier.hpp`: `4308dc2333a7a835f1edf08117f1d154ae03d7b4`
-- `native_scalar_guest_call_verifier_test.cpp`: `32301b7cda22a9da744c0c505dbbf086d8877160`
+- `native_scalar_guest_call_verifier_test.cpp`: `2523edace8bc03f8df34fa9e8f36b51756f3040f`
 - `native_rt_scalar_step_aot.py`: `5196a13c1849b505f91bd4c21a1ac512dcc56d41`
 - `native_scalar_ir_surface_test.py`: `7f4fca8eeeae5e992aec19c587f85ee672f5a6a0`
 - Portable CFG verifier header/test: `98dcd686f4df7b7e8e11906d1a74da69b1a0492e`
@@ -135,6 +135,9 @@ is only meaningful inside a trusted, exclusive owner/protection boundary.
 ### Executed portable checks
 
 - GCC 14 and Clang 17 at `-O3 -DNDEBUG`: **PASS**.
+- The complete local portable verification receipt is stored with this
+  ChatGPT run; its scope is individual Git blobs, not a checked-out full tree.
+  GCC/Clang `-O3`, GCC/Clang ASan+UBSan and both Python scanner modes all pass.
 - GCC and Clang ASan/UBSan in a clean container shell: **PASS**.
 - 3,584 exhaustive three-node directed CFG/meter cases, resource limits and
   malformed edges: **PASS**.
