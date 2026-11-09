@@ -407,5 +407,48 @@ int main() {
     assert(rejected([&] { apply({Kind::Suspend, ""}, direct_suspend); }));
     apply({Kind::ReleaseShared, "y", 37}, direct_suspend);
     apply({Kind::Suspend, ""}, direct_suspend);
+
+    // Compiler-controlled AST complexity can be adversarial. Oversized
+    // unreachable blocks, places, operations and edges must be denied before
+    // allocating the fixed-point analysis or iterating a large proof lattice.
+    Graph complexity;
+    complexity.entry = {{"owner", cell(kOwned)}};
+    complexity.blocks.resize(kMaxCfgBlocks + 1);
+    assert(rejected([&] { verify(complexity); }));
+    complexity.blocks.clear();
+    complexity.blocks.resize(1);
+    complexity.entry.clear();
+    for (std::size_t i = 0; i <= kMaxCfgPlaces; ++i)
+        complexity.entry.emplace("place_" + std::to_string(i), cell(kOwned));
+    assert(rejected([&] { verify(complexity); }));
+
+    complexity.entry = {{"owner", cell(kOwned)}};
+    complexity.blocks[0].operations.assign(
+        kMaxCfgOperations + 1, op(Kind::Read, "owner"));
+    assert(rejected([&] { verify(complexity); }));
+    complexity.blocks[0].operations.clear();
+    complexity.blocks[0].successors.assign(kMaxCfgEdges + 1, 0);
+    assert(rejected([&] { verify(complexity); }));
+
+    // A CFG can individually satisfy the place/op/edge maxima yet require
+    // excessive quadratic work because apply() checks the entire place
+    // layout for every operation. Abort before executing that workload.
+    complexity.blocks[0].successors.clear();
+    complexity.entry.clear();
+    for (std::size_t i = 0; i < 4096; ++i)
+        complexity.entry.emplace("place_" + std::to_string(i), cell(kOwned));
+    complexity.blocks[0].operations.assign(
+        4096, op(Kind::Read, "place_0"));
+    assert(rejected([&] { verify(complexity); }));
+
+    // Ordinary small ownership graphs retain their existing semantics.
+    complexity.entry = {{"owner", cell(kOwned)}};
+    complexity.blocks[0].operations = {
+        op(Kind::BorrowShared, "owner"),
+        op(Kind::ReleaseShared, "owner"),
+        {Kind::Suspend, ""},
+        op(Kind::Read, "owner")
+    };
+    verify(complexity);
     return 0;
 }
