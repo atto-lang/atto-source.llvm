@@ -1,0 +1,77 @@
+name: Opto Sync AttoLang native LLVM guest contract
+on:
+  pull_request:
+    paths:
+      - 'tests/fixtures/opto-sync-atto-v1/**'
+      - 'scripts/test-opto-sync-atto-native.mjs'
+      - '.github/workflows/opto-sync-atto-llvm-guest.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  opto-sync-real-native-atto-guest:
+    name: Compiler-backed LLVM/Clang O0 and O2 Opto Sync scalar guests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact triggering source SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # immutable v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify fixture hashes and exact source identity (SOURCE_ONLY)
+        shell: bash
+        env:
+          ATTO_EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$ATTO_EXPECTED_SHA"
+          test -z "$(git status --porcelain)"
+          node --check scripts/test-opto-sync-atto-native.mjs
+          node scripts/test-opto-sync-atto-native.mjs --verify-source-only
+          echo "OPTO_ATTO_SOURCE_SHA=$ATTO_EXPECTED_SHA"
+          echo "OPTO_ATTO_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Install LLVM compiler and zero-GC IR-auditor build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends build-essential cmake ninja-build clang llvm-dev rustc
+          test -n "$(llvm-config --cmakedir)"
+          clang --version | head -1
+          rustc --version
+      - name: Build real compiler and native zero-GC IR audit tool
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -G Ninja -S . -B "$RUNNER_TEMP/opto-atto-llvm-build" \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+            -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build "$RUNNER_TEMP/opto-atto-llvm-build" \
+            --target oreslang-llvmc oreslang-no-gc-ir-audit-build --parallel 2
+          test -x "$RUNNER_TEMP/opto-atto-llvm-build/oreslang-llvmc"
+          test -x "$RUNNER_TEMP/opto-atto-llvm-build/oreslang-no-gc-ir-audit"
+          sha256sum "$RUNNER_TEMP/opto-atto-llvm-build/oreslang-llvmc"
+          sha256sum "$RUNNER_TEMP/opto-atto-llvm-build/oreslang-no-gc-ir-audit"
+      - name: Compile and execute actual Opto Sync AttoLang guests at O0 and O2
+        shell: bash
+        env:
+          ATTO_EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          ORESLANG_LLVMC: ${{ runner.temp }}/opto-atto-llvm-build/oreslang-llvmc
+          ORES_NO_GC_IR_AUDIT: ${{ runner.temp }}/opto-atto-llvm-build/oreslang-no-gc-ir-audit
+          ATTO_OPTO_RECEIPT: ${{ runner.temp }}/opto-sync-atto-llvm-receipt.json
+        run: |
+          set -euo pipefail
+          node scripts/test-opto-sync-atto-native.mjs
+          test -s "$ATTO_OPTO_RECEIPT"
+          test "$(git rev-parse HEAD)" = "$ATTO_EXPECTED_SHA"
+          echo 'OPTO_ATTO_NATIVE_LLVM_GUEST_STEP=EXECUTED'
+          echo 'ATTO_CROSS_BACKEND_PARITY=NOT_CERTIFIED'
+      - name: Retain exact-source real compiler/guest execution evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # pinned v7.0.1
+        with:
+          name: opto-sync-atto-llvm-native-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/opto-sync-atto-llvm-receipt.json
+          if-no-files-found: ignore
+          retention-days: 30
