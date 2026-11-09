@@ -103,7 +103,10 @@ int main() {
     require(stopped.claim_under_lease(selected)==LS::Ok &&
             selected.dispatch==Ledger::Dispatch::CancelCleanup,
             "supervisor cleanup turn");
-    require(cancelled.enter(t)==FS::Ok,"physical cleanup turn reacquires stack");
+    require(cancelled.enter_for_cleanup(t)==FS::Ok,
+            "physical cleanup turn reacquires non-executable stack");
+    require(cancelled.push(t,1,pending)==FS::NotRunning,
+            "cleanup lease cannot dispatch guest frames");
     require(cancelled.retire_after_guest_exit(t,true)==FS::Ok,"cleanup scrubs frame");
     require(stopped.finish_after_exit(t)==LS::Ok,"cleanup acknowledged");
     require(cancelled.snapshot().charged_bytes==0,"no bytes after cleanup");
@@ -135,6 +138,15 @@ int main() {
     require(quota.retire_after_guest_exit(qb,true)==Small::Status::Ok,
             "B cleanup permitted despite terminal poison");
     require(quota.snapshot().charged_bytes==40,"A suspended still charged");
+    require(quota.enter_for_cleanup(qa)==Small::Status::Ok,
+            "poisoned actor keeps bounded physical cleanup access");
+    require(quota.push(qa,1,exceeded)==Small::Status::Poisoned,
+            "cleanup entry cannot restart poisoned guest");
+    require(quota.retire_after_guest_exit(qa,true)==Small::Status::Ok,
+            "suspended A is scrubbed by physical cleanup");
+    require(quota.snapshot().charged_bytes==0 &&
+            quota.snapshot().live_stacks==0,
+            "poisoned actor eventually reclaims all invocation stacks");
 
     // Independent actor heap/stack domain is not poisoned by A's exhaustion.
     Frames sibling(82,2);
