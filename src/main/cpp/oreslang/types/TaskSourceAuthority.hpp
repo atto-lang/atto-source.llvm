@@ -143,6 +143,17 @@ inline void revoke_source_task_i64(SourceTaskI64Binding& task) noexcept {
     task.ownership_boundary_identity = nullptr;
 }
 
+inline void require_source_task_i64(
+        const SourceTaskI64Binding& task) {
+    const auto current = source_task_i64_fingerprint(task);
+    if (!task.ownership_admitted ||
+            task.ownership_boundary_identity != &task ||
+            !task.ownership_authority_fingerprint || !current ||
+            task.ownership_authority_fingerprint != current)
+        throw std::runtime_error(
+            "source Task<int> lacks exact post-ownership lowering authority");
+}
+
 // Do not let a still-valid Task expression proof be transplanted into a
 // different, post-check function envelope. The frontend currently admits
 // exactly one capture-free Task<int> as the first binding of synchronous
@@ -183,17 +194,6 @@ inline void require_source_task_i64_function(const Function& function) {
         }
     }
     require_source_task_i64(task);
-}
-
-inline void require_source_task_i64(
-        const SourceTaskI64Binding& task) {
-    const auto current = source_task_i64_fingerprint(task);
-    if (!task.ownership_admitted ||
-            task.ownership_boundary_identity != &task ||
-            !task.ownership_authority_fingerprint || !current ||
-            task.ownership_authority_fingerprint != current)
-        throw std::runtime_error(
-            "source Task<int> lacks exact post-ownership lowering authority");
 }
 
 } // namespace oreslang::types
