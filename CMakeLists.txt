@@ -1426,6 +1426,26 @@ if(BUILD_TESTING)
     # replay-unsafe subjects, duplicate cases, and nb dispatch stay fail-closed.
     oreslang_contract_test(native_value_match_arm_result
         dispatch-value-match-run.ores --ir "ternary.merge")
+    oreslang_contract_test(native_value_match_default_ir
+        dispatch-value-match-default-run.ores --ir "ternary.merge")
+    oreslang_contract_test(native_value_match_default_only_ir
+        dispatch-value-match-default-only-run.ores --ir "ret i64 42")
+    oreslang_contract_test(native_do_match_default_ir
+        dispatch-do-match-default-run.ores --ir "return.snapshot.slot")
+    oreslang_contract_test(native_do_match_default_only_ir
+        dispatch-do-match-default-only-run.ores --ir "return.snapshot.slot")
+    oreslang_contract_test(native_value_match_default_must_be_last
+        dispatch-value-match-default-not-last-reject.ores
+        --diagnostic "native value match default arm must be last")
+    oreslang_contract_test(native_do_match_default_must_be_last
+        dispatch-do-match-default-not-last-reject.ores
+        --diagnostic "native do match default arm must be last")
+    oreslang_contract_test(native_tilde_map_requires_typed_native_lowering
+        tilde-map-literal-native-reject.ores
+        --diagnostic "native tilde map/record literal unsupported")
+    oreslang_contract_test(native_tilde_record_requires_typed_native_lowering
+        tilde-record-literal-native-reject.ores
+        --diagnostic "native tilde map/record literal unsupported")
     # Direct signed-minimum literal remains valid; nested unary negation
     # would overflow host i64 and must reject before any LLVM IR.
     oreslang_contract_test(native_dispatch_signed_min_literal_ir
@@ -1454,6 +1474,14 @@ if(BUILD_TESTING)
             dispatch-signed-min-pattern-run.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_value_match_arm_result_runtime
             dispatch-value-match-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_value_match_default_runtime
+            dispatch-value-match-default-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_value_match_default_only_runtime
+            dispatch-value-match-default-only-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_do_match_default_runtime
+            dispatch-do-match-default-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_do_match_default_only_runtime
+            dispatch-do-match-default-only-run.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_value_switch_arm_result_runtime
             dispatch-value-switch-run.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_do_match_function_return_runtime
