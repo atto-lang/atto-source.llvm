@@ -143,13 +143,13 @@ public:
         Frame* frame=nullptr;
         Status st=top(t,ref,s,frame);
         if (st!=Status::Ok) return st;
-        scrub(*s,frame->offset,frame->size);
-        s->used-=frame->size;
+        const std::size_t size=frame->size;
+        scrub(*s,frame->offset,size);
+        s->used-=size;
         *frame={};
         --s->depth;
         --live_frames_;
-        charged_-=refBytes_; // updated only for this authenticated top frame
-        refBytes_=0;
+        charged_-=size;
         return Status::Ok;
     }
 
@@ -215,7 +215,6 @@ private:
         if (!same(t,ref.owner) || !slot->depth) return Status::NoFrame;
         frame=&slot->frames[slot->depth-1];
         if (ref.depth!=slot->depth || ref.nonce!=frame->nonce) return Status::NoFrame;
-        refBytes_=frame->size;
         return Status::Ok;
     }
     static void scrub(Slot& s,std::size_t offset,std::size_t size) noexcept {
@@ -238,7 +237,6 @@ private:
     std::array<Slot,Slots> slots_{};
     std::uint64_t actor_,generation_;
     std::size_t charged_=0,peak_=0,live_frames_=0;
-    std::size_t refBytes_=0;
     bool poisoned_=false;
 };
 
