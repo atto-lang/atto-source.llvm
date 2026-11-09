@@ -182,6 +182,67 @@ static void million_fast_backedges_do_not_read_the_clock() {
     require(q.completedBackedgesThisDispatch() == 1'048'576);
 }
 
+
+// Clock with an exact signed 64-bit nanosecond representation: no duration
+// casts can hide an overflow/regression in the test itself.
+struct ExtremeClock {
+    using rep = std::int64_t;
+    using period = std::nano;
+    using duration = std::chrono::duration<rep, period>;
+    using time_point = std::chrono::time_point<ExtremeClock>;
+    static constexpr bool is_steady = true;
+    static std::atomic<rep> ticks;
+    static std::atomic<int> reads;
+    static time_point now() noexcept {
+        reads.fetch_add(1, std::memory_order_relaxed);
+        return time_point(duration(ticks.load(std::memory_order_relaxed)));
+    }
+};
+std::atomic<ExtremeClock::rep> ExtremeClock::ticks{0};
+std::atomic<int> ExtremeClock::reads{0};
+
+using ExtremeQuantum = oreslang::runtime::BasicSourceCooperationQuantum<ExtremeClock>;
+
+static void extreme_clocks_fail_closed_on_slow_path() {
+    constexpr auto upper = std::numeric_limits<std::int64_t>::max();
+    constexpr auto lower = std::numeric_limits<std::int64_t>::min();
+
+    // Old direct signed subtraction wraps to +11 and incorrectly clears
+    // an overdue request. A ticket still permits at most one cold probe.
+    ExtremeClock::ticks.store(upper - 5);
+    ExtremeClock::reads.store(0);
+    ExtremeQuantum wrapped;
+    wrapped.beginDispatch();
+    ExtremeClock::ticks.store(lower + 5);
+    for (int i = 0; i < 127; ++i) require(!wrapped.completedBackedgeNeedsCheck());
+    require(wrapped.completedBackedgeNeedsCheck());
+    require(wrapped.shouldCooperateAtCheck());
+    require(!wrapped.shouldCooperateAtCheck());
+    require(ExtremeClock::reads.load() == 3);
+    require(wrapped.timeSinceLastCooperate() == std::chrono::nanoseconds::max());
+
+    // A backwards monotonic clock must not mint more scheduling time.
+    ExtremeClock::ticks.store(10'000);
+    ExtremeClock::reads.store(0);
+    ExtremeQuantum regressed;
+    regressed.beginDispatch();
+    ExtremeClock::ticks.store(9'999);
+    for (int i = 0; i < 128; ++i) regressed.completedBackedgeNeedsCheck();
+    require(regressed.shouldCooperateAtCheck());
+    require(regressed.timeSinceLastCooperate() == std::chrono::nanoseconds::max());
+
+    // Even a mathematically positive delta greater than INT64_MAX may
+    // never flow through signed chrono subtraction or duration_cast.
+    ExtremeClock::ticks.store(lower + 7);
+    ExtremeClock::reads.store(0);
+    ExtremeQuantum huge;
+    huge.beginDispatch();
+    ExtremeClock::ticks.store(upper - 7);
+    for (int i = 0; i < 128; ++i) huge.completedBackedgeNeedsCheck();
+    require(huge.shouldCooperateAtCheck());
+    require(huge.timeSinceLastCooperate() == std::chrono::nanoseconds::max());
+}
+
 int main() {
     reduction_fast_path();
     overdue_no_yield_region_checks_every_new_boundary();
@@ -191,5 +252,6 @@ int main() {
     repeated_dispatches_keep_task_context();
     short_resumptions_cannot_evade_poll_phase();
     million_fast_backedges_do_not_read_the_clock();
+    extreme_clocks_fail_closed_on_slow_path();
     std::cout << "native quantum 128/512/2ms: PASS (host-only, no guest await parity)\n";
 }
