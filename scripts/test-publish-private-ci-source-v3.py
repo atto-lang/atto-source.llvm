@@ -82,7 +82,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         ).read_bytes()
         # A syntactically valid owner rule after security terminators must
         # remain a hard denial, even if all owners are still ORESoftware.
-        mutation = codeowners + b"/docs/security/ @ORESoftware\\n"
+        mutation = codeowners + b"/docs/security/ @ORESoftware\n"
         with self.assertRaisesRegex(
             v3.Denied, "terminal security-owner rules"
         ):
