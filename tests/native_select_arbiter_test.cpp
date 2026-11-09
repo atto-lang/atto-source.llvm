@@ -222,6 +222,69 @@ static void throwing_commit_leaves_select_pending() {
     assert(second_revoke == 0);
 }
 
+static void commit_reentry_fails_closed_without_losing_registrations() {
+    NativeSelectArbiter<2> select;
+    auto first = select.register_case(0);
+    auto second = select.register_case(1);
+    int first_revoked = 0;
+    int second_revoked = 0;
+    first.arm([&] { ++first_revoked; });
+    second.arm([&] { ++second_revoked; });
+
+    const auto rejected = [&](auto attempt) {
+        bool threw = false;
+        try {
+            (void)first.try_win_if([&]() -> bool {
+                attempt();
+                return true;
+            });
+        } catch (const std::logic_error&) {
+            threw = true;
+        }
+        assert(threw);
+        assert(!select.winner().has_value());
+        assert(!select.is_cancelled());
+        assert(first_revoked == 0 && second_revoked == 0);
+    };
+
+    rejected([&] { (void)first.try_win(); });
+    rejected([&] { (void)select.cancellation_handle().cancel(); });
+    rejected([&] { (void)select.winner(); });
+    rejected([&] { (void)first.is_winner(); });
+    rejected([&] { first.arm([] {}); });
+    rejected([&] { (void)select.register_case(0); });
+
+    assert(second.try_win());
+    assert(select.winner().has_value() && *select.winner() == 1);
+    assert(first_revoked == 1 && second_revoked == 0);
+}
+
+static void nested_other_arbiter_is_allowed_but_cycle_is_rejected() {
+    NativeSelectArbiter<2> outer;
+    NativeSelectArbiter<2> inner;
+    auto outer_case = outer.register_case(0);
+    auto inner_case = inner.register_case(0);
+    outer_case.arm([] {});
+    inner_case.arm([] {});
+
+    bool cycle_rejected = false;
+    assert(outer_case.try_win_if([&] {
+        // A -> B is permitted. B -> A must be rejected before locking A.
+        assert(inner_case.try_win_if([&] {
+            try {
+                (void)outer.winner();
+            } catch (const std::logic_error&) {
+                cycle_rejected = true;
+            }
+            return true;
+        }));
+        return true;
+    }));
+    assert(cycle_rejected);
+    assert(outer.winner().has_value() && *outer.winner() == 0);
+    assert(inner.winner().has_value() && *inner.winner() == 0);
+}
+
 static void throwing_revoker_does_not_skip_other_losers() {
     NativeSelectArbiter<3> select;
     auto first = select.register_case(0);
@@ -305,6 +368,8 @@ int main() {
     registration_validation_fails_closed();
     conditional_commit_only_wins_after_operation_commits();
     throwing_commit_leaves_select_pending();
+    commit_reentry_fails_closed_without_losing_registrations();
+    nested_other_arbiter_is_allowed_but_cycle_is_rejected();
     throwing_revoker_does_not_skip_other_losers();
     concurrent_ready_race_has_exactly_one_winner();
     return 0;
