@@ -66,6 +66,28 @@ def carrier_contract(review_pr=None):
 
 
 class LlvmPrivateCiV3Test(unittest.TestCase):
+    def test_live_source_codeowners_matches_terminal_security_contract(self):
+        # The publisher reads the protected-main CODEOWNERS file, not a
+        # synthetic stand-in. Keep the source file itself in regression
+        # coverage so ownership ordering cannot silently block export.
+        codeowners = (
+            Path(__file__).resolve().parents[1] / ".github" / "CODEOWNERS"
+        ).read_bytes()
+        self.assertGreater(len(codeowners), 0)
+        v3.require_source_security_codeowners(codeowners)
+
+    def test_source_codeowners_nonterminal_owner_rule_fails_closed(self):
+        codeowners = (
+            Path(__file__).resolve().parents[1] / ".github" / "CODEOWNERS"
+        ).read_bytes()
+        # A syntactically valid owner rule after security terminators must
+        # remain a hard denial, even if all owners are still ORESoftware.
+        mutation = codeowners + b"/docs/security/ @ORESoftware\\n"
+        with self.assertRaisesRegex(
+            v3.Denied, "terminal security-owner rules"
+        ):
+            v3.require_source_security_codeowners(mutation)
+
     def test_incident_gate_contract_is_complete_and_unique(self):
         expected = (
             (22, 5832921751,
