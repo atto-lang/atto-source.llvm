@@ -23,7 +23,7 @@ The following **four** real repository source files were reconstructed from the 
 ORES_F32_NATIVE_HOST_PREFLIGHT_V1_PASS|foreign_thread=DENIED|stopped=DENIED|shape=CHECKED|guest=NOT_EXECUTED
 ```
 
-The complete in-repository runner script was **not** executed on a hosted runner; the locally compiled commands matched its intended GCC/Clang settings. Source CI admission has historically failed with zero steps.
+The **exact committed standalone shell runner** (Git blob `595f3a8b8fc90006b814fbe4fbdf44c169580baf`) was also reconstructed byte-for-byte, passed `bash -n`, and **executed locally** against the four Git-blob-verified source files. It completed all four GCC/Clang O1/O2 ASan+UBSan matrix configurations with `ORES_F32_NATIVE_ADMISSION_MATRIX_PASS` for each. It has **not** executed in GitHub-hosted CI. Source CI admission has historically failed with zero steps.
 
 ## Security / maturity boundaries
 
