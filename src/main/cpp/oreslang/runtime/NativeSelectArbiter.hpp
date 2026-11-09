@@ -12,6 +12,35 @@
 
 namespace oreslang::runtime {
 
+namespace detail {
+/**
+ * One TLS commit chain shared by *all* NativeSelectArbiter<Capacity> instances.
+ * Per-specialization TLS misses A<2> -> B<3> -> A<2> cycles and may deadlock.
+ * The opaque state pointer is compared, never dereferenced.
+ */
+struct NativeSelectCommitScope final {
+    const void* state;
+    NativeSelectCommitScope* previous;
+    inline static thread_local NativeSelectCommitScope* active = nullptr;
+
+    explicit NativeSelectCommitScope(const void* value) noexcept
+        : state(value), previous(active) {
+        active = this;
+    }
+    ~NativeSelectCommitScope() noexcept { active = previous; }
+    NativeSelectCommitScope(const NativeSelectCommitScope&) = delete;
+    NativeSelectCommitScope& operator=(const NativeSelectCommitScope&) = delete;
+
+    static void reject_reentry(const void* value) {
+        for (auto* scope = active; scope; scope = scope->previous) {
+            if (scope->state == value)
+                throw std::logic_error(
+                    "select commit callback must not re-enter its arbiter");
+        }
+    }
+};
+} // namespace detail
+
 /**
  * Host/runtime arbitration primitive for a future native static-select lowering.
  *
@@ -61,30 +90,9 @@ private:
         std::exception_ptr cleanup_failure;
     };
 
-    // Reject same-thread commit callback re-entry *before* attempting to
-    // acquire the non-recursive arbiter mutex. The linked TLS scope also
-    // detects A -> B -> A recursion without rejecting unrelated arbiters.
-    // Commit scopes are thread-local; no shared state is read without a lock.
-    struct CommitScope final {
-        const State* state;
-        CommitScope* previous;
-        explicit CommitScope(const State* value) noexcept
-            : state(value), previous(active_commit_) {
-            active_commit_ = this;
-        }
-        ~CommitScope() noexcept { active_commit_ = previous; }
-        CommitScope(const CommitScope&) = delete;
-        CommitScope& operator=(const CommitScope&) = delete;
-    };
-    inline static thread_local CommitScope* active_commit_ = nullptr;
-
+    using CommitScope = detail::NativeSelectCommitScope;
     static void reject_commit_reentry(const State* state) {
-        for (auto* scope = active_commit_; scope; scope = scope->previous) {
-            if (scope->state == state) {
-                throw std::logic_error(
-                    "select commit callback must not re-enter its arbiter");
-            }
-        }
+        CommitScope::reject_reentry(state);
     }
 
     static void record_cleanup_failure(
