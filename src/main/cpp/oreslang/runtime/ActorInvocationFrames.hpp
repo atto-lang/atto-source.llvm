@@ -52,8 +52,9 @@ public:
     // Bind immediately after successful ledger admit; no guest frame exists
     // yet. Reject a recycled slot's old token even after physical retirement.
     Status bind(Token t) noexcept {
-        if (poisoned_) return Status::Poisoned;
+        // Authenticate actor/incarnation before revealing poison status.
         if (!validIdentity(t)) return Status::Stale;
+        if (poisoned_) return Status::Poisoned;
         Slot& s=slots_[t.slot];
         if (s.phase!=Phase::Free) return Status::Busy;
         if (t.sequence<=s.last_sequence ||
