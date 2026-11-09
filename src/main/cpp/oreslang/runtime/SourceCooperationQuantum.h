@@ -64,6 +64,11 @@ public:
 
     // Calling this after await restarts *only* the fairness quantum.
     void beginDispatch() noexcept {
+        // Await/carrier migration cannot forget an overdue no-yield scope.
+        // Only a genuine prior cooperate acknowledges the exhausted counter.
+        if (!acknowledgedCooperate_ && backedges_ >= kMaxBackedgesPerDispatch)
+            pendingHandoff_ = true;
+        acknowledgedCooperate_ = false;
         dispatchStarted_ = Clock::now();
         backedges_ = 0;
         pollDue_ = false;
@@ -92,17 +97,35 @@ public:
         // cheap and can never repeatedly read the clock.
         if (!pollDue_) return false;
         pollDue_ = false;
-        if (watchdogRequested || backedges_ >= kMaxBackedgesPerDispatch)
+        if (pendingHandoff_ || watchdogRequested ||
+            backedges_ >= kMaxBackedgesPerDispatch) {
+            pendingHandoff_ = true;
             return true;
+        }
         const auto elapsed = detail::elapsedClockTicksOrMax<Clock>(
             Clock::now(), dispatchStarted_);
         const auto threshold = std::chrono::duration_cast<
             typename Clock::duration>(kSoftDispatchQuantum).count();
-        return threshold <= 0 || elapsed >= static_cast<std::uint64_t>(threshold);
+        if (threshold <= 0 || elapsed >= static_cast<std::uint64_t>(threshold)) {
+            pendingHandoff_ = true;
+            return true;
+        }
+        return false;
+    }
+
+    // Read-only hint for a verified critical/borrow no-yield exit. This
+    // never authorizes preemption through a live loan or native stack frame.
+    bool pendingHandoffOnNoYieldExit() const noexcept {
+        return pendingHandoff_ || backedges_ >= kMaxBackedgesPerDispatch;
     }
 
     // Must only be called for an actual logical cooperate handoff.
-    void recordedCooperate() noexcept { lastCooperate_ = Clock::now(); }
+    void recordedCooperate() noexcept {
+        lastCooperate_ = Clock::now();
+        pendingHandoff_ = false;
+        pollDue_ = false;
+        acknowledgedCooperate_ = true;
+    }
 
     // Generator 'yield value' is NOT a scheduler cooperation.
     std::chrono::nanoseconds timeSinceLastCooperate() const noexcept {
@@ -130,6 +153,8 @@ private:
     std::uint64_t backedges_ = 0;
     std::uint32_t pollPhase_ = 0;
     bool pollDue_ = false;
+    bool pendingHandoff_ = false;
+    bool acknowledgedCooperate_ = false;
 };
 
 using SourceCooperationQuantum = BasicSourceCooperationQuantum<>;
