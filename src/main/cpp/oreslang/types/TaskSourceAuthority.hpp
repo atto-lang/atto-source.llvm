@@ -143,6 +143,48 @@ inline void revoke_source_task_i64(SourceTaskI64Binding& task) noexcept {
     task.ownership_boundary_identity = nullptr;
 }
 
+// Do not let a still-valid Task expression proof be transplanted into a
+// different, post-check function envelope. The frontend currently admits
+// exactly one capture-free Task<int> as the first binding of synchronous
+// zero-argument main. All surrounding assumptions must still hold at LLVM
+// emission, not just when Parser::validate_complete originally ran.
+//
+// This is an intentionally narrow *second gate*, not a replacement for the
+// full source ownership/type checker. Arbitrary later statement mutation
+// still requires source-wide revalidation before invoking codegen.
+inline void require_source_task_i64_function(const Function& function) {
+    if (function.source_tasks.empty()) return;
+    if (function.name != "main" || !function.method_owner.empty() ||
+            function.native_internal || function.async_source_i64 ||
+            !function.parameters.empty() || !function.generic_parameters.empty() ||
+            function.source_tasks.size() != 1 || !function.future_pipelines.empty() ||
+            function.has_declared_effects || function.scalar_while ||
+            function.caught_throw_value || !function.actor_spawns.empty() ||
+            !function.actor_actions.empty() || !function.actor_field_writes.empty() ||
+            !function.ready_await_actor.empty() || !function.done_await_actor.empty()) {
+        throw std::runtime_error(
+            "source Task<int> function envelope changed after ownership check");
+    }
+    const auto& task = function.source_tasks.front();
+    if (function.locals.empty() || !task.awaited ||
+            function.locals.front().task_await_name != task.name ||
+            function.locals.front().scalar_type != ScalarType::I64 ||
+            function.locals.front().initializer ||
+            !function.locals.front().future_await_name.empty()) {
+        throw std::runtime_error(
+            "source Task<int> await binding changed after ownership check");
+    }
+    for (std::size_t index = 0; index < function.locals.size(); ++index) {
+        const auto& local = function.locals[index];
+        if (local.name == task.name ||
+                (index != 0 && !local.task_await_name.empty())) {
+            throw std::runtime_error(
+                "source Task<int> lexical authority changed after ownership check");
+        }
+    }
+    require_source_task_i64(task);
+}
+
 inline void require_source_task_i64(
         const SourceTaskI64Binding& task) {
     const auto current = source_task_i64_fingerprint(task);
