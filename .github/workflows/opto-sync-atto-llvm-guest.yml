@@ -48,7 +48,12 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
             -DLLVM_DIR="$(llvm-config --cmakedir)"
           cmake --build "$RUNNER_TEMP/opto-atto-llvm-build" \
-            --target oreslang-llvmc oreslang-no-gc-ir-audit-build --parallel 2
+            --target oreslang-llvmc --parallel 2
+          # The CMake auditor target exists only when BUILD_TESTING=ON.
+          # Build the exact repository Rust auditor directly instead of
+          # accidentally relying on an absent target or omitting IR checks.
+          rustc --edition=2021 -D warnings scripts/audit_no_gc_ir.rs \
+            -o "$RUNNER_TEMP/opto-atto-llvm-build/oreslang-no-gc-ir-audit"
           test -x "$RUNNER_TEMP/opto-atto-llvm-build/oreslang-llvmc"
           test -x "$RUNNER_TEMP/opto-atto-llvm-build/oreslang-no-gc-ir-audit"
           sha256sum "$RUNNER_TEMP/opto-atto-llvm-build/oreslang-llvmc"
