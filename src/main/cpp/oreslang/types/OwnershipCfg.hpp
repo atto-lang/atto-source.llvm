@@ -138,8 +138,10 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
         // and physical-quiescence contract is implemented. Scan *all*
         // tracked places, not just op.place (which is intentionally empty).
         for (const auto& item : state)
-            if (item.second.shared_loans || item.second.exclusive_loan)
-                violation(item.first, "live loan crosses logical suspension");
+            if (item.second.shared_loans || item.second.exclusive_loan ||
+                    !item.second.shared_loan_ids.empty() ||
+                    item.second.exclusive_loan_id.has_value())
+                violation(item.first, "live or unproven loan crosses logical suspension");
         return;
     }
     if (op.kind == Operation::Kind::ReadObject ||
@@ -221,6 +223,11 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             return;
         case Operation::Kind::ReleaseShared: {
             if (!value.shared_loans) violation(op.place, "unmatched shared loan release");
+            // verify(Graph) normalizes legacy anonymous entry loans. Direct
+            // apply() callers have no such normalization, so never read
+            // begin() on an empty provenance set or erase an unproven loan.
+            if (value.shared_loan_ids.size() != value.shared_loans)
+                violation(op.place, "shared loan release lacks valid provenance");
             if (!op.loan_id && value.shared_loan_ids.size() != 1)
                 violation(op.place, "shared loan release requires unambiguous provenance");
             const auto to_release = op.loan_id.value_or(*value.shared_loan_ids.begin());
@@ -231,6 +238,8 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
         }
         case Operation::Kind::ReleaseExclusive:
             if (!value.exclusive_loan) violation(op.place, "unmatched exclusive loan release");
+            if (!value.exclusive_loan_id)
+                violation(op.place, "exclusive loan release lacks provenance");
             if (op.loan_id && op.loan_id != value.exclusive_loan_id)
                 violation(op.place, "exclusive loan release has foreign provenance");
             value.exclusive_loan = false;
