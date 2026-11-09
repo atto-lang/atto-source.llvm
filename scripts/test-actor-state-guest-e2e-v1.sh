@@ -46,7 +46,8 @@ unset ORESLANG_LLVM_AOT_OPT_LEVEL
 rc=0
 timeout 30s "$compiler" --target=host "$negative" > "$tmp/negative.ll" 2> "$tmp/negative.err" || rc=$?
 [[ "$rc" != 0 && "$rc" != 124 && "$rc" != 125 ]] || exit 1
-grep -Eiq 'sealed|actor.state|handle_state|critical' "$tmp/negative.err" || {
+[[ ! -s "$tmp/negative.ll" ]] || { echo "compiler emitted IR for rejected sealed-state program" >&2; exit 1; }
+grep -Eiq 'sealed.*(actor|state|field)|actor.state.*(denied|private|sealed|access)|handle_state.*(required|only|must)|critical-(read|write).*(required|only|must)' "$tmp/negative.err" || {
   cat "$tmp/negative.err" >&2; exit 1;
 }
 [[ "$(git -C "$root" rev-parse HEAD)" == "$EXPECTED_HEAD" ]] || exit 78
