@@ -309,6 +309,16 @@ public:
                                      "checked named defaults, ownership and ABI lowering at byte "
                                      + std::to_string(start));
         }
+        // The `~map(...)` / `~record(...)` / `~(...)` aggregate
+        // proposals require typed product/Map layout, lifetime and
+        // transactional admission. Reject them before accidental scalar
+        // codegen or pseudo-object fallback. Ordinary unary '~' is likewise
+        // unavailable in this restricted native scalar frontend.
+        if (ch == '~') {
+            throw std::runtime_error(
+                "native tilde map/record literal unsupported until typed aggregate "
+                "and ownership lowering at byte " + std::to_string(start));
+        }
         // Admit '@' as a TOKEN only so existing parameter-local @Default guards
         // can issue their specific fail-closed diagnostic instead of a generic
         // unsupported-token error. No annotation execution is enabled.
@@ -2864,6 +2874,19 @@ private:
                     fail("native procedural dispatch arm limit exceeded (32)");
 
                 if (is_match) {
+                    // Canonical AttoLang fallback has its own keyword.
+                    // Keep 'on _' source-compatible, but never accept
+                    // 'on default' or any pattern after a default.
+                    if (accept("default")) {
+                        if (has_fallback)
+                            fail("native do match can contain only one default arm");
+                        require("->"); require("{");
+                        fallback = branch_arm(false, false); require("}");
+                        has_fallback = true;
+                        if (token_.text != "end")
+                            fail("native do match default arm must be last");
+                        continue;
+                    }
                     require("on");
                     if (accept("_")) {
                         if (has_fallback)
@@ -3866,6 +3889,15 @@ private:
         while (token_.text != "end") {
             if (arms.size() >= 32)
                 fail("native value match arm limit exceeded (32)");
+            if (accept("default")) {
+                if (fallback)
+                    fail("native value match can contain only one default arm");
+                require("->");
+                fallback = dispatch_value_arm("native value match");
+                if (token_.text != "end")
+                    fail("native value match default arm must be last");
+                continue;
+            }
             require("on");
             if (accept("_")) {
                 if (fallback)
