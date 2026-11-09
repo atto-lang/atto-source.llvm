@@ -285,6 +285,37 @@ static void nested_other_arbiter_is_allowed_but_cycle_is_rejected() {
     assert(inner.winner().has_value() && *inner.winner() == 0);
 }
 
+// Regression: a per-Capacity thread-local commit scope silently misses this
+// cross-specialization cycle and deadlocks while trying to lock outer again.
+static void mixed_capacity_commit_cycle_fails_closed() {
+    NativeSelectArbiter<2> outer;
+    NativeSelectArbiter<3> inner;
+    auto first = outer.register_case(0);
+    auto second = outer.register_case(1);
+    auto nested = inner.register_case(0);
+    int revoked = 0;
+    first.arm([] {});
+    second.arm([&] { ++revoked; });
+    nested.arm([] {});
+
+    bool cycle_rejected = false;
+    assert(first.try_win_if([&] {
+        assert(nested.try_win_if([&] {
+            try {
+                (void)second.is_winner();
+            } catch (const std::logic_error&) {
+                cycle_rejected = true;
+            }
+            return true;
+        }));
+        return true;
+    }));
+    assert(cycle_rejected);
+    assert(outer.winner().has_value() && *outer.winner() == 0);
+    assert(inner.winner().has_value() && *inner.winner() == 0);
+    assert(revoked == 1);
+}
+
 static void throwing_revoker_does_not_skip_other_losers() {
     NativeSelectArbiter<3> select;
     auto first = select.register_case(0);
@@ -370,6 +401,7 @@ int main() {
     throwing_commit_leaves_select_pending();
     commit_reentry_fails_closed_without_losing_registrations();
     nested_other_arbiter_is_allowed_but_cycle_is_rejected();
+    mixed_capacity_commit_cycle_fails_closed();
     throwing_revoker_does_not_skip_other_losers();
     concurrent_ready_race_has_exactly_one_winner();
     return 0;
