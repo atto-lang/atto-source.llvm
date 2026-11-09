@@ -408,6 +408,34 @@ int main() {
     apply({Kind::ReleaseShared, "y", 37}, direct_suspend);
     apply({Kind::Suspend, ""}, direct_suspend);
 
+    // Direct apply() is a safety-critical helper as well as a verifier
+    // implementation detail. A malformed caller-supplied entry loan must
+    // never dereference an empty identity set or release unknown authority.
+    State orphan_shared = {{"a", cell(kOwned)}};
+    orphan_shared.at("a").shared_loan_ids.insert(71);
+    assert(rejected([&] { apply({Kind::Suspend, ""}, orphan_shared); }));
+    State orphan_exclusive = {{"a", cell(kOwned)}};
+    orphan_exclusive.at("a").exclusive_loan_id = 79;
+    assert(rejected([&] { apply({Kind::Suspend, ""}, orphan_exclusive); }));
+
+    State missing_shared_identity = {{"a", {kOwned, 1, false}}};
+    assert(rejected([&] {
+        apply({Kind::ReleaseShared, "a"}, missing_shared_identity);
+    }));
+    State missing_exclusive_identity = {{"a", {kOwned, 0, true}}};
+    assert(rejected([&] {
+        apply({Kind::ReleaseExclusive, "a"}, missing_exclusive_identity);
+    }));
+    State wrong_shared_count = {{"a", {kOwned, 2, false, {17}}}};
+    assert(rejected([&] {
+        apply({Kind::ReleaseShared, "a", 17}, wrong_shared_count);
+    }));
+
+    // Proven entry-loan identities remain releasable.
+    State valid_direct_loans = {{"a", {kOwned, 1, false, {23}}}};
+    apply({Kind::ReleaseShared, "a", 23}, valid_direct_loans);
+    apply({Kind::Suspend, ""}, valid_direct_loans);
+
     // Compiler-controlled AST complexity can be adversarial. Oversized
     // unreachable blocks, places, operations and edges must be denied before
     // allocating the fixed-point analysis or iterating a large proof lattice.
