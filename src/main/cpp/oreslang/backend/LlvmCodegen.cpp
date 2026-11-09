@@ -1414,6 +1414,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         region_moves.sum_check = sum_check;
 
         std::unordered_map<std::string, llvm::Value*> source_task_handles;
+        // A valid Task AST fingerprint is insufficient if the containing
+        // function/await envelope changed after the semantic check.
+        if (!fn.source_tasks.empty())
+            types::require_source_task_i64_function(fn);
         for (const auto& task : fn.source_tasks) {
             // Never emit a producer before checking the exact AST that the
             // completed ownership pass authorized. Parser-only acceptance or
