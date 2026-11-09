@@ -243,6 +243,46 @@ static void extreme_clocks_fail_closed_on_slow_path() {
     require(huge.timeSinceLastCooperate() == std::chrono::nanoseconds::max());
 }
 
+
+static void overdue_no_yield_debt_survives_physical_dispatch() {
+    reset_clock();
+    Quantum q;
+    q.beginDispatch();
+    for (int i = 1; i <= 512; ++i)
+        require(q.completedBackedgeNeedsCheck() == (i % 128 == 0));
+    // A guard-held actor cannot park, but an overdue request is observable
+    // after the independently compiler-verified no-yield scope exits.
+    require(q.pendingHandoffOnNoYieldExit());
+    q.beginDispatch();
+    require(q.pendingHandoffOnNoYieldExit());
+    for (int i = 1; i <= 128; ++i)
+        require(q.completedBackedgeNeedsCheck() == (i == 128));
+    require(q.shouldCooperateAtCheck());
+    require(FakeClock::reads.load() == 3);
+    q.recordedCooperate();
+    require(!q.pendingHandoffOnNoYieldExit());
+    q.beginDispatch();
+    require(!q.pendingHandoffOnNoYieldExit());
+    for (int i = 0; i < 128; ++i) q.completedBackedgeNeedsCheck();
+    require(!q.shouldCooperateAtCheck());
+}
+
+static void unserved_watchdog_request_survives_await() {
+    reset_clock();
+    Quantum q;
+    q.beginDispatch();
+    for (int i = 0; i < 128; ++i) q.completedBackedgeNeedsCheck();
+    require(q.shouldCooperateAtCheck(true));
+    require(q.pendingHandoffOnNoYieldExit());
+    q.beginDispatch(); // plain await: NOT a cooperation acknowledgment
+    for (int i = 0; i < 128; ++i) q.completedBackedgeNeedsCheck();
+    const int before = FakeClock::reads.load();
+    require(q.shouldCooperateAtCheck(false));
+    require(FakeClock::reads.load() == before);
+    q.recordedCooperate();
+    require(!q.pendingHandoffOnNoYieldExit());
+}
+
 int main() {
     reduction_fast_path();
     overdue_no_yield_region_checks_every_new_boundary();
@@ -253,5 +293,7 @@ int main() {
     short_resumptions_cannot_evade_poll_phase();
     million_fast_backedges_do_not_read_the_clock();
     extreme_clocks_fail_closed_on_slow_path();
+    overdue_no_yield_debt_survives_physical_dispatch();
+    unserved_watchdog_request_survives_await();
     std::cout << "native quantum 128/512/2ms: PASS (host-only, no guest await parity)\n";
 }
