@@ -78,6 +78,20 @@ public:
         return Status::Ok;
     }
 
+    // A terminally poisoned actor must still be able to complete bounded
+    // physical STOP cleanup. This grants *no* guest frame read/write/push
+    // access and is only called after the ledger selected CancelCleanup.
+    Status enter_for_cleanup(Token t) noexcept {
+        Slot* s=find(t); if (!s) return Status::Stale;
+        if (s->phase!=Phase::Queued && s->phase!=Phase::Suspended)
+            return Status::Busy;
+        for (const Slot& other:slots_)
+            if (&other!=s && (other.phase==Phase::Running ||
+                               other.phase==Phase::Cleanup)) return Status::Busy;
+        s->phase=Phase::Cleanup;
+        return Status::Ok;
+    }
+
     Status suspend(Token t) noexcept {
         Slot* s=find(t); if (!s) return Status::Stale;
         if (poisoned_) return Status::Poisoned;
@@ -158,7 +172,8 @@ public:
     // have popped every frame. Cancellation may scrub leftover frames.
     Status retire_after_guest_exit(Token t, bool cancelled=false) noexcept {
         Slot* s=find(t); if (!s) return Status::Stale;
-        if (s->phase!=Phase::Running) return Status::NotRunning;
+        if (s->phase!=Phase::Running &&
+            !(cancelled && s->phase==Phase::Cleanup)) return Status::NotRunning;
         if (s->depth && !cancelled) {
             poisoned_=true;
             return Status::Invalid;
@@ -183,7 +198,7 @@ public:
     bool poisoned() const noexcept { return poisoned_; }
 
 private:
-    enum class Phase : std::uint8_t { Free, Queued, Running, Suspended };
+    enum class Phase : std::uint8_t { Free, Queued, Running, Suspended, Cleanup };
     struct Frame { std::size_t offset=0,size=0; std::uint64_t nonce=0; };
     struct Slot {
         Token owner{};
