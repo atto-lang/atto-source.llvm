@@ -133,6 +133,10 @@ int main() {
     require(quota.push(qb,25,exceeded)==Small::Status::QuotaExceeded,
             "aggregate 64-byte actor quota cannot be bypassed");
     require(quota.poisoned(),"swallowed quota error is actor terminal");
+    auto foreign=qa;
+    ++foreign.generation;
+    require(quota.bind(foreign)==Small::Status::Stale,
+            "foreign generation cannot inspect actor poison status");
     require(quota.push(qb,1,exceeded)==Small::Status::Poisoned,
             "poisoned actor cannot resume guest");
     require(quota.retire_after_guest_exit(qb,true)==Small::Status::Ok,
