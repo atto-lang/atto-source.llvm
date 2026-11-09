@@ -83,6 +83,16 @@ struct Analysis {
     std::vector<std::optional<State>> outgoing;
 };
 
+// Compiler work limits are deliberately independent of host memory/CPU
+// quotas. A malicious or corrupted compiler AST must not exhaust the process
+// while joining large ownership lattices. Exceeding a limit denies lowering;
+// it never substitutes a successful proof.
+constexpr std::size_t kMaxCfgBlocks = 16384;
+constexpr std::size_t kMaxCfgPlaces = 16384;
+constexpr std::size_t kMaxCfgOperations = 262144;
+constexpr std::size_t kMaxCfgEdges = 262144;
+constexpr std::uint64_t kMaxCfgAnalysisWork = UINT64_C(16000000);
+
 [[noreturn]] inline void violation(const std::string& name, const std::string& why) {
     throw std::runtime_error("ownership violation: " + why + " '" + name + "'");
 }
@@ -263,6 +273,18 @@ inline bool join_into(State& target, const State& incoming) {
 inline Analysis verify(const Graph& graph) {
     if (graph.blocks.empty())
         throw std::runtime_error("ownership violation: empty CFG");
+    if (graph.blocks.size() > kMaxCfgBlocks ||
+            graph.entry.size() > kMaxCfgPlaces)
+        violation("graph", "CFG block/place complexity limit exceeded");
+    std::size_t operation_total = 0;
+    std::size_t edge_total = 0;
+    for (const auto& block : graph.blocks) {
+        if (block.operations.size() > kMaxCfgOperations - operation_total ||
+                block.successors.size() > kMaxCfgEdges - edge_total)
+            violation("graph", "CFG operation/edge complexity limit exceeded");
+        operation_total += block.operations.size();
+        edge_total += block.successors.size();
+    }
     // Each lexical borrow must own a globally unique provenance token,
     // including across mutually exclusive CFG predecessors. Otherwise two
     // different borrows with the same count and token could spuriously join,
@@ -360,12 +382,23 @@ inline Analysis verify(const Graph& graph) {
     std::deque<std::size_t> queue{0};
     std::vector<bool> queued(graph.blocks.size(), false);
     queued[0] = true;
+    std::uint64_t remaining_work = kMaxCfgAnalysisWork;
     while (!queue.empty()) {
         const auto index = queue.front();
         queue.pop_front();
         queued[index] = false;
-        State current = *result.incoming[index];
         const BasicBlock& block = graph.blocks[index];
+        // apply() verifies the place layout on every operation, and each
+        // fixed-point revisit copies the complete incoming place lattice.
+        // Charge both costs before execution. All factors are bounded by
+        // the graph preflight, so this arithmetic cannot overflow uint64.
+        const auto work = (static_cast<std::uint64_t>(graph.entry.size()) + 1) *
+                (static_cast<std::uint64_t>(block.operations.size()) + 1) +
+                static_cast<std::uint64_t>(block.successors.size());
+        if (work > remaining_work)
+            violation("graph", "CFG fixed-point work limit exceeded");
+        remaining_work -= work;
+        State current = *result.incoming[index];
         for (std::size_t site = 0; site < block.operations.size(); ++site) {
             // Reserve zero for an explicitly known loan at entry. Source
             // position gives stable IDs across fixed-point reprocessing.
