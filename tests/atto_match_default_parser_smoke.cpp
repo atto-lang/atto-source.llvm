@@ -41,6 +41,20 @@ int main(int argc, char** argv) {
         {"tilde-map-literal-native-reject.ores", false,
          "native tilde map/record literal unsupported"},
         {"tilde-record-literal-native-reject.ores", false,
+         "native tilde map/record literal unsupported"},
+        {"dispatch-value-match-default-fallthrough-run.ores", true, ""},
+        {"dispatch-do-match-default-fallthrough-run.ores", true, ""},
+        {"dispatch-value-match-duplicate-pattern-reject.ores", false,
+         "duplicate native value match pattern"},
+        {"dispatch-do-match-duplicate-pattern-reject.ores", false,
+         "duplicate native do match pattern"},
+        {"dispatch-value-match-guard-reject.ores", false,
+         "native scalar value match binding/guard patterns require dedicated pattern lowering"},
+        {"dispatch-do-match-guard-reject.ores", false,
+         "native scalar do match binding/guard patterns require dedicated pattern lowering"},
+        {"tilde-explicit-record-native-reject.ores", false,
+         "native tilde map/record literal unsupported"},
+        {"tilde-ambiguous-empty-native-reject.ores", false,
          "native tilde map/record literal unsupported"}
     };
     std::size_t checked = 0;
