@@ -25,8 +25,8 @@ on:
       - src/main/cpp/oreslang/runtime/AsyncIoCompletionGate.hpp
       - tests/native_actor_execution_ledger_test.cpp
       - tests/native_actor_compiled_guest_ledger_bridge_test.c
-      - tests/native_actor_compiled_guest_ledger.py
-      - tests/fixtures/native-retained-guest-steps.ores
+      - tests/rust-harness/src/retained_guest.rs
+      - tests/fixtures/native-retained-guest-steps.atto
       - tests/fixtures/source-actor-suspend-method-reject.ores
       - docs/ACTOR_EXECUTION_LEDGER_V1.md
       - CMakeLists.txt
@@ -89,8 +89,8 @@ jobs:
             src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c \
             src/main/cpp/oreslang/runtime/NativeLogicalTrace.c \
             tests/native_actor_compiled_guest_ledger_bridge_test.c \
-            tests/native_actor_compiled_guest_ledger.py \
-            tests/fixtures/native-retained-guest-steps.ores \
+            tests/rust-harness/src/retained_guest.rs \
+            tests/fixtures/native-retained-guest-steps.atto \
             tests/fixtures/source-actor-suspend-method-reject.ores; do
             expected="$(git rev-parse "HEAD:$path")"
             actual="$(git hash-object "$path")"
@@ -339,8 +339,8 @@ jobs:
             test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
           fi
           for path in \
-              tests/fixtures/native-retained-guest-steps.ores \
-              tests/native_actor_compiled_guest_ledger.py \
+              tests/fixtures/native-retained-guest-steps.atto \
+              tests/rust-harness/src/retained_guest.rs \
               tests/native_actor_compiled_guest_ledger_bridge_test.c \
               tests/fixtures/source-actor-suspend-method-reject.ores \
               src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
@@ -378,10 +378,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m py_compile tests/native_actor_compiled_guest_ledger.py
-          python3 tests/native_actor_compiled_guest_ledger.py \
-            --compiler "$PWD/build/actor-ledger-guest/oreslang-llvmc" \
-            --clang clang --root "$PWD"
-          python3 tests/native_actor_compiled_guest_ledger.py \
-            --compiler "$PWD/build/actor-ledger-guest/oreslang-llvmc" \
-            --clang clang --root "$PWD" --sanitize
+          cargo build --manifest-path tests/rust-harness/Cargo.toml --locked --release \
+            --target-dir build/actor-ledger-rust
+          rustc --edition=2021 -D warnings scripts/audit_no_gc_ir.rs -o build/actor-ledger-no-gc
+          build/actor-ledger-rust/release/oreslang-llvm-test-harness retained-guest \
+            "$PWD/build/actor-ledger-guest/oreslang-llvmc" clang "$PWD" \
+            "$PWD/build/actor-ledger-no-gc" release
+          build/actor-ledger-rust/release/oreslang-llvm-test-harness retained-guest \
+            "$PWD/build/actor-ledger-guest/oreslang-llvmc" clang "$PWD" \
+            "$PWD/build/actor-ledger-no-gc" sanitize

@@ -247,7 +247,7 @@ interleavings or a hard-real-time WCET bound. The implementation remains draft.
 
 ## Compiled native guest-segment bridge (intermediate, not actor-await lowering)
 
-`tests/fixtures/native-retained-guest-steps.ores` contains four real
+`tests/fixtures/native-retained-guest-steps.atto` contains four real
 Oreslang functions (`guest_step`, `guest_resume`, `guest_cleanup`, `main`). The CTest
 `source_actor_compiled_native_retained_guest_bridge` and its sanitizer variant
 run `oreslang-llvmc` on these exact source bytes, verify that the generated

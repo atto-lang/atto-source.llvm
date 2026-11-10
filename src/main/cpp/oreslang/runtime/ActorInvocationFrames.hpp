@@ -24,6 +24,9 @@ class ActorInvocationFrames final {
                   "invalid per-invocation frame bound");
     static_assert(BytesPerStack > 0 && ActorBytes > 0,
                   "nonzero bounded actor stack capacities required");
+    static_assert(BytesPerStack <= UINT32_MAX && ActorBytes <= UINT32_MAX &&
+                  Slots <= UINT32_MAX / BytesPerStack,
+                  "actor frame payload regions require checked 32-bit offsets");
 public:
     using Ledger = ActorExecutionLedger<Slots>;
     using Token = typename Ledger::Token;
@@ -56,7 +59,8 @@ public:
         if (!validIdentity(t)) return Status::Stale;
         if (poisoned_) return Status::Poisoned;
         Slot& s=slots_[t.slot];
-        if (s.phase!=Phase::Free) return Status::Busy;
+        if (s.phase!=Phase::Free)
+            return same(s.owner,t) ? Status::Busy : Status::Stale;
         if (t.sequence<=s.last_sequence ||
             t.slot_generation<=s.last_slot_generation) return Status::Stale;
         s.owner=t;
@@ -74,7 +78,8 @@ public:
         if (s->phase!=Phase::Queued && s->phase!=Phase::Suspended)
             return Status::Busy;
         for (const Slot& other:slots_)
-            if (&other!=s && other.phase==Phase::Running) return Status::Busy;
+            if (&other!=s && (other.phase==Phase::Running ||
+                              other.phase==Phase::Cleanup)) return Status::Busy;
         s->phase=Phase::Running;
         return Status::Ok;
     }
@@ -113,7 +118,8 @@ public:
             return Status::QuotaExceeded;
         }
         const std::uint64_t nonce=++s->next_nonce;
-        s->frames[s->depth]={s->used,bytes,nonce};
+        s->frames[s->depth]={static_cast<std::uint32_t>(s->used),
+            static_cast<std::uint32_t>(bytes),nonce};
         s->used+=bytes;
         ++s->depth;
         ++live_frames_;
@@ -200,7 +206,7 @@ public:
 
 private:
     enum class Phase : std::uint8_t { Free, Queued, Running, Suspended, Cleanup };
-    struct Frame { std::size_t offset=0,size=0; std::uint64_t nonce=0; };
+    struct Frame { std::uint32_t offset=0,size=0; std::uint64_t nonce=0; };
     struct Slot {
         Token owner{};
         Phase phase=Phase::Free;

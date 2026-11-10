@@ -1,0 +1,74 @@
+name: Named-call exact-head compiler gate
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      - 'CMakeLists.txt'
+      - 'tests/fixtures/named-call-*.ores'
+      - 'tests/fixtures/named-member-*.ores'
+      - '.github/workflows/named-call-exact-head.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-named-call:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout immutable source head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source and tree
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          echo "EXACT_SOURCE_HEAD=$EXPECTED_HEAD"
+          echo "EXACT_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Install native compiler dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev jq
+      - name: Build real LLVM frontend and guest compiler
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --parallel 2
+      - name: Prove required CTest cases exist on this head
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build --show-only=json-v1 > build/named-call-tests.json
+          # Fail closed if the CTest JSON is malformed or any required test
+          # is absent; use jq instead of Python in the LLVM CI lane.
+          jq -e '(.tests | type) == "array"' build/named-call-tests.json >/dev/null
+          jq -r '.tests[].name' build/named-call-tests.json | LC_ALL=C sort -u > build/named-call-test-names.txt
+          required=(
+            native_named_member_positional_array_baseline
+            native_named_member_unlowered_array_label
+            native_named_member_duplicate_label
+            native_named_member_positional_after_named
+            native_named_call_lexical_ir_order
+            native_named_call_unknown_label
+            native_named_call_duplicate_slot
+            native_named_call_positional_after_named
+          )
+          for name in "${required[@]}"; do
+            if ! grep -Fxq -- "$name" build/named-call-test-names.txt; then
+              echo "::error::Missing exact-head named-call CTest case: $name" >&2
+              exit 1
+            fi
+          done
+          echo "NAMED_CALL_MANIFEST_PASS: ${#required[@]} required tests registered"
+      - name: Execute parser, diagnostic, lexical order and native guest tests
+        run: |
+          ctest --test-dir build -R '^native_named_(call_|member_)' \
+            --output-on-failure --no-tests=error --timeout 180 --parallel 2

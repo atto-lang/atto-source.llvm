@@ -1,4 +1,4 @@
-/* Native scheduler + actual LLVM-compiled .ores scalar segments.
+/* Native scheduler + actual LLVM-compiled .atto scalar segments.
  * This is a trusted bridge regression, NOT source-level actor await lowering.
  * Host owns actor state and is responsible for physical guest frame cleanup.
  */
@@ -14,7 +14,7 @@
 extern int64_t guest_step(int64_t prior, int64_t payload);
 extern int64_t guest_resume(int64_t prior, int64_t payload);
 extern int64_t guest_cleanup(int64_t prior, int64_t reason);
-extern int64_t ores_guest_fixture_main(void);
+extern int32_t ores_guest_fixture_main(void);
 
 #define CHECK(x) do { if (!(x)) { \
     fprintf(stderr, "COMPILED_GUEST_LEDGER_FAIL %s:%d: %s\n", \
@@ -357,6 +357,6 @@ int main(void) {
     CHECK(ores_actor_i64_heap_try_destroy(f.heaps[1]));
     f.heaps[1] = NULL;
     run_compiled_guest_stop_cleanup();
-    puts("LLVM_COMPILED_ORES_SEGMENTS_RETAINED_LEDGER_PASS");
+    puts("LLVM_COMPILED_ATTO_SEGMENTS_RETAINED_LEDGER_PASS");
     return 0;
 }

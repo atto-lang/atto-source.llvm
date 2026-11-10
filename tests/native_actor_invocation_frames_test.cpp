@@ -115,6 +115,28 @@ int main() {
     require(stopped.wake(t)==LS::Stale,"cancelled wake denied");
 
     // Actor-global stack quota remains independent of per-slot reservation.
+    {
+        Frames cleanup(85,3);
+        Ledger cleanupLedger(85,3);
+        Ledger::Token ca{}, cb{};
+        require(cleanupLedger.admit(Ledger::Kind::Mail,ca)==LS::Ok &&
+                cleanupLedger.admit(Ledger::Kind::Mail,cb)==LS::Ok,
+                "cleanup and sibling execution contexts admitted");
+        require(cleanup.bind(ca)==FS::Ok && cleanup.bind(cb)==FS::Ok &&
+                cleanup.enter(ca)==FS::Ok, "cleanup owner stack entered");
+        Frames::FrameRef live{};
+        require(cleanup.push(ca,8,live)==FS::Ok &&
+                cleanup.suspend(ca)==FS::Ok &&
+                cleanup.enter_for_cleanup(ca)==FS::Ok,
+                "suspended execution acquires non-executable cleanup lease");
+        require(cleanup.enter(cb)==FS::Busy,
+                "another execution cannot run during physical stack cleanup");
+        require(cleanup.retire_after_guest_exit(ca,true)==FS::Ok &&
+                cleanup.enter(cb)==FS::Ok &&
+                cleanup.retire_after_guest_exit(cb)==FS::Ok,
+                "cleanup completion releases the next execution without poison");
+    }
+
     // This portion simulates future opt-in concurrent receive admission;
     // the serial ledger above intentionally forbids executing B during await.
     using Small = oreslang::runtime::ActorInvocationFrames<3,4,64,64>;
