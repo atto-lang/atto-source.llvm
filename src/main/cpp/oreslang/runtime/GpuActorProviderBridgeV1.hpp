@@ -128,7 +128,8 @@ private:
  * supervisor must retain it through restart/reconciliation. No capacity
  * overcommit, timed "success", implicit CPU fallback or speculative release.
  */
-class GpuActorQuarantineRegistryV1 final {
+class GpuActorQuarantineRegistryV1 final
+    : public std::enable_shared_from_this<GpuActorQuarantineRegistryV1> {
 public:
     using Turn = HostTurnBridgeV0::Turn;
     using ActorKey = HostTurnBridgeV0::ActorKey;
@@ -324,6 +325,10 @@ public:
         if (next_id_ == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("GPU_PROVIDER_REGISTRY_SEQUENCE_EXHAUSTED");
 
+        // A process-root native owner retains the registry if a supervisor
+        // wrapper dies while physical work is unresolved. Capacity is global
+        // and bounded; recovery remains a trusted-native-only operation.
+        if (entries_.empty()) process_root().pin(shared_from_this());
         const auto id = ++next_id_;
         // Slot reservation precedes actor registration: failed allocations
         // cannot silently overcommit the quarantine capacity.
@@ -339,6 +344,7 @@ public:
             it->second = std::move(e);
         } catch (...) {
             entries_.erase(it);
+            if (entries_.empty()) process_root().unpin(this);
             throw;
         }
         return id;
@@ -391,6 +397,15 @@ public:
         prune(id, e);
     }
 
+    // The root supervisor (not a guest actor) can recover all registries
+    // retained after their immediate supervisor handle was destroyed.
+    static void progress_process_root() {
+        for (const auto& r : process_root().snapshot()) r->progress_all();
+    }
+    static std::size_t retained_registry_count() {
+        return process_root().count();
+    }
+
     std::size_t retained_count() const {
         std::lock_guard<std::mutex> guard(mu_);
         return entries_.size();
@@ -415,6 +430,42 @@ public:
 
 private:
     using EntryPtr = std::shared_ptr<Entry>;
+
+    struct ProcessRoot final {
+        std::mutex mu;
+        std::map<GpuActorQuarantineRegistryV1*,
+                 std::shared_ptr<GpuActorQuarantineRegistryV1>> retained;
+        static constexpr std::size_t maximum_registries = 256;
+
+        void pin(const std::shared_ptr<GpuActorQuarantineRegistryV1>& registry) {
+            std::lock_guard<std::mutex> guard(mu);
+            if (retained.count(registry.get()) != 0) return;
+            if (retained.size() >= maximum_registries)
+                throw std::logic_error("GPU_PROVIDER_PROCESS_ROOT_CAPACITY_EXHAUSTED");
+            retained.emplace(registry.get(), registry);
+        }
+        void unpin(GpuActorQuarantineRegistryV1* registry) {
+            std::lock_guard<std::mutex> guard(mu);
+            retained.erase(registry);
+        }
+        std::vector<std::shared_ptr<GpuActorQuarantineRegistryV1>> snapshot() {
+            std::lock_guard<std::mutex> guard(mu);
+            std::vector<std::shared_ptr<GpuActorQuarantineRegistryV1>> out;
+            out.reserve(retained.size());
+            for (const auto& kv : retained) out.push_back(kv.second);
+            return out;
+        }
+        std::size_t count() {
+            std::lock_guard<std::mutex> guard(mu);
+            return retained.size();
+        }
+    };
+    static ProcessRoot& process_root() {
+        // This root intentionally survives native supervisor-instance teardown.
+        // Process termination is NOT crash-persistent hardware recovery.
+        static auto* root = new ProcessRoot();
+        return *root;
+    }
     EntryPtr require(std::uint64_t id) const {
         std::lock_guard<std::mutex> guard(mu_);
         const auto it = entries_.find(id);
@@ -438,6 +489,7 @@ private:
         std::lock_guard<std::mutex> entry_guard(e->mu);
         if (e->detached && e->phase == Phase::Released)
             entries_.erase(id);
+        if (entries_.empty()) process_root().unpin(this);
     }
     const std::size_t capacity_;
     mutable std::mutex mu_;
