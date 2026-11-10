@@ -1446,6 +1446,30 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_tilde_record_requires_typed_native_lowering
         tilde-record-literal-native-reject.ores
         --diagnostic "native tilde map/record literal unsupported")
+    # Match-default hardening: ensure unmatched arms actually execute the
+    # fallback, and reject duplicate/guarded patterns and tilde bypasses.
+    oreslang_contract_test(native_value_match_default_fallthrough_ir
+        dispatch-value-match-default-fallthrough-run.ores --ir "ternary.merge")
+    oreslang_contract_test(native_do_match_default_fallthrough_ir
+        dispatch-do-match-default-fallthrough-run.ores --ir "return.snapshot.slot")
+    oreslang_contract_test(native_value_match_duplicate_pattern
+        dispatch-value-match-duplicate-pattern-reject.ores
+        --diagnostic "duplicate native value match pattern")
+    oreslang_contract_test(native_do_match_duplicate_pattern
+        dispatch-do-match-duplicate-pattern-reject.ores
+        --diagnostic "duplicate native do match pattern")
+    oreslang_contract_test(native_value_match_guard_failclosed
+        dispatch-value-match-guard-reject.ores
+        --diagnostic "native scalar value match binding/guard patterns require dedicated pattern lowering")
+    oreslang_contract_test(native_do_match_guard_failclosed
+        dispatch-do-match-guard-reject.ores
+        --diagnostic "native scalar do match binding/guard patterns require dedicated pattern lowering")
+    oreslang_contract_test(native_tilde_explicit_record_failclosed
+        tilde-explicit-record-native-reject.ores
+        --diagnostic "native tilde map/record literal unsupported")
+    oreslang_contract_test(native_tilde_ambiguous_empty_failclosed
+        tilde-ambiguous-empty-native-reject.ores
+        --diagnostic "native tilde map/record literal unsupported")
     # Strict fallback admission: no duplicate, guarded or 'on default' forms.
     oreslang_contract_test(native_value_match_default_fallback_ir
         dispatch-value-match-default-fallback-run.ores --ir "ternary.merge")
@@ -1505,6 +1529,10 @@ if(BUILD_TESTING)
             dispatch-do-match-default-run.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_do_match_default_only_runtime
             dispatch-do-match-default-only-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_value_match_default_fallthrough_runtime
+            dispatch-value-match-default-fallthrough-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_do_match_default_fallthrough_runtime
+            dispatch-do-match-default-fallthrough-run.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_value_match_default_fallback_runtime
             dispatch-value-match-default-fallback-run.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_do_match_default_fallback_runtime
