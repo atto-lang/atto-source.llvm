@@ -4,7 +4,7 @@
 #include <string.h>
 
 typedef struct {
-    size_t offset, length;
+    size_t offset, length, span;
     uint32_t generation;
     uint8_t live;
 } ElasticSlotV1;
@@ -132,18 +132,37 @@ int ores_elastic_native_allocate_v1(OresElasticNativeArenaV1* a,size_t bytes,
     if(a->cursor>SIZE_MAX-mask)return 0;
     const size_t offset=(a->cursor+mask)&~mask;
     if(offset>a->hard_limit || bytes>a->hard_limit-offset)return 0;
-    uint32_t free_slot=a->max_slots;
-    for(uint32_t i=0;i<a->max_slots;++i)
-        if(!a->slots[i].live && a->slots[i].generation!=UINT32_MAX){free_slot=i;break;}
+    /* Prefer a dead, explicitly scrubbed span when a live root pins the
+     * actor's logical tail. Without this path, temporary churn can exhaust
+     * the 64 MiB logical limit despite having no net live-byte growth.
+     *
+     * Slot identity + generation prevent a stale host handle from
+     * authorizing access to a newly recycled span at the same ref32 word.
+     */
+    uint32_t free_slot=a->max_slots, reusable=a->max_slots;
+    for(uint32_t i=0;i<a->max_slots;++i){
+        ElasticSlotV1* candidate=&a->slots[i];
+        if(candidate->live || candidate->generation==UINT32_MAX)continue;
+        if(free_slot==a->max_slots)free_slot=i;
+        if(candidate->span>=bytes && candidate->offset<=a->cursor &&
+           candidate->span<=a->cursor-candidate->offset &&
+           candidate->offset%alignment==0){reusable=i;break;}
+    }
+    if(reusable!=a->max_slots)free_slot=reusable;
     if(free_slot==a->max_slots)return 0;
-    const size_t end=offset+bytes;
-    if(!grow(a,end))return 0;
+    const int reuse=reusable!=a->max_slots;
+    const size_t place=reuse?a->slots[free_slot].offset:offset;
+    const size_t end=place+bytes;
+    if(!reuse && !grow(a,end))return 0;
     ElasticSlotV1* slot=&a->slots[free_slot];
-    scrub(a->native_bytes+offset,bytes);
-    slot->offset=offset;slot->length=bytes;slot->live=1;
-    a->cursor=end;++a->live;
+    scrub(a->native_bytes+place,bytes);
+    slot->offset=place;slot->length=bytes;
+    if(!reuse)slot->span=bytes;
+    slot->live=1;
+    if(!reuse)a->cursor=end;
+    ++a->live;
     *out=(OresElasticNativeHandleV1){a->domain,a->incarnation,
-                                    (uint32_t)(offset/8+1),free_slot,slot->generation};
+                                    (uint32_t)(place/8+1),free_slot,slot->generation};
     return 1;
 }
 int ores_elastic_native_write_i64_v1(OresElasticNativeArenaV1* a,
@@ -161,11 +180,21 @@ int ores_elastic_native_read_i64_v1(OresElasticNativeArenaV1* a,
 int ores_elastic_native_drop_v1(OresElasticNativeArenaV1* a,OresElasticNativeHandleV1 h) {
     ElasticSlotV1* s=checked(a,h);
     if(!s)return 0;
-    scrub(a->native_bytes+s->offset,s->length);
+    /* Scrub the entire reserved hole (including any old slack) so a
+     * subsequent smaller owner cannot observe bytes from an earlier one. */
+    scrub(a->native_bytes+s->offset,s->span);
     s->live=0;
     if(s->generation!=UINT32_MAX)++s->generation;
     --a->live;
-    if(!a->live){scrub(a->native_bytes,a->cursor);a->cursor=0;}
+    if(!a->live){
+        scrub(a->native_bytes,a->cursor);
+        a->cursor=0;
+        /* An old hole above a reset cursor could later overlap a new live
+         * bump allocation. Clear all cached hole extents, but retain
+         * generations and the permanently exhausted slot tombstones. */
+        for(uint32_t i=0;i<a->max_slots;++i)
+            if(!a->slots[i].live)a->slots[i].span=0;
+    }
     return 1;
 }
 size_t ores_elastic_native_committed_v1(const OresElasticNativeArenaV1* a){return a?a->committed:0;}
