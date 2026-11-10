@@ -55,11 +55,17 @@ inline std::optional<std::uint64_t> straight_line_effect_shape(
     // claiming straight-line completeness.
     if (!function.result || function.locals.empty() ||
             function.locals.size() > 64 || function.statements.size() > 128 ||
+            function.generic_parameters.size() > 64 ||
             program.classes.size() > 64)
         return std::nullopt;
     bool has_class = false;
-    for (const auto& local : function.locals)
+    for (const auto& local : function.locals) {
+        // Parameters to a constructor are unsupported by this source-MIR
+        // subset. Bound their inventory before hashing or traversal.
+        if (local.constructor_arguments.size() > 64)
+            return std::nullopt;
         has_class = has_class || !local.class_name.empty();
+    }
     if (!has_class)
         return std::nullopt;
 
