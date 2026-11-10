@@ -64,6 +64,7 @@ public:
             return Status::Invalid;
         }
         bound_[token.slot]=token;
+        cancel_requested_[token.slot]=false;
         out=token;
         return Status::Ok;
     }
@@ -149,7 +150,11 @@ public:
         if (l!=Status::Ok) return l;
         // Queued cancellation is immediately physically retired by ledger.
         // A running or suspended token remains framed until guest exit.
-        if (frames_.retire_queued(t)==FrameStatus::Ok) bound_[t.slot]={};
+        cancel_requested_[t.slot]=true;
+        if (frames_.retire_queued(t)==FrameStatus::Ok) {
+            bound_[t.slot]={};
+            cancel_requested_[t.slot]=false;
+        }
         return l;
     }
 
@@ -157,6 +162,12 @@ public:
         if (!has_actor_lease()) return Status::Unauthorized;
         // On terminal poison we permit only STOP/cancellation cleanup. Never
         // interpret a swallowed quota error as an ordinary successful RET.
+        if (cancelled && (t.slot>=Capacity ||
+                !cancel_requested_[t.slot] ||
+                bound_[t.slot].sequence!=t.sequence ||
+                bound_[t.slot].slot_generation!=t.slot_generation)) {
+            return Status::Invalid; // cleanup requires proven STOP/cancel intent
+        }
         if ((faulted_ || frames_.poisoned()) && !cancelled) return Status::Invalid;
         const FrameStatus f=frames_.retire_after_guest_exit(t,cancelled);
         if (f!=FrameStatus::Ok) {
@@ -169,6 +180,7 @@ public:
             return l;
         }
         bound_[t.slot]={};
+        cancel_requested_[t.slot]=false;
         return Status::Ok;
     }
 
@@ -178,8 +190,12 @@ public:
         if (l!=Status::Ok) return l;
         for (std::size_t i=0;i<Capacity;++i) {
             Token t=bound_[i];
-            if (t.sequence &&
-                frames_.retire_queued(t)==FrameStatus::Ok) bound_[i]={};
+            if (!t.sequence) continue;
+            cancel_requested_[i]=true;
+            if (frames_.retire_queued(t)==FrameStatus::Ok) {
+                bound_[i]={};
+                cancel_requested_[i]=false;
+            }
         }
         return l;
     }
@@ -196,6 +212,7 @@ private:
     Adapter ledger_;
     Frames frames_;
     std::array<Token,Capacity> bound_{};
+    std::array<bool,Capacity> cancel_requested_{};
     bool faulted_=false;
 };
 
