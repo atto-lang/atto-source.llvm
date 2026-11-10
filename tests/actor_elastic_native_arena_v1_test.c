@@ -144,12 +144,79 @@ static void test_concurrent_actor_budget_admission(void) {
     assert(!ores_elastic_budget_used_v1(&tenant));
     assert(!ores_elastic_budget_used_v1(&process));
 }
+static void test_persistent_root_churn_reuses_scrubbed_holes(void) {
+    OresElasticNativeBudgetV1 budget;
+    assert(ores_elastic_budget_init_v1(&budget,4096));
+    OresElasticNativeArenaV1* a=ores_elastic_native_open_v1(
+        300,1,256,3,&budget,&budget);
+    assert(a);
+    OresElasticNativeHandleV1 root,tail,old_tail;
+    assert(ores_elastic_native_allocate_v1(a,8,8,&root));
+    assert(ores_elastic_native_write_i64_v1(a,root,0,0x10203040ll));
+    assert(ores_elastic_native_allocate_v1(a,248,8,&tail));
+    assert(tail.word==2 && ores_elastic_native_committed_v1(a)==256);
+    old_tail=tail;
+    assert(ores_elastic_native_drop_v1(a,tail));
+    int64_t value=0;
+    for(int i=0;i<10000;++i) {
+        /* The live root pins the cursor at the hard quota. Only a genuine
+         * dead-hole allocation can keep this 10,000-turn workload running. */
+        assert(ores_elastic_native_allocate_v1(a,248,8,&tail));
+        assert(tail.word==2 && tail.slot==old_tail.slot);
+        assert(ores_elastic_native_read_i64_v1(a,tail,0,&value) && value==0);
+        assert(ores_elastic_native_write_i64_v1(a,tail,0,i+100));
+        assert(ores_elastic_native_read_i64_v1(a,root,0,&value) && value==0x10203040ll);
+        assert(!ores_elastic_native_read_i64_v1(a,old_tail,0,&value));
+        assert(ores_elastic_native_drop_v1(a,tail));
+        old_tail=tail;
+    }
+    assert(ores_elastic_native_committed_v1(a)==256);
+    assert(ores_elastic_budget_used_v1(&budget)==256);
+    assert(ores_elastic_native_drop_v1(a,root));
+    /* Last-owner drop resets the cursor and invalidates all cached holes:
+     * ancient hole metadata cannot alias newly appended live objects. */
+    OresElasticNativeHandleV1 fresh,aligned;
+    assert(ores_elastic_native_allocate_v1(a,8,8,&fresh));
+    assert(fresh.word==1 && fresh.generation!=root.generation);
+    assert(ores_elastic_native_allocate_v1(a,64,64,&aligned));
+    assert(aligned.word==9 && ores_elastic_native_live_v1(a)==2);
+    assert(!ores_elastic_native_read_i64_v1(a,old_tail,0,&value));
+    ores_elastic_native_close_v1(a);
+    assert(ores_elastic_budget_used_v1(&budget)==0);
+}
+static void test_hole_alignment_and_nonoverlap(void) {
+    OresElasticNativeBudgetV1 budget;
+    assert(ores_elastic_budget_init_v1(&budget,4096));
+    OresElasticNativeArenaV1* a=ores_elastic_native_open_v1(
+        301,1,384,4,&budget,&budget);
+    assert(a);
+    OresElasticNativeHandleV1 root,aligned,reused,other;
+    assert(ores_elastic_native_allocate_v1(a,8,8,&root));
+    assert(ores_elastic_native_allocate_v1(a,64,64,&aligned));
+    assert(aligned.word==9);
+    assert(ores_elastic_native_drop_v1(a,aligned));
+    assert(ores_elastic_native_allocate_v1(a,16,64,&reused));
+    assert(reused.word==9 && reused.slot==aligned.slot);
+    assert(ores_elastic_native_allocate_v1(a,64,8,&other));
+    assert(other.word==17);
+    assert(ores_elastic_native_write_i64_v1(a,reused,0,81));
+    assert(ores_elastic_native_write_i64_v1(a,other,0,92));
+    assert(ores_elastic_native_drop_v1(a,reused));
+    int64_t v=0;
+    assert(ores_elastic_native_read_i64_v1(a,other,0,&v) && v==92);
+    assert(ores_elastic_native_drop_v1(a,other));
+    assert(ores_elastic_native_drop_v1(a,root));
+    ores_elastic_native_close_v1(a);
+    assert(ores_elastic_budget_used_v1(&budget)==0);
+}
 int main(void){
     test_peak_quota_and_actor_survival();
     test_relocation_and_injected_failure();
     test_peak_limit_rejects_relocation();
     test_stale_slot_offset_collision_denied();
     test_concurrent_actor_budget_admission();
+    test_persistent_root_churn_reuses_scrubbed_holes();
+    test_hole_alignment_and_nonoverlap();
     puts("PASS host-only LLVM elastic native arena v1: peak budgets, rollback, ref32, sibling isolation");
     return 0;
 }
