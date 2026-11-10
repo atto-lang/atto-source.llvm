@@ -10,7 +10,7 @@ for cc in clang gcc; do
   command -v "$cc" >/dev/null || { echo "Missing required compiler: $cc" >&2; exit 1; }
   for optimization in 1 2; do
     "$cc" -std=c11 -Wall -Wextra -Wpedantic -Werror "-O$optimization" \
-      -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+      -g -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
       -DORES_ELASTIC_TESTING -I src/main/cpp \
       src/main/cpp/oreslang/runtime/ActorElasticNativeArenaV1.c \
       tests/actor_elastic_native_arena_v1_test.c \
