@@ -2594,6 +2594,12 @@ private:
                         fail("ActorRef<T> type mismatch with spawned actor");
                     require("(");
                     require(")");
+                    // A source 'pipe' is a typed graph construction with
+                    // atomic connections, bounded DATA, distinct supervisor
+                    // CONTROL, and physical shutdown barriers. Never lower
+                    // a partial chain as an ordinary actor spawn.
+                    if (token_.text == "pipe")
+                        fail("NATIVE_ACTOR_PIPE_UNSUPPORTED: typed actor pipe requires guest port, mailbox and supervisor lowering");
                     require(";");
                     value.actor_spawns.push_back(std::move(spawned));
                     continue;
