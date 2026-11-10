@@ -55,9 +55,9 @@ int main(int argc, char** argv) {
         {"dispatch-do-structural-field-reject.ores", false,
          "native structural field pattern requires checked typed aggregate lowering"},
         {"dispatch-value-record-field-reject.ores", false,
-         "native structural field pattern requires checked typed aggregate lowering"},
+         "native tilde map/record literal unsupported"},
         {"dispatch-do-record-field-reject.ores", false,
-         "native structural field pattern requires checked typed aggregate lowering"}
+         "native tilde map/record literal unsupported"}
     };
     std::size_t checked = 0;
     for (const auto& c : cases) {

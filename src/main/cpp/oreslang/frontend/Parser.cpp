@@ -315,11 +315,9 @@ public:
         // codegen or pseudo-object fallback. Ordinary unary '~' is likewise
         // unavailable in this restricted native scalar frontend.
         if (ch == '~') {
-            // Retain the token until the native match parser can issue the
-            // more precise structural-pattern diagnostic. Every other tilde
-            // expression remains rejected before native HIR/codegen.
-            ++at_;
-            return {Kind::Symbol, source_.substr(start, 1), start};
+            throw std::runtime_error(
+                "native tilde map/record literal unsupported until typed aggregate "
+                "and ownership lowering at byte " + std::to_string(start));
         }
         // Admit '@' as a TOKEN only so existing parameter-local @Default guards
         // can issue their specific fail-closed diagnostic instead of a generic
@@ -3973,8 +3971,6 @@ private:
                     "native nb match/switch is invalid: nb applies to channel/select operations, not dispatch arms at byte " +
                     std::to_string(token_.offset));
         }
-        if (token_.text == "~")
-            fail("native tilde map/record literal unsupported until typed aggregate and ownership lowering");
         if (token_.text == "match") return value_match_expression();
         if (token_.text == "switch") return value_switch_expression();
         if (token_.text == "do") {

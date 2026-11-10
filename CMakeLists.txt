@@ -1466,10 +1466,10 @@ if(BUILD_TESTING)
         --diagnostic "native structural field pattern requires checked typed aggregate lowering")
     oreslang_contract_test(native_structural_field_failclosed_3
         dispatch-value-record-field-reject.ores
-        --diagnostic "native structural field pattern requires checked typed aggregate lowering")
+        --diagnostic "native tilde map/record literal unsupported")
     oreslang_contract_test(native_structural_field_failclosed_4
         dispatch-do-record-field-reject.ores
-        --diagnostic "native structural field pattern requires checked typed aggregate lowering")
+        --diagnostic "native tilde map/record literal unsupported")
     # Direct signed-minimum literal remains valid; nested unary negation
     # would overflow host i64 and must reject before any LLVM IR.
     oreslang_contract_test(native_dispatch_signed_min_literal_ir
