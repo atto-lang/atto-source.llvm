@@ -4871,6 +4871,29 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 20)
 endif()
 
+# GPU actors have a distinct source-admission diagnostic, but no GPU-native
+# state/MIR, kernel or physical hardware implementation. This test compiles
+# the REAL parser and must never be used as GPU execution evidence.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-gpu-actor-admission-test
+        tests/gpu_actor_source_admission_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp
+        src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-native-gpu-actor-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_include_directories(oreslang-native-gpu-actor-admission-test SYSTEM PRIVATE
+        ${LLVM_INCLUDE_DIRS})
+    target_link_libraries(oreslang-native-gpu-actor-admission-test PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_features(oreslang-native-gpu-actor-admission-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-gpu-actor-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_gpu_actor_source_admission
+        COMMAND oreslang-native-gpu-actor-admission-test)
+    set_tests_properties(native_gpu_actor_source_admission PROPERTIES TIMEOUT 20)
+endif()
+
 # Dependency-free, executable import/source admission boundary. This test
 # compiles the production SourceInput.hpp with the host C++ compiler.
 if(BUILD_TESTING AND UNIX)
