@@ -747,6 +747,8 @@ public:
                 type_only_declaration(program, true, exported);
                 continue;
             }
+            // Never lower a GPU actor through the ordinary CPU actor parser.
+            reject_unlowered_gpu_actor();
             if (token_.text == "state" && peek_next().text == "container")
                 fail("STATE_CONTAINER_BACKEND_UNSUPPORTED: protected heap region and critical guard lowering required");
             if (token_.text == "virtual" && peek_next().text == "actor")
@@ -884,6 +886,8 @@ public:
                     type_only_declaration(program, true, public_class);
                     continue;
                 }
+                // Never lower a GPU actor through the ordinary CPU actor parser.
+                reject_unlowered_gpu_actor();
                 if (token_.text == "state" && peek_next().text == "container")
                     fail("STATE_CONTAINER_BACKEND_UNSUPPORTED: protected heap region and critical guard lowering required");
                 if (token_.text == "virtual" && peek_next().text == "actor")
@@ -6023,6 +6027,17 @@ private:
     }
 
 
+
+    void reject_unlowered_gpu_actor() {
+        if (token_.text == "gpu" && peek_next().text == "actor") {
+            throw std::runtime_error(
+                "GPU_ACTOR_MIR_UNSUPPORTED: native GPU actor requires typed "
+                "sealed-state ownership, bounded GPU mailbox scheduling, "
+                "supervisor CONTROL and physical device lowering; "
+                "no implicit CPU fallback at byte "
+                + std::to_string(token_.offset));
+        }
+    }
 
     void advance() { token_ = lexer_.next(); }
     [[noreturn]] void fail(const std::string& reason) const {
