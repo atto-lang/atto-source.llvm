@@ -111,14 +111,12 @@ static int grow(OresElasticNativeArenaV1* a,size_t required) {
 }
 static ElasticSlotV1* checked(OresElasticNativeArenaV1* a,OresElasticNativeHandleV1 h) {
     if(!a || h.domain!=a->domain || h.incarnation!=a->incarnation ||
-       h.word==0 || h.generation==0) return NULL;
+       h.word==0 || h.generation==0 || h.slot>=a->max_slots) return NULL;
+    ElasticSlotV1* slot=&a->slots[h.slot];
     const size_t offset=((size_t)h.word-1)*8;
-    for(uint32_t i=0;i<a->max_slots;++i){
-        ElasticSlotV1* slot=&a->slots[i];
-        if(slot->live && slot->offset==offset && slot->generation==h.generation)
-            return slot;
-    }
-    return NULL;
+    if(!slot->live || slot->offset!=offset || slot->generation!=h.generation)
+        return NULL;
+    return slot;
 }
 int ores_elastic_native_allocate_v1(OresElasticNativeArenaV1* a,size_t bytes,
                                     uint32_t alignment,OresElasticNativeHandleV1* out) {
@@ -139,7 +137,7 @@ int ores_elastic_native_allocate_v1(OresElasticNativeArenaV1* a,size_t bytes,
     slot->offset=offset;slot->length=bytes;slot->live=1;
     a->cursor=end;++a->live;
     *out=(OresElasticNativeHandleV1){a->domain,a->incarnation,
-                                    (uint32_t)(offset/8+1),slot->generation};
+                                    (uint32_t)(offset/8+1),free_slot,slot->generation};
     return 1;
 }
 int ores_elastic_native_write_i64_v1(OresElasticNativeArenaV1* a,
