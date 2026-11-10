@@ -1,4 +1,5 @@
 #include "oreslang/runtime/ActorInvocationFrameBridge.hpp"
+#include "oreslang/runtime/ActorInvocationFrameAbiV1.hpp"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -91,6 +92,22 @@ extern "C" void on_wake(void* raw,std::size_t actor,
     Bridge::Selection selected{};
     CHECK(s.frames->claim(selected)==Status::Ok);
     CHECK(selected.token.sequence==s.a.sequence);
+    // The future compiler-visible ABI is pointer-free data, not authority.
+    auto wire=oreslang::runtime::abi::encode<4>(s.a);
+    Bridge::Token decoded{};
+    CHECK(oreslang::runtime::abi::decode<4>(wire,decoded));
+    CHECK(decoded.actor==s.a.actor && decoded.sequence==s.a.sequence &&
+          decoded.slot_generation==s.a.slot_generation);
+    wire.reserved=7;
+    CHECK(!oreslang::runtime::abi::decode<4>(wire,decoded));
+    auto frameWire=oreslang::runtime::abi::encode<4,8,96,192>(s.callee);
+    Bridge::FrameRef frameDecoded{};
+    CHECK((oreslang::runtime::abi::decode<4,8,96,192>(
+           frameWire,frameDecoded)));
+    CHECK(frameDecoded.nonce==s.callee.nonce);
+    frameWire.reserved=1;
+    CHECK(!(oreslang::runtime::abi::decode<4,8,96,192>(
+            frameWire,frameDecoded)));
     std::uint8_t actual[3]={};
     CHECK(s.frames->read(s.a,s.callee,3,actual,3).ok());
     CHECK(actual[0]==0x2a && actual[1]==0x11 && actual[2]==0x09);
