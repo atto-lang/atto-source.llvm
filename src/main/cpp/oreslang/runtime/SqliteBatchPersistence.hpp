@@ -151,6 +151,77 @@ public:
             return results;
         } catch(...) {rollback();throw;} // outcome unknown; caller must retry same op id.
     }
+    // Trusted host-only event identity reconciliation after an activation
+    // restart. A newer epoch may verify prior immutable journal bytes, but
+    // this is NOT an original command digest or durable client reply.
+    struct VerifiedCommittedEvent {
+        std::uint64_t version;
+        std::uint32_t schema_version;
+        std::vector<std::uint8_t> payload;
+    };
+    std::optional<VerifiedCommittedEvent> resolve_committed_event_fenced(
+        const Identity& id, std::uint64_t current_epoch,
+        const std::string& operation_id, std::uint32_t schema_version,
+        const std::vector<std::uint8_t>& exact_event_bytes) {
+        if (!valid_id(id.tenant) || !valid_id(id.actor) || !valid_id(id.slot) ||
+            !valid_id(operation_id) || !current_epoch || current_epoch > INT64_MAX ||
+            !schema_version || exact_event_bytes.size() > 1048576)
+            throw std::invalid_argument("INVALID_EVENT_RESOLUTION");
+        std::lock_guard<std::mutex> lock(mu_);
+        sql("BEGIN");
+        try {
+            if (epoch(id) != std::optional<std::uint64_t>(current_epoch))
+                throw std::logic_error("STALE_EPOCH");
+            std::optional<VerifiedCommittedEvent> result;
+            Statement op(db_,"SELECT epoch,expected,kind,schema,length(payload),"
+                "substr(payload,1,1048577),version FROM ops "
+                "WHERE tenant=? AND actor=? AND slot=? AND op=?");
+            bind_identity(op,id); op.text(4,operation_id);
+            if (op.step() == SQLITE_ROW) {
+                const auto old_epoch = sqlite3_column_int64(op.p,0);
+                const auto expected = sqlite3_column_int64(op.p,1);
+                const auto kind = sqlite3_column_int(op.p,2);
+                const auto schema = sqlite3_column_int64(op.p,3);
+                const auto payload_size = sqlite3_column_int64(op.p,4);
+                const auto* saved = static_cast<const std::uint8_t*>(sqlite3_column_blob(op.p,5));
+                const auto old_version = sqlite3_column_int64(op.p,6);
+                const auto matches = [&] {
+                    return old_epoch > 0
+                        && static_cast<std::uint64_t>(old_epoch) <= current_epoch
+                        && expected >= 0 && expected < INT64_MAX
+                        && old_version > 0 && old_version == expected + 1
+                        && kind == static_cast<int>(WriteKind::Event)
+                        && schema == static_cast<sqlite3_int64>(schema_version)
+                        && payload_size == static_cast<sqlite3_int64>(exact_event_bytes.size())
+                        && (payload_size == 0 || (saved != nullptr &&
+                             std::memcmp(saved,exact_event_bytes.data(),
+                                 exact_event_bytes.size()) == 0))
+                        && static_cast<std::uint64_t>(old_version) <= version(id);
+                };
+                if (!matches()) throw std::logic_error("OP_ID_CONFLICT");
+                Statement journal(db_,"SELECT schema,length(payload),substr(payload,1,1048577)"
+                    " FROM events WHERE tenant=? AND actor=? AND slot=? AND version=?");
+                bind_identity(journal,id); journal.integer(4,static_cast<std::uint64_t>(old_version));
+                if (journal.step() != SQLITE_ROW
+                    || sqlite3_column_int64(journal.p,0) != static_cast<sqlite3_int64>(schema_version)
+                    || sqlite3_column_int64(journal.p,1) != payload_size)
+                    throw std::logic_error("OPERATION_EVENT_UNAVAILABLE");
+                const auto* actual=static_cast<const std::uint8_t*>(
+                    sqlite3_column_blob(journal.p,2));
+                if (payload_size > 0 && (actual == nullptr
+                    || std::memcmp(actual,exact_event_bytes.data(),
+                        exact_event_bytes.size()) != 0))
+                    throw std::logic_error("OPERATION_EVENT_UNAVAILABLE");
+                result = VerifiedCommittedEvent{
+                    static_cast<std::uint64_t>(old_version),schema_version,exact_event_bytes};
+            }
+            sql("COMMIT");
+            return result;
+        } catch (...) {
+            rollback();
+            throw;
+        }
+    }
     // Internal restore: one read transaction binds directory epoch and state.
     // The unfenced overload is privileged host/migration inspection only.
     Recovery load_impl(const Identity& id, std::optional<std::uint64_t> required_epoch) {

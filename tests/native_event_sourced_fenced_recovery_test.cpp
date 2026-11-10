@@ -97,6 +97,25 @@ int main() {
         auto published = second.read<std::uint64_t>(*new_state);
         assert(published && *published == 42);
 
+        // A new epoch can read-only verify a prior committed EVENT without
+        // reacquiring an old writer's lease or appending another journal row.
+        auto proof=store.resolve_committed_event_fenced(
+            account,2,"deposit-op-42",1,encode(42));
+        assert(proof && proof->version==1 && proof->schema_version==1 &&
+               proof->payload==encode(42));
+        assert(!store.resolve_committed_event_fenced(
+            account,2,"missing-op",1,encode(42)).has_value());
+        bool bad_payload=false;
+        try { (void)store.resolve_committed_event_fenced(
+            account,2,"deposit-op-42",1,encode(43)); }
+        catch (const std::logic_error&) { bad_payload=true; }
+        assert(bad_payload && "mismatched event bytes accepted");
+        bool stale_lookup=false;
+        try { (void)store.resolve_committed_event_fenced(
+            account,1,"deposit-op-42",1,encode(42)); }
+        catch (const std::logic_error&) { stale_lookup=true; }
+        assert(stale_lookup && "stale actor inspected a committed event");
+
         // Existing providers prevent cross-epoch duplicate appends but cannot
         // return the prior durable command response to the new activation.
         // Resolution by stable command ID is the next P0 feature, not proven here.
