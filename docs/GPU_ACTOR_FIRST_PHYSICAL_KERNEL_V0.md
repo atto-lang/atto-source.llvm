@@ -2,7 +2,7 @@
 
 **Status: G1 kernel-only prerequisite. It cannot certify GPU actor execution.**
 
-This builds on `tests/atto_gpu_physical_saxpy_probe.cpp` (existing hardware-required native OpenCL probe) with `tests/fixtures/gpu_actor_saxpy_f32_v0.cl` and `tests/gpu_actor_saxpy_hardware_gate.sh`. The device kernel has a checked logical tail guard for 1003 values rounded to 1024 work-items. The host probe uploads device buffers, submits OpenCL work, authenticates successful native event status from the OpenCL runtime, downloads output, compares against an independent f32 CPU oracle, and reports device model, vendor and driver. It does NOT compile AttoLang guest source and is NOT an actor scheduler.
+This builds on `tests/atto_gpu_physical_saxpy_probe.cpp` (existing hardware-required native OpenCL probe) with `tests/fixtures/gpu_actor_saxpy_f32_v0.cl` and `tests/gpu_actor_saxpy_hardware_gate.sh`. The device kernel has a checked logical tail guard for 1003 values rounded to 1024 work-items. The host probe uploads device buffers, submits OpenCL work, observes a provider-reported completion event through OpenCL (not an independently attested hardware event), downloads output, compares against an independent f32 CPU oracle, and reports device model, vendor and driver. It does NOT compile AttoLang guest source and is NOT an actor scheduler.
 
 ## Run on a Linux host with OpenCL 1.2 and an actual GPU
 
