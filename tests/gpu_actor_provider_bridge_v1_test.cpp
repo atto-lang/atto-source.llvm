@@ -458,8 +458,38 @@ void retirement_release_window_denies_concurrent_actor_turn() {
     denied([&] { (void)b->submit(1); },"GPU_PROVIDER_ACTOR_NOT_READY");
     r->progress_all();
     check(b->completed(),"cancelled actor retires only after provider release");
+    check(p2->release_calls==1,"cancel-vs-retire must not release same buffer twice");
     b.reset();
     check(r->retained_count()==0,"retire-vs-close slot freed");
+    drain_notice(l,Lane::Kind::Cancel);
+}
+
+void terminal_release_serializes_concurrent_progress_workers() {
+    auto r=registry(1); auto l=lane(1);
+    auto p=std::make_shared<BlockedReleasePort>(binding("terminal-release"));
+    std::shared_ptr<MockPort> as_mock=p;
+    auto a=actor(r,l,as_mock);
+    (void)a->submit(31);
+    a.reset();
+    p->observation=Port::Observation::CompleteOk;
+    r->progress_all(); // terminal device event; needs explicit buffer release
+    check(r->retained_count()==1,"terminal actor still owns buffer");
+
+    p->release_ok=true;
+    std::atomic<bool> first_finished{false};
+    std::thread releasing([&] {
+        r->progress_all(); // blocks inside the native provider release
+        first_finished.store(true);
+    });
+    p->await_entered();
+    r->progress_all(); // competing poll must NOT enter the same provider release
+    check(!first_finished.load(),"first release still in provider");
+    check(r->retained_count()==1,"registry remains pinned throughout release");
+    p->resume();
+    releasing.join();
+    check(first_finished.load(),"first provider release completed");
+    check(p->release_calls==1,"exactly one provider release for one allocation");
+    check(r->retained_count()==0,"terminal actor pruned after release");
     drain_notice(l,Lane::Kind::Cancel);
 }
 
@@ -516,6 +546,7 @@ int main() {
     malformed_provider_reply_is_quarantined_not_lost();
     supervisor_handle_loss_preserves_process_root_quarantine();
     retirement_release_window_denies_concurrent_actor_turn();
+    terminal_release_serializes_concurrent_progress_workers();
     population_1024_mock_provider_turns();
     if(checks<3100) throw std::runtime_error("GPU_PROVIDER_INSUFFICIENT_CHECKS");
     std::cout<<"GPU_PROVIDER_BRIDGE_V1_HOST_PASS checks="<<checks
