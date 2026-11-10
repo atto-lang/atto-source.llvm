@@ -41,7 +41,15 @@ int main(int argc, char** argv) {
         {"tilde-map-literal-native-reject.ores", false,
          "native tilde map/record literal unsupported"},
         {"tilde-record-literal-native-reject.ores", false,
-         "native tilde map/record literal unsupported"}
+         "native tilde map/record literal unsupported"},
+        {"dispatch-value-match-wildcard-then-default-reject.ores", false,
+         "native value match wildcard arm must be last"},
+        {"dispatch-do-match-wildcard-then-default-reject.ores", false,
+         "native do match wildcard arm must be last"},
+        {"dispatch-value-match-duplicate-case-reject.ores", false,
+         "duplicate native value match pattern"},
+        {"dispatch-do-match-duplicate-case-reject.ores", false,
+         "duplicate native do match pattern"}
     };
     std::size_t checked = 0;
     for (const auto& c : cases) {
