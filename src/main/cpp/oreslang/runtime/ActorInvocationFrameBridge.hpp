@@ -71,6 +71,10 @@ public:
 
     Status claim(Selection& out) noexcept {
         if (!has_actor_lease()) return Status::Unauthorized;
+        // Do not mutate ledger into a new DATA turn while actor-owned frame
+        // storage is poisoned. Supervisor must request STOP first so the next
+        // eligible selection is authenticated CancelCleanup.
+        if ((faulted_ || frames_.poisoned()) && !stopped_) return Status::Invalid;
         Selection selected{};
         const Status s=ledger_.claim(selected);
         if (s!=Status::Ok) return s;
@@ -188,6 +192,7 @@ public:
         if (!has_actor_lease()) return Status::Unauthorized;
         const Status l=ledger_.stop_and_request_cleanup();
         if (l!=Status::Ok) return l;
+        stopped_=true;
         for (std::size_t i=0;i<Capacity;++i) {
             Token t=bound_[i];
             if (!t.sequence) continue;
@@ -214,6 +219,7 @@ private:
     std::array<Token,Capacity> bound_{};
     std::array<bool,Capacity> cancel_requested_{};
     bool faulted_=false;
+    bool stopped_=false;
 };
 
 } // namespace oreslang::runtime
