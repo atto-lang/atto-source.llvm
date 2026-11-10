@@ -5,6 +5,7 @@
 #include "oreslang/runtime/SupervisorFailureLane.hpp"
 
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <mutex>
 #include <optional>
@@ -62,6 +63,14 @@ public:
     HostTurnBridgeV0(const HostTurnBridgeV0&) = delete;
     HostTurnBridgeV0& operator=(const HostTurnBridgeV0&) = delete;
 
+    ~HostTurnBridgeV0() {
+        std::lock_guard<std::mutex> guard(mu_);
+        // Fail-stop rather than drop an unretired provider event, exclusive
+        // actor turn, or live supervisor reservation. This bridge does not
+        // own physical allocations and cannot free them on destruction.
+        if (!closed_ || pending_) std::terminate();
+    }
+
     // Returns a source-only host turn identity, NOT an authenticated GPU event.
     Turn prepare(std::int64_t increment) {
         std::lock_guard<std::mutex> guard(mu_);
@@ -69,6 +78,9 @@ public:
             throw std::logic_error("GPU_ACTOR_CLOSED");
         }
         if (pending_) throw std::logic_error("GPU_ACTOR_TURN_INFLIGHT");
+        if (turn_sequence_ == std::numeric_limits<std::uint64_t>::max()) {
+            throw std::overflow_error("GPU_ACTOR_TURN_SEQUENCE_EXHAUSTED");
+        }
         const auto claim = credits_.try_acquire();
         if (!claim) throw std::logic_error("GPU_ACTOR_TURN_CREDIT_EXHAUSTED");
         if ((increment > 0 && state_ > std::numeric_limits<std::int64_t>::max() - increment)
@@ -182,6 +194,20 @@ public:
             throw std::logic_error("GPU_ACTOR_BUFFER_RELEASE_UNPROVEN");
         }
         fence_.retire_after_backend_release(identity_);
+    }
+
+    // For normal actor termination. Physical resources must already have
+    // been released by a trusted provider, and no command may remain.
+    // Unlike cancellation, this does NOT send a failure to supervisor CONTROL.
+    void retire_gracefully_after_backend_release(bool provider_released) {
+        std::lock_guard<std::mutex> guard(mu_);
+        if (!provider_released || closed_ || close_requested_ || pending_) {
+            throw std::logic_error("GPU_ACTOR_GRACEFUL_RETIRE_UNPROVEN");
+        }
+        fence_.retire_after_backend_release(identity_);
+        credits_.retire();
+        control_.retire_gracefully(actor_);
+        closed_ = true;
     }
 
     std::int64_t committed_state() const {
