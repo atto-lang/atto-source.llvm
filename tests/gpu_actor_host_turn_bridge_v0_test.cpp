@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -321,5 +322,7 @@ int main() {
     device_loss_is_cohort_failure_not_actor_isolation();
     concurrent_claim_one_actor();
     if(checks < 3100) throw std::runtime_error("test coverage under expected 1024 population threshold");
+    std::cout << "GPU_ACTOR_HOST_BRIDGE_PASS checks=" << checks
+              << " actors=1024 turns=4096 physical_gpu=false" << '\\n';
     return 0;
 }
