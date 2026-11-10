@@ -131,7 +131,9 @@ int ores_elastic_native_allocate_v1(OresElasticNativeArenaV1* a,size_t bytes,
     const size_t mask=(size_t)alignment-1;
     if(a->cursor>SIZE_MAX-mask)return 0;
     const size_t offset=(a->cursor+mask)&~mask;
-    if(offset>a->hard_limit || bytes>a->hard_limit-offset)return 0;
+    /* Do not deny a valid hole reuse just because the bump cursor has
+     * reached the actor's hard quota. Apply the bump bound only if no
+     * previously scrubbed hole can satisfy the request. */
     /* Prefer a dead, explicitly scrubbed span when a live root pins the
      * actor's logical tail. Without this path, temporary churn can exhaust
      * the 64 MiB logical limit despite having no net live-byte growth.
@@ -151,6 +153,7 @@ int ores_elastic_native_allocate_v1(OresElasticNativeArenaV1* a,size_t bytes,
     if(reusable!=a->max_slots)free_slot=reusable;
     if(free_slot==a->max_slots)return 0;
     const int reuse=reusable!=a->max_slots;
+    if(!reuse && (offset>a->hard_limit || bytes>a->hard_limit-offset))return 0;
     const size_t place=reuse?a->slots[free_slot].offset:offset;
     const size_t end=place+bytes;
     if(!reuse && !grow(a,end))return 0;
