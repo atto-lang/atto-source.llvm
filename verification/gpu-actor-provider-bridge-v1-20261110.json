@@ -1,0 +1,63 @@
+{
+  "schema": "attolang.gpu-actor-provider-bridge-evidence/1",
+  "recordedAt": "2026-11-10",
+  "repo": "ores-truffle-oreslang/oreslang-source.llvm",
+  "branch": "feat/gpu-actor-provider-port-v1-20261110",
+  "stackedOn": "ores-truffle-oreslang/oreslang-source.llvm#1650",
+  "scope": "source-authenticated local provider event handles and bounded actor quarantine, host mocked; no GPU guest/device execution",
+  "sourceBlobs": {
+    "src/main/cpp/oreslang/runtime/GpuActorProviderBridgeV1.hpp": "e23b175da55da4c38b75bdbad78cf96ad87578fc",
+    "tests/gpu_actor_provider_bridge_v1_test.cpp": "3cf129ef64d832a5a49e795375c35dee40580f94",
+    "src/main/cpp/oreslang/runtime/GpuActorHostTurnBridgeV0.hpp": "e2787e95da1dff46e7abb36793436e55d183df97",
+    "src/main/cpp/oreslang/runtime/GpuBufferFence.hpp": "1316dc2be8c19ef23a19dcb7e907455bba633afc",
+    "src/main/cpp/oreslang/runtime/NativeActorTurnCredits.hpp": "ad47b278fc74d1bfcdc5554a102cd01531c374b1",
+    "src/main/cpp/oreslang/runtime/SupervisorFailureLane.hpp": "f2e0557c938285886f5dfeb5b3c5448336a8bbd8"
+  },
+  "carrier": {
+    "repo": "scintilla-run/scintilla-run-e2e",
+    "branch": "carrier/gpu-provider-bridge-v1-20261110",
+    "head": "2a5295060c2731ee2a464e888cfecc52d5b4115c",
+    "runId": 42920512073,
+    "jobId": 130193856041,
+    "url": "https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42920512073",
+    "exactSourceBlobs": true,
+    "gccAsanUbsan": "passed",
+    "clang": "passed",
+    "checksPerCompiler": 6268,
+    "logicalActors": 1024,
+    "mockedTurns": 4096
+  },
+  "securityTests": [
+    "cross-provider-forged-event",
+    "stale-turn-replay",
+    "actor-generation-check",
+    "ambiguous-submit",
+    "definitive-no-enqueue",
+    "malformed-provider-receipt-quarantine",
+    "async-enqueue-cancellation-race",
+    "actor-destructor-quarantine",
+    "bounded-admission-capacity",
+    "release-requires-provider-ack",
+    "device-loss-cohort",
+    "cross-tenant-isolation",
+    "graceful-retirement"
+  ],
+  "promotion": {
+    "realGpu": false,
+    "physicalEventAuthenticated": false,
+    "actualDeviceAllocations": false,
+    "providerDriverObserved": false,
+    "compiledAttoGuest": false,
+    "actualKernelDispatch": false,
+    "fullCmakeCtest": false,
+    "fiveBackendParity": false
+  },
+  "limitations": [
+    "native provider remains trusted and can return false completion",
+    "legacy v0 trusted Boolean methods remain present",
+    "supervisor root must outlive unresolved quarantine; registry destruction while unresolved is not safe",
+    "no real device runtime adapter"
+  ],
+  "releaseReady": false,
+  "reviewRequired": true
+}
