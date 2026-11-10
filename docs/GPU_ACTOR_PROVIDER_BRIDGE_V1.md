@@ -26,24 +26,24 @@ ProviderPortV1 is a **trusted native backend interface**. It issues an opaque, n
 
 A thrown enqueue or malformed receipt means Unknown, **not** proof of no submission. A forged event, another actor generation, or an earlier turn cannot publish state. Device loss affects matching tenant/device/provider generation; other tenants' actors can complete independently. Timeouts do not imply device quiescence.
 
-The registry retains the V0 host ledger, provider and shared supervisor CONTROL lane when the actor-facing wrapper disappears. Admission is capacity bounded, so no overcommit occurs when device loss prevents physical release.
+The registry retains the V0 host ledger, provider and shared supervisor CONTROL lane when the actor-facing wrapper disappears. A native process-root anchor also pins any nonempty registry across loss of its immediate supervisor handle. The root is bounded to 256 registries; each registry has its own capacity gate. Native recovery calls progress_process_root() and automatically unpins empty registries. No arbitrary guest may access the root.
 
-**Remaining lifecycle gap:** This protects actor-wrapper destruction while its supervisor-owned registry remains alive. V0 still calls std::terminate on unresolved ledger destruction, so deletion of the *entire registry* with outstanding entries is not an isolated recovery path. A durable or process-root quarantine owner that survives supervisor restart must be implemented and tested before production enablement. The registry cannot be safely discarded on a timer.
+**Remaining lifecycle gap:** The process-root anchor prevents a normal in-process supervisor-handle drop from destroying unresolved V0 ledgers. However it is NOT process-crash durable and cannot prove an actual GPU device quiesced after driver loss. A permanently unresponsive driver can retain physical resources until trusted recovery; global root capacity bounds the number of separate retained registries but does not implement durable recovery or reclaim device memory. This is not yet an isolated whole-process or supervisor-tree restart contract.
 
 ## Verified native host-only evidence
 
-Private token-free exact Git-blob carrier: https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42920512073
+Private token-free exact Git-blob carrier: https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42921328555
 
 - GCC with strict warnings, AddressSanitizer and UndefinedBehaviorSanitizer: executed and passed
 - Clang with strict warnings: executed and passed
-- 6,268 host checks on each compiler; 1,024 logical actors, 4,096 mock-provider turns
+- 6,280 host checks on each compiler; 1,024 logical actors, 4,096 mock-provider turns; verified process-root retention and recovery after supervisor-handle loss
 - Event forgery/replay, malformed receipts, definitive enqueue abort, ambiguous exceptions, cancellation during enqueue, cohort loss, cross-tenant isolation, capacity exhaustion and graceful retirement
 - No real GPU, GPU driver event, compiled AttoLang guest, physical GPU kernel, or five-backend parity verified
 
 ## Next production gates
 
 1. Implement trusted physical provider adapter with native GPU queue, allocation generations and exact event authority.
-2. Make quarantines resilient to supervisor-of-supervisor restarts, with explicit release and device-generation recovery.
+2. Add durable crash recovery and supervisor-of-supervisor registry handoff beyond this process-root-only retention, with explicit release and device-generation recovery.
 3. Complete Java and LLVM GPU actor typed body MIR, effects, borrow rules and guest lowering.
 4. Execute real device run with hardware/driver identity, artifact hashes, successful device event, independent CPU oracle and supervision validation.
 5. Independently verify unsupported backends fail closed.
