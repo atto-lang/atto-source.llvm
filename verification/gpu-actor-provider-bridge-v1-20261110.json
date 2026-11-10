@@ -6,8 +6,8 @@
   "stackedOn": "ores-truffle-oreslang/oreslang-source.llvm#1650",
   "scope": "source-authenticated local provider event handles and bounded actor quarantine, host mocked; no GPU guest/device execution",
   "sourceBlobs": {
-    "src/main/cpp/oreslang/runtime/GpuActorProviderBridgeV1.hpp": "e23b175da55da4c38b75bdbad78cf96ad87578fc",
-    "tests/gpu_actor_provider_bridge_v1_test.cpp": "3cf129ef64d832a5a49e795375c35dee40580f94",
+    "src/main/cpp/oreslang/runtime/GpuActorProviderBridgeV1.hpp": "23fef983580e6323e278792ef17dc6c9b96306ee",
+    "tests/gpu_actor_provider_bridge_v1_test.cpp": "4b97bc83cb1e62d0ae8ba7db92b285507b5d3b22",
     "src/main/cpp/oreslang/runtime/GpuActorHostTurnBridgeV0.hpp": "e2787e95da1dff46e7abb36793436e55d183df97",
     "src/main/cpp/oreslang/runtime/GpuBufferFence.hpp": "1316dc2be8c19ef23a19dcb7e907455bba633afc",
     "src/main/cpp/oreslang/runtime/NativeActorTurnCredits.hpp": "ad47b278fc74d1bfcdc5554a102cd01531c374b1",
@@ -16,14 +16,14 @@
   "carrier": {
     "repo": "scintilla-run/scintilla-run-e2e",
     "branch": "carrier/gpu-provider-bridge-v1-20261110",
-    "head": "2a5295060c2731ee2a464e888cfecc52d5b4115c",
-    "runId": 42920512073,
-    "jobId": 130193856041,
-    "url": "https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42920512073",
+    "head": "03566737d7fb7436d46549a5acabc158209d7a21",
+    "runId": 42921328555,
+    "jobId": 130196605781,
+    "url": "https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42921328555",
     "exactSourceBlobs": true,
     "gccAsanUbsan": "passed",
     "clang": "passed",
-    "checksPerCompiler": 6268,
+    "checksPerCompiler": 6280,
     "logicalActors": 1024,
     "mockedTurns": 4096
   },
@@ -40,7 +40,9 @@
     "release-requires-provider-ack",
     "device-loss-cohort",
     "cross-tenant-isolation",
-    "graceful-retirement"
+    "graceful-retirement",
+    "process-root-registry-retention-after-supervisor-handle-loss",
+    "orphaned-buffer-release-then-root-unpin"
   ],
   "promotion": {
     "realGpu": false,
@@ -55,9 +57,17 @@
   "limitations": [
     "native provider remains trusted and can return false completion",
     "legacy v0 trusted Boolean methods remain present",
-    "supervisor root must outlive unresolved quarantine; registry destruction while unresolved is not safe",
-    "no real device runtime adapter"
+    "no real device runtime adapter",
+    "process-root only: process crash, device reset and process restart recovery not implemented",
+    "a native provider can still falsely report completion; no actual device event authenticated"
   ],
   "releaseReady": false,
-  "reviewRequired": true
+  "reviewRequired": true,
+  "processRoot": {
+    "globalRegistryLimit": 256,
+    "retainOrphanedRegistryUntilReleased": true,
+    "rootRecoveryCallbackTested": true,
+    "processCrashDurability": false,
+    "realGpuQuiescenceProof": false
+  }
 }
