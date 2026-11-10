@@ -370,16 +370,16 @@ public:
         if (next_id_ == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("GPU_PROVIDER_REGISTRY_SEQUENCE_EXHAUSTED");
 
-        // A process-root native owner retains the registry if a supervisor
-        // wrapper dies while physical work is unresolved. Capacity is global
-        // and bounded; recovery remains a trusted-native-only operation.
-        if (entries_.empty()) process_root().pin(shared_from_this());
-        const auto id = ++next_id_;
-        // Slot reservation precedes actor registration: failed allocations
-        // cannot silently overcommit the quarantine capacity.
+        // Reserve the bounded slot BEFORE pinning the process root.
+        // An allocation failure in map::emplace must not leave an empty
+        // supervisor registry permanently rooted.
+        const auto id = next_id_ + 1;
         auto [it, inserted] = entries_.emplace(id, nullptr);
         if (!inserted) throw std::logic_error("GPU_PROVIDER_REGISTRY_COLLISION");
         try {
+            // Process-root retention is required before any actor CONTROL
+            // reservation or physical resource can become live.
+            if (entries_.size() == 1) process_root().pin(shared_from_this());
             auto e = std::make_shared<Entry>(std::move(provider), std::move(lane));
             const auto& b = e->port->binding();
             e->host = std::make_unique<HostTurnBridgeV0>(
@@ -387,6 +387,7 @@ public:
                 oreslang::gpu::Identity{b.tenant, b.device, b.allocation_generation},
                 bytes, initial_state);
             it->second = std::move(e);
+            next_id_ = id;
         } catch (...) {
             entries_.erase(it);
             if (entries_.empty()) process_root().unpin(this);
