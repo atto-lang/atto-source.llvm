@@ -67,8 +67,9 @@ int main() {
     CHECK(b.outgoing.kind == EffectKind::Raise && b.outgoing.code == 12);
     CHECK(counts.raises == 1);
 
-    // No on_panic exists at this ABI boundary, even when both local
-    // callbacks are nonnull. The parent supervisor owns PANIC CONTROL.
+    // No on_panic RESOLUTION exists at this boundary, even when both local
+    // callbacks are nonnull. The separate safe-lane observer below cannot
+    // consume the parent's PANIC CONTROL notice.
     for (const auto kind : {EffectKind::Panic, EffectKind::Cancel,
                              EffectKind::Fatal, EffectKind::Return}) {
         auto x = dispatch_actor_local_unhandled(
