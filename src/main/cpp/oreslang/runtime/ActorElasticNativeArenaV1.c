@@ -63,8 +63,14 @@ OresElasticNativeArenaV1* ores_elastic_native_open_v1(
     if(!a) return NULL;
     a->slots=calloc(max_slots,sizeof(*a->slots));
     if(!a->slots){free(a);return NULL;}
-    const uint64_t id=atomic_fetch_add_explicit(&next_domain,1,memory_order_relaxed);
-    if(!id || id==UINT64_MAX){free(a->slots);free(a);return NULL;}
+    /* A wrapped domain could authorize an old actor handle. Saturate instead
+     * of letting fetch_add wrap back to an earlier domain identity. */
+    uint64_t id=atomic_load_explicit(&next_domain,memory_order_relaxed);
+    for(;;){
+        if(!id || id==UINT64_MAX){free(a->slots);free(a);return NULL;}
+        if(atomic_compare_exchange_weak_explicit(&next_domain,&id,id+1,
+                memory_order_relaxed,memory_order_relaxed))break;
+    }
     a->actor_id=actor_id;a->incarnation=incarnation;a->domain=id;
     a->max_slots=max_slots;a->hard_limit=hard_limit_bytes;
     a->tenant=tenant;a->process=process;
