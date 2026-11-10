@@ -80,13 +80,14 @@ foreach(mutant IN LISTS mutants)
     string(REGEX MATCH
         "OWNERSHIP_CFG\\|case=${expected_case}\\|kind=(positive|negative)\\|result=FAIL"
         expected_failure "${mutant_out}")
-    string(FIND "${mutant_out}"
-        "OWNERSHIP_DATAFLOW_V1|positive=15|negative=39|attempted=54|failed="
-        aggregate_pos)
-    string(FIND "${mutant_out}" "|result=FAIL" aggregate_fail_pos)
-    if("${mutant_status}" STREQUAL "0" OR
+    # Require complete, explicitly failing 54-case output; crashes,
+    # timeouts, partial suites, and unrelated failures are not mutant kills.
+    string(REGEX MATCH
+        "OWNERSHIP_DATAFLOW_V1\\|positive=15\\|negative=39\\|attempted=54\\|failed=[1-9][0-9]*\\|result=FAIL"
+        aggregate_failure "${mutant_out}")
+    if(NOT "${mutant_status}" MATCHES "^[1-9][0-9]*$" OR
        expected_failure STREQUAL "" OR
-       aggregate_pos EQUAL -1 OR aggregate_fail_pos EQUAL -1)
+       aggregate_failure STREQUAL "")
         message(FATAL_ERROR
             "mutant survived or failed without targeted semantic regression: ${mutant}\n"
             "status=${mutant_status}\n${mutant_out}\n${mutant_err}")
