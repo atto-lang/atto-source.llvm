@@ -2931,6 +2931,7 @@ if(BUILD_TESTING)
                 tests/fixtures/native-class-string/mutable-scalar-record-view.ores
                 tests/fixtures/native-class-string/router-elif-chain.ores
                 tests/fixtures/native-class-string/mutable-record-iteration-print.atto
+                tests/fixtures/native-class-string/console-primitives.atto
                 tests/fixtures/native-class-string/root-mutable-record-view.atto
                 tests/fixtures/native-class-string/root-mutable-record-const-reject.atto
                 tests/fixtures/native-class-string/root-mutable-record-let-reject.atto

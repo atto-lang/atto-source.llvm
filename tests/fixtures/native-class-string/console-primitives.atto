@@ -1,0 +1,5 @@
+pub routine main():int {
+  stdio.println(1);
+  stdio.println(true);
+  return 0;
+}

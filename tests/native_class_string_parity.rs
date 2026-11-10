@@ -235,6 +235,8 @@ fn main() {
     let exact = include_str!("fixtures/native-class-string/main.ores");
     let foo = include_str!("fixtures/native-class-string/main-1.ores");
     let positives = [
+        ("atto-console-primitives", include_str!("fixtures/native-class-string/console-primitives.atto"), "1\ntrue\n"),
+
         ("root-mutable-record-iteration-print", include_str!("fixtures/native-class-string/mutable-record-iteration-print.atto"), "1\n"),
 
         ("root-mutable-record-view-canonical-if", include_str!("fixtures/native-class-string/root-mutable-record-view.atto"), ""),
@@ -629,7 +631,7 @@ fn main() {
     ];
     for (case_index, (name, source, expected)) in positives.iter().chain(native_only.iter()).chain(panics.iter()).enumerate() {
         let expects_panic = case_index >= positives.len() + native_only.len();
-        let entry_name = if name.starts_with("root-mutable-record-") { "main.atto" } else { "main.ores" };
+        let entry_name = if name.starts_with("root-mutable-record-") || name.starts_with("atto-") { "main.atto" } else { "main.ores" };
         fs::write(scratch.0.join(entry_name), source).unwrap();
         fs::write(scratch.0.join("main-1.ores"), foo).unwrap();
         fs::write(scratch.0.join("sums.ores"), "define module sums as pub fnc choose(bool yes):Option<string>{return yes?Some(\"module\"):None;}pub fnc checked(bool yes):Result<bool,string>{return yes?Ok(false):Err(\"missing\");}end").unwrap();
@@ -1050,7 +1052,7 @@ fn main() {
         ),
         (
             "wrong-console-type",
-            "pub fnc main():int{stdio.print(42);return 0;}".to_owned(),
+            "pub fnc main():int{val Option<int> value=Some(42);stdio.print(value);return 0;}".to_owned(),
             foo.to_owned(),
         ),
         (
@@ -1098,7 +1100,7 @@ fn main() {
         ),
     ];
     for (name, source, dependency) in &negatives {
-        let entry_name = if name.starts_with("root-mutable-record-") { "main.atto" } else { "main.ores" };
+        let entry_name = if name.starts_with("root-mutable-record-") || name.starts_with("atto-") { "main.atto" } else { "main.ores" };
         fs::write(scratch.0.join(entry_name), source).unwrap();
         fs::write(scratch.0.join("main-1.ores"), dependency).unwrap();
         let rejected = run(Command::new(&compiler).arg(scratch.0.join(entry_name)));
