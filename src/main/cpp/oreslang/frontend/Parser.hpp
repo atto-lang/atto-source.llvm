@@ -44,7 +44,8 @@ struct Expression {
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
-        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field
+        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field,
+        ShiftLeft, ShiftRight, ShiftUnsignedRight
     };
     Kind kind;
     std::size_t offset = 0;
@@ -368,6 +369,9 @@ struct Function {
     bool exported = false;
     std::string method_owner; // compiler-owned class method privilege, never source syntax
     bool native_internal = false; // linker-owned private imported implementation
+    // Explicit compiler-owned host C u32 trampoline, never the guest i64 ABI.
+    // Only the browser v1 ABI version symbol is admitted in the first slice.
+    std::string c_export_u32_symbol;
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
     std::string return_sum;
@@ -444,6 +448,8 @@ struct ScalarGenerator {
 
 struct ModuleImport {
     bool selected_class = false;
+    // `import fnc name [as alias] from "path";` binds one pub function by name.
+    bool selected_function = false;
     std::string selected_module;
     std::string local_name;
     std::string path;

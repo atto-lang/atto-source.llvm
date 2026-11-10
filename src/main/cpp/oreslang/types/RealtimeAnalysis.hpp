@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -95,6 +96,10 @@ struct DirectFacts {
     bool bounded_cleanup = true;
     bool bounded_calls = true;
     bool unsupported_runtime = false;
+    // Explicit copy/share needs a verified scalar-vs-buffer and ownership/
+    // refcount lowering proof. Do not presume these are free register moves.
+    bool unqualified_copy_or_share = false;
+    bool unmodeled_expression = false;
     bool call_budget_exceeded = false;
     std::size_t call_limit = 0;
     std::uint64_t loop_iterations = 0;
@@ -134,7 +139,7 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
             add_effect(facts, FunctionEffect::Alloc); facts.unsupported_runtime = true; break;
         case Expression::Kind::SumAccess:
             add_effect(facts, FunctionEffect::StateRead); facts.unsupported_runtime = true;
-            if (expr->name == "unwrap") add_effect(facts, FunctionEffect::Panic);
+            if (expr->name == "unwrap" || expr->name == "expect") add_effect(facts, FunctionEffect::Panic);
             break;
         case Expression::Kind::String:
             add_effect(facts, FunctionEffect::Alloc);
@@ -172,9 +177,22 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
         case Expression::Kind::Add:
             if (expr->resolved_type == ScalarType::String) add_effect(facts, FunctionEffect::Alloc);
             break;
+        case Expression::Kind::Remainder: {
+            // Qualify only a proven literal divisor. Keep the analyzer's
+            // -1 proof conservative until it shares the code generator's
+            // MIN % -1 special-case witness.
+            const auto* rhs = expr->right.get();
+            const auto* lhs = expr->left.get();
+            const bool safe_literal_divisor = rhs && rhs->kind == Expression::Kind::Integer &&
+                rhs->integer != 0 &&
+                (rhs->integer != -1 ||
+                 (lhs && lhs->kind == Expression::Kind::Integer &&
+                  lhs->integer != std::numeric_limits<std::int64_t>::min()));
+            if (!safe_literal_divisor) add_effect(facts, FunctionEffect::Panic);
+            break;
+        }
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
-        case Expression::Kind::Remainder:
         case Expression::Kind::Equal:
         case Expression::Kind::NotEqual:
         case Expression::Kind::Less:
@@ -185,21 +203,38 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
         case Expression::Kind::LogicalOr:
         case Expression::Kind::LogicalXor:
         case Expression::Kind::Conditional:
+            // These scalar operators are not explicit ownership transfers.
+            // Their operands and lazy conditional arms are scanned above.
+            break;
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
+            // Until the typed MIR proves a register-only copy or a bounded
+            // zero-allocation share, these operations cannot enter strict RT
+            // just because a shallow AST expression has no Alloc effect.
+            facts.unqualified_copy_or_share = true;
+            break;
         case Expression::Kind::Borrow:
+            break;
+        default:
+            // Newly introduced or corrupted AST kinds are not pure by default.
+            // The strict profile must explicitly classify every expression.
+            facts.unmodeled_expression = true;
             break;
     }
 }
 
 inline void scan_binding(const LocalBinding& binding, DirectFacts& facts) {
     if (facts.call_budget_exceeded) return;
+    // Await metadata lives on LocalBinding even if the producer fields were
+    // not populated. Reject this AST shape rather than assuming a pure local.
+    if (!binding.task_await_name.empty() || !binding.future_await_name.empty())
+        add_effect(facts, FunctionEffect::Suspend);
     scan_expression(binding.initializer.get(), facts);
     for (const auto& argument : binding.constructor_arguments) {
         scan_expression(argument.get(), facts);
         if (facts.call_budget_exceeded) return;
     }
-    if (binding.heap_owned || binding.int_array)
+    if (binding.heap_owned || binding.int_array || !binding.sum_type.empty())
         add_effect(facts, FunctionEffect::Alloc);
     // Materializing an immutable class view allocates a root descriptor even
     // when its initializer is only a named value, rather than a constructor.
@@ -209,7 +244,36 @@ inline void scan_binding(const LocalBinding& binding, DirectFacts& facts) {
     }
 }
 
-inline void scan_statement(const Statement& statement, DirectFacts& facts) {
+// A stack-local nominal constructor can still execute field initializer
+// expressions (and allocate implicit owned arrays/sum descriptors). They
+// live on the ClassDecl, not on LocalBinding.initializer, so scanning only
+// constructor call arguments would incorrectly certify an allocating path.
+inline void scan_constructor_fields(
+        const LocalBinding& binding, const Program& program, DirectFacts& facts) {
+    const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
+        [&](const ClassDecl& candidate) { return candidate.name == binding.class_name; });
+    if (cls == program.classes.end()) {
+        facts.unsupported_runtime = true;
+        return;
+    }
+    for (const ClassField& field : cls->fields) {
+        // Constructors may allocate implicitly even without an initializer
+        // expression: owned arrays, sum storage and nested nominal records
+        // have no currently certified fixed-capacity hard-RT resource proof.
+        if (field.int_array || !field.sum_type.empty() || !field.class_name.empty())
+            add_effect(facts, FunctionEffect::Alloc);
+        if (field.int_array) continue;
+        if (!field.initializer_expression) {
+            facts.unsupported_runtime = true;
+            continue;
+        }
+        scan_expression(field.initializer_expression.get(), facts);
+        if (facts.call_budget_exceeded) return;
+    }
+}
+
+inline void scan_statement(const Statement& statement, DirectFacts& facts,
+                           const Program* program = nullptr) {
     if (facts.call_budget_exceeded) return;
     scan_expression(statement.expression.get(), facts);
     scan_expression(statement.condition.get(), facts);
@@ -221,8 +285,17 @@ inline void scan_statement(const Statement& statement, DirectFacts& facts) {
         scan_expression(value.get(), facts);
         if (facts.call_budget_exceeded) return;
     }
-    if (statement.branch_local)
+    if (statement.branch_local) {
         scan_binding(*statement.branch_local, facts);
+        if (facts.call_budget_exceeded) return;
+        // Scoped/branch locals use the same nominal constructor metadata as
+        // function locals. Without this pass, implicit field allocation and
+        // transitive initializer calls evade strict hard-RT admission.
+        if (statement.branch_local->new_class) {
+            if (!program) facts.unsupported_runtime = true;
+            else scan_constructor_fields(*statement.branch_local, *program, facts);
+        }
+    }
     if (facts.call_budget_exceeded) return;
 
     if (statement.kind == Statement::Kind::FieldWrite || statement.kind == Statement::Kind::ScalarWrite)
@@ -239,18 +312,37 @@ inline void scan_statement(const Statement& statement, DirectFacts& facts) {
     }
 
     for (const auto& nested : statement.then_statements) {
-        scan_statement(nested, facts);
+        scan_statement(nested, facts, program);
         if (facts.call_budget_exceeded) return;
     }
     for (const auto& nested : statement.else_statements) {
-        scan_statement(nested, facts);
+        scan_statement(nested, facts, program);
         if (facts.call_budget_exceeded) return;
     }
 }
 
-inline DirectFacts direct_facts(const Function& function, std::size_t call_limit) {
+inline DirectFacts direct_facts(const Function& function, std::size_t call_limit,
+                                const Program* program = nullptr) {
     DirectFacts facts;
     facts.call_limit = call_limit;
+    // Async/task/pipeline and lifecycle-await syntax is represented in dedicated
+    // Function fields, not in locals/statements/result. Without this gate, a
+    // function containing only a constant result plus a scheduler operation
+    // incorrectly appears effect-free to the hard-RT transitive checker.
+    // Until bounded scheduler, continuation lifetime and allocation proofs are
+    // part of verified MIR, all of these forms must reject as suspending.
+    if (function.async_source_i64 ||
+        !function.source_tasks.empty() ||
+        !function.future_pipelines.empty() ||
+        !function.ready_await_actor.empty() ||
+        !function.done_await_actor.empty() ||
+        function.ready_await_form != NativeAwaitForm::None ||
+        !function.ready_future_name.empty() ||
+        !function.ready_future_actor.empty()) {
+        add_effect(facts, FunctionEffect::Suspend);
+    }
+    // Uninstantiated generic source declarations have no closed RT witness.
+    if (!function.generic_parameters.empty()) facts.bounded_calls = false;
     // Even a passthrough validates a region-backed descriptor at entry. The
     // scalar ABI does not make sum storage a certified hard-RT resource.
     if (!function.return_sum.empty() || std::any_of(function.parameters.begin(), function.parameters.end(),
@@ -262,9 +354,16 @@ inline DirectFacts direct_facts(const Function& function, std::size_t call_limit
     for (const auto& local : function.locals) {
         scan_binding(local, facts);
         if (facts.call_budget_exceeded) return facts;
+        if (local.new_class) {
+            // A standalone direct-facts check without its class table cannot
+            // certify constructor defaults; the whole-program check provides it.
+            if (!program) facts.unsupported_runtime = true;
+            else scan_constructor_fields(local, *program, facts);
+            if (facts.call_budget_exceeded) return facts;
+        }
     }
     for (const auto& statement : function.statements) {
-        scan_statement(statement, facts);
+        scan_statement(statement, facts, program);
         if (facts.call_budget_exceeded) return facts;
     }
     for (const auto& guard : function.early_returns) {
@@ -293,7 +392,7 @@ inline DirectFacts direct_facts(const Function& function, std::size_t call_limit
     if (!function.caught_throw_defers.empty()) {
         facts.bounded_cleanup = false;
         for (const auto& statement : function.caught_throw_defers) {
-            scan_statement(statement, facts);
+            scan_statement(statement, facts, program);
             if (facts.call_budget_exceeded) return facts;
         }
     }
@@ -403,7 +502,7 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
     for (const auto& [key, function] : functions) {
         const auto remaining_edges =
             realtime_detail::kMaxRealtimeCallEdges - call_edges;
-        auto facts = realtime_detail::direct_facts(*function, remaining_edges);
+        auto facts = realtime_detail::direct_facts(*function, remaining_edges, &program);
         if (facts.call_budget_exceeded) {
             report.diagnostic = "RT003_WCET_UNPROVEN";
             report.reason = "hard-RT call-edge count exceeds compiler qualification ceiling";
@@ -421,6 +520,8 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
     bool bounded_cleanup = true;
     bool bounded_calls = true;
     bool unsupported_runtime = false;
+    bool unqualified_copy_or_share = false;
+    bool unmodeled_expression = false;
     std::string failure;
     std::string failure_diagnostic;
 
@@ -456,6 +557,9 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
         bounded_cleanup = bounded_cleanup && facts.bounded_cleanup;
         bounded_calls = bounded_calls && facts.bounded_calls;
         unsupported_runtime = unsupported_runtime || facts.unsupported_runtime;
+        unqualified_copy_or_share =
+            unqualified_copy_or_share || facts.unqualified_copy_or_share;
+        unmodeled_expression = unmodeled_expression || facts.unmodeled_expression;
 
         for (const auto& child : facts.calls) {
             const FunctionEffects child_effects = visit(child);
@@ -526,6 +630,16 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
     if (!report.bounded_cleanup) {
         report.diagnostic = "RT006_UNBOUNDED_CLEANUP";
         report.reason = "defer/exception cleanup bound is not proven";
+        return report;
+    }
+    if (unmodeled_expression) {
+        report.diagnostic = "RT015_UNMODELED_EXPRESSION";
+        report.reason = "reachable AST expression kind lacks strict RT effect classification";
+        return report;
+    }
+    if (unqualified_copy_or_share) {
+        report.diagnostic = "RT014_ZERO_COPY_UNPROVEN";
+        report.reason = "reachable explicit copy/share lacks verified bounded, allocation-free native lowering";
         return report;
     }
     if (unsupported_runtime) {

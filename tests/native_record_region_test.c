@@ -14,6 +14,18 @@ static void* foreign_root(void* argument) {
     require(ores_record_region_end() == 1);
     return NULL;
 }
+/* Independent cross-thread negative: a failed read must not mask a
+ * missing write-isolation check. This thread attempts the write FIRST. */
+static void* foreign_write_only(void* argument) {
+    const int64_t foreign = *(int64_t*)argument;
+    const int64_t local_value = 17;
+    require(ores_record_region_begin() == 0);
+    int64_t own = ores_record_new_mutable(1, 1, &local_value, 1);
+    require(own != foreign);
+    require(ores_record_set(foreign, 1, 0, 99) == 1);
+    require(ores_record_region_end() == 1);
+    return NULL;
+}
 int main(void) {
     const int64_t values[] = {13, 29};
     require(ores_record_region_begin() == 0);
@@ -23,6 +35,14 @@ int main(void) {
     require(ores_record_set(mutable, 1, 0, 42) == 0);
     require(ores_record_get(mutable, 1, 0) == 42);
     require(ores_record_get(mutable, 1, 1) == 29);
+    const int64_t retained_alias = mutable;
+    require(ores_record_set(retained_alias, 1, 0, 41) == 0);
+    require(ores_record_get(mutable, 1, 0) == 41);
+    require(ores_record_set(mutable, 1, 0, 42) == 0);
+    pthread_t write_thread;
+    require(pthread_create(&write_thread, NULL, foreign_write_only, &mutable) == 0);
+    require(pthread_join(write_thread, NULL) == 0);
+    require(ores_record_get(mutable, 1, 0) == 42);
     pthread_t mutable_thread;
     require(pthread_create(&mutable_thread, NULL, foreign_root, &mutable) == 0);
     require(pthread_join(mutable_thread, NULL) == 0);
@@ -44,6 +64,25 @@ int main(void) {
     require(ores_record_region_end() == 1);
     require(ores_record_region_begin() == 0);
     require(ores_record_new_mutable(1, 2, values, UINT64_C(1) << 40) == 0);
+    require(ores_record_region_end() == 1);
+    /* The 16th scalar bit is legal; bit 16 is not. No uninitialized
+     * write-bit or modulo shift may authorize another field. */
+    const int64_t wide_values[16] = {0};
+    require(ores_record_region_begin() == 0);
+    int64_t wide = ores_record_new_mutable(9, 16, wide_values, UINT64_C(1) << 15);
+    require(wide != 0);
+    require(ores_record_set(wide, 9, 15, 123) == 0);
+    require(ores_record_get(wide, 9, 15) == 123);
+    require(ores_record_region_end() == 0);
+    require(ores_record_region_begin() == 0);
+    require(ores_record_new_mutable(9, 16, wide_values, UINT64_C(1) << 16) == 0);
+    require(ores_record_region_end() == 1);
+    require(ores_record_region_begin() == 0);
+    int64_t empty_mutable = ores_record_new_mutable(7, 0, NULL, 0);
+    require(empty_mutable != 0 && ores_record_check_shape(empty_mutable, 7, 0) == 0);
+    require(ores_record_region_end() == 0);
+    require(ores_record_region_begin() == 0);
+    require(ores_record_new_mutable(7, 0, NULL, 1) == 0);
     require(ores_record_region_end() == 1);
     require(ores_record_region_begin() == 0);
     int64_t first = ores_record_new(1, 2, values);

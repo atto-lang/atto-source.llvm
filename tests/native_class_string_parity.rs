@@ -1,6 +1,7 @@
 //! Execute real LLVM-generated machine code, optionally comparing Java output.
 use std::{
     env, fs,
+    io::Write,
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     thread,
@@ -17,6 +18,95 @@ fn run(command: &mut Command) -> Output {
         .output()
         .unwrap_or_else(|error| panic!("cannot run {command:?}: {error}"))
 }
+const JAVA_LLVM_STRICT_NINE: [&str; 9] = [
+    "exact-user-program",
+    "string-content-equality",
+    "string-equality-embedded-nul-and-unicode",
+    "http-string-routing-primitives",
+    "source-effect-order",
+    "parameters-and-return",
+    "lazy-conditional",
+    "escaped-unicode",
+    "empty-and-embedded-nul",
+];
+fn valid_git_revision(value: &str) -> bool {
+    value.len() == 40 && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+// Binary-safe stdout evidence; unlike UTF-8 conversion, this also retains
+// embedded NUL and exact source output bytes.
+fn hex_encode(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = Vec::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(DIGITS[usize::from(*byte >> 4)]);
+        out.push(DIGITS[usize::from(*byte & 0x0f)]);
+    }
+    String::from_utf8(out).expect("hex alphabet is ASCII")
+}
+
+fn evidence_admission(
+    require_java: bool,
+    java: Option<&str>,
+    java_revision: Option<&str>,
+    llvm_revision: Option<&str>,
+    report: Option<&str>,
+) -> Result<(), &'static str> {
+    if !require_java {
+        if report.is_some() || java_revision.is_some() || llvm_revision.is_some() {
+            return Err("revision-stamped evidence requires --require-java");
+        }
+        return Ok(());
+    }
+    if java.map_or(true, |value| value.trim().is_empty()) {
+        return Err("--require-java requires a nonempty --java-command; missing Java must fail closed");
+    }
+    if !java_revision.is_some_and(valid_git_revision) {
+        return Err("--require-java requires a 40-hex --java-revision");
+    }
+    if !llvm_revision.is_some_and(valid_git_revision) {
+        return Err("--require-java requires a 40-hex --llvm-revision");
+    }
+    if report.map_or(true, |value| value.trim().is_empty()) {
+        return Err("--require-java requires a nonempty --report for a durable execution receipt");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{evidence_admission, hex_encode, valid_git_revision};
+
+    const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    #[test]
+    fn rejects_missing_reference_or_provenance() {
+        assert!(evidence_admission(true, None, Some(SHA), Some(SHA), Some("r.json")).is_err());
+        assert!(evidence_admission(true, Some("java"), None, Some(SHA), Some("r.json")).is_err());
+        assert!(evidence_admission(true, Some("java"), Some(SHA), None, Some("r.json")).is_err());
+        assert!(evidence_admission(true, Some("java"), Some(SHA), Some(SHA), None).is_err());
+        assert!(evidence_admission(false, None, None, None, Some("r.json")).is_err());
+        assert!(evidence_admission(false, None, Some(SHA), Some(SHA), None).is_err());
+        assert!(evidence_admission(true, Some(""), Some(SHA), Some(SHA), Some("r.json")).is_err());
+        assert!(evidence_admission(true, Some("java"), Some(SHA), Some(SHA), Some("")).is_err());
+    }
+
+    #[test]
+    fn preserves_binary_stdout_evidence() {
+        assert_eq!(hex_encode(b"a\x00b"), "610062");
+        assert_eq!(hex_encode("é".as_bytes()), "c3a9");
+    }
+
+    #[test]
+    fn admits_only_pinned_strict_comparison() {
+        assert!(valid_git_revision(SHA));
+        assert!(!valid_git_revision("main"));
+        assert!(!valid_git_revision("g".repeat(40).as_str()));
+        assert!(evidence_admission(true, Some("java"), Some(SHA), Some(SHA), Some("r.json")).is_ok());
+        assert!(evidence_admission(false, None, None, None, None).is_ok());
+    }
+}
+
 // Negative admission is adversarial: a broken O_NONBLOCK/fstat guard must
 // fail the test quickly rather than consume an entire macOS/Linux CI job.
 // Redirect both streams to files/null to avoid pipe-buffer deadlocks.
@@ -99,6 +189,9 @@ fn main() {
     let (mut compiler, mut clang, mut runtime, mut java) = (None, None, None, None);
     let mut sanitize = false;
     let mut aot_driver = None;
+    let mut require_java = false;
+    let mut java_args = Vec::<String>::new();
+    let (mut java_revision, mut llvm_revision, mut receipt_path) = (None, None, None);
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -106,10 +199,24 @@ fn main() {
             "--clang" => clang = args.next(),
             "--runtime" => runtime = args.next(),
             "--java-command" => java = args.next(),
+            "--java-arg" => java_args.push(args.next().expect("--java-arg needs a value")),
+            "--require-java" => require_java = true,
+            "--java-revision" => java_revision = args.next(),
+            "--llvm-revision" => llvm_revision = args.next(),
+            "--report" => receipt_path = args.next(),
             "--aot-driver" => aot_driver = args.next(),
             "--sanitize" => sanitize = true,
             _ => panic!("unknown argument {arg}"),
         }
+    }
+    if let Err(error) = evidence_admission(
+        require_java,
+        java.as_deref(),
+        java_revision.as_deref(),
+        llvm_revision.as_deref(),
+        receipt_path.as_deref(),
+    ) {
+        panic!("{error}");
     }
     let (compiler, clang, runtime) = (
         compiler.expect("--compiler"),
@@ -510,6 +617,8 @@ fn main() {
           pub fnc main():int{val Array<int> values=new Array<int>();values.add(42);val Data child=new Data(values);val Outer outer=new Outer(child);return outer.child.read()==42&&outer.child.values.size==1?0:1;}"#, ""),
     ];
     let mut comparisons = 0;
+    let mut strict_comparisons = 0;
+    let mut case_evidence = Vec::<String>::new();
     let mut guest_address_checks = false;
     let panics = [
         ("sum-none-unwrap-controlled-abort", "pub routine main():int{val Option<int> item=None;return item.unwrap();}", ""),
@@ -599,6 +708,8 @@ fn main() {
             "{name}: {}",
             String::from_utf8_lossy(&linked.stderr)
         );
+        let strict_case = require_java && case_index < positives.len() && JAVA_LLVM_STRICT_NINE.contains(name);
+        let mut native_stdout = Vec::<u8>::new();
         for _ in 0..5 {
             let native = run(&mut Command::new(&binary));
             if expects_panic {
@@ -615,27 +726,42 @@ fn main() {
                 String::from_utf8_lossy(&native.stderr)
             );
             assert_eq!(native.stdout, expected.as_bytes(), "{name}: native output");
+            if strict_case { native_stdout = native.stdout.clone(); }
             assert!(
                 native.stderr.is_empty(),
                 "{name}: sanitizer/runtime diagnostics: {}",
                 String::from_utf8_lossy(&native.stderr)
             );
         }
-        if let Some(launcher) = java.as_ref().filter(|_| case_index < positives.len() || expects_panic) {
-            let reference = run(Command::new(launcher).arg(&path));
+        let execute_java = java.is_some() && (if require_java { strict_case } else { case_index < positives.len() || expects_panic });
+        if execute_java {
+            let launcher = java.as_ref().expect("Java launcher required");
             if expects_panic {
+                let reference = run(Command::new(launcher).args(&java_args).arg(&path));
                 assert!(!reference.status.success(), "Java {name}: invalid unwrap succeeded");
                 comparisons += 1;
-                continue;
+            } else {
+                let java_runs = if require_java { 2 } else { 1 };
+                let mut java_stdout = Vec::<u8>::new();
+                for _ in 0..java_runs {
+                    let reference = run(Command::new(launcher).args(&java_args).arg(&path));
+                    assert_eq!(reference.status.code(), Some(0), "Java {name}: {}", String::from_utf8_lossy(&reference.stderr));
+                    assert_eq!(reference.stdout, expected.as_bytes(), "Java {name}: output");
+                    if require_java {
+                        assert!(reference.stderr.is_empty(), "Java {name}: unexpected diagnostics: {}", String::from_utf8_lossy(&reference.stderr));
+                    }
+                    java_stdout = reference.stdout;
+                }
+                if strict_case {
+                    assert_eq!(java_stdout, native_stdout, "Java/LLVM {name}: byte-differential output");
+                    case_evidence.push(format!(
+                        r#"{{"name":"{name}","native_stdout_hex":"{}","java_stdout_hex":"{}","native_exit":0,"java_exit":0,"native_runs":5,"java_runs":2}}"#,
+                        hex_encode(&native_stdout), hex_encode(&java_stdout)
+                    ));
+                    strict_comparisons += 1;
+                }
+                comparisons += 1;
             }
-            assert_eq!(
-                reference.status.code(),
-                Some(0),
-                "Java {name}: {}",
-                String::from_utf8_lossy(&reference.stderr)
-            );
-            assert_eq!(reference.stdout, expected.as_bytes(), "Java {name}: output");
-            comparisons += 1;
         }
     }
     check_sum_boundary(&compiler, &clang, &runtime, &scratch.0, sanitize);
@@ -1110,6 +1236,28 @@ fn main() {
         );
     }
     assert!(!sanitize || guest_address_checks, "missing guest ASan instrumentation proof");
+    if require_java {
+        assert_eq!(strict_comparisons, JAVA_LLVM_STRICT_NINE.len(), "exactly nine shared-source Java executions required");
+        assert_eq!(case_evidence.len(), JAVA_LLVM_STRICT_NINE.len(), "each shared-source fixture requires receipt evidence");
+        let mut receipt = fs::OpenOptions::new()
+            .write(true).create_new(true)
+            .open(receipt_path.expect("validated --report"))
+            .expect("parity receipt must be a new file");
+        let body = format!(
+            r#"{{"schema":"oreslang.java-llvm.source-parity.v1","status":"passed","llvm_revision":"{}","java_revision":"{}","positive_programs":{},"native_executions":{},"java_executions":{},"llvm_only_negative_rejections":{},"sanitized":{},"cases":[{}]}}"#,
+            llvm_revision.expect("validated --llvm-revision"),
+            java_revision.expect("validated --java-revision"),
+            strict_comparisons,
+            strict_comparisons * 5,
+            strict_comparisons * 2,
+            negatives.len() + 2,
+            sanitize,
+            case_evidence.join(",")
+        );
+        receipt.write_all(body.as_bytes()).expect("write parity receipt");
+        receipt.write_all(b"\n").expect("finish parity receipt");
+        receipt.sync_all().expect("sync parity receipt");
+    }
     if guest_address_checks { println!("PASS generated guest IR includes ASan memory checks"); }
     println!("PASS class/string parity: {} common-source positives, {} native-only positives, {} controlled-panic cases (five native executions each), {} no-IR rejections plus two target boundaries and two Unix filesystem boundary rejections, Java={comparisons}, standalone={standalone_runs}, sanitized={sanitize}", positives.len(), native_only.len(), panics.len(), negatives.len());
 }

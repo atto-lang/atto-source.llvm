@@ -1,0 +1,58 @@
+name: LLVM UHL-1 C ABI negotiation (host-only, unsupported features)
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/native-uhl1-c-abi.yml'
+      - 'src/main/cpp/oreslang/runtime/ores_hot_load_v1*'
+      - 'tests/native_uhl1_unsupported_abi_test.c'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-abi:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Validate exact commit tree and source hashes
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -n "$(git rev-parse HEAD^{tree})"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          for path in src/main/cpp/oreslang/runtime/ores_hot_load_v1.h src/main/cpp/oreslang/runtime/ores_hot_load_v1_unsupported.c tests/native_uhl1_unsupported_abi_test.c; do
+            test -s "$path"
+            git hash-object "$path"
+          done
+      - name: Execute C11 GCC and Clang then C++17 ABI compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/uhl1"
+          for compiler in gcc clang; do
+            "$compiler" -std=c11 -O2 -UNDEBUG -Wall -Wextra -Werror -pedantic \
+              -Isrc/main/cpp src/main/cpp/oreslang/runtime/ores_hot_load_v1_unsupported.c \
+              tests/native_uhl1_unsupported_abi_test.c -o "$RUNNER_TEMP/uhl1/$compiler"
+            "$RUNNER_TEMP/uhl1/$compiler" | tee "$RUNNER_TEMP/uhl1/$compiler.log"
+            grep -qx 'UHL1_C_ABI_HOST_ONLY_PASS=10000' "$RUNNER_TEMP/uhl1/$compiler.log"
+          done
+          clang++ -x c++ -std=c++17 -O1 -UNDEBUG -Wall -Wextra -Werror -pedantic \
+            -Isrc/main/cpp src/main/cpp/oreslang/runtime/ores_hot_load_v1_unsupported.c \
+            tests/native_uhl1_unsupported_abi_test.c -o "$RUNNER_TEMP/uhl1/clang-cxx17"
+          "$RUNNER_TEMP/uhl1/clang-cxx17" | tee "$RUNNER_TEMP/uhl1/clang-cxx17.log"
+          grep -qx 'UHL1_C_ABI_HOST_ONLY_PASS=10000' "$RUNNER_TEMP/uhl1/clang-cxx17.log"
+      - name: Keep host-only compiler logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: llvm-uhl1-hostonly-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/uhl1/*.log
+          if-no-files-found: error
+          retention-days: 7
