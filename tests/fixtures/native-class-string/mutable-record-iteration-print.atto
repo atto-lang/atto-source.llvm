@@ -1,0 +1,7 @@
+define class Item as pub let int value=1; end
+pub routine main():int {
+  val Array<Item> items=new Array<Item>();
+  items.add(new Item());
+  for (const item of items) { stdio.println(item.value); }
+  return 0;
+}

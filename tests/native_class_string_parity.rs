@@ -235,6 +235,8 @@ fn main() {
     let exact = include_str!("fixtures/native-class-string/main.ores");
     let foo = include_str!("fixtures/native-class-string/main-1.ores");
     let positives = [
+        ("root-mutable-record-iteration-print", include_str!("fixtures/native-class-string/mutable-record-iteration-print.atto"), "1\n"),
+
         ("root-mutable-record-view-canonical-if", include_str!("fixtures/native-class-string/root-mutable-record-view.atto"), ""),
         ("router-elif-short-circuit-cleanup-and-return", include_str!("fixtures/native-class-string/router-elif-chain.ores"), "aababcabc"),
 
@@ -943,7 +945,6 @@ fn main() {
         ("iteration-local-scope-escape", r#"pub fnc main():int{val Array<int> a=new Array<int>();for(const n of a){val int x=n;}return x;}"#.to_owned(), foo.to_owned()),
         ("iteration-element-shadow", r#"pub fnc main():int{val Array<int> a=new Array<int>();val int n=0;for(const n of a){}return 0;}"#.to_owned(), foo.to_owned()),
         ("iteration-nested-shadow", r#"pub fnc main():int{val Array<int> a=new Array<int>();for(const n of a){for(const n of a){}}return 0;}"#.to_owned(), foo.to_owned()),
-        ("iteration-mutable-record", r#"define class Item as pub let int value=1;end pub fnc main():int{val Array<Item> a=new Array<Item>();for(const n of a){stdio.println(n.value);}return 0;}"#.to_owned(), foo.to_owned()),
         ("scoped-mutable-record-snapshot", r#"define class Item as pub let int value=1;end pub fnc main():int{val Item i=new Item();if(true){val Item j=i;}else{}fi return 0;}"#.to_owned(), foo.to_owned()),
         ("iteration-element-write", r#"define class Item as pub val int value;end pub fnc main():int{val Array<Item> a=new Array<Item>();for(const n of a){n.value=2;}return 0;}"#.to_owned(), foo.to_owned()),
         ("iteration-break-without-cleanup", r#"pub fnc main():int{val Array<int> a=new Array<int>();for(const n of a){break;}return 0;}"#.to_owned(), foo.to_owned()),
