@@ -1446,6 +1446,29 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_tilde_record_requires_typed_native_lowering
         tilde-record-literal-native-reject.ores
         --diagnostic "native tilde map/record literal unsupported")
+    # Strict fallback admission: no duplicate, guarded or 'on default' forms.
+    oreslang_contract_test(native_value_match_default_fallback_ir
+        dispatch-value-match-default-fallback-run.ores --ir "ternary.merge")
+    oreslang_contract_test(native_do_match_default_fallback_ir
+        dispatch-do-match-default-fallback-run.ores --ir "return.snapshot.slot")
+    oreslang_contract_test(native_value_match_duplicate_default_reject
+        dispatch-value-match-default-duplicate-reject.ores
+        --diagnostic "native value match can contain only one default arm")
+    oreslang_contract_test(native_do_match_duplicate_default_reject
+        dispatch-do-match-default-duplicate-reject.ores
+        --diagnostic "native do match can contain only one default arm")
+    oreslang_contract_test(native_value_match_on_default_reject
+        dispatch-value-match-on-default-reject.ores
+        --diagnostic "native value match fallback must use 'default ->' without 'on'")
+    oreslang_contract_test(native_do_match_on_default_reject
+        dispatch-do-match-on-default-reject.ores
+        --diagnostic "native do match fallback must use 'default ->' without 'on'")
+    oreslang_contract_test(native_value_match_guarded_default_reject
+        dispatch-value-match-default-guard-reject.ores
+        --diagnostic "native value match default arm cannot have a guard or binding")
+    oreslang_contract_test(native_do_match_guarded_default_reject
+        dispatch-do-match-default-guard-reject.ores
+        --diagnostic "native do match default arm cannot have a guard or binding")
     # Direct signed-minimum literal remains valid; nested unary negation
     # would overflow host i64 and must reject before any LLVM IR.
     oreslang_contract_test(native_dispatch_signed_min_literal_ir
@@ -1482,6 +1505,10 @@ if(BUILD_TESTING)
             dispatch-do-match-default-run.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_do_match_default_only_runtime
             dispatch-do-match-default-only-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_value_match_default_fallback_runtime
+            dispatch-value-match-default-fallback-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_do_match_default_fallback_runtime
+            dispatch-do-match-default-fallback-run.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_value_switch_arm_result_runtime
             dispatch-value-switch-run.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_do_match_function_return_runtime
