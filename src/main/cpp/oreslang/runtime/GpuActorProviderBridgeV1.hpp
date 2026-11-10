@@ -420,7 +420,7 @@ private:
     }
     std::vector<std::pair<std::uint64_t, EntryPtr>> snapshot_with_ids() const {
         std::lock_guard<std::mutex> guard(mu_);
-        return {entries_.begin(), entries_.end()};
+        return std::vector<std::pair<std::uint64_t, EntryPtr>>(entries_.begin(), entries_.end());
     }
     void prune(std::uint64_t id, const EntryPtr& e) {
         std::lock_guard<std::mutex> guard(mu_);
