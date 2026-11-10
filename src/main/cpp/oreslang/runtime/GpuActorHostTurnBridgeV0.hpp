@@ -80,7 +80,7 @@ public:
             auto ticket = fence_.begin_command(identity_);
             const Turn turn{actor_.generation, ++turn_sequence_};
             pending_.emplace(Pending{turn, *claim, std::move(ticket),
-                                     state_ + increment, false, false});
+                                     state_ + increment, false, false, false});
             return turn;
         } catch (...) {
             (void)credits_.release(*claim);
@@ -88,13 +88,49 @@ public:
         }
     }
 
-    // Trusted provider calls this ONLY after physical work is enqueued.
+    // Trusted host MUST enter the enqueue window BEFORE calling an external
+    // provider. A close/device loss during this window may NOT pre-enqueue
+    // abort the buffer until the provider has confirmed enqueue outcome.
+    void begin_enqueue(Turn turn) {
+        std::lock_guard<std::mutex> guard(mu_);
+        Pending& p = require_pending(turn);
+        if (close_requested_ || p.enqueue_started || p.submitted) {
+            throw std::logic_error("GPU_ACTOR_ENQUEUE_WINDOW_INVALID");
+        }
+        p.enqueue_started = true;
+    }
+
+    // Trusted provider calls this ONLY after the command is durably enqueued.
+    // If close won during enqueue, poison and await the physical event.
     void mark_submitted(Turn turn) {
         std::lock_guard<std::mutex> guard(mu_);
         Pending& p = require_pending(turn);
-        if (close_requested_ || p.submitted) throw std::logic_error("GPU_ACTOR_SUBMISSION_INVALID");
+        if (!p.enqueue_started || p.submitted) {
+            throw std::logic_error("GPU_ACTOR_SUBMISSION_INVALID");
+        }
         fence_.mark_submitted(p.ticket);
         p.submitted = true;
+        if (close_requested_) {
+            fence_.cancel_pending(p.ticket);
+            p.cancelled = true;
+        }
+    }
+
+    // Trusted provider calls on a DEFINITIVE failure to enqueue (never
+    // after the command could have been submitted). Abort is not cancellation
+    // of submitted work. This abort terminates the actor incarnation.
+    void abort_enqueue(Turn turn) {
+        std::lock_guard<std::mutex> guard(mu_);
+        Pending& p = require_pending(turn);
+        if (!p.enqueue_started || p.submitted) {
+            throw std::logic_error("GPU_ACTOR_ENQUEUE_ABORT_INVALID");
+        }
+        fence_.abort_unsubmitted(p.ticket);
+        release_pending();
+        close_requested_ = true;
+        closed_ = true;
+        credits_.retire();
+        publish_terminal_failure("gpu actor kernel enqueue failed");
     }
 
     // Trusted provider must verify event identity AND device quiescence.
@@ -116,28 +152,12 @@ public:
     }
 
     // An actor close request never assumes an enqueued GPU kernel is cancelled.
-    // Retire physical buffers ONLY after a trusted provider proves quiescence.
-    bool request_close() {
-        std::lock_guard<std::mutex> guard(mu_);
-        if (closed_ || close_requested_) return false;
-        close_requested_ = true;
-        credits_.retire();
-        if (!pending_) {
-            closed_ = true;
-            publish_failure(FailureKind::Cancel, "gpu actor cancelled");
-            return true;
-        }
-        if (!pending_->submitted) {
-            fence_.abort_unsubmitted(pending_->ticket);
-            release_pending();
-            closed_ = true;
-            publish_failure(FailureKind::Cancel, "gpu actor cancelled before enqueue");
-        } else {
-            fence_.cancel_pending(pending_->ticket);
-            pending_->cancelled = true;
-        }
-        return true;
-    }
+    // An in-progress enqueue must resolve first: no premature buffer reuse.
+    bool request_close() { return request_stop(StopCause::Cancel); }
+
+    // Device loss is cohort-wide; never report actor-local device isolation.
+    // Outstanding allocations remain quarantined pending provider recovery.
+    bool report_device_loss() { return request_stop(StopCause::DeviceLoss); }
 
     // Called after the *same* provider event completes/quiesces, not merely
     // because cancellation was requested or a timeout occurred.
@@ -151,7 +171,7 @@ public:
         fence_.acknowledge_cancelled_device_event(p.ticket, identity_);
         release_pending();
         closed_ = true;
-        publish_failure(FailureKind::Cancel, "gpu actor cancelled after device fence");
+        publish_terminal_failure("gpu actor stopped after device fence");
     }
 
     // The physical provider must FIRST release the buffer and prove that the
@@ -179,11 +199,14 @@ public:
     oreslang::gpu::Status fence_status() const { return fence_.status(); }
 
 private:
+    enum class StopCause { None, Cancel, DeviceLoss };
+
     struct Pending {
         Turn turn;
         oreslang::runtime::NativeActorTurnCredits::Claim credit;
         oreslang::gpu::Ticket ticket;
         std::int64_t staged_state;
+        bool enqueue_started;
         bool submitted;
         bool cancelled;
     };
@@ -204,6 +227,39 @@ private:
         if (!credits_.release(credit)) throw std::logic_error("GPU_ACTOR_CREDIT_CORRUPT");
     }
 
+    bool request_stop(StopCause cause) {
+        std::lock_guard<std::mutex> guard(mu_);
+        if (closed_ || close_requested_) return false;
+        close_requested_ = true;
+        stop_cause_ = cause;
+        credits_.retire();
+        if (!pending_) {
+            closed_ = true;
+            publish_terminal_failure("gpu actor stopped without active command");
+            return true;
+        }
+        if (pending_->enqueue_started && !pending_->submitted) {
+            // Enqueue has entered the provider. Never infer that it failed.
+            return true;
+        }
+        if (!pending_->submitted) {
+            fence_.abort_unsubmitted(pending_->ticket);
+            release_pending();
+            closed_ = true;
+            publish_terminal_failure("gpu actor stopped before enqueue");
+        } else {
+            fence_.cancel_pending(pending_->ticket);
+            pending_->cancelled = true;
+        }
+        return true;
+    }
+
+    void publish_terminal_failure(const char* message) {
+        publish_failure(stop_cause_ == StopCause::DeviceLoss
+                || stop_cause_ == StopCause::None
+                ? FailureKind::HostFailure : FailureKind::Cancel, message);
+    }
+
     void publish_failure(FailureKind kind, const char* message) {
         if (!control_.publish_preallocated(actor_, kind, message, parent_id_)) {
             throw std::logic_error("GPU_ACTOR_CONTROL_DUPLICATE");
@@ -220,6 +276,7 @@ private:
     std::int64_t state_;
     std::uint64_t turn_sequence_ = 0;
     std::optional<Pending> pending_;
+    StopCause stop_cause_ = StopCause::None;
     bool close_requested_ = false;
     bool closed_ = false;
 };
