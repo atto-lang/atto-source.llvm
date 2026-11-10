@@ -105,6 +105,11 @@ void validate_native_scalar_types(const Program& program) {
             case E::Integer: return scalar(false);
             case E::Boolean: return scalar(true);
             case E::String: return scalar(ScalarType::String);
+            // These native subset operators previously fell through to the
+            // generic unsupported-expression diagnostic. Make that policy
+            // exhaustive so strict -Wswitch/-Werror builds remain valid.
+            case E::ShiftLeft: case E::ShiftRight: case E::ShiftUnsignedRight:
+                fail(e.offset, "unsupported expression");
             case E::Console: {
                 // Java renders any value; the native slice admits String, int and
                 // bool and records which so codegen can format int/bool as text.
