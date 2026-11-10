@@ -5,7 +5,7 @@
 using namespace oreslang;
 #define CHECK(expr) do { if (!(expr)) throw std::runtime_error("failed: " #expr); } while(false)
 
-struct Counts { int throws = 0; int raises = 0; };
+struct Counts { int throws = 0; int raises = 0; int panics = 0; std::uint32_t panic_code = 0; };
 
 static ActorLocalHookReply accept_throw(void* user, EffectStatus failure) noexcept {
     auto* counters = static_cast<Counts*>(user);
@@ -29,6 +29,12 @@ static ActorLocalHookReply panic_in_hook(void* user, EffectStatus) noexcept {
     auto* counters = static_cast<Counts*>(user);
     ++counters->throws;
     return {ActorLocalResolution::Handled, {EffectKind::Panic, 202}};
+}
+
+static void observe_panic(void* user, EffectStatus failure) noexcept {
+    auto* counters = static_cast<Counts*>(user);
+    ++counters->panics;
+    counters->panic_code = failure.code;
 }
 
 static ActorLocalHookReply invalid_in_hook(void*, EffectStatus) noexcept {
@@ -63,6 +69,31 @@ int main() {
         CHECK(x.outgoing.kind == kind && x.outgoing.code == 55);
     }
     CHECK(counts.throws == 1 && counts.raises == 1);
+
+    // Only a safely unwound, dedicated observer lane may call on_panic.
+    // It sees the panic but cannot convert it to success or handle it.
+    auto observed = observe_actor_panic_on_safe_lane(
+            {EffectKind::Panic, 77}, &counts, observe_panic);
+    CHECK(observed.hook_invoked && !observed.handled);
+    CHECK(observed.outgoing.kind == EffectKind::Panic &&
+          observed.outgoing.code == 77);
+    CHECK(counts.panics == 1 && counts.panic_code == 77);
+    CHECK(counts.throws == 1 && counts.raises == 1);
+
+    // Missing observers and non-panic effects bypass local observation.
+    for (const auto kind : {EffectKind::Throw, EffectKind::Raise,
+                            EffectKind::Cancel, EffectKind::Fatal,
+                            EffectKind::ProcessExit, EffectKind::Return}) {
+        auto skipped = observe_actor_panic_on_safe_lane(
+                {kind, 78}, &counts, observe_panic);
+        CHECK(!skipped.hook_invoked && !skipped.handled);
+        CHECK(skipped.outgoing.kind == kind && skipped.outgoing.code == 78);
+    }
+    auto absent = observe_actor_panic_on_safe_lane(
+            {EffectKind::Panic, 79}, &counts, nullptr);
+    CHECK(!absent.hook_invoked && !absent.handled);
+    CHECK(absent.outgoing.kind == EffectKind::Panic && absent.outgoing.code == 79);
+    CHECK(counts.panics == 1);
 
     auto c = dispatch_actor_local_unhandled(
             {EffectKind::Throw, 13}, &counts, nullptr, nullptr);
