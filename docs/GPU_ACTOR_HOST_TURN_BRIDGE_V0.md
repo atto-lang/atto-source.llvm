@@ -38,7 +38,7 @@ The real provider adapter must bind these seams to a provider-issued opaque even
 
 ## Executed CI
 
-Private exact-Git-blob carrier: [run #42916577741](https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42916577741), using production header files and the executable test, GCC strict flags with ASan/UBSan, and Clang strict flags. Tests include 1,024 logical host-controlled actor turns and clean retirements, concurrent claim, checked overflow, rejection of stale/fake turn IDs, cancellation before and during enqueue, post-submission quiescence, failed enqueue, device loss affecting a cohort, and supervisor failure routing.
+Private exact-Git-blob carrier: [run #42916949277](https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42916949277), using production header files and the executable test, GCC strict flags with ASan/UBSan, and Clang strict flags. Both GCC/ASan/UBSan and Clang report 6,257 executed checks, including 1,024 logical actors, 4,096 host-simulated turns, and 1,024 clean retirements, concurrent claim, checked overflow, rejection of stale/fake turn IDs, cancellation before and during enqueue, post-submission quiescence, failed enqueue, device loss affecting a cohort, and supervisor failure routing.
 
 This does **not** prove execution of a GPU kernel, a compiled `.atto` actor, a physically authenticated fence, or five-backend parity. It is intentionally a narrow G1 host-control milestone; do not promote to production GPU actor support from this result.
 
