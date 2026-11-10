@@ -58,7 +58,7 @@ public:
             last_event=ev;
             return {mode,ev};
         }
-        return {mode,nullptr};
+        return {mode,injected_event};
     }
     EnqueueResult enqueue(Turn turn) override {
         ++enqueue_calls;
@@ -340,6 +340,58 @@ void cancel_racing_enqueued_submission_does_not_abort() {
     drain_notice(l,Lane::Kind::Cancel);
 }
 
+void malformed_provider_reply_is_quarantined_not_lost() {
+    for(const auto mode : {Port::EnqueueState::Unknown,
+                           Port::EnqueueState::DefinitelyNotSubmitted}) {
+        auto r=registry(1); auto l=lane(1);
+        auto p=std::make_shared<MockPort>(binding("malformed"));
+        p->enqueue_mode=mode;
+        p->injected_event=p->mint_for_test({1,1});
+        auto a=actor(r,l,p);
+        denied([&]{(void)a->submit(19);},
+               mode==Port::EnqueueState::Unknown
+               ? "GPU_PROVIDER_UNKNOWN_HAS_EVENT" : "GPU_PROVIDER_SPURIOUS_EVENT");
+        check(a->committed_state()==0,"malformed receipt never commits state");
+        a.reset();
+        check(r->quarantined_count()==1,"ambiguous malformed receipt retained");
+        p->injected_event.reset();
+        p->reconcile_mode=Port::EnqueueState::DefinitelyNotSubmitted;
+        r->progress_all();
+        check(r->retained_count()==1,"no release until explicit provider result");
+        p->release_ok=true;r->progress_all();
+        check(r->retained_count()==0,"malformed provider receipt can recover safely");
+        drain_notice(l,Lane::Kind::HostFailure);
+    }
+}
+
+void population_1024_mock_provider_turns() {
+    constexpr int count=1024;
+    auto r=registry(count);auto l=lane(count);
+    std::vector<std::shared_ptr<MockPort>> providers;
+    std::vector<std::unique_ptr<Bridge>> actors;
+    providers.reserve(count);actors.reserve(count);
+    for(int i=0;i<count;i++) {
+        auto p=std::make_shared<MockPort>(binding("bulk-"+std::to_string(i)));
+        p->observation=Port::Observation::CompleteOk;
+        p->release_ok=true;
+        actors.push_back(actor(r,l,p));
+        providers.push_back(std::move(p));
+    }
+    for(int n=1;n<=4;n++) {
+        for(auto& a:actors) (void)a->submit(n);
+        r->progress_all();
+    }
+    for(auto& a:actors) {
+        check(a->committed_state()==10,"1024 independent actor state");
+        a->retire_gracefully();
+        check(a->completed(),"provider release before actor retirement");
+        a.reset();
+    }
+    check(r->retained_count()==0,"all 1024 registry slots returned");
+    check(l->reserved_count()==0 && l->pending_count()==0,
+          "all 1024 supervisor reservations returned without fake CONTROL");
+}
+
 void forged_binding_and_invalid_admission_rejected() {
     auto r=registry(); auto l=lane();
     auto p=std::make_shared<MockPort>(binding("actual"));
@@ -365,7 +417,9 @@ int main() {
     exception_during_enqueue_remains_ambiguous();
     cancel_racing_enqueued_submission_does_not_abort();
     forged_binding_and_invalid_admission_rejected();
-    if(checks<65) throw std::runtime_error("GPU_PROVIDER_INSUFFICIENT_CHECKS");
+    malformed_provider_reply_is_quarantined_not_lost();
+    population_1024_mock_provider_turns();
+    if(checks<3100) throw std::runtime_error("GPU_PROVIDER_INSUFFICIENT_CHECKS");
     std::cout<<"GPU_PROVIDER_BRIDGE_V1_HOST_PASS checks="<<checks
-             <<" physical_gpu=false provider_observation=mock"<<std::endl;
+             <<" actors=1024 turns=4096 physical_gpu=false provider_observation=mock"<<std::endl;
 }
