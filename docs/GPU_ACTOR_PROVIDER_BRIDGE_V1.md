@@ -24,6 +24,8 @@ ProviderPortV1 is a **trusted native backend interface**. It issues an opaque, n
       -> Terminal: explicitly retry physical provider release
       -> Released: recycle bounded registry slot
 
+Graceful retirement first reserves a Retiring phase before dropping the native lock to request provider release. Concurrent actor submission is rejected; cancellation racing with retirement cannot publish an unverified success. Tests execute both retirement-vs-submission and retirement-vs-close schedules.
+
 A thrown enqueue or malformed receipt means Unknown, **not** proof of no submission. A forged event, another actor generation, or an earlier turn cannot publish state. Device loss affects matching tenant/device/provider generation; other tenants' actors can complete independently. Timeouts do not imply device quiescence.
 
 The registry retains the V0 host ledger, provider and shared supervisor CONTROL lane when the actor-facing wrapper disappears. A native process-root anchor also pins any nonempty registry across loss of its immediate supervisor handle. The root is bounded to 256 registries; each registry has its own capacity gate. Native recovery calls progress_process_root() and automatically unpins empty registries. No arbitrary guest may access the root.
@@ -32,11 +34,11 @@ The registry retains the V0 host ledger, provider and shared supervisor CONTROL 
 
 ## Verified native host-only evidence
 
-Private token-free exact Git-blob carrier: https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42921328555
+Private token-free exact Git-blob carrier: https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42921965357
 
 - GCC with strict warnings, AddressSanitizer and UndefinedBehaviorSanitizer: executed and passed
 - Clang with strict warnings: executed and passed
-- 6,280 host checks on each compiler; 1,024 logical actors, 4,096 mock-provider turns; verified process-root retention and recovery after supervisor-handle loss
+- 6,293 host checks on each compiler; 1,024 logical actors, 4,096 mock-provider turns; verified process-root retention and recovery after supervisor-handle loss
 - Event forgery/replay, malformed receipts, definitive enqueue abort, ambiguous exceptions, cancellation during enqueue, cohort loss, cross-tenant isolation, capacity exhaustion and graceful retirement
 - No real GPU, GPU driver event, compiled AttoLang guest, physical GPU kernel, or five-backend parity verified
 
