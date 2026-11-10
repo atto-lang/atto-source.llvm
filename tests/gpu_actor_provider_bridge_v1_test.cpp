@@ -392,6 +392,31 @@ void population_1024_mock_provider_turns() {
           "all 1024 supervisor reservations returned without fake CONTROL");
 }
 
+void supervisor_handle_loss_preserves_process_root_quarantine() {
+    check(Registry::retained_registry_count()==0,
+          "all prior actor registry roots were retired");
+    auto r=registry(1); auto l=lane(1);
+    auto p=std::make_shared<MockPort>(binding("root-retained"));
+    auto a=actor(r,l,p);
+    a->submit(13);
+    std::weak_ptr<Registry> weak=r;
+    r.reset(); // immediate supervisor lost its registry handle
+    a.reset(); // actor wrapper is now also gone
+    check(!weak.expired(),"process root retained unresolved work");
+    check(Registry::retained_registry_count()==1,
+          "one bounded process root pins the orphan registry");
+    Registry::progress_process_root();
+    check(!weak.expired(),"pending provider event cannot release root registry");
+    p->observation=Port::Observation::CompleteOk;
+    Registry::progress_process_root();
+    check(!weak.expired(),"quiescent event alone is not physical buffer release");
+    p->release_ok=true;
+    Registry::progress_process_root();
+    check(weak.expired(),"root registry released only after confirmed buffer release");
+    check(Registry::retained_registry_count()==0,"process-root slot reclaimed");
+    drain_notice(l,Lane::Kind::Cancel);
+}
+
 void forged_binding_and_invalid_admission_rejected() {
     auto r=registry(); auto l=lane();
     auto p=std::make_shared<MockPort>(binding("actual"));
@@ -418,6 +443,7 @@ int main() {
     cancel_racing_enqueued_submission_does_not_abort();
     forged_binding_and_invalid_admission_rejected();
     malformed_provider_reply_is_quarantined_not_lost();
+    supervisor_handle_loss_preserves_process_root_quarantine();
     population_1024_mock_provider_turns();
     if(checks<3100) throw std::runtime_error("GPU_PROVIDER_INSUFFICIENT_CHECKS");
     std::cout<<"GPU_PROVIDER_BRIDGE_V1_HOST_PASS checks="<<checks
