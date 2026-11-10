@@ -137,7 +137,7 @@ public:
     using EventHandle = Port::EventHandle;
 
 private:
-    enum class Phase { Ready, Retiring, EnqueueInProgress, UnknownEnqueue, Submitted, Terminal, Released };
+    enum class Phase { Ready, Retiring, EnqueueInProgress, UnknownEnqueue, Reconciling, Submitted, Terminal, Releasing, Released };
 
     struct Entry final {
         explicit Entry(std::shared_ptr<Port> p,
@@ -162,7 +162,8 @@ private:
                 if (device_loss) (void)host->report_device_loss();
                 else (void)host->request_close();
             }
-            if (host->closed() && !turn) phase = Phase::Terminal;
+            if (host->closed() && !turn && phase != Phase::Retiring
+                    && phase != Phase::Releasing) phase = Phase::Terminal;
         }
 
         void accept_result_locked(const Port::EnqueueResult& result) {
@@ -235,12 +236,18 @@ private:
                     || phase == Phase::Ready) return;
             if (phase == Phase::UnknownEnqueue) {
                 const Turn current = *turn;
+                phase = Phase::Reconciling; // one provider reconciliation at a time
                 guard.unlock();
                 Port::EnqueueResult result{Port::EnqueueState::Unknown, nullptr};
                 try { result = port->reconcile_unknown(current); }
-                catch (...) { return; } // retain quarantine; no fabricated proof
+                catch (...) {
+                    guard.lock();
+                    if (phase == Phase::Reconciling) phase = Phase::UnknownEnqueue;
+                    return; // ambiguous outcome is NOT an abort
+                }
                 guard.lock();
-                if (phase == Phase::UnknownEnqueue) {
+                if (phase == Phase::Reconciling) {
+                    phase = Phase::UnknownEnqueue;
                     try { accept_result_locked(result); }
                     catch (const std::logic_error&) { /* retain quarantined */ }
                 }
@@ -277,13 +284,24 @@ private:
                 return;
             }
             if (phase == Phase::Terminal) {
-                // This is an explicit provider release attempt, not a timeout.
+                // Reserve the external release attempt before dropping the
+                // mutex. Concurrent progress/recovery must never call the
+                // provider release operation twice on the same allocation.
+                phase = Phase::Releasing;
                 guard.unlock();
                 bool released = false;
                 try { released = port->try_release_buffer(); }
-                catch (...) { return; }
+                catch (...) {
+                    guard.lock();
+                    if (phase == Phase::Releasing) phase = Phase::Terminal;
+                    return;
+                }
                 guard.lock();
-                if (phase != Phase::Terminal || !released) return;
+                if (phase != Phase::Releasing) return;
+                if (!released) {
+                    phase = Phase::Terminal;
+                    return;
+                }
                 host->acknowledge_backend_buffer_release(true);
                 phase = Phase::Released;
             }
@@ -302,12 +320,27 @@ private:
                 released = port->try_release_buffer();
             } catch (...) {
                 guard.lock();
-                if (phase == Phase::Retiring) phase = Phase::Ready;
+                if (phase == Phase::Retiring)
+                    phase = stopping ? Phase::Terminal : Phase::Ready;
                 throw;
             }
             guard.lock();
-            if (phase != Phase::Retiring || stopping || !released) {
-                if (phase == Phase::Retiring) phase = Phase::Ready;
+            if (phase != Phase::Retiring)
+                throw std::logic_error("GPU_PROVIDER_RETIRE_STATE_CORRUPT");
+            if (stopping) {
+                // request_close/device_loss can win while native release is
+                // in progress. Reuse the existing outcome, never call the
+                // provider release a second time. CONTROL was pre-reserved.
+                if (released) {
+                    host->acknowledge_backend_buffer_release(true);
+                    phase = Phase::Released;
+                } else {
+                    phase = Phase::Terminal;
+                }
+                throw std::logic_error("GPU_PROVIDER_RELEASE_NOT_PROVEN");
+            }
+            if (!released) {
+                phase = Phase::Ready;
                 throw std::logic_error("GPU_PROVIDER_RELEASE_NOT_PROVEN");
             }
             host->retire_gracefully_after_backend_release(true);
