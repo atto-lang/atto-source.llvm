@@ -87,9 +87,19 @@ execution, native thread-race proof or seven-backend parity was established.
 - No hard-real-time guarantee: `calloc`, free and relocation may fault or
   stall while an actor turn executes. The existing prefault RT path remains
   separate and must not be silently replaced.
-- The current bump allocator may exhaust logical address space when long-lived
-  objects coexist with many dropped non-tail objects. Reuse, compaction,
-  offsets, alignment, ledger and actor closure need further tests.
+- Scrubbed whole-slot spans are now reusable while a long-lived root pins
+  the actor bump cursor. A recycled slot retains its full span extent, while
+  its new smaller live object retains exact access bounds. The last-owner
+  cursor reset clears cached hole spans so stale metadata cannot overlap
+  newly appended objects. Noncoalescing fragmentation remains possible:
+  the allocator does not yet split or merge dead slots, compact live objects,
+  or enforce in-flight FFI/loan fences.
+- The latest hole-reuse patch's **full LLVM repository native C test binary
+  has not executed on an admitted exact-head CI runner**. An independent
+  source-free C11 reproduction of the hole-selection/reset logic passed
+  GCC and Clang × O1/O2 under ASan/UBSan on 2026-11-10, 4/4, including
+  10,000 temporary allocations under a live root. This is NOT a compiler
+  guest or exact-source C runtime test and is not promotable evidence.
 - Verify independently that source-compiled actor `spawn`, message handlers,
   owned values, field accesses and retirement use this heap and that guest
   results satisfy the shared conformance fixture. Existing LLVM actor
@@ -100,3 +110,20 @@ Shared policy: [conformance #643](https://github.com/ores-truffle-oreslang/oresl
 ### Further native test hardening
 
 On 2026-11-10 the native test was rerun under GCC and Clang at both O1 and O2 with ASan/UBSan after adding 16-thread budget contention and saturating domain-ID admission. 4/4 configurations passed locally with `-pthread`. These tests establish only the host C allocator's behavior; they do not constitute ThreadSanitizer certification or multi-threaded access to *one* arena, which remains prohibited.
+
+## 2026-11-10 incremental bounded-hole hardening
+
+The current runtime source blob uses a per-slot `span` distinct from its
+live `length`. Dead, scrubbed spans can be reused only when they satisfy the
+new request's alignment and bounds entirely within the preexisting bump
+cursor. A suitable hole remains available even after the append cursor
+reaches the actor's hard quota. Each drop erases the entire reserved slot
+span; after final-owner drop, cached hole spans reset to zero while
+generations remain advanced. The test suite adds 10,000 allocation/drop
+cycles, alignment-safe reuse beside a live sibling and stale-handle checks.
+
+Local *independent* C11 model: GCC 14/Clang 17 at O1/O2, ASan+UBSan,
+4/4 PASS. Shared source-free Node oracle: 4/4 PASS, exact Git blob
+`9ed98e244a272ce38df2d9509b7e8dbd8ce4d364`, in platform PR #643.
+No full LLVM exact-source native binary or compiler-generated guest executed
+in this incremental check, so status remains `HOST_ONLY_NOT_CERTIFIED`.
