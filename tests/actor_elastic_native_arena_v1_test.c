@@ -74,10 +74,34 @@ static void test_peak_limit_rejects_relocation(void) {
     ores_elastic_native_close_v1(a);
     assert(ores_elastic_budget_used_v1(&both)==0);
 }
+static void test_stale_slot_offset_collision_denied(void) {
+    OresElasticNativeBudgetV1 budget;
+    assert(ores_elastic_budget_init_v1(&budget,12*KiB));
+    OresElasticNativeArenaV1* a=ores_elastic_native_open_v1(99,1,1024,3,&budget,&budget);
+    assert(a);
+    OresElasticNativeHandleV1 first, stale, second, third, fourth;
+    assert(ores_elastic_native_allocate_v1(a,8,8,&first));
+    assert(ores_elastic_native_allocate_v1(a,8,64,&stale));
+    assert(stale.word==9 && stale.slot==1 && stale.generation==1);
+    assert(ores_elastic_native_drop_v1(a,first));
+    assert(ores_elastic_native_drop_v1(a,stale));
+    assert(ores_elastic_native_allocate_v1(a,8,8,&second));
+    assert(ores_elastic_native_allocate_v1(a,8,8,&third));
+    assert(ores_elastic_native_allocate_v1(a,8,64,&fourth));
+    assert(fourth.word==stale.word && fourth.generation==stale.generation);
+    assert(fourth.slot!=stale.slot);
+    int64_t got=0;
+    assert(ores_elastic_native_write_i64_v1(a,fourth,0,123));
+    assert(!ores_elastic_native_read_i64_v1(a,stale,0,&got));
+    assert(ores_elastic_native_read_i64_v1(a,fourth,0,&got) && got==123);
+    ores_elastic_native_close_v1(a);
+    assert(!ores_elastic_budget_used_v1(&budget));
+}
 int main(void){
     test_peak_quota_and_actor_survival();
     test_relocation_and_injected_failure();
     test_peak_limit_rejects_relocation();
+    test_stale_slot_offset_collision_denied();
     puts("PASS host-only LLVM elastic native arena v1: peak budgets, rollback, ref32, sibling isolation");
     return 0;
 }
