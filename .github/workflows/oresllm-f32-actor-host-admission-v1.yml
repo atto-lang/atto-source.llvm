@@ -10,6 +10,7 @@ on:
       - 'tests/native_f32_actor_host_admission_v1_test.c'
       - 'scripts/test-native-f32-actor-host-admission-v1.sh'
       - '.github/workflows/oresllm-f32-actor-host-admission-v1.yml'
+      - 'tests/native_f32_actor_turn_lease_v1_test.c'
       - 'src/main/cpp/oreslang/runtime/NativeF32ActorTurnLeaseV1.h'
   workflow_dispatch:
 permissions:
