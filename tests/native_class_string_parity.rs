@@ -235,6 +235,7 @@ fn main() {
     let exact = include_str!("fixtures/native-class-string/main.ores");
     let foo = include_str!("fixtures/native-class-string/main-1.ores");
     let positives = [
+        ("root-mutable-record-view-canonical-if", include_str!("fixtures/native-class-string/root-mutable-record-view.atto"), ""),
         ("router-elif-short-circuit-cleanup-and-return", include_str!("fixtures/native-class-string/router-elif-chain.ores"), "aababcabc"),
 
         ("mutable-record-view-retains-identity-across-growth", include_str!("fixtures/native-class-string/mutable-scalar-record-view.ores"), ""),
@@ -626,7 +627,8 @@ fn main() {
     ];
     for (case_index, (name, source, expected)) in positives.iter().chain(native_only.iter()).chain(panics.iter()).enumerate() {
         let expects_panic = case_index >= positives.len() + native_only.len();
-        fs::write(scratch.0.join("main.ores"), source).unwrap();
+        let entry_name = if name.starts_with("root-mutable-record-") { "main.atto" } else { "main.ores" };
+        fs::write(scratch.0.join(entry_name), source).unwrap();
         fs::write(scratch.0.join("main-1.ores"), foo).unwrap();
         fs::write(scratch.0.join("sums.ores"), "define module sums as pub fnc choose(bool yes):Option<string>{return yes?Some(\"module\"):None;}pub fnc checked(bool yes):Result<bool,string>{return yes?Ok(false):Err(\"missing\");}end").unwrap();
         fs::write(scratch.0.join("owned-box.ores"), "define pub class OwnedBox as pub val Array<int> values;pub copy():OwnedBox{val Array<int> copied=new Array<int>();copied.add(self.values.get(0));return new OwnedBox(copied);}end").unwrap();
@@ -636,7 +638,7 @@ fn main() {
         let module_fixture = include_str!("fixtures/native-class-string/routing-path-validation.ores")
             .replace("pub routine main(): int", "pub fnc verify_paths(): int");
         fs::write(scratch.0.join("paths.ores"), format!("define module paths as\n{module_fixture}\nend\n")).unwrap();
-        let path = scratch.0.join("main.ores");
+        let path = scratch.0.join(entry_name);
         let generated = run(Command::new(&compiler).arg(&path));
         assert!(
             generated.status.success() && !generated.stdout.is_empty(),
@@ -833,6 +835,8 @@ fn main() {
         }
     }
     let negatives = [
+        ("root-mutable-record-const-reject", include_str!("fixtures/native-class-string/root-mutable-record-const-reject.atto").to_owned(), foo.to_owned()),
+        ("root-mutable-record-let-reject", include_str!("fixtures/native-class-string/root-mutable-record-let-reject.atto").to_owned(), foo.to_owned()),
         ("elif-condition-requires-bool", "fnc touch():void{return;}pub fnc main():int{touch();let int value=0;if false;then value=1;elif 1;then value=2;fi return value;}".to_owned(), foo.to_owned()),
         ("elif-arm-cannot-see-preceding-arm-local", "fnc touch():void{return;}pub fnc main():int{touch();if false;then val Array<int> values=new Array<int>();elif true;then values.add(1);fi return 0;}".to_owned(), foo.to_owned()),
         ("elif-condition-cannot-conditionally-consume-owner", "fnc touch():void{return;}fnc positive(int value):bool{return value>0;}pub fnc main():int{let int value=1;touch();if true;then value=value+0;elif positive(rt take value);then value=1;fi return value;}".to_owned(), foo.to_owned()),
@@ -1093,9 +1097,10 @@ fn main() {
         ),
     ];
     for (name, source, dependency) in &negatives {
-        fs::write(scratch.0.join("main.ores"), source).unwrap();
+        let entry_name = if name.starts_with("root-mutable-record-") { "main.atto" } else { "main.ores" };
+        fs::write(scratch.0.join(entry_name), source).unwrap();
         fs::write(scratch.0.join("main-1.ores"), dependency).unwrap();
-        let rejected = run(Command::new(&compiler).arg(scratch.0.join("main.ores")));
+        let rejected = run(Command::new(&compiler).arg(scratch.0.join(entry_name)));
         assert_eq!(
             rejected.status.code(),
             Some(1),

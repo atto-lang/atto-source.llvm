@@ -747,11 +747,18 @@ void validate_i64_ownership(Program& program) {
             } else if (binding.record_view) {
                 check_value(*binding.initializer, locals, functions);
                 const bool owning = !class_arrays.at(binding.class_name).empty();
+                entry.handle_record_view = native_mutable_scalar_record(layouts.source(binding.class_name));
+                if (entry.handle_record_view && binding.owner_mutable) {
+                    if (!binding.initializer || binding.initializer->kind != Expression::Kind::ArrayCall ||
+                            binding.initializer->name != "get")
+                        throw std::runtime_error("mutable scalar record view requires array.get provenance");
+                    (void)array_owner(*binding.initializer->left, locals, true);
+                }
                 if (owning && !binding.owner_mutable)
                     throw std::runtime_error("owning class result requires val or let mut owner");
                 entry.record_view = !owning;
-                entry.mode = owning ? Mode::Value : Mode::Borrow;
-                entry.mutable_owner = owning && binding.owner_mutable;
+                entry.mode = owning ? Mode::Value : entry.handle_record_view && binding.owner_mutable ? Mode::BorrowMut : Mode::Borrow;
+                entry.mutable_owner = (owning || entry.handle_record_view) && binding.owner_mutable;
                 entry.mutable_paths = layouts.mutable_paths(binding.class_name);
                 entry.subobjects = layouts.at(binding.class_name).subobjects;
                 entry.class_fields = class_fields.at(binding.class_name);
@@ -994,7 +1001,7 @@ void validate_i64_ownership(Program& program) {
                 if (entry.handle_record_view && local.owner_mutable) {
                     if (!local.initializer || local.initializer->kind != Expression::Kind::ArrayCall ||
                             local.initializer->name != "get")
-                        throw std::runtime_error("mutable record view requires array.get provenance");
+                        throw std::runtime_error("mutable scalar record view requires array.get provenance");
                     (void)array_owner(*local.initializer->left, state, true);
                 }
                 state.emplace(local.name, std::move(entry));

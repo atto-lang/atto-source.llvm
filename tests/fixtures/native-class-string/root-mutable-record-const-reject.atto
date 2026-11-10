@@ -1,0 +1,8 @@
+define class Cell as pub let int value=1; end
+pub routine main():int {
+  val Array<Cell> cells=new Array<Cell>();
+  cells.add(new Cell());
+  const Cell observed=cells.get(0);
+  observed.value=2;
+  return 0;
+}

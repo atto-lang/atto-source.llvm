@@ -257,7 +257,13 @@ void validate_native_scalar_types(const Program& program) {
                     };
                     if (!binding.initializer || !owning_call_tree(*binding.initializer))
                         fail(binding.offset, "owning class result requires a named call binding");
-                } else (void)immutable_record(binding.class_name);
+                } else {
+                    const auto& cls = collection_record(binding.class_name);
+                    if (native_mutable_scalar_record(cls) && (!binding.initializer ||
+                            binding.initializer->kind != Expression::Kind::ArrayCall ||
+                            binding.initializer->name != "get"))
+                        fail(binding.offset, "mutable scalar record view requires array.get provenance");
+                }
             }
             if (!binding.array_record_class.empty()) (void)collection_record(binding.array_record_class);
             if (binding.initializer) {

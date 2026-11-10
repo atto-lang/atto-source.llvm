@@ -1,0 +1,23 @@
+define class Cell as
+  pub val int identity;
+  pub let int value = 0;
+end
+pub routine main():int {
+  val Array<Cell> cells = new Array<Cell>();
+  cells.add(new Cell(7));
+  let mut Cell first = cells.get(0);
+  val Cell second = cells.get(0);
+  first.value = 41;
+  for (let int index = 0; index < 1024; index = index + 1) {
+    cells.add(new Cell(index));
+  }
+  second.value = second.value + 1;
+  if first.value == 42 then
+    return first.identity == 7 && cells.size == 1025 ? 0 : 1;
+  elif first.value == 41 then
+    return 2;
+  else
+    return 3;
+  fi
+  return 4;
+}

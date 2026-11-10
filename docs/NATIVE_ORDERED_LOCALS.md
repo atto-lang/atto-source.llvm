@@ -155,3 +155,18 @@ branches, int/String returns, and punctuation inside string literals. Negative
 gates check boolean conditions, branch-local visibility, conditional moves and
 excessive chain depth. This admits the real router's elif syntax; subsequent
 owning-class return/declaration and node-view ABI boundaries remain unsupported.
+
+## Method-entry getter bindings
+
+Mutable scalar `array.get` views use the same checked handle ABI whether a
+binding appears at method entry or after other statements. `let mut` and `val`
+retain mutable referent permission; `const` and `let` without `mut` do not gain
+write permission. Getter bindings are never materialized as independent object
+copies and cannot escape into the raw-pointer method ABI.
+
+The `.atto` root-view fixture uses canonical if/elif headers, keeps two aliases
+through 1,024 insertions and verifies shared writeback. It is executed by the
+real frontend and standalone O0/O2 driver, including the current no-GC IR audit.
+Separate `.atto` negatives require rejection without IR for const/readonly
+writes. Owning-array node views and ownership-aware structured returns remain
+required for the complete router and HTTP server.

@@ -1510,6 +1510,20 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         }
 
         for (const auto& binding : fn.locals) {
+            if (binding.record_view && native_mutable_scalar_record(*record_classes.at(binding.class_name))) {
+                // Keep root getter bindings on the same identity ABI as
+                // scoped views. A raw struct snapshot would lose writeback.
+                auto* slot = entry_alloca(builder, i64, nullptr, binding.name + ".record.handle.slot");
+                native_lifetime_start(builder, slot, 8);
+                auto* handle = lower(*binding.initializer, builder, i64, storage, field_storage, declarations, &region_moves);
+                builder.CreateCall(record_check, {handle,
+                    llvm::ConstantInt::get(i64, record_schemas.at(binding.class_name))});
+                builder.CreateStore(handle, slot);
+                storage.emplace(binding.name, slot);
+                handle_record_views.emplace(binding.name, binding.class_name);
+                lexical_slots.push_back({binding.name, slot, false, 8});
+                continue;
+            }
             if (binding.int_array) {
                 llvm::Value* handle = new_checked_array(binding.name);
                 llvm::Value* slot = builder.CreateAlloca(i64, nullptr,

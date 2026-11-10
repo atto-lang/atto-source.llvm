@@ -2516,13 +2516,19 @@ private:
                         require(")");
                     }
                     binding.new_class = true;
-                } else {
+                } else if (token_.text == "rt") {
                     require("rt");
                     require("take");
                     const bool parenthesized = accept("(");
                     binding.move_source = identifier();
                     if (parenthesized) require(")");
                     binding.move_class = true;
+                } else {
+                    binding.initializer = expression();
+                    if (binding.initializer->kind != Expression::Kind::ArrayCall ||
+                            binding.initializer->name != "get")
+                        fail("native class binding requires new, rt take or array.get");
+                    binding.record_view = true;
                 }
                 }
             } else {

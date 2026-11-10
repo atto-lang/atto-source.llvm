@@ -144,7 +144,7 @@ pub fnc main(): int {
   } else { } fi
   return 42;
 }
-""", "branch-local class owner requires destructor/drop lowering"),
+""", "mutable scalar record view requires array.get provenance"),
     "experimental-owned-region": ("""
 pub fnc main(): int {
   if (1 eq 1) {

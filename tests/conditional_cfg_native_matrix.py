@@ -102,7 +102,7 @@ pub fnc main(): int {
   if (1 eq 1) { let mut Pair p = new Pair(); } else { } fi
   return 42;
 }
-""", "native branch-local class owner requires destructor/drop lowering"),
+""", "mutable scalar record view requires array.get provenance"),
     "branch-local-defer": ("""
 fnc update(): void { return; }
 pub fnc main(): int {
@@ -250,8 +250,8 @@ pub fnc main(): int {
 
 NEGATIVE["guard-option-narrowing-denied"] = ("""
 pub fnc main(): int {
-  let o: Option<int> = Some(4);
-  guard o is Some { return 1; }
+  let Option<int> candidate = Some(4);
+  guard candidate is Some { return 1; }
   return 42;
 }
 """, "native guard is Some requires ownership-aware Option narrowing")
