@@ -57,7 +57,15 @@ int main(int argc, char** argv) {
         {"dispatch-value-record-field-reject.ores", false,
          "native tilde map/record literal unsupported"},
         {"dispatch-do-record-field-reject.ores", false,
-         "native tilde map/record literal unsupported"}
+         "native tilde map/record literal unsupported"},
+        {"dispatch-value-public-class-field-run.ores", true, ""},
+        {"dispatch-do-public-class-field-run.ores", true, ""},
+        {"dispatch-value-private-class-field-reject.ores", false, "native structural field pattern requires a declared public primitive field"},
+        {"dispatch-value-mutable-class-owner-reject.ores", false, "native structural field pattern requires a stack-constructed const class local"},
+        {"dispatch-value-structural-mixed-fields-reject.ores", false, "native ordinary structural match cannot prove differently named field arms disjoint"},
+        {"dispatch-value-structural-duplicate-reject.ores", false, "duplicate native structural field match pattern"},
+        {"dispatch-value-structural-multi-field-reject.ores", false, "native structural field pattern supports exactly one field"},
+        {"dispatch-value-structural-wrong-type-reject.ores", false, "native structural field pattern literal type does not match declared field"}
     };
     std::size_t checked = 0;
     for (const auto& c : cases) {

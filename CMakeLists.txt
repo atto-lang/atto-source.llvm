@@ -1470,6 +1470,22 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_structural_field_failclosed_4
         dispatch-do-record-field-reject.ores
         --diagnostic "native tilde map/record literal unsupported")
+    oreslang_contract_test(native_structural_local_1
+        dispatch-value-public-class-field-run.ores --ir "ternary.merge")
+    oreslang_contract_test(native_structural_local_2
+        dispatch-do-public-class-field-run.ores --ir "ternary.merge")
+    oreslang_contract_test(native_structural_local_3
+        dispatch-value-private-class-field-reject.ores --diagnostic "native structural field pattern requires a declared public primitive field")
+    oreslang_contract_test(native_structural_local_4
+        dispatch-value-mutable-class-owner-reject.ores --diagnostic "native structural field pattern requires a stack-constructed const class local")
+    oreslang_contract_test(native_structural_local_5
+        dispatch-value-structural-mixed-fields-reject.ores --diagnostic "native ordinary structural match cannot prove differently named field arms disjoint")
+    oreslang_contract_test(native_structural_local_6
+        dispatch-value-structural-duplicate-reject.ores --diagnostic "duplicate native structural field match pattern")
+    oreslang_contract_test(native_structural_local_7
+        dispatch-value-structural-multi-field-reject.ores --diagnostic "native structural field pattern supports exactly one field")
+    oreslang_contract_test(native_structural_local_8
+        dispatch-value-structural-wrong-type-reject.ores --diagnostic "native structural field pattern literal type does not match declared field")
     # Direct signed-minimum literal remains valid; nested unary negation
     # would overflow host i64 and must reject before any LLVM IR.
     oreslang_contract_test(native_dispatch_signed_min_literal_ir
