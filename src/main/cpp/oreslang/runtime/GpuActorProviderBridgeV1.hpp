@@ -249,7 +249,12 @@ private:
                 if (phase == Phase::Reconciling) {
                     phase = Phase::UnknownEnqueue;
                     try { accept_result_locked(result); }
-                    catch (const std::logic_error&) { /* retain quarantined */ }
+                    catch (const std::logic_error&) {
+                        // Malformed reconciliation from a trusted-native
+                        // provider is a host failure, not ordinary polling.
+                        // Keep the ambiguous device loan quarantined.
+                        stop_locked(true);
+                    }
                 }
                 return;
             }
