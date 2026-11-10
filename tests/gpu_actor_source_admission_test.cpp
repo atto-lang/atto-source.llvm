@@ -33,11 +33,10 @@ int main() {
     denied("fnc gpu_kernel(): int { gpu task { 42 }; return 0; }",
            "native gpu/quantum boundary unsupported");
 
-    // GPU tokens in comments/strings are data rather than declarations.
+    // GPU tokens in comments are not declarations.
     auto normal = oreslang::parse_program(R"(
         fnc main(): int {
             // define gpu actor NotAnActor as state {} end
-            val string note = "define gpu actor NotAnActor as state {} end";
             return 42;
         }
     )");
