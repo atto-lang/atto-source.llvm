@@ -1,9 +1,10 @@
 #include "oreslang/backend/OwnershipDataflowV1.hpp"
 
-#include <cassert>
 #include <cstddef>
 #include <stdexcept>
 #include <vector>
+
+#define REQUIRE(expr) do { if (!(expr)) throw std::runtime_error("shadow V0: " #expr); } while (false)
 
 using namespace oreslang;
 
@@ -41,19 +42,19 @@ int main() {
     const auto graph = source_graph();
     // The normal compiler path remains unchanged; it does not construct events.
     const auto plain = OwnershipDataflowV1::analyze(graph);
-    assert(plain.normal_exits.size() == 1);
-    assert(plain.normal_exits[0].cleanup_reverse_order == std::vector<std::size_t>{0});
+    REQUIRE(plain.normal_exits.size() == 1);
+    REQUIRE(plain.normal_exits[0].cleanup_reverse_order == std::vector<std::size_t>{0});
     std::vector<Observed> events;
     const auto traced = OwnershipDataflowV1::analyze(graph, &record, &events);
-    assert(traced.normal_exits.size() == plain.normal_exits.size());
-    assert(traced.normal_exits[0].cleanup_reverse_order ==
+    REQUIRE(traced.normal_exits.size() == plain.normal_exits.size());
+    REQUIRE(traced.normal_exits[0].cleanup_reverse_order ==
            plain.normal_exits[0].cleanup_reverse_order);
-    assert(events.size() == 4);
-    assert(events[0].block == 0 && events[0].operation == 0 &&
+    REQUIRE(events.size() == 4);
+    REQUIRE(events[0].block == 0 && events[0].operation == 0 &&
            events[0].kind == OwnershipV1OpKind::Create && events[0].owner == 0);
-    assert(events[1].kind == OwnershipV1OpKind::Use);
-    assert(events[2].block == 1 && events[2].kind == OwnershipV1OpKind::Use);
-    assert(events[3].kind == OwnershipV1OpKind::ExitNormal);
+    REQUIRE(events[1].kind == OwnershipV1OpKind::Use);
+    REQUIRE(events[2].block == 1 && events[2].kind == OwnershipV1OpKind::Use);
+    REQUIRE(events[3].kind == OwnershipV1OpKind::ExitNormal);
 
     // Rejection cannot generate an apparent accepted operation at the failed step.
     auto invalid = source_graph();
@@ -62,12 +63,12 @@ int main() {
     bool rejected = false;
     try { (void)OwnershipDataflowV1::analyze(invalid, &record, &events); }
     catch (const std::runtime_error&) { rejected = true; }
-    assert(rejected && events.empty());
+    REQUIRE(rejected && events.empty());
 
     // A failing consumer must abort verification, never grant ownership.
     rejected = false;
     try { (void)OwnershipDataflowV1::analyze(graph, &deny, nullptr); }
     catch (const std::runtime_error&) { rejected = true; }
-    assert(rejected);
+    REQUIRE(rejected);
     return 0;
 }
