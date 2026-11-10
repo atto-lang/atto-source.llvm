@@ -1460,10 +1460,10 @@ if(BUILD_TESTING)
         --diagnostic "duplicate native do match pattern")
     oreslang_contract_test(native_structural_field_failclosed_1
         dispatch-value-structural-field-reject.ores
-        --diagnostic "native structural field pattern requires checked typed aggregate lowering")
+        --diagnostic "native structural field pattern requires a stack-constructed const class local")
     oreslang_contract_test(native_structural_field_failclosed_2
         dispatch-do-structural-field-reject.ores
-        --diagnostic "native structural field pattern requires checked typed aggregate lowering")
+        --diagnostic "native structural field pattern requires a stack-constructed const class local")
     oreslang_contract_test(native_structural_field_failclosed_3
         dispatch-value-record-field-reject.ores
         --diagnostic "native tilde map/record literal unsupported")
