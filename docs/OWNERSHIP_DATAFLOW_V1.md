@@ -47,6 +47,24 @@ overflow/invalid-graph diagnostics, bad exit placement, overlapping
 mutable loans, borrow-state mismatch at joins, and self-transfer. These
 fixtures remain host compiler-time tests, not source-language guest execution.
 
+A separate deterministic property CTest generates 128 six-block acyclic CFGs
+from seed `0x5eeda770c0ffee11`. Each CFG has two normal exits and four
+independently specified checks: reverse acquisition-order cleanup predicted
+by a construction-time oracle, a one-branch open-loan mutation rejected at
+its join, a drop-then-use mutation rejected on the use, and an acquisition
+reorder mutation with exactly predicted cleanup change. This gives 512
+seed-replayable property checks; a failing iteration is reported individually.
+
+The implementation-mutation CTest first requires the unmodified 54-case
+binary and aggregate receipt to pass, then recompiles four isolated
+mutated header copies: disabling drop's loan guard, disabling mutable-loan
+read denial, disabling inconsistent CFG join denial, and reversing cleanup
+order. Each mutant must compile successfully, return nonzero, finish the
+54-case registry and print the specific expected failing named case.
+Compilation failure or unrelated process failure is not counted as a
+successful mutation detection. Neither test modifies production compiler
+sources, or proves typed-source guest execution, actor isolation, or zero GC.
+
 The tests are authored and registered. They are **not reported as passing** until a nonzero-step native CTest job runs on the exact PR head. They do not prove LLVM guest execution or a process-wide no-GC link closure.
 
 ## Required next work
