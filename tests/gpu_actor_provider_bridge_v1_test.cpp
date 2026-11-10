@@ -189,6 +189,7 @@ void stale_turn_event_cannot_reuse_completed_token() {
     auto p=std::make_shared<MockPort>(binding("stale", "tenantA","gpu0",2));
     auto a=actor(r,l,p);
     auto first=a->submit(1);
+    check(first.actor_generation==2 && first.sequence==1,"first generation-qualified turn");
     auto stale=p->last_event;
     p->observation=Port::Observation::CompleteOk;
     r->progress_all();
