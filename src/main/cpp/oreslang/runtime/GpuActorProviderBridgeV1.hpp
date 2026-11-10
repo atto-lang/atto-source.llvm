@@ -137,7 +137,7 @@ public:
     using EventHandle = Port::EventHandle;
 
 private:
-    enum class Phase { Ready, EnqueueInProgress, UnknownEnqueue, Submitted, Terminal, Released };
+    enum class Phase { Ready, Retiring, EnqueueInProgress, UnknownEnqueue, Submitted, Terminal, Released };
 
     struct Entry final {
         explicit Entry(std::shared_ptr<Port> p,
@@ -293,11 +293,23 @@ private:
             std::unique_lock<std::mutex> guard(mu);
             if (phase != Phase::Ready || detached || stopping || turn)
                 throw std::logic_error("GPU_PROVIDER_GRACEFUL_RETIRE_DENIED");
+            // Reserve retirement before releasing the mutex for the provider
+            // call. No competing thread may admit a new turn on the buffer.
+            phase = Phase::Retiring;
             guard.unlock();
-            const bool released = port->try_release_buffer();
+            bool released = false;
+            try {
+                released = port->try_release_buffer();
+            } catch (...) {
+                guard.lock();
+                if (phase == Phase::Retiring) phase = Phase::Ready;
+                throw;
+            }
             guard.lock();
-            if (phase != Phase::Ready || stopping || !released)
+            if (phase != Phase::Retiring || stopping || !released) {
+                if (phase == Phase::Retiring) phase = Phase::Ready;
                 throw std::logic_error("GPU_PROVIDER_RELEASE_NOT_PROVEN");
+            }
             host->retire_gracefully_after_backend_release(true);
             phase = Phase::Released;
         }
