@@ -19,12 +19,12 @@ ProviderPortV1 is a **trusted native backend interface**. It issues an opaque, n
       -> Submitted: pending until a matching provider-reported terminal event
          -> success: publish staged state exactly once
          -> failure: supervisor CONTROL without state commit
-      -> Unknown: quarantine, reconcile until definite provider outcome
+      -> Unknown: quarantine, single-owner reconciliation until definite outcome
       -> Cancel/device loss/actor teardown: halt admission but retain in-flight buffers
-      -> Terminal: explicitly retry physical provider release
+      -> Terminal -> Releasing: exclusive provider release; no overlapping retries
       -> Released: recycle bounded registry slot
 
-Graceful retirement first reserves a Retiring phase before dropping the native lock to request provider release. Concurrent actor submission is rejected; cancellation racing with retirement cannot publish an unverified success. Tests execute both retirement-vs-submission and retirement-vs-close schedules.
+Graceful retirement first reserves a Retiring phase before dropping the native lock to request provider release. Concurrent actor submission is rejected; cancellation racing with retirement consumes the original provider release result (no second release). Terminal cleanup likewise reserves Releasing before dropping its lock; two recovery pollers cannot release the same physical allocation twice. Unknown-enqueue reconciliation uses a Reconciling phase to prevent simultaneous provider reconciliation calls.
 
 A thrown enqueue or malformed receipt means Unknown, **not** proof of no submission. A forged event, another actor generation, or an earlier turn cannot publish state. Device loss affects matching tenant/device/provider generation; other tenants' actors can complete independently. Timeouts do not imply device quiescence.
 
@@ -34,12 +34,12 @@ The registry retains the V0 host ledger, provider and shared supervisor CONTROL 
 
 ## Verified native host-only evidence
 
-Private token-free exact Git-blob carrier: https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42921965357
+Private token-free exact Git-blob carrier: https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42925139986
 
 - GCC with strict warnings, AddressSanitizer and UndefinedBehaviorSanitizer: executed and passed
 - Clang with strict warnings: executed and passed
-- 6,293 host checks on each compiler; 1,024 logical actors, 4,096 mock-provider turns; verified process-root retention and recovery after supervisor-handle loss
-- Event forgery/replay, malformed receipts, definitive enqueue abort, ambiguous exceptions, cancellation during enqueue, cohort loss, cross-tenant isolation, capacity exhaustion and graceful retirement
+- 6,329 host checks on each compiler; 1,024 logical actors, 4,096 mock-provider turns; verified process-root retention and recovery after supervisor-handle loss
+- Event forgery/replay, malformed initial/reconciled receipts, definitive enqueue abort, ambiguous exceptions, cancellation during enqueue, cohort loss, cross-tenant isolation, capacity exhaustion, graceful retirement, overlapping release/reconciliation threads, release exceptions, and failed-admission root cleanup
 - No real GPU, GPU driver event, compiled AttoLang guest, physical GPU kernel, or five-backend parity verified
 
 ## Next production gates
@@ -49,3 +49,9 @@ Private token-free exact Git-blob carrier: https://github.com/scintilla-run/scin
 3. Complete Java and LLVM GPU actor typed body MIR, effects, borrow rules and guest lowering.
 4. Execute real device run with hardware/driver identity, artifact hashes, successful device event, independent CPU oracle and supervision validation.
 5. Independently verify unsupported backends fail closed.
+
+## 2026-11-10 independent lifecycle audit
+
+The audit identified and corrected: a duplicate terminal provider release race, cancellation racing with graceful release, simultaneous ambiguous-enqueue reconciliation, provider-error recovery without quarantine escalation, and an exception-safety exposure when process-root retention preceded registry placeholder allocation. Both strict native compilers executed 6,329 host assertions on pinned source.
+
+**Unresolved trust boundaries:** native provider callbacks remain privileged and can forge completion internally; V0 still exposes native Boolean completion paths; no physical device event or provider driver has been attested; process-root ownership is not crash durable and unresolved work can consume its bounded capacity; host actor tests do not prove the full compiler MIR or actor scheduler integration. This PR must remain draft, and none of the five backend GPU-guest statuses may be promoted.
