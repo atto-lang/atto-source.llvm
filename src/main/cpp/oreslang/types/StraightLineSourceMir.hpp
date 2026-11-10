@@ -55,6 +55,8 @@ inline std::optional<StraightLineTrace> build_checked_straight_line_trace(
             "ownership violation: MIR source function is not from sealed Program");
 
     if (function.return_type == ScalarType::String ||
+            !function.pending_return_type_alias.empty() ||
+            function.native_internal ||
             function.compiler_straight_line_effect_fingerprint == 0)
         return std::nullopt;
     if (!function.generic_parameters.empty() ||
@@ -86,8 +88,12 @@ inline std::optional<StraightLineTrace> build_checked_straight_line_trace(
     std::set<std::string> assignable_scalar_slots;
     std::size_t modeled_fields = 0;
     for (const auto& local : function.locals) {
-        if (local.name.empty() || !names.insert(local.name).second ||
+        // Place identifiers must be disjoint from class.field projections.
+        if (local.name.empty() || local.name.find('.') != std::string::npos ||
+                !names.insert(local.name).second ||
                 local.scalar_type == ScalarType::String ||
+                local.array_element_type != ScalarType::I64 ||
+                !local.pending_type_alias.empty() ||
                 !local.sum_type.empty() || !local.array_record_class.empty() ||
                 !local.move_source.empty() ||
                 local.heap_owned || local.int_array || local.record_view ||
@@ -114,6 +120,7 @@ inline std::optional<StraightLineTrace> build_checked_straight_line_trace(
                 if (field.name.empty() || field.name.find('.') != std::string::npos ||
                         field.int_array || !field.class_name.empty() ||
                         field.scalar_type == ScalarType::String ||
+                        field.array_element_type != ScalarType::I64 ||
                         !field.sum_type.empty() ||
                         !field.array_record_class.empty() ||
                         field.final_field || field.constructor_argument ||
@@ -158,7 +165,8 @@ inline std::optional<StraightLineTrace> build_checked_straight_line_trace(
                 expr.condition_rhs || expr.when_true || expr.when_false ||
                 !expr.arguments.empty() || !expr.argument_names.empty() ||
                 expr.type_arguments_present || !expr.type_arguments.empty() ||
-                !expr.resolved_class.empty() || !expr.sum_type.empty())
+                !expr.resolved_class.empty() || !expr.sum_type.empty() ||
+                expr.resolved_type == ScalarType::String)
             return false;
         switch (expr.kind) {
             case Expression::Kind::Integer:
