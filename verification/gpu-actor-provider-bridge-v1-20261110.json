@@ -6,8 +6,8 @@
   "stackedOn": "ores-truffle-oreslang/oreslang-source.llvm#1650",
   "scope": "source-authenticated local provider event handles and bounded actor quarantine, host mocked; no GPU guest/device execution",
   "sourceBlobs": {
-    "src/main/cpp/oreslang/runtime/GpuActorProviderBridgeV1.hpp": "8e9f916898d285cbb36667cbd74e33b70cf60cd3",
-    "tests/gpu_actor_provider_bridge_v1_test.cpp": "056928f4622ca70ca7476ee29845b4940d68630e",
+    "src/main/cpp/oreslang/runtime/GpuActorProviderBridgeV1.hpp": "67ba38101d602e63ea8c126bc023f51d146daaa4",
+    "tests/gpu_actor_provider_bridge_v1_test.cpp": "ab847cd09d64b714ada72a15409eeda7b64c8566",
     "src/main/cpp/oreslang/runtime/GpuActorHostTurnBridgeV0.hpp": "e2787e95da1dff46e7abb36793436e55d183df97",
     "src/main/cpp/oreslang/runtime/GpuBufferFence.hpp": "1316dc2be8c19ef23a19dcb7e907455bba633afc",
     "src/main/cpp/oreslang/runtime/NativeActorTurnCredits.hpp": "ad47b278fc74d1bfcdc5554a102cd01531c374b1",
@@ -16,14 +16,14 @@
   "carrier": {
     "repo": "scintilla-run/scintilla-run-e2e",
     "branch": "carrier/gpu-provider-bridge-v1-20261110",
-    "head": "72af9f14caea283d3d063a7d5e407f3a5113464c",
-    "runId": 42921965357,
-    "jobId": 130198780658,
-    "url": "https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42921965357",
+    "head": "bf5b415e84239d176bbd98fc3bb08cc65cd85caa",
+    "runId": 42925139986,
+    "jobId": 130209609920,
+    "url": "https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42925139986",
     "exactSourceBlobs": true,
     "gccAsanUbsan": "passed",
     "clang": "passed",
-    "checksPerCompiler": 6293,
+    "checksPerCompiler": 6329,
     "logicalActors": 1024,
     "mockedTurns": 4096
   },
@@ -44,7 +44,12 @@
     "process-root-registry-retention-after-supervisor-handle-loss",
     "orphaned-buffer-release-then-root-unpin",
     "graceful-provider-release-excludes-concurrent-actor-turn",
-    "cancellation-racing-provider-buffer-release"
+    "cancellation-racing-provider-buffer-release",
+    "no-overlapping-provider-release",
+    "single-owner-unknown-enqueue-reconciliation",
+    "malformed-reconciliation-escalates-to-host-failure",
+    "provider-release-exception-retry",
+    "failed-actor-admission-root-rollback"
   ],
   "promotion": {
     "realGpu": false,
@@ -77,5 +82,15 @@
     "concurrentSubmissionRejected": true,
     "cancellationCanAbortGracefulRetirement": true,
     "realPhysicalEventProof": false
+  },
+  "audit": {
+    "type": "manual-source-review-and-executed-adversarial-regression",
+    "fixedFindings": 5,
+    "compilers": [
+      "g++ strict Werror ASan UBSan",
+      "clang++ strict Werror"
+    ],
+    "hostChecksPerCompiler": 6329,
+    "physicalDeviceExecuted": false
   }
 }
