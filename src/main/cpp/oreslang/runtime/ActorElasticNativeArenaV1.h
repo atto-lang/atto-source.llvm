@@ -22,6 +22,7 @@ typedef struct {
     uint64_t domain;
     uint64_t incarnation;
     uint32_t word;
+    uint32_t slot;
     uint32_t generation;
 } OresElasticNativeHandleV1;
 
