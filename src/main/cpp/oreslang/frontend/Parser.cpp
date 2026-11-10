@@ -2408,6 +2408,10 @@ private:
             if (source_future_pipeline_local()) continue;
             if (ready_future_local()) continue;
             LocalBinding binding;
+            // A non-mut let Class is still not a const declaration.
+            // This independent lexical proof prevents mutable/rebindable
+            // class sources from acquiring readonly pattern authority.
+            bool literal_const_class_owner = false;
             binding.offset = token_.offset;
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
@@ -2513,6 +2517,7 @@ private:
                         require(")");
                     }
                     binding.new_class = true;
+                    literal_const_class_owner = !mutable_value;
                     }
                 }
             } else if (accept("let")) {
@@ -2654,8 +2659,11 @@ private:
             // Only a function-local, stack-constructed const record is
             // currently eligible for pattern field projection. Parameters,
             // borrowed aliases, mutable owners and nested scopes are not.
-            if (binding.new_class && !binding.owner_mutable &&
-                    !binding.class_name.empty()) {
+            // Do not let an ordinary later binding with the same spelling
+            // inherit an earlier class pattern authority.
+            class_literal_locals_.erase(binding.name);
+            if (literal_const_class_owner && binding.new_class &&
+                    !binding.owner_mutable && !binding.class_name.empty()) {
                 class_literal_locals_.emplace(binding.name, binding.class_name);
             }
             value.locals.push_back(std::move(binding));
