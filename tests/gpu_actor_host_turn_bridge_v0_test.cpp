@@ -195,8 +195,14 @@ void population_1024_host_only() {
         check(a->committed_state()==10);
         check(!a->has_pending_turn());
         check(a->fence_status()==oreslang::gpu::Status::Idle);
+        denied([&] { a->retire_gracefully_after_backend_release(false); },
+               "GPU_ACTOR_GRACEFUL_RETIRE_UNPROVEN");
+        a->retire_gracefully_after_backend_release(true);
+        check(a->closed());
+        check(a->fence_status()==oreslang::gpu::Status::Closed);
     }
     check(lane.pending_count()==0);
+    check(lane.reserved_count()==0);
 }
 void stop_during_provider_enqueue_window() {
     SupervisorFailureLane lane(1);
