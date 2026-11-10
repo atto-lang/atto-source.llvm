@@ -59,13 +59,15 @@ detection enabled. It verifies:
 7. Even if a new slot matches a stale ref32 *word* and *generation*, the
    out-of-line slot identity prevents stale authorization.
 8. Final actor closure scrubs native data and returns charged payload bytes.
+9. Sixteen independently owned actors contend for a shared process/tenant quota; successful and denied growth preserve each actor's prior data and all accounting returns to zero.
+10. The internal actor-domain ID counter saturates instead of wrapping and reissuing an older domain.
 
 **Executed locally on 2026-11-10:** 4/4 compiler/optimization combinations
 passed. Exact source Git blob SHAs were checked against GitHub:
 
 - Header `04e5ec3f2c69610051e474a969e5ebb62e398ca8`
-- Runtime `7335025737a85f9416cb01c366cc0fa1f6aff117`
-- Test `77781a470d4d8869728c88bd63d986de3c783c55`
+- Runtime `9549cd1c66f1615e077a9a556f111428981d0596`
+- Test `3e647c26a03ce8bfd3f277281bf6c9d224de678f`
 
 This is real native C host-code execution with sanitizers; **no compiled
 AttoLang guest**, compiler lowering, release-AOT execution, source-org Actions
@@ -94,3 +96,7 @@ execution, native thread-race proof or seven-backend parity was established.
   acceptance has separate unsupported/sealed-state restrictions.
 
 Shared policy: [conformance #643](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/pull/643).
+
+### Further native test hardening
+
+On 2026-11-10 the native test was rerun under GCC and Clang at both O1 and O2 with ASan/UBSan after adding 16-thread budget contention and saturating domain-ID admission. 4/4 configurations passed locally with `-pthread`. These tests establish only the host C allocator's behavior; they do not constitute ThreadSanitizer certification or multi-threaded access to *one* arena, which remains prohibited.
