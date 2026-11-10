@@ -129,7 +129,7 @@ void drain_notice(const std::shared_ptr<Lane>& l, Lane::Kind kind) {
 }
 
 void successful_event_is_host_bound_and_single_commit() {
-    auto r=registry(), l=lane(), p=std::make_shared<MockPort>(binding("success"));
+    auto r=registry(); auto l=lane(); auto p=std::make_shared<MockPort>(binding("success"));
     auto a=actor(r,l,p,10);
     auto turn=a->submit(7);
     check(turn.actor_generation==1 && turn.sequence==1,"turn identity");
@@ -160,7 +160,7 @@ void successful_event_is_host_bound_and_single_commit() {
 }
 
 void forged_cross_provider_event_denied_and_quarantined() {
-    auto r=registry(), l=lane();
+    auto r=registry(); auto l=lane();
     auto p=std::make_shared<MockPort>(binding("forgery"));
     auto attacker=std::make_shared<MockPort>(binding("forgery"));
     p->injected_event=attacker->mint_for_test({1,1});
@@ -185,7 +185,7 @@ void forged_cross_provider_event_denied_and_quarantined() {
 }
 
 void stale_turn_event_cannot_reuse_completed_token() {
-    auto r=registry(), l=lane();
+    auto r=registry(); auto l=lane();
     auto p=std::make_shared<MockPort>(binding("stale", "tenantA","gpu0",2));
     auto a=actor(r,l,p);
     auto first=a->submit(1);
@@ -208,7 +208,7 @@ void stale_turn_event_cannot_reuse_completed_token() {
 }
 
 void detached_actor_keeps_provider_and_buffer_quarantined() {
-    auto r=registry(1), l=lane(1);
+    auto r=registry(1); auto l=lane(1);
     auto p=std::make_shared<MockPort>(binding("detached"));
     auto a=actor(r,l,p);
     a->submit(50);
@@ -230,7 +230,7 @@ void detached_actor_keeps_provider_and_buffer_quarantined() {
 }
 
 void unknown_enqueue_never_assumes_no_command() {
-    auto r=registry(1), l=lane(1);
+    auto r=registry(1); auto l=lane(1);
     auto p=std::make_shared<MockPort>(binding("unknown"));
     p->enqueue_mode=Port::EnqueueState::Unknown;
     auto a=actor(r,l,p);
@@ -249,7 +249,7 @@ void unknown_enqueue_never_assumes_no_command() {
 }
 
 void device_loss_poison_all_matching_cohort_only() {
-    auto r=registry(3), l=lane(3);
+    auto r=registry(3); auto l=lane(3);
     auto p1=std::make_shared<MockPort>(binding("cohort-a"));
     auto p2=std::make_shared<MockPort>(binding("cohort-b"));
     auto p3=std::make_shared<MockPort>(binding("other","tenantB","gpu0"));
@@ -278,7 +278,7 @@ void device_loss_poison_all_matching_cohort_only() {
 }
 
 void registry_quota_rejects_new_actors_until_physical_release() {
-    auto r=registry(1), l=lane(2);
+    auto r=registry(1); auto l=lane(2);
     auto p1=std::make_shared<MockPort>(binding("quota-one"));
     auto a=actor(r,l,p1);a->submit(2);a.reset();
     auto p2=std::make_shared<MockPort>(binding("quota-two"));
@@ -295,7 +295,7 @@ void registry_quota_rejects_new_actors_until_physical_release() {
 }
 
 void exception_during_enqueue_remains_ambiguous() {
-    auto r=registry(1), l=lane(1);
+    auto r=registry(1); auto l=lane(1);
     auto p=std::make_shared<MockPort>(binding("exception"));
     p->throw_in_enqueue=true;
     auto a=actor(r,l,p);
@@ -312,7 +312,7 @@ void exception_during_enqueue_remains_ambiguous() {
 }
 
 void cancel_racing_enqueued_submission_does_not_abort() {
-    auto r=registry(1), l=lane(1);
+    auto r=registry(1); auto l=lane(1);
     auto p=std::make_shared<BlockedPort>(binding("race"));
     std::shared_ptr<MockPort> as_mock=p;
     auto a=actor(r,l,as_mock);
@@ -340,7 +340,7 @@ void cancel_racing_enqueued_submission_does_not_abort() {
 }
 
 void forged_binding_and_invalid_admission_rejected() {
-    auto r=registry(), l=lane();
+    auto r=registry(); auto l=lane();
     auto p=std::make_shared<MockPort>(binding("actual"));
     denied([&] {
         Bridge wrong(r,p,l,{"different",1},"root",4096);
