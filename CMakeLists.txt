@@ -1473,7 +1473,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_structural_local_1
         dispatch-value-public-class-field-run.ores --ir "ternary.merge")
     oreslang_contract_test(native_structural_local_2
-        dispatch-do-public-class-field-run.ores --ir "ternary.merge")
+        dispatch-do-public-class-field-run.ores --ir "return.snapshot.slot")
     oreslang_contract_test(native_structural_local_3
         dispatch-value-private-class-field-reject.ores --diagnostic "native structural field pattern requires a declared public primitive field")
     oreslang_contract_test(native_structural_local_4
