@@ -51,3 +51,29 @@ are persisted atomically. The test includes wrong-event and stale-epoch negative
 
 No GCC/Clang/ASan test execution is claimed until an exact-head runner
 actually executes and records nonzero steps.
+
+## Atomic durable commands and event batches (third host slice)
+
+`SqliteStore::commit_command` persists up to 256 contiguous immutable domain
+events, the journal head, canonical request bytes, and the original reply
+in **one SQLite WAL/FULL transaction**. The new `command_inbox` table is
+additive and shares an operation-ID namespace with existing `ops`.
+`resolve_command_fenced` checks the current epoch, exact request bytes,
+the persisted batch and every retained event row before returning the
+original reply from an older activation. Same operation ID with different
+request fails closed. The event batch is length-delimited, 1MiB bounded
+and uses network-order 32-bit fields compatible with Java's ByteBuffer
+encoding; reply and request are limited to 64KiB each.
+
+`native_durable_command_inbox_test.cpp` covers two-event atomic commit,
+original-reply duplicate, cross-epoch lookup, conflicting request,
+durable reopen and a SQLite trigger that aborts the SECOND event, proving
+rollback of journal/head/inbox and safe retry.
+
+This is a privileged synchronous HOST provider, **not** a source-compiled
+AttoLang actor or nonblocking scheduler integration. The future compiler
+must stage owned event bytes and the command/reply envelope under one
+actor turn, then dispatch this method on a storage worker. The only trusted
+reply to guest code comes after verified committed storage and a fresh
+actor epoch check. It does NOT implement transactional outbox or full
+supervisor recovery yet. Exact-head GCC/Clang runs are pending.

@@ -7,6 +7,7 @@ on:
       - 'tests/native_sqlite_persistence_test.cpp'
       - 'tests/native_actor_arena_persistence_reactivation_test.cpp'
       - 'tests/native_event_sourced_fenced_recovery_test.cpp'
+      - 'tests/native_durable_command_inbox_test.cpp'
       - 'src/main/cpp/oreslang/runtime/ActorOwnedHeap.hpp'
       - 'src/main/cpp/oreslang/runtime/SqliteBatchPersistence.hpp'
       - 'CMakeLists.txt'
@@ -82,3 +83,18 @@ jobs:
             -Isrc/main/cpp tests/native_event_sourced_fenced_recovery_test.cpp \
             -lsqlite3 -o /tmp/atto-native-event-journal-clang
           /tmp/atto-native-event-journal-clang
+      - name: Native host transactional command inbox (GCC ASan/UBSan)
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O1 -g -pthread -Wall -Wextra -Werror -pedantic \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp tests/native_durable_command_inbox_test.cpp \
+            -lsqlite3 -o /tmp/atto-native-command-inbox
+          ASAN_OPTIONS=detect_leaks=1 /tmp/atto-native-command-inbox
+      - name: Clang native host transaction rollback and cross-epoch reply
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O2 -pthread -Wall -Wextra -Werror -pedantic \
+            -Isrc/main/cpp tests/native_durable_command_inbox_test.cpp \
+            -lsqlite3 -o /tmp/atto-native-command-inbox-clang
+          /tmp/atto-native-command-inbox-clang

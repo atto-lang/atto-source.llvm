@@ -4545,3 +4545,22 @@ if(BUILD_TESTING AND UNIX)
             PROPERTIES TIMEOUT 45)
     endif()
 endif()
+
+# Durable command inbox + multi-event journal host integration only.
+if(BUILD_TESTING AND UNIX)
+    find_package(SQLite3 QUIET)
+    if(SQLite3_FOUND)
+        add_executable(oreslang-native-durable-command-inbox-test
+            tests/native_durable_command_inbox_test.cpp)
+        target_include_directories(oreslang-native-durable-command-inbox-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features(oreslang-native-durable-command-inbox-test PRIVATE cxx_std_17)
+        target_compile_options(oreslang-native-durable-command-inbox-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        target_link_libraries(oreslang-native-durable-command-inbox-test PRIVATE SQLite::SQLite3)
+        add_test(NAME native_durable_command_inbox_atomic_batch_host_only
+            COMMAND oreslang-native-durable-command-inbox-test)
+        set_tests_properties(native_durable_command_inbox_atomic_batch_host_only
+            PROPERTIES TIMEOUT 45)
+    endif()
+endif()
