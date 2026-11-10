@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <pthread.h>
 #define KiB 1024u
 static void test_peak_quota_and_actor_survival(void) {
     OresElasticNativeBudgetV1 tenant,process;
@@ -97,11 +98,58 @@ static void test_stale_slot_offset_collision_denied(void) {
     ores_elastic_native_close_v1(a);
     assert(!ores_elastic_budget_used_v1(&budget));
 }
+typedef struct {
+    OresElasticNativeBudgetV1* tenant;
+    OresElasticNativeBudgetV1* process;
+    unsigned id;
+    int success;
+} ThreadCase;
+static void* concurrent_actor(void* raw) {
+    ThreadCase* t=(ThreadCase*)raw;
+    OresElasticNativeArenaV1* a=ores_elastic_native_open_v1(
+        t->id+100,1,8192,8,t->tenant,t->process);
+    if(!a)return NULL;
+    OresElasticNativeHandleV1 root,tail;
+    if(ores_elastic_native_allocate_v1(a,4096,8,&root)) {
+        const int64_t value=(int64_t)t->id+1100;
+        assert(ores_elastic_native_write_i64_v1(a,root,0,value));
+        /* A relocation may fail under contention; it must not corrupt root. */
+        if(ores_elastic_native_allocate_v1(a,4096,8,&tail)) {
+            int64_t z=-1;
+            assert(ores_elastic_native_read_i64_v1(a,tail,0,&z) && z==0);
+        }
+        int64_t observed=0;
+        assert(ores_elastic_native_read_i64_v1(a,root,0,&observed));
+        assert(observed==value);
+        assert(ores_elastic_budget_used_v1(t->tenant)<=32*KiB);
+        assert(ores_elastic_budget_used_v1(t->process)<=32*KiB);
+        t->success=1;
+    }
+    ores_elastic_native_close_v1(a);
+    return NULL;
+}
+static void test_concurrent_actor_budget_admission(void) {
+    OresElasticNativeBudgetV1 tenant,process;
+    assert(ores_elastic_budget_init_v1(&tenant,32*KiB));
+    assert(ores_elastic_budget_init_v1(&process,32*KiB));
+    pthread_t threads[16];ThreadCase cases[16];
+    for(unsigned i=0;i<16;++i){
+        cases[i]=(ThreadCase){&tenant,&process,i,0};
+        assert(pthread_create(&threads[i],NULL,concurrent_actor,&cases[i])==0);
+    }
+    for(unsigned i=0;i<16;++i)assert(pthread_join(threads[i],NULL)==0);
+    int succeeded=0;
+    for(unsigned i=0;i<16;++i)succeeded+=cases[i].success;
+    assert(succeeded>0);
+    assert(!ores_elastic_budget_used_v1(&tenant));
+    assert(!ores_elastic_budget_used_v1(&process));
+}
 int main(void){
     test_peak_quota_and_actor_survival();
     test_relocation_and_injected_failure();
     test_peak_limit_rejects_relocation();
     test_stale_slot_offset_collision_denied();
+    test_concurrent_actor_budget_admission();
     puts("PASS host-only LLVM elastic native arena v1: peak budgets, rollback, ref32, sibling isolation");
     return 0;
 }
