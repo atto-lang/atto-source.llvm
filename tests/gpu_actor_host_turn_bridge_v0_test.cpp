@@ -323,6 +323,6 @@ int main() {
     concurrent_claim_one_actor();
     if(checks < 3100) throw std::runtime_error("test coverage under expected 1024 population threshold");
     std::cout << "GPU_ACTOR_HOST_BRIDGE_PASS checks=" << checks
-              << " actors=1024 turns=4096 physical_gpu=false" << '\\n';
+              << " actors=1024 turns=4096 physical_gpu=false" << std::endl;
     return 0;
 }
