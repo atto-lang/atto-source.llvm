@@ -1458,6 +1458,18 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_match_fallback_hardening_4
         dispatch-do-match-duplicate-case-reject.ores
         --diagnostic "duplicate native do match pattern")
+    oreslang_contract_test(native_structural_field_failclosed_1
+        dispatch-value-structural-field-reject.ores
+        --diagnostic "native structural field pattern requires checked typed aggregate lowering")
+    oreslang_contract_test(native_structural_field_failclosed_2
+        dispatch-do-structural-field-reject.ores
+        --diagnostic "native structural field pattern requires checked typed aggregate lowering")
+    oreslang_contract_test(native_structural_field_failclosed_3
+        dispatch-value-record-field-reject.ores
+        --diagnostic "native structural field pattern requires checked typed aggregate lowering")
+    oreslang_contract_test(native_structural_field_failclosed_4
+        dispatch-do-record-field-reject.ores
+        --diagnostic "native structural field pattern requires checked typed aggregate lowering")
     # Direct signed-minimum literal remains valid; nested unary negation
     # would overflow host i64 and must reject before any LLVM IR.
     oreslang_contract_test(native_dispatch_signed_min_literal_ir

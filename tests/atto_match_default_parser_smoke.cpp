@@ -49,7 +49,15 @@ int main(int argc, char** argv) {
         {"dispatch-value-match-duplicate-case-reject.ores", false,
          "duplicate native value match pattern"},
         {"dispatch-do-match-duplicate-case-reject.ores", false,
-         "duplicate native do match pattern"}
+         "duplicate native do match pattern"},
+        {"dispatch-value-structural-field-reject.ores", false,
+         "native structural field pattern requires checked typed aggregate lowering"},
+        {"dispatch-do-structural-field-reject.ores", false,
+         "native structural field pattern requires checked typed aggregate lowering"},
+        {"dispatch-value-record-field-reject.ores", false,
+         "native structural field pattern requires checked typed aggregate lowering"},
+        {"dispatch-do-record-field-reject.ores", false,
+         "native structural field pattern requires checked typed aggregate lowering"}
     };
     std::size_t checked = 0;
     for (const auto& c : cases) {
