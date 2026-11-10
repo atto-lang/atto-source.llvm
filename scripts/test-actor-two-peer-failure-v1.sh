@@ -10,8 +10,8 @@ for tool in timeout clang sha256sum git cmp; do command -v "$tool" >/dev/null ||
 relative="tests/fixtures/actor-two-peer-failure-v1/two-peer-failure-matrix.atto"
 source="$root/$relative"
 [[ -f "$source" && ! -L "$source" ]] || exit 78
-[[ "$(git -C "$root" rev-parse "HEAD:$relative")" == 003983eb9475d7fd680ea5b31804df02f1843f19 ]] || exit 78
-[[ "$(git -C "$root" hash-object --no-filters "$source")" == 003983eb9475d7fd680ea5b31804df02f1843f19 ]] || exit 78
+[[ "$(git -C "$root" rev-parse "HEAD:$relative")" == eaac813262ca184930ba124180ed692e21329969 ]] || exit 78
+[[ "$(git -C "$root" hash-object --no-filters "$source")" == eaac813262ca184930ba124180ed692e21329969 ]] || exit 78
 [[ "$(git -C "$root" ls-files --stage -- "$relative")" =~ ^100644[[:space:]] ]] || exit 78
 compiler="$root/build/oreslang-llvmc"
 auditor="$root/build/oreslang-no-gc-ir-audit"
@@ -53,4 +53,4 @@ unset ORESLANG_LLVM_AOT_OPT_LEVEL
 : "${ACTOR_TWO_PEER_VERIFIED_LEDGER:?trusted runtime ledger required; stdout alone is not proof}"
 [[ -s "$ACTOR_TWO_PEER_VERIFIED_LEDGER" && ! -L "$ACTOR_TWO_PEER_VERIFIED_LEDGER" ]] || exit 78
 [[ "$(git -C "$root" rev-parse HEAD)" == "$EXPECTED_HEAD" ]] || exit 78
-echo "LLVM_TWO_PEER_NATIVE_CANDIDATE_ONLY|head=$EXPECTED_HEAD|fixture_git_blob=003983eb9475d7fd680ea5b31804df02f1843f19"
+echo "LLVM_TWO_PEER_NATIVE_CANDIDATE_ONLY|head=$EXPECTED_HEAD|fixture_git_blob=eaac813262ca184930ba124180ed692e21329969"
