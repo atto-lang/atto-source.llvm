@@ -107,6 +107,32 @@ public:
     }
 };
 
+class BlockedReleasePort final : public MockPort {
+public:
+    explicit BlockedReleasePort(Binding b) : MockPort(std::move(b)) {}
+    std::mutex mu;
+    std::condition_variable cv;
+    bool entered=false, proceed=false, blocked_once=false;
+    bool try_release_buffer() override {
+        {
+            std::unique_lock<std::mutex> guard(mu);
+            if(!blocked_once) {
+                blocked_once=true; entered=true; cv.notify_all();
+                cv.wait(guard,[&]{return proceed;});
+            }
+        }
+        return MockPort::try_release_buffer();
+    }
+    void await_entered() {
+        std::unique_lock<std::mutex> guard(mu);
+        cv.wait(guard,[&]{return entered;});
+    }
+    void resume() {
+        std::lock_guard<std::mutex> guard(mu);
+        proceed=true; cv.notify_all();
+    }
+};
+
 std::shared_ptr<Lane> lane(std::size_t capacity=8) {
     return std::make_shared<Lane>(capacity);
 }
@@ -392,6 +418,51 @@ void population_1024_mock_provider_turns() {
           "all 1024 supervisor reservations returned without fake CONTROL");
 }
 
+void retirement_release_window_denies_concurrent_actor_turn() {
+    auto r=registry(1);auto l=lane(1);
+    auto p=std::make_shared<BlockedReleasePort>(binding("retire-race"));
+    std::shared_ptr<MockPort> port=p;
+    auto a=actor(r,l,port);
+    p->release_ok=true;
+    std::atomic<bool> retired{false};
+    std::thread worker([&] {
+        try {a->retire_gracefully(); retired.store(true);}
+        catch(...) { /* verified below */ }
+    });
+    p->await_entered();
+    denied([&] { (void)a->submit(1); },"GPU_PROVIDER_ACTOR_NOT_READY");
+    check(a->committed_state()==0,"retire guard prevents mid-release mutation");
+    p->resume();worker.join();
+    check(retired.load(),"reserved retirement completed");
+    check(a->completed(),"retired ledger cannot reenter actor");
+    a.reset();
+    check(r->retained_count()==0,"normal retired slot released");
+    check(l->reserved_count()==0,"CONTROL reservation retired without failure");
+
+    auto p2=std::make_shared<BlockedReleasePort>(binding("retire-vs-close"));
+    std::shared_ptr<MockPort> port2=p2;
+    auto b=actor(r,l,port2);
+    p2->release_ok=true;
+    std::atomic<bool> rejected{false};
+    std::thread w2([&] {
+        try {b->retire_gracefully();}
+        catch(const std::logic_error& e) {
+            rejected.store(std::string(e.what()).find("GPU_PROVIDER_RELEASE_NOT_PROVEN")
+                            != std::string::npos);
+        }
+    });
+    p2->await_entered();
+    b->request_close(); // cancel races with provider release
+    p2->resume();w2.join();
+    check(rejected.load(),"inconsistent concurrent retirement rejected");
+    denied([&] { (void)b->submit(1); },"GPU_PROVIDER_ACTOR_NOT_READY");
+    r->progress_all();
+    check(b->completed(),"cancelled actor retires only after provider release");
+    b.reset();
+    check(r->retained_count()==0,"retire-vs-close slot freed");
+    drain_notice(l,Lane::Kind::Cancel);
+}
+
 void supervisor_handle_loss_preserves_process_root_quarantine() {
     check(Registry::retained_registry_count()==0,
           "all prior actor registry roots were retired");
@@ -444,6 +515,7 @@ int main() {
     forged_binding_and_invalid_admission_rejected();
     malformed_provider_reply_is_quarantined_not_lost();
     supervisor_handle_loss_preserves_process_root_quarantine();
+    retirement_release_window_denies_concurrent_actor_turn();
     population_1024_mock_provider_turns();
     if(checks<3100) throw std::runtime_error("GPU_PROVIDER_INSUFFICIENT_CHECKS");
     std::cout<<"GPU_PROVIDER_BRIDGE_V1_HOST_PASS checks="<<checks
