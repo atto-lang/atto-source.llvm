@@ -50,6 +50,7 @@ public:
     bool release_ok=false;
     bool throw_in_enqueue=false;
     bool throw_in_poll=false;
+    bool throw_in_release=false;
     int enqueue_calls=0, poll_calls=0, reconcile_calls=0, release_calls=0;
 
     EnqueueResult make_report(EnqueueState mode, Turn turn) {
@@ -77,6 +78,7 @@ public:
     }
     bool try_release_buffer() override {
         ++release_calls;
+        if (throw_in_release) throw std::runtime_error("MOCK_RELEASE_UNKNOWN");
         return release_ok;
     }
     EventHandle mint_for_test(Turn turn) { return issue_event(turn); }
@@ -130,6 +132,30 @@ public:
     void resume() {
         std::lock_guard<std::mutex> guard(mu);
         proceed=true; cv.notify_all();
+    }
+};
+
+class BlockedReconcilePort final : public MockPort {
+public:
+    explicit BlockedReconcilePort(Binding b) : MockPort(std::move(b)) {}
+    std::mutex mu;
+    std::condition_variable cv;
+    bool entered=false, proceed=false;
+    EnqueueResult reconcile_unknown(Turn turn) override {
+        {
+            std::unique_lock<std::mutex> guard(mu);
+            entered=true; cv.notify_all();
+            cv.wait(guard,[&]{return proceed;});
+        }
+        return MockPort::reconcile_unknown(turn);
+    }
+    void await_entered() {
+        std::unique_lock<std::mutex> guard(mu);
+        cv.wait(guard,[&]{return entered;});
+    }
+    void resume() {
+        std::lock_guard<std::mutex> guard(mu);
+        proceed=true;cv.notify_all();
     }
 };
 
@@ -493,6 +519,82 @@ void terminal_release_serializes_concurrent_progress_workers() {
     drain_notice(l,Lane::Kind::Cancel);
 }
 
+void unknown_enqueue_reconciliation_serializes_concurrent_pollers() {
+    auto r=registry(1);auto l=lane(1);
+    auto p=std::make_shared<BlockedReconcilePort>(binding("reconcile-race"));
+    std::shared_ptr<MockPort> as_mock=p;
+    p->enqueue_mode=Port::EnqueueState::Unknown;
+    p->reconcile_mode=Port::EnqueueState::DefinitelyNotSubmitted;
+    auto a=actor(r,l,as_mock);
+    (void)a->submit(5);
+    a.reset();
+    std::thread first([&]{r->progress_all();});
+    p->await_entered();
+    r->progress_all(); // second poll cannot enter same native reconciliation
+    check(p->reconcile_calls==0,"first reconciliation has not returned");
+    check(r->retained_count()==1,"unresolved enqueue remains quarantined");
+    p->resume();first.join();
+    check(p->reconcile_calls==1,"one provider reconciliation at a time");
+    check(r->retained_count()==1,"definite absence is not buffer release");
+    p->release_ok=true;r->progress_all();
+    check(r->retained_count()==0,"quiescent buffer released exactly once");
+    drain_notice(l,Lane::Kind::Cancel);
+}
+
+void malformed_reconciliation_sends_host_failure_control() {
+    auto r=registry(1);auto l=lane(1);
+    auto p=std::make_shared<MockPort>(binding("bad-reconcile"));
+    p->enqueue_mode=Port::EnqueueState::Unknown;
+    auto a=actor(r,l,p);
+    (void)a->submit(19);
+    p->reconcile_mode=Port::EnqueueState::Unknown;
+    p->injected_event=p->mint_for_test({1,1});
+    r->progress_all();
+    check(a->committed_state()==0,"malformed reconcile never publishes state");
+    p->injected_event.reset();
+    p->reconcile_mode=Port::EnqueueState::DefinitelyNotSubmitted;
+    a.reset();
+    r->progress_all(); // now provider proves no kernel was submitted
+    p->release_ok=true;r->progress_all();
+    check(r->retained_count()==0,"malformed reconcile preserved until release");
+    drain_notice(l,Lane::Kind::HostFailure);
+}
+
+void release_exception_keeps_quarantine_and_retries() {
+    auto r=registry(1);auto l=lane(1);
+    auto p=std::make_shared<MockPort>(binding("release-exception"));
+    p->throw_in_release=true;
+    auto a=actor(r,l,p);
+    (void)a->submit(9);
+    a.reset();p->observation=Port::Observation::CompleteOk;
+    r->progress_all(); // event quiescent, still terminal
+    r->progress_all(); // provider throws; registry retains physical claim
+    check(r->retained_count()==1,"native release exception retains buffer");
+    check(p->release_calls==1,"first provider release attempted once");
+    p->throw_in_release=false;p->release_ok=true;
+    r->progress_all();
+    check(p->release_calls==2,"retry only after exception unwound");
+    check(r->retained_count()==0,"event/release proof allows final prune");
+    drain_notice(l,Lane::Kind::Cancel);
+}
+
+void failed_actor_admission_unpins_empty_process_root() {
+    auto r=registry(1);auto l=lane(2);
+    auto p1=std::make_shared<MockPort>(binding("actor-duplicate"));
+    // A competing supervisor already owns this actor incarnation.
+    l->reserve({"actor-duplicate",1});
+    const auto before=Registry::retained_registry_count();
+    denied([&]{auto bad=actor(r,l,p1);},"duplicate supervision reservation");
+    check(r->retained_count()==0,"failed admission erases placeholder entry");
+    check(Registry::retained_registry_count()==before,
+          "failed actor constructor must not leak a rooted empty registry");
+    l->retire_gracefully({"actor-duplicate",1});
+    auto a=actor(r,l,p1);
+    p1->release_ok=true;
+    a->retire_gracefully();a.reset();
+    check(r->retained_count()==0,"same registry remains reusable after failed admission");
+}
+
 void supervisor_handle_loss_preserves_process_root_quarantine() {
     check(Registry::retained_registry_count()==0,
           "all prior actor registry roots were retired");
@@ -547,6 +649,10 @@ int main() {
     supervisor_handle_loss_preserves_process_root_quarantine();
     retirement_release_window_denies_concurrent_actor_turn();
     terminal_release_serializes_concurrent_progress_workers();
+    unknown_enqueue_reconciliation_serializes_concurrent_pollers();
+    malformed_reconciliation_sends_host_failure_control();
+    release_exception_keeps_quarantine_and_retries();
+    failed_actor_admission_unpins_empty_process_root();
     population_1024_mock_provider_turns();
     if(checks<3100) throw std::runtime_error("GPU_PROVIDER_INSUFFICIENT_CHECKS");
     std::cout<<"GPU_PROVIDER_BRIDGE_V1_HOST_PASS checks="<<checks
