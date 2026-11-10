@@ -3528,6 +3528,16 @@ if(BUILD_TESTING)
     target_compile_features(oreslang-ownership-dataflow-v1-test PRIVATE cxx_std_17)
     target_compile_options(oreslang-ownership-dataflow-v1-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror)
+    add_executable(oreslang-ownership-shadow-v0-test
+        tests/ownership_shadow_v0_test.cpp)
+    target_include_directories(oreslang-ownership-shadow-v0-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-ownership-shadow-v0-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-ownership-shadow-v0-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ownership_shadow_v0
+        COMMAND oreslang-ownership-shadow-v0-test)
+    set_tests_properties(native_ownership_shadow_v0 PROPERTIES TIMEOUT 30)
     add_executable(oreslang-ownership-source-lowering-v1-test
         tests/ownership_source_lowering_v1_test.cpp)
     target_include_directories(oreslang-ownership-source-lowering-v1-test PRIVATE
