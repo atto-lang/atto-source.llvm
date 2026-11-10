@@ -25,6 +25,14 @@ static ActorLocalHookReply escalate_raise(void* user, EffectStatus failure) noex
     return {ActorLocalResolution::Escalate, {EffectKind::Return, 0}};
 }
 
+static ActorLocalHookReply accept_raise(void* user, EffectStatus failure) noexcept {
+    auto* counters = static_cast<Counts*>(user);
+    ++counters->raises;
+    if (failure.kind != EffectKind::Raise)
+        return {ActorLocalResolution::Escalate, {EffectKind::Fatal, 103}};
+    return {ActorLocalResolution::Handled, {EffectKind::Return, 0}};
+}
+
 static ActorLocalHookReply panic_in_hook(void* user, EffectStatus) noexcept {
     auto* counters = static_cast<Counts*>(user);
     ++counters->throws;
@@ -70,6 +78,14 @@ int main() {
     }
     CHECK(counts.throws == 1 && counts.raises == 1);
 
+    // Unlike PANIC, an unhandled RAISE may be handled at a checked actor
+    // on_raise boundary after lexical recover had the first opportunity.
+    auto handled_raise = dispatch_actor_local_unhandled(
+            {EffectKind::Raise, 76}, &counts, accept_throw, accept_raise);
+    CHECK(handled_raise.hook_invoked && handled_raise.handled);
+    CHECK(handled_raise.outgoing.kind == EffectKind::Return);
+    CHECK(counts.raises == 2 && counts.throws == 1);
+
     // Only a safely unwound, dedicated observer lane may call on_panic.
     // It sees the panic but cannot convert it to success or handle it.
     auto observed = observe_actor_panic_on_safe_lane(
@@ -78,7 +94,7 @@ int main() {
     CHECK(observed.outgoing.kind == EffectKind::Panic &&
           observed.outgoing.code == 77);
     CHECK(counts.panics == 1 && counts.panic_code == 77);
-    CHECK(counts.throws == 1 && counts.raises == 1);
+    CHECK(counts.throws == 1 && counts.raises == 2);
 
     // Missing observers and non-panic effects bypass local observation.
     for (const auto kind : {EffectKind::Throw, EffectKind::Raise,
