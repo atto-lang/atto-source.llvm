@@ -213,7 +213,18 @@ private:
             }
 
             guard.lock();
-            accept_result_locked(result);
+            try {
+                accept_result_locked(result);
+            } catch (...) {
+                // A malformed provider reply is NOT proof that no command
+                // reached the device. Preserve the enqueue window and keep
+                // the actor under supervisor quarantine for reconciliation.
+                if (phase == Phase::EnqueueInProgress) {
+                    stop_locked(true);
+                    phase = Phase::UnknownEnqueue;
+                }
+                throw;
+            }
             return next;
         }
 
