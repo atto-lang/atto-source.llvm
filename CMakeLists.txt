@@ -4525,3 +4525,23 @@ if(BUILD_TESTING AND UNIX)
         set_tests_properties(native_actor_arena_sqlite_reactivation_host_only PROPERTIES TIMEOUT 45)
     endif()
 endif()
+
+# Native host event sourcing fault: _exit after SQLite event COMMIT before ACK.
+# This is not compiled .atto guest or actor scheduler execution.
+if(BUILD_TESTING AND UNIX)
+    find_package(SQLite3 QUIET)
+    if(SQLite3_FOUND)
+        add_executable(oreslang-native-event-sourced-fenced-recovery-test
+            tests/native_event_sourced_fenced_recovery_test.cpp)
+        target_include_directories(oreslang-native-event-sourced-fenced-recovery-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features(oreslang-native-event-sourced-fenced-recovery-test PRIVATE cxx_std_17)
+        target_compile_options(oreslang-native-event-sourced-fenced-recovery-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        target_link_libraries(oreslang-native-event-sourced-fenced-recovery-test PRIVATE SQLite::SQLite3)
+        add_test(NAME native_event_sourced_crash_after_commit_fenced_replay_host_only
+            COMMAND oreslang-native-event-sourced-fenced-recovery-test)
+        set_tests_properties(native_event_sourced_crash_after_commit_fenced_replay_host_only
+            PROPERTIES TIMEOUT 45)
+    endif()
+endif()
