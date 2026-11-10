@@ -17,3 +17,16 @@ This is only the scalar floor: not an AttoLang actor/HTTP client,
 structured `sync_admission.ores` support, five-backend parity,
 NativeAOT on other backends, or an SDK publication claim.
 Workflows without admitted runners and executed steps are **NOT_EXECUTED**.
+
+## Corrected common scalar admission
+
+All five sources now use the existing common-subset `pub fnc main()`
+declaration spelling. `reject-overflow` is an out-of-range integer
+literal (`9223372036854775808`) rather than an in-range expression
+whose checked addition may fail at runtime. Compile-time denial here
+must not be cited as a checked-runtime-overflow semantic proof.
+
+The five Git blobs must match current Opto Sync clients #165 and
+Java/GraalVM #2751 exact-head source files; this is a candidate suite
+until native `oreslang-llvmc`, Clang, and guest processes execute in a
+runner with nonempty steps.
