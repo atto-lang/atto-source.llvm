@@ -48,6 +48,13 @@ int main() {
                 "supervisor read suspended actor locals");
         require(!first.enter(10), "unrelated execution stole suspended frames");
 
+        require(second.enter(5), "sibling admission failed during suspension");
+        auto sibling_frame = second.push(8);
+        require(sibling_frame && !second.pop(*bottom) && !second.poisoned(),
+                "foreign frame capability poisoned an independent sibling");
+        require(second.pop(*sibling_frame) && second.finish(),
+                "sibling failed after foreign frame denial");
+
         std::atomic<bool> migration_ok{false};
         std::thread migrated([&] {
             const bool ok = first.enter(9) &&
@@ -68,6 +75,8 @@ int main() {
                     && observed == 0, "recycled frame bytes were not scrubbed");
         require(!first.read(*bottom, 0, &observed, sizeof observed),
                 "old frame capability survived execution generation");
+        require(!first.pop(*bottom) && !first.poisoned(),
+                "old execution's frame poisoned a fresh execution");
         require(first.pop(*recycled) && first.finish(), "new turn failed cleanup");
         require(first.retire_quiesced() && first.retire_quiesced(),
                 "quiescent actor retirement not idempotent");
@@ -110,7 +119,7 @@ int main() {
                 invalid_order.cancel_active() && invalid_order.retire_quiesced(),
                 "poisoned arena leaked write authority");
 
-        ActorFrameArena<1, 8> reincarnated;
+        ActorFrameArena<3, 32> reincarnated;
         require(reincarnated.enter(9) && !reincarnated.read(*bottom, 0,
                     &observed, sizeof observed), "restarted actor accepted stale stack token");
         auto new_frame = reincarnated.push(8);

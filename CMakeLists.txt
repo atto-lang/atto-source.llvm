@@ -2060,6 +2060,12 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 30)
 
     if(ORE_CLANG)
+        add_test(NAME source_actor_compiled_isolation_low_stack
+            COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" actor-isolation
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(source_actor_compiled_isolation_low_stack
+            PROPERTIES TIMEOUT 180)
         add_test(NAME source_actor_compiled_native_lifecycle
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_actor_e2e.py"
