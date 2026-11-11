@@ -389,10 +389,18 @@ void ambiguous_enqueue_is_retained_not_falsely_aborted(bool after_accept) {
     check(p->reconcile_unknown({3,1}).state==Port::EnqueueState::Unknown,
           "no fabricated preenqueue proof");
     check(api->buffer_releases==0,"enqueue error must not release live device buffers");
-    check(!p->recover_unknown_begin_on_worker(),"no queue proof means no recovery");
+    using Worker=oreslang::gpu_actor::OpenClActorRecoveryWorkerV1;
+    Worker worker(1);
+    check(worker.request(p,reg,{3,1},Worker::Kind::UnknownBegin),
+          "worker admits uncertain upload only via native capability");
+    worker.await_idle();
+    check(worker.stats().deferred==1,"no queue proof means deferred recovery");
     check(api->buffer_releases==0,"still no buffer release before native proof");
     api->allow_loss_quiescence=true;
-    check(p->recover_unknown_begin_on_worker(),"worker proves native queue quiescence");
+    check(worker.request(p,reg,{3,1},Worker::Kind::UnknownBegin),
+          "requeue exact operation after proof becomes available");
+    worker.await_idle();
+    check(worker.stats().proven==1,"worker proves native queue quiescence");
     reg->progress_all(); // provider-issued failed/quiescent local receipt
     reg->progress_all(); // cancellation after failed native operation
     reg->progress_all(); // physical kernel program release
@@ -424,10 +432,18 @@ void ambiguous_kernel_or_download_never_releases_before_proof(bool download,
     check(api->buffer_releases==0,"uncertain kernel/download retains physical buffers");
     reg->progress_all(); // acknowledge uncertain native enqueue as supervisor failure
     check(!a->completed(),"unknown physical event not an actor completion");
-    check(!p->recover_unknown_kernel_on_worker(),"worker must not invent quiescence");
+    using Worker=oreslang::gpu_actor::OpenClActorRecoveryWorkerV1;
+    Worker worker(1);
+    check(worker.request(p,reg,{3,1},Worker::Kind::UnknownKernel),
+          "worker admits uncertain kernel/download");
+    worker.await_idle();
+    check(worker.stats().deferred==1,"worker cannot invent quiescence");
     check(api->buffer_releases==0,"no buffers freed before native queue quiescence");
     api->allow_loss_quiescence=true;
-    check(p->recover_unknown_kernel_on_worker(),"trusted worker obtains queue-finish proof");
+    check(worker.request(p,reg,{3,1},Worker::Kind::UnknownKernel),
+          "worker retries exact quarantined operation");
+    worker.await_idle();
+    check(worker.stats().proven==1,"trusted worker obtains queue-finish proof");
     reg->progress_all(); // terminal failed event, no state commit
     check(a->committed_state()==17,"failed GPU operation never publishes staged value");
     reg->progress_all(); // release prepared program
