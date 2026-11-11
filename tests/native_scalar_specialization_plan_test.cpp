@@ -267,7 +267,7 @@ int main() {
         }
         {
             auto program = fixture();
-            program.module = std::string("tenant\\0spoof", 12);
+            program.module = std::string("tenant\0spoof", 12);
             const auto image = freeze_native_i64_dispatch_image(program);
             must_reject([&] {
                 (void)plan_native_aot_function_symbol(
