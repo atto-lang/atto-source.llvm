@@ -160,6 +160,14 @@ int main() {
     auto leading_underscore=pin;leading_underscore.alias="_math";
     fails("invalid locked",[&]{(void)admit(leading_underscore,{{"math",math}});});
 
+    // Shared namespace/ESM model reserves prototype and constructor keys.
+    for(const auto* reserved : {"constructor","prototype","__proto__","__root__"}) {
+        auto bad_alias=pin;bad_alias.alias=reserved;
+        fails("invalid locked",[&]{(void)admit(bad_alias,{{"math",math}});});
+        auto bad_ns=pin;bad_ns.namespaces.front().name=reserved;
+        fails("invalid or duplicate",[&]{(void)admit(bad_ns,{{"math",math}});});
+    }
+
     // A large, internally impossible export count must fail before reserve().
     auto impossible=std::vector<std::uint8_t>{'O','R','E','S','I',0,1};
     str(impossible,"math");str(impossible,"atto-java-1");
