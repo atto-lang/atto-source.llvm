@@ -35,14 +35,26 @@ struct Export {
     std::string name;
     std::string signature;
 };
-struct Verified {
-    std::string alias;
-    std::string package_instance_id;
-    std::map<std::string, std::vector<Export>> namespaces;
-
+class Verified {
+    // Admission creates a frozen snapshot. Consumers cannot modify the
+    // namespace export table after SHA/profile verification.
+    const std::string alias_;
+    const std::string package_instance_id_;
+    const std::map<std::string, std::vector<Export>> namespaces_;
+public:
+    Verified(std::string alias, std::string package_instance_id,
+             std::map<std::string, std::vector<Export>> namespaces)
+        : alias_(std::move(alias)),
+          package_instance_id_(std::move(package_instance_id)),
+          namespaces_(std::move(namespaces)) {}
+    const std::string& alias() const noexcept { return alias_; }
+    const std::string& package_instance_id() const noexcept {
+        return package_instance_id_;
+    }
+    std::size_t namespace_count() const noexcept { return namespaces_.size(); }
     const std::vector<Export>& namespace_exports(const std::string& name) const {
-        auto it = namespaces.find(name);
-        if (it == namespaces.end())
+        auto it = namespaces_.find(name);
+        if (it == namespaces_.end())
             throw std::runtime_error("namespace not exported by locked package");
         return it->second;
     }
@@ -305,7 +317,7 @@ inline Verified admit(const DependencyPin& pin,
        snapshots.size()!=pin.namespaces.size())
         detail::reject("invalid locked .oresi package identity/profile");
     std::set<std::string> seen;
-    Verified verified{pin.alias,pin.package_instance_id,{}};
+    std::map<std::string, std::vector<Export>> checked_namespaces;
     for(const auto& ns:pin.namespaces){
         if(!detail::ident(ns.name)||!detail::sha_hex(ns.sha256)||!seen.insert(ns.name).second)
             detail::reject("invalid or duplicate .oresi namespace pin");
@@ -317,9 +329,9 @@ inline Verified admit(const DependencyPin& pin,
         if(decoded.ns!=ns.name||decoded.compiler!=pin.compiler_version||
            decoded.target!=pin.target_abi||decoded.policy!=pin.feature_policy)
             detail::reject("locked .oresi ABI/profile mismatch");
-        verified.namespaces.emplace(ns.name,std::move(decoded.exports));
+        checked_namespaces.emplace(ns.name,std::move(decoded.exports));
     }
-    return verified;
+    return Verified{pin.alias,pin.package_instance_id,std::move(checked_namespaces)};
 }
 
 } // namespace oreslang::package_interface
