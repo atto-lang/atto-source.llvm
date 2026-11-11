@@ -31,6 +31,8 @@ class NativeDemandI64Port final {
     static_assert(Capacity > 0 && MaxInFlight > 0, "positive bounded capacities required");
     static_assert(MaxBytes >= sizeof(std::int64_t), "byte budget too small");
     static_assert(MaxDemand > 0, "demand must be bounded and positive");
+    static_assert(Capacity <= 65536 && MaxInFlight <= 4096,
+                  "descriptor budgets exceed implementation ceiling");
 
 public:
     enum class Offer { Accepted, NoSubscriber, NoDemand, Full, ByteBudget, Closed };
@@ -124,7 +126,7 @@ public:
     /** Cancel drops queued items exactly once; in-flight loans survive until ACK. */
     bool cancel() {
         std::lock_guard<std::mutex> guard(mutex_);
-        if (cancelled_) return false;
+        if (finished_ || cancelled_) return false;
         cancelled_ = true;
         finished_ = true;
         credits_ = 0;
