@@ -30,10 +30,11 @@ An exception from `OpenClProvider::begin()` can occur after the underlying API a
 
 ## Executed tests
 
-Exact private Git blob mirror and CI: https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42949404184
+Exact private Git blob mirror and CI: https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42949702555
 
 - GCC C++17 strict warnings with AddressSanitizer and UndefinedBehaviorSanitizer: pass, 65 assertions
 - Independent Clang C++17 strict warnings: pass, 65 assertions
+- The repository's preexisting `opencl_provider_g3_test.cpp` compiled and executed under GCC -Werror + ASan/UBSan against the exact mirrored OpenCL provider sources: pass
 - Real production `OpenClProvider` and `OpenClSystemApi` source compiled; injected OpenCL Api drives mock upload/kernel/download, numerical oracle, actor state publication, supervisor CONTROL, native release, and device-loss recovery
 - Native physical-GPU integration probe compiled successfully
 - Physical probe attempted; compatible OpenCL GPU runtime/device absent → `GPU_ACTOR_V2_NO_GPU_RUNTIME`, **NOT_EXECUTED**, no CPU fallback
