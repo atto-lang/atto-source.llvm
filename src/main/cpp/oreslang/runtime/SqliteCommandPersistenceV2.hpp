@@ -154,6 +154,7 @@ public:
     }
     std::optional<Receipt> verify(const Identity& id,const std::string& op,std::uint64_t expected_epoch,const Bytes& command){
         std::lock_guard<std::mutex> guard(lock_);tenant(id);valid(id.actor);valid(id.slot);valid(op);
+        if(expected_epoch==0 || expected_epoch>INT64_MAX)throw std::invalid_argument("INVALID_EPOCH");
         begin();try{
             if(epoch(id)!=expected_epoch)throw std::logic_error("STALE_EPOCH");
             auto proof=lookup(id,op,command);commit();return proof;
@@ -161,6 +162,7 @@ public:
     }
     Recovery load_fenced(const Identity& id,std::uint64_t expected_epoch){
         std::lock_guard<std::mutex> guard(lock_);tenant(id);valid(id.actor);valid(id.slot);
+        if(expected_epoch==0 || expected_epoch>INT64_MAX)throw std::invalid_argument("INVALID_EPOCH");
         begin();try{
             if(epoch(id)!=expected_epoch)throw std::logic_error("STALE_EPOCH");
             const auto version=head(id);std::uint64_t cursor=0;

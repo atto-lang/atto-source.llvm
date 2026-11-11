@@ -24,6 +24,18 @@ int main(){
     char* dir=mkdtemp(path_template);assert(dir);
     std::string db=std::string(dir)+"/store.sqlite";
     const Identity id{"tenant-a","bank","main"};
+    // An actor with no activation fence reports epoch zero in the database.
+    // Zero is NOT an authorized incarnation and must not permit a read or proof.
+    {
+        SqliteCommandStore store(db,"tenant-a");
+        const Identity never_activated{"tenant-a","never-activated","main"};
+        fail("INVALID_EPOCH",[&]{(void)store.load_fenced(never_activated,0);});
+        fail("INVALID_EPOCH",[&]{(void)store.verify(never_activated,"missing",0,b("x"));});
+        fail("INVALID_EPOCH",[&]{(void)store.load_fenced(never_activated,UINT64_MAX);});
+        fail("INVALID_EPOCH",[&]{(void)store.verify(never_activated,"missing",UINT64_MAX,b("x"));});
+        fail("STALE_EPOCH",[&]{(void)store.load_fenced(never_activated,1);});
+        fail("STALE_EPOCH",[&]{(void)store.verify(never_activated,"missing",1,b("x"));});
+    }
     {
         SqliteCommandStore store(db,"tenant-a");store.grant_epoch("bank",1);
         auto first=store.append(command("deposit-1",1,0));
