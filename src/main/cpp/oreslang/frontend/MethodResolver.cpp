@@ -1,14 +1,23 @@
 #include "oreslang/frontend/MethodResolver.hpp"
+#include "oreslang/frontend/CallableSelector.hpp"
 #include <functional>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace oreslang {
 void resolve_native_methods(Program& program) {
     std::unordered_map<std::string, const ClassDecl*> classes;
-    for (const auto& cls : program.classes)
+    for (const auto& cls : program.classes) {
         if (!classes.emplace(cls.name, &cls).second)
             throw std::runtime_error("duplicate compiler-owned nominal class identity");
+        // Linked/generated IR is not trusted to preserve parser uniqueness:
+        // validate every method slot, including slots that have no callers.
+        std::unordered_set<std::string> seen_slots;
+        for (const auto& method : cls.methods)
+            if (!seen_slots.insert(native_function_slot(method.name, method.arity)).second)
+                throw std::runtime_error("duplicate compiler-owned native method slot");
+    }
     for (auto& fn : program.functions) {
         if (!fn.method_owner.empty()) {
             if (!classes.count(fn.method_owner) || fn.parameters.empty()
