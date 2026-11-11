@@ -1,0 +1,8 @@
+// One capture-free Task<int> computes a tile; the caller completes a second tile.
+// The native source backend has not proven multiple parallel tasks or multiple cores.
+pub fnc main(): int {
+  let Task<int> first = task { return ((1 + 2) + 3) + 4; };
+  let int second = ((5 + 6) + 7) + 14;
+  let int partial = await first;
+  return partial + second;
+}
