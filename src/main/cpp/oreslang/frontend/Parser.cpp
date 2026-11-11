@@ -651,7 +651,9 @@ public:
                     bool experimental_rt_scalar_loop)
         : source_(source), lexer_(source), token_(lexer_.next()),
           experimental_owned_int_(experimental_owned_int),
-          experimental_rt_scalar_loop_(experimental_rt_scalar_loop) {}
+          experimental_rt_scalar_loop_(experimental_rt_scalar_loop) {
+        reject_unlowered_with_update();
+    }
 
     Program parse() {
         Program program;
@@ -6024,7 +6026,24 @@ private:
 
 
 
-    void advance() { token_ = lexer_.next(); }
+    // 'with' is contextual: preserve ordinary identifiers such as with(x).
+    // Inspect actual lexer tokens rather than strings/comments/substrings.
+    // No LLVM IR may be emitted until typed field-wise copy/move, drop plans,
+    // borrow exclusion and AOT layout reconstruction have been implemented.
+    void reject_unlowered_with_update() const {
+        if (token_.kind == Kind::Identifier && token_.text == "with"
+                && peek_next().text == "{") {
+            throw std::runtime_error(
+                "WITH_BACKEND_UNSUPPORTED: immutable with field reconstruction "
+                "requires checked rt copy/take ownership, typed native layout, "
+                "field-wise drop and LLVM AOT lowering at byte "
+                + std::to_string(token_.offset));
+        }
+    }
+    void advance() {
+        token_ = lexer_.next();
+        reject_unlowered_with_update();
+    }
     [[noreturn]] void fail(const std::string& reason) const {
         if (token_.text == "gpu" || token_.text == "cpu" || token_.text == "quantum") {
             const char* domain = token_.text == "cpu"

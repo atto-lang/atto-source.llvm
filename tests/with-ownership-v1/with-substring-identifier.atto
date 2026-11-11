@@ -1,0 +1,4 @@
+pub fnc main(): int {
+    const int withered = 42;
+    return withered;
+}
