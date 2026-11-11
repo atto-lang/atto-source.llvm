@@ -154,7 +154,14 @@ freeze_native_i64_specializations(const Program& program) {
     constexpr std::size_t kMaxGenericParameters = 32;
     std::unordered_map<std::string, std::string> selected;
     std::unordered_set<std::string> concrete_symbols;
+    std::unordered_set<std::string> declaration_selectors;
     for (const auto& fn : program.functions) {
+        // Freeze all selector identities, not just generic ones. Generated
+        // compiler IR may otherwise define both a plain and generic function
+        // with the same call selector, and codegen cannot preserve both.
+        const std::string selector = native_function_slot(fn.name, fn.parameters.size());
+        if (!declaration_selectors.insert(selector).second)
+            throw std::runtime_error("duplicate compiler-owned native function selector");
         // Reject stale or forged generic ABI metadata even when a function
         // claims to be non-generic. Otherwise codegen would silently erase a
         // GenericType parameter to i64 without a frozen specialization.
@@ -196,6 +203,8 @@ freeze_native_i64_specializations(const Program& program) {
         for (const auto& param : fn.parameters) {
             if (!param.generic_type.empty() &&
                     (known.find(param.generic_type) == known.end() ||
+                     param.scalar_type != ScalarType::I64 ||
+                     !param.pending_type_alias.empty() ||
                      !param.class_name.empty() || !param.sum_type.empty()))
                 throw std::runtime_error("unresolved native AOT generic parameter ABI");
         }
@@ -205,7 +214,6 @@ freeze_native_i64_specializations(const Program& program) {
         std::string suffix = "$atto_g" + std::to_string(fn.generic_parameters.size());
         for (std::size_t i = 0; i < fn.generic_parameters.size(); ++i)
             suffix += "$int";
-        const std::string selector = native_function_slot(fn.name, fn.parameters.size());
         if (!selected.emplace(selector, suffix).second)
             throw std::runtime_error("duplicate native AOT generic specialization identity");
         if (!concrete_symbols.insert(selector + suffix).second)
