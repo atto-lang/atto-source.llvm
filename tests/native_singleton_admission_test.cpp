@@ -24,6 +24,19 @@ int main() {
     denied("define pub singleton Settings as end\n");
     denied("pub define singleton Settings as end\n");
     denied("define module app as\n define singleton Settings as end\nend\n");
+    // The same declaration must be denied after otherwise valid root code.
+    // This catches parsers that only reject singleton as the first unit.
+    denied("fnc main(): int { return 42; }\ndefine singleton Late as end\n");
+    denied("// benign declaration\n"
+           "fnc main(): int { return 42; }\n"
+           "define pub singleton Late as end\n");
+    denied("fnc main(): int { return 42; }\n"
+           "pub define singleton Late as end\n");
+    // Classification occurs before evaluating body effects or leaking
+    // a receiver that has not finished immutable publication.
+    denied("define singleton StateBank as\n"
+           "  const int answer = StateBank.answer;\n"
+           "end\n");
 
     // Identical Oreslang source bytes as the shared state-container candidates.
     // A parser that merely chokes on @Inject after singleton is not sufficient:
