@@ -47,16 +47,16 @@ freeze_native_i64_specializations(const Program& program) {
         // Check the declaration shape rather than trusting a previously
         // serialized "specialization approved" boolean.
         for (const auto& param : fn.generic_parameters) {
-            if (!canonical(param.name) || known.contains(param.name))
+            if (!canonical(param.name) || known.find(param.name) != known.end())
                 throw std::runtime_error("invalid native AOT generic parameter identity");
             if (!param.default_type.empty() && param.default_type != "int" &&
-                    !known.contains(param.default_type))
+                    known.find(param.default_type) == known.end())
                 throw std::runtime_error("invalid native AOT generic default dependency");
             known.insert(param.name);
         }
         for (const auto& param : fn.parameters) {
             if (!param.generic_type.empty() &&
-                    (!known.contains(param.generic_type) ||
+                    (known.find(param.generic_type) == known.end() ||
                      !param.class_name.empty() || !param.sum_type.empty()))
                 throw std::runtime_error("unresolved native AOT generic parameter ABI");
         }
