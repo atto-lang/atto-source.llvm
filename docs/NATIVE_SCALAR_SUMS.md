@@ -84,3 +84,17 @@ lifetime-aware sum ABI. Borrowed subobject results, such as the router's
 owner is not a substitute. The actual Spin server still requires typed HTTP
 mailboxes, await frames, request-scoped storage and the remaining route graph.
 This milestone does not establish server parity or a performance result.
+
+## Compiler-created descriptor validation
+
+Native C++ compiler ASTs are not automatically trusted. The sum registry
+now rejects duplicated `Option`/`Result` names, a mismatched case kind,
+noncanonical payload names, an invalid `ScalarType` or sum kind, and
+noncanonical hidden `Option` error metadata before the resolver or scalar
+type checker can pass descriptors to LLVM code generation.
+
+The standalone native regression adds eight forged-descriptor mutation
+cases, alongside the existing conditional-arm and payload tests. These
+are compiler-host tests, **not** evidence of source-defined nominal
+`define enum`, recursive ADTs, .atto guest execution, or Native AOT
+parity. Exact-head LLVM CTest execution is required.
