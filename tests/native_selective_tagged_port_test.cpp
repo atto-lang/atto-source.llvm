@@ -298,7 +298,49 @@ static void randomized_tagged_dequeue() {
     p.close();
 }
 
+// Selective ACK may complete a newer sequence before an earlier queued
+// receipt. The global completion window must stay bounded by the contiguous
+// watermark, even after physical frame credits are refunded out of order.
+static void selective_ack_does_not_skip_global_completion_window() {
+    using Port = BoundedActorPort<MoveOnlyMessage>;
+    using Ledger = oreslang::runtime::ActorMailboxCompletion;
+    auto ledger = std::make_shared<Ledger>(3);
+    Port port(4, 64, ledger);
+    MoveOnlyMessage one(1), two(2), three(3), four(4);
+    CHECK(port.offer(std::move(one), 8, 11));
+    CHECK(port.offer(std::move(two), 8, 17));
+    CHECK(port.offer(std::move(three), 8, 23));
+    CHECK(ledger->snapshot() == 3);
+    auto newest = port.try_receive_tagged(23, 3);
+    CHECK(newest.status == Port::SelectiveStatus::Matched && newest.delivery);
+    CHECK(newest.delivery->sequence() == 3);
+    CHECK(newest.delivery->acknowledge_released());
+    CHECK(port.used_frames() == 2);
+    CHECK(ledger->watermark() == 0);
+    CHECK(!port.offer(std::move(four), 8, 23));
+    CHECK(four.value && *four.value == 4);
+    auto first = port.try_receive();
+    CHECK(first && first->sequence() == 1);
+    CHECK(first->acknowledge_released());
+    CHECK(ledger->watermark() == 1);
+    CHECK(port.offer(std::move(four), 8, 23));
+    CHECK(ledger->snapshot() == 4);
+    auto fourth = port.try_receive_tagged(23, 4);
+    CHECK(fourth.status == Port::SelectiveStatus::Matched && fourth.delivery);
+    CHECK(fourth.delivery->sequence() == 4);
+    CHECK(fourth.delivery->acknowledge_released());
+    CHECK(ledger->watermark() == 1);
+    auto second = port.try_receive();
+    CHECK(second && second->sequence() == 2);
+    CHECK(second->acknowledge_released());
+    CHECK(ledger->watermark() == 4);
+    CHECK(ledger->completed_through(4));
+    CHECK(port.used_frames() == 0 && port.used_bytes() == 0);
+    port.close();
+}
+
 int main() {
+    selective_ack_does_not_skip_global_completion_window();
     bounded_port_selective();
     actual_priority_inbox_lane();
     bound_actor_turn_selective();
