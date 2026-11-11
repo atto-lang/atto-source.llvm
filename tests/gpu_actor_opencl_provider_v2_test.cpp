@@ -1,6 +1,12 @@
-#include "oreslang/runtime/GpuActorOpenClProviderV2.hpp"
+#include "oreslang/runtime/GpuActorOpenClRecoveryWorkerV1.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <future>
+#include <mutex>
+#include <thread>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -43,6 +49,11 @@ struct FakeOpenCl : oreslang::opencl::Api {
     bool throw_after_download_accept=false;
     bool delayed=false, device_loss=false, allow_loss_quiescence=false;
     bool fail_buffer_release_once=false;
+    bool block_native_finish=false;
+    bool finish_entered=false;
+    bool finish_released=false;
+    std::mutex native_mu;
+    std::condition_variable native_cv;
     std::vector<Event*> events;
 
     void validate_artifact(const oreslang::dop::OpenClArtifact& a) const override {
@@ -119,7 +130,22 @@ struct FakeOpenCl : oreslang::opencl::Api {
         delete p;++event_releases;
     }
     bool prove_device_loss_quiescence() override {
+        std::unique_lock<std::mutex> guard(native_mu);
+        if(block_native_finish) {
+            finish_entered=true;
+            native_cv.notify_all();
+            native_cv.wait(guard,[&]{return finish_released;});
+        }
         return allow_loss_quiescence;
+    }
+    void await_native_finish_entry() {
+        std::unique_lock<std::mutex> guard(native_mu);
+        native_cv.wait(guard,[&]{return finish_entered;});
+    }
+    void release_native_finish() {
+        std::lock_guard<std::mutex> guard(native_mu);
+        finish_released=true;
+        native_cv.notify_all();
     }
 };
 
@@ -253,7 +279,13 @@ void gpu_loss_requires_native_quiescence_before_cancel_retirement() {
     check(a->committed_state()==5,"no false event completion while device is live");
     check(!a->completed(),"inflight buffer remains quarantined");
     api->allow_loss_quiescence=true;
-    reg->progress_all(); // provider proves clFinish-equivalent quiescence
+    oreslang::gpu_actor::OpenClActorRecoveryWorkerV1 worker(2);
+    check(worker.request(p,reg,{3,1},
+          oreslang::gpu_actor::OpenClActorRecoveryWorkerV1::Kind::DeviceLoss),
+          "device-loss recovery admitted on worker");
+    worker.await_idle();
+    check(worker.stats().proven==1,"native device-loss quiescence proven off scheduler");
+    reg->progress_all(); // V1 consumes the failed native completion
     check(a->committed_state()==5,"recovery never publishes failed GPU state");
     reg->progress_all(); // retire prepared OpenCL program only after proof
     check(a->completed(),"device-loss actor now physically retired");
@@ -263,6 +295,61 @@ void gpu_loss_requires_native_quiescence_before_cancel_retirement() {
     check(msg && msg->kind==Lane::Kind::HostFailure,"supervisor gets device-loss CONTROL");
     lane->ack(msg->actor);
     check(lane->reserved_count()==0,"CONTROL slot reclaimed after device loss");
+}
+
+void blocking_native_finish_does_not_park_actor_scheduler() {
+    using Worker=oreslang::gpu_actor::OpenClActorRecoveryWorkerV1;
+    Inputs in;
+    auto api=std::make_shared<FakeOpenCl>();
+    api->fail_upload=true;
+    api->block_native_finish=true;
+    api->allow_loss_quiescence=true;
+    auto p=make_port(api,in);
+    auto reg=std::make_shared<Registry>(1);
+    auto lane=std::make_shared<Lane>(1);
+    auto actor=std::make_unique<GpuActorProviderBridgeV1>(
+        reg,p,lane,Lane::ActorKey{"actor",3},"root",in.plan.byte_length(),11);
+    denied([&]{(void)actor->submit(99);},"GPU_V2_FAKE_UPLOAD_FAILED");
+    check(actor->committed_state()==11,"unknown submission not committed");
+
+    Worker worker(1);
+    check(worker.request(p,reg,{3,1},Worker::Kind::UnknownBegin),
+          "worker accepted exact generation-qualified operation");
+    api->await_native_finish_entry(); // worker is blocked inside mock clFinish
+    check(!worker.request(p,reg,{3,1},Worker::Kind::UnknownBegin),
+          "duplicate native recovery request coalesced");
+    denied([&]{
+        (void)worker.request(p,reg,{3,1},Worker::Kind::DeviceLoss);
+    },"GPU_RECOVERY_QUEUE_CAPACITY_EXHAUSTED");
+    denied([&]{
+        (void)worker.request(p,reg,{999,1},Worker::Kind::UnknownBegin);
+    },"GPU_RECOVERY_FOREIGN_OR_STALE_TURN");
+
+    // The only time bound here is an actor SCHEDULER responsiveness test.
+    // It does not assert/assume any physical device quiescence.
+    auto scheduler=std::async(std::launch::async,[&] {
+        reg->progress_all();
+        return actor->committed_state();
+    });
+    const bool scheduler_ready=scheduler.wait_for(
+            std::chrono::milliseconds(1000))==std::future_status::ready;
+    api->release_native_finish();
+    check(scheduler_ready,"actor scheduler was blocked by recovery mutex");
+    check(scheduler.get()==11,"poll cannot forge completion while worker blocked");
+    worker.await_idle();
+    check(worker.stats().proven==1,"worker received explicit native queue proof");
+    reg->progress_all();
+    reg->progress_all();
+    check(actor->committed_state()==11,"quiescent failure never publishes staged 99");
+    check(reg->retained_count()==1,"wrapper retained pending explicit program release");
+    reg->progress_all();
+    check(actor->completed(),"verified recovery and cleanup close actor");
+    actor.reset();
+    check(reg->retained_count()==0,"root slot freed only after native release");
+    auto ctrl=lane->poll();
+    check(ctrl && ctrl->kind==Lane::Kind::HostFailure,
+          "recovered host failure sent to supervisor CONTROL");
+    lane->ack(ctrl->actor);
 }
 
 void negative_authority_and_missing_gpu_fail_closed() {
@@ -361,6 +448,7 @@ int main() {
     event_info_query_failure_never_forges_terminal_completion();
     actor_bridge_commits_only_after_kernel_download();
     gpu_loss_requires_native_quiescence_before_cancel_retirement();
+    blocking_native_finish_does_not_park_actor_scheduler();
     negative_authority_and_missing_gpu_fail_closed();
     // Keep one unresolved ambiguous provider operation deliberately rooted:
     // a failed enqueue API call is not proof no device command was accepted.
