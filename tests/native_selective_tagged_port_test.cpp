@@ -164,6 +164,14 @@ static void bound_actor_turn_selective() {
     CHECK(inbox.offer_to(actor, Lane::Normal, std::move(a), 8, 11));
     CHECK(inbox.offer_to(actor, Lane::Normal, std::move(b), 8, 17));
     CHECK(inbox.offer_to(actor, Lane::Normal, std::move(c), 8, 23));
+    // The low-level lane probe cannot bypass an owned actor's CONTROL
+    // and user-turn gates, even when the caller holds the target inbox.
+    bool bypass_rejected = false;
+    try {
+        (void)inbox.try_receive_tagged(Lane::Normal, 23, 1);
+    } catch (const std::logic_error&) { bypass_rejected = true; }
+    CHECK(bypass_rejected && inbox.used_frames(Lane::Normal) == 3);
+
     Inbox::SelectiveCursor cursor;
     bool processed = false;
     auto consumer = [&](Inbox::Delivery& delivery) {
@@ -173,6 +181,14 @@ static void bound_actor_turn_selective() {
         CHECK(*delivery.value().value == 30);
         CHECK(delivery.acknowledge_released());
     };
+    // A queued supervisor CONTROL turn must win without inspecting the
+    // user mailbox, even with an already-published matching tag.
+    bool control_executed = false;
+    CHECK(group.enqueue_control(actor, [&] { control_executed = true; }));
+    CHECK(inbox.dispatch_next_tagged(group, actor, Lane::Normal, 23, 1,
+                                    cursor, consumer) == Status::Control);
+    CHECK(control_executed && !processed);
+    CHECK(inbox.used_frames(Lane::Normal) == 3);
     CHECK(inbox.dispatch_next_tagged(group, actor, Lane::Normal, 23, 1,
                                     cursor, consumer) == Status::Resume);
     CHECK(!processed && inbox.used_frames(Lane::Normal) == 3);
@@ -183,6 +199,8 @@ static void bound_actor_turn_selective() {
     CHECK(processed && inbox.used_frames(Lane::Normal) == 2);
     CHECK(inbox.watermark() == 0);
     group.close();
+    CHECK(inbox.dispatch_next_tagged(group, actor, Lane::Normal, 23, 1,
+                                    cursor, consumer) == Status::Retired);
     CHECK(finalizer.ready_for_actor_turn_quiescence());
     CHECK(inbox.retire_queued_after_quiescence(finalizer, actor) == 2);
     CHECK(inbox.watermark() == 3);
