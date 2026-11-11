@@ -282,6 +282,38 @@ int main() {
                     program, program.functions[0], image, 0, false, false);
             }, "native AOT missing compiler function family");
         }
+        // Real lowering retains LLVM Function* identity and checks this
+        // frozen scalar witness on every admitted generic call. These
+        // source-level mutations test the metadata gate; actual pointer
+        // binding still requires an executed LLVM compiler/guest test.
+        {
+            const auto image = freeze_native_i64_dispatch_image(source);
+            const auto* target = image.find_direct(selector);
+            if (!target) throw std::runtime_error("missing scalar call witness");
+            const auto symbol = plan_native_aot_function_symbol(
+                source, source.functions[0], image, 1, false, false);
+            const std::vector<std::string> labels = {"value"};
+            verify_native_i64_scalar_call_witness(
+                *target, selector, symbol, symbol, 1, labels, true);
+            const auto reject = [&](const std::string& slot,
+                                    const std::string& recorded,
+                                    const std::string& actual,
+                                    std::size_t arity,
+                                    const std::vector<std::string>& formals,
+                                    bool internal) {
+                must_reject([&] {
+                    verify_native_i64_scalar_call_witness(
+                        *target, slot, recorded, actual, arity, formals, internal);
+                }, "native AOT static call witness");
+            };
+            reject(native_function_slot("other", 1), symbol, symbol, 1, labels, true);
+            reject(selector, symbol, symbol, 2, labels, true);
+            reject(selector, symbol, "shadow." + symbol, 1, labels, true);
+            reject(selector, "shadow." + symbol, "shadow." + symbol, 1, labels, true);
+            reject(selector, symbol, symbol, 1, {"wrong"}, true);
+            reject(selector, symbol, symbol, 1, {}, true);
+            reject(selector, symbol, symbol, 1, labels, false);
+        }
         // The same selected source function/arity is used by all call sites;
         // the producer does not manufacture one method body per call site.
         {
@@ -505,7 +537,7 @@ int main() {
             must_reject([&] { (void)freeze_native_i64_specializations(oversized); },
                         "native AOT specialization byte estimate exceeded");
         }
-        std::cout << "NATIVE_I64_SPECIALIZATION_PLAN|symbols=1|negative_cases=37\n";
+        std::cout << "NATIVE_I64_SPECIALIZATION_PLAN|symbols=1|negative_cases=44\n";
     } catch (const std::exception& error) {
         std::cerr << "NATIVE_I64_SPECIALIZATION_PLAN_FAIL: " << error.what() << '\n';
         return 1;
