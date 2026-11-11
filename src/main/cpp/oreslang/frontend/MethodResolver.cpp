@@ -6,7 +6,9 @@
 namespace oreslang {
 void resolve_native_methods(Program& program) {
     std::unordered_map<std::string, const ClassDecl*> classes;
-    for (const auto& cls : program.classes) classes.emplace(cls.name, &cls);
+    for (const auto& cls : program.classes)
+        if (!classes.emplace(cls.name, &cls).second)
+            throw std::runtime_error("duplicate compiler-owned nominal class identity");
     for (auto& fn : program.functions) {
         if (!fn.method_owner.empty()) {
             if (!classes.count(fn.method_owner) || fn.parameters.empty()
@@ -42,8 +44,14 @@ void resolve_native_methods(Program& program) {
             auto cls = classes.find(owner);
             if (cls == classes.end()) throw std::runtime_error("unknown instance method class");
             const ClassMethod* method = nullptr;
-            for (const auto& candidate : cls->second->methods)
-                if (candidate.name == expr->name && candidate.arity == expr->arguments.size()) method = &candidate;
+            for (const auto& candidate : cls->second->methods) {
+                if (candidate.name != expr->name || candidate.arity != expr->arguments.size()) continue;
+                // The frontend normally rejects duplicate slots. Recheck linked IR:
+                // never pick the last slot by declaration order or silently
+                // delegate a statically typed method call to runtime lookup.
+                if (method) throw std::runtime_error("ambiguous compiler-owned native method slot");
+                method = &candidate;
+            }
             if (!method) throw std::runtime_error("unknown method or wrong explicit call arity '" + expr->name + "'");
             if (!method->public_member && fn.method_owner != cls->first)
                 throw std::runtime_error("private instance method is not accessible");
