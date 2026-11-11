@@ -33,6 +33,10 @@ pub fnc main(): int { return fixed(); }
     "specialization-reuse": ("""fnc identity<T>(T value): T { return value; }
 pub fnc main(): int { return identity<int>(20) + identity(22); }
 """, 42),
+    "nested-generic-direct-chain": ("""fnc leaf<T>(T value): T { return value; }
+fnc outer<T>(T value): T { return leaf(value); }
+pub fnc main(): int { return outer<int>(42); }
+""", 42),
     "dependent-chain": ("""fnc sum<A, B=A, C=B, D=C>(A x, B y): int { return x + y; }
 pub fnc main(): int { return sum<A=int, D=int>(19, 23); }
 """, 42),
@@ -202,6 +206,18 @@ def verify(compiler, clang):
                         f"defs={len(definitions)}, calls={len(direct_calls)}")
                 if re.search(r'(?m)^define\s+[^\n]*?@identity\s*\(', ir):
                     raise AssertionError("uninstantiated generic symbol still emitted")
+            if name == "nested-generic-direct-chain":
+                ir = result.stdout.decode("utf-8")
+                for callee in ("leaf", "outer"):
+                    symbol = rf'@(?:"{callee}\\$atto_g1\\$int"|{callee}\\$atto_g1\\$int)'
+                    defs = re.findall(rf'(?m)^define\\s+internal\\s+[^\\n]*?{symbol}\\s*\\(', ir)
+                    calls = re.findall(rf'\\bcall\\s+[^\\n]*?{symbol}\\s*\\(', ir)
+                    if len(defs) != 1 or len(calls) != 1:
+                        raise AssertionError(
+                            f"{name}: missing exact frozen static call witness for {callee}: "
+                            f"definitions={len(defs)}, calls={len(calls)}")
+                if re.search(r'(?m)^define\\s+[^\\n]*?@(leaf|outer)\\s*\\(', ir):
+                    raise AssertionError("nested generic emitted an unspecialized fallback")
             ll = tmp / (name + ".ll")
             exe = tmp / name
             ll.write_bytes(result.stdout)
