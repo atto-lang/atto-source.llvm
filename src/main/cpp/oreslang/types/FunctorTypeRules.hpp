@@ -141,6 +141,8 @@ inline void validate_type(const Type& type, unsigned depth = 0,
     if (after_dot) throw TypeError("invalid-nested-type", "type ends with an empty qualified segment");
     if (type.name == "_")
         throw TypeError("unresolved-nested-generic", "type inference hole must be resolved before lowering");
+    if (depth != 0 && type.name == "void")
+        throw TypeError("invalid-functor-payload", "void cannot inhabit a nested value or error slot; use a unit value type");
     if (type.name == "string")
         throw TypeError("invalid-nested-type", "uncanonicalized string alias in typed IR");
     if (type.name == "Option" || type.name == "Tree") require_arity(type, 1);
