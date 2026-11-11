@@ -182,6 +182,10 @@ static void supervisor_parity_close_races_data_and_retires_loans() {
         CHECK(group.mark_ready(actor));
         Inbox inbox({1, 16}, {2, 32}, {1, 16}, 3);
         inbox.bind_target(actor);
+        // Require an already-accepted DATA loan before the close race;
+        // a run in which STOP always wins cannot masquerade as drain proof.
+        CHECK(inbox.offer_to(actor, Lane::Normal, 100000 + static_cast<int>(trial), 8));
+        CHECK(actor.outstanding_resource_loans() == 1);
         std::atomic<unsigned> started{0};
         bool admitted = false, denied = false;
         std::exception_ptr closer_error;
@@ -211,7 +215,7 @@ static void supervisor_parity_close_races_data_and_retires_loans() {
         closer.join();
         if (closer_error) std::rethrow_exception(closer_error);
         CHECK(admitted != denied);
-        CHECK(inbox.snapshot() == (admitted ? 1u : 0u));
+        CHECK(inbox.snapshot() == (admitted ? 2u : 1u));
         bool post_fence_denied = false;
         try { (void)inbox.offer_to(actor, Lane::Normal, -1, 8); }
         catch (const std::logic_error&) { post_fence_denied = true; }
@@ -219,7 +223,9 @@ static void supervisor_parity_close_races_data_and_retires_loans() {
         group.close();
         CHECK(finalizer.ready_for_actor_turn_quiescence());
         CHECK(inbox.retire_queued_after_quiescence(finalizer, actor)
-              == (admitted ? 1u : 0u));
+              == (admitted ? 2u : 1u));
+        CHECK(inbox.drain_status(1) == Inbox::DrainStatus::Aborted);
+        if (admitted) CHECK(inbox.drain_status(2) == Inbox::DrainStatus::Aborted);
         CHECK(actor.outstanding_resource_loans() == 0);
         CHECK(finalizer.ready_for_resource_reclamation());
         CHECK(finalizer.finalized());
