@@ -142,6 +142,7 @@ public:
         UploadSubmitted,
         KernelSubmitted,
         DownloadSubmitted,
+        UnknownEnqueue, // native enqueue API may have accepted work before throwing
         CancelRequested,
         Succeeded,
         Failed,
@@ -368,6 +369,7 @@ public:
         std::unique_ptr<dop::QueueClaimedGpuBinding> claim;
         std::shared_ptr<Operation> operation;
         bool durable_enqueued = false;
+        bool upload_attempted = false;
 
         try {
             input_physical = api_.allocate(bytes);
@@ -406,6 +408,10 @@ public:
             claim.reset();
             register_active(operation);
 
+            // Once we enter the native API, an exception is NOT evidence
+            // that the OpenCL driver rejected the command. Keep buffers and
+            // staging pinned until an explicit queue-quiescence certificate.
+            upload_attempted = true;
             Api::Handle upload = api_.enqueue_upload(
                     input_physical,
                     operation->input_staging_.data(),
@@ -424,7 +430,7 @@ public:
         } catch (...) {
             auto failure = std::current_exception();
 
-            if (durable_enqueued && operation) {
+            if ((durable_enqueued || upload_attempted) && operation) {
                 std::lock_guard<std::mutex> quarantine_guard(quarantine_lock_);
                 quarantined_operations_.push_back(operation);
                 std::rethrow_exception(failure);
@@ -497,6 +503,8 @@ public:
         if (operation.state_ == OperationState::Reserved)
             throw std::logic_error(
                     "reserved OpenCL operation was never physically submitted");
+        if (operation.state_ == OperationState::UnknownEnqueue)
+            return operation.state_; // no event pointer; never query/null-release
 
         const auto status = api_.poll_event(operation.event_);
         if (status == EventStatus::Pending)
@@ -543,9 +551,11 @@ public:
             return operation.state_;
         }
 
+        bool child_enqueue_attempted = false;
         try {
             switch (operation.state_) {
                 case OperationState::UploadSubmitted: {
+                    child_enqueue_attempted = true;
                     operation.event_ = api_.enqueue_kernel(
                             operation.program_->program(),
                             operation.input_physical_,
@@ -558,6 +568,7 @@ public:
                     break;
                 }
                 case OperationState::KernelSubmitted: {
+                    child_enqueue_attempted = true;
                     operation.event_ = api_.enqueue_download(
                             operation.output_physical_,
                             operation.output_staging_.data(),
@@ -582,6 +593,25 @@ public:
             }
         } catch (...) {
             auto failure = std::current_exception();
+
+            if (child_enqueue_attempted) {
+                // Kernel/download enqueue may have reached the GPU even if
+                // the API throws or returns a null event. Do NOT complete
+                // tickets or free physical memory on this ambiguous path.
+                operation.state_ = OperationState::UnknownEnqueue;
+                try {
+                    gpu::BufferFence::cancel_pair(
+                            operation.input_.fence,
+                            operation.output_.fence,
+                            operation.claim_.claim().tickets);
+                    operation.cancel_requested_ = true;
+                } catch (...) {
+                    std::lock_guard<std::mutex> guard(quarantine_lock_);
+                    quarantine_latched_ = true;
+                }
+                retain_quarantined(operation);
+                std::rethrow_exception(failure);
+            }
 
             if (operation.state_ == OperationState::UploadSubmitted
                     || operation.state_ == OperationState::KernelSubmitted) {
@@ -847,6 +877,11 @@ private:
         require_owner(operation);
         if (terminal(operation.state_))
             throw std::logic_error("OpenCL operation already terminal");
+        if (operation.state_ == OperationState::UnknownEnqueue) {
+            operation.cancel_requested_ = true;
+            operation.timeout_requested_ = operation.timeout_requested_ || timeout;
+            return; // no native event: must prove queue quiescence separately
+        }
 
         if (!operation.cancel_requested_) {
             gpu::BufferFence::cancel_pair(
