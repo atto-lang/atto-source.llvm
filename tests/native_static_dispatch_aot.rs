@@ -33,17 +33,21 @@ fn require_direct_method_calls(ir: &str, targets: &[&str]) -> Result<(), String>
         // A typed direct callee contains @symbol or @"quoted.symbol".
         // A function-pointer operand without @ is a regression for this
         // deliberately non-polymorphic, closed-world test program.
-        if let Some(token) = operands.split_whitespace().last() {
-            if let Some(symbol) = token.strip_prefix('@') {
-                // Match the *entire* compiler ABI symbol. Prefix, suffix,
-                // namespace and arity lookalikes must not satisfy this gate.
-                let symbol = symbol.trim_matches('"');
-                if targets.contains(&symbol) {
-                    found.insert(symbol.to_string());
-                }
-            } else if token.starts_with('%') {
-                return Err(format!("unexpected indirect LLVM call: {operands}"));
-            }
+        let token = operands.split_whitespace().last()
+            .ok_or_else(|| format!("LLVM call has no callee: {operands}"))?;
+        // Reject *every* unrecognized call form, not just %function-pointers:
+        // bitcast/inline-asm/typed-indirect calls can otherwise coexist with
+        // a genuine direct call and silently evade this AOT proof.
+        let symbol = token.strip_prefix('@')
+            .ok_or_else(|| format!("unverified indirect or computed LLVM call: {operands}"))?;
+        // Match the *entire* compiler ABI symbol. Prefix, suffix,
+        // namespace and arity lookalikes must not satisfy this gate.
+        let symbol = symbol.trim_matches('"');
+        if symbol.is_empty() {
+            return Err(format!("empty LLVM call symbol: {operands}"));
+        }
+        if targets.contains(&symbol) {
+            found.insert(symbol.to_string());
         }
     }
     for target in targets {
@@ -212,6 +216,20 @@ mod tests {
     fn rejects_typed_function_pointer_call() {
         let ir = "%v = call i64 (ptr) %fn(ptr %c)\n%w = call i64 @\"Counter.read\"(ptr %c)";
         assert!(require_direct_method_calls(ir, &["Counter.read"]).is_err());
+    }
+
+    #[test]
+    fn rejects_other_computed_call_forms_even_with_a_valid_direct_target() {
+        let real = "%ok = call i64 @\\"Counter.read\\"(ptr %c)";
+        for computed in [
+            "%v = call i64 bitcast (ptr @other to ptr)(ptr %c)",
+            "%v = call i64 asm sideeffect \\"ret\\", \\"=r\\"()",
+            "%v = call i64 (ptr) %fn(ptr %c)",
+        ] {
+            let ir = format!("{real}\\n{computed}");
+            assert!(require_direct_method_calls(&ir, &["Counter.read"]).is_err(),
+                "unexpected admission: {computed}");
+        }
     }
 
     #[test]
