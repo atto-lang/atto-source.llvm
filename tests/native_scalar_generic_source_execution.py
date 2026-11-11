@@ -209,14 +209,14 @@ def verify(compiler, clang):
             if name == "nested-generic-direct-chain":
                 ir = result.stdout.decode("utf-8")
                 for callee in ("leaf", "outer"):
-                    symbol = rf'@(?:"{callee}\\$atto_g1\\$int"|{callee}\\$atto_g1\\$int)'
-                    defs = re.findall(rf'(?m)^define\\s+internal\\s+[^\\n]*?{symbol}\\s*\\(', ir)
-                    calls = re.findall(rf'\\bcall\\s+[^\\n]*?{symbol}\\s*\\(', ir)
+                    symbol = rf'@(?:"{callee}\$atto_g1\$int"|{callee}\$atto_g1\$int)'
+                    defs = re.findall(rf'(?m)^define\s+internal\s+[^\n]*?{symbol}\s*\(', ir)
+                    calls = re.findall(rf'\bcall\s+[^\n]*?{symbol}\s*\(', ir)
                     if len(defs) != 1 or len(calls) != 1:
                         raise AssertionError(
                             f"{name}: missing exact frozen static call witness for {callee}: "
                             f"definitions={len(defs)}, calls={len(calls)}")
-                if re.search(r'(?m)^define\\s+[^\\n]*?@(leaf|outer)\\s*\\(', ir):
+                if re.search(r'(?m)^define\s+[^\n]*?@(leaf|outer)\s*\(', ir):
                     raise AssertionError("nested generic emitted an unspecialized fallback")
             ll = tmp / (name + ".ll")
             exe = tmp / name
