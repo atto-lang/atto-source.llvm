@@ -110,6 +110,12 @@ int main() {
     reject("use-after-move", [] {
         check_affine_rebuild(OwnerState::Moved, false);
     });
+    reject("invalid-owner-state", [] {
+        check_affine_rebuild(static_cast<OwnerState>(999), false);
+    });
+    reject("invalid-owner-state", [] {
+        check_affine_rebuild(static_cast<OwnerState>(999), true);
+    });
 
     // Negative mutation controls must fail with explicit diagnostic categories.
     reject("wrong-callback-input-type", [&] {
