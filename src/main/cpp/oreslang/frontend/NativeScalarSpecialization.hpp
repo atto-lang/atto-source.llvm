@@ -63,6 +63,8 @@ inline NativeI64SpecializationClosureEvidence check_native_i64_specialization_cl
         push_statements(fn.statements);
         push_statements(fn.caught_throw_defers);
 
+        const auto caller = native_function_slot(fn.name, fn.parameters.size());
+        const bool generic_body = emitted_generic && selected.find(caller) != selected.end();
         std::size_t fn_nodes = 0;
         std::unordered_set<std::string> outgoing;
         while (!expressions.empty() || !statements.empty()) {
@@ -86,7 +88,7 @@ inline NativeI64SpecializationClosureEvidence check_native_i64_specialization_cl
             }
             const auto* expr = expressions.back();
             expressions.pop_back();
-            if (expr->kind == Expression::Kind::Call) {
+            if (generic_body && expr->kind == Expression::Kind::Call) {
                 const auto key = native_function_slot(expr->name, expr->arguments.size());
                 if (selected.find(key) != selected.end() && outgoing.insert(key).second) {
                     if (++edges > kMaxEdges)
@@ -102,15 +104,14 @@ inline NativeI64SpecializationClosureEvidence check_native_i64_specialization_cl
             push(expr->when_false);
             for (const auto& arg : expr->arguments) push(arg);
         }
-        const auto selector = native_function_slot(fn.name, fn.parameters.size());
-        if (!emitted_generic || selected.find(selector) == selected.end()) return;
+        if (!generic_body) return;
         // Conservative pre-emission estimate, not a measured final binary
         // byte count. Limit growth before creating the native LLVM module.
         if (estimated > kMaxEstimatedBytes - 256 ||
             fn_nodes > (kMaxEstimatedBytes - estimated - 256) / 64)
             throw std::runtime_error("native AOT specialization byte estimate exceeded");
         estimated += 256 + fn_nodes * 64;
-        if (!graph.emplace(selector, std::move(outgoing)).second)
+        if (!graph.emplace(caller, std::move(outgoing)).second)
             throw std::runtime_error("duplicate native AOT specialization graph node");
     };
 
