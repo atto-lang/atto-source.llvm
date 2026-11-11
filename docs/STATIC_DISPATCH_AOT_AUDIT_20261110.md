@@ -238,3 +238,44 @@ these metadata checks, and they do not establish dynamic overriding or
 isolated-actor message-dispatch semantics. Real native `.atto` guest
 execution, sanitizer evidence, exact-head root tree, compiler SHA256, and
 independent code review remain required.
+
+## 2026-11-11 module-qualified linker-symbol and hidden-owner ABI hardening
+
+The real LLVM emitter now uses `plan_native_aot_function_symbol` from the
+compiler's frozen scalar-i64 dispatch image. This is the single name builder
+for module-qualified functions, overloaded source arity, internal concrete
+generic suffixes, and the target-specific `main` rewrite.
+
+Before creating an LLVM declaration, it rejects zero/overlong/NUL-containing
+symbol identities, attempted `llvm.*` intrinsic shadowing, and collisions
+with known unqualified host/runtime symbols (including `abort`, `write`,
+string/record helpers, actor runtime calls and reserved entrypoints). A
+qualified user method such as `payments.write` is distinct from the host
+`write` declaration. Native, wasm32 and Cortex-M legitimate entrypoint
+rewrites are explicitly preserved.
+
+The production emitter checks `module.getNamedValue(symbol)` **before**
+creating a declaration, retains its emitted-symbol uniqueness set, and
+verifies the LLVM function name afterwards to detect unexpected LLVM global
+uniquification. Runtime/import linkage is still subject to ordinary module
+validation; this hardening does not authorize unresolved cross-module
+imports or promise linked, multi-module typeclass dispatch.
+
+In the same implementation, the frozen target's explicit source ABI is
+checked against the physical LLVM signature with **exact** argument count:
+value/borrow parameters, compiler-added class-array region pointers, and
+the two owned-result hidden slots are accounted for separately. An
+incorrect/missing/extra hidden ownership parameter now aborts compilation
+instead of being overlooked by a lower-bound argument-count check.
+
+The host C++ specialization-plan test now covers two distinct qualified
+modules, overloaded source arities, wasm/native/Cortex-M entry symbols,
+unqualified runtime shadowing, permitted qualified names, `llvm.*`
+intrinsic spoofing, embedded NUL identities and an invalid zero-sized
+overload family. The case receipt is 37 adversarial rejections in the
+C++ suite; **committed tests are not executed evidence**.
+
+The implementation remains confined to the already-checked scalar-int
+specialization slice. Real LLVM/Clang builds, source guest exit codes,
+sanitizer checks, tree/binary hashes and independent reviews are still
+required on this exact PR head before merge.
