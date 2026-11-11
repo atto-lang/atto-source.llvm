@@ -53,6 +53,9 @@ public:
         std::uint32_t tag;
         std::size_t bytes;
         Owner payload;
+        // Physical port-local admission ID is distinct from the shared
+        // cross-lane ledger publication sequence.
+        std::uint64_t id = 0;
     };
     static_assert(std::is_nothrow_move_constructible_v<Frame>,
                   "slot unlink must move actor-owned envelopes without throwing");
@@ -102,7 +105,8 @@ public:
     std::size_t capacity() const noexcept { return slots_.size(); }
 
     bool push(Owner& payload, std::size_t bytes,
-              std::uint32_t tag, std::uint64_t sequence) {
+              std::uint32_t tag, std::uint64_t sequence,
+              std::uint64_t id = 0) {
         if (!payload || bytes == 0 || sequence == 0 || sequence <= last_sequence_)
             throw std::invalid_argument("invalid selective frame or sequence");
         if (free_ == none) return false;
@@ -114,7 +118,7 @@ public:
         slot.generation++;
         slot.prev = tail_;
         slot.next = none;
-        slot.frame.emplace(Frame{sequence, tag, bytes, std::move(payload)});
+        slot.frame.emplace(Frame{sequence, tag, bytes, std::move(payload), id});
         if (tail_ != none) slots_[tail_].next = i;
         else head_ = i;
         tail_ = i;
