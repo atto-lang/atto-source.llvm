@@ -14,6 +14,7 @@ on:
       - 'tests/native_actor_control_data_lane_test.cpp'
       - 'tests/bounded_actor_port_test.cpp'
       - 'scripts/test-actor-pipeline-routing.sh'
+      - 'scripts/test-actor-pipeline-exact-head.sh'
       - '.github/workflows/actor-pipeline-routing.yml'
   push:
     branches: [main]
@@ -30,6 +31,7 @@ on:
       - 'tests/native_actor_control_data_lane_test.cpp'
       - 'tests/bounded_actor_port_test.cpp'
       - 'scripts/test-actor-pipeline-routing.sh'
+      - 'scripts/test-actor-pipeline-exact-head.sh'
       - '.github/workflows/actor-pipeline-routing.yml'
 permissions:
   contents: read
@@ -58,10 +60,11 @@ jobs:
             src/main/cpp/oreslang/runtime/NativeActorPipeTransport.hpp \
             src/main/cpp/oreslang/runtime/BoundedActorPort.hpp \
             src/main/cpp/oreslang/runtime/ActorGroupLifecycle.hpp
-      - name: Run native actor pipeline, CONTROL and bounded-port GCC/Clang proof
+      - name: Run exact-head native actor pipeline and CONTROL GCC/Clang matrix
         shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          sh scripts/test-actor-pipeline-routing.sh | tee "$RUNNER_TEMP/actor-pipeline-host.log"
-          grep -Fx 'ORES_ACTOR_PIPELINE_HOST_MATRIX_PASS' "$RUNNER_TEMP/actor-pipeline-host.log"
-          grep -Fx 'ORES_ACTOR_IO_CONTROL_HOST_MATRIX_PASS' "$RUNNER_TEMP/actor-pipeline-host.log"
+          bash scripts/test-actor-pipeline-exact-head.sh | tee "$RUNNER_TEMP/actor-pipeline-evidence.log"
+          grep -Fx 'LLVM_ACTOR_PIPELINE_EXACT_HEAD_HOST_EXECUTED_PASS' "$RUNNER_TEMP/actor-pipeline-evidence.log"
