@@ -29,20 +29,18 @@ template <typename T>
 class BoundedActorPort final {
     static_assert(std::is_move_constructible_v<T>, "actor payload must be movable");
 
-    using SlotQueue = PreallocatedSelectiveSlots<T>;
-    using Envelope = typename SlotQueue::Frame;
+    using Queue = PreallocatedSelectiveSlots<T>;
     struct State {
         explicit State(std::size_t frames, std::size_t bytes,
                        std::shared_ptr<ActorMailboxCompletion> ledger)
-            : queue(frames), max_frames(frames), max_bytes(bytes),
-              ledger(std::move(ledger)) {
-            if (!bytes) throw std::invalid_argument("positive port byte limit required");
+            : queue(frames), max_frames(frames), max_bytes(bytes), ledger(std::move(ledger)) {
+            if (!frames || !bytes) throw std::invalid_argument("positive port limits required");
         }
         std::mutex mutex;
-        // Fixed slot capacity allocated once at port construction. The
-        // caller-held mutex serializes all queue modifications. Retirement
-        // must drain queued slots before the State destructor.
-        SlotQueue queue;
+        // All queue node storage is preallocated during State construction.
+        // The caller-held mutex protects the fixed-slot free/active lists;
+        // checked-out frames keep their port credit until physical ACK.
+        Queue queue;
         std::size_t max_frames, max_bytes;
         std::size_t used_frames = 0, used_bytes = 0;
         // Preparations reserve the same credits as queued/checked-out frames.
@@ -96,7 +94,7 @@ public:
         ~Delivery() = default;
     private:
         friend class BoundedActorPort<T>;
-        Delivery(std::shared_ptr<State> state, Envelope envelope)
+        Delivery(std::shared_ptr<State> state, typename Queue::Frame envelope)
             : state_(std::move(state)), id_(envelope.id),
               bytes_(envelope.bytes), payload_(std::move(envelope.payload)),
               sequence_(envelope.sequence) {}
@@ -161,6 +159,8 @@ public:
         } reservation{state, bytes};
 
         auto owned = std::make_unique<T>(std::move(payload));
+        // No queue allocation or T move after taking the physical mutex.
+        // All user-defined move hooks have completed outside the lock.
         {
             std::lock_guard<std::mutex> guard(state->mutex);
             // A concurrently running close() can seal new admissions while
@@ -168,18 +168,18 @@ public:
             // already owns its credits, so it must be allowed to publish.
             if (state->next_id == 0)
                 throw std::overflow_error("actor frame identity exhausted");
-            const auto id = state->next_id;
-            // Physical slot capacity was reserved in used_frames before the
-            // user T move. A rejected/malformed insertion retains 'owned';
-            // its destructor runs after this mutex guard unwinds.
-            const auto publish = [&](std::uint64_t sequence) {
-                if (!state->queue.push(owned, bytes, match_tag, sequence, id))
-                    throw std::logic_error("reserved actor slot unexpectedly full");
-            };
+            // Queue publication is deterministic and allocation-free. A
+            // failed invariant leaves 'owned' with the local sender while
+            // Reservation rolls back byte/frame/ledger preparation credits.
             if (state->ledger) {
-                state->ledger->publish(publish);
-            } else {
-                publish(id);
+                state->ledger->publish([&](std::uint64_t sequence) {
+                    if (!state->queue.push(owned, bytes, match_tag,
+                                          sequence, state->next_id))
+                        throw std::logic_error("reserved actor mailbox slot unavailable");
+                });
+            } else if (!state->queue.push(owned, bytes, match_tag,
+                                          state->next_id, state->next_id)) {
+                throw std::logic_error("reserved actor mailbox slot unavailable");
             }
             ++state->next_id;
             --state->pending_prepares;
@@ -218,24 +218,24 @@ public:
         ++state->pending_prepares;
 
         try {
-            const auto id = state->next_id;
-            // push() transfers the existing owner only after validating slot
-            // and sequence admission. This path allocates no message node.
-            const auto publish = [&](std::uint64_t sequence) {
-                if (!state->queue.push(payload, bytes, match_tag, sequence, id))
-                    throw std::logic_error("reserved actor slot unexpectedly full");
-            };
             if (state->ledger) {
-                state->ledger->publish(publish);
-            } else {
-                publish(id);
+                state->ledger->publish([&](std::uint64_t sequence) {
+                    if (!state->queue.push(payload, bytes, match_tag,
+                                           sequence, state->next_id))
+                        throw std::logic_error("reserved actor mailbox slot unavailable");
+                });
+            } else if (!state->queue.push(payload, bytes, match_tag,
+                                          state->next_id, state->next_id)) {
+                throw std::logic_error("reserved actor mailbox slot unavailable");
             }
+            // The producer's unique owner moves only at successful
+            // publication; no user allocation occurs under this mutex.
             ++state->next_id;
             --state->pending_prepares;
             return true;
         } catch (...) {
-            // The caller retains ownership on all validation/rejection
-            // paths; no payload destructor executes while holding the lock.
+            // Failed validation/publication never steals the producer's
+            // owner and cannot consume a global ledger sequence.
             --state->pending_prepares;
             --state->used_frames;
             state->used_bytes -= bytes;
@@ -251,17 +251,14 @@ public:
         return std::optional<Delivery>(Delivery(state_, std::move(*frame)));
     }
 
-    // Stage-1 selective receive: inspect AOT-generated immutable message
-    // discriminants without invoking user code or executing a payload guard
-    // while holding the mailbox lock. This is a **host runtime primitive**,
-    // not a guest-language parser/typed-pattern implementation.
-    //
-    // Typed tags are generated and validated by the compiler/runtime.
-    // A cursor is physical-queue-bound, and a resumed scan validates slot
-    // generation and tag before inspecting at most scan_budget messages.
-    // Matched frames retain all physical credits until ACK.
-    enum class SelectiveStatus { Matched, Continue, NoMatch };
-    using SelectiveCursor = typename SlotQueue::Cursor;
+    // Stage-1 AOT immutable-tag selection. The preallocated queue owns its
+    // slot identity and validates resumable cursors against slot generations.
+    // No dynamic allocation or arbitrary guest matcher executes under lock.
+    // At most scan_budget tags are examined; middle unlink is O(1).
+    // This remains lane-local; Erlang global selective ordering, timeout/
+    // guard lowering and hard-RT WCET qualification are separate contracts.
+    using SelectiveStatus = typename Queue::Status;
+    using SelectiveCursor = typename Queue::Cursor;
     struct SelectiveResult {
         SelectiveStatus status;
         std::optional<Delivery> delivery;
@@ -273,23 +270,15 @@ public:
             std::uint32_t tag, std::size_t scan_budget,
             const SelectiveCursor& cursor = {}) {
         std::lock_guard<std::mutex> guard(state_->mutex);
-        auto selected = state_->queue.select(tag, scan_budget, cursor);
-        switch (selected.status) {
-            case SlotQueue::Status::Matched:
-                if (!selected.frame)
-                    throw std::logic_error("selective hit without owned frame");
-                return {SelectiveStatus::Matched,
-                        std::optional<Delivery>(
-                            Delivery(state_, std::move(*selected.frame))),
-                        selected.inspected, {}};
-            case SlotQueue::Status::Continue:
-                return {SelectiveStatus::Continue, std::nullopt,
-                        selected.inspected, std::move(selected.cursor)};
-            case SlotQueue::Status::NoMatch:
-                return {SelectiveStatus::NoMatch, std::nullopt,
-                        selected.inspected, {}};
+        auto result = state_->queue.select(tag, scan_budget, cursor);
+        if (result.frame) {
+            return {result.status,
+                    std::optional<Delivery>(
+                        Delivery(state_, std::move(*result.frame))),
+                    result.inspected, std::move(result.cursor)};
         }
-        throw std::logic_error("invalid selective mailbox status");
+        return {result.status, std::nullopt, result.inspected,
+                std::move(result.cursor)};
     }
 
     std::size_t used_frames() const {
