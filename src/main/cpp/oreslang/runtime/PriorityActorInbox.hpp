@@ -38,6 +38,8 @@ public:
         std::size_t bytes;
     };
     using OwnedDelivery = typename BoundedActorPort<T>::Delivery;
+    using SelectiveCursor = typename BoundedActorPort<T>::SelectiveCursor;
+    using SelectiveStatus = typename BoundedActorPort<T>::SelectiveStatus;
 
     class Delivery final {
     public:
@@ -110,18 +112,19 @@ public:
     // Runtime entry point for generation-fenced enqueue; the issuer's rights
     // to choose URGENT still require separate capability verification.
     bool offer_to(const NativeActorRef& target, Lane lane, T&& value,
-                  std::size_t bytes) {
+                  std::size_t bytes, std::uint32_t match_tag = 0) {
         AdmissionGuard admission(*this, &target);
-        const bool accepted = port(lane).offer(std::move(value), bytes);
+        const bool accepted = port(lane).offer(std::move(value), bytes, match_tag);
         if (accepted) admission.commit();
         return accepted;
     }
 
     // Called only by trusted admission after source/role/priority validation.
     // Failed offers leave the producer's T untouched and do not queue a waiter.
-    bool offer(Lane lane, T&& value, std::size_t bytes) {
+    bool offer(Lane lane, T&& value, std::size_t bytes,
+               std::uint32_t match_tag = 0) {
         AdmissionGuard admission(*this, nullptr);
-        return port(lane).offer(std::move(value), bytes);
+        return port(lane).offer(std::move(value), bytes, match_tag);
     }
 
     /**
@@ -129,15 +132,17 @@ public:
      * The prebuilt unique owner transfers only after publication succeeds.
      * Authority for URGENT still belongs to the trusted runtime caller.
      */
-    bool offer_owned(Lane lane, std::unique_ptr<T>& value, std::size_t bytes) {
+    bool offer_owned(Lane lane, std::unique_ptr<T>& value, std::size_t bytes,
+                     std::uint32_t match_tag = 0) {
         AdmissionGuard admission(*this, nullptr);
-        return port(lane).offer_owned(value, bytes);
+        return port(lane).offer_owned(value, bytes, match_tag);
     }
 
     bool offer_owned_to(const NativeActorRef& target, Lane lane,
-                        std::unique_ptr<T>& value, std::size_t bytes) {
+                        std::unique_ptr<T>& value, std::size_t bytes,
+                        std::uint32_t match_tag = 0) {
         AdmissionGuard admission(*this, &target);
-        const bool accepted = port(lane).offer_owned(value, bytes);
+        const bool accepted = port(lane).offer_owned(value, bytes, match_tag);
         if (accepted) admission.commit();
         return accepted;
     }
@@ -158,6 +163,35 @@ public:
                 return Delivery(lane, std::move(*receipt), completion_, bound_actor_);
         }
         return std::nullopt;
+    }
+
+    // Tagged stage-1 selective receive is lane-LOCAL. Existing weighted
+    // inter-lane priority scheduling still governs ordinary try_receive(),
+    // so a full Erlang single-global-mailbox selective receive is NOT
+    // implemented by this entry point. Only a compiler/runtime-generated
+    // immutable tag may be supplied; no user callbacks execute under locks.
+    //
+    // For a bound actor, the trusted scheduler MUST call this only from an
+    // authorized single-flight user turn, having polled priority CONTROL.
+    // Any Continue cursor must be retained only by that actor incarnation,
+    // with the same lane, tag and selector; always yield on scan exhaustion.
+    struct SelectiveResult {
+        SelectiveStatus status;
+        std::optional<Delivery> delivery;
+        std::size_t inspected;
+        SelectiveCursor cursor;
+    };
+    SelectiveResult try_receive_tagged(
+            Lane lane, std::uint32_t tag, std::size_t scan_budget,
+            const SelectiveCursor& cursor = {}) {
+        std::lock_guard<std::mutex> guard(service_mutex_);
+        auto result = port(lane).try_receive_tagged(tag, scan_budget, cursor);
+        std::optional<Delivery> owned;
+        if (result.delivery) {
+            owned.emplace(lane, std::move(*result.delivery), completion_, bound_actor_);
+        }
+        return {result.status, std::move(owned), result.inspected,
+                std::move(result.cursor)};
     }
 
     /**
