@@ -89,12 +89,16 @@ public:
                 || turn.sequence == 0 || ambiguous_) {
             throw std::logic_error("GPU_V2_ENQUEUE_NOT_ADMITTED");
         }
-        // The real provider must own all physical allocations/queue claims.
-        // Any exception is UNKNOWN, not proof of no enqueue.
+        // Pre-allocate the local event capability BEFORE the first GPU API
+        // call. No host allocation/issuer exception after native submission
+        // may be mistaken for a safely aborted physical command.
+        EventHandle candidate;
+        try { candidate = issue_event(turn); }
+        catch (...) { return {EnqueueState::DefinitelyNotSubmitted, nullptr}; }
+        active_turn_ = turn;
         try {
             operation_ = provider_->begin(*prepared_, input_, output_, host_input_);
-            active_turn_ = turn;
-            active_ = issue_event(turn);
+            active_ = std::move(candidate); // noexcept shared_ptr move
         } catch (...) {
             ambiguous_ = true;
             throw;
@@ -102,12 +106,47 @@ public:
         return {EnqueueState::Submitted, active_};
     }
 
-    EnqueueResult reconcile_unknown(Turn) override {
-        // No source-visible Boolean or timer can clear an unknown physical
-        // enqueue. The existing OpenCL provider can retain a quarantined
-        // operation internally, but does not expose an authenticated recovery
-        // receipt for begin() exceptions. Require a future explicit adapter.
-        return {EnqueueState::Unknown, nullptr};
+    EnqueueResult reconcile_unknown(Turn turn) override {
+        std::lock_guard<std::mutex> guard(mu_);
+        if (!recovered_unknown_begin_ ||
+                turn.actor_generation != active_turn_.actor_generation ||
+                turn.sequence != active_turn_.sequence)
+            return {EnqueueState::Unknown, nullptr};
+        if (!active_) {
+            // ISSUE BEFORE returning the native recovery receipt. This
+            // represents an authenticated failed/quiescent actor command,
+            // NEVER a successful device kernel or an unsubmitted upload.
+            active_ = issue_event(turn);
+            event_terminal_ = true;
+            event_success_ = false;
+        }
+        return {EnqueueState::Submitted, active_};
+    }
+
+    // Explicit privileged RECOVERY WORKER entrypoints. These may call
+    // clFinish and must never be called from the scheduler polling path.
+    // Failure to establish physical queue quiescence cannot free buffers.
+    bool recover_unknown_begin_on_worker() {
+        std::lock_guard<std::mutex> guard(mu_);
+        if (!ambiguous_ || operation_ || closed_)
+            return false;
+        if (!provider_->recover_ambiguous_begin_after_quiescence())
+            return false;
+        ambiguous_ = false;
+        recovered_unknown_begin_ = true;
+        return true;
+    }
+
+    bool recover_unknown_kernel_on_worker() {
+        std::lock_guard<std::mutex> guard(mu_);
+        if (!operation_ || closed_ || event_terminal_ ||
+                operation_->state() != opencl::Provider::OperationState::UnknownEnqueue)
+            return false;
+        if (!provider_->recover_ambiguous_kernel_after_quiescence(*operation_))
+            return false;
+        event_terminal_ = true;
+        event_success_ = false;
+        return true;
     }
 
     Observation observe(const EventHandle& event) override {
@@ -146,8 +185,9 @@ public:
             return Observation::Unknown;
         }
 
-        if (state == State::DeviceLost)
-            return Observation::DeviceLost;
+        if (state == State::DeviceLost ||
+                state == State::UnknownEnqueue)
+            return Observation::DeviceLost; // uncertainty is NOT quiescence
         if (state == State::ReleaseFailed)
             return Observation::Unknown;
         if (state == State::Succeeded) {
@@ -222,6 +262,7 @@ private:
     EventHandle active_;
     std::vector<unsigned char> verified_output_bytes_;
     bool ambiguous_ = false;
+    bool recovered_unknown_begin_ = false;
     bool event_terminal_ = false;
     bool event_success_ = false;
     bool closed_ = false;
