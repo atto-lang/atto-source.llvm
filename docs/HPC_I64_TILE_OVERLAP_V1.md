@@ -29,3 +29,56 @@ Source-local GitHub Actions workflow `hpc-native-reduction-v1.yml` records exact
 5. Preserve existing actor single-owner memory semantics, generation fencing, critical sections and no raw cross-actor writes. Native task workers are not actors.
 
 The semantic roadmap is tracked in platform-conformance issue/PR #215 and source LLVM issue #1138. GPU, NUMA, MPI, f64, SIMD, TaskScope and actor-parallel admission are **not** implemented by this PR.
+
+
+## Full-width parameterized numerical differential gate (P0 follow-on)
+
+The shared canonical source `tests/fixtures/hpc-reduction-v1/i64-parameterized-tiles.atto` has Git blob
+`88795ff752006d020ea08c6585a8b3b03bf641c7` and is byte-identical in
+`oreslang-source.java` PR #2900 and `oreslang-platform-conformance` PR #704.
+
+`pub fnc tile_reduce8(int a, ..., int h): int` is ordinary AttoLang guest
+code: two sequential four-element tiles, each `((a+b)+c)+d`,
+then `tile0 + tile1`. A standalone Rust proof runner
+`tests/hpc_i64_differential_v1.rs` compiles that source through the real
+`oreslang-llvmc --target=host` frontend, verifies that LLVM IR defines the
+actual external `i64 @tile_reduce8` and guest main, and runs the native no-GC
+IR auditor. It renames only the generated operating-system `i32 @main`
+wrapper to permit a restricted C observer to call the compiled guest
+`tile_reduce8` ABI with **runtime-supplied** 64-bit integer parameters.
+The observer parses and prints integer values; it does not implement a
+reduction algorithm.
+
+The Rust oracle performs checked i64 adds in the guest's precise grouping.
+Its fixture corpus includes exact signed boundaries, cancellation, values
+outside the 8-bit OS exit-status range, and 96 deterministic xorshift64 input
+vectors seeded by `0x5EED_F00D_BADC_0FFE`. Total: **107 vectors at each
+of LLVM/Clang O0 and O2, 214 required native guest executions**. A single
+mismatch, IR-audit rejection, failed link or timeout fails the run. The gate
+prints individual vector receipts and final source-tree/compiler/source/IR/
+native-binary SHA-256 identities. The Java suite independently executes the
+same 107 input values as Graal guest expressions in `AttoHpcTileGuestTest`.
+
+The source-local CI workflow runs a Rust test-harness unit suite first, then
+the pre-existing four O0/O2 fixed/one-task guest checks and four negative
+admissions, then the parameterized 214-comparison differential gate.
+Each requirement is independently checked; success of host-side Rust
+unit tests or the C observer syntax screen must not be reported as guest
+execution.
+
+Manual source-local invocation (when rustc, Clang and the actual compiler
+are available):
+
+```sh
+rustc --edition=2021 -D warnings --test tests/hpc_i64_differential_v1.rs \
+  -o /tmp/atto-hpc-i64-diff-unit
+/tmp/atto-hpc-i64-diff-unit
+rustc --edition=2021 -D warnings tests/hpc_i64_differential_v1.rs \
+  -o /tmp/atto-hpc-i64-diff
+EXPECTED_HEAD="$(git rev-parse HEAD)" /tmp/atto-hpc-i64-diff
+```
+
+**Promotion status: NOT_EXECUTED until the compiler tests run on an allocated
+runner with real nonzero steps.** At this stage there is no hardware speedup,
+SIMD, multicore reduction scheduling, JVM/AOT equal-bit evidence, or f64 LLVM
+source parity claim. A successful host C syntax check does not change this.
