@@ -59,3 +59,16 @@ The independent CI mirror uses exact source Git blob SHA checks,
 both GCC/Clang, O1/O2, ASan/UBSan, and a deliberate prepatch failure
 oracle. This is **host runtime evidence only**, not whole-program
 source-language zero-GC certification.
+
+## Host raw-byte copy isolation
+
+For raw POD nodes, `allocate`, `write`, and `copy_out` reject
+nonzero caller spans that overlap any bytes in the graph heap object
+(including slots, borrow authority, and link metadata), as well as
+uintptr-wrapping spans. This prevents a trusted host adapter from turning
+an authenticated actor call into metadata corruption or leaking another
+part of the actor's own arena. Zero-length spans remain permitted.
+
+The graph heap still assumes trusted host pointers with valid lifetimes;
+this check is not process isolation, cross-actor memory protection, a
+replacement for typed compiler-owned object views, or an FFI firewall.
