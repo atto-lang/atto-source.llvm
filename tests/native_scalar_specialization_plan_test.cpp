@@ -98,7 +98,33 @@ int main() {
             must_reject([&] { (void)freeze_native_i64_specializations(bad); },
                         "native AOT generic specialization count exceeded");
         }
-        std::cout << "NATIVE_I64_SPECIALIZATION_PLAN|symbols=1|negative_cases=8\n";
+        // A non-generic function is a legal empty specialization closure.
+        {
+            Program plain;
+            Function fn;
+            fn.name = "plain";
+            Parameter parameter;
+            parameter.name = "n";
+            fn.parameters.push_back(std::move(parameter));
+            plain.functions.push_back(std::move(fn));
+            if (!freeze_native_i64_specializations(plain).empty())
+                throw std::runtime_error("plain function minted generic symbols");
+        }
+        // Post-validation compiler IR mutation must never silently erase a
+        // forged generic parameter into an ordinary i64 ABI slot.
+        {
+            Program forged;
+            Function fn;
+            fn.name = "forged";
+            Parameter parameter;
+            parameter.name = "value";
+            parameter.generic_type = "T"; // no declaring generic parameter
+            fn.parameters.push_back(std::move(parameter));
+            forged.functions.push_back(std::move(fn));
+            must_reject([&] { (void)freeze_native_i64_specializations(forged); },
+                        "undeclared native AOT generic parameter ABI");
+        }
+        std::cout << "NATIVE_I64_SPECIALIZATION_PLAN|symbols=1|negative_cases=9\\n";
     } catch (const std::exception& error) {
         std::cerr << "NATIVE_I64_SPECIALIZATION_PLAN_FAIL: " << error.what() << '\n';
         return 1;
