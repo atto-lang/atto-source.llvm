@@ -1,5 +1,6 @@
 #include "oreslang/runtime/ActorLocalFailurePolicy.hpp"
 #include "oreslang/runtime/ActorCheckedFrameBudget.hpp"
+#include <new>
 #include <stdexcept>
 #include <initializer_list>
 
@@ -81,6 +82,24 @@ static void verify_checked_frame_budget() {
         cannot_recover = e.limit() == Limit::FrameCount;
     }
     CHECK(cannot_recover);
+
+    // Placement-new creates another actor at the SAME memory address.
+    // A token minted for the retired incarnation must still be rejected.
+    alignas(ActorCheckedFrameBudget) unsigned char reused_storage[
+        sizeof(ActorCheckedFrameBudget)] = {};
+    auto* old_budget = new (reused_storage) ActorCheckedFrameBudget(64, 2);
+    auto retired_token = old_budget->enter_frame(8);
+    old_budget->leave_frame(retired_token);
+    old_budget->~ActorCheckedFrameBudget();
+    auto* new_budget = new (reused_storage) ActorCheckedFrameBudget(64, 2);
+    auto live_token = new_budget->enter_frame(8);
+    bool rejected_aba = false;
+    try { new_budget->leave_frame(retired_token); }
+    catch (const std::logic_error&) { rejected_aba = true; }
+    CHECK(rejected_aba);
+    CHECK(new_budget->active_frames() == 1 && new_budget->used_bytes() == 8);
+    new_budget->leave_frame(live_token);
+    new_budget->~ActorCheckedFrameBudget();
 
     ActorCheckedFrameBudget byte_limit(48, 4);
     auto initial = byte_limit.enter_frame(32);
