@@ -1,6 +1,7 @@
 #pragma once
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
+#include "oreslang/types/FunctorTypeRules.hpp"
 #include <functional>
 #include <stdexcept>
 #include <unordered_map>
@@ -18,6 +19,17 @@ inline const NativeSumType& native_sum(const Program& program, const std::string
 // Context resolves constructors; the nominal type checker still independently
 // validates every payload and use. This pass never turns arbitrary i64 into a sum.
 inline void resolve_native_sums(Program& program) {
+    // NativeSumType is currently a scalar-only ABI descriptor. Validate
+    // its canonical generic shape before any expression is admitted to IR.
+    // The recursive functor rules never authorize native nested payload ABI.
+    for (const auto& sum : program.sum_types) {
+        const auto expected = native_sum_name(sum.kind, sum.value_type, sum.error_type);
+        const auto shape = types::functor_v1::parse_type(sum.name);
+        const bool correct_kind = shape.name ==
+            (sum.kind == NativeSumType::Kind::Option ? "Option" : "Result");
+        if (!correct_kind || shape.str() != expected)
+            throw std::runtime_error("native sum descriptor type-shape mismatch (nested payload requires owned ABI)");
+    }
     struct Hint {
         ScalarType scalar = ScalarType::I64;
         std::string sum{}, cls{};
