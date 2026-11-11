@@ -205,3 +205,36 @@ executed compiler/guest steps. Running source-only or isolated host tests cannot
 promote this to native guest AOT parity. Keep head/tree IDs, emitted IR, Clang
 linked guest exit codes, SHA-256 receipts and independent reviews tied to the
 exact head used for any promotion.
+
+## 2026-11-11 frozen direct-call ABI audit — non-generic budget isolation
+
+The native LLVM scalar-`int` dispatch image now freezes the entire currently
+represented direct-call ABI, rather than relying on selector and arity alone.
+Each `NativeI64DirectTarget` contains parameter names, scalar representations,
+borrow/borrow-mut/value modes, generic slot identity, class/sum metadata,
+the explicit return type and void flag, return class/sum representation,
+declared effect bits and declaration presence, and export/internal flags.
+
+The production `freeze_native_i64_dispatch_image` factory rejects unresolved
+aliases, invalid/unrecognized effect bits and compiler-generated C u32
+entrypoint trampolines for scalar generic targets. LLVM lowering calls
+`verify_native_i64_direct_target` again and independently verifies the
+physical LLVM parameter types against the frozen borrow modes and return
+`void`/`i64` shape before constructing the direct-call declaration.
+
+The bounded generic dependency traversal now examines *emitted generic
+functions only*. Nongeneric source call sites and actor handlers use the
+ordinary compiler verification pipeline; they must not consume this distinct
+generic closure/size quota or mint generic dispatch roots. Regression coverage
+includes a deliberately oversized nongeneric function in a module with one
+valid generic, plus 11 new forged ABI mutations (labels, borrow modes, parameter
+and return types, suffix, effects, exported flag, unknown effect bits, and
+unresolved return aliases). The native specialization C++ test reports 27
+adversarial negative cases; added test bodies must still actually execute.
+
+This audit is intentionally bounded to the currently implemented native
+scalar-int backend. No separate capability/witness table is introduced by
+these metadata checks, and they do not establish dynamic overriding or
+isolated-actor message-dispatch semantics. Real native `.atto` guest
+execution, sanitizer evidence, exact-head root tree, compiler SHA256, and
+independent code review remain required.
