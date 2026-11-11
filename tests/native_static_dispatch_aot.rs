@@ -220,13 +220,13 @@ mod tests {
 
     #[test]
     fn rejects_other_computed_call_forms_even_with_a_valid_direct_target() {
-        let real = "%ok = call i64 @\\"Counter.read\\"(ptr %c)";
+        let real = "%ok = call i64 @\"Counter.read\"(ptr %c)";
         for computed in [
             "%v = call i64 bitcast (ptr @other to ptr)(ptr %c)",
-            "%v = call i64 asm sideeffect \\"ret\\", \\"=r\\"()",
+            "%v = call i64 asm sideeffect \"ret\", \"=r\"()",
             "%v = call i64 (ptr) %fn(ptr %c)",
         ] {
-            let ir = format!("{real}\\n{computed}");
+            let ir = format!("{real}\n{computed}");
             assert!(require_direct_method_calls(&ir, &["Counter.read"]).is_err(),
                 "unexpected admission: {computed}");
         }
