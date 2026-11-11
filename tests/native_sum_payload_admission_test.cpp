@@ -85,6 +85,13 @@ void require_rejection(Program p, const std::string& diagnostic,
     }
     throw std::runtime_error(label + ": unexpectedly accepted");
 }
+void require_invalid_registry(const std::function<void(Program&)>& mutate,
+                              const std::string& diagnostic,
+                              const std::string& label) {
+    Program program = initial("Option<int>", "Some", scalar(Kind::Integer));
+    mutate(program);
+    require_rejection(std::move(program), diagnostic, label);
+}
 } // namespace
 
 int main() {
@@ -135,7 +142,35 @@ int main() {
         require_rejection(conditional("Result<int,String>",
             constructor("Ok", scalar(Kind::Integer)), scalar(Kind::Integer)),
             "conditional sum branches", "reject Ok vs raw int");
-        std::cout << "native sum typed payload admission: PASS 23 assertions (host-only)\n";
+        // A forged compiler AST is not trusted just because its name
+        // resembles a previously parsed native Option/Result. No such
+        // descriptor may reach the i64 handle code generator.
+        require_invalid_registry([](Program& p) {
+            p.sum_types.front().value_type = ScalarType::String;
+        }, "descriptor name/payload mismatch", "forged Option<int> with String payload");
+        require_invalid_registry([](Program& p) {
+            p.sum_types.push_back(p.sum_types.front());
+        }, "duplicate native sum descriptor", "duplicate identical nominal descriptor");
+        require_invalid_registry([](Program& p) {
+            p.sum_types.front().kind = NativeSumType::Kind::Result;
+        }, "descriptor name/payload mismatch", "Option name with Result kind");
+        require_invalid_registry([](Program& p) {
+            p.sum_types.front().kind = static_cast<NativeSumType::Kind>(255);
+        }, "invalid native sum descriptor kind", "invalid nominal kind byte");
+        require_invalid_registry([](Program& p) {
+            p.sum_types.front().value_type = static_cast<ScalarType>(255);
+        }, "invalid native sum scalar payload kind", "invalid sum scalar kind byte");
+        require_invalid_registry([](Program& p) {
+            p.sum_types.front().error_type = ScalarType::Bool;
+        }, "noncanonical error slot", "Option has no error payload type");
+        require_invalid_registry([](Program& p) {
+            p.sum_types.back().error_type = ScalarType::I64;
+        }, "descriptor name/payload mismatch", "Result error payload doesn't match name");
+        require_invalid_registry([](Program& p) {
+            p.sum_types.back().error_type = static_cast<ScalarType>(255);
+        }, "invalid native sum scalar payload kind", "invalid Result error payload byte");
+
+        std::cout << "native sum typed payload admission: PASS 31 assertions (host-only)\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "native sum typed payload admission: " << e.what() << '\n';
