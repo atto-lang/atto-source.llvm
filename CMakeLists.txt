@@ -775,6 +775,23 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_owned_heap_contract
         COMMAND oreslang-actor-owned-heap-test)
 
+    # Host-only regression: one native callback runs on independent actor
+    # heaps and supervisor state. This does not certify compiled .atto actor
+    # execution, read-only OS code mappings, or compiler borrow checking.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-actor-shared-code-private-state-test
+        tests/actor_shared_code_private_state_test.cpp)
+    target_include_directories(oreslang-actor-shared-code-private-state-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-actor-shared-code-private-state-test PRIVATE
+        Threads::Threads)
+    target_compile_options(oreslang-actor-shared-code-private-state-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_shared_code_private_state_host_only
+        COMMAND oreslang-actor-shared-code-private-state-test)
+    set_tests_properties(native_actor_shared_code_private_state_host_only
+        PROPERTIES TIMEOUT 30)
+
     # Compiler-ready compact object field substrate: physical i32 edges
     # with original full-domain/generation proofs kept outside guest objects.
     add_executable(oreslang-actor-compact-field-store-test
