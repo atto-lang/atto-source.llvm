@@ -2,6 +2,7 @@
 // Trusted host-only SQLite v2 command contract. NOT an .ores actor or async carrier.
 // Canonical command bytes are stored intact: same-op retries compare the full bytes.
 #include <sqlite3.h>
+#include <cstddef>
 #include <cstdint>
 #include <climits>
 #include <limits>
@@ -42,6 +43,8 @@ inline void valid(const std::string& s) {
 class SqliteCommandStore {
     sqlite3* db_=nullptr;
     std::mutex lock_;
+    static constexpr std::size_t MAX_REPLAY_BYTES = 64u * 1024u * 1024u;
+    std::size_t replay_byte_limit_ = MAX_REPLAY_BYTES;
     static void chk(int rc) {
         if(rc!=SQLITE_OK && rc!=SQLITE_DONE && rc!=SQLITE_ROW)
             throw std::runtime_error("SQLITE_FAILURE");
@@ -93,8 +96,12 @@ class SqliteCommandStore {
     void tenant(const Identity& id)const {if(id.tenant!=tenant_)throw std::invalid_argument("WRONG_TENANT");}
     std::string tenant_;
 public:
-    SqliteCommandStore(const std::string& filename,std::string tenant):tenant_(std::move(tenant)){
+    SqliteCommandStore(const std::string& filename,std::string tenant,
+                       std::size_t replay_byte_limit=MAX_REPLAY_BYTES)
+        :replay_byte_limit_(replay_byte_limit),tenant_(std::move(tenant)){
         valid(tenant_);
+        if(replay_byte_limit_==0||replay_byte_limit_>MAX_REPLAY_BYTES)
+            throw std::invalid_argument("INVALID_CONFIG");
         if(filename.empty())throw std::invalid_argument("INVALID_PATH");
         if(sqlite3_open_v2(filename.c_str(),&db_,SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_FULLMUTEX,nullptr)!=SQLITE_OK){
             if(db_) sqlite3_close(db_);
@@ -166,8 +173,9 @@ public:
         begin();try{
             if(epoch(id)!=expected_epoch)throw std::logic_error("STALE_EPOCH");
             const auto version=head(id);std::uint64_t cursor=0;
+            std::size_t replayed_bytes=0;
             Recovery result{version,{}};
-            Stmt q(db_,"SELECT version,op_id,schema,payload FROM native_command_v2_events WHERE tenant=? AND actor=? AND slot=? ORDER BY version ASC LIMIT 65537");bind(q,id);
+            Stmt q(db_,"SELECT version,op_id,schema,payload,length(payload) FROM native_command_v2_events WHERE tenant=? AND actor=? AND slot=? ORDER BY version ASC LIMIT 65537");bind(q,id);
             while(q.step()==SQLITE_ROW){
                 if(result.events.size()>=65536)throw std::logic_error("REPLAY_LIMIT_EXCEEDED");
                 const auto next=static_cast<std::uint64_t>(sqlite3_column_int64(q.s,0));
@@ -175,7 +183,18 @@ public:
                 const auto schema=static_cast<std::uint32_t>(sqlite3_column_int(q.s,2));
                 if(next!=cursor+1||schema==0)throw std::logic_error("JOURNAL_GAP");
                 if(!covers(id,op,next))throw std::logic_error("UNINDEXED_JOURNAL");
-                result.events.push_back(Event{next,schema,op,bytes(q.s,3)});cursor=next;
+                // Check SQL BLOB length before copying into the recovery
+                // vector. An event-count bound alone permits huge replays.
+                if(sqlite3_column_type(q.s,4)==SQLITE_NULL)
+                    throw std::logic_error("CORRUPT_JOURNAL_PAYLOAD");
+                const auto length=sqlite3_column_int64(q.s,4);
+                if(length<0||static_cast<std::uint64_t>(length)>replay_byte_limit_-replayed_bytes)
+                    throw std::logic_error("REPLAY_BYTES_LIMIT_EXCEEDED");
+                Bytes payload=bytes(q.s,3);
+                if(payload.size()!=static_cast<std::size_t>(length))
+                    throw std::logic_error("CORRUPT_JOURNAL_PAYLOAD");
+                replayed_bytes+=static_cast<std::size_t>(length);
+                result.events.push_back(Event{next,schema,op,std::move(payload)});cursor=next;
             }
             if(cursor!=version)throw std::logic_error("JOURNAL_GAP");
             commit();return result;

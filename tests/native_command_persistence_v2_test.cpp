@@ -88,7 +88,23 @@ int main(){
         assert(store.append(command("crash-deposit",2,2)).duplicate);
         assert(store.load_fenced(id,2).events.size()==2);
     }
+    // Count limits alone do not bound total replay memory. Keep storage
+    // receipts after replay-byte refusal so the caller can fail closed.
+    std::string bounded=db+"-bounded";
+    {
+        SqliteCommandStore store(bounded,"tenant-a",3);
+        store.grant_epoch("bank",1);
+        auto first=command("tiny-first",1,0);first.events={b("+1")};
+        assert(store.append(first).last_version==1);
+        assert(store.load_fenced(id,1).events.size()==1);
+        auto second=command("tiny-second",1,1);second.events={b("+2")};
+        assert(store.append(second).last_version==2);
+        fail("REPLAY_BYTES_LIMIT_EXCEEDED",[&]{(void)store.load_fenced(id,1);});
+        assert(store.verify(id,"tiny-second",1,b("deposit:100"))->last_version==2);
+    }
+    fail("INVALID_CONFIG",[&]{SqliteCommandStore invalid(bounded,"tenant-a",0);});
     std::filesystem::remove_all(dir);
     std::filesystem::remove(rollback);std::filesystem::remove(crashdb);
+    std::filesystem::remove(bounded);
     std::cout<<"PASS native SQLite v2 multi-event, epoch retry, rollback and process crash\n";
 }
