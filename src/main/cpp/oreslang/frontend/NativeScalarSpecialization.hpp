@@ -417,7 +417,9 @@ inline std::string plan_native_aot_function_symbol(
     // Only an actual compiler-rewritten native/cortex entry can use this
     // internal implementation symbol. Everything else is checked against the
     // runtime/global namespace before creating any LLVM Function.
-    if ((!cortex_entry && !native_entry) || family_size != 1)
+    const bool wasm_entry = fn.name == "main" && program.module.empty() &&
+        !native_main && !cortex_m_target && family_size == 1;
+    if ((!cortex_entry && !native_entry && !wasm_entry) || family_size != 1)
         validate_native_aot_global_symbol(symbol);
     return symbol;
 }
