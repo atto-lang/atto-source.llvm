@@ -10,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const FIXTURE: &str = "tests/fixtures/hpc-reduction-v1/i64-parameterized-tiles.atto";
 const N_RANDOM: usize = 96;
+const VECTOR_MATRIX_SHA256: &str = "b921d3a36a08917bd5ce7681eb9e00c7b37bb62e8308e0b8615c0c7ffb3ff575";
 const OBSERVER_C: &str = r#"
 #include <errno.h>
 #include <inttypes.h>
@@ -287,6 +288,27 @@ fn main() {
         test_vectors.len() == N_RANDOM + 11,
         "unexpected differential vector count",
     );
+    // Canonical decimal-comma-LF matrix digest is independently pinned
+    // by Java/Graal and platform-conformance. This detects accidental
+    // drift in vector order, signed representation or PRNG semantics.
+    let canonical_rows = test_vectors
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+                + "\n"
+        })
+        .collect::<String>();
+    let vectors_path = scratch.0.join("i64-vectors-canonical.txt");
+    fs::write(&vectors_path, canonical_rows)
+        .unwrap_or_else(|err| fail(format!("stage=oracle_matrix write: {err}")));
+    let matrix_hash = sha256(&vectors_path);
+    require(
+        matrix_hash == VECTOR_MATRIX_SHA256,
+        format!("stage=oracle_matrix cross-backend vector digest drift: {matrix_hash}"),
+    );
     for level in ["0", "2"] {
         let binary = scratch.0.join(format!("tile-observer-o{level}"));
         let binary_str = binary.to_str().unwrap_or_else(|| fail("invalid binary path"));
@@ -333,7 +355,7 @@ fn main() {
         println!(
             "ATTO_HPC_I64_DIFFERENTIAL_PASS head={head} tree={tree} \
              opt=O{level} vectors={} compiler_sha256={compiler_hash} \
-             source_sha256={source_hash} ir_sha256={ir_hash} \
+             source_sha256={source_hash} matrix_sha256={matrix_hash} ir_sha256={ir_hash} \
              artifact_sha256={binary_hash} result_channel=native_i64_abi",
             test_vectors.len()
         );
