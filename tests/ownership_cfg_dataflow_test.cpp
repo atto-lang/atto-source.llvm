@@ -86,6 +86,36 @@ int main() {
     verify(alias_layout);
 
     // Direct apply() must reject ambiguous storage too, even without verify().
+    // The flat key space MUST NOT treat unproven indexed/deref projections
+    // as independent storage. Otherwise a live loan on p can be bypassed by
+    // a write through p[0] or through an encoded generated expression.
+    for (const char* unproven : {"p[0]", "p[*]", "p->a", "p::a", "p.a[0]",
+                                 "p.0", "p.$a", "p\\x", "p a"}) {
+        Graph indexed_alias;
+        indexed_alias.entry = {{"p", cell(kOwned)}, {unproven, cell(kOwned)}};
+        indexed_alias.blocks = {{{op(Kind::BorrowShared, "p"),
+                                  op(Kind::Move, unproven)}, {}}};
+        assert(rejected([&] { verify(indexed_alias); }));
+    }
+    Graph too_deep_path;
+    std::string deep_key = "p";
+    for (int i = 0; i < 16; ++i) deep_key += ".a";
+    too_deep_path.entry = {{deep_key, cell(kOwned)}};
+    too_deep_path.blocks = {{{op(Kind::Read, deep_key.c_str())}, {}}};
+    assert(rejected([&] { verify(too_deep_path); }));
+    Graph huge_path;
+    const std::string long_key(257, 'a');
+    huge_path.entry = {{long_key, cell(kOwned)}};
+    huge_path.blocks = {{{op(Kind::Read, long_key.c_str())}, {}}};
+    assert(rejected([&] { verify(huge_path); }));
+    // Valid, statically named sibling projections remain disjoint.
+    Graph valid_named_siblings;
+    valid_named_siblings.entry = {{"p.a", cell(kOwned)}, {"p.b", cell(kOwned)}};
+    valid_named_siblings.blocks = {{{op(Kind::BorrowShared, "p.a"),
+                                    op(Kind::Move, "p.b"),
+                                    op(Kind::ReleaseShared, "p.a")}, {}}};
+    verify(valid_named_siblings);
+
     State direct_alias = {{"p", cell(kOwned)}, {"p.a", cell(kOwned)}};
     assert(rejected([&] { apply(op(Kind::Read, "p.a"), direct_alias); }));
     assert(rejected([&] { apply(op(Kind::MoveObject, "p"), direct_alias); }));
