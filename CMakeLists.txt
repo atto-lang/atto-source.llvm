@@ -1078,6 +1078,21 @@ if(BUILD_TESTING)
     set_tests_properties(native_compile_time_borrow_escape_admission
         PROPERTIES TIMEOUT 90)
 
+    # Supplemental real compiler frontend unit: reject invalid linked method
+    # slots before call-site resolution; not a substitute for executed guests.
+    add_executable(oreslang-native-static-dispatch-resolver-test
+        tests/native_static_dispatch_resolver_test.cpp
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp)
+    target_include_directories(oreslang-native-static-dispatch-resolver-test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-static-dispatch-resolver-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-static-dispatch-resolver-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_static_dispatch_resolver_ir_integrity
+        COMMAND oreslang-native-static-dispatch-resolver-test)
+    set_tests_properties(native_static_dispatch_resolver_ir_integrity
+        PROPERTIES TIMEOUT 20)
+
     # Direct nominal calls are compiler-bound before linking; prove this
     # against emitted IR and executed O0/O2 AttoLang guests (not host models).
     # The independent Rust predicate tests reject function-pointer regressions.
