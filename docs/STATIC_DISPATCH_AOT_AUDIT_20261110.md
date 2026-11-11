@@ -84,3 +84,43 @@ compiler-backed workflow run `42943943177` likewise reported `steps=[]`.
 That run is runner admission failure, **NOT_EXECUTED**, not a Rust/C++/Clang
 pass or failure. Later commits require a fresh exact-head executed receipt.
 The PR stays draft pending real guest execution and independent review.
+
+## Stage-1 concrete `int` generic AOT specialization (new work)
+
+The native LLVM frontend already type-checks an intentionally narrow scalar
+generic ABI: concrete type arguments must resolve to `int`, and generic
+instance methods, generic classes and trait witness specialization are not
+supported by this slice. Source canonical extension is `.atto`.
+
+`NativeScalarSpecialization.hpp` now derives one deterministic
+`$atto_gN$int...` suffix from each verified scalar generic declaration.
+The real `LlvmCodegen.cpp` producer uses that suffix for an **internal,
+precompiled LLVM function**; ordinary calls still use the existing verified
+exact selector map, so two calls to `identity<int>` share the same
+`identity$atto_g1$int` function and never require runtime method-name
+lookup or JIT compilation. Source-defined `$` identifiers are forbidden;
+duplicate output symbols and repeated declaration selectors reject.
+
+**Deliberate limit:** this stage eagerly instantiates at most 256
+declarations at the single `int` concrete tuple. It is not yet a
+whole-program, *reachable-only* multi-type monomorphization graph and does
+not fulfill the full `common-source #265` specialization-closure contract.
+Compilation-size budgeting, trait witnesses, class methods, per-module
+linker ABI and cross-backend parity remain separate implementation gates.
+
+New tests:
+- `native_scalar_i64_specialization_plan`: compiler helper constructed
+  with the actual typed native `Program` IR types; positive canonical
+  symbol plus eight independent forged identity/ABI/budget negatives.
+- `native_scalar_i64_specialization_guest`: canonical `.atto` source
+  compilation, exact **one internal definition / two direct calls** in LLVM
+  IR, real Clang-linked guest exit 42, plus the preexisting scalar generic
+  positive and negative source corpus.
+- `llvm-static-dispatch-aot-exact-head.yml` requires both CTests,
+  in addition to the existing nominal direct-call and sanitizer tests.
+
+Evidence remains **NOT_EXECUTED at the updated PR head** until an
+authorized run with nonzero executed steps produces full compiler build,
+IR, native guest, and negative-test receipts. A no-step Actions failure
+is runner admission failure, not a compiler result. Independent reviewer
+approval and exact-head merge gates still apply.
