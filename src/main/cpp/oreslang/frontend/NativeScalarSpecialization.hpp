@@ -424,6 +424,33 @@ inline std::string plan_native_aot_function_symbol(
     return symbol;
 }
 
+// Compiler-to-codegen static call witness for the already-admitted scalar
+// specialization slice. The actual LLVM callee must be the exact Function*
+// retained from the frozen declaration pass; never rediscover it by name.
+// This shape is not a general trait/typeclass witness (no trait solving).
+inline void verify_native_i64_scalar_call_witness(
+        const NativeI64DirectTarget& target,
+        const std::string& resolved_selector,
+        const std::string& frozen_symbol,
+        const std::string& actual_symbol,
+        std::size_t source_argument_count,
+        const std::vector<std::string>& emitted_formal_labels,
+        bool internal_linkage) {
+    if (target.selector != resolved_selector ||
+        target.lowered_arity != source_argument_count ||
+        target.parameter_abi.size() != source_argument_count ||
+        !internal_linkage || frozen_symbol != actual_symbol ||
+        frozen_symbol.size() <= target.emitted_suffix.size() ||
+        frozen_symbol.compare(frozen_symbol.size() - target.emitted_suffix.size(),
+                              target.emitted_suffix.size(), target.emitted_suffix) != 0 ||
+        emitted_formal_labels.size() != target.parameter_abi.size())
+        throw std::runtime_error("native AOT static call witness identity mismatch");
+    for (std::size_t i = 0; i < target.parameter_abi.size(); ++i) {
+        if (target.parameter_abi[i].name != emitted_formal_labels[i])
+            throw std::runtime_error("native AOT static call witness formal ABI mismatch");
+    }
+}
+
 // Compatibility entry point for the existing source-level C++ verifier.
 // Production LLVM lowering consumes NativeI64DispatchImage directly.
 inline std::unordered_map<std::string, std::string>
