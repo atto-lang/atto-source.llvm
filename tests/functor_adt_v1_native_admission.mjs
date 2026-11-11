@@ -95,7 +95,7 @@ try{
   assert.equal(results.filter(x=>x.kind==="compile_and_execute").length,2);
   assert.equal(results.filter(x=>x.kind==="compile_reject").length,15);
   for(const entry of results){
-    const diag=String(entry.diagnostic||"").replace(/\\s+/g," ").slice(0,260);
+    const diag=String(entry.diagnostic||"").replace(/\s+/g," ").slice(0,260);
     console.log("LLVM_FUNCTOR_CASE id="+entry.id+
       " evidence="+entry.evidence+" compiler_exit="+entry.compiler_status+
       " diagnostic="+JSON.stringify(diag));
