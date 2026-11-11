@@ -102,6 +102,17 @@ inline void resolve_native_sums(Program& program) {
             }
             e.sum_type = selected; return {ScalarType::I64, selected};
         }
+        if (e.kind == E::Variable || e.kind == E::String ||
+                e.kind == E::Boolean || e.kind == E::Integer) {
+            // A scalar leaf cannot hide ignored calls, tagged payloads,
+            // captures or evaluation branches. Reject before type inference
+            // returns early and before LLVM emits code.
+            if (e.left || e.right || e.condition || e.condition_lhs ||
+                    e.condition_rhs || e.when_true || e.when_false ||
+                    !e.arguments.empty() || !e.argument_names.empty() ||
+                    !e.type_arguments.empty() || e.type_arguments_present)
+                throw std::runtime_error("malformed native scalar leaf AST");
+        }
         if (e.kind == E::Variable) return env.count(e.name) ? env.at(e.name) : Hint{};
         if (e.kind == E::String) return {ScalarType::String};
         if (e.kind == E::Boolean) return {ScalarType::Bool};
