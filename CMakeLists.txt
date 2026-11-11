@@ -2224,6 +2224,20 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-selective-tagged-port-test)
     set_tests_properties(native_actor_tag_selective_bounded_receive PROPERTIES TIMEOUT 30)
 
+    # Integrated production BoundedActorPort<MoveOnly> + shared ledger + fixed
+    # slot pool (not merely a standalone slot reference model).
+    add_executable(oreslang-native-preallocated-port-oracle-test
+        tests/native_preallocated_port_reference_model_test.cpp)
+    target_include_directories(oreslang-native-preallocated-port-oracle-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-preallocated-port-oracle-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-preallocated-port-oracle-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-preallocated-port-oracle-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_preallocated_production_port_oracle
+        COMMAND oreslang-native-preallocated-port-oracle-test)
+    set_tests_properties(native_actor_preallocated_production_port_oracle PROPERTIES TIMEOUT 30)
+
     # Independently buildable host primitive: fixed-capacity intrusive slots,
     # compiler-generated tag selectors and generation-fenced scan continuations.
     # This does not yet replace the production BoundedActorPort adapter.
