@@ -2,6 +2,7 @@
 
 #include "oreslang/runtime/ActorMailboxCompletion.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -266,6 +267,8 @@ public:
     // resume on a subsequent authorized actor turn without rescanning the
     // already-tested prefix. Publication is append-only, so no lower sequence
     // can appear after that cursor; the matcher tag MUST stay identical.
+    // Seeking the next sequence has O(log max_frames) cost, not a full prefix
+    // walk. A budget limits tag inspections, not deque middle-erase cost.
     //
     // A matched delivery retains all charged credits until physical ACK.
     // Unmatched messages never move, destruct, lose bytes, or change order.
@@ -293,8 +296,17 @@ public:
         std::lock_guard<std::mutex> guard(state_->mutex);
         std::size_t inspected = 0;
         std::uint64_t last = cursor.through_sequence;
-        for (auto it = state_->queue.begin(); it != state_->queue.end(); ++it) {
-            if (it->sequence <= cursor.through_sequence) continue;
+        // Every port publishes envelopes in strictly increasing sequence
+        // order. Binary seek avoids rescanning an unbounded prior prefix on
+        // each resumed actor turn; std::deque has random-access iterators.
+        // The seek is O(log(queue length)), plus at most scan_budget inspected
+        // tags. Queue length is bounded by max_frames, but erase remains O(n).
+        auto it = std::upper_bound(state_->queue.begin(), state_->queue.end(),
+                cursor.through_sequence,
+                [](std::uint64_t sequence, const Envelope& frame) {
+                    return sequence < frame.sequence;
+                });
+        for (; it != state_->queue.end(); ++it) {
             if (inspected == scan_budget) {
                 return {SelectiveStatus::Continue, std::nullopt, inspected,
                         SelectiveCursor{last, tag, state_}};
