@@ -1,3 +1,4 @@
+#define ORESLANG_GPU_ACTOR_V0_HOST_TEST_SEAM 1
 #include "oreslang/runtime/GpuActorHostTurnBridgeV0.hpp"
 
 #include <cassert>
