@@ -6,6 +6,9 @@
 #include <memory>
 #include <stdexcept>
 #include <thread>
+#include <deque>
+#include <random>
+#include <algorithm>
 #include <utility>
 
 using oreslang::runtime::BoundedActorPort;
@@ -143,7 +146,77 @@ static void actual_priority_inbox_lane() {
     inbox.close();
 }
 
+// Independent fixed-seed FIFO oracle: the production port must select the
+// first matching tag, never disturb unmatched order, and never refund credits
+// until a receipt acknowledges. This is native host modeling, NOT guest AOT.
+static void randomized_tagged_dequeue() {
+    using Port = BoundedActorPort<MoveOnlyMessage>;
+    using Status = Port::SelectiveStatus;
+    Port p(16, 256);
+    std::deque<std::pair<std::uint32_t, int>> expected;
+    std::mt19937 rng(20261110);
+    int next_value = 1;
+    for (int turn = 0; turn < 8000; ++turn) {
+        const auto op = rng() % 3;
+        if (op == 0) {
+            const std::uint32_t tag = 1 + rng() % 4;
+            MoveOnlyMessage m(next_value);
+            const bool admitted = p.offer(std::move(m), 8, tag);
+            CHECK(admitted == (expected.size() < 16));
+            if (admitted) {
+                expected.emplace_back(tag, next_value);
+                ++next_value;
+            } else CHECK(m.value && *m.value == next_value);
+        } else if (op == 1) {
+            const auto tag = std::uint32_t(1 + rng() % 4);
+            const auto hit = std::find_if(expected.begin(), expected.end(),
+                [&](const auto& entry) { return entry.first == tag; });
+            const bool should_match = hit != expected.end();
+            bool matched = false, terminal = false;
+            Port::SelectiveCursor cursor;
+            for (int budget_turn = 0; budget_turn < 18 && !terminal; ++budget_turn) {
+                auto selected = p.try_receive_tagged(tag, 1, cursor);
+                CHECK(selected.inspected <= 1);
+                if (selected.status == Status::Continue) {
+                    CHECK(!selected.delivery);
+                    cursor = std::move(selected.cursor);
+                    continue;
+                }
+                terminal = true;
+                if (selected.status == Status::Matched) {
+                    CHECK(should_match && selected.delivery);
+                    CHECK(*selected.delivery->value().value == hit->second);
+                    CHECK(selected.delivery->acknowledge_released());
+                    CHECK(!selected.delivery->acknowledge_released());
+                    expected.erase(hit);
+                    matched = true;
+                } else CHECK(selected.status == Status::NoMatch && !should_match);
+            }
+            CHECK(terminal && matched == should_match);
+        } else {
+            auto received = p.try_receive();
+            CHECK(bool(received) == !expected.empty());
+            if (received) {
+                CHECK(*received->value().value == expected.front().second);
+                expected.pop_front();
+                CHECK(received->acknowledge_released());
+            }
+        }
+        CHECK(p.used_frames() == expected.size());
+        CHECK(p.used_bytes() == expected.size() * 8);
+    }
+    while (auto r = p.try_receive()) {
+        CHECK(!expected.empty());
+        CHECK(*r->value().value == expected.front().second);
+        expected.pop_front();
+        CHECK(r->acknowledge_released());
+    }
+    CHECK(expected.empty() && p.used_frames() == 0 && p.used_bytes() == 0);
+    p.close();
+}
+
 int main() {
     bounded_port_selective();
     actual_priority_inbox_lane();
+    randomized_tagged_dequeue();
 }
