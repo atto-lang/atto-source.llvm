@@ -1,4 +1,2 @@
-pub fnc main(): int {
-    const int withered = 42;
-    return withered;
-}
+pub fnc main(): int { return withered(42); }
+fnc withered(int value): int { return value; }

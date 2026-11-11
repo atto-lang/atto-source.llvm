@@ -12,7 +12,7 @@ for name in with-scalar-reject with-trivia-reject; do
     grep -q 'WITH_BACKEND_UNSUPPORTED:' "$tmp/$name.err"
     test ! -s "$tmp/$name.ll"
 done
-for name in with-inert-comment with-substring-identifier; do
+for name in with-inert-comment with-substring-identifier with-call-identifier; do
     "$compiler" "$root/tests/with-ownership-v1/$name.atto" >"$tmp/$name.ll" 2>"$tmp/$name.err"
     grep -q 'define ' "$tmp/$name.ll"
 done
