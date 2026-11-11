@@ -115,6 +115,21 @@ private:
             throw std::logic_error("actor graph heap is retiring or executing destructor glue");
     }
 
+    // Only trusted host buffers OUTSIDE this actor's private heap object may
+    // enter a byte-copy boundary. A pointer into slots, metadata or the
+    // owner/borrow gate would expose private data or corrupt allocator state.
+    // Valid requests do not allocate; zero-byte copies remain no-ops.
+    void require_external_span(const void* buffer, std::size_t bytes) const {
+        if (!bytes) return;
+        if (!buffer) throw std::invalid_argument("null actor graph host buffer");
+        const auto start = reinterpret_cast<std::uintptr_t>(buffer);
+        const auto owned = reinterpret_cast<std::uintptr_t>(this);
+        const auto max = std::numeric_limits<std::uintptr_t>::max();
+        if (bytes > max - start || sizeof(*this) > max - owned ||
+                (start < owned + sizeof(*this) && owned < start + bytes))
+            throw std::invalid_argument("actor graph host buffer aliases private heap or wraps");
+    }
+
     Slot& require_node(Handle id) {
         if (id.heap != heap_id_) throw std::logic_error("foreign actor graph handle");
         if (id.slot >= NodeCapacity) throw std::logic_error("invalid actor graph slot");
@@ -234,6 +249,7 @@ public:
         require_open_access(actor);
         if (length > NodeBytes || (length && bytes == nullptr))
             throw std::invalid_argument("invalid actor graph payload");
+        require_external_span(bytes, length);
         for (std::size_t i = 0; i < NodeCapacity; ++i) {
             Slot& slot = slots_[i];
             if (slot.live || slot.generation == std::numeric_limits<std::uint64_t>::max())
@@ -294,6 +310,7 @@ public:
         if (slot.drop) throw std::logic_error("owned objects are not raw byte payloads");
         if (capacity < slot.length || (slot.length && destination == nullptr))
             throw std::invalid_argument("output buffer too small");
+        require_external_span(destination, slot.length);
         if (slot.length) std::memcpy(destination, slot.payload.data(), slot.length);
         return slot.length;
     }
@@ -304,6 +321,7 @@ public:
         if (slot.drop) throw std::logic_error("owned objects cannot be overwritten as bytes");
         if (length > NodeBytes || (length && !bytes))
             throw std::invalid_argument("invalid actor graph payload");
+        require_external_span(bytes, length);
         std::fill(slot.payload.begin(), slot.payload.end(), std::byte{0});
         if (length) std::memcpy(slot.payload.data(), bytes, length);
         slot.length = length;
