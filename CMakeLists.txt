@@ -532,6 +532,14 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    # Real compiler-backed admission of exact shared tuple-pipe v1 sources.
+    # Deliberately UNSUPPORTED: success is not native/AOT guest parity.
+    add_test(NAME native_value_pipe_tuple_v1_unsupported_admission
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_value_pipe_tuple_v1_admission.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_value_pipe_tuple_v1_unsupported_admission
+        PROPERTIES TIMEOUT 180 LABELS "compiler;tuple;unsupported")
     add_test(NAME native_realtime_profile_cli
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
             realtime-profile "$<TARGET_FILE:oreslang-llvmc>")
