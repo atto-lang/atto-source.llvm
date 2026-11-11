@@ -8,25 +8,27 @@
     "blobs": {
       "src/main/cpp/oreslang/runtime/GpuActorHostTurnBridgeV0.hpp": "f49fcb2bfea035ac504ea3e58dc207980df8eb91",
       "tests/gpu_actor_host_turn_bridge_v0_test.cpp": "57294886d72b8b1ff62ef4e07b654774fcb7e2b5",
-      "src/main/cpp/oreslang/runtime/GpuActorOpenClProviderV2.hpp": "effa0a2d4dcf5a236780a6d9b0579a8430e8c8e0",
+      "src/main/cpp/oreslang/runtime/GpuActorOpenClProviderV2.hpp": "78253690fcdc896f2246f266bab7083f6bb1e014",
       "src/main/cpp/oreslang/runtime/GpuActorOpenClRecoveryWorkerV1.hpp": "f7eef7f03a16bd664863ff9be1f850a00be3af49",
-      "tests/gpu_actor_opencl_provider_v2_test.cpp": "9c378919c7767efd4f5b8b4603258c206c710a20",
-      "CMakeLists.txt": "b0d1fee0b7cfaeb6e30caddce4f778299b68cd01"
+      "tests/gpu_actor_opencl_provider_v2_test.cpp": "650886eb2dc85b0b902c48d6d6b5db94dfeebf20",
+      "CMakeLists.txt": "2cda0040c6ffcd353b7613e785c70554d5642954",
+      "tests/gpu_actor_recovery_authority_negative.cpp": "be93e3792a516ebe871046806c9dbc5cad56b12b",
+      "tests/cmake/GpuActorRecoveryAuthorityGate.cmake": "0d9775504c84566a3e855fcc2c0d778cd7187ad6"
     }
   },
   "carrier": {
     "repo": "scintilla-run/scintilla-run-e2e",
     "branch": "carrier/gpu-native-worker-v3-20261110",
-    "head": "b132927c82759603b59c8b94c4b35e4ff7b073b6",
-    "runId": 42958180311,
-    "jobId": 130318167381,
-    "url": "https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42958180311",
+    "head": "7f8e0e2d237b89646ba427a40e4128939c0a1bb7",
+    "runId": 42959491252,
+    "jobId": 130322389355,
+    "url": "https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42959491252",
     "exactBlobChecks": true,
     "noCrossOrgSecretsOrPrivateCheckout": true,
     "gccAsanUbsan": "passed",
     "clangStrict": "passed",
     "assertionsPerCompiler": {
-      "openclV2": 144,
+      "openclV2": 156,
       "actorV1": 6329,
       "v0RegistryMigration": 1169
     },
@@ -40,16 +42,22 @@
     },
     "actualSourceHostOnlyCMake": {
       "gccAsanUbsan": {
-        "passed": 5,
-        "total": 5
+        "passed": 6,
+        "total": 6
       },
       "clang": {
-        "passed": 5,
-        "total": 5
+        "passed": 6,
+        "total": 6
       }
     },
     "fullCompilerBuild": false,
-    "fullRepoCtest": false
+    "fullRepoCtest": false,
+    "compilerNegativeRecovery": {
+      "gcc": "pass - private access",
+      "clang": "pass - private access",
+      "cmakeScriptGcc": "pass",
+      "cmakeScriptClang": "pass"
+    }
   },
   "worker": {
     "inProcess": true,
@@ -64,7 +72,10 @@
     "releaseFailureRecoveryMovedToWorker": true,
     "crashDurable": false,
     "driverHangMayBlockWorkerDestructor": true,
-    "automaticSupervisorActorIntegration": false
+    "automaticSupervisorActorIntegration": false,
+    "nativeRecoveryEntrypointsPrivateToWorkerFriend": true,
+    "directNativeRecoveryCompileNegativeVerified": true,
+    "ordinaryNativeCallerCannotInvokeBlockingRecovery": true
   },
   "hardware": {
     "nativeProbeCompiled": true,
