@@ -3390,17 +3390,30 @@ private:
             require(";");
             value.statements.push_back(std::move(statement));
         }
-        require("return");
-        if (!value.returns_void) {
-            value.result = expression();
-            if (value.scalar_while &&
-                    (value.result->kind != Expression::Kind::Variable ||
-                     value.result->name != value.scalar_while->counter))
-                fail("experimental scalar loop must return the counter");
-            if (terminal_try_finally && !nonthrowing_protected_read(*value.result))
-                fail("native protected try return requires nonthrowing scalar/field read");
+        // An ordinary non-void function/method must explicitly return a
+        // value. Only a void body may fall through to its closing brace.
+        // Braceless expression lambdas have a different AST/result contract;
+        // this statement-bodied function parser must never infer a value.
+        const bool terminal_return = accept("return");
+        if (!terminal_return && !value.returns_void)
+            fail("RETURN_EXPLICIT_REQUIRED: non-void function requires explicit return");
+        if (terminal_return) {
+            if (!value.returns_void) {
+                if (token_.text == ";" || token_.text == "}")
+                    fail("RETURN_VALUE_REQUIRED: non-void return requires a value");
+                value.result = expression();
+                if (value.scalar_while &&
+                        (value.result->kind != Expression::Kind::Variable ||
+                         value.result->name != value.scalar_while->counter))
+                    fail("experimental scalar loop must return the counter");
+                if (terminal_try_finally && !nonthrowing_protected_read(*value.result))
+                    fail("native protected try return requires nonthrowing scalar/field read");
+            } else if (token_.text != ";" && token_.text != "}") {
+                fail("RETURN_VOID_VALUE: void function cannot return a value");
+            }
+            if (!accept(";") && token_.text != "}")
+                fail("expected ';' or closing return brace");
         }
-        if (!accept(";") && token_.text != "}") fail("expected ';' or closing return brace");
         if (terminal_try_finally) {
             require("}");
             // Java/Graal syntax requires catch. This native subset has no
