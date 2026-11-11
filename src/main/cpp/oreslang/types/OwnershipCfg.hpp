@@ -102,12 +102,43 @@ inline PlaceState& place(State& state, const std::string& key) {
 // apply(), and vice versa. Until this verifier has a proven projection tree,
 // reject those mixed layouts instead of allowing a loan to be bypassed.
 // Siblings (p.a and p.b) remain independent places.
+// The flat representation only proves disjointness for named field paths.
+// Array indexes, pointer dereferences, escaped separators and generated
+// unverified place expressions must be lowered to typed PlaceIds first.
+// Otherwise a key like "p[0]" incorrectly appears disjoint from "p" and a
+// write through it could bypass an outstanding exclusive/shared loan.
+// This deliberately restricts the flat verifier to ASCII identifier segments.
 inline void validate_disjoint_place_layout(const State& state) {
+    constexpr std::size_t kMaxPlacePathBytes = 256;
+    constexpr std::size_t kMaxPlacePathSegments = 16;
     for (const auto& item : state) {
         const std::string& key = item.first;
-        if (key.empty() || key.front() == '.' || key.back() == '.' ||
+        if (key.empty() || key.size() > kMaxPlacePathBytes ||
+                key.front() == '.' || key.back() == '.' ||
                 key.find("..") != std::string::npos)
             violation(key, "invalid CFG place path");
+        std::size_t segments = 0;
+        std::size_t at = 0;
+        while (at < key.size()) {
+            if (++segments > kMaxPlacePathSegments)
+                violation(key, "unproven or overdeep CFG field path");
+            const auto valid_start = [](unsigned char ch) {
+                return (ch >= 'A' && ch <= 'Z') ||
+                    (ch >= 'a' && ch <= 'z') || ch == '_';
+            };
+            const auto valid_continuation = [&](unsigned char ch) {
+                return valid_start(ch) || (ch >= '0' && ch <= '9');
+            };
+            if (!valid_start(static_cast<unsigned char>(key[at])))
+                violation(key, "unproven CFG place projection syntax");
+            ++at;
+            while (at < key.size() && key[at] != '.') {
+                if (!valid_continuation(static_cast<unsigned char>(key[at])))
+                    violation(key, "unproven CFG place projection syntax");
+                ++at;
+            }
+            if (at < key.size()) ++at;
+        }
         for (std::size_t dot = key.find('.'); dot != std::string::npos;
                 dot = key.find('.', dot + 1)) {
             if (state.count(key.substr(0, dot)))
