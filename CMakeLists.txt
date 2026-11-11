@@ -2224,6 +2224,21 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-selective-tagged-port-test)
     set_tests_properties(native_actor_tag_selective_bounded_receive PROPERTIES TIMEOUT 30)
 
+    # Independently buildable host primitive: fixed-capacity intrusive slots,
+    # compiler-generated tag selectors and generation-fenced scan continuations.
+    # This does not yet replace the production BoundedActorPort adapter.
+    add_executable(oreslang-preallocated-selective-slots-test
+        tests/preallocated_selective_slots_test.cpp)
+    target_include_directories(oreslang-preallocated-selective-slots-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-preallocated-selective-slots-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-preallocated-selective-slots-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-preallocated-selective-slots-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_preallocated_selective_slots
+        COMMAND oreslang-preallocated-selective-slots-test)
+    set_tests_properties(native_actor_preallocated_selective_slots PROPERTIES TIMEOUT 30)
+
     add_executable(oreslang-native-mailbox-parallel-terminal-test
         tests/native_mailbox_parallel_terminal_test.cpp)
     target_include_directories(oreslang-native-mailbox-parallel-terminal-test PRIVATE
