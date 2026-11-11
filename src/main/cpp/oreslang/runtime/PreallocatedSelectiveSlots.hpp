@@ -22,6 +22,9 @@ template<class T>
 class PreallocatedSelectiveSlots final {
 public:
     static constexpr std::size_t none = std::numeric_limits<std::size_t>::max();
+    // The native actor-turn admission gate already caps capacity at 65,536.
+    // Reject unbounded/invalid requests BEFORE allocating the slot vector.
+    static constexpr std::size_t max_capacity = 65536;
     struct Frame {
         std::uint64_t sequence;
         std::uint32_t tag;
@@ -52,11 +55,9 @@ public:
     };
 
     explicit PreallocatedSelectiveSlots(std::size_t capacity)
-        : slots_(capacity), owner_(new_owner()) {
-        if (capacity == 0 || capacity == none)
-            throw std::invalid_argument("positive fixed actor mailbox capacity required");
-        for (std::size_t i = 0; i < capacity; ++i)
-            slots_[i].free_next = i + 1 == capacity ? none : i + 1;
+        : slots_(checked_capacity(capacity)), owner_(new_owner()) {
+        for (std::size_t i = 0; i < slots_.size(); ++i)
+            slots_[i].free_next = i + 1 == slots_.size() ? none : i + 1;
         free_ = 0;
     }
     PreallocatedSelectiveSlots(const PreallocatedSelectiveSlots&) = delete;
@@ -127,6 +128,11 @@ public:
     }
 
 private:
+    static std::size_t checked_capacity(std::size_t capacity) {
+        if (capacity == 0 || capacity > max_capacity)
+            throw std::invalid_argument("actor mailbox capacity outside bounded range");
+        return capacity;
+    }
     struct Slot {
         std::optional<Frame> frame;
         std::size_t prev = none, next = none, free_next = none;
@@ -134,10 +140,16 @@ private:
     };
     static std::uint64_t new_owner() {
         static std::atomic<std::uint64_t> owners{1};
-        const auto id = owners.fetch_add(1, std::memory_order_relaxed);
-        if (id == 0 || id == std::numeric_limits<std::uint64_t>::max())
-            throw std::overflow_error("mailbox incarnation sequence exhausted");
-        return id;
+        auto id = owners.load(std::memory_order_relaxed);
+        for (;;) {
+            // Do NOT fetch_add first and test later: that wraps the counter
+            // and eventually permits old mailbox owner IDs to be reused.
+            if (id == 0 || id == std::numeric_limits<std::uint64_t>::max())
+                throw std::overflow_error("mailbox incarnation sequence exhausted");
+            if (owners.compare_exchange_weak(id, id + 1,
+                    std::memory_order_relaxed, std::memory_order_relaxed))
+                return id;
+        }
     }
     std::optional<Frame> detach(std::size_t i) {
         Slot& slot = slots_[i];
