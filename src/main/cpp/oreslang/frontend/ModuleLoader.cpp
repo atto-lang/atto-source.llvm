@@ -76,7 +76,19 @@ public:
             if (index && !unit.program.actors.empty())
                 fail(unit, "native imported actor declarations require typed module actor placement lowering");
             for (const auto& type : unit.program.sum_types) {
-                bool found = false; for (const auto& existing : linked.sum_types) if (existing.name == type.name) found = true;
+                bool found = false;
+                for (const auto& existing : linked.sum_types) {
+                    if (existing.name != type.name) continue;
+                    // Independently parsed modules may legitimately repeat
+                    // Option<int>. Only identical scalar ABI descriptors may
+                    // be coalesced, otherwise fail before type/IR admission.
+                    if (existing.kind != type.kind ||
+                            existing.value_type != type.value_type ||
+                            existing.error_type != type.error_type)
+                        fail(unit, "conflicting linked native sum type descriptor '" + type.name + "'");
+                    found = true;
+                    break;
+                }
                 if (!found) linked.sum_types.push_back(type);
             }
             for (auto& fn : unit.program.functions) {
