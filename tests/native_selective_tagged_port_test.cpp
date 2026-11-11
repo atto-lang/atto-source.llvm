@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
+#include <type_traits>
 #include <thread>
 #include <deque>
 #include <random>
@@ -15,6 +16,9 @@ using oreslang::runtime::BoundedActorPort;
 using oreslang::runtime::PriorityActorInbox;
 
 #define CHECK(x) do { if (!(x)) throw std::runtime_error("selective port contract: " #x); } while (false)
+
+static_assert(!std::is_aggregate_v<BoundedActorPort<int>::SelectiveCursor>,
+              "tagged selective resume cursors must not expose forgeable fields");
 
 struct MoveOnlyMessage {
     std::unique_ptr<int> value;
@@ -47,7 +51,7 @@ static void bounded_port_selective() {
     // Budgeted scan yields WITHOUT consuming even a single unmatched message.
     auto yielded = p.try_receive_tagged(shutdown, 2);
     CHECK(yielded.status == Status::Continue && !yielded.delivery);
-    CHECK(yielded.inspected == 2 && yielded.cursor.through_sequence == 2);
+    CHECK(yielded.inspected == 2 && yielded.cursor.through_sequence() == 2);
     CHECK(p.used_frames() == 3 && p.used_bytes() == 48);
     expect_reject([&] { (void)p.try_receive_tagged(payment, 2, yielded.cursor); });
     expect_reject([&] { (void)p.try_receive_tagged(shutdown, 0, yielded.cursor); });
