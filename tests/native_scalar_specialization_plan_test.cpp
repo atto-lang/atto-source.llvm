@@ -55,6 +55,7 @@ int main() {
             if (image.direct_targets.size() != 1 || target == nullptr ||
                 target->selector != selector ||
                 target->emitted_suffix != "$atto_g1$int" ||
+                target->emitted_full_symbol != "identity$atto_g1$int" ||
                 target->lowered_arity != 1 ||
                 target->concrete_types != std::vector<std::string>{"int"} ||
                 image.closure.concrete_symbols != 1 ||
@@ -121,6 +122,17 @@ int main() {
             }
             {
                 auto forged = *original;
+                forged.emitted_full_symbol = "shadow.identity$atto_g1$int";
+                // The frozen factory binds this to the emitted module name;
+                // this mutation is caught at the module/overload planner.
+                must_reject([&] {
+                    (void)verify_native_i64_scalar_call_witness(
+                        forged, selector, original->emitted_full_symbol,
+                        original->emitted_full_symbol, 1, {"value"}, true);
+                }, "native AOT static call witness identity mismatch");
+            }
+            {
+                auto forged = *original;
                 forged.exported = !forged.exported;
                 reject_mutation(std::move(forged));
             }
@@ -179,7 +191,8 @@ int main() {
             const auto frozen = freeze_native_i64_dispatch_image(left);
             const auto symbol = plan_native_aot_function_symbol(
                 left, left.functions[0], frozen, 1, false, false);
-            if (symbol != "payments.identity$atto_g1$int")
+            if (symbol != "payments.identity$atto_g1$int" ||
+                frozen.find_direct(native_function_slot("identity", 1))->emitted_full_symbol != symbol)
                 throw std::runtime_error("qualified native generic ABI symbol mismatch");
             auto right = fixture();
             right.module = "inventory";
@@ -537,7 +550,7 @@ int main() {
             must_reject([&] { (void)freeze_native_i64_specializations(oversized); },
                         "native AOT specialization byte estimate exceeded");
         }
-        std::cout << "NATIVE_I64_SPECIALIZATION_PLAN|symbols=1|negative_cases=44\n";
+        std::cout << "NATIVE_I64_SPECIALIZATION_PLAN|symbols=1|negative_cases=45\n";
     } catch (const std::exception& error) {
         std::cerr << "NATIVE_I64_SPECIALIZATION_PLAN_FAIL: " << error.what() << '\n';
         return 1;
