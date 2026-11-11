@@ -1,4 +1,4 @@
-// Typed AttoLang equality/inequality lowered to native LLVM instructions.
+// Canonical AttoLang eq/neq/!eq scalar guest; same bytes for LLVM and .NET.
 pub fnc main(): int {
     let int a = 7;
     let int b = 8;
