@@ -48,3 +48,17 @@ Record source PR head SHA, full or precisely scoped Git tree/blob inventory, run
 ## Merge gate
 
 Keep this PR **draft**. A host-only shape-rule green run can support the standalone type algebra, not LLVM functor parity or zero-GC. No source-free model, static grep, parser-only negative, or no-step CI may upgrade the registry's LLVM PENDING status.
+
+
+## 2026-11-11 audit and hardening addendum — source only until executed
+
+The draft PR now also includes CTest registration in CMakeLists.txt for native_functor_recursive_type_shape_host_only, in addition to the standalone GCC/Clang workflow. Added guards include:
+- Recursive verification of compiler-constructed Type trees (not just parsed strings), depth/node limits, qualified identifier grammar, generic arity, unresolved holes, and nested void slots pending an explicit Unit ABI. This is a **native pre-lowering rule only**, not a claim about all possible high-level language Result<void,E> semantics.
+- Canonical native sum descriptor table validation: known enum values, scalar slot types, canonical Option error slots, unique names, and no fabricated nested sum layout identity.
+- Real native sum resolver rejects unused/hidden constructor operands, conditional arms, generic arguments and named arguments before lowering, plus malformed scalar leaf payload ASTs.
+- Unknown affine owner-state enum values fail closed. This is a host-policy gate only; LLVM ownership, destructor and zero-GC guest proof remain NOT_EXECUTED.
+- Host mutation tests for all gates. The dedicated workflow compares raw checkout bytes against Git blobs for every changed compiler/test/CMake/workflow file, including ignored-untracked checks, before compilation.
+
+**Important audit boundaries:** The recursive standalone Type helper is NOT yet the complete AttoLang frontend typechecker. The scalar-sum resolver guard is real production compiler code, but only rejects malformed input; it does not generate nested ADT IR, closures, or native functor code. Preserve the existing scalar Option/Result ABI and do not add an untyped i64 escape hatch. Review the intended Unit/void interaction separately before extending the frontend.
+
+**Required evidence:** An exact-head C++17 strict compile and execution of native_functor_recursive_type_shape_host_only, plus Clang ASan/UBSan host execution, must succeed with real job steps. Then the unchanged conformance PR #689 source blobs must run through oreslang-llvmc, O0/O2 native guest linking/execution, strict 36 positives/15 diagnostic negatives, and destructor/allocator sanitizer proof. The first pass alone cannot upgrade LLVM PENDING. Open source-export security incidents #22 and #77 still block unapproved cross-org mirrors.
