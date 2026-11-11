@@ -181,7 +181,7 @@ def verify(compiler, clang):
     with tempfile.TemporaryDirectory(prefix="oreslang-native-generics-") as tmp:
         tmp = Path(tmp)
         for name, (source, exit_code) in VALID.items():
-            path = tmp / (name + ".ores")
+            path = tmp / (name + ".atto")
             path.write_text(source)
             result = run([str(compiler), str(path)])
             if result.returncode or not result.stdout.startswith(b"; ModuleID"):
@@ -193,7 +193,7 @@ def verify(compiler, clang):
                 ir = result.stdout.decode("utf-8")
                 symbol = r'@(?:"identity\$atto_g1\$int"|identity\$atto_g1\$int)'
                 definitions = re.findall(
-                    rf'(?m)^define\s+[^\n]*?{symbol}\s*\(', ir)
+                    rf'(?m)^define\s+internal\s+[^\n]*?{symbol}\s*\(', ir)
                 direct_calls = re.findall(
                     rf'\bcall\s+[^\n]*?{symbol}\s*\(', ir)
                 if len(definitions) != 1 or len(direct_calls) != 2:
@@ -213,7 +213,7 @@ def verify(compiler, clang):
                 raise AssertionError(f"{name}: guest exit {executed.returncode}, expected {exit_code}, stderr={executed.stderr!r}")
             print(f"PASS guest {name}: {exit_code}", flush=True)
         for name, (source, diagnostic) in INVALID.items():
-            path = tmp / (name + ".ores")
+            path = tmp / (name + ".atto")
             path.write_text(source)
             result = run([str(compiler), str(path)])
             if result.returncode == 0 or result.returncode < 0 or result.stdout:
