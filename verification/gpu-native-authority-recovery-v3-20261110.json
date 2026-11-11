@@ -1,0 +1,87 @@
+{
+  "schema": "attolang.gpu-native-authority-recovery-v3/1",
+  "recordedOn": "2026-11-10",
+  "source": {
+    "repo": "ores-truffle-oreslang/oreslang-source.llvm",
+    "branch": "feat/gpu-native-authority-recovery-v3-20261110",
+    "stackedOn": "security/gpu-v0-test-seam-removal-20261110",
+    "blobs": {
+      "src/main/cpp/oreslang/runtime/GpuActorHostTurnBridgeV0.hpp": "f49fcb2bfea035ac504ea3e58dc207980df8eb91",
+      "tests/gpu_actor_host_turn_bridge_v0_test.cpp": "57294886d72b8b1ff62ef4e07b654774fcb7e2b5",
+      "src/main/cpp/oreslang/runtime/GpuActorOpenClProviderV2.hpp": "effa0a2d4dcf5a236780a6d9b0579a8430e8c8e0",
+      "src/main/cpp/oreslang/runtime/GpuActorOpenClRecoveryWorkerV1.hpp": "f7eef7f03a16bd664863ff9be1f850a00be3af49",
+      "tests/gpu_actor_opencl_provider_v2_test.cpp": "9c378919c7767efd4f5b8b4603258c206c710a20",
+      "CMakeLists.txt": "b0d1fee0b7cfaeb6e30caddce4f778299b68cd01"
+    }
+  },
+  "carrier": {
+    "repo": "scintilla-run/scintilla-run-e2e",
+    "branch": "carrier/gpu-native-worker-v3-20261110",
+    "head": "b132927c82759603b59c8b94c4b35e4ff7b073b6",
+    "runId": 42958180311,
+    "jobId": 130318167381,
+    "url": "https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42958180311",
+    "exactBlobChecks": true,
+    "noCrossOrgSecretsOrPrivateCheckout": true,
+    "gccAsanUbsan": "passed",
+    "clangStrict": "passed",
+    "assertionsPerCompiler": {
+      "openclV2": 144,
+      "actorV1": 6329,
+      "v0RegistryMigration": 1169
+    },
+    "legacyV0DirectAssertionsRetired": 6257,
+    "preexistingOpenClG3": "passed under GCC sanitizers",
+    "compilerNegativeAuthority": {
+      "gcc": "pass - private",
+      "clang": "pass - private",
+      "cmakeScriptGcc": "pass",
+      "cmakeScriptClang": "pass"
+    },
+    "actualSourceHostOnlyCMake": {
+      "gccAsanUbsan": {
+        "passed": 5,
+        "total": 5
+      },
+      "clang": {
+        "passed": 5,
+        "total": 5
+      }
+    },
+    "fullCompilerBuild": false,
+    "fullRepoCtest": false
+  },
+  "worker": {
+    "inProcess": true,
+    "dedicatedThread": true,
+    "capacityBounded": true,
+    "generationAndTurnScoped": true,
+    "deduplicateJobs": true,
+    "stalledMockNativeFinishDoesNotBlockActorPoll": true,
+    "deviceLossRecoveryMovedToWorker": true,
+    "unknownBeginRecoveryMovedToWorker": true,
+    "unknownKernelRecoveryMovedToWorker": true,
+    "releaseFailureRecoveryMovedToWorker": true,
+    "crashDurable": false,
+    "driverHangMayBlockWorkerDestructor": true,
+    "automaticSupervisorActorIntegration": false
+  },
+  "hardware": {
+    "nativeProbeCompiled": true,
+    "probeAttempted": true,
+    "exitCode": 77,
+    "marker": "GPU_ACTOR_V2_NO_GPU_RUNTIME",
+    "deviceKernelExecuted": false,
+    "compiledAttoGuestExecuted": false,
+    "cpuFallback": false
+  },
+  "claims": {
+    "nativeHostLifecyclePassed": true,
+    "sourceProductionV0MacroRemoved": true,
+    "physicallyAuthenticatedGpuEvent": false,
+    "fullAotGuest": false,
+    "fiveBackendParity": false
+  },
+  "releaseReady": false,
+  "draftOnly": true
+}
