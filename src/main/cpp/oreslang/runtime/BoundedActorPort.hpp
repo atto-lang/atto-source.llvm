@@ -1,11 +1,10 @@
 #pragma once
 
 #include "oreslang/runtime/ActorMailboxCompletion.hpp"
+#include "oreslang/runtime/PreallocatedSelectiveSlots.hpp"
 
-#include <map>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <exception>
 #include <limits>
 #include <memory>
@@ -30,28 +29,20 @@ template <typename T>
 class BoundedActorPort final {
     static_assert(std::is_move_constructible_v<T>, "actor payload must be movable");
 
-    struct Envelope {
-        std::uint64_t id;
-        std::size_t bytes;
-        std::unique_ptr<T> payload;
-        std::uint64_t sequence;
-        // Compiler/generated transport discriminant. Zero means an untagged
-        // legacy frame and must never match a typed selective receive.
-        std::uint32_t match_tag;
-    };
+    using SlotQueue = PreallocatedSelectiveSlots<T>;
+    using Envelope = typename SlotQueue::Frame;
     struct State {
         explicit State(std::size_t frames, std::size_t bytes,
                        std::shared_ptr<ActorMailboxCompletion> ledger)
-            : max_frames(frames), max_bytes(bytes), ledger(std::move(ledger)) {
-            if (!frames || !bytes) throw std::invalid_argument("positive port limits required");
+            : queue(frames), max_frames(frames), max_bytes(bytes),
+              ledger(std::move(ledger)) {
+            if (!bytes) throw std::invalid_argument("positive port byte limit required");
         }
         std::mutex mutex;
-        // Ordered by publication sequence. A selective middle erase no longer
-        // shifts O(n) remaining envelopes or calls payload move assignment.
-        // This uses balanced-tree allocations and O(log n) updates: it is NOT
-        // a hard-real-time data structure until replaced by a preallocated
-        // bounded index/slot queue with measured worst-case costs.
-        std::map<std::uint64_t, Envelope> queue;
+        // Fixed slot capacity allocated once at port construction. The
+        // caller-held mutex serializes all queue modifications. Retirement
+        // must drain queued slots before the State destructor.
+        SlotQueue queue;
         std::size_t max_frames, max_bytes;
         std::size_t used_frames = 0, used_bytes = 0;
         // Preparations reserve the same credits as queued/checked-out frames.
@@ -170,7 +161,6 @@ public:
         } reservation{state, bytes};
 
         auto owned = std::make_unique<T>(std::move(payload));
-        Envelope frame{0, bytes, std::move(owned), 0, match_tag};
         {
             std::lock_guard<std::mutex> guard(state->mutex);
             // A concurrently running close() can seal new admissions while
@@ -178,23 +168,18 @@ public:
             // already owns its credits, so it must be allowed to publish.
             if (state->next_id == 0)
                 throw std::overflow_error("actor frame identity exhausted");
-            frame.id = state->next_id;
-            // No user payload destruction can occur under the mutex on
-            // allocation failure: the local frame outlives this guard.
+            const auto id = state->next_id;
+            // Physical slot capacity was reserved in used_frames before the
+            // user T move. A rejected/malformed insertion retains 'owned';
+            // its destructor runs after this mutex guard unwinds.
+            const auto publish = [&](std::uint64_t sequence) {
+                if (!state->queue.push(owned, bytes, match_tag, sequence, id))
+                    throw std::logic_error("reserved actor slot unexpectedly full");
+            };
             if (state->ledger) {
-                state->ledger->publish([&](std::uint64_t sequence) {
-                    frame.sequence = sequence;
-                    const auto [at, inserted] = state->queue.emplace(
-                            frame.sequence, std::move(frame));
-                    if (!inserted) throw std::logic_error("duplicate actor message sequence");
-                    (void)at;
-                });
+                state->ledger->publish(publish);
             } else {
-                frame.sequence = frame.id;
-                const auto [at, inserted] = state->queue.emplace(
-                        frame.sequence, std::move(frame));
-                if (!inserted) throw std::logic_error("duplicate actor message sequence");
-                (void)at;
+                publish(id);
             }
             ++state->next_id;
             --state->pending_prepares;
@@ -233,32 +218,24 @@ public:
         ++state->pending_prepares;
 
         try {
-            Envelope frame{state->next_id, bytes, nullptr, 0, match_tag};
+            const auto id = state->next_id;
+            // push() transfers the existing owner only after validating slot
+            // and sequence admission. This path allocates no message node.
+            const auto publish = [&](std::uint64_t sequence) {
+                if (!state->queue.push(payload, bytes, match_tag, sequence, id))
+                    throw std::logic_error("reserved actor slot unexpectedly full");
+            };
             if (state->ledger) {
-                state->ledger->publish([&](std::uint64_t sequence) {
-                    frame.sequence = sequence;
-                    const auto [at, inserted] = state->queue.emplace(
-                            frame.sequence, std::move(frame));
-                    if (!inserted) throw std::logic_error("duplicate actor message sequence");
-                    (void)at;
-                });
+                state->ledger->publish(publish);
             } else {
-                frame.sequence = frame.id;
-                const auto [at, inserted] = state->queue.emplace(
-                        frame.sequence, std::move(frame));
-                if (!inserted) throw std::logic_error("duplicate actor message sequence");
-                (void)at;
+                publish(id);
             }
-            // Non-throwing transfer AFTER queue publication; a receiver
-            // cannot observe the envelope until the port mutex is released.
-            state->queue.rbegin()->second.payload = std::move(payload);
             ++state->next_id;
             --state->pending_prepares;
             return true;
         } catch (...) {
-            // No T ownership moved on a throwing publication. The empty
-            // envelope is not retained by the strong deque insertion
-            // guarantee for noexcept-movable Envelope.
+            // The caller retains ownership on all validation/rejection
+            // paths; no payload destructor executes while holding the lock.
             --state->pending_prepares;
             --state->used_frames;
             state->used_bytes -= bytes;
@@ -269,11 +246,9 @@ public:
 
     std::optional<Delivery> try_receive() {
         std::lock_guard<std::mutex> guard(state_->mutex);
-        if (state_->queue.empty()) return std::nullopt;
-        auto head = state_->queue.begin();
-        auto frame = std::move(head->second);
-        state_->queue.erase(head);
-        return std::optional<Delivery>(Delivery(state_, std::move(frame)));
+        auto frame = state_->queue.pop_front();
+        if (!frame) return std::nullopt;
+        return std::optional<Delivery>(Delivery(state_, std::move(*frame)));
     }
 
     // Stage-1 selective receive: inspect AOT-generated immutable message
@@ -281,32 +256,12 @@ public:
     // while holding the mailbox lock. This is a **host runtime primitive**,
     // not a guest-language parser/typed-pattern implementation.
     //
-    // The continuation is tied to this physical port. An incomplete scan can
-    // resume on a subsequent authorized actor turn without rescanning the
-    // already-tested prefix. Publication is append-only, so no lower sequence
-    // can appear after that cursor; the matcher tag MUST stay identical.
-    // Seeking and erasing cost O(log max_frames), with at most scan_budget
-    // tag inspections; balanced-tree allocations still need an RT replacement.
-    //
-    // A matched delivery retains all charged credits until physical ACK.
-    // Unmatched messages never move, destruct, lose bytes, or change order.
+    // Typed tags are generated and validated by the compiler/runtime.
+    // A cursor is physical-queue-bound, and a resumed scan validates slot
+    // generation and tag before inspecting at most scan_budget messages.
+    // Matched frames retain all physical credits until ACK.
     enum class SelectiveStatus { Matched, Continue, NoMatch };
-    // The cursor is opaque: a caller cannot fabricate a skip-ahead sequence,
-    // substitute a forged tag, or attach it to a different mailbox owner.
-    // Only the producing physical port can mint a continuation.
-    class SelectiveCursor final {
-    public:
-        SelectiveCursor() = default;
-        std::uint64_t through_sequence() const noexcept { return through_sequence_; }
-    private:
-        friend class BoundedActorPort<T>;
-        SelectiveCursor(std::uint64_t through, std::uint32_t tag,
-                        std::weak_ptr<State> owner) noexcept
-            : through_sequence_(through), tag_(tag), owner_(std::move(owner)) {}
-        std::uint64_t through_sequence_ = 0;
-        std::uint32_t tag_ = 0;
-        std::weak_ptr<State> owner_;
-    };
+    using SelectiveCursor = typename SlotQueue::Cursor;
     struct SelectiveResult {
         SelectiveStatus status;
         std::optional<Delivery> delivery;
@@ -317,40 +272,24 @@ public:
     SelectiveResult try_receive_tagged(
             std::uint32_t tag, std::size_t scan_budget,
             const SelectiveCursor& cursor = {}) {
-        if (tag == 0 || scan_budget == 0)
-            throw std::invalid_argument("selective receive needs typed tag and positive scan budget");
-        if (cursor.through_sequence_ != 0 &&
-                (cursor.tag_ != tag || cursor.owner_.lock() != state_))
-            throw std::invalid_argument("stale, foreign or mismatched selective scan cursor");
         std::lock_guard<std::mutex> guard(state_->mutex);
-        std::size_t inspected = 0;
-        std::uint64_t last = cursor.through_sequence_;
-        // Each sequence has a unique balanced-tree key. Resume skips the
-        // already-visited prefix with logarithmic lookup; a match unlinks in
-        // O(log n) rather than shifting O(n) move-only message envelopes.
-        // This is still NOT hard-real-time: tree nodes allocate on publish.
-        auto it = state_->queue.upper_bound(cursor.through_sequence_);
-        for (; it != state_->queue.end(); ++it) {
-            if (inspected == scan_budget) {
-                return {SelectiveStatus::Continue, std::nullopt, inspected,
-                        SelectiveCursor{last, tag, state_}};
-            }
-            ++inspected;
-            last = it->second.sequence;
-            if (it->second.match_tag != tag) continue;
-
-            // Only move the envelope's owning unique_ptr, never the user T,
-            // and unlink one balanced-tree node under the port lock without
-            // invoking user-supplied payload code.
-            auto frame = std::move(it->second);
-            state_->queue.erase(it);
-            return {SelectiveStatus::Matched,
-                    std::optional<Delivery>(Delivery(state_, std::move(frame))),
-                    inspected, {}};
+        auto selected = state_->queue.select(tag, scan_budget, cursor);
+        switch (selected.status) {
+            case SlotQueue::Status::Matched:
+                if (!selected.frame)
+                    throw std::logic_error("selective hit without owned frame");
+                return {SelectiveStatus::Matched,
+                        std::optional<Delivery>(
+                            Delivery(state_, std::move(*selected.frame))),
+                        selected.inspected, {}};
+            case SlotQueue::Status::Continue:
+                return {SelectiveStatus::Continue, std::nullopt,
+                        selected.inspected, std::move(selected.cursor)};
+            case SlotQueue::Status::NoMatch:
+                return {SelectiveStatus::NoMatch, std::nullopt,
+                        selected.inspected, {}};
         }
-        // A new enqueue after this observation must start a NEW scan.
-        // Retaining an exhausted cursor could miss future messages.
-        return {SelectiveStatus::NoMatch, std::nullopt, inspected, {}};
+        throw std::logic_error("invalid selective mailbox status");
     }
 
     std::size_t used_frames() const {
