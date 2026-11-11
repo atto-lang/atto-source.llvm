@@ -302,6 +302,27 @@ inline Analysis verify(const Graph& graph) {
                 violation(op.place, "duplicate lexical loan identity");
         }
     }
+    // The verifier currently starts from block 0. A disconnected but
+    // structurally well-formed block would otherwise receive no analysis,
+    // and later compiler transforms could expose unverified operations.
+    // Reject the entire typed CFG unless every declared block is reachable.
+    std::vector<bool> reachable(graph.blocks.size(), false);
+    std::deque<std::size_t> pending{0};
+    reachable[0] = true;
+    while (!pending.empty()) {
+        const auto block_id = pending.front();
+        pending.pop_front();
+        for (const auto next : graph.blocks[block_id].successors) {
+            if (!reachable[next]) {
+                reachable[next] = true;
+                pending.push_back(next);
+            }
+        }
+    }
+    for (std::size_t block_id = 0; block_id < reachable.size(); ++block_id)
+        if (!reachable[block_id])
+            violation(std::to_string(block_id), "unreachable CFG block");
+
     // Reject malformed initial abstract states before any CFG edge is
     // processed. Unknown bits and contradictory live-loan provenance
     // must not silently enter the fixed-point lattice.
