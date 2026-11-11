@@ -24,6 +24,43 @@ template<class F> void require_invalid(F&& f) {
 static_assert(!std::is_aggregate_v<Q::Cursor>);
 static_assert(!std::is_move_constructible_v<Q>);
 
+// Simulate an actor arena's physical-release hook. The fixed slot pool must
+// transfer this callback-bearing unique owner without changing its deleter,
+// refunding ownership prematurely, or calling cleanup on selective checkout.
+struct ArenaCleanup {
+  std::atomic<int>* released;
+  void operator()(int* value) const noexcept {
+    released->fetch_add(1,std::memory_order_relaxed);
+    delete value;
+  }
+};
+static_assert(std::is_nothrow_move_constructible_v<ArenaCleanup>);
+static_assert(std::is_nothrow_invocable_v<ArenaCleanup&, int*>);
+static void arena_owner_release_gate() {
+  using ArenaSlots=PreallocatedSelectiveSlots<int,ArenaCleanup>;
+  std::atomic<int> released{0};
+  {
+    ArenaSlots inbox(2);
+    ArenaSlots::Owner one(new int(41),ArenaCleanup{&released});
+    ArenaSlots::Owner two(new int(42),ArenaCleanup{&released});
+    REQUIRE(inbox.push(one,8,9,1));
+    REQUIRE(inbox.push(two,8,7,2));
+    REQUIRE(!one && !two && released.load()==0);
+    auto selected=inbox.select(7,2);
+    REQUIRE(selected.status==ArenaSlots::Status::Matched && selected.frame);
+    REQUIRE(*selected.frame->payload==42 && released.load()==0);
+    REQUIRE(inbox.size()==1 && released.load()==0);
+    selected.frame.reset(); // caller's physical quiescence/ACK boundary
+    REQUIRE(released.load()==1);
+    auto remaining=inbox.pop_front();
+    REQUIRE(remaining && *remaining->payload==41);
+    REQUIRE(released.load()==1);
+    remaining.reset();
+    REQUIRE(released.load()==2 && inbox.size()==0);
+  }
+  REQUIRE(released.load()==2);
+}
+
 // The slot pool deliberately has no internal mutex. This exercises its
 // actual contract: a trusted host scheduler must serialize mutations under
 // the physical mailbox lock. Payload ownership moves exactly once on publish.
@@ -78,6 +115,7 @@ static void concurrent_external_lock_oracle() {
 }
 
 int main() {
+  arena_owner_release_gate();
   concurrent_external_lock_oracle();
   // Reject bad capacities before allocation, rather than requesting an
   // enormous vector and accidentally throwing std::bad_alloc/length_error.
