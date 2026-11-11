@@ -18,21 +18,12 @@ fn call_operands(ir: &str) -> Vec<String> {
                 .or_else(|| line.split_once(" invoke ").map(|(_, s)| s))
                 .or_else(|| line.strip_prefix("call "))
                 .or_else(|| line.strip_prefix("invoke "))?;
-            Some(operand.split('(').next().unwrap_or(operand).trim().to_string())
+            // The rightmost '(' starts call arguments; earlier parentheses
+            // may describe a function-pointer type, e.g. i64 (ptr) %fp.
+            Some(operand.rsplit_once('(').map(|(before, _)| before)
+                .unwrap_or(operand).trim().to_string())
         })
         .collect()
-}
-
-fn contains_method_identity(symbol: &str, target: &str) -> bool {
-    symbol.match_indices(target).any(|(start, _)| {
-        let bytes = symbol.as_bytes();
-        let before_ok = start == 0
-            || !bytes[start - 1].is_ascii_alphanumeric() && bytes[start - 1] != b'_';
-        let after = start + target.len();
-        let after_ok = after == symbol.len()
-            || !bytes[after].is_ascii_alphanumeric() && bytes[after] != b'_';
-        before_ok && after_ok
-    })
 }
 
 fn require_direct_method_calls(ir: &str, targets: &[&str]) -> Result<(), String> {
@@ -42,23 +33,21 @@ fn require_direct_method_calls(ir: &str, targets: &[&str]) -> Result<(), String>
         // A typed direct callee contains @symbol or @"quoted.symbol".
         // A function-pointer operand without @ is a regression for this
         // deliberately non-polymorphic, closed-world test program.
-        if let Some(at) = operands.rfind('@') {
-            let symbol = operands[at + 1..].trim_matches('"');
-            for target in targets {
-                if contains_method_identity(symbol, target) {
-                    found.insert(*target);
+        if let Some(token) = operands.split_whitespace().last() {
+            if let Some(symbol) = token.strip_prefix('@') {
+                // Match the *entire* compiler ABI symbol. Prefix, suffix,
+                // namespace and arity lookalikes must not satisfy this gate.
+                let symbol = symbol.trim_matches('"');
+                if targets.contains(&symbol) {
+                    found.insert(symbol.to_string());
                 }
+            } else if token.starts_with('%') {
+                return Err(format!("unexpected indirect LLVM call: {operands}"));
             }
-        } else if operands
-            .split_whitespace()
-            .last()
-            .is_some_and(|token| token.starts_with('%'))
-        {
-            return Err(format!("unexpected indirect LLVM call: {operands}"));
         }
     }
     for target in targets {
-        if !found.contains(target) {
+        if !found.contains(*target) {
             return Err(format!("missing emitted direct LLVM method call: {target}"));
         }
     }
@@ -79,6 +68,17 @@ pub fnc main():int{
   let mut Counter c=new Counter();
   c.add(2);
   return c.read();
+}
+"#;
+
+    const OVERLOADED: &str = r#"define class Box as
+  let int value=20;
+  pub read():int{return self.value;}
+  pub read(int n):int{return self.value+n;}
+end
+pub fnc main():int{
+  let Box b=new Box();
+  return b.read()+b.read(2);
 }
 "#;
 
@@ -117,37 +117,49 @@ pub fnc main():int{
         Ok(())
     }
 
+    fn compile_and_execute(compiler: &Path, clang: &Path, root: &Path, stem: &str,
+                           source: &str, expected_calls: &[&str]) -> Result<(), String> {
+        let source_path = root.join(format!("{stem}.atto"));
+        fs::write(&source_path, source).map_err(|err| err.to_string())?;
+        let compiled = compile_source(compiler, &source_path)?;
+        if !compiled.status.success() {
+            return Err(format!("{stem}: compiler rejection: {}",
+                String::from_utf8_lossy(&compiled.stderr)));
+        }
+        let ir = String::from_utf8(compiled.stdout)
+            .map_err(|_| format!("{stem}: compiler returned non-UTF8 LLVM IR"))?;
+        require_direct_method_calls(&ir, expected_calls)?;
+        let llvm_path = root.join(format!("{stem}.ll"));
+        fs::write(&llvm_path, ir).map_err(|err| err.to_string())?;
+        for opt in ["-O0", "-O2"] {
+            let binary = root.join(format!("{stem}_{}", if opt == "-O0" { "o0" } else { "o2" }));
+            let link = Command::new(clang).args([opt, "-x", "ir"]).arg(&llvm_path)
+                .arg("-o").arg(&binary).output()
+                .map_err(|err| format!("{stem}: could not launch clang: {err}"))?;
+            if !link.status.success() {
+                return Err(format!("{stem}: clang {opt} failed: {}",
+                    String::from_utf8_lossy(&link.stderr)));
+            }
+            let executed = Command::new(&binary).output()
+                .map_err(|err| format!("{stem}: native guest did not execute: {err}"))?;
+            if executed.status.code() != Some(42) {
+                return Err(format!("{stem}: {opt} guest expected exit 42, got {:?}: {}",
+                    executed.status.code(), String::from_utf8_lossy(&executed.stderr)));
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn run() -> Result<(), String> {
         let mut args = env::args_os().skip(1);
         let compiler = PathBuf::from(args.next().ok_or("usage: test COMPILER CLANG")?);
         let clang = PathBuf::from(args.next().ok_or("usage: test COMPILER CLANG")?);
         if args.next().is_some() { return Err("unexpected extra argument".into()); }
         let root = Scratch::new()?;
-        let source = root.0.join("main.atto");
-        fs::write(&source, POSITIVE).map_err(|err| err.to_string())?;
-        let compiled = compile_source(&compiler, &source)?;
-        if !compiled.status.success() {
-            return Err(format!("compiler rejection: {}", String::from_utf8_lossy(&compiled.stderr)));
-        }
-        let ir = String::from_utf8(compiled.stdout)
-            .map_err(|_| "compiler returned non-UTF8 LLVM IR".to_string())?;
-        require_direct_method_calls(&ir, &["Counter.add", "Counter.read"])?;
-        let llvm_path = root.0.join("main.ll");
-        fs::write(&llvm_path, ir).map_err(|err| err.to_string())?;
-        for opt in ["-O0", "-O2"] {
-            let binary = root.0.join(if opt == "-O0" { "guest_o0" } else { "guest_o2" });
-            let link = Command::new(&clang).args([opt, "-x", "ir"]).arg(&llvm_path)
-                .arg("-o").arg(&binary).output()
-                .map_err(|err| format!("could not launch clang: {err}"))?;
-            if !link.status.success() {
-                return Err(format!("clang {opt} failed: {}", String::from_utf8_lossy(&link.stderr)));
-            }
-            let executed = Command::new(&binary).output()
-                .map_err(|err| format!("native guest did not execute: {err}"))?;
-            if executed.status.code() != Some(42) {
-                return Err(format!("{opt} guest expected exit 42, got {:?}: {}", executed.status.code(), String::from_utf8_lossy(&executed.stderr)));
-            }
-        }
+        compile_and_execute(&compiler, &clang, &root.0, "simple", POSITIVE,
+            &["Counter.add", "Counter.read"])?;
+        compile_and_execute(&compiler, &clang, &root.0, "overloaded", OVERLOADED,
+            &["Box.read$arity0", "Box.read$arity1"])?;
         const PREFIX: &str = "define class Counter as let int value=40; pub read():int{return self.value;} end\n";
         must_reject(&compiler, &root.0, "wrong_arity",
             &(PREFIX.to_string() + "pub fnc main():int{let Counter c=new Counter();return c.read(1);}"),
@@ -158,7 +170,10 @@ pub fnc main():int{
         must_reject(&compiler, &root.0, "duplicate_slot",
             "define class Counter as let int value=42; pub read():int{return self.value;} pub read():int{return 0;} end pub fnc main():int{return 0;}",
             "duplicate native method")?;
-        eprintln!("PASS: direct symbol method calls, O0/O2 guest exit 42, and 3 source rejections");
+        must_reject(&compiler, &root.0, "private_method",
+            "define class Box as let int value=42; hidden():int{return self.value;} end pub fnc main():int{let Box b=new Box();return b.hidden();}",
+            "private instance method")?;
+        eprintln!("PASS: 2 compiled class guests, exact direct/overload symbols, O0/O2 exit 42, and 4 source rejections");
         Ok(())
     }
 }
@@ -174,24 +189,55 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
-    fn identifies_direct_calls_and_quoted_targets() {
-        let ir = "%v = call i64 @\"Counter.read$1\"(ptr %c)\n  call void @\"Counter.add$2\"(ptr %c, i64 2)";
+    fn identifies_exact_direct_calls() {
+        let ir = "%v = call i64 @\"Counter.read\"(ptr %c)\n  call void @\"Counter.add\"(ptr %c, i64 2)";
         assert!(require_direct_method_calls(ir, &["Counter.read", "Counter.add"]).is_ok());
     }
+
+    #[test]
+    fn identifies_overload_slot_symbols() {
+        let ir = "%v = call i64 @\"Box.read$arity0\"(ptr %c)\n%w = call i64 @\"Box.read$arity1\"(ptr %c, i64 2)";
+        assert!(require_direct_method_calls(ir, &["Box.read$arity0", "Box.read$arity1"]).is_ok());
+    }
+
     #[test]
     fn rejects_indirect_function_pointer_call() {
         let ir = "%v = call i64 %fn(ptr %c)\n%w = call i64 @\"Counter.read\"(ptr %c)";
         assert!(require_direct_method_calls(ir, &["Counter.read"]).is_err());
     }
+
+    #[test]
+    fn rejects_typed_function_pointer_call() {
+        let ir = "%v = call i64 (ptr) %fn(ptr %c)\n%w = call i64 @\"Counter.read\"(ptr %c)";
+        assert!(require_direct_method_calls(ir, &["Counter.read"]).is_err());
+    }
+
     #[test]
     fn rejects_missing_method_and_declaration_spoofing() {
         let ir = "define i64 @\"Counter.read\"(ptr %c) { ret i64 42 }";
         assert!(require_direct_method_calls(ir, &["Counter.read"]).is_err());
     }
+
     #[test]
-    fn does_not_confuse_prefix_names() {
-        let ir = "%v = call i64 @NotCounter.read(ptr %c)";
-        assert!(require_direct_method_calls(ir, &["Counter.read"]).is_err());
+    fn rejects_namespace_prefix_and_suffix_spoofing() {
+        for imposter in ["Other.Counter.read", "Counter.read.evil",
+                         "Counter.read$arity01", "Counter.read$arity0extra"] {
+            let ir = format!("%v = call i64 @\"{imposter}\"(ptr %c)");
+            assert!(require_direct_method_calls(&ir, &["Counter.read"]).is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_wrong_overload_arity() {
+        let ir = "%v = call i64 @\"Box.read$arity1\"(ptr %c, i64 2)";
+        assert!(require_direct_method_calls(ir, &["Box.read$arity0"]).is_err());
+    }
+
+    #[test]
+    fn recognizes_direct_invoke() {
+        let ir = "%v = invoke i64 @\"Counter.read\"(ptr %c) to label %ok unwind label %fail";
+        assert!(require_direct_method_calls(ir, &["Counter.read"]).is_ok());
     }
 }
