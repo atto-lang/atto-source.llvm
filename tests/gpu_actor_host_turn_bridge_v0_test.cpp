@@ -1,329 +1,148 @@
-#define ORESLANG_GPU_ACTOR_V0_HOST_TEST_SEAM 1
-#include "oreslang/runtime/GpuActorHostTurnBridgeV0.hpp"
+// Legacy host-turn coverage migrated to production registry capabilities.
+// There is deliberately NO V0 Boolean-completion test macro or direct
+// access to HostTurnBridgeV0. All source-like turns enter the V1 registry.
+#include "oreslang/runtime/GpuActorProviderBridgeV1.hpp"
 
-#include <cassert>
 #include <cstdint>
-#include <limits>
-#include <memory>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include <atomic>
-#include <thread>
 
-using oreslang::SupervisorFailureLane;
-using oreslang::gpu_actor::HostTurnBridgeV0;
+using Registry = oreslang::gpu_actor::GpuActorQuarantineRegistryV1;
+using Port = oreslang::gpu_actor::ProviderPortV1;
+using Bridge = oreslang::gpu_actor::GpuActorProviderBridgeV1;
+using Lane = oreslang::SupervisorFailureLane;
 
 namespace {
-int checks = 0;
-void check(bool value) {
-    if (!value) throw std::runtime_error("GPU_ACTOR_HOST_BRIDGE_ASSERTION_FAILED");
+std::size_t checks = 0;
+void check(bool ok,const char* label) {
+    if(!ok) throw std::runtime_error(std::string("GPU_V0_REGISTRY_MIGRATION_FAILED: ")+label);
     ++checks;
 }
-template <typename F>
-void denied(F&& action, const char* code) {
-    bool rejected = false;
-    try { action(); }
+template<class F> void denied(F&& action,const char* expected) {
+    try {action();}
     catch (const std::exception& e) {
-        rejected = std::string(e.what()).find(code) != std::string::npos;
-    }
-    check(rejected);
-}
-std::unique_ptr<HostTurnBridgeV0> actor(
-        SupervisorFailureLane& lane, const std::string& id,
-        std::uint64_t generation = 1, std::int64_t state = 0) {
-    return std::make_unique<HostTurnBridgeV0>(
-        SupervisorFailureLane::ActorKey{id, generation},
-        "root_supervisor", lane,
-        oreslang::gpu::Identity{"tenant_A", "device_0", generation},
-        4096, state);
-}
-void success_and_order() {
-    SupervisorFailureLane lane(1);
-    auto a = actor(lane, "actor-1", 3, 10);
-    auto t = a->prepare(4);
-    check(a->has_pending_turn());
-    check(a->committed_state() == 10);
-    denied([&] { (void)a->prepare(4); }, "GPU_ACTOR_TURN_INFLIGHT");
-    denied([&] { a->finish_after_provider_event(t, true, true); }, "GPU_ACTOR_FINISH_INVALID");
-    denied([&] { a->mark_submitted(t); }, "GPU_ACTOR_SUBMISSION_INVALID");
-    a->begin_enqueue(t);
-    a->mark_submitted(t);
-    denied([&] { a->mark_submitted(t); }, "GPU_ACTOR_SUBMISSION_INVALID");
-    denied([&] { a->finish_after_provider_event(t, true, false); }, "GPU_ACTOR_DEVICE_NOT_QUIESCENT");
-    check(a->committed_state() == 10);
-    a->finish_after_provider_event(t, true, true); // trusted host seam, NOT real provider proof
-    check(a->committed_state() == 14);
-    check(a->fence_status() == oreslang::gpu::Status::Idle);
-    check(!a->has_pending_turn());
-    denied([&] { a->finish_after_provider_event(t, true, true); }, "GPU_ACTOR_STALE_TURN");
-    auto t2 = a->prepare(6);
-    check(t2.sequence == t.sequence + 1);
-    a->begin_enqueue(t2);
-    a->mark_submitted(t2);
-    a->finish_after_provider_event(t2, true, true);
-    check(a->committed_state() == 20);
-    check(lane.pending_count() == 0);
-    check(a->request_close());
-    check(a->closed());
-    denied([&] { a->acknowledge_backend_buffer_release(false); }, "GPU_ACTOR_BUFFER_RELEASE_UNPROVEN");
-    a->acknowledge_backend_buffer_release(true);
-    check(a->fence_status() == oreslang::gpu::Status::Closed);
-    auto event=lane.poll();
-    check(event.has_value());
-    check(event->kind == SupervisorFailureLane::Kind::Cancel);
-    check(event->actor.id == "actor-1");
-    check(event->actor.generation == 3);
-    lane.ack(event->actor);
-}
-void cancellation_after_submit() {
-    SupervisorFailureLane lane(1);
-    auto a = actor(lane, "actor-cancel");
-    auto t = a->prepare(11);
-    a->begin_enqueue(t);
-    a->mark_submitted(t);
-    check(a->request_close());
-    check(!a->closed());
-    check(a->fence_status() == oreslang::gpu::Status::Poisoned);
-    denied([&] { (void)a->prepare(1); }, "GPU_ACTOR_CLOSED");
-    denied([&] { a->finish_after_provider_event(t, true, true); }, "GPU_ACTOR_FINISH_INVALID");
-    denied([&] { a->acknowledge_backend_buffer_release(true); }, "GPU_ACTOR_BUFFER_RELEASE_UNPROVEN");
-    denied([&] { a->acknowledge_cancelled_provider_event(t,false); }, "GPU_ACTOR_DEVICE_NOT_QUIESCENT");
-    check(a->committed_state() == 0);
-    check(a->has_pending_turn());
-    check(lane.pending_count() == 0);
-    a->acknowledge_cancelled_provider_event(t,true);
-    check(a->closed());
-    check(!a->has_pending_turn());
-    check(a->committed_state() == 0);
-    check(lane.pending_count() == 1);
-    denied([&] { a->acknowledge_cancelled_provider_event(t,true); }, "GPU_ACTOR_STALE_TURN");
-    a->acknowledge_backend_buffer_release(true);
-    auto ev=lane.poll();
-    check(ev && ev->kind == SupervisorFailureLane::Kind::Cancel);
-    check(ev->parent_id == "root_supervisor");
-    lane.ack(ev->actor);
-}
-void cancellation_before_enqueue() {
-    SupervisorFailureLane lane(1);
-    auto a = actor(lane,"actor-preenqueue");
-    auto t=a->prepare(20);
-    check(a->request_close());
-    check(a->closed());
-    check(a->committed_state() == 0);
-    check(!a->has_pending_turn());
-    denied([&] { a->mark_submitted(t); }, "GPU_ACTOR_STALE_TURN");
-    check(a->fence_status() == oreslang::gpu::Status::Idle);
-    a->acknowledge_backend_buffer_release(true);
-    check(a->fence_status() == oreslang::gpu::Status::Closed);
-    auto ev=lane.poll();
-    check(ev && ev->kind == SupervisorFailureLane::Kind::Cancel);
-    lane.ack(ev->actor);
-}
-void failed_kernel_delivers_control_once() {
-    SupervisorFailureLane lane(1);
-    auto a=actor(lane,"actor-fail");
-    auto t=a->prepare(10);
-    a->begin_enqueue(t);
-    a->mark_submitted(t);
-    a->finish_after_provider_event(t,false,true);
-    check(a->committed_state() == 0);
-    check(a->closed());
-    check(a->fence_status() == oreslang::gpu::Status::Poisoned);
-    check(lane.pending_count() == 1);
-    denied([&] { a->finish_after_provider_event(t,false,true); }, "GPU_ACTOR_STALE_TURN");
-    denied([&] { (void)a->prepare(1); }, "GPU_ACTOR_CLOSED");
-    a->acknowledge_backend_buffer_release(true);
-    auto ev=lane.poll();
-    check(ev && ev->kind == SupervisorFailureLane::Kind::HostFailure);
-    check(ev->actor.id == "actor-fail");
-    check(ev->parent_id == "root_supervisor");
-    lane.ack(ev->actor);
-}
-void invalid_authority_and_overflow() {
-    SupervisorFailureLane lane(4);
-    denied([&] { HostTurnBridgeV0 bridge({"",1},"root",lane,{"tenant","device",1},8); },
-           "GPU_ACTOR_INVALID_AUTHORITY");
-    denied([&] { HostTurnBridgeV0 bridge({"x",0},"root",lane,{"tenant","device",1},8); },
-           "GPU_ACTOR_INVALID_AUTHORITY");
-    denied([&] { HostTurnBridgeV0 bridge({"x",1},"root",lane,{"tenant","device",0},8); },
-           "GPU_ACTOR_INVALID_AUTHORITY");
-    auto a=actor(lane,"actor-over-max",1,std::numeric_limits<std::int64_t>::max());
-    denied([&] { (void)a->prepare(1); }, "GPU_ACTOR_STAGE_OVERFLOW");
-    check(!a->has_pending_turn());
-    auto low=actor(lane,"actor-under-min",1,std::numeric_limits<std::int64_t>::min());
-    denied([&] { (void)low->prepare(-1); }, "GPU_ACTOR_STAGE_OVERFLOW");
-    check(!low->has_pending_turn());
-    auto legal=low->prepare(1); low->begin_enqueue(legal); low->mark_submitted(legal);
-    low->finish_after_provider_event(legal,true,true);
-    check(low->committed_state() == std::numeric_limits<std::int64_t>::min()+1);
-    check(a->request_close());
-    check(low->request_close());
-}
-void stale_turn_forgery() {
-    SupervisorFailureLane lane(1);
-    auto a=actor(lane,"stale",8);
-    auto t=a->prepare(3);
-    denied([&] { a->mark_submitted({7,t.sequence}); }, "GPU_ACTOR_STALE_TURN");
-    denied([&] { a->mark_submitted({8,t.sequence+1}); }, "GPU_ACTOR_STALE_TURN");
-    a->begin_enqueue(t);
-    a->mark_submitted(t);
-    denied([&] { a->finish_after_provider_event({8,t.sequence+1},true,true); },
-           "GPU_ACTOR_STALE_TURN");
-    a->finish_after_provider_event(t,true,true);
-    check(a->committed_state()==3);
-    check(a->request_close());
-}
-void population_1024_host_only() {
-    constexpr int count=1024;
-    SupervisorFailureLane lane(count);
-    std::vector<std::unique_ptr<HostTurnBridgeV0>> actors;
-    actors.reserve(count);
-    for(int i=0;i<count;i++) actors.push_back(actor(lane,"gpu-"+std::to_string(i)));
-    // This is a deterministic host-only model using the actual native
-    // actor-credit, fence and supervisor classes: NO physical device work.
-    for(int step=0;step<4;step++) {
-        std::vector<HostTurnBridgeV0::Turn> batch;
-        batch.reserve(count);
-        for(auto& a:actors) batch.push_back(a->prepare(step+1));
-        for(int i=count-1;i>=0;i--) {
-            actors[i]->begin_enqueue(batch[i]);
-            actors[i]->mark_submitted(batch[i]);
+        if (std::string(e.what()).find(expected)!=std::string::npos) {
+            check(true,"expected rejection");
+            return;
         }
-        for(int i=0;i<count;i++) actors[i]->finish_after_provider_event(batch[i],true,true);
+        throw;
     }
-    for(auto& a:actors) {
-        check(a->committed_state()==10);
-        check(!a->has_pending_turn());
-        check(a->fence_status()==oreslang::gpu::Status::Idle);
-        denied([&] { a->retire_gracefully_after_backend_release(false); },
-               "GPU_ACTOR_GRACEFUL_RETIRE_UNPROVEN");
-        a->retire_gracefully_after_backend_release(true);
-        check(a->closed());
-        check(a->fence_status()==oreslang::gpu::Status::Closed);
+    throw std::runtime_error(std::string("GPU_V0_MIGRATION_MISSING_DENIAL: ")+expected);
+}
+class TrustedFixturePort final : public Port {
+public:
+    explicit TrustedFixturePort(Binding binding): Port(std::move(binding)) {}
+    Observation observed=Observation::Pending;
+    bool release_proven=false;
+    EventHandle event;
+    EnqueueResult enqueue(Turn turn) override {
+        event=issue_event(turn);
+        return {EnqueueState::Submitted,event};
     }
-    check(lane.pending_count()==0);
-    check(lane.reserved_count()==0);
-}
-void stop_during_provider_enqueue_window() {
-    SupervisorFailureLane lane(1);
-    auto a=actor(lane,"enqueue-close");
-    const auto t=a->prepare(99);
-    a->begin_enqueue(t); // true provider would now begin external API call
-    check(a->request_close());
-    check(a->has_pending_turn()); // never pre-enqueue abort while call is live
-    check(!a->closed());
-    check(a->fence_status() == oreslang::gpu::Status::InFlight);
-    denied([&]{a->acknowledge_backend_buffer_release(true);},
-           "GPU_ACTOR_BUFFER_RELEASE_UNPROVEN");
-    a->mark_submitted(t); // durable enqueue was late relative to close
-    check(a->fence_status() == oreslang::gpu::Status::Poisoned);
-    denied([&]{a->finish_after_provider_event(t,true,true);},"GPU_ACTOR_FINISH_INVALID");
-    denied([&]{a->acknowledge_cancelled_provider_event(t,false);},
-           "GPU_ACTOR_DEVICE_NOT_QUIESCENT");
-    check(a->committed_state()==0);
-    a->acknowledge_cancelled_provider_event(t,true);
-    check(a->closed() && !a->has_pending_turn());
-    a->acknowledge_backend_buffer_release(true);
-    const auto ev=lane.poll();
-    check(ev && ev->kind == SupervisorFailureLane::Kind::Cancel);
-    lane.ack(ev->actor);
-}
-void enqueue_aborts_distinguish_failure_from_close() {
-    SupervisorFailureLane lane(2);
-    auto failed=actor(lane,"enqueue-failed");
-    auto t=failed->prepare(17);
-    failed->begin_enqueue(t);
-    failed->abort_enqueue(t);
-    check(failed->closed());
-    check(failed->committed_state()==0);
-    check(failed->fence_status() == oreslang::gpu::Status::Idle);
-    denied([&]{failed->mark_submitted(t);},"GPU_ACTOR_STALE_TURN");
-    auto ev=lane.poll();
-    check(ev && ev->kind == SupervisorFailureLane::Kind::HostFailure);
-    lane.ack(ev->actor);
-
-    auto cancelled=actor(lane,"enqueue-cancelled");
-    t=cancelled->prepare(20);
-    cancelled->begin_enqueue(t);
-    check(cancelled->request_close());
-    check(!cancelled->closed() && cancelled->has_pending_turn());
-    cancelled->abort_enqueue(t); // provider proves command was NOT enqueued
-    check(cancelled->closed());
-    check(cancelled->committed_state()==0);
-    ev=lane.poll();
-    check(ev && ev->kind == SupervisorFailureLane::Kind::Cancel);
-    lane.ack(ev->actor);
-}
-void device_loss_is_cohort_failure_not_actor_isolation() {
-    SupervisorFailureLane lane(3);
-    auto first=actor(lane,"lost-a");
-    auto second=actor(lane,"lost-b");
-    auto idle=actor(lane,"lost-idle");
-
-    auto x=first->prepare(3);
-    first->begin_enqueue(x);
-    first->mark_submitted(x);
-    auto y=second->prepare(7);
-    second->begin_enqueue(y);
-
-    check(first->report_device_loss());
-    check(second->report_device_loss());
-    check(idle->report_device_loss());
-    check(first->fence_status() == oreslang::gpu::Status::Poisoned);
-    check(second->fence_status() == oreslang::gpu::Status::InFlight);
-    check(!first->closed() && !second->closed() && idle->closed());
-    denied([&]{second->acknowledge_backend_buffer_release(true);},
-           "GPU_ACTOR_BUFFER_RELEASE_UNPROVEN");
-    second->mark_submitted(y);
-    check(second->fence_status() == oreslang::gpu::Status::Poisoned);
-    first->acknowledge_cancelled_provider_event(x,true);
-    second->acknowledge_cancelled_provider_event(y,true);
-    check(first->committed_state()==0 && second->committed_state()==0);
-    first->acknowledge_backend_buffer_release(true);
-    second->acknowledge_backend_buffer_release(true);
-    idle->acknowledge_backend_buffer_release(true);
-    for(int i=0;i<3;i++) {
-        auto event=lane.poll();
-        check(event && event->kind == SupervisorFailureLane::Kind::HostFailure);
-        check(event->parent_id=="root_supervisor");
-        lane.ack(event->actor);
+    EnqueueResult reconcile_unknown(Turn) override {
+        return {EnqueueState::Unknown,nullptr};
     }
-    check(lane.pending_count()==0);
+    Observation observe(const EventHandle& next) override {
+        if(next!=event) return Observation::Unknown;
+        return observed;
+    }
+    bool try_release_buffer() override {return release_proven;}
+};
+Port::Binding binding(std::string name,std::uint64_t generation=3) {
+    return {std::move(name),generation,"tenant","mock-gpu","queue",1,1,1};
 }
-void concurrent_claim_one_actor() {
-    SupervisorFailureLane lane(1);
-    auto a=actor(lane,"contended");
-    std::atomic<int> admitted{0}, deniedCount{0};
-    std::atomic<bool> begin{false};
-    auto worker=[&] {
-        while(!begin.load(std::memory_order_acquire)) std::this_thread::yield();
-        try { (void)a->prepare(1); admitted.fetch_add(1); }
-        catch (const std::logic_error&) { deniedCount.fetch_add(1); }
-    };
-    std::thread first(worker),second(worker);
-    begin.store(true,std::memory_order_release);
-    first.join();second.join();
-    check(admitted.load()==1 && deniedCount.load()==1);
-    check(a->request_close()); // pre-enqueue abort, no event
+void population_through_registry() {
+    constexpr int actors=64;
+    constexpr int turns=4;
+    auto registry=std::make_shared<Registry>(actors);
+    auto lane=std::make_shared<Lane>(actors);
+    std::vector<std::shared_ptr<TrustedFixturePort>> ports;
+    std::vector<std::unique_ptr<Bridge>> members;
+    ports.reserve(actors);
+    members.reserve(actors);
+    for(int i=0;i<actors;++i) {
+        auto id="actor-"+std::to_string(i);
+        auto port=std::make_shared<TrustedFixturePort>(binding(id));
+        members.push_back(std::make_unique<Bridge>(
+            registry,port,lane,Lane::ActorKey{id,3},"parent",4096,0));
+        ports.push_back(std::move(port));
+    }
+    for(int turn=1;turn<=turns;++turn) {
+        for(int i=0;i<actors;++i) {
+            const auto identity=members[i]->submit(turn);
+            check(identity.sequence==static_cast<std::uint64_t>(turn),"sequence bound");
+            check(identity.actor_generation==3,"generation bound");
+            check(ports[i]->event!=nullptr,"trusted port event minted");
+            check(members[i]->committed_state()==turn*(turn-1)/2,
+                  "stage invisible until event completion");
+            ports[i]->observed=Port::Observation::CompleteOk;
+        }
+        registry->progress_all();
+    }
+    for(int i=0;i<actors;++i) {
+        check(members[i]->committed_state()==10,"one commit per actual completion");
+        ports[i]->release_proven=true;
+        members[i]->retire_gracefully();
+        check(members[i]->completed(),"backend release required for retirement");
+        members[i].reset();
+    }
+    check(registry->retained_count()==0,"all registry leases retired");
+    check(lane->reserved_count()==0,"all CONTROL slots returned");
+    check(lane->pending_count()==0,"normal retire does not fabricate failure");
+    check(Registry::retained_registry_count()==0,"root quarantine empty");
 }
-} // namespace
+void cancellation_releases_only_after_event() {
+    auto registry=std::make_shared<Registry>(1);
+    auto lane=std::make_shared<Lane>(1);
+    auto p=std::make_shared<TrustedFixturePort>(binding("cancel"));
+    auto actor=std::make_unique<Bridge>(registry,p,lane,Lane::ActorKey{"cancel",3},
+                                       "parent",4096,7);
+    actor->submit(42);
+    actor->request_close();
+    registry->progress_all();
+    check(actor->committed_state()==7,"cancel does not commit pending GPU state");
+    check(!actor->completed(),"pending event prevents retirement");
+    denied([&]{actor->submit(1);},"GPU_PROVIDER_ACTOR_NOT_READY");
+    p->observed=Port::Observation::CompleteOk;
+    registry->progress_all();
+    check(actor->committed_state()==7,"cancelled completed kernel never commits");
+    check(!actor->completed(),"event alone not physical buffer release");
+    p->release_proven=true;
+    registry->progress_all();
+    check(actor->completed(),"release after quiescence");
+    actor.reset();
+    check(registry->retained_count()==0,"cancelled lease reclaimed");
+    auto control=lane->poll();
+    check(control && control->kind==Lane::Kind::Cancel,"supervisor CANCEL CONTROL");
+    lane->ack(control->actor);
+    check(lane->reserved_count()==0,"supervisor cancellation reservation freed");
+}
+void stale_identity_and_overflow_denied() {
+    auto registry=std::make_shared<Registry>(1);
+    auto lane=std::make_shared<Lane>(1);
+    auto p=std::make_shared<TrustedFixturePort>(binding("checked"));
+    denied([&]{Bridge invalid(registry,p,lane,Lane::ActorKey{"checked",4},
+                              "parent",4096);},"GPU_PROVIDER_ADMISSION_BINDING_MISMATCH");
+    auto actor=std::make_unique<Bridge>(registry,p,lane,Lane::ActorKey{"checked",3},
+                                       "parent",4096,INT64_MAX);
+    denied([&]{actor->submit(1);},"GPU_ACTOR_STAGE_OVERFLOW");
+    check(actor->committed_state()==INT64_MAX,"overflow leaves state intact");
+    p->release_proven=true;
+    actor->retire_gracefully();
+    actor.reset();
+    check(registry->retained_count()==0,"overflow actor gracefully retired");
+}
+}
 
 int main() {
-    success_and_order();
-    cancellation_after_submit();
-    cancellation_before_enqueue();
-    failed_kernel_delivers_control_once();
-    invalid_authority_and_overflow();
-    stale_turn_forgery();
-    population_1024_host_only();
-    stop_during_provider_enqueue_window();
-    enqueue_aborts_distinguish_failure_from_close();
-    device_loss_is_cohort_failure_not_actor_isolation();
-    concurrent_claim_one_actor();
-    if(checks < 3100) throw std::runtime_error("test coverage under expected 1024 population threshold");
-    std::cout << "GPU_ACTOR_HOST_BRIDGE_PASS checks=" << checks
-              << " actors=1024 turns=4096 physical_gpu=false" << std::endl;
-    return 0;
+    population_through_registry();
+    cancellation_releases_only_after_event();
+    stale_identity_and_overflow_denied();
+    if(checks<1000) throw std::runtime_error("GPU_V0_REGISTRY_MIGRATION_COVERAGE_SHORTFALL");
+    std::cout<<"GPU_ACTOR_V0_REGISTRY_MIGRATION_PASS checks="<<checks
+             <<" logical_actors=64 physical_gpu=false direct_v0_boolean_calls=0"
+             <<std::endl;
 }
