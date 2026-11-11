@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <exception>
 #include <initializer_list>
+#include <limits>
+#include <cstdint>
 #include <stdexcept>
 
 using oreslang::runtime::ActorHeapIdentity;
@@ -103,10 +105,54 @@ static void reused_owner_is_not_dropped_twice() {
     require_order(log, used, {5, 7, 6});
 }
 
+template<class F>
+static void require_invalid_host_span(F&& operation, const char* why) {
+    bool rejected = false;
+    try { operation(); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    check(rejected, why);
+}
+
+static void private_host_byte_spans_cannot_modify_actor_heap() {
+    using Heap = ActorOwnedGraphHeap<2, 64, 1>;
+    const ActorHeapIdentity owner{104, 7, 1};
+    Heap heap(owner);
+    const std::array<unsigned char, 8> source{{1, 2, 3, 4, 5, 6, 7, 8}};
+    const auto slot = heap.allocate(owner, source.data(), source.size()).value();
+    std::array<unsigned char, 8> copy{};
+    auto* control = reinterpret_cast<unsigned char*>(&heap);
+    auto* wrapped = reinterpret_cast<unsigned char*>(
+        std::numeric_limits<std::uintptr_t>::max() - 3);
+
+    require_invalid_host_span([&] { (void)heap.allocate(owner, control, 8); },
+        "allocation read from private actor metadata");
+    require_invalid_host_span([&] { heap.write(owner, slot, control, 8); },
+        "write read from private actor metadata");
+    require_invalid_host_span([&] { (void)heap.copy_out(owner, slot, control, 8); },
+        "read overwrote private actor metadata");
+    require_invalid_host_span([&] {
+        (void)heap.copy_out(owner, slot, control + sizeof(heap) - 1, 8);
+    }, "boundary-straddling output overwrote private actor heap");
+    require_invalid_host_span([&] { (void)heap.allocate(owner, wrapped, 8); },
+        "allocation admitted a wrapping host span");
+    require_invalid_host_span([&] { heap.write(owner, slot, wrapped, 8); },
+        "write admitted a wrapping host span");
+    require_invalid_host_span([&] { (void)heap.copy_out(owner, slot, wrapped, 8); },
+        "read admitted a wrapping host span");
+
+    check(heap.live_nodes(owner) == 1, "denied alias corrupted node count");
+    check(heap.copy_out(owner, slot, copy.data(), copy.size()) == source.size(),
+        "valid copy no longer works");
+    check(copy == source, "denied host alias modified live actor payload");
+    heap.remove(owner, slot);
+    check(heap.live_nodes(owner) == 0, "denied alias corrupted reclamation");
+}
+
 int main() {
+    private_host_byte_spans_cannot_modify_actor_heap();
     reclaimed_slot_drops_in_new_construction_order();
     exception_scope_runs_exact_once_reverse_teardown();
     reused_owner_is_not_dropped_twice();
-    std::puts("PASS actor graph reverse construction order, slot reuse, host unwind, exactly-once drops");
+    std::puts("PASS actor graph private buffer denial, reverse construction order, slot reuse, host unwind, exactly-once drops");
     return 0;
 }
