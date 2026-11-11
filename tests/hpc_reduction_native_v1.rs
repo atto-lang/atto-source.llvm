@@ -69,14 +69,19 @@ fn main() {
         "tests/fixtures/hpc-reduction-v1/i64-fixed-tiles.atto",
         "tests/fixtures/hpc-reduction-v1/i64-task-tile.atto",
     ];
-    const NEGATIVE: &str = "tests/fixtures/task-v1-negative/second-task.atto";
+    const NEGATIVES: [(&str, &str); 2] = [
+        ("tests/fixtures/task-v1-negative/second-task.atto",
+         "supports exactly one source Task"),
+        ("tests/fixtures/hpc-reduction-v1/mutable-before-await-reject.atto",
+         "requires await to immediately consume"),
+    ];
     let head = env::var("EXPECTED_HEAD").unwrap_or_default();
     require(head.len() == 40 && head.chars().all(|c| c.is_ascii_hexdigit()), "EXPECTED_HEAD must be exact SHA40");
     require(exec("git", &["rev-parse", "HEAD"]) == head, "worktree HEAD differs from expected immutable commit");
     require(exec("git", &["status", "--porcelain", "--", "tests/fixtures/hpc-reduction-v1"]).is_empty(),
             "HPC fixtures have uncommitted changes");
     for source in SOURCES { source_matches_head(source); }
-    source_matches_head(NEGATIVE);
+    for (negative, _) in NEGATIVES { source_matches_head(negative); }
     let compiler = Path::new("build/oreslang-llvmc");
     let auditor = Path::new("build/oreslang-no-gc-ir-audit");
     trusted_file(compiler);
@@ -106,19 +111,24 @@ fn main() {
             executed += 1;
         }
     }
-    // Explicit negative: current LLVM task source implementation must not
-    // silently accept two live tasks or publish an executable on rejection.
-    let invalid_output = work.0.join("rejected-two-tasks");
-    let invalid_str = invalid_output.to_str().expect("work path utf8");
-    let rejected = cmd("timeout", &["-k", "5s", "60s", "bash", "scripts/compile-aot.sh", NEGATIVE, invalid_str]);
-    require(!rejected.status.success() && rejected.status.code() != Some(124) && rejected.status.code() != Some(137),
-            "two-task negative unexpectedly compiled or timed out");
-    require(!invalid_output.exists(), "rejected two-task source published executable");
-    let diagnostic = String::from_utf8_lossy(&rejected.stderr);
-    require(diagnostic.contains("supports exactly one source Task"),
-            format!("unexpected two-task diagnostic: {diagnostic}"));
+    // Reject both two live Tasks and a mutable caller tile before await.
+    // Neither invalid source may publish native IR or an executable.
+    for (index, (negative, required_diagnostic)) in NEGATIVES.iter().enumerate() {
+        let invalid_output = work.0.join(format!("rejected-{index}"));
+        let invalid_str = invalid_output.to_str().expect("work path utf8");
+        let rejected = cmd("timeout",
+            &["-k", "5s", "60s", "bash", "scripts/compile-aot.sh",
+              negative, invalid_str]);
+        require(!rejected.status.success() && rejected.status.code() != Some(124) && rejected.status.code() != Some(137),
+                format!("invalid source compiled or timed out: {negative}"));
+        require(!invalid_output.exists(),
+                format!("rejected source published executable: {negative}"));
+        let diagnostic = String::from_utf8_lossy(&rejected.stderr);
+        require(diagnostic.contains(required_diagnostic),
+                format!("unexpected diagnostic for {negative}: {diagnostic}"));
+    }
     require(exec("git", &["status", "--porcelain", "--", "tests/fixtures/hpc-reduction-v1"]).is_empty(),
             "HPC source changed during verification");
     require(executed == 4, "missing O0/O2 compiled guest executions");
-    println!("ATTO_HPC_I64_GATE_PASS head={head} executed_guest_cases={executed} negative_cases=1 evidence_scope=restricted_i64_native_aot");
+    println!("ATTO_HPC_I64_GATE_PASS head={head} executed_guest_cases={executed} negative_cases=2 evidence_scope=restricted_i64_native_aot");
 }
