@@ -353,6 +353,29 @@ int main() {
                 (void)check_native_i64_specialization_closure(absent, forged);
             }, "missing emitted native AOT specialization node");
         }
+        // A large nongeneric body must not deplete the specialization-only
+        // closure scan allowance, even when the module also declares a
+        // generic. It is checked elsewhere by the ordinary compiler passes.
+        {
+            auto program = fixture();
+            Function plain;
+            plain.name = "unrelated";
+            auto enormous = std::make_unique<Expression>();
+            enormous->kind = Expression::Kind::Integer;
+            enormous->arguments.reserve(131073);
+            for (int i = 0; i < 131073; ++i) {
+                auto child = std::make_unique<Expression>();
+                child->kind = Expression::Kind::Integer;
+                enormous->arguments.push_back(std::move(child));
+            }
+            plain.result = std::move(enormous);
+            program.functions.push_back(std::move(plain));
+            const auto image = freeze_native_i64_dispatch_image(program);
+            if (image.closure.concrete_symbols != 1 ||
+                image.closure.scanned_nodes != 0 ||
+                image.closure.estimated_code_bytes != 256)
+                throw std::runtime_error("nongeneric AST consumed generic scan budget");
+        }
         // Deliberately malformed compiler-owned AST, flat rather than deep.
         // Exactly 131072 scanned nodes fit the scan budget, while the
         // independent 8 MiB specialization byte estimate must reject it.
