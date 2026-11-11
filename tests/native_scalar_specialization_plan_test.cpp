@@ -58,7 +58,9 @@ int main() {
                 target->lowered_arity != 1 ||
                 target->concrete_types != std::vector<std::string>{"int"} ||
                 image.closure.concrete_symbols != 1 ||
-                image.closure.estimated_code_bytes == 0)
+                image.closure.estimated_code_bytes == 0 ||
+                image.closure.dependencies.size() != 1 ||
+                !image.closure.dependencies.at(selector).empty())
                 throw std::runtime_error("frozen compiler-owned dispatch image does not match typed i64 ABI");
             if (image.find_direct(native_function_slot("missing", 0)) != nullptr)
                 throw std::runtime_error("unproved direct target exists in frozen dispatch image");
@@ -179,7 +181,8 @@ int main() {
             if (!freeze_native_i64_specializations(plain).empty())
                 throw std::runtime_error("plain function minted generic symbols");
             const auto image = freeze_native_i64_dispatch_image(plain);
-            if (!image.direct_targets.empty() || image.closure.concrete_symbols != 0)
+            if (!image.direct_targets.empty() || image.closure.concrete_symbols != 0 ||
+                !image.closure.dependencies.empty())
                 throw std::runtime_error("plain function acquired forged direct dispatch targets");
         }
         // Post-validation compiler IR mutation must never silently erase a
@@ -217,7 +220,10 @@ int main() {
             const auto symbols = freeze_native_i64_specializations(program);
             const auto closure = check_native_i64_specialization_closure(program, symbols);
             if (symbols.size() != 2 || closure.concrete_symbols != 2 ||
-                closure.dependency_edges != 1 || closure.estimated_code_bytes == 0)
+                closure.dependency_edges != 1 || closure.estimated_code_bytes == 0 ||
+                closure.dependencies.at(native_function_slot("identity", 1)) !=
+                    std::vector<std::string>{native_function_slot("helper", 1)} ||
+                !closure.dependencies.at(native_function_slot("helper", 1)).empty())
                 throw std::runtime_error("reused generic dependency was not deduplicated");
         }
         // Cycles in a fixed emitted specialization graph are legal. They do
@@ -237,7 +243,11 @@ int main() {
             }
             const auto symbols = freeze_native_i64_specializations(program);
             const auto closure = check_native_i64_specialization_closure(program, symbols);
-            if (closure.dependency_edges != 2 || closure.concrete_symbols != 2)
+            if (closure.dependency_edges != 2 || closure.concrete_symbols != 2 ||
+                closure.dependencies.at(native_function_slot("identity", 1)) !=
+                    std::vector<std::string>{native_function_slot("helper", 1)} ||
+                closure.dependencies.at(native_function_slot("helper", 1)) !=
+                    std::vector<std::string>{native_function_slot("identity", 1)})
                 throw std::runtime_error("bounded recursive specialization closure mismatch");
         }
         // The checker must never treat a source/compiler-supplied symbol map
