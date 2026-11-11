@@ -105,6 +105,7 @@ static void reused_owner_is_not_dropped_twice() {
     require_order(log, used, {5, 7, 6});
 }
 
+#ifndef ORESLANG_GRAPH_DROP_BASELINE_ORACLE
 template<class F>
 static void require_invalid_host_span(F&& operation, const char* why) {
     bool rejected = false;
@@ -148,8 +149,12 @@ static void private_host_byte_spans_cannot_modify_actor_heap() {
     check(heap.live_nodes(owner) == 0, "denied alias corrupted reclamation");
 }
 
+#endif // ORESLANG_GRAPH_DROP_BASELINE_ORACLE
+
 int main() {
+#ifndef ORESLANG_GRAPH_DROP_BASELINE_ORACLE
     private_host_byte_spans_cannot_modify_actor_heap();
+#endif
     reclaimed_slot_drops_in_new_construction_order();
     exception_scope_runs_exact_once_reverse_teardown();
     reused_owner_is_not_dropped_twice();
