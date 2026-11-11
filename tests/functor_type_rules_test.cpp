@@ -187,6 +187,16 @@ int main() {
     reject("invalid-functor-payload", [&] {
         (void)map(opt, i, parse_type("void"));
     });
+    shape(parse_type("void"), "void");
+    reject("invalid-functor-payload", [] {
+        (void)parse_type("Option<Result<void,DomainA>>");
+    });
+    reject("invalid-functor-payload", [] {
+        (void)parse_type("Result<int,void>");
+    });
+    reject("invalid-functor-payload", [&] {
+        (void)map(opt, i, Type{"Result", {i, Type{"void", {}}}});
+    });
     reject("invalid-type-arity", [&] {
         (void)and_then(opt, i, Type{"Option", {i, i}});
     });
