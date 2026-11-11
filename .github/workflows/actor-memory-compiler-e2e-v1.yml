@@ -7,6 +7,9 @@ on:
       - 'scripts/verify_actor_memory_compiler_e2e_v1.py'
       - 'scripts/test_actor_memory_compiler_e2e_v1.py'
       - 'tests/actor_memory_e2e_v1_host.c'
+      - 'tests/source_actor_e2e.py'
+      - 'tests/native_class_owned_array_source.py'
+      - 'src/main/cpp/oreslang/**'
       - 'verification/Ores.Net.Tests/ActorMemoryE2EV1SelfTest.cs'
       - 'verification/Ores.Net.Tests/ActorNativeArenaSelfTest.cs'
       - 'src/test/java/dev/oreslang/runtime/ActorMemoryE2EV1Test.java'
@@ -56,6 +59,62 @@ jobs:
           "$RUNNER_TEMP/actor-memory-sanitized" \
             | tee "$RUNNER_TEMP/actor-memory-sanitized.log"
           grep -Fx 'ACTOR_MEMORY_E2E_V1_HOST_ONLY=PASS' "$RUNNER_TEMP/actor-memory-sanitized.log"
+      - name: Install prerequisites for actual LLVM guest compilation
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang llvm-dev python3
+          cmake -S . -B build-memory-v1 -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build-memory-v1 --target oreslang-llvmc --parallel 2
+          test -x build-memory-v1/oreslang-llvmc
+      - name: Compile and execute source actor owned-i64 and class-owned array slices
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1
+        run: |
+          set -euo pipefail
+          compiler="$PWD/build-memory-v1/oreslang-llvmc"
+          clang_bin="$(command -v clang)"
+          python3 -I tests/test_source_actor_receipts.py
+          python3 -I tests/source_actor_e2e.py \
+            --compiler "$compiler" --clang "$clang_bin" --root . \
+            | tee "$RUNNER_TEMP/actor-memory-guest-actor.log"
+          python3 -I tests/native_class_owned_array_source.py \
+            --compiler "$compiler" --clang "$clang_bin" --source-root . \
+            | tee "$RUNNER_TEMP/actor-memory-guest-class.log"
+          python3 -I tests/source_actor_e2e.py \
+            --compiler "$compiler" --clang "$clang_bin" --root . --sanitize \
+            | tee "$RUNNER_TEMP/actor-memory-guest-actor-sanitized.log"
+          python3 -I tests/native_class_owned_array_source.py \
+            --compiler "$compiler" --clang "$clang_bin" --source-root . --sanitizers \
+            | tee "$RUNNER_TEMP/actor-memory-guest-class-sanitized.log"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"])
+          expected = {
+              "actor-memory-guest-actor.log": (
+                  "PASS native source actor: source-actor-scoped-owned-i64.ores actors 1",
+                  "PASS native source actor: source-actor-two-owned-heaps.ores actors 2",
+                  "PASS current-source actor lowering and physical heap reclamation"),
+              "actor-memory-guest-class.log": (
+                  "PASS: class-owned Array<int> source:",),
+              "actor-memory-guest-actor-sanitized.log": (
+                  "PASS native source actor: source-actor-scoped-owned-i64.ores actors 1",
+                  "PASS native source actor: source-actor-two-owned-heaps.ores actors 2",
+                  "PASS current-source actor lowering and physical heap reclamation"),
+              "actor-memory-guest-class-sanitized.log": (
+                  "PASS: class-owned Array<int> source:", "(ASan+UBSan)"),
+          }
+          for name, markers in expected.items():
+              lines = (root / name).read_text().splitlines()
+              for marker in markers:
+                  if sum(marker in line for line in lines) != 1:
+                      raise SystemExit(f"guest execution marker missing or duplicated: {name}/{marker}")
+          print("ACTOR_MEMORY_V1_COMPILED_GUEST_SLICES=PASS")
+          PY
       - name: Write bounded evidence receipt (never guest or AOT)
         shell: bash
         env:
@@ -76,6 +135,15 @@ jobs:
           expected = os.environ["EXPECTED_HEAD"]
           if git("rev-parse", "HEAD") != expected:
               raise SystemExit("nonexact HEAD")
+          root = pathlib.Path(os.environ["RUNNER_TEMP"])
+          guest_logs = [
+              "actor-memory-guest-actor.log",
+              "actor-memory-guest-class.log",
+              "actor-memory-guest-actor-sanitized.log",
+              "actor-memory-guest-class-sanitized.log",
+          ]
+          if any(not (root / f).is_file() or not (root / f).stat().st_size for f in guest_logs):
+              raise SystemExit("compiled guest logs missing or empty")
           receipt = {
               "schema": "oreslang.actor_memory_compiler_e2e.host_receipt_v1",
               "backend": os.environ["TARGET_BACKEND"],
@@ -86,7 +154,12 @@ jobs:
               "run_id": os.environ["GITHUB_RUN_ID"],
               "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
               "host_substrate": "PASS",
-              "compiled_guest": "NOT_EXECUTED",
+              "compiled_guest": "NARROW_EXECUTED",
+              "compiled_actor_owned_i64": "PASS",
+              "compiled_class_owned_array": "PASS",
+              "compiled_guest_asan_ubsan": "PASS",
+              "actor_owned_class_with_suspend": "NOT_EXECUTED",
+              "guest_lowering_scope": "independent actor i64 and class-owned array slices",
               "aot": "NOT_EXECUTED",
               "zero_gc_certified": False,
               "cross_org_private_source_export": False,
