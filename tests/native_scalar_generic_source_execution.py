@@ -30,6 +30,9 @@ pub fnc main(): int { return identity<T=_>(42); }
     "default-omission": ("""fnc fixed<T=int>(): int { return 42; }
 pub fnc main(): int { return fixed(); }
 """, 42),
+    "specialization-reuse": ("""fnc identity<T>(T value): T { return value; }
+pub fnc main(): int { return identity<int>(20) + identity(22); }
+""", 42),
     "dependent-chain": ("""fnc sum<A, B=A, C=B, D=C>(A x, B y): int { return x + y; }
 pub fnc main(): int { return sum<A=int, D=int>(19, 23); }
 """, 42),
@@ -183,6 +186,22 @@ def verify(compiler, clang):
             result = run([str(compiler), str(path)])
             if result.returncode or not result.stdout.startswith(b"; ModuleID"):
                 raise AssertionError(f"{name}: compiler rc={result.returncode}, stderr={result.stderr!r}")
+            # A source-level generic is only an AOT specialization when
+            # LLVM contains a compiler-generated concrete symbol, not an
+            # erased unspecialized generic entry or a runtime lookup.
+            if name == "specialization-reuse":
+                ir = result.stdout.decode("utf-8")
+                symbol = r'@(?:"identity\\$atto_g1\\$int"|identity\\$atto_g1\\$int)'
+                definitions = re.findall(
+                    rf'(?m)^define\\s+[^\\n]*?{symbol}\\s*\\(', ir)
+                direct_calls = re.findall(
+                    rf'\\bcall\\s+[^\\n]*?{symbol}\\s*\\(', ir)
+                if len(definitions) != 1 or len(direct_calls) != 2:
+                    raise AssertionError(
+                        f"generic AOT must emit one reused exact symbol; "
+                        f"defs={len(definitions)}, calls={len(direct_calls)}")
+                if re.search(r'(?m)^define\\s+[^\\n]*?@identity\\s*\\(', ir):
+                    raise AssertionError("uninstantiated generic symbol still emitted")
             ll = tmp / (name + ".ll")
             exe = tmp / name
             ll.write_bytes(result.stdout)
