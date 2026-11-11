@@ -319,6 +319,18 @@ inline Verified admit(const DependencyPin& pin,
        pin.namespaces.empty()||pin.namespaces.size()>4096u||
        snapshots.size()!=pin.namespaces.size())
         detail::reject("invalid locked .oresi package identity/profile");
+    // A closed lock may list 4096 interfaces. Cap the aggregate byte budget
+    // before hashing or decoding any one attacker-controlled envelope.
+    constexpr std::size_t max_envelope_bytes = 16u*1024u*1024u;
+    constexpr std::size_t max_package_bytes = 64u*1024u*1024u;
+    std::size_t total_bytes = 0;
+    for (const auto& [name, bytes] : snapshots) {
+        (void)name;
+        if (bytes.size()>max_envelope_bytes ||
+            bytes.size()>max_package_bytes-total_bytes)
+            detail::reject("package interface byte budget exceeded");
+        total_bytes+=bytes.size();
+    }
     std::set<std::string> seen;
     std::map<std::string, std::vector<Export>> checked_namespaces;
     for(const auto& ns:pin.namespaces){
