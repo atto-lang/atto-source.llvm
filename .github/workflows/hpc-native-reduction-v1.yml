@@ -3,7 +3,13 @@ on:
   pull_request:
     paths:
       - 'tests/fixtures/hpc-reduction-v1/**'
+      - 'tests/fixtures/task-v1-negative/**'
       - 'tests/hpc_reduction_native_v1.rs'
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'src/main/cpp/oreslang/runtime/SourceTaskRuntime.c'
+      - 'scripts/compile-aot.sh'
+      - 'scripts/audit_no_gc_ir.rs'
       - '.github/workflows/hpc-native-reduction-v1.yml'
   workflow_dispatch:
 permissions:
