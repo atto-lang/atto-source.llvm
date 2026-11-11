@@ -2,6 +2,7 @@ name: LLVM functor recursive type-shape preflight (HOST ONLY)
 on:
   pull_request:
     paths:
+      - CMakeLists.txt
       - src/main/cpp/oreslang/types/FunctorTypeRules.hpp
       - src/main/cpp/oreslang/types/NativeSumTypes.hpp
       - tests/functor_type_rules_test.cpp
@@ -30,12 +31,14 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           git diff --quiet --exit-code
           test -z "$(git ls-files --others --exclude-standard)"
+          test -z "$(git ls-files --others --ignored --exclude-standard)"
           echo "SOURCE_COMMIT=$(git rev-parse HEAD)"
           echo "SOURCE_TREE=$(git rev-parse HEAD^{tree})"
-          for file in src/main/cpp/oreslang/types/FunctorTypeRules.hpp tests/functor_type_rules_test.cpp; do
+          for file in CMakeLists.txt src/main/cpp/oreslang/types/FunctorTypeRules.hpp src/main/cpp/oreslang/types/NativeSumTypes.hpp tests/functor_type_rules_test.cpp .github/workflows/functor-type-shape-host.yml; do
             test -f "$file"
+            test ! -L "$file"
             echo "BLOB $file $(git rev-parse "HEAD:$file")"
-            test "$(git hash-object "$file")" = "$(git rev-parse "HEAD:$file")"
+            git cat-file -p "HEAD:$file" | cmp - "$file"
           done
       - name: Build and execute C++17 strict host-only shape tests
         shell: bash
