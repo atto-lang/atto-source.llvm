@@ -19,9 +19,9 @@ typedef enum {
     FF_RR_OUTER_ERR=12, FF_RR_INNER_ERR=13, FF_RR_OK=14,
     FF_R_ERR=15, FF_R_OK=16
 } ff_tag;
-typedef struct { uint16_t index; uint32_t generation; } ff_handle;
+typedef struct { uint16_t index; uint64_t generation; } ff_handle;
 typedef struct {
-    uint32_t generation;
+    uint64_t generation;
     uint16_t next;
     uint8_t live, borrowed, form, tag, owns_resource;
     uint32_t error_domain;
@@ -143,8 +143,15 @@ static inline ff_status ff_drop(ff_arena* a,ff_handle* h) {
     if(s->borrowed)return FF_BORROWED;
     bool owned=s->owns_resource;int64_t value=s->value;
     uint16_t i=h->index;
-    s->live=0;s->generation++;if(!s->generation)s->generation++;
-    s->next=a->free_head;a->free_head=i;
+    s->live=0;
+    if(s->generation==UINT64_MAX){
+        /* Permanently retire on exhausted generation identity rather than
+         * permitting a stale historical handle to become valid again. */
+        s->next=FF_NIL;
+    }else{
+        ++s->generation;
+        s->next=a->free_head;a->free_head=i;
+    }
     --a->live_count;++a->releases;
     h->index=FF_NIL;h->generation=0;
     if(owned){++a->destructors;a->destroy(value,a->destroy_context);}

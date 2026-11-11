@@ -74,5 +74,19 @@ int main(void){
   for(unsigned i=0;i<FF_CAP;i++)assert(ff_drop(&a,&all[i])==FF_OK);
   assert(a.live_count==0 && a.peak_count==FF_CAP);
   assert(a.allocations==a.releases);
+  /* Simulate exhaustion of one handle generation: release must RETIRE its
+     slot, preventing historical handles from reviving on wrap-around. */
+  assert(ff_make(&a,FF_O,FF_O_NONE,0,0,false,&h)==FF_OK);
+  ff_cell* last=ff_get(&a,h);
+  last->generation=UINT64_MAX;
+  h.generation=UINT64_MAX;
+  stale=h;
+  assert(ff_drop(&a,&h)==FF_OK);
+  assert(ff_get(&a,stale)==NULL);
+  for(unsigned i=0;i<FF_CAP-1u;i++)
+    assert(ff_make(&a,FF_O,FF_O_NONE,0,0,false,&all[i])==FF_OK);
+  assert(ff_make(&a,FF_O,FF_O_NONE,0,0,false,&h)==FF_FULL);
+  for(unsigned i=0;i<FF_CAP-1u;i++)assert(ff_drop(&a,&all[i])==FF_OK);
+  assert(a.live_count==0 && a.allocations==a.releases);
   printf("PASS native bounded fused Option/Result ownership ABI; GCC+Clang; guest=NOT_EXECUTED\n");
 }

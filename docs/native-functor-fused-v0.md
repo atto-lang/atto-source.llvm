@@ -24,8 +24,8 @@ independent ABI review and typed compiler lowering.
 **Local native executions (source SHA matched):** GCC -O0 PASS; GCC -O2 PASS;
 Clang -O1 AddressSanitizer + UndefinedBehaviorSanitizer PASS, with strict
 warnings as errors and assertions enabled. Source SHA1 Git blob
-7269dc1900595197f84feb1cb1c1393f61b74845;
-test blob cba6ccd777760c8760b9ae91734a28b4289ab8da.
+2c29c6fe9b6c451926e655321e185f0f3c03f253;
+test blob e5cd9383e86e87bcef090101b2b65a72b189849b.
 These are local host/native C proof steps, **not** LLVM .atto guest steps.
 
 **Explicit limitations:** the C API exposes cell handles and is not a
