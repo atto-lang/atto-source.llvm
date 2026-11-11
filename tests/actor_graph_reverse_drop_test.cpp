@@ -3,6 +3,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdio>
+#include <exception>
+#include <initializer_list>
 #include <stdexcept>
 
 using oreslang::runtime::ActorHeapIdentity;
