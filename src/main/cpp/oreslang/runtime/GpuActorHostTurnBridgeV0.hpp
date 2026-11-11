@@ -78,13 +78,8 @@ public:
         if (!closed_ || pending_) std::terminate();
     }
 
-    // V0 direct-method tests intentionally opt in to the legacy unsafe seam;
-    // production compilation leaves the proof-sensitive methods private.
-#if defined(ORESLANG_GPU_ACTOR_V0_HOST_TEST_SEAM)
-public:
-#else
+    // No test override. Host lifecycle proof is mediated by V1 registry.
 private:
-#endif
     // Returns a source-only host turn identity, NOT an authenticated GPU event.
     Turn prepare(std::int64_t increment) {
         std::lock_guard<std::mutex> guard(mu_);
@@ -186,14 +181,9 @@ public:
     // Outstanding allocations remain quarantined pending provider recovery.
     bool report_device_loss() { return request_stop(StopCause::DeviceLoss); }
 
-    // Proof-sensitive hardware event and release acknowledgments may only
-    // originate inside the V1 supervisor registry. In tests, enable the
-    // explicit V0 HOST TEST seam before including this header.
-#if defined(ORESLANG_GPU_ACTOR_V0_HOST_TEST_SEAM)
-public:
-#else
+    // All completion and release acknowledgments originate from the
+    // supervisor-owned registry, never direct tests or actor-facing code.
 private:
-#endif
     // Called after the *same* provider event completes/quiesces, not merely
     // because cancellation was requested or a timeout occurred.
     void acknowledge_cancelled_provider_event(Turn turn, bool provider_event_quiescent) {
