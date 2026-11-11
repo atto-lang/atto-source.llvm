@@ -7,23 +7,23 @@
   "scope": "native OpenCL actor-provider adapter over production OpenClProvider/SystemApi, not compiled AttoLang guest; physical device absent in carrier",
   "sourceBlobs": {
     "src/main/cpp/oreslang/runtime/GpuActorOpenClProviderV2.hpp": "d0103a9727a13cbd661c4095383f6e79570af7cc",
-    "tests/gpu_actor_opencl_provider_v2_test.cpp": "e1853839872b1a86290d8137e5102ece48fef325",
+    "tests/gpu_actor_opencl_provider_v2_test.cpp": "d4c062a0d29cf2bdb4b3107ee9a5067c66e72069",
     "tests/gpu_actor_opencl_v2_physical_probe.cpp": "965c20f494cfc4fac2acf9590cc3e0130708d979",
     "src/main/cpp/oreslang/runtime/GpuActorProviderBridgeV1.hpp": "67ba38101d602e63ea8c126bc023f51d146daaa4",
     "src/main/cpp/oreslang/runtime/OpenClProvider.hpp": "8eab84e42d3c57130656664728cb8c4ef9df6c7b",
-    "src/main/cpp/oreslang/runtime/OpenClSystemApi.hpp": "47e75269dd67d2f1b20518a5aca82c3329fbc4e0"
+    "src/main/cpp/oreslang/runtime/OpenClSystemApi.hpp": "36792e75a02cc3d1c7e9a9be17e6d5a75cfea269"
   },
   "carrier": {
     "repo": "scintilla-run/scintilla-run-e2e",
     "branch": "carrier/gpu-actor-opencl-v2-20261110",
-    "head": "30c1a325fd3591e1d903552af7bee34b3569d94f",
-    "runId": 42948847074,
-    "jobId": 130288095256,
-    "url": "https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42948847074",
+    "head": "72addc49d807255d813bfe01cdff4f0e62dcaa5e",
+    "runId": 42949404184,
+    "jobId": 130289898006,
+    "url": "https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42949404184",
     "exactSourceBlobs": true,
     "gccAsanUbsan": "passed",
     "clangStrict": "passed",
-    "assertionsPerCompiler": 59,
+    "assertionsPerCompiler": 65,
     "physicalNativeProbeCompiled": true,
     "hardwareGateInvoked": true
   },
@@ -44,7 +44,8 @@
     "actor_supervisor_CONTROL_mock",
     "device_loss_requires_native_queue_quiescence_mock",
     "ambiguous_enqueue_retained",
-    "gpu_only_runtime_selector_compiled"
+    "gpu_only_runtime_selector_compiled",
+    "failed-native-OpenCL-event-info-query-not-terminal"
   ],
   "remainingBlockers": [
     "actual physical GPU provider run",
@@ -52,7 +53,8 @@
     "legacy V0 trusted Boolean completion entrypoints accessible to native host",
     "process crash-durable quarantine and device reset proof",
     "compiled AttoLang actor ownership/effect MIR and guest kernel lowering",
-    "full repository CTest and independent five-backend parity"
+    "full repository CTest and independent five-backend parity",
+    "device event query failure must remain pending until explicit physical recovery"
   ],
   "deviceGuestStatus": {
     "java": "NOT_EXECUTED",
