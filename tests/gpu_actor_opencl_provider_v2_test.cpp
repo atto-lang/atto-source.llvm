@@ -38,7 +38,7 @@ struct FakeOpenCl : oreslang::opencl::Api {
     struct Event { EventStatus status; };
     int program_releases=0, buffer_releases=0, event_releases=0;
     int uploads=0, kernels=0, downloads=0, polls=0;
-    bool reject_prepare=false, fail_kernel=false, fail_upload=false;
+    bool reject_prepare=false, fail_kernel=false, fail_upload=false, fail_download=false;
     bool delayed=false, device_loss=false, allow_loss_quiescence=false;
     bool fail_buffer_release_once=false;
     std::vector<Event*> events;
@@ -96,6 +96,7 @@ struct FakeOpenCl : oreslang::opencl::Api {
     }
     Handle enqueue_download(Handle from,unsigned char* dst,std::size_t n) override {
         ++downloads;
+        if (fail_download) throw std::runtime_error("GPU_V2_FAKE_DOWNLOAD_FAILED");
         const auto& x=static_cast<Buffer*>(from)->bytes;
         std::copy(x.begin(),x.begin()+static_cast<std::ptrdiff_t>(n),dst);
         return next_event();
@@ -289,9 +290,54 @@ void ambiguous_enqueue_is_retained_not_falsely_aborted() {
     check(reg->retained_count()==1,"unknown cannot be mistaken for completed");
     check(p->reconcile_unknown({3,1}).state==Port::EnqueueState::Unknown,
           "no fabricated preenqueue proof");
-    // Intentionally leave the quarantine retained within this isolated
-    // test PROCESS. The mock may have enqueued work despite the error.
-    // This case is a known production-blocking recovery gap.
+    check(api->buffer_releases==0,"enqueue error must not release live device buffers");
+    check(!p->recover_unknown_begin_on_worker(),"no queue proof means no recovery");
+    check(api->buffer_releases==0,"still no buffer release before native proof");
+    api->allow_loss_quiescence=true;
+    check(p->recover_unknown_begin_on_worker(),"worker proves native queue quiescence");
+    reg->progress_all(); // provider-issued failed/quiescent local receipt
+    reg->progress_all(); // cancellation after failed native operation
+    reg->progress_all(); // physical kernel program release
+    check(reg->retained_count()==0,"root quarantine retires only after native release");
+    auto msg=lane->poll();
+    check(msg && msg->kind==Lane::Kind::HostFailure,
+          "ambiguous native upload reports supervisor host failure");
+    lane->ack(msg->actor);
+    check(lane->reserved_count()==0,"recovered upload CONTROL lane retired");
+}
+
+void ambiguous_kernel_or_download_never_releases_before_proof(bool download) {
+    Inputs in;
+    auto api=std::make_shared<FakeOpenCl>();
+    api->fail_kernel=!download;
+    api->fail_download=download;
+    auto p=make_port(api,in);
+    auto reg=std::make_shared<Registry>(1);
+    auto lane=std::make_shared<Lane>(1);
+    auto a=std::make_unique<GpuActorProviderBridgeV1>(
+        reg,p,lane,Lane::ActorKey{"actor",3},"root",in.plan.byte_length(),17);
+    (void)a->submit(40);
+    reg->progress_all(); // upload -> kernel, or attempted kernel throws
+    if (download) reg->progress_all(); // kernel -> attempted download throws
+    check(a->committed_state()==17,"no speculative state on uncertain native enqueue");
+    check(api->buffer_releases==0,"uncertain kernel/download retains physical buffers");
+    reg->progress_all(); // acknowledge uncertain native enqueue as supervisor failure
+    check(!a->completed(),"unknown physical event not an actor completion");
+    check(!p->recover_unknown_kernel_on_worker(),"worker must not invent quiescence");
+    check(api->buffer_releases==0,"no buffers freed before native queue quiescence");
+    api->allow_loss_quiescence=true;
+    check(p->recover_unknown_kernel_on_worker(),"trusted worker obtains queue-finish proof");
+    reg->progress_all(); // terminal failed event, no state commit
+    check(a->committed_state()==17,"failed GPU operation never publishes staged value");
+    reg->progress_all(); // release prepared program
+    check(a->completed(),"physical buffers+program retired before actor close");
+    check(api->buffer_releases==2,"physical cleanup occurs exactly once");
+    a.reset();
+    check(reg->retained_count()==0,"no residual quota or orphaned GPU actor");
+    auto msg=lane->poll();
+    check(msg && msg->kind==Lane::Kind::HostFailure,
+          "uncertain native GPU submission reaches supervisor CONTROL");
+    lane->ack(msg->actor);
 }
 
 } // namespace
@@ -305,6 +351,8 @@ int main() {
     // Keep one unresolved ambiguous provider operation deliberately rooted:
     // a failed enqueue API call is not proof no device command was accepted.
     ambiguous_enqueue_is_retained_not_falsely_aborted();
+    ambiguous_kernel_or_download_never_releases_before_proof(false);
+    ambiguous_kernel_or_download_never_releases_before_proof(true);
     if(checks<35) throw std::runtime_error("GPU_V2_TEST_COVERAGE_UNDERFLOW");
     std::cout<<"GPU_ACTOR_OPENCL_V2_HOST_MOCK_PASS checks="<<checks
              <<" physical_gpu=false device_events=fake_api"<<std::endl;
