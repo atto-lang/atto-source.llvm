@@ -46,6 +46,8 @@ public:
         std::size_t bytes;
         Owner payload;
     };
+    static_assert(std::is_nothrow_move_constructible_v<Frame>,
+                  "slot unlink must move actor-owned envelopes without throwing");
     enum class Status { Matched, Continue, NoMatch };
     class Cursor final {
     public:
