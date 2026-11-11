@@ -84,13 +84,13 @@ run_case(attolang_equality "${fixtures}/attolang_equality.atto" 0)
 # Strict native scalar equality enforces identical operand types. The
 # accepted aliases are all lowered to static comparison instructions.
 reject_case(equality_alias_mixed_bool_int
-  "fnc main(): bool { return 7 !eq true; }\\n"
+  "fnc main(): bool { return 7 !eq true; }\n"
   "equality operands require the same scalar type")
 reject_case(equality_keyword_mixed_bool_int
-  "fnc main(): bool { return 7 neq true; }\\n"
+  "fnc main(): bool { return 7 neq true; }\n"
   "equality operands require the same scalar type")
 reject_case(equality_alias_split
-  "fnc main(): bool { return 7 ! eq 8; }\\n"
+  "fnc main(): bool { return 7 ! eq 8; }\n"
   "expected")
 
 reject_case(import_private_fnc
