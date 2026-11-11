@@ -47,6 +47,35 @@ int main() {
             throw std::runtime_error("canonical i64 generic ABI mismatch");
         if (freeze_native_i64_specializations(source).at(selector) != proof.at(selector))
             throw std::runtime_error("specialization identity is not deterministic");
+        // Production LLVM codegen consumes the full frozen image, rather
+        // than deriving authority from a source-authored suffix or runtime map.
+        {
+            const auto image = freeze_native_i64_dispatch_image(source);
+            const auto* target = image.find_direct(selector);
+            if (image.direct_targets.size() != 1 || target == nullptr ||
+                target->selector != selector ||
+                target->emitted_suffix != "$atto_g1$int" ||
+                target->lowered_arity != 1 ||
+                target->concrete_types != std::vector<std::string>{"int"} ||
+                image.closure.concrete_symbols != 1 ||
+                image.closure.estimated_code_bytes == 0)
+                throw std::runtime_error("frozen compiler-owned dispatch image does not match typed i64 ABI");
+            if (image.find_direct(native_function_slot("missing", 0)) != nullptr)
+                throw std::runtime_error("unproved direct target exists in frozen dispatch image");
+        }
+        // The concrete tuple remains declaration-ordered even when defaults
+        // refer to earlier parameters. No runtime generic expansion occurs.
+        {
+            Program dependent;
+            Function fn = generic("depend");
+            fn.generic_parameters.push_back({"U", "T"});
+            dependent.functions.push_back(std::move(fn));
+            const auto image = freeze_native_i64_dispatch_image(dependent);
+            const auto* target = image.find_direct(native_function_slot("depend", 1));
+            if (target == nullptr || target->emitted_suffix != "$atto_g2$int$int" ||
+                target->concrete_types != std::vector<std::string>({"int", "int"}))
+                throw std::runtime_error("dependent concrete i64 tuple was not frozen in order");
+        }
         // The same selected source function/arity is used by all call sites;
         // the producer does not manufacture one method body per call site.
         {
@@ -149,6 +178,9 @@ int main() {
             plain.functions.push_back(std::move(fn));
             if (!freeze_native_i64_specializations(plain).empty())
                 throw std::runtime_error("plain function minted generic symbols");
+            const auto image = freeze_native_i64_dispatch_image(plain);
+            if (!image.direct_targets.empty() || image.closure.concrete_symbols != 0)
+                throw std::runtime_error("plain function acquired forged direct dispatch targets");
         }
         // Post-validation compiler IR mutation must never silently erase a
         // forged generic parameter into an ordinary i64 ABI slot.
