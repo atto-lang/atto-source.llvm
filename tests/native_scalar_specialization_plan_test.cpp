@@ -89,7 +89,7 @@ int main() {
             auto bad = fixture();
             bad.functions.push_back(generic("identity"));
             must_reject([&] { (void)freeze_native_i64_specializations(bad); },
-                        "duplicate native AOT generic specialization identity");
+                        "duplicate compiler-owned native function selector");
         }
         // Internal codegen uses name+arity selectors for all functions,
         // including non-generics. Mixed declarations must fail before ABI
