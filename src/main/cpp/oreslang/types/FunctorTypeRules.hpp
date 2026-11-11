@@ -246,6 +246,9 @@ enum class OwnerState { Owned, SharedBorrow, MutableBorrow, Moved };
 // Pre-lowering admission policy only. This cannot replace LLVM loan tracking,
 // tagged-value destruction, allocator counters, or sanitizers on guest binaries.
 inline void check_affine_rebuild(OwnerState state, bool affine_payload) {
+    if (state != OwnerState::Owned && state != OwnerState::SharedBorrow &&
+            state != OwnerState::MutableBorrow && state != OwnerState::Moved)
+        throw TypeError("invalid-owner-state", "unknown owner provenance cannot be admitted");
     if (state == OwnerState::Moved)
         throw TypeError("use-after-move", "cannot transform a consumed functor owner");
     if (affine_payload && state != OwnerState::Owned)
