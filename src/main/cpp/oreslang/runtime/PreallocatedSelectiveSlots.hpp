@@ -29,7 +29,12 @@ public:
     // during slot unlink or a physical release/ACK boundary.
     static_assert(std::is_nothrow_move_constructible_v<Deleter>,
                   "actor-owned payload deleter must have a nonthrowing move");
-    static_assert(std::is_nothrow_invocable_v<Deleter&, T*>,
+    // libstdc++ does not annotate default_delete<T>::operator() noexcept:
+    // validate the T destructor for the standard deleter, and the callable
+    // noexcept contract for custom arena/resource deleters.
+    static_assert((std::is_same_v<Deleter, std::default_delete<T>> &&
+                   std::is_nothrow_destructible_v<T>) ||
+                  std::is_nothrow_invocable_v<Deleter&, T*>,
                   "actor-owned payload cleanup must be nonthrowing");
     static constexpr std::size_t none = std::numeric_limits<std::size_t>::max();
     // The native actor-turn admission gate already caps capacity at 65,536.
