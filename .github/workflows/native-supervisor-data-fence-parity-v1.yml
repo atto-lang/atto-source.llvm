@@ -32,7 +32,7 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           test -z "$(git status --porcelain)"
-          test "$(git hash-object tests/native_preallocated_supervisor_races_test.cpp)" = 701157d72a085a796587737a16a47f93baee3956
+          test "$(git hash-object tests/native_preallocated_supervisor_races_test.cpp)" = 5237e706ccb7cf63f10360a931ac4a482ff9caa1
           test "$(git hash-object src/main/cpp/oreslang/runtime/ActorGroupLifecycle.hpp)" = 066f23a0d4c2e17c5369e81e829f4daf14e980f5
           test "$(git hash-object src/main/cpp/oreslang/runtime/PriorityActorInbox.hpp)" = 848a0cbc6f31a274056a09482ea5cf74162b17bb
       - name: Build and run actual bound native supervisor inbox test
