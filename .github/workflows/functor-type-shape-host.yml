@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - CMakeLists.txt
+      - src/main/cpp/oreslang/frontend/ModuleLoader.cpp
       - src/main/cpp/oreslang/types/FunctorTypeRules.hpp
       - src/main/cpp/oreslang/types/NativeSumTypes.hpp
       - tests/functor_type_rules_test.cpp
@@ -34,7 +35,7 @@ jobs:
           test -z "$(git ls-files --others --ignored --exclude-standard)"
           echo "SOURCE_COMMIT=$(git rev-parse HEAD)"
           echo "SOURCE_TREE=$(git rev-parse HEAD^{tree})"
-          for file in CMakeLists.txt src/main/cpp/oreslang/types/FunctorTypeRules.hpp src/main/cpp/oreslang/types/NativeSumTypes.hpp tests/functor_type_rules_test.cpp .github/workflows/functor-type-shape-host.yml; do
+          for file in CMakeLists.txt src/main/cpp/oreslang/frontend/ModuleLoader.cpp src/main/cpp/oreslang/types/FunctorTypeRules.hpp src/main/cpp/oreslang/types/NativeSumTypes.hpp tests/functor_type_rules_test.cpp .github/workflows/functor-type-shape-host.yml; do
             test -f "$file"
             test ! -L "$file"
             echo "BLOB $file $(git rev-parse "HEAD:$file")"
