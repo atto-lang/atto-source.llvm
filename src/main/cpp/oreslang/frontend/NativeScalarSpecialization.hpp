@@ -149,8 +149,30 @@ inline NativeI64SpecializationClosureEvidence check_native_i64_specialization_cl
 // This plan is deliberately rebuilt by the emitter from the post-validation
 // Program rather than accepted as source-authored metadata. One declaration
 // gets exactly one concrete i64 specialization, reused by all matching calls.
+// Frozen compiler-owned direct-call records. The tuple is concrete and
+// ordered; each record is derived from the admitted Program, never from a
+// source-authored manifest or a runtime symbol registry.
+struct NativeI64DirectTarget {
+    std::string selector;
+    std::string emitted_suffix;
+    std::vector<std::string> concrete_types;
+    std::size_t lowered_arity;
+};
+
+struct NativeI64DispatchImage {
+    NativeI64SpecializationClosureEvidence closure;
+    std::unordered_map<std::string, NativeI64DirectTarget> direct_targets;
+
+    const NativeI64DirectTarget* find_direct(const std::string& selector) const {
+        const auto found = direct_targets.find(selector);
+        return found == direct_targets.end() ? nullptr : &found->second;
+    }
+};
+
+// This selector builder is deliberately internal to the frozen-image path;
+// callers must not regard the returned mapping alone as dispatch authority.
 inline std::unordered_map<std::string, std::string>
-freeze_native_i64_specializations(const Program& program) {
+select_native_i64_specializations(const Program& program) {
     constexpr std::size_t kMaxSpecializations = 256;
     constexpr std::size_t kMaxGenericParameters = 32;
     std::unordered_map<std::string, std::string> selected;
@@ -220,8 +242,42 @@ freeze_native_i64_specializations(const Program& program) {
         if (!concrete_symbols.insert(selector + suffix).second)
             throw std::runtime_error("duplicate native AOT specialized symbol");
     }
-    (void)check_native_i64_specialization_closure(program, selected);
     return selected;
+}
+
+// This factory is the production bridge between the checked typed Program,
+// its bounded specialization closure and LLVM's direct call declarations.
+inline NativeI64DispatchImage freeze_native_i64_dispatch_image(const Program& program) {
+    auto selected = select_native_i64_specializations(program);
+    NativeI64DispatchImage image{
+        check_native_i64_specialization_closure(program, selected), {}
+    };
+    for (const auto& fn : program.functions) {
+        const auto selector = native_function_slot(fn.name, fn.parameters.size());
+        const auto selection = selected.find(selector);
+        if (selection == selected.end()) continue;
+        std::vector<std::string> types(fn.generic_parameters.size(), "int");
+        NativeI64DirectTarget target{
+            selector, selection->second, std::move(types), fn.parameters.size()
+        };
+        if (!image.direct_targets.emplace(selector, std::move(target)).second)
+            throw std::runtime_error("duplicate frozen native AOT dispatch target");
+    }
+    if (image.direct_targets.size() != selected.size() ||
+        image.closure.concrete_symbols != selected.size())
+        throw std::runtime_error("incomplete frozen native AOT direct dispatch image");
+    return image;
+}
+
+// Compatibility entry point for the existing source-level C++ verifier.
+// Production LLVM lowering consumes NativeI64DispatchImage directly.
+inline std::unordered_map<std::string, std::string>
+freeze_native_i64_specializations(const Program& program) {
+    const auto image = freeze_native_i64_dispatch_image(program);
+    std::unordered_map<std::string, std::string> suffixes;
+    for (const auto& [selector, target] : image.direct_targets)
+        suffixes.emplace(selector, target.emitted_suffix);
+    return suffixes;
 }
 
 } // namespace oreslang
