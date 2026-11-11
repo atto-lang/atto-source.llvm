@@ -34,7 +34,7 @@ inline NativeI64SpecializationClosureEvidence check_native_i64_specialization_cl
     std::unordered_map<std::string, std::unordered_set<std::string>> graph;
     std::size_t scanned = 0, edges = 0, estimated = 0;
 
-    const auto scan = [&](const Function& fn) {
+    const auto scan = [&](const Function& fn, bool emitted_generic) {
         std::vector<const Expression*> expressions;
         std::vector<const Statement*> statements;
         const auto push = [&](const std::unique_ptr<Expression>& e) {
@@ -103,18 +103,19 @@ inline NativeI64SpecializationClosureEvidence check_native_i64_specialization_cl
             for (const auto& arg : expr->arguments) push(arg);
         }
         const auto selector = native_function_slot(fn.name, fn.parameters.size());
-        if (selected.find(selector) == selected.end()) return;
+        if (!emitted_generic || selected.find(selector) == selected.end()) return;
         // Conservative pre-emission estimate, not a measured final binary
         // byte count. Limit growth before creating the native LLVM module.
-        if (fn_nodes > (kMaxEstimatedBytes - estimated - 256) / 64)
+        if (estimated > kMaxEstimatedBytes - 256 ||
+            fn_nodes > (kMaxEstimatedBytes - estimated - 256) / 64)
             throw std::runtime_error("native AOT specialization byte estimate exceeded");
         estimated += 256 + fn_nodes * 64;
         if (!graph.emplace(selector, std::move(outgoing)).second)
             throw std::runtime_error("duplicate native AOT specialization graph node");
     };
 
-    for (const auto& fn : program.functions) scan(fn);
-    for (const auto& actor : program.actors) scan(actor.on_message);
+    for (const auto& fn : program.functions) scan(fn, true);
+    for (const auto& actor : program.actors) scan(actor.on_message, false);
 
     // Traverse each emitted generic as a root. Recursive calls and diamonds
     // terminate because every concrete specialization is visited once.
