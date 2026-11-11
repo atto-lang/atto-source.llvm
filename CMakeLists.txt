@@ -2238,6 +2238,19 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_preallocated_selective_slots
         COMMAND oreslang-preallocated-selective-slots-test)
     set_tests_properties(native_actor_preallocated_selective_slots PROPERTIES TIMEOUT 30)
+    # Real shared ActorMailboxCompletion with two independently preallocated
+    # priority lanes: global sequence fence versus lane-local receipt ID.
+    add_executable(oreslang-native-slot-ledger-integration-test
+        tests/native_slot_ledger_integration_test.cpp)
+    target_include_directories(oreslang-native-slot-ledger-integration-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-slot-ledger-integration-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-slot-ledger-integration-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-slot-ledger-integration-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_preallocated_slot_ledger_fence
+        COMMAND oreslang-native-slot-ledger-integration-test)
+    set_tests_properties(native_actor_preallocated_slot_ledger_fence PROPERTIES TIMEOUT 30)
     # Compile-negative actor safety gate: custom deleter destructors or moves
     # must not call back into an actor mailbox while the physical lock is held.
     if(UNIX)
