@@ -152,10 +152,14 @@ public:
     Observation observe(const EventHandle& event) override {
         std::lock_guard<std::mutex> guard(mu_);
         if (!active_ || event != active_ ||
-                !authentic_local_event(event, active_turn_) || !operation_)
+                !authentic_local_event(event, active_turn_))
             return Observation::Unknown;
+        // A verified failed upload may be reconciled via clFinish without
+        // ever producing an Operation handle. Its locally minted terminal
+        // failure receipt is valid *only after* physical queue quiescence.
         if (event_terminal_)
             return event_success_ ? Observation::CompleteOk : Observation::CompleteFailed;
+        if (!operation_) return Observation::Unknown;
 
         using State = opencl::Provider::OperationState;
         State state = operation_->state();
