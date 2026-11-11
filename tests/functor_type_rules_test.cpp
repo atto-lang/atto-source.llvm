@@ -332,6 +332,26 @@ int main() {
         sum.argument_names.push_back("");
     });
 
+    auto reject_hidden_scalar_payload = [&](const std::function<void(oreslang::Expression&)>& mutate) {
+        auto program = sum_ast();
+        auto& payload = *program.functions.front().locals.front().initializer->arguments.front();
+        mutate(payload);
+        reject_table(std::move(program), "malformed native scalar leaf AST");
+    };
+    reject_hidden_scalar_payload([](oreslang::Expression& payload) {
+        payload.left = std::make_unique<oreslang::Expression>();
+        payload.left->kind = oreslang::Expression::Kind::Call;
+    });
+    reject_hidden_scalar_payload([](oreslang::Expression& payload) {
+        payload.when_true = std::make_unique<oreslang::Expression>();
+        payload.when_true->kind = oreslang::Expression::Kind::String;
+    });
+    reject_hidden_scalar_payload([](oreslang::Expression& payload) {
+        payload.type_arguments_present = true;
+    });
+    reject_hidden_scalar_payload([](oreslang::Expression& payload) {
+        payload.arguments.push_back(std::make_unique<oreslang::Expression>());
+    });
     std::cout << "PASS " << passed << " compiler-type-shape host-only checks; "
               << "LLVM guest/native machine-code verification NOT_EXECUTED\n";
     return 0;
