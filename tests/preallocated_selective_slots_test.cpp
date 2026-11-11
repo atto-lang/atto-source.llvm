@@ -1,5 +1,9 @@
 #include "oreslang/runtime/PreallocatedSelectiveSlots.hpp"
 #include <algorithm>
+#include <array>
+#include <atomic>
+#include <mutex>
+#include <thread>
 #include <limits>
 #include <cstdint>
 #include <deque>
@@ -19,7 +23,62 @@ template<class F> void require_invalid(F&& f) {
 }
 static_assert(!std::is_aggregate_v<Q::Cursor>);
 static_assert(!std::is_move_constructible_v<Q>);
+
+// The slot pool deliberately has no internal mutex. This exercises its
+// actual contract: a trusted host scheduler must serialize mutations under
+// the physical mailbox lock. Payload ownership moves exactly once on publish.
+static void concurrent_external_lock_oracle() {
+  constexpr int senders=4, per_sender=1500;
+  Q inbox(32);
+  std::mutex physical_lock;
+  std::atomic<int> admitted{0}, received{0};
+  std::uint64_t next_sequence=1;
+  std::array<std::thread, senders> producers;
+  for(int sender=0;sender<senders;sender++) {
+    producers[sender]=std::thread([&,sender] {
+      for(int seq=0;seq<per_sender;seq++) {
+        auto item=std::make_unique<int>(sender*65536+seq);
+        bool published=false;
+        while(!published) {
+          {
+            std::lock_guard<std::mutex> guard(physical_lock);
+            published=inbox.push(item,8,std::uint32_t(sender+1),next_sequence);
+            if(published) {
+              ++next_sequence;
+              admitted.fetch_add(1,std::memory_order_relaxed);
+            }
+          }
+          if(!published) std::this_thread::yield();
+        }
+        REQUIRE(!item);
+      }
+    });
+  }
+  std::array<int, senders> last_seen{-1,-1,-1,-1};
+  while(received.load(std::memory_order_relaxed)<senders*per_sender) {
+    std::optional<Q::Frame> current;
+    {
+      std::lock_guard<std::mutex> guard(physical_lock);
+      current=inbox.pop_front();
+    }
+    if(!current) { std::this_thread::yield(); continue; }
+    int encoded=*current->payload;
+    int sender=encoded/65536, seq=encoded%65536;
+    REQUIRE(sender>=0 && sender<senders);
+    REQUIRE(seq==last_seen[sender]+1);
+    REQUIRE(current->tag==std::uint32_t(sender+1));
+    last_seen[sender]=seq;
+    received.fetch_add(1,std::memory_order_relaxed);
+  }
+  for(auto& producer:producers) producer.join();
+  REQUIRE(admitted.load()==senders*per_sender);
+  REQUIRE(received.load()==senders*per_sender);
+  for(auto last:last_seen) REQUIRE(last==per_sender-1);
+  REQUIRE(inbox.size()==0);
+}
+
 int main() {
+  concurrent_external_lock_oracle();
   // Reject bad capacities before allocation, rather than requesting an
   // enormous vector and accidentally throwing std::bad_alloc/length_error.
   require_invalid([] { Q bad(0); });
