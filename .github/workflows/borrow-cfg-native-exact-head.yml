@@ -29,8 +29,8 @@ jobs:
           test -z "$(git status --porcelain)"
           mkdir -p target/borrow-cfg-native-evidence
           printf "head=%s\ntree=%s\nstatus=HOST_NATIVE_ONLY\n" "$EXPECTED_HEAD" "$(git rev-parse HEAD^{tree})" > target/borrow-cfg-native-evidence/identity.txt
-          test "$(git rev-parse HEAD:src/main/cpp/oreslang/types/OwnershipCfg.hpp)" = "126f2da98bdf95a58b75874bfe6344a9ea16fb09"
-          test "$(git rev-parse HEAD:tests/ownership_cfg_dataflow_test.cpp)" = "0d26d16525bff9e37b2a1b12b8e8f59cdce81881"
+          test "$(git rev-parse HEAD:src/main/cpp/oreslang/types/OwnershipCfg.hpp)" = "2eece42bf529b5e2e21b40e88a8c5cad756aaf16"
+          test "$(git rev-parse HEAD:tests/ownership_cfg_dataflow_test.cpp)" = "5bbb19fbea3e9273f9ae39e423ac954c618d9f58"
           for source in src/main/cpp/oreslang/types/OwnershipCfg.hpp tests/ownership_cfg_dataflow_test.cpp; do
             test "$(git rev-parse "HEAD:$source")" = "$(git hash-object --no-filters "$source")"
             printf "%s %s\n" "$source" "$(git rev-parse "HEAD:$source")" >> target/borrow-cfg-native-evidence/identity.txt
