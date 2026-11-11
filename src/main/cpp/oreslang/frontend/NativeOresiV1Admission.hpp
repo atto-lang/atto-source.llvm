@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstddef>
+#include <utility>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -140,7 +142,7 @@ inline bool sha_hex(const std::string& x) {
 inline bool package_instance(const std::string& x) {
     if (x.empty() || x.size()>256 || x.find("//")!=std::string::npos ||
         x.find("/../")!=std::string::npos || x.find("/./")!=std::string::npos ||
-        x.compare(x.size()-std::min(x.size(),3u),std::min(x.size(),3u),"/..")==0 ||
+        (x.size()>=3 && x.compare(x.size()-3,3,"/..")==0) ||
         (x.size()>=2 && x.compare(x.size()-2,2,"/.")==0)) return false;
     if (!((x[0]>='A'&&x[0]<='Z')||(x[0]>='a'&&x[0]<='z')||(x[0]>='0'&&x[0]<='9')))return false;
     for (char c : x)
