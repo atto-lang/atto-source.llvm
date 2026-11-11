@@ -254,6 +254,10 @@ fn main() {
         ("ordered-local-scopes-do-not-leak", r#"fnc touch():void{return;}pub fnc main():int{touch();let int total=0;for(let int index=0;index<2;index=index+1){let int local=index;local=local+1;total=total+local;}if total==3;then let int local=39;total=total+local;fi return total==42?0:1;}"#, ""),
         ("contextual-pattern-function-and-parameter", "fnc pattern(int pattern):int{return pattern;}pub fnc main():int{return pattern(42)==42?0:1;}", ""),
         ("sum-mixed-guard-source-order", "fnc choose(bool first):Option<int>{if first;then return Some(1);fi if(true){return Some(2);}fi return None;}pub fnc main():int{return choose(true).unwrap()==1&&choose(false).unwrap()==2?0:1;}", ""),
+        ("adt-conditional-option-tagged-arms",
+            include_str!("fixtures/adt-conditional-v1/option-positive.atto"), ""),
+        ("adt-conditional-result-tagged-arms",
+            include_str!("fixtures/adt-conditional-v1/result-positive.atto"), ""),
         ("sum-result-schema-matrix", r#"pub routine main():int{val Result<int,int> ii=Ok(0);val Result<int,bool> ib=Err(false);val Result<bool,int> bi=Ok(false);val Result<String,bool> sb=Ok("");val Result<String,String> ss=Err("");return ii.is_ok()&&ii.unwrap()==0&&ib.is_err()&&bi.is_ok()&&!bi.unwrap()&&sb.is_ok()&&sb.unwrap()==""&&ss.is_err()?0:1;}"#, ""),
         ("imported-canonical-sum-identity", r#"import module sums from './sums.ores';pub routine main():int{val Option<String> item=sums.choose(true);val Result<bool,String> result=sums.checked(false);return item.unwrap()=="module"&&result.is_err()?0:1;}"#, ""),
         ("actual-routing-option-capture", include_str!("fixtures/native-class-string/routing-option-capture.ores"), ""),
@@ -621,7 +625,11 @@ fn main() {
     ];
     for (case_index, (name, source, expected)) in positives.iter().chain(native_only.iter()).chain(panics.iter()).enumerate() {
         let expects_panic = case_index >= positives.len() + native_only.len();
-        fs::write(scratch.0.join("main.ores"), source).unwrap();
+        // Canonical ADT regressions execute as actual .atto guest files.
+        let guest_name = if name.starts_with("adt-conditional-") {
+            "main.atto"
+        } else { "main.ores" };
+        fs::write(scratch.0.join(guest_name), source).unwrap();
         fs::write(scratch.0.join("main-1.ores"), foo).unwrap();
         fs::write(scratch.0.join("sums.ores"), "define module sums as pub fnc choose(bool yes):Option<string>{return yes?Some(\"module\"):None;}pub fnc checked(bool yes):Result<bool,string>{return yes?Ok(false):Err(\"missing\");}end").unwrap();
         fs::write(scratch.0.join("owned-box.ores"), "define pub class OwnedBox as pub val Array<int> values;pub copy():OwnedBox{val Array<int> copied=new Array<int>();copied.add(self.values.get(0));return new OwnedBox(copied);}end").unwrap();
@@ -631,7 +639,7 @@ fn main() {
         let module_fixture = include_str!("fixtures/native-class-string/routing-path-validation.ores")
             .replace("pub routine main(): int", "pub fnc verify_paths(): int");
         fs::write(scratch.0.join("paths.ores"), format!("define module paths as\n{module_fixture}\nend\n")).unwrap();
-        let path = scratch.0.join("main.ores");
+        let path = scratch.0.join(guest_name);
         let generated = run(Command::new(&compiler).arg(&path));
         assert!(
             generated.status.success() && !generated.stdout.is_empty(),
@@ -857,6 +865,15 @@ fn main() {
         ("sum-contract-not-int-result", "pub define contract Api as fnc inspect(int value)=>int;end define module Server conforms Api as pub fnc inspect(int value):Option<int>{return Some(value);}pub fnc main():int{return 0;}end".to_owned(), foo.to_owned()),
         ("sum-cannot-reorder-legacy-return-guards", "fnc bad():Option<int>{if(true){return Some(1);}fi if true;then return Some(2);fi return None;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("sum-cannot-forge-from-int", "pub fnc main():int{val Option<int> item=1;return 0;}".to_owned(), foo.to_owned()),
+        ("adt-conditional-option-scalar-false",
+            include_str!("fixtures/adt-conditional-v1/option-scalar-false.atto").to_owned(),
+            foo.to_owned()),
+        ("adt-conditional-option-scalar-true",
+            include_str!("fixtures/adt-conditional-v1/option-scalar-true.atto").to_owned(),
+            foo.to_owned()),
+        ("adt-conditional-result-scalar-false",
+            include_str!("fixtures/adt-conditional-v1/result-scalar-false.atto").to_owned(),
+            foo.to_owned()),
         ("sum-cannot-return-as-int", "pub fnc main():int{val Option<int> item=Some(1);return item;}".to_owned(), foo.to_owned()),
         ("sum-cannot-use-as-bool", "pub fnc main():int{val Option<bool> item=Some(true);return item?0:1;}".to_owned(), foo.to_owned()),
         ("sum-cannot-cross-payload-types", "fnc read(Option<int> item):int{return item.unwrap();}pub fnc main():int{val Option<bool> item=Some(true);return read(item);}".to_owned(), foo.to_owned()),
@@ -1076,9 +1093,12 @@ fn main() {
         ),
     ];
     for (name, source, dependency) in &negatives {
-        fs::write(scratch.0.join("main.ores"), source).unwrap();
+        let guest_name = if name.starts_with("adt-conditional-") {
+            "main.atto"
+        } else { "main.ores" };
+        fs::write(scratch.0.join(guest_name), source).unwrap();
         fs::write(scratch.0.join("main-1.ores"), dependency).unwrap();
-        let rejected = run(Command::new(&compiler).arg(scratch.0.join("main.ores")));
+        let rejected = run(Command::new(&compiler).arg(scratch.0.join(guest_name)));
         assert_eq!(
             rejected.status.code(),
             Some(1),
@@ -1090,6 +1110,10 @@ fn main() {
             "ordered-owning-array-not-hoisted" => Some("ordered owning local requires scoped region/drop lowering"),
             "ordered-async-frame-not-on-stack" => Some("continuation-aware statement lowering"),
             "sum-contract-not-int-parameter" => Some("contract ownership mode mismatch"),
+            "adt-conditional-option-scalar-false" |
+            "adt-conditional-option-scalar-true" |
+            "adt-conditional-result-scalar-false" => Some(
+                "native conditional sum branches must resolve to the same declared sum type"),
             "sum-contract-not-int-result" => Some("contract requires int return"),
             "owning-return-duplicate-array" => Some("live unique array"),
             "owning-return-borrowed-field" => Some("named lexical array"),

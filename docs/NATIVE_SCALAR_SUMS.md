@@ -85,6 +85,18 @@ owner is not a substitute. The actual Spin server still requires typed HTTP
 mailboxes, await frames, request-scoped storage and the remaining route graph.
 This milestone does not establish server parity or a performance result.
 
+## Conditional-sum source-to-native parity gate
+
+The existing `native_class_string_parity` Rust executable harness includes
+five canonical `.atto` conditional-sum fixtures: two valid Option/Result
+tagged-branch guests executed through `oreslang-llvmc`, Clang/native O1,
+and the harness sanitizer configuration; and three negative mixed scalar/
+tagged conditionals requiring the **exact semantic rejection** and no
+emitted LLVM IR. Legacy fixtures remain `.ores`.
+
+These are test definitions, not executed evidence. The exact-head compiler,
+native guest stdout/exit, and ASan/UBSan receipts remain required.
+
 ## Compiler-created descriptor validation
 
 Native C++ compiler ASTs are not automatically trusted. The sum registry
