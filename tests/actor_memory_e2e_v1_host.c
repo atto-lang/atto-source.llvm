@@ -14,7 +14,7 @@
 #endif
 
 #define REQUIRE(expr) do { if (!(expr)) { \
-    fprintf(stderr, "ACTOR_MEMORY_HOST_V1_FAIL line=%d: %s\\n", __LINE__, #expr); \
+    fprintf(stderr, "ACTOR_MEMORY_HOST_V1_FAIL line=%d: %s\n", __LINE__, #expr); \
     return 1; } } while (0)
 
 static int positive_lifecycle(void) {
