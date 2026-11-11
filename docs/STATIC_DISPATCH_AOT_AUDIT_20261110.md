@@ -105,8 +105,9 @@ duplicate output symbols and repeated declaration selectors reject.
 declarations at the single `int` concrete tuple. It is not yet a
 whole-program, *reachable-only* multi-type monomorphization graph and does
 not fulfill the full `common-source #265` specialization-closure contract.
-Compilation-size budgeting, trait witnesses, class methods, per-module
-linker ABI and cross-backend parity remain separate implementation gates.
+The new conservative pre-emission size estimate is a bounded admission check,
+not a final code-size proof. Trait witnesses, class methods, per-module linker
+ABI and cross-backend parity remain separate implementation gates.
 
 New tests:
 - `native_scalar_i64_specialization_plan`: compiler helper constructed
@@ -124,3 +125,44 @@ authorized run with nonzero executed steps produces full compiler build,
 IR, native guest, and negative-test receipts. A no-step Actions failure
 is runner admission failure, not a compiler result. Independent reviewer
 approval and exact-head merge gates still apply.
+
+## 2026-11-11 bounded scalar specialization closure — production preflight
+
+`freeze_native_i64_specializations` now invokes
+`check_native_i64_specialization_closure` **inside the production LLVM
+code-generation path, before emitting function bodies**. The checker reconstructs
+the generic-to-generic dependency edges from compiler-owned expression and
+statement ASTs, including nested branch, initializer and guarded-return
+expressions. Repeated calls to the same concrete specialization create one
+edge; recursive edges and cycles among already-emitted concrete symbols are
+allowed and terminate by visited-node identity.
+
+This intentionally narrow admission uses:
+- at most 256 concrete scalar-i64 generic symbols (existing declaration cap);
+- at most 131072 inspected AST/statement nodes;
+- at most 65536 distinct generic dependency edges;
+- an 8 MiB conservative pre-emission estimate for generic bodies
+  (256 bytes per emitted generic plus 64 per inspected node).
+
+Every generic declaration is an emission root because this backend currently
+emits all generic bodies, including unused declarations. This is **not** an
+optimized reachable-only graph or a final linked-binary byte measurement.
+It does not authorize unresolved generic trait witnesses, nominal generic
+methods, AOT polymorphic receiver devirtualization or actor state access.
+The normal type/ownership/effect admission remains mandatory; this additional
+codegen check cannot replace those passes.
+
+`native_scalar_i64_specialization_plan` now additionally covers repeated-edge
+deduplication, finite two-node recursion, and refusal of a forged manifest root
+with no compiler-owned function body; the active test receipt states 10
+negative cases. No new test result is claimed for this code merely because
+it is committed.
+
+**Runner blocker:** on the current source repository, `main` reports
+`protected=false`. The private carrier contract does not include an
+independently reviewed test plan authorizing LLVM PR #1663. Therefore a
+cross-organization temporary source mirror is **not authorized**. Current
+source-org Actions jobs fail with `runner_id=0` / `steps=[]`.
+An admin must restore source-local admission or complete the protected
+source + approved carrier governance before a new exact-head compiler run.
+Earlier guest receipts apply only to their recorded older heads.
