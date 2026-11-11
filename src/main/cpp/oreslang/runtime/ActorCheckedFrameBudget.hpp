@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -33,15 +34,17 @@ class ActorCheckedFrameBudget final {
   class FrameToken final {
     friend class ActorCheckedFrameBudget;
     const ActorCheckedFrameBudget* owner_ = nullptr;
+    std::uint64_t incarnation_ = 0;
     std::uint64_t serial_ = 0;
     std::uint64_t previous_serial_ = 0;
     std::uint32_t depth_ = 0;
     std::size_t before_bytes_ = 0;
     std::size_t after_bytes_ = 0;
-    FrameToken(const ActorCheckedFrameBudget* owner, std::uint64_t serial,
-               std::uint64_t previous, std::uint32_t depth,
-               std::size_t before, std::size_t after) noexcept
-        : owner_(owner), serial_(serial), previous_serial_(previous),
+    FrameToken(const ActorCheckedFrameBudget* owner, std::uint64_t incarnation,
+               std::uint64_t serial, std::uint64_t previous,
+               std::uint32_t depth, std::size_t before, std::size_t after) noexcept
+        : owner_(owner), incarnation_(incarnation), serial_(serial),
+          previous_serial_(previous),
           depth_(depth), before_bytes_(before), after_bytes_(after) {}
    public:
     FrameToken() = default;
@@ -51,6 +54,10 @@ class ActorCheckedFrameBudget final {
       : max_bytes_(max_bytes), max_frames_(max_frames) {
     if (max_bytes == 0 || max_frames == 0 || max_frames > 1024)
       throw std::invalid_argument("invalid actor checked frame budget");
+    const auto epoch = next_incarnation_.fetch_add(1, std::memory_order_relaxed);
+    if (epoch == 0 || epoch == std::numeric_limits<std::uint64_t>::max())
+      throw std::overflow_error("actor frame budget incarnation exhausted");
+    incarnation_ = epoch;
   }
   ActorCheckedFrameBudget(const ActorCheckedFrameBudget&) = delete;
   ActorCheckedFrameBudget& operator=(const ActorCheckedFrameBudget&) = delete;
@@ -72,11 +79,12 @@ class ActorCheckedFrameBudget final {
     used_bytes_ += bytes;
     ++depth_;
     top_ = serial;
-    return FrameToken(this, serial, previous, depth_, before, used_bytes_);
+    return FrameToken(this, incarnation_, serial, previous, depth_, before, used_bytes_);
   }
 
   void leave_frame(const FrameToken& token) {
-    if (token.owner_ != this || depth_ == 0 || token.depth_ != depth_ ||
+    if (token.owner_ != this || token.incarnation_ != incarnation_ ||
+        depth_ == 0 || token.depth_ != depth_ ||
         token.serial_ == 0 || token.serial_ != top_ ||
         token.after_bytes_ != used_bytes_ ||
         token.before_bytes_ >= used_bytes_)
@@ -98,6 +106,10 @@ class ActorCheckedFrameBudget final {
     terminal_ = limit;
     throw Overflow(limit);
   }
+  // Different actor budget instances MUST have different generations even
+  // if native storage is destroyed and reconstructed at the same address.
+  static inline std::atomic<std::uint64_t> next_incarnation_{1};
+  std::uint64_t incarnation_ = 0;
   const std::size_t max_bytes_;
   const std::uint32_t max_frames_;
   std::size_t used_bytes_ = 0;
