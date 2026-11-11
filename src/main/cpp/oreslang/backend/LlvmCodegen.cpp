@@ -1151,11 +1151,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // arguments only. Freeze a canonical, bounded one-per-declaration
     // specialization map before emitting any function bodies.
     const auto frozen_i64_specializations = freeze_native_i64_specializations(source);
-    // The emitted concrete symbols must be closed over every compile-time
-    // generic dependency, including recursion/diamonds, before codegen
-    // publishes any callable bodies. The checker enforces node/edge/estimated
-    // code-size bounds and never trusts source-supplied verification flags.
-    (void)check_native_i64_specialization_closure(source, frozen_i64_specializations);
+    // freeze_native_i64_specializations itself checks the bounded concrete
+    // dependency closure before LLVM declarations are emitted; do not scan
+    // the full AST a second time here, or accept source-supplied proof flags.
     std::unordered_set<std::string> emitted_function_symbols;
     for (const auto& fn : source.functions) {
         const std::string base_symbol = cortex_m_target && fn.name == "main"
