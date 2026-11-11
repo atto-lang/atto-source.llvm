@@ -2,7 +2,7 @@
 
 #include "oreslang/runtime/ActorMailboxCompletion.hpp"
 
-#include <algorithm>
+#include <map>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -46,7 +46,12 @@ class BoundedActorPort final {
             if (!frames || !bytes) throw std::invalid_argument("positive port limits required");
         }
         std::mutex mutex;
-        std::deque<Envelope> queue;
+        // Ordered by publication sequence. A selective middle erase no longer
+        // shifts O(n) remaining envelopes or calls payload move assignment.
+        // This uses balanced-tree allocations and O(log n) updates: it is NOT
+        // a hard-real-time data structure until replaced by a preallocated
+        // bounded index/slot queue with measured worst-case costs.
+        std::map<std::uint64_t, Envelope> queue;
         std::size_t max_frames, max_bytes;
         std::size_t used_frames = 0, used_bytes = 0;
         // Preparations reserve the same credits as queued/checked-out frames.
@@ -179,11 +184,17 @@ public:
             if (state->ledger) {
                 state->ledger->publish([&](std::uint64_t sequence) {
                     frame.sequence = sequence;
-                    state->queue.push_back(std::move(frame));
+                    const auto [at, inserted] = state->queue.emplace(
+                            frame.sequence, std::move(frame));
+                    if (!inserted) throw std::logic_error("duplicate actor message sequence");
+                    (void)at;
                 });
             } else {
                 frame.sequence = frame.id;
-                state->queue.push_back(std::move(frame));
+                const auto [at, inserted] = state->queue.emplace(
+                        frame.sequence, std::move(frame));
+                if (!inserted) throw std::logic_error("duplicate actor message sequence");
+                (void)at;
             }
             ++state->next_id;
             --state->pending_prepares;
@@ -226,15 +237,21 @@ public:
             if (state->ledger) {
                 state->ledger->publish([&](std::uint64_t sequence) {
                     frame.sequence = sequence;
-                    state->queue.push_back(std::move(frame));
+                    const auto [at, inserted] = state->queue.emplace(
+                            frame.sequence, std::move(frame));
+                    if (!inserted) throw std::logic_error("duplicate actor message sequence");
+                    (void)at;
                 });
             } else {
                 frame.sequence = frame.id;
-                state->queue.push_back(std::move(frame));
+                const auto [at, inserted] = state->queue.emplace(
+                        frame.sequence, std::move(frame));
+                if (!inserted) throw std::logic_error("duplicate actor message sequence");
+                (void)at;
             }
             // Non-throwing transfer AFTER queue publication; a receiver
             // cannot observe the envelope until the port mutex is released.
-            state->queue.back().payload = std::move(payload);
+            state->queue.rbegin()->second.payload = std::move(payload);
             ++state->next_id;
             --state->pending_prepares;
             return true;
@@ -253,8 +270,9 @@ public:
     std::optional<Delivery> try_receive() {
         std::lock_guard<std::mutex> guard(state_->mutex);
         if (state_->queue.empty()) return std::nullopt;
-        auto frame = std::move(state_->queue.front());
-        state_->queue.pop_front();
+        auto head = state_->queue.begin();
+        auto frame = std::move(head->second);
+        state_->queue.erase(head);
         return std::optional<Delivery>(Delivery(state_, std::move(frame)));
     }
 
@@ -267,8 +285,8 @@ public:
     // resume on a subsequent authorized actor turn without rescanning the
     // already-tested prefix. Publication is append-only, so no lower sequence
     // can appear after that cursor; the matcher tag MUST stay identical.
-    // Seeking the next sequence has O(log max_frames) cost, not a full prefix
-    // walk. A budget limits tag inspections, not deque middle-erase cost.
+    // Seeking and erasing cost O(log max_frames), with at most scan_budget
+    // tag inspections; balanced-tree allocations still need an RT replacement.
     //
     // A matched delivery retains all charged credits until physical ACK.
     // Unmatched messages never move, destruct, lose bytes, or change order.
@@ -307,31 +325,24 @@ public:
         std::lock_guard<std::mutex> guard(state_->mutex);
         std::size_t inspected = 0;
         std::uint64_t last = cursor.through_sequence_;
-        // Every port publishes envelopes in strictly increasing sequence
-        // order. Binary seek avoids rescanning an unbounded prior prefix on
-        // each resumed actor turn; std::deque has random-access iterators.
-        // The seek is O(log(queue length)), plus at most scan_budget inspected
-        // tags. Queue length is bounded by max_frames, but erase remains O(n).
-        auto it = std::upper_bound(state_->queue.begin(), state_->queue.end(),
-                cursor.through_sequence_,
-                [](std::uint64_t sequence, const Envelope& frame) {
-                    return sequence < frame.sequence;
-                });
+        // Each sequence has a unique balanced-tree key. Resume skips the
+        // already-visited prefix with logarithmic lookup; a match unlinks in
+        // O(log n) rather than shifting O(n) move-only message envelopes.
+        // This is still NOT hard-real-time: tree nodes allocate on publish.
+        auto it = state_->queue.upper_bound(cursor.through_sequence_);
         for (; it != state_->queue.end(); ++it) {
             if (inspected == scan_budget) {
                 return {SelectiveStatus::Continue, std::nullopt, inspected,
                         SelectiveCursor{last, tag, state_}};
             }
             ++inspected;
-            last = it->sequence;
-            if (it->match_tag != tag) continue;
+            last = it->second.sequence;
+            if (it->second.match_tag != tag) continue;
 
             // Only move the envelope's owning unique_ptr, never the user T,
-            // and erase under the port lock without running payload code.
-            // deque::erase can shift O(queue length) handles. This stage-1
-            // implementation has NO hard-real-time WCET guarantee; a future
-            // preallocated indexed queue must bound that mutation cost too.
-            auto frame = std::move(*it);
+            // and unlink one balanced-tree node under the port lock without
+            // invoking user-supplied payload code.
+            auto frame = std::move(it->second);
             state_->queue.erase(it);
             return {SelectiveStatus::Matched,
                     std::optional<Delivery>(Delivery(state_, std::move(frame))),
