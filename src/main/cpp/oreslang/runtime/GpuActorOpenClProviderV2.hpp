@@ -126,27 +126,103 @@ public:
     // Explicit privileged RECOVERY WORKER entrypoints. These may call
     // clFinish and must never be called from the scheduler polling path.
     // Failure to establish physical queue quiescence cannot free buffers.
+    // These recovery entrypoints run ONLY on the supervised worker thread.
+    // The native call can block indefinitely in clFinish: never hold mu_
+    // while invoking it. Actor scheduler polling must remain responsive.
     bool recover_unknown_begin_on_worker() {
+        {
+            std::lock_guard<std::mutex> guard(mu_);
+            if (!ambiguous_ || operation_ || closed_ || recovery_in_progress_)
+                return false;
+            recovery_in_progress_ = true;
+        }
+        bool proven = false;
+        try { proven = provider_->recover_ambiguous_begin_after_quiescence(); }
+        catch (...) { /* failed proof preserves quarantine */ }
         std::lock_guard<std::mutex> guard(mu_);
-        if (!ambiguous_ || operation_ || closed_)
-            return false;
-        if (!provider_->recover_ambiguous_begin_after_quiescence())
-            return false;
-        ambiguous_ = false;
-        recovered_unknown_begin_ = true;
-        return true;
+        recovery_in_progress_ = false;
+        if (proven) {
+            ambiguous_ = false;
+            recovered_unknown_begin_ = true;
+        }
+        return proven;
     }
 
     bool recover_unknown_kernel_on_worker() {
+        std::shared_ptr<opencl::Provider::Operation> operation;
+        {
+            std::lock_guard<std::mutex> guard(mu_);
+            if (!operation_ || closed_ || event_terminal_ || recovery_in_progress_
+                    || operation_->state() != opencl::Provider::OperationState::UnknownEnqueue)
+                return false;
+            operation = operation_;
+            recovery_in_progress_ = true;
+        }
+        bool proven = false;
+        try { proven = provider_->recover_ambiguous_kernel_after_quiescence(*operation); }
+        catch (...) { /* no speculative state commit or resource release */ }
         std::lock_guard<std::mutex> guard(mu_);
-        if (!operation_ || closed_ || event_terminal_ ||
-                operation_->state() != opencl::Provider::OperationState::UnknownEnqueue)
-            return false;
-        if (!provider_->recover_ambiguous_kernel_after_quiescence(*operation_))
-            return false;
-        event_terminal_ = true;
-        event_success_ = false;
-        return true;
+        recovery_in_progress_ = false;
+        if (proven && operation_ == operation) {
+            event_terminal_ = true;
+            event_success_ = false;
+        }
+        return proven;
+    }
+
+    bool recover_device_loss_on_worker() {
+        std::shared_ptr<opencl::Provider::Operation> operation;
+        {
+            std::lock_guard<std::mutex> guard(mu_);
+            if (!operation_ || closed_ || event_terminal_ || recovery_in_progress_
+                    || operation_->state() != opencl::Provider::OperationState::DeviceLost)
+                return false;
+            operation = operation_;
+            recovery_in_progress_ = true;
+        }
+        bool proven = false;
+        try {
+            provider_->recover_device_loss(*operation);
+            proven = provider_->usage() == opencl::Usage{0,0,0,0};
+        } catch (...) { /* failed or ambiguous native recovery remains quarantined */ }
+        std::lock_guard<std::mutex> guard(mu_);
+        recovery_in_progress_ = false;
+        if (proven && operation_ == operation) {
+            event_terminal_ = true;
+            event_success_ = false;
+        }
+        return proven;
+    }
+
+    bool recover_release_failure_on_worker() {
+        std::shared_ptr<opencl::Provider::Operation> operation;
+        {
+            std::lock_guard<std::mutex> guard(mu_);
+            if (!operation_ || closed_ || event_terminal_ || recovery_in_progress_
+                    || operation_->state() != opencl::Provider::OperationState::ReleaseFailed)
+                return false;
+            operation = operation_;
+            recovery_in_progress_ = true;
+        }
+        bool proven = false;
+        try {
+            provider_->retry_release(*operation);
+            proven = provider_->usage() == opencl::Usage{0,0,0,0};
+        } catch (...) {}
+        std::lock_guard<std::mutex> guard(mu_);
+        recovery_in_progress_ = false;
+        if (proven && operation_ == operation) {
+            event_terminal_ = true;
+            event_success_ = false; // recovery never asserts GPU success
+        }
+        return proven;
+    }
+
+    bool matches_recovery_turn(Turn turn) const {
+        std::lock_guard<std::mutex> guard(mu_);
+        return turn.actor_generation == active_turn_.actor_generation
+            && turn.sequence == active_turn_.sequence
+            && turn.sequence != 0 && !closed_;
     }
 
     Observation observe(const EventHandle& event) override {
@@ -159,30 +235,17 @@ public:
         // failure receipt is valid *only after* physical queue quiescence.
         if (event_terminal_)
             return event_success_ ? Observation::CompleteOk : Observation::CompleteFailed;
+        if (recovery_in_progress_) return Observation::Unknown;
         if (!operation_) return Observation::Unknown;
 
         using State = opencl::Provider::OperationState;
         State state = operation_->state();
         try {
-            if (state == State::DeviceLost) {
-                // A device-loss notification itself does NOT imply the GPU
-                // stopped touching its allocations. Only the existing
-                // OpenCL provider's recovery routine may establish physical
-                // queue quiescence and retire the underlying buffers.
-                try { provider_->recover_device_loss(*operation_); }
-                catch (...) { return Observation::DeviceLost; }
-                if (!(provider_->usage() == opencl::Usage{0,0,0,0}))
-                    return Observation::Unknown;
-                event_terminal_ = true;
-                event_success_ = false;
-                return Observation::CompleteFailed; // recovery is NOT success
-            } else if (state == State::ReleaseFailed) {
-                try { provider_->retry_release(*operation_); }
-                catch (...) { return Observation::Unknown; }
-                state = operation_->state();
-            } else {
-                state = provider_->poll(*operation_);
-            }
+            if (state == State::DeviceLost || state == State::UnknownEnqueue)
+                return Observation::DeviceLost;
+            if (state == State::ReleaseFailed)
+                return Observation::Unknown;
+            state = provider_->poll(*operation_);
         } catch (...) {
             // Native provider error may be after a physical enqueue and
             // MUST NOT be converted into a fake completed event.
@@ -217,7 +280,7 @@ public:
     bool try_release_buffer() override {
         std::lock_guard<std::mutex> guard(mu_);
         if (closed_) return true; // idempotent only after native release
-        if (ambiguous_) return false;
+        if (ambiguous_ || recovery_in_progress_) return false;
         if (operation_ && !event_terminal_) return false;
         if (!(provider_->usage() == opencl::Usage{0,0,0,0})) return false;
         try {
@@ -268,6 +331,7 @@ private:
     std::vector<unsigned char> verified_output_bytes_;
     bool ambiguous_ = false;
     bool recovered_unknown_begin_ = false;
+    bool recovery_in_progress_ = false;
     bool event_terminal_ = false;
     bool event_success_ = false;
     bool closed_ = false;
