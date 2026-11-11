@@ -24,16 +24,16 @@ def assert_static_method_calls(ir, targets, case_name):
     It does not claim devirtualization for polymorphic interfaces or actor refs.
     """
     indirect = re.findall(
-        r'\\b(?:call|invoke)\\s+[^\\n(@]*%[A-Za-z_][A-Za-z0-9_.]*\\s*\\(', ir)
+        r'\b(?:call|invoke)\s+[^\n(@]*%[A-Za-z_][A-Za-z0-9_.]*\s*\(', ir)
     if indirect:
         raise AssertionError((case_name, 'unexpected indirect LLVM call', indirect[:3]))
     for target in targets:
         # LLVM can quote or mangle a statically known symbol, but the
         # compiler-owned class.method identity must survive in its name.
         escaped = re.escape(target)
-        pattern = (r'\\bcall\\s+[^\\n]*@(?:"[^"\\n]*' + escaped
-                   + r'[^"\\n]*"|[A-Za-z0-9_.$]*' + escaped
-                   + r'[A-Za-z0-9_.$]*)\\s*\\(')
+        pattern = (r'\bcall\s+[^\n]*@(?:"[^"\n]*' + escaped
+                   + r'[^"\n]*"|[A-Za-z0-9_.$]*' + escaped
+                   + r'[A-Za-z0-9_.$]*)\s*\(')
         if not re.search(pattern, ir):
             raise AssertionError((case_name, 'missing direct LLVM method call', target))
 
