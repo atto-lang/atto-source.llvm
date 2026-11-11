@@ -141,5 +141,70 @@ int main() {
     require(two_verified.namespaces.size()==2,"multi-namespace pin mismatch");
     fails("invalid locked",[&]{(void)admit(two,{{"math",math}});});
 
+    // Deliberately wrong spelling: Java's package alias grammar is lower-case.
+    auto mixed_alias=pin;mixed_alias.alias="mathA";
+    fails("invalid locked",[&]{(void)admit(mixed_alias,{{"math",math}});});
+    auto leading_underscore=pin;leading_underscore.alias="_math";
+    fails("invalid locked",[&]{(void)admit(leading_underscore,{{"math",math}});});
+
+    // A large, internally impossible export count must fail before reserve().
+    auto impossible=std::vector<std::uint8_t>{'O','R','E','S','I',0,1};
+    str(impossible,"math");str(impossible,"atto-java-1");
+    str(impossible,"java-aot-v1");str(impossible,"ownership-strict-v1");
+    u32(impossible,100000u);
+    auto impossible_pin=lock("math",impossible);
+    fails("impossible .oresi export count",[&]{
+        (void)admit(impossible_pin,{{"math",impossible}});
+    });
+
+    // A pin alone must never make path/control/bidi-spoofed names addressable.
+    const std::vector<std::string> hostile_names={
+        "bad/../escape",std::string("bad\0name",8),
+        std::string("bad\xE2\x80\xAE",6)
+    };
+    for(const auto& name:hostile_names){
+        auto hostile=std::vector<std::uint8_t>{'O','R','E','S','I',0,1};
+        str(hostile,"math");str(hostile,"atto-java-1");
+        str(hostile,"java-aot-v1");str(hostile,"ownership-strict-v1");
+        u32(hostile,2);
+        entry(hostile,"algebra",0,"algebra","");
+        entry(hostile,"algebra",1,name,"()int");
+        auto hostile_pin=lock("math",hostile);
+        fails("invalid .oresi export",[&]{(void)admit(hostile_pin,{{"math",hostile}});});
+    }
+
+    // Unicode public names remain accepted. This digest is Java's v1 codec
+    // layout over the exact bytes including the 2-byte UTF-8 lambda.
+    auto unicode=std::vector<std::uint8_t>{'O','R','E','S','I',0,1};
+    str(unicode,"math");str(unicode,"atto-java-1");
+    str(unicode,"java-aot-v1");str(unicode,"ownership-strict-v1");
+    u32(unicode,2);
+    entry(unicode,"algebra",0,"algebra","");
+    entry(unicode,"algebra",1,std::string("sum_")+std::string("\xCE\xBB",2),
+          "(int a,int b):int");
+    require(sha256(unicode)==
+        "b163a6b76ab78ae943efe70e3d28a270a35417b891fe6f6de7208625709cc0d2",
+        "non-ASCII Java .oresi bytes diverged");
+    require(admit(lock("math",unicode),{{"math",unicode}})
+            .namespace_exports("math").size()==2,
+        "valid UTF-8 export wrongly rejected");
+
+    // Independent SHA256 padding-boundary known answers, not just abc/empty.
+    const std::vector<std::pair<std::size_t,std::string>> hash_vectors={
+        {55,"463eb28e72f82e0a96c0a4cc53690c571281131f672aa229e0d45ae59b598b59"},
+        {56,"da2ae4d6b36748f2a318f23e7ab1dfdf45acdc9d049bd80e59de82a60895f562"},
+        {63,"29af2686fd53374a36b0846694cc342177e428d1647515f078784d69cdb9e488"},
+        {64,"fdeab9acf3710362bd2658cdc9a29e8f9c757fcf9811603a8c447cd1d9151108"},
+        {65,"4bfd2c8b6f1eec7a2afeb48b934ee4b2694182027e6d0fc075074f2fabb31781"},
+        {120,"f52b23db1fbb6ded89ef42a23ce0c8922c45f25c50b568a93bf1c075420bbb7c"}
+    };
+    for(const auto& [length,expected]:hash_vectors){
+        std::vector<std::uint8_t> input;
+        input.reserve(length);
+        for(std::size_t i=0;i<length;++i)
+            input.push_back(static_cast<std::uint8_t>(i));
+        require(sha256(input)==expected,"SHA256 padding boundary mismatch");
+    }
+
     std::cout<<"Native .oresi host preflight passed; no Atto guest or binary linker executed\n";
 }
