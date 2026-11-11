@@ -12,6 +12,10 @@
 #include <random>
 #include <stdexcept>
 #include <type_traits>
+#if defined(__unix__) || defined(__APPLE__)
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 #include <vector>
 using oreslang::runtime::PreallocatedSelectiveSlots;
 using Q=PreallocatedSelectiveSlots<int>;
@@ -114,7 +118,32 @@ static void concurrent_external_lock_oracle() {
   REQUIRE(inbox.size()==0);
 }
 
+// Losing the last queued slot owner must not silently destroy an actor
+// payload before its supervisor/ACK teardown fence. The child uses its own
+// terminate handler so the parent verifies this fail-closed contract without
+// killing the test runner. On non-POSIX platforms, execute this as a dedicated
+// negative subprocess test rather than spawning an unchecked runner thread.
+static void incomplete_teardown_aborts() {
+#if defined(__unix__) || defined(__APPLE__)
+  const pid_t pid=fork();
+  REQUIRE(pid>=0);
+  if(pid==0) {
+    std::set_terminate([] { std::_Exit(97); });
+    {
+      Q queue(1);
+      auto owned=std::make_unique<int>(42);
+      if(!queue.push(owned,8,1,1)) std::_Exit(15);
+    }
+    std::_Exit(16);
+  }
+  int status=0;
+  REQUIRE(waitpid(pid,&status,0)==pid);
+  REQUIRE(WIFEXITED(status) && WEXITSTATUS(status)==97);
+#endif
+}
+
 int main() {
+  incomplete_teardown_aborts();
   arena_owner_release_gate();
   concurrent_external_lock_oracle();
   // Reject bad capacities before allocation, rather than requesting an
