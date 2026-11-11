@@ -376,17 +376,22 @@ inline Analysis verify(const Graph& graph) {
     // Loops may legitimately need multiple visits; an adversarial CFG must
     // not monopolize the compiler in an unbounded fixed-point computation.
     std::size_t remaining_work = kMaxCfgWork;
-    while (!queue.empty()) {
-        if (!remaining_work--)
+    auto charge_work = [&](std::size_t cost) {
+        if (cost > remaining_work)
             throw std::runtime_error("ownership violation: CFG analysis work budget exceeded");
+        remaining_work -= cost;
+    };
+    while (!queue.empty()) {
+        // Every state includes entry places. Most CFG operations scan them,
+        // so counting only instructions would severely undercharge work.
+        charge_work(1 + entry.size());
         const auto index = queue.front();
         queue.pop_front();
         queued[index] = false;
         State current = *result.incoming[index];
         const BasicBlock& block = graph.blocks[index];
         for (std::size_t site = 0; site < block.operations.size(); ++site) {
-            if (!remaining_work--)
-                throw std::runtime_error("ownership violation: CFG analysis work budget exceeded");
+            charge_work(1 + current.size());
             // Reserve zero for an explicitly known loan at entry. Source
             // position gives stable IDs across fixed-point reprocessing.
             if (index >= UINT32_MAX || site >= UINT32_MAX)
@@ -401,8 +406,7 @@ inline Analysis verify(const Graph& graph) {
                     violation(item.first, "loan escapes CFG exit");
         result.outgoing[index] = current;
         for (std::size_t next : block.successors) {
-            if (!remaining_work--)
-                throw std::runtime_error("ownership violation: CFG analysis work budget exceeded");
+            charge_work(1 + current.size());
             if (next >= graph.blocks.size())
                 throw std::runtime_error("ownership violation: CFG edge outside graph");
             bool changed = false;
