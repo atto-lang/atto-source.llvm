@@ -2,6 +2,7 @@
 """Real instance-method/qualified-class lowering, with receiver ownership gates."""
 import argparse
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -15,6 +16,27 @@ end
 
 def run(command, **kwargs):
     return subprocess.run(command, capture_output=True, text=True, timeout=45, **kwargs)
+
+def assert_static_method_calls(ir, targets, case_name):
+    """Native class calls must remain direct linked symbols, not function pointers.
+
+    This is a compiled-IR shape check, separate from executable guest evidence.
+    It does not claim devirtualization for polymorphic interfaces or actor refs.
+    """
+    indirect = re.findall(
+        r'\\b(?:call|invoke)\\s+[^\\n(@]*%[A-Za-z_][A-Za-z0-9_.]*\\s*\\(', ir)
+    if indirect:
+        raise AssertionError((case_name, 'unexpected indirect LLVM call', indirect[:3]))
+    for target in targets:
+        # LLVM can quote or mangle a statically known symbol, but the
+        # compiler-owned class.method identity must survive in its name.
+        escaped = re.escape(target)
+        pattern = (r'\\bcall\\s+[^\\n]*@(?:"[^"\\n]*' + escaped
+                   + r'[^"\\n]*"|[A-Za-z0-9_.$]*' + escaped
+                   + r'[A-Za-z0-9_.$]*)\\s*\\(')
+        if not re.search(pattern, ir):
+            raise AssertionError((case_name, 'missing direct LLVM method call', target))
+
 
 def main():
     p=argparse.ArgumentParser()
@@ -66,7 +88,7 @@ def main():
     positives.append(('ordinary-send-is-not-actor-send', {
         'main.ores':'define class Sender as let int value=40;pub send(int n):int{return self.value+n;}end pub fnc main():int{let Sender s=new Sender();return s.send(2);}',
     }))
-    java_unsupported={'imported-public-class','imported-nominal-identities','imported-data-only-class'}
+    # Known nominal receivers must never regress to runtime method-name lookup.\n    direct_calls={\n        'private-field-read': ('Counter.read',),\n        'mutable-receiver': ('Counter.add', 'Counter.read'),\n        'private-self-call': ('Box.hidden', 'Box.read'),\n        'explicit-arity-slots': ('Box.read',),\n    }\n    java_unsupported={'imported-public-class','imported-nominal-identities','imported-data-only-class'}
     negatives=[
         ('public-constructor-private-class', 'define class Box as let int value=42;pub constructor(){return;}end pub fnc main():int{return 0;}',{},'public constructor requires a public class'),
         ('field-method-collision', 'define class Box as let int read=42;pub read():int{return 42;}end pub fnc main():int{return 0;}',{},'field/method name collision'),
@@ -118,6 +140,8 @@ def main():
             result=run([a.compiler,str(source)])
             if result.returncode:raise AssertionError((name,result.stderr))
             (directory/'main.ll').write_text(result.stdout)
+            if name in direct_calls:
+                assert_static_method_calls(result.stdout, direct_calls[name], name)
             command=[a.clang,'-O1',str(directory/'main.ll'),'-o',str(directory/'main')]
             if a.sanitize:command[1:1]=['-fsanitize=address,undefined','-fno-omit-frame-pointer']
             linked=run(command)
