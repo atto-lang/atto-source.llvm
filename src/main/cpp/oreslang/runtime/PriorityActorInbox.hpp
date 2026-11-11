@@ -230,6 +230,49 @@ public:
         return consumed ? Dispatch::User : Dispatch::Idle;
     }
 
+    // The scheduling-aware entry point for compiler-generated typed tag
+    // dispatch. Unlike the low-level selector, this proves the actor's
+    // incarnation is still bound, polls privileged CONTROL first, and only
+    // scans within an admitted nonreentrant actor turn. A budget hit yields
+    // a resumable cursor rather than parking an actor carrier.
+    //
+    // This stage remains lane-local; global Erlang order, typed payload guards,
+    // deadline arbitration and guest AOT emission are separate gates.
+    enum class SelectiveDispatch { Control, User, Idle, Busy, Retired, Resume };
+    template<class Process>
+    SelectiveDispatch dispatch_next_tagged(
+            NativeActorGroup& group, const NativeActorRef& actor,
+            Lane lane, std::uint32_t tag, std::size_t scan_budget,
+            SelectiveCursor& cursor, Process&& process) {
+        {
+            std::lock_guard<std::mutex> guard(service_mutex_);
+            if (!bound_target_ || !same_target(actor))
+                return SelectiveDispatch::Retired;
+        }
+        switch (group.run_control_turn(actor)) {
+            case NativeActorGroup::ControlTurn::executed: return SelectiveDispatch::Control;
+            case NativeActorGroup::ControlTurn::busy: return SelectiveDispatch::Busy;
+            case NativeActorGroup::ControlTurn::retired: return SelectiveDispatch::Retired;
+            case NativeActorGroup::ControlTurn::idle: break;
+        }
+        bool matched = false, resume = false;
+        const auto outcome = group.run_user_turn(actor, [&] {
+            auto result = try_receive_tagged(lane, tag, scan_budget, cursor);
+            cursor = std::move(result.cursor);
+            if (result.status == SelectiveStatus::Continue) {
+                resume = true;
+                return;
+            }
+            if (!result.delivery) return;
+            matched = true;
+            process(*result.delivery);
+        });
+        if (outcome == NativeActorGroup::UserTurn::retired) return SelectiveDispatch::Retired;
+        if (outcome == NativeActorGroup::UserTurn::busy) return SelectiveDispatch::Busy;
+        if (resume) return SelectiveDispatch::Resume;
+        return matched ? SelectiveDispatch::User : SelectiveDispatch::Idle;
+    }
+
     std::size_t used_frames(Lane lane) const { return port(lane).used_frames(); }
     std::size_t used_bytes(Lane lane) const { return port(lane).used_bytes(); }
 
