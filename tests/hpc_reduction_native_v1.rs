@@ -69,10 +69,14 @@ fn main() {
         "tests/fixtures/hpc-reduction-v1/i64-fixed-tiles.atto",
         "tests/fixtures/hpc-reduction-v1/i64-task-tile.atto",
     ];
-    const NEGATIVES: [(&str, &str); 2] = [
+    const NEGATIVES: [(&str, &str); 4] = [
         ("tests/fixtures/task-v1-negative/second-task.atto",
          "supports exactly one source Task"),
+        ("tests/fixtures/task-v1-negative/producer-call.atto",
+         "producer must be capture-free and scalar"),
         ("tests/fixtures/hpc-reduction-v1/mutable-before-await-reject.atto",
+         "requires await to immediately consume"),
+        ("tests/fixtures/hpc-reduction-v1/two-caller-tiles-reject.atto",
          "requires await to immediately consume"),
     ];
     let head = env::var("EXPECTED_HEAD").unwrap_or_default();
@@ -164,5 +168,5 @@ fn main() {
     require(exec("git", &["status", "--porcelain", "--", "tests/fixtures/hpc-reduction-v1"]).is_empty(),
             "HPC source changed during verification");
     require(executed == 4, "missing O0/O2 compiled guest executions");
-    println!("ATTO_HPC_I64_GATE_PASS head={head} executed_guest_cases={executed} negative_cases=2 evidence_scope=restricted_i64_native_aot");
+    println!("ATTO_HPC_I64_GATE_PASS head={head} executed_guest_cases={executed} negative_cases=4 evidence_scope=restricted_i64_native_aot");
 }
