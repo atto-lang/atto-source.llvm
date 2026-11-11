@@ -279,6 +279,16 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
+        // AttoLang's contiguous !eq inequality alias is a single token.
+        // The identifier boundary matters: "!equation" is NOT "!eq" + "uation".
+        // This is syntax-only normalization into the existing native NotEqual
+        // expression kind; no reflection, interpreter or runtime dispatch.
+        if (source_.substr(at_, 3) == "!eq" &&
+            (at_ + 3 == source_.size() ||
+             !identifier_part(source_[at_ + 3]))) {
+            at_ += 3;
+            return {Kind::Symbol, source_.substr(start, 3), start};
+        }
         // Contiguous comparison/logical operators are single tokens, matching
         // the Java/Graal precedence grammar.
         for (std::string_view op : {"->", "::", "|>", "==", "!=", "<=", ">=", "&&", "||", "^^"}) {
@@ -3510,7 +3520,8 @@ private:
     std::unique_ptr<Expression> equality() {
         auto left = comparison();
         while (token_.text == "==" || token_.text == "eq" ||
-                token_.text == "!=" || token_.text == "neq") {
+                token_.text == "!=" || token_.text == "neq" ||
+                token_.text == "!eq") {
             const auto offset = token_.offset;
             const bool equal = token_.text == "==" || token_.text == "eq";
             advance();
