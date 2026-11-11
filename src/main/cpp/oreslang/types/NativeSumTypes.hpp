@@ -4,12 +4,44 @@
 #include <functional>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace oreslang {
+inline std::string native_sum_scalar_name(ScalarType type) {
+    switch (type) {
+        case ScalarType::I64: return "int";
+        case ScalarType::Bool: return "bool";
+        case ScalarType::String: return "String";
+    }
+    throw std::runtime_error("invalid native sum scalar payload kind");
+}
 inline std::string native_sum_name(NativeSumType::Kind kind, ScalarType value, ScalarType error = ScalarType::I64) {
-    auto name = [](ScalarType t) { return t == ScalarType::String ? "String" : t == ScalarType::Bool ? "bool" : "int"; };
-    return std::string(kind == NativeSumType::Kind::Option ? "Option<" : "Result<") + name(value) +
-        (kind == NativeSumType::Kind::Result ? std::string(",") + name(error) : "") + ">";
+    // Invalid enum discriminants must never collapse to valid Result<int,int>
+    // names, and unchecked ScalarType values must never turn into "int".
+    const std::string component = native_sum_scalar_name(value);
+    switch (kind) {
+        case NativeSumType::Kind::Option:
+            if (error != ScalarType::I64)
+                throw std::runtime_error("native Option descriptor has noncanonical error slot");
+            return "Option<" + component + ">";
+        case NativeSumType::Kind::Result:
+            return "Result<" + component + "," + native_sum_scalar_name(error) + ">";
+    }
+    throw std::runtime_error("invalid native sum descriptor kind");
+}
+inline void validate_native_sum_registry(const Program& program) {
+    // Typed ASTs may originate from internal compiler stages rather than the
+    // text parser. Validate *every* descriptor before it can be referenced by
+    // a constructor or emitted as an untyped i64 handle.
+    std::unordered_set<std::string> seen;
+    for (const NativeSumType& type : program.sum_types) {
+        const std::string canonical = native_sum_name(
+            type.kind, type.value_type, type.error_type);
+        if (type.name != canonical)
+            throw std::runtime_error("native sum descriptor name/payload mismatch");
+        if (!seen.insert(type.name).second)
+            throw std::runtime_error("duplicate native sum descriptor");
+    }
 }
 inline const NativeSumType& native_sum(const Program& program, const std::string& name) {
     for (const auto& type : program.sum_types) if (type.name == name) return type;
@@ -18,6 +50,7 @@ inline const NativeSumType& native_sum(const Program& program, const std::string
 // Context resolves constructors; the nominal type checker still independently
 // validates every payload and use. This pass never turns arbitrary i64 into a sum.
 inline void resolve_native_sums(Program& program) {
+    validate_native_sum_registry(program);
     struct Hint {
         ScalarType scalar = ScalarType::I64;
         std::string sum{}, cls{};
