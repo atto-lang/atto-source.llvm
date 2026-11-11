@@ -11,21 +11,23 @@
     "tests/gpu_actor_opencl_v2_physical_probe.cpp": "965c20f494cfc4fac2acf9590cc3e0130708d979",
     "src/main/cpp/oreslang/runtime/GpuActorProviderBridgeV1.hpp": "67ba38101d602e63ea8c126bc023f51d146daaa4",
     "src/main/cpp/oreslang/runtime/OpenClProvider.hpp": "8eab84e42d3c57130656664728cb8c4ef9df6c7b",
-    "src/main/cpp/oreslang/runtime/OpenClSystemApi.hpp": "36792e75a02cc3d1c7e9a9be17e6d5a75cfea269"
+    "src/main/cpp/oreslang/runtime/OpenClSystemApi.hpp": "36792e75a02cc3d1c7e9a9be17e6d5a75cfea269",
+    "tests/opencl_provider_g3_test.cpp": "5d0a53429c5a92a3461e5f8db5abb03d12191535"
   },
   "carrier": {
     "repo": "scintilla-run/scintilla-run-e2e",
     "branch": "carrier/gpu-actor-opencl-v2-20261110",
-    "head": "72addc49d807255d813bfe01cdff4f0e62dcaa5e",
-    "runId": 42949404184,
-    "jobId": 130289898006,
-    "url": "https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42949404184",
+    "head": "e8eb8e6e82370789eae2f7b2eb58df5adc8a812c",
+    "runId": 42949702555,
+    "jobId": 130290869708,
+    "url": "https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42949702555",
     "exactSourceBlobs": true,
     "gccAsanUbsan": "passed",
     "clangStrict": "passed",
     "assertionsPerCompiler": 65,
     "physicalNativeProbeCompiled": true,
-    "hardwareGateInvoked": true
+    "hardwareGateInvoked": true,
+    "preexistingOpenClProviderG3Test": "passed GCC ASan UBSan"
   },
   "physicalResult": {
     "openClCompatibleGpuAvailable": false,
@@ -45,7 +47,8 @@
     "device_loss_requires_native_queue_quiescence_mock",
     "ambiguous_enqueue_retained",
     "gpu_only_runtime_selector_compiled",
-    "failed-native-OpenCL-event-info-query-not-terminal"
+    "failed-native-OpenCL-event-info-query-not-terminal",
+    "preexisting_OpenClProvider_G3_suite_compiled_executed_ASan_UBSan"
   ],
   "remainingBlockers": [
     "actual physical GPU provider run",
