@@ -211,6 +211,35 @@ void actor_bridge_commits_only_after_kernel_download() {
     check(lane->reserved_count()==0,"supervisor CONTROL slot reclaimed");
 }
 
+void gpu_loss_requires_native_quiescence_before_cancel_retirement() {
+    Inputs in;
+    auto api=std::make_shared<FakeOpenCl>();
+    api->device_loss=true;
+    auto p=make_port(api,in);
+    auto reg=std::make_shared<Registry>(1);
+    auto lane=std::make_shared<Lane>(1);
+    auto a=std::make_unique<GpuActorProviderBridgeV1>(
+        reg,p,lane,Lane::ActorKey{"actor",3},"root",in.plan.byte_length(),5);
+    (void)a->submit(55);
+    reg->progress_all(); // native OpenCL reports device loss, not completion
+    check(a->committed_state()==5,"no actor state commit on device loss");
+    check(!a->completed(),"device-loss notice is not physical quiescence");
+    reg->progress_all(); // no native device-loss quiescence proof available
+    check(a->committed_state()==5,"no false event completion while device is live");
+    check(!a->completed(),"inflight buffer remains quarantined");
+    api->allow_loss_quiescence=true;
+    reg->progress_all(); // provider proves clFinish-equivalent quiescence
+    check(a->committed_state()==5,"recovery never publishes failed GPU state");
+    reg->progress_all(); // retire prepared OpenCL program only after proof
+    check(a->completed(),"device-loss actor now physically retired");
+    a.reset();
+    check(reg->retained_count()==0,"device-loss quarantine drained");
+    auto msg=lane->poll();
+    check(msg && msg->kind==Lane::Kind::HostFailure,"supervisor gets device-loss CONTROL");
+    lane->ack(msg->actor);
+    check(lane->reserved_count()==0,"CONTROL slot reclaimed after device loss");
+}
+
 void negative_authority_and_missing_gpu_fail_closed() {
     Inputs in;
     auto api=std::make_shared<FakeOpenCl>();
@@ -254,6 +283,7 @@ void ambiguous_enqueue_is_retained_not_falsely_aborted() {
 int main() {
     actual_provider_api_pipeline_mocked();
     actor_bridge_commits_only_after_kernel_download();
+    gpu_loss_requires_native_quiescence_before_cancel_retirement();
     negative_authority_and_missing_gpu_fail_closed();
     // Keep one unresolved ambiguous provider operation deliberately rooted:
     // a failed enqueue API call is not proof no device command was accepted.
