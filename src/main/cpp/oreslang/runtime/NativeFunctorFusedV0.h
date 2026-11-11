@@ -120,7 +120,7 @@ static inline ff_status ff_flatten(ff_arena* a,ff_handle h) {
 static inline ff_status ff_map_i64(ff_arena* a,ff_handle h,ff_map_fn fn,void* context) {
     ff_cell* s=ff_get(a,h);if(!s)return FF_STALE;
     if(s->borrowed)return FF_BORROWED;
-    if(!fn)return FF_TYPE;
+    if(!fn||s->owns_resource)return FF_TYPE;
     if(s->form!=FF_O && s->form!=FF_R)return FF_TYPE;
     if(s->tag==FF_O_SOME || s->tag==FF_R_OK)s->value=fn(s->value,context);
     return FF_OK;
@@ -129,7 +129,7 @@ static inline ff_status ff_map_err_i64(ff_arena* a,ff_handle h,uint32_t new_doma
                                        ff_map_fn fn,void* context) {
     ff_cell* s=ff_get(a,h);if(!s)return FF_STALE;
     if(s->borrowed)return FF_BORROWED;
-    if(s->form!=FF_R||!new_domain||!fn)return FF_TYPE;
+    if(s->form!=FF_R||!new_domain||!fn||s->owns_resource)return FF_TYPE;
     if(s->tag==FF_R_ERR)s->value=fn(s->value,context);
     s->error_domain=new_domain;return FF_OK;
 }
