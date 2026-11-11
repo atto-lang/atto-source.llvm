@@ -144,7 +144,7 @@ public:
             return Observation::Unknown;
         if (state == State::Succeeded) {
             try {
-                output_ = operation_->output_bytes();
+                verified_output_bytes_ = operation_->output_bytes();
             } catch (...) {
                 return Observation::Unknown;
             }
@@ -182,7 +182,7 @@ public:
         std::lock_guard<std::mutex> guard(mu_);
         if (!event_terminal_ || !event_success_)
             throw std::logic_error("GPU_V2_OUTPUT_NOT_VERIFIED");
-        return output_;
+        return verified_output_bytes_;
     }
 
     bool native_opencl_success_observed() const {
@@ -212,7 +212,7 @@ private:
     mutable std::mutex mu_;
     Turn active_turn_{0,0};
     EventHandle active_;
-    std::vector<unsigned char> output_;
+    std::vector<unsigned char> verified_output_bytes_;
     bool ambiguous_ = false;
     bool event_terminal_ = false;
     bool event_success_ = false;
