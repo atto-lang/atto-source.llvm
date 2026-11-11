@@ -26,7 +26,17 @@ freeze_native_i64_specializations(const Program& program) {
     std::unordered_map<std::string, std::string> selected;
     std::unordered_set<std::string> concrete_symbols;
     for (const auto& fn : program.functions) {
-        if (fn.generic_parameters.empty()) continue;
+        // Reject stale or forged generic ABI metadata even when a function
+        // claims to be non-generic. Otherwise codegen would silently erase a
+        // GenericType parameter to i64 without a frozen specialization.
+        if (fn.generic_parameters.empty()) {
+            for (const auto& param : fn.parameters) {
+                if (!param.generic_type.empty())
+                    throw std::runtime_error(
+                        "undeclared native AOT generic parameter ABI");
+            }
+            continue;
+        }
         if (selected.size() == kMaxSpecializations)
             throw std::runtime_error("native AOT generic specialization count exceeded");
         if (!fn.method_owner.empty() || fn.generic_parameters.size() > kMaxGenericParameters)
