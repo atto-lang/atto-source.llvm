@@ -687,6 +687,73 @@ public:
         remove_quarantined(operation);
     }
 
+    // TRUSTED RECOVERY WORKER ONLY: this may call the blocking OpenCL
+    // queue-finish operation. Never invoke it from the actor scheduler's
+    // nonblocking event-poll path. No timeout counts as quiescence.
+    //
+    // A failed begin() had attempted UPLOAD only. Even if the write executed,
+    // it cannot commit an actor kernel: after confirmed queue quiescence,
+    // cancelling the host tickets and retiring the buffers is safe.
+    bool recover_ambiguous_begin_after_quiescence() {
+        std::shared_ptr<Operation> op;
+        {
+            std::lock_guard<std::mutex> guard(quarantine_lock_);
+            if (quarantined_operations_.size() != 1)
+                return false;
+            op = quarantined_operations_.front();
+        }
+        std::lock_guard<std::mutex> guard(op->lock_);
+        require_owner(*op);
+        if (op->state_ != OperationState::Reserved
+                && op->state_ != OperationState::ReleaseFailed
+                && op->state_ != OperationState::Cancelled)
+            return false;
+        if (op->state_ == OperationState::Reserved) {
+            if (op->event_ || !api_.prove_device_loss_quiescence())
+                return false;
+            // May throw if ownership admission invariants were violated:
+            // leave the physical resources pinned and retry safely.
+            dop::abort_gpu_before_enqueue(op->input_, op->output_, op->claim_);
+            op->state_ = OperationState::Cancelled;
+        }
+        try { finish_cleanup(*op); }
+        catch (...) { return false; }
+        if (!op->cleanup_complete_) return false;
+        remove_quarantined(*op);
+        return true;
+    }
+
+    // TRUSTED RECOVERY WORKER ONLY. A kernel or download enqueue exception
+    // may occur after the GPU accepted work; never free its allocations
+    // until the actual queue has been independently proven quiescent.
+    bool recover_ambiguous_kernel_after_quiescence(Operation& op) {
+        std::lock_guard<std::mutex> guard(op.lock_);
+        require_owner(op);
+        if (op.state_ != OperationState::UnknownEnqueue
+                && op.state_ != OperationState::ReleaseFailed
+                && op.state_ != OperationState::Cancelled)
+            throw std::logic_error("OpenCL operation has no ambiguous kernel enqueue");
+        if (op.state_ == OperationState::UnknownEnqueue) {
+            if (!api_.prove_device_loss_quiescence())
+                return false;
+            if (!op.cancel_requested_) {
+                gpu::BufferFence::cancel_pair(
+                    op.input_.fence, op.output_.fence,
+                    op.claim_.claim().tickets);
+                op.cancel_requested_ = true;
+            }
+            gpu::BufferFence::acknowledge_cancelled_pair(
+                op.input_.fence, op.output_.fence,
+                op.claim_.claim().tickets);
+            op.state_ = OperationState::Cancelled;
+        }
+        try { finish_cleanup(op); }
+        catch (...) { return false; }
+        if (!op.cleanup_complete_) return false;
+        remove_quarantined(op);
+        return true;
+    }
+
     void retry_pre_enqueue_cleanup() {
         std::shared_ptr<Operation> operation_recovery;
         {
