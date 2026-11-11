@@ -2375,8 +2375,25 @@ private:
                 if (accept("await")) {
                     if (binding.scalar_type != ScalarType::I64)
                         fail("native scalar await requires an int result binding");
-                    if (!value.locals.empty())
-                        fail("native first async slice requires await to immediately consume its Future/Task");
+                    // A single immutable, capture-free scalar tile may execute
+                    // between task submission and await. Its initializer has
+                    // no receiver, loan, I/O or task-state access, so the
+                    // already-emitted task start remains independent of it.
+                    // This is NOT general suspension or multi-Task admission.
+                    if (!value.locals.empty()) {
+                        const bool pure_immutable_i64_tile =
+                            value.source_tasks.size() == 1 &&
+                            value.locals.size() == 1 &&
+                            value.locals.front().scalar_type == ScalarType::I64 &&
+                            !value.locals.front().assignable &&
+                            !value.locals.front().heap_owned &&
+                            !value.locals.front().int_array &&
+                            value.locals.front().initializer &&
+                            native_capture_free_task_tree(
+                                *value.locals.front().initializer);
+                        if (!pure_immutable_i64_tile)
+                            fail("native first async slice requires await to immediately consume its Future/Task; only one pure immutable int tile may precede await");
+                    }
                     const std::string awaited_name = identifier();
                     auto task = std::find_if(
                         value.source_tasks.begin(), value.source_tasks.end(),
