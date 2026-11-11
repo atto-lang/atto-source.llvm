@@ -5,6 +5,7 @@
 #include <functional>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace oreslang {
 inline std::string native_sum_name(NativeSumType::Kind kind, ScalarType value, ScalarType error = ScalarType::I64) {
@@ -22,7 +23,17 @@ inline void resolve_native_sums(Program& program) {
     // NativeSumType is currently a scalar-only ABI descriptor. Validate
     // its canonical generic shape before any expression is admitted to IR.
     // The recursive functor rules never authorize native nested payload ABI.
+    std::unordered_set<std::string> admitted_sum_names;
+    const auto is_scalar = [](ScalarType kind) {
+        return kind == ScalarType::I64 || kind == ScalarType::Bool || kind == ScalarType::String;
+    };
     for (const auto& sum : program.sum_types) {
+        if ((sum.kind != NativeSumType::Kind::Option && sum.kind != NativeSumType::Kind::Result) ||
+                !is_scalar(sum.value_type) || !is_scalar(sum.error_type) ||
+                (sum.kind == NativeSumType::Kind::Option && sum.error_type != ScalarType::I64))
+            throw std::runtime_error("invalid native sum scalar ABI descriptor");
+        if (!admitted_sum_names.insert(sum.name).second)
+            throw std::runtime_error("duplicate native sum type descriptor");
         const auto expected = native_sum_name(sum.kind, sum.value_type, sum.error_type);
         const auto shape = types::functor_v1::parse_type(sum.name);
         const bool correct_kind = shape.name ==
