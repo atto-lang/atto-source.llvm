@@ -45,6 +45,17 @@ if(ORESLANG_GPU_ACTOR_HOST_ONLY)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/GpuActorV0CompletionAuthorityGate.cmake")
     set_tests_properties(native_gpu_actor_v0_completion_authority_private
         PROPERTIES TIMEOUT 30)
+    # Worker-only quiescence/cleanup authority: ordinary C++ callers MUST
+    # fail compilation when invoking these potentially blocking methods.
+    add_test(NAME native_gpu_actor_recovery_worker_authority_private
+        COMMAND "${CMAKE_COMMAND}"
+            "-DGPU_ACTOR_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+            "-DGPU_ACTOR_INCLUDE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+            "-DGPU_ACTOR_NEGATIVE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_actor_recovery_authority_negative.cpp"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/GpuActorRecoveryAuthorityGate.cmake")
+    set_tests_properties(native_gpu_actor_recovery_worker_authority_private
+        PROPERTIES TIMEOUT 30)
+
     # Build the physical probe, but never count 77 as a passing GPU test.
     add_executable(oreslang-gpu-physical-prerequisite
         tests/gpu_actor_opencl_v2_physical_probe.cpp)
@@ -4952,6 +4963,17 @@ if(BUILD_TESTING)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/GpuActorV0CompletionAuthorityGate.cmake")
     set_tests_properties(native_gpu_actor_v0_completion_authority_private
         PROPERTIES TIMEOUT 30)
+    # Worker-only quiescence/cleanup authority: ordinary C++ callers MUST
+    # fail compilation when invoking these potentially blocking methods.
+    add_test(NAME native_gpu_actor_recovery_worker_authority_private
+        COMMAND "${CMAKE_COMMAND}"
+            "-DGPU_ACTOR_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+            "-DGPU_ACTOR_INCLUDE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+            "-DGPU_ACTOR_NEGATIVE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_actor_recovery_authority_negative.cpp"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/GpuActorRecoveryAuthorityGate.cmake")
+    set_tests_properties(native_gpu_actor_recovery_worker_authority_private
+        PROPERTIES TIMEOUT 30)
+
 endif()
 
 # V1 opaque host provider event identity and bounded actor quarantine. This
