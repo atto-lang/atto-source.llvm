@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 #include <map>
+#include <type_traits>
 
 using namespace oreslang::package_interface;
 
@@ -52,6 +53,12 @@ static DependencyPin lock(const std::string& ns,
     return {"math","acme/math@1#"+std::string(64,'a'),"atto-java-1",
         "java-aot-v1","ownership-strict-v1",{{ns,sha256(bytes)}}};
 }
+static_assert(!std::is_assignable_v<Verified&, Verified>,
+    "an admitted export table must never become mutable after verification");
+static_assert(!std::is_constructible_v<Verified, std::string, std::string,
+    std::map<std::string, std::vector<Export>>>,
+    "only admit() may construct a Verified export proof");
+
 int main() {
     require(sha256({})==
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -66,8 +73,8 @@ int main() {
         "Java .oresi v1 frozen wire digest drift");
     auto pin=lock("math",math);
     auto guest=admit(pin,{{"math",math}});
-    require(guest.alias=="math","alias mismatch");
-    require(guest.package_instance_id==pin.package_instance_id,"locked instance mismatch");
+    require(guest.alias()=="math","alias mismatch");
+    require(guest.package_instance_id()==pin.package_instance_id,"locked instance mismatch");
     require(guest.namespace_exports("math").size()==2,"export count mismatch");
     require(guest.module_exports("math","algebra").size()==2,"module binding mismatch");
     fails("module not exported",[&]{(void)guest.module_exports("math","hidden");});
@@ -131,14 +138,14 @@ int main() {
             legacy_pkg.package_instance_id,"sha-colon package ID rejected");
     auto second_pkg=pin;second_pkg.package_instance_id="acme/math@1#"+std::string(64,'b');
     const auto other=admit(second_pkg,{{"math",math}});
-    require(other.package_instance_id!=guest.package_instance_id,
+    require(other.package_instance_id()!=guest.package_instance_id(),
         "same name does not grant same nominal package instance");
 
     // A 2nd namespace must be in the exact pinned closed inventory.
     const auto net=fixture("network","tcp");
     auto two=pin;two.namespaces.push_back({"network",sha256(net)});
     const auto two_verified=admit(two,{{"math",math},{"network",net}});
-    require(two_verified.namespaces.size()==2,"multi-namespace pin mismatch");
+    require(two_verified.namespace_count()==2,"multi-namespace pin mismatch");
     fails("invalid locked",[&]{(void)admit(two,{{"math",math}});});
 
     // Deliberately wrong spelling: Java's package alias grammar is lower-case.
