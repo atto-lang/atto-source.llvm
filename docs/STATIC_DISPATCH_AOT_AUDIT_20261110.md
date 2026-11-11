@@ -15,12 +15,19 @@ closure contract, not a declaration that virtual/interface dispatch is implement
   The native class-method slice therefore emits a direct LLVM call.
 - Source declaration admission rejects duplicate method name/explicit arity.
   The resolver additionally rejects duplicate class identities and duplicate
-  method slots in linked/compiler-owned IR, instead of letting last-match or
-  first-match lookup select the implementation.
+  method slots in linked/compiler-owned IR **before call resolution**, including
+  unused duplicate slots, instead of letting declaration order select a target.
 - `tests/native_static_dispatch_aot.rs` provides an independent Rust-only
-  compiler-to-LLVM-IR assertion for known class methods, then links and
-  executes the guest at both O0 and O2 (expected exit code 42).
-  Its Rust predicate tests reject indirect-call and symbol-spoofing examples.
+  compiler-to-LLVM-IR assertion for both concrete and overloaded class
+  methods with **exact** compiler ABI symbol matching, then links and
+  executes both guests at O0 and O2 (expected exit code 42).
+  Eight Rust predicate tests reject typed/ordinary indirect calls,
+  incorrect overload slots, namespace/suffix spoofing and declaration-only evidence.
+- `tests/native_static_dispatch_resolver_test.cpp` links the actual C++
+  frontend resolver with no compiler simulation. It rejects duplicate nominal
+  identities, uncalled duplicate slots and forged method receivers, while
+  preserving legal same-name/different-arity methods; this is a supplemental
+  host-level check, not executed guest evidence.
   Existing legacy class-method regression fixtures remain unchanged.
 
 ## Semantic rules for future implementations
@@ -59,10 +66,21 @@ unresolved virtual/interface calls never silently turn into name lookup.
 For genuinely polymorphic calls add override, base reference, witness,
 and adversarial stale-actor-generation fixtures before claiming parity.
 
-Run the new CTests `native_static_dispatch_aot` and
-`native_static_dispatch_predicates`, plus the existing
+Run the new CTests `native_static_dispatch_aot`,
+`native_static_dispatch_predicates`, and
+`native_static_dispatch_resolver_ir_integrity`, plus the existing
 `native_source_class_methods_release` and
 `native_source_class_methods_sanitizer` with the actual compiler and clang,
-on the **exact PR head**. Record toolchain, compiler/blob/tree IDs, executed
+on the **exact PR head**. The isolated exact-head workflow is
+`.github/workflows/llvm-static-dispatch-aot-exact-head.yml` (LLVM/Clang 19). Record toolchain, compiler/blob/tree IDs, executed
 steps and final native exit codes; a zero-step runner is NOT_EXECUTED. This
 patch includes no measured speedup claim and no verified JIT-vs-AOT parity.
+
+## Current CI status (2026-11-10 / 2026-11-11 UTC)
+
+The initial workflow attempts failed with `steps=[]`; a manual retry of
+`Rust-only / no Python` also failed with zero executed steps. The dedicated
+compiler-backed workflow run `42943943177` likewise reported `steps=[]`.
+That run is runner admission failure, **NOT_EXECUTED**, not a Rust/C++/Clang
+pass or failure. Later commits require a fresh exact-head executed receipt.
+The PR stays draft pending real guest execution and independent review.
