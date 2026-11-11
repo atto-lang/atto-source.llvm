@@ -227,6 +227,49 @@ int main() {
                        oreslang::ScalarType::I64, oreslang::ScalarType::String});
     reject_descriptor({oreslang::NativeSumType::Kind::Option, "Option<Result<int,String>>",
                        oreslang::ScalarType::I64, oreslang::ScalarType::I64});
+    // Native ABI registry hardening: opaque enum values, hidden Option errors,
+    // duplicate names and fabricated nested descriptors must fail before IR.
+    auto reject_table = [](oreslang::Program table, const std::string& reason) {
+        try {
+            oreslang::resolve_native_sums(table);
+        } catch (const std::runtime_error& error) {
+            check(std::string(error.what()).find(reason) != std::string::npos,
+                  "invalid native sum registry gives expected diagnostic");
+            return;
+        }
+        throw std::runtime_error("accepted an invalid scalar sum descriptor table");
+    };
+    {
+        oreslang::Program duplicate;
+        duplicate.sum_types.push_back({oreslang::NativeSumType::Kind::Option,
+                                       "Option<int>", oreslang::ScalarType::I64, oreslang::ScalarType::I64});
+        duplicate.sum_types.push_back(duplicate.sum_types.front());
+        reject_table(std::move(duplicate), "duplicate native sum type descriptor");
+    }
+    {
+        oreslang::Program forged;
+        forged.sum_types.push_back({static_cast<oreslang::NativeSumType::Kind>(99),
+                                    "Result<int,int>", oreslang::ScalarType::I64, oreslang::ScalarType::I64});
+        reject_table(std::move(forged), "invalid native sum scalar ABI descriptor");
+    }
+    {
+        oreslang::Program forged;
+        forged.sum_types.push_back({oreslang::NativeSumType::Kind::Option,
+                                    "Option<int>", static_cast<oreslang::ScalarType>(99), oreslang::ScalarType::I64});
+        reject_table(std::move(forged), "invalid native sum scalar ABI descriptor");
+    }
+    {
+        oreslang::Program forged;
+        forged.sum_types.push_back({oreslang::NativeSumType::Kind::Result,
+                                    "Result<int,int>", oreslang::ScalarType::I64, static_cast<oreslang::ScalarType>(99)});
+        reject_table(std::move(forged), "invalid native sum scalar ABI descriptor");
+    }
+    {
+        oreslang::Program forged;
+        forged.sum_types.push_back({oreslang::NativeSumType::Kind::Option,
+                                    "Option<int>", oreslang::ScalarType::I64, oreslang::ScalarType::String});
+        reject_table(std::move(forged), "invalid native sum scalar ABI descriptor");
+    }
     std::cout << "PASS " << passed << " compiler-type-shape host-only checks; "
               << "LLVM guest/native machine-code verification NOT_EXECUTED\n";
     return 0;
