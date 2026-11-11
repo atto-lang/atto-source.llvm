@@ -7,7 +7,7 @@
 - `tests/fixtures/hpc-reduction-v1/i64-fixed-tiles.atto` is an actual AttoLang guest defining four pure scalar tile sums and a fixed binary merge, expected native `main` exit 42. Canonical Git blob: `9deb9935b4f65b4d53de92f200291a28cdb02a79`, byte-identical to Java companion and platform conformance PR #704.
 - `i64-task-tile.atto` creates the current compiler's one allowed `Task<int>` (capture-free pure integer producer), computes **one** immutable caller-local integer tile after submission, then awaits and merges the results. `SourceTaskRuntime.c` submits to its one-carrier native scheduler; the parent caller is a separate execution context. This enables a possible overlap interval, **not** evidence of physical simultaneous core execution.
 - `Parser.cpp` permits only one preceding immutable scalar `int` local whose initializer is recursively capture-free and pure. A mutable `let` local, foreign buffer, guest capture, heap owner, second task, or arbitrary locals before await remain rejected.
-- `tests/hpc_reduction_native_v1.rs` rejects dirty/uncommitted fixture bytes, compiles each positive guest through the actual LLVM + no-GC screen + Clang AOT driver at O0/O2, executes the generated native binary, requires exit 42, validates source and compiler hashes before/after, and rejects the mutable-before-await and second-task inputs with no executable publication.
+- `tests/hpc_reduction_native_v1.rs` rejects dirty/uncommitted fixture bytes, requires actual compiler-produced `__oreslang_guest_main` IR (and source Task ABI calls where applicable), compiles each positive guest through the real LLVM + no-GC screen + Clang AOT driver at O0/O2, executes the generated native binary, requires exit 42, and validates source and compiler hashes before/after. It also rejects *four* invalid inputs (mutable caller tile, two caller tiles, second Task, producer function call), checking both zero compiler-produced IR and no published executable.
 
 ## Run only from an exact Git checkout with actual compiler artifacts
 
@@ -18,7 +18,7 @@ rustc --edition=2021 -D warnings tests/hpc_reduction_native_v1.rs -o /tmp/atto-h
 EXPECTED_HEAD="$(git rev-parse HEAD)" /tmp/atto-hpc-v1-gate
 ```
 
-Source-local GitHub Actions workflow `hpc-native-reduction-v1.yml` records exact head/tree, four compiled-guest executions and two negative compiler admissions when a real runner executes. `steps=null` or a zero-step failure is `NOT_EXECUTED`, never a semantic test result.
+Source-local GitHub Actions workflow `hpc-native-reduction-v1.yml` records exact head/tree, four compiled-guest executions and four negative compiler admissions when a real runner executes. `steps=null` or a zero-step failure is `NOT_EXECUTED`, never a semantic test result.
 
 ## Promotion blockers
 
