@@ -27,6 +27,8 @@ struct Unit {
     bool core_closure_complete = false;
     std::unordered_map<std::string, std::size_t> dependencies;
     std::unordered_map<std::string, std::pair<std::size_t, std::string>> class_imports;
+    // local name -> (unit index, pub function name) from `import fnc`.
+    std::unordered_map<std::string, std::pair<std::size_t, std::string>> function_imports;
     // Declaration identities stay immutable while ASTs are moved/qualified.
     std::unordered_map<std::string, std::unordered_map<std::size_t, bool>> functions;
     std::unordered_set<std::string> classes;
@@ -259,14 +261,17 @@ private:
                 } else {
                     if (raw.rfind("./", 0) != 0 && raw.rfind("../", 0) != 0)
                         fail(current, "native imports require relative ./ or ../, project-root +/, or compiler-owned ores.core/* source paths");
-                    dependency = fs::path(raw);
-                    if (dependency.extension().empty()) dependency += ".ores";
-                    if (dependency.extension() != ".ores")
-                        fail(current, "native module source must use .ores extension");
-                    dependency = current.path.parent_path() / dependency;
+                    dependency = project_root_import_detail::resolve_native_source_suffix(
+                        current.path.parent_path() / fs::path(raw));
                     std::error_code error;
                     dependency = fs::canonical(dependency, error);
                     if (error) fail(current, "cannot resolve native import '" + raw + "'");
+                    try {
+                        project_root_import_detail::enforce_relative_import_package_boundary(
+                            current.path, dependency);
+                    } catch (const std::exception& boundary_error) {
+                        fail(current, boundary_error.what());
+                    }
                 }
 
                 const auto known = paths.find(dependency.string());
@@ -305,6 +310,18 @@ private:
             if (imported.local_name == current.program.module)
                 fail(current, "native imported module binding conflicts with containing module");
             const auto& target = *units[selected];
+            if (imported.selected_function) {
+                const auto found = target.functions.find(imported.selected_module);
+                bool exported = false;
+                if (found != target.functions.end())
+                    for (const auto& arity : found->second) exported = exported || arity.second;
+                if (!exported)
+                    fail(current, "unknown or private imported function '" + imported.selected_module + "'");
+                if (current.functions.count(imported.local_name))
+                    fail(current, "imported function conflicts with local function '" + imported.local_name + "'");
+                current.function_imports.emplace(imported.local_name, std::make_pair(selected, imported.selected_module));
+                continue;
+            }
             if (imported.selected_class) {
                 const auto cls = target.class_exports.find(imported.selected_module);
                 if (cls == target.class_exports.end() || !cls->second)
@@ -326,7 +343,7 @@ private:
         return index;
     }
     static void binding_name(const Unit& unit, const std::string& name) {
-        if (unit.dependencies.count(name) || unit.class_imports.count(name))
+        if (unit.dependencies.count(name) || unit.class_imports.count(name) || unit.function_imports.count(name))
             fail(unit, "native module import binding cannot be shadowed: '" + name + "'");
     }
     void expression(const Unit& unit, Expression* expr) {
@@ -348,10 +365,16 @@ private:
             const auto binding = unit.dependencies.find(expr->name.substr(0, dot));
             if (binding == unit.dependencies.end()) fail(unit, "unknown native module binding");
             target = units[binding->second].get(); member = expr->name.substr(dot + 1); external = true;
+        } else if (!unit.functions.count(member)) {
+            const auto imported = unit.function_imports.find(member);
+            if (imported != unit.function_imports.end()) {
+                target = units[imported->second.first].get(); member = imported->second.second; external = true;
+            }
         }
         const auto function = target->functions.find(member);
         if (function == target->functions.end() || !function->second.count(expr->arguments.size()))
-            fail(unit, "unknown function or wrong call arity '" + expr->name + "'");
+            fail(unit, "unknown function or wrong call arity '" + expr->name +
+                (function == target->functions.end() ? "': unknown function" : "': call arity mismatch"));
         if (external && !function->second.at(expr->arguments.size()))
             fail(unit, "imported function is private: '" + expr->name + "'");
         expr->name = target->prefix + member;
