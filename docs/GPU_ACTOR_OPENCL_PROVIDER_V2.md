@@ -18,6 +18,8 @@ A trusted host initiates an actor turn. The V1 registry verifies the actor incar
 
 No state publication occurs on initial upload, kernel submission, failed download, cancellation, or unverified device completion. V2 rejects event replay once the operation is retired. The provider's native event observation remains within the trusted runtime boundary; a mock Api is only a testing dependency.
 
+Native OpenCL status queries are fail-closed: when clGetEventInfo fails, the SystemApi returns an unknown/pending event instead of treating the failed query as a terminal command. Negative tests confirm invalid-event and other failed queries cannot authorize buffer release.
+
 Device loss is not physical quiescence. The actor reports HostFailure CONTROL. The existing OpenCL provider must prove queue quiescence and retire the physical allocations through `recover_device_loss` before V2 reports `CompleteFailed` to the supervising actor registry. The actor never commits staged state on recovered failure.
 
 ## Fail-closed unknown enqueue
@@ -28,10 +30,10 @@ An exception from `OpenClProvider::begin()` can occur after the underlying API a
 
 ## Executed tests
 
-Exact private Git blob mirror and CI: https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42948847074
+Exact private Git blob mirror and CI: https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42949404184
 
-- GCC C++17 strict warnings with AddressSanitizer and UndefinedBehaviorSanitizer: pass, 59 assertions
-- Independent Clang C++17 strict warnings: pass, 59 assertions
+- GCC C++17 strict warnings with AddressSanitizer and UndefinedBehaviorSanitizer: pass, 65 assertions
+- Independent Clang C++17 strict warnings: pass, 65 assertions
 - Real production `OpenClProvider` and `OpenClSystemApi` source compiled; injected OpenCL Api drives mock upload/kernel/download, numerical oracle, actor state publication, supervisor CONTROL, native release, and device-loss recovery
 - Native physical-GPU integration probe compiled successfully
 - Physical probe attempted; compatible OpenCL GPU runtime/device absent → `GPU_ACTOR_V2_NO_GPU_RUNTIME`, **NOT_EXECUTED**, no CPU fallback
