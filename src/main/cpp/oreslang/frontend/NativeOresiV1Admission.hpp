@@ -41,12 +41,15 @@ class Verified {
     const std::string alias_;
     const std::string package_instance_id_;
     const std::map<std::string, std::vector<Export>> namespaces_;
-public:
+    // Only the validated admission function may construct this proof object.
+    friend Verified admit(const DependencyPin&,
+        const std::map<std::string, std::vector<std::uint8_t>>&);
     Verified(std::string alias, std::string package_instance_id,
              std::map<std::string, std::vector<Export>> namespaces)
         : alias_(std::move(alias)),
           package_instance_id_(std::move(package_instance_id)),
           namespaces_(std::move(namespaces)) {}
+public:
     const std::string& alias() const noexcept { return alias_; }
     const std::string& package_instance_id() const noexcept {
         return package_instance_id_;
