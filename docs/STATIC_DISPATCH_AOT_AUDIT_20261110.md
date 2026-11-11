@@ -83,7 +83,7 @@ The initial workflow attempts failed with `steps=[]`; a manual retry of
 compiler-backed workflow run `42943943177` likewise reported `steps=[]`.
 That run is runner admission failure, **NOT_EXECUTED**, not a Rust/C++/Clang
 pass or failure. Later commits require a fresh exact-head executed receipt.
-The PR stays draft pending real guest execution and independent review.
+The PR remains open pending real exact-head guest execution and independent review.
 
 ## Stage-1 concrete `int` generic AOT specialization (new work)
 
@@ -112,7 +112,7 @@ ABI and cross-backend parity remain separate implementation gates.
 New tests:
 - `native_scalar_i64_specialization_plan`: compiler helper constructed
   with the actual typed native `Program` IR types; positive canonical
-  symbol plus eight independent forged identity/ABI/budget negatives.
+  symbol plus 16 adversarial rejection checks for forged identity, ABI,\nclosure roots and the pre-emission budget.
 - `native_scalar_i64_specialization_guest`: canonical `.atto` source
   compilation, exact **one internal definition / two direct calls** in LLVM
   IR, real Clang-linked guest exit 42, plus the preexisting scalar generic
@@ -154,8 +154,8 @@ codegen check cannot replace those passes.
 
 `native_scalar_i64_specialization_plan` now additionally covers repeated-edge
 deduplication, finite two-node recursion, and refusal of a forged manifest root
-with no compiler-owned function body; the active test receipt states 10
-negative cases. No new test result is claimed for this code merely because
+with no compiler-owned function body, plus a deliberately oversized flat
+compiler AST. The active test receipt states 16 negative cases. No new test result is claimed for this code merely because
 it is committed.
 
 **Runner blocker:** on the current source repository, `main` reports
