@@ -1,4 +1,4 @@
-name: Actor memory compiler E2E v1 — host-only evidence (llvm)
+name: Actor memory compiler E2E v1 — owned-source slices (llvm)
 on:
   pull_request:
     paths:
@@ -18,7 +18,7 @@ on:
 permissions:
   contents: read
 jobs:
-  host-substrate-not-guest:
+  host-and-owned-source-slices:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -115,7 +115,7 @@ jobs:
                       raise SystemExit(f"guest execution marker missing or duplicated: {name}/{marker}")
           print("ACTOR_MEMORY_V1_COMPILED_GUEST_SLICES=PASS")
           PY
-      - name: Write bounded evidence receipt (never guest or AOT)
+      - name: Write bounded receipt (independent compiled slices; no full-backend certification)
         shell: bash
         env:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -160,7 +160,8 @@ jobs:
               "compiled_guest_asan_ubsan": "PASS",
               "actor_owned_class_with_suspend": "NOT_EXECUTED",
               "guest_lowering_scope": "independent actor i64 and class-owned array slices",
-              "aot": "NOT_EXECUTED",
+              "aot": "NARROW_LLVM_NATIVE_EXECUTED",
+              "whole_program_aot_certified": False,
               "zero_gc_certified": False,
               "cross_org_private_source_export": False,
           }
