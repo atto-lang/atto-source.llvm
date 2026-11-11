@@ -364,7 +364,7 @@ int main() {
         invalid.initializer->left = std::make_unique<oreslang::Expression>();
         invalid.initializer->left->kind = oreslang::Expression::Kind::Variable;
         invalid.initializer->left->name = "value";
-        invalid.initializer->arguments.push_back(nullptr);
+        invalid.initializer->arguments.emplace_back(); // intentionally null
         program.functions.front().locals.push_back(std::move(invalid));
         reject_table(std::move(program), "malformed native sum/member access AST");
     }
