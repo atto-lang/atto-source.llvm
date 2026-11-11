@@ -368,7 +368,7 @@ inline NativeI64DispatchImage freeze_native_i64_dispatch_image(const Program& pr
 // be redefined as ordinary guest functions, regardless of parser provenance.
 inline void validate_native_aot_global_symbol(const std::string& symbol) {
     if (symbol.empty() || symbol.size() > 1024 ||
-        symbol.find('\\0') != std::string::npos)
+        symbol.find('\0') != std::string::npos)
         throw std::runtime_error("invalid native AOT emitted symbol identity");
     if (symbol.rfind("llvm.", 0) == 0)
         throw std::runtime_error("reserved LLVM intrinsic symbol collision");
@@ -412,7 +412,7 @@ inline std::string plan_native_aot_function_symbol(
         ? native_function_slot(base, source_arity) : base) +
         (target ? target->emitted_suffix : std::string{});
     if (symbol.empty() || symbol.size() > 1024 ||
-        symbol.find('\\0') != std::string::npos)
+        symbol.find('\0') != std::string::npos)
         throw std::runtime_error("invalid native AOT emitted symbol identity");
     // Only an actual compiler-rewritten native/cortex entry can use this
     // internal implementation symbol. Everything else is checked against the
