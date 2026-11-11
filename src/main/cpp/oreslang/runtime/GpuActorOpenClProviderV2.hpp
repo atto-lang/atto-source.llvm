@@ -122,9 +122,17 @@ public:
         State state = operation_->state();
         try {
             if (state == State::DeviceLost) {
+                // A device-loss notification itself does NOT imply the GPU
+                // stopped touching its allocations. Only the existing
+                // OpenCL provider's recovery routine may establish physical
+                // queue quiescence and retire the underlying buffers.
                 try { provider_->recover_device_loss(*operation_); }
                 catch (...) { return Observation::DeviceLost; }
-                state = operation_->state();
+                if (!(provider_->usage() == opencl::Usage{0,0,0,0}))
+                    return Observation::Unknown;
+                event_terminal_ = true;
+                event_success_ = false;
+                return Observation::CompleteFailed; // recovery is NOT success
             } else if (state == State::ReleaseFailed) {
                 try { provider_->retry_release(*operation_); }
                 catch (...) { return Observation::Unknown; }
