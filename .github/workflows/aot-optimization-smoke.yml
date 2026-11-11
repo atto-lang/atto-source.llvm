@@ -119,9 +119,18 @@ jobs:
           set -euo pipefail
           bash -n scripts/test-dispatch-guest-v1.sh
           bash scripts/test-dispatch-guest-v1.sh | tee "$RUNNER_TEMP/atto-llvm-dispatch-receipts.txt"
+          grep -Fqx "DISPATCH_LLVM_CORPUS_SHA_PINNED|head=$EXPECTED_HEAD|blobs=7" "$RUNNER_TEMP/atto-llvm-dispatch-receipts.txt"
           grep -Fqx 'DISPATCH_LLVM_V1_MATRIX=EXECUTED_DIRECT_AND_INSTANCE_ONLY;VIRTUAL_AND_STATIC=NOT_IMPLEMENTED' "$RUNNER_TEMP/atto-llvm-dispatch-receipts.txt"
           test "$(grep -c '^DISPATCH_LLVM_NATIVE_GUEST_PASS|' "$RUNNER_TEMP/atto-llvm-dispatch-receipts.txt")" = 4
           test "$(grep -c '^DISPATCH_LLVM_FAIL_CLOSED|' "$RUNNER_TEMP/atto-llvm-dispatch-receipts.txt")" = 6
+          test "$(grep -Ec '^DISPATCH_LLVM_FAIL_CLOSED[|].*[|]no_ir=TRUE[|]no_binary=TRUE[|]' "$RUNNER_TEMP/atto-llvm-dispatch-receipts.txt")" = 6
+          # The executable guest must have succeeded at BOTH O-levels for EACH
+          # positive fixture. Duplicated receipts from one O-level are invalid.
+          for case_name in direct_call_42 instance_call_42; do
+            for level in 0 2; do
+              test "$(grep -Ec "^DISPATCH_LLVM_NATIVE_GUEST_PASS[|]case=$case_name[|]O$level[|]head=$EXPECTED_HEAD[|]" "$RUNNER_TEMP/atto-llvm-dispatch-receipts.txt")" = 1
+            done
+          done
       - name: Retain guest receipts separately from host-only smoke
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
