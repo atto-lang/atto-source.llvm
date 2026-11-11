@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -16,11 +17,20 @@ namespace oreslang::runtime {
 // this class intentionally has no separate lock, scheduler or guest callback.
 // Each enqueue consumes one already-allocated slot and transfers a pre-owned
 // payload handle. No allocator or user T move is used on a successful path.
+// A nonthrowing custom Deleter supports actor-owned arenas and kernel handles;
+// the outer ACK gate is still responsible for the final physical release.
 // It does not implement actor ACK accounting, authenticated CONTROL, or
 // multi-lane Erlang selective receive. All three belong to outer layers.
-template<class T>
+template<class T, class Deleter = std::default_delete<T>>
 class PreallocatedSelectiveSlots final {
 public:
+    using Owner = std::unique_ptr<T, Deleter>;
+    // A throwing handle move or cleanup would break strong ownership safety
+    // during slot unlink or a physical release/ACK boundary.
+    static_assert(std::is_nothrow_move_constructible_v<Deleter>,
+                  "actor-owned payload deleter must have a nonthrowing move");
+    static_assert(std::is_nothrow_invocable_v<Deleter&, T*>,
+                  "actor-owned payload cleanup must be nonthrowing");
     static constexpr std::size_t none = std::numeric_limits<std::size_t>::max();
     // The native actor-turn admission gate already caps capacity at 65,536.
     // Reject unbounded/invalid requests BEFORE allocating the slot vector.
@@ -29,7 +39,7 @@ public:
         std::uint64_t sequence;
         std::uint32_t tag;
         std::size_t bytes;
-        std::unique_ptr<T> payload;
+        Owner payload;
     };
     enum class Status { Matched, Continue, NoMatch };
     class Cursor final {
@@ -37,7 +47,7 @@ public:
         Cursor() = default;
         std::uint64_t through_sequence() const noexcept { return through_; }
     private:
-        friend class PreallocatedSelectiveSlots<T>;
+        friend class PreallocatedSelectiveSlots<T, Deleter>;
         Cursor(std::uint64_t owner, std::size_t next, std::uint64_t generation,
                std::uint64_t through, std::uint32_t tag) noexcept
             : owner_(owner), generation_(generation), through_(through),
@@ -68,7 +78,7 @@ public:
     std::size_t size() const noexcept { return size_; }
     std::size_t capacity() const noexcept { return slots_.size(); }
 
-    bool push(std::unique_ptr<T>& payload, std::size_t bytes,
+    bool push(Owner& payload, std::size_t bytes,
               std::uint32_t tag, std::uint64_t sequence) {
         if (!payload || bytes == 0 || sequence == 0 || sequence <= last_sequence_)
             throw std::invalid_argument("invalid selective frame or sequence");
