@@ -181,18 +181,32 @@ public:
         std::size_t inspected;
         SelectiveCursor cursor;
     };
+    // Unbound transport test/probe API only. A bound actor must never
+    // consume typed user messages outside its authenticated CONTROL-first
+    // single-flight actor turn; use dispatch_next_tagged instead.
     SelectiveResult try_receive_tagged(
             Lane lane, std::uint32_t tag, std::size_t scan_budget,
             const SelectiveCursor& cursor = {}) {
         std::lock_guard<std::mutex> guard(service_mutex_);
+        if (bound_target_)
+            throw std::logic_error("bound actor selective receive requires authorized actor turn");
+        return try_receive_tagged_locked(lane, tag, scan_budget, cursor);
+    }
+
+private:
+    // Requires service_mutex_. Caller owns either the explicitly unbound
+    // probe or a generation-checked, authorized actor user turn.
+    SelectiveResult try_receive_tagged_locked(
+            Lane lane, std::uint32_t tag, std::size_t scan_budget,
+            const SelectiveCursor& cursor) {
         auto result = port(lane).try_receive_tagged(tag, scan_budget, cursor);
         std::optional<Delivery> owned;
-        if (result.delivery) {
+        if (result.delivery)
             owned.emplace(lane, std::move(*result.delivery), completion_, bound_actor_);
-        }
         return {result.status, std::move(owned), result.inspected,
                 std::move(result.cursor)};
     }
+public:
 
     /**
      * Actual native host actor-turn integration. The group, not the mailbox,
@@ -257,7 +271,14 @@ public:
         }
         bool matched = false, resume = false;
         const auto outcome = group.run_user_turn(actor, [&] {
-            auto result = try_receive_tagged(lane, tag, scan_budget, cursor);
+            // The current user turn is already granted by NativeActorGroup;
+            // recheck the bound identity before entering the raw port path.
+            SelectiveResult result = [&] {
+                std::lock_guard<std::mutex> guard(service_mutex_);
+                if (!bound_target_ || !same_target(actor))
+                    throw std::logic_error("actor changed during selective user turn");
+                return try_receive_tagged_locked(lane, tag, scan_budget, cursor);
+            }();
             cursor = std::move(result.cursor);
             if (result.status == SelectiveStatus::Continue) {
                 resume = true;
