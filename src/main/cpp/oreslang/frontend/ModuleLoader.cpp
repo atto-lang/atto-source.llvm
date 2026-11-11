@@ -1,6 +1,7 @@
 #include "oreslang/frontend/ModuleLoader.hpp"
 #include "oreslang/frontend/CoreLibrarySources.hpp"
 #include "oreslang/frontend/ProjectRootImport.hpp"
+#include "oreslang/types/NativeSumTypes.hpp"
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -76,20 +77,8 @@ public:
             if (index && !unit.program.actors.empty())
                 fail(unit, "native imported actor declarations require typed module actor placement lowering");
             for (const auto& type : unit.program.sum_types) {
-                bool found = false;
-                for (const auto& existing : linked.sum_types) {
-                    if (existing.name != type.name) continue;
-                    // Independently parsed modules may legitimately repeat
-                    // Option<int>. Only identical scalar ABI descriptors may
-                    // be coalesced, otherwise fail before type/IR admission.
-                    if (existing.kind != type.kind ||
-                            existing.value_type != type.value_type ||
-                            existing.error_type != type.error_type)
-                        fail(unit, "conflicting linked native sum type descriptor '" + type.name + "'");
-                    found = true;
-                    break;
-                }
-                if (!found) linked.sum_types.push_back(type);
+                try { merge_native_sum_descriptor(linked.sum_types, type); }
+                catch (const std::runtime_error& error) { fail(unit, error.what()); }
             }
             for (auto& fn : unit.program.functions) {
                 qualify_function(unit, fn);
