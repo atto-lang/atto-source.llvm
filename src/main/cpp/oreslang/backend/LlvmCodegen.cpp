@@ -2,6 +2,7 @@
 #include "oreslang/backend/NativeFlatClasses.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
+#include "oreslang/frontend/NativeScalarSpecialization.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 #include "oreslang/runtime/OresIsolateAbi.h"
 
@@ -1146,6 +1147,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // Unique free functions retain their ABI symbol, overloaded families use arity slots.
     std::unordered_map<std::string, std::size_t> family_sizes;
     for (const auto& fn : source.functions) ++family_sizes[fn.name];
+    // The existing typed native frontend admits concrete int generic
+    // arguments only. Freeze a canonical, bounded one-per-declaration
+    // specialization map before emitting any function bodies.
+    const auto frozen_i64_specializations = freeze_native_i64_specializations(source);
+    std::unordered_set<std::string> emitted_function_symbols;
     for (const auto& fn : source.functions) {
         const std::string base_symbol = cortex_m_target && fn.name == "main"
             ? "oreslang_cortexm_bootstrap"
@@ -1156,9 +1162,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         // internal ABI parameter list and lookup count unchanged.
         const std::size_t source_arity = native_source_value_arity(
             fn.parameters.size(), !fn.method_owner.empty());
-        const std::string symbol = family_sizes.at(fn.name) > 1
+        const auto specialization = frozen_i64_specializations.find(
+            native_function_slot(fn.name, fn.parameters.size()));
+        const std::string symbol = (family_sizes.at(fn.name) > 1
             ? native_function_slot(base_symbol, source_arity)
-            : base_symbol;
+            : base_symbol) + (specialization == frozen_i64_specializations.end()
+                ? std::string{} : specialization->second);
+        if (!emitted_function_symbols.insert(symbol).second)
+            throw std::runtime_error("native AOT emitted function symbol collision");
         std::vector<llvm::Type*> argument_types;
         for (const auto& param : fn.parameters)
             argument_types.push_back(param.class_name.empty()
@@ -1180,7 +1191,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         llvm::Function* declaration = llvm::Function::Create(
             signature,
             (fn.native_internal || fn.async_source_i64 ||
-             !fn.c_export_u32_symbol.empty())
+             !fn.c_export_u32_symbol.empty() ||
+             specialization != frozen_i64_specializations.end())
                 ? llvm::Function::InternalLinkage
                 : llvm::Function::ExternalLinkage,
             symbol, module);
@@ -1193,7 +1205,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             else formal.setName(label_index == fn.parameters.size() + hidden.size() ? "$result" : "$result.region");
             ++label_index;
         }
-        declarations.emplace(native_function_slot(fn.name, fn.parameters.size()), declaration);
+        if (!declarations.emplace(native_function_slot(fn.name, fn.parameters.size()),
+                                  declaration).second)
+            throw std::runtime_error("native AOT duplicate declaration selector");
     }
     for (const auto& fn : source.functions) {
         llvm::Function* function = declarations.at(native_function_slot(fn.name, fn.parameters.size()));
