@@ -75,6 +75,9 @@ inline void resolve_native_sums(Program& program) {
             for (const auto& label : e.argument_names)
                 if (!label.empty())
                     throw std::runtime_error("malformed native sum constructor AST");
+            for (const auto& payload : e.arguments)
+                if (!payload)
+                    throw std::runtime_error("malformed native sum constructor AST");
             std::string selected = expected;
             if (selected.empty()) {
                 if (e.name != "Some" || e.arguments.size() != 1) throw std::runtime_error("native sum constructor requires a declared Option/Result context");
@@ -144,6 +147,11 @@ inline void resolve_native_sums(Program& program) {
             return {ScalarType::I64, {}, e.name};
         }
         if (e.kind == E::ArrayCall || e.kind == E::SumAccess) {
+            if (!e.left)
+                throw std::runtime_error("malformed native sum/member access AST");
+            for (const auto& argument : e.arguments)
+                if (!argument)
+                    throw std::runtime_error("malformed native sum/member access AST");
             const auto owner = expression(*e.left, env, {});
             std::vector<Hint> argument_types;
             argument_types.reserve(e.arguments.size());
