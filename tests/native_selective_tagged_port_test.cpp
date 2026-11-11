@@ -146,6 +146,53 @@ static void actual_priority_inbox_lane() {
     inbox.close();
 }
 
+// A real bound NativeActorGroup owns the turn; privileged CONTROL is polled
+// before each selective data scan. Stop/retirement then aborts only unmatched
+// queued work, never re-ACKs the already checked-out matching receipt.
+static void bound_actor_turn_selective() {
+    using Inbox = PriorityActorInbox<MoveOnlyMessage>;
+    using Lane = Inbox::Lane;
+    using Status = Inbox::SelectiveDispatch;
+    oreslang::runtime::NativeActorGroup group(12034, 1);
+    auto actor = group.adopt(12034, 55, 1, [] {});
+    auto finalizer = group.runtime_finalizer(actor);
+    CHECK(group.mark_ready(actor));
+    Inbox inbox({2, 32}, {4, 64}, {2, 32}, 8);
+    inbox.bind_target(actor);
+
+    MoveOnlyMessage a(10), b(20), c(30);
+    CHECK(inbox.offer_to(actor, Lane::Normal, std::move(a), 8, 11));
+    CHECK(inbox.offer_to(actor, Lane::Normal, std::move(b), 8, 17));
+    CHECK(inbox.offer_to(actor, Lane::Normal, std::move(c), 8, 23));
+    Inbox::SelectiveCursor cursor;
+    bool processed = false;
+    auto consumer = [&](Inbox::Delivery& delivery) {
+        CHECK(!processed);
+        processed = true;
+        CHECK(delivery.lane() == Lane::Normal);
+        CHECK(*delivery.value().value == 30);
+        CHECK(delivery.acknowledge_released());
+    };
+    CHECK(inbox.dispatch_next_tagged(group, actor, Lane::Normal, 23, 1,
+                                    cursor, consumer) == Status::Resume);
+    CHECK(!processed && inbox.used_frames(Lane::Normal) == 3);
+    CHECK(inbox.dispatch_next_tagged(group, actor, Lane::Normal, 23, 1,
+                                    cursor, consumer) == Status::Resume);
+    CHECK(inbox.dispatch_next_tagged(group, actor, Lane::Normal, 23, 1,
+                                    cursor, consumer) == Status::User);
+    CHECK(processed && inbox.used_frames(Lane::Normal) == 2);
+    CHECK(inbox.watermark() == 0);
+    group.close();
+    CHECK(finalizer.ready_for_actor_turn_quiescence());
+    CHECK(inbox.retire_queued_after_quiescence(finalizer, actor) == 2);
+    CHECK(inbox.watermark() == 3);
+    CHECK(inbox.drain_status(3) == Inbox::DrainStatus::Aborted);
+    CHECK(finalizer.ready_for_resource_reclamation());
+    CHECK(finalizer.finalized());
+    actor.get_done().get();
+    inbox.close();
+}
+
 // Independent fixed-seed FIFO oracle: the production port must select the
 // first matching tag, never disturb unmatched order, and never refund credits
 // until a receipt acknowledges. This is native host modeling, NOT guest AOT.
@@ -218,5 +265,6 @@ static void randomized_tagged_dequeue() {
 int main() {
     bounded_port_selective();
     actual_priority_inbox_lane();
+    bound_actor_turn_selective();
     randomized_tagged_dequeue();
 }
