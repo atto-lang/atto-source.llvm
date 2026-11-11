@@ -4,6 +4,7 @@
 #include "oreslang/runtime/PriorityActorInbox.hpp"
 #include <atomic>
 #include <cstdint>
+#include <exception>
 #include <memory>
 #include <stdexcept>
 #include <thread>
@@ -190,6 +191,7 @@ static void supervisor_parity_close_races_data_and_retires_loans() {
             try {
                 admitted = inbox.offer_to(actor, Lane::Normal,
                                          static_cast<int>(trial), 8);
+                denied = !admitted;
             } catch (const std::logic_error&) {
                 denied = true;
             }
