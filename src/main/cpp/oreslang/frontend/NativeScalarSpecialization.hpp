@@ -3,7 +3,9 @@
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/Parser.hpp"
 
+#include <algorithm>
 #include <cstddef>
+#include <map>
 #include <memory>
 #include <vector>
 #include <stdexcept>
@@ -22,12 +24,15 @@ struct NativeI64SpecializationClosureEvidence {
     std::size_t dependency_edges;
     std::size_t estimated_code_bytes;
     std::size_t concrete_symbols;
+    // Deterministically ordered, closed concrete-selector dependency table.
+    // Produced by the compiler's post-validation AST walk, never imported.
+    std::map<std::string, std::vector<std::string>> dependencies;
 };
 
 inline NativeI64SpecializationClosureEvidence check_native_i64_specialization_closure(
         const Program& program,
         const std::unordered_map<std::string, std::string>& selected) {
-    if (selected.empty()) return {0, 0, 0, 0};
+    if (selected.empty()) return {0, 0, 0, 0, {}};
     constexpr std::size_t kMaxScanNodes = 131072;
     constexpr std::size_t kMaxEdges = 65536;
     constexpr std::size_t kMaxEstimatedBytes = 8 * 1024 * 1024;
@@ -138,7 +143,14 @@ inline NativeI64SpecializationClosureEvidence check_native_i64_specialization_cl
     }
     if (visited.size() != selected.size())
         throw std::runtime_error("incomplete native AOT specialization closure");
-    return {scanned, edges, estimated, visited.size()};
+    std::map<std::string, std::vector<std::string>> frozen_dependencies;
+    for (const auto& [selector, outgoing] : graph) {
+        std::vector<std::string> ordered(outgoing.begin(), outgoing.end());
+        std::sort(ordered.begin(), ordered.end());
+        if (!frozen_dependencies.emplace(selector, std::move(ordered)).second)
+            throw std::runtime_error("duplicate native AOT frozen dependency identity");
+    }
+    return {scanned, edges, estimated, visited.size(), std::move(frozen_dependencies)};
 }
 
 // Closed, compiler-derived stage-1 native generic ABI. The native scalar type
