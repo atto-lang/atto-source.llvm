@@ -116,6 +116,17 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # This checks a real source parser/typed nullary-enum lowering contract.
+    # It is host-only: generated LLVM IR/native guest tests are separate.
+    add_executable(oreslang-native-nominal-enum-v1-source-test
+        tests/native_nominal_enum_v1_source_test.cpp)
+    target_include_directories(oreslang-native-nominal-enum-v1-source-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-nominal-enum-v1-source-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_nominal_enum_v1_source_admission
+        COMMAND oreslang-native-nominal-enum-v1-source-test)
+    set_tests_properties(native_nominal_enum_v1_source_admission PROPERTIES TIMEOUT 20)
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
     add_executable(oreslang-native-sum-payload-admission-test
