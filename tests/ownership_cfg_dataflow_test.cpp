@@ -363,5 +363,95 @@ int main() {
         invalid.blocks = {{{}, {2}}};
         verify(invalid);
     }));
+    // Executable native-C++ ownership CFG checks mapped to the shared
+    // nine-toolchain borrow-mir-v1 logical case IDs. These use the actual
+    // LLVM-side verifier, not the source-free JS oracle or emitted .atto guests.
+    // C02/C04/C07/C08/C10-C14/C16/C20-C21 require typed MIR effects this
+    // LLVM flat-place API cannot faithfully represent: DO NOT synthesize a pass.
+    {
+        Graph contract;
+        contract.entry = {{"x", cell(kOwned)}};
+
+        // C01: a definitely owned place is readable.
+        contract.blocks = {{{op(Kind::Read, "x")}, {}}};
+        verify(contract);
+
+        // C03: use after a move must fail.
+        contract.blocks = {{{op(Kind::Move, "x"), op(Kind::Read, "x")}, {}}};
+        assert(rejected([&] { verify(contract); }));
+
+        // C05: two independently identified shared loans can coexist.
+        contract.blocks = {{{
+            {Kind::BorrowShared, "x", 10},
+            {Kind::BorrowShared, "x", 11},
+            op(Kind::Read, "x"),
+            {Kind::ReleaseShared, "x", 11},
+            {Kind::ReleaseShared, "x", 10}
+        }, {}}};
+        verify(contract);
+
+        // C06: an exclusive loan cannot overlap a live shared loan.
+        contract.blocks = {{{
+            {Kind::BorrowShared, "x", 10},
+            {Kind::BorrowExclusive, "x", 11}
+        }, {}}};
+        assert(rejected([&] { verify(contract); }));
+
+        // C09: a live shared loan fences destruction.
+        contract.blocks = {{{
+            {Kind::BorrowShared, "x", 10},
+            op(Kind::Drop, "x")
+        }, {}}};
+        assert(rejected([&] { verify(contract); }));
+
+        // C15: a nonexistent loan cannot be released.
+        contract.blocks = {{{{Kind::ReleaseShared, "x", 10}}, {}}};
+        assert(rejected([&] { verify(contract); }));
+
+        // C22: a live shared loan cannot escape a terminal block.
+        contract.blocks = {{{{Kind::BorrowShared, "x", 10}}, {}}};
+        assert(rejected([&] { verify(contract); }));
+    }
+    {
+        // C17: loan IDs are globally minted, not per branch.
+        Graph reused_loan;
+        reused_loan.entry = {{"x", cell(kOwned)}};
+        reused_loan.blocks = {
+            {{}, {1, 2}},
+            {{{Kind::BorrowShared, "x", 10},
+              {Kind::ReleaseShared, "x", 10}}, {3}},
+            {{{Kind::BorrowShared, "x", 10},
+              {Kind::ReleaseShared, "x", 10}}, {3}},
+            {{{Kind::Read, "x"}}, {}}
+        };
+        assert(rejected([&] { verify(reused_loan); }));
+    }
+    {
+        // C18: a MAY-moved owner at a CFG join cannot be read.
+        Graph branch_moved;
+        branch_moved.entry = {{"x", cell(kOwned)}};
+        branch_moved.blocks = {
+            {{}, {1, 2}},
+            {{{Kind::Move, "x"}}, {3}},
+            {{}, {3}},
+            {{{Kind::Read, "x"}}, {}}
+        };
+        assert(rejected([&] { verify(branch_moved); }));
+    }
+    {
+        // Backend extension, NOT shared C19 parity: the LLVM fixed-point
+        // engine accepts a proven read-only cycle, while canonical Rust V0
+        // deliberately rejects all cycles. Model this as capability drift
+        // until a typed cyclic Rust contract is independently validated.
+        Graph proven_read_loop;
+        proven_read_loop.entry = {{"x", cell(kOwned)}};
+        proven_read_loop.blocks = {
+            {{}, {1}},
+            {{{Kind::Read, "x"}}, {1, 2}},
+            {{}, {}}
+        };
+        verify(proven_read_loop);
+    }
+
     return 0;
 }
