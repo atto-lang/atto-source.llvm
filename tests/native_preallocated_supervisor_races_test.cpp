@@ -167,8 +167,66 @@ static void raced_send_stop_must_abort_only_winning_publications() {
     CHECK(send_wins + stop_wins == 400);
 }
 
+// Cross-backend admission/fence contract: the real native mailbox gate
+// serializes DATA issuance with close, and no post-close producer can acquire
+// new authority. Pre-close accepted envelopes must receive an aborted drain
+// receipt before the native supervisor may reclaim the actor generation.
+static void supervisor_parity_close_races_data_and_retires_loans() {
+    for (unsigned trial = 0; trial < 128; ++trial) {
+        const std::uint64_t runtime = 910000 + trial;
+        NativeActorGroup group(runtime, 1);
+        auto actor = group.adopt(runtime, 17, 1, [] {});
+        auto finalizer = group.runtime_finalizer(actor);
+        CHECK(group.mark_ready(actor));
+        Inbox inbox({1, 16}, {2, 32}, {1, 16}, 3);
+        inbox.bind_target(actor);
+        std::atomic<unsigned> started{0};
+        bool admitted = false, denied = false;
+        std::exception_ptr closer_error;
+        std::thread producer([&] {
+            started.fetch_add(1, std::memory_order_release);
+            while (started.load(std::memory_order_acquire) != 2)
+                std::this_thread::yield();
+            try {
+                admitted = inbox.offer_to(actor, Lane::Normal,
+                                         static_cast<int>(trial), 8);
+            } catch (const std::logic_error&) {
+                denied = true;
+            }
+        });
+        std::thread closer([&] {
+            started.fetch_add(1, std::memory_order_release);
+            while (started.load(std::memory_order_acquire) != 2)
+                std::this_thread::yield();
+            // close() may report still outstanding pre-fence loans; the
+            // actual seal must remain sticky even in that case.
+            try { inbox.close(); }
+            catch (const std::logic_error&) {}
+            catch (...) { closer_error = std::current_exception(); }
+        });
+        producer.join();
+        closer.join();
+        if (closer_error) std::rethrow_exception(closer_error);
+        CHECK(admitted != denied);
+        CHECK(inbox.snapshot() == (admitted ? 1u : 0u));
+        bool post_fence_denied = false;
+        try { (void)inbox.offer_to(actor, Lane::Normal, -1, 8); }
+        catch (const std::logic_error&) { post_fence_denied = true; }
+        CHECK(post_fence_denied);
+        group.close();
+        CHECK(finalizer.ready_for_actor_turn_quiescence());
+        CHECK(inbox.retire_queued_after_quiescence(finalizer, actor)
+              == (admitted ? 1u : 0u));
+        CHECK(actor.outstanding_resource_loans() == 0);
+        CHECK(finalizer.ready_for_resource_reclamation());
+        CHECK(finalizer.finalized());
+        actor.get_done().get();
+    }
+}
+
 int main() {
     control_priority_resumable_selective_and_abort();
     active_user_turn_stop_and_control_race();
     raced_send_stop_must_abort_only_winning_publications();
+    supervisor_parity_close_races_data_and_retires_loans();
 }
