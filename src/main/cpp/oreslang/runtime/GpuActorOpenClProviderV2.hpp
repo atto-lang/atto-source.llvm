@@ -17,6 +17,8 @@
 
 namespace oreslang::gpu_actor {
 
+class OpenClActorRecoveryWorkerV1;
+
 /**
  * V2 physical GPU adapter for the already-existing OpenCL provider pipeline.
  *
@@ -37,6 +39,7 @@ namespace oreslang::gpu_actor {
  * This is a draft, not a production-ready actor GPU dispatch path.
  */
 class OpenClActorProviderPortV2 final : public ProviderPortV1 {
+    friend class OpenClActorRecoveryWorkerV1;
 public:
     using Base = ProviderPortV1;
     using Turn = Base::Turn;
@@ -126,6 +129,7 @@ public:
     // Explicit privileged RECOVERY WORKER entrypoints. These may call
     // clFinish and must never be called from the scheduler polling path.
     // Failure to establish physical queue quiescence cannot free buffers.
+private:
     // These recovery entrypoints run ONLY on the supervised worker thread.
     // The native call can block indefinitely in clFinish: never hold mu_
     // while invoking it. Actor scheduler polling must remain responsive.
@@ -225,6 +229,7 @@ public:
             && turn.sequence != 0 && !closed_;
     }
 
+public:
     Observation observe(const EventHandle& event) override {
         std::lock_guard<std::mutex> guard(mu_);
         if (closed_ || !active_ || event != active_ ||
