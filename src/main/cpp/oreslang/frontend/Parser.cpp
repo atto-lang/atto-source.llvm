@@ -3084,18 +3084,18 @@ private:
                 }
                 continue;
             }
-            // Instance void methods may have empty bodies or fall through,
-            // just as in the Java reference frontend. The native entrypoint
-            // also retains its existing implicit-success fallthrough. Non-void
-            // functions continue to require an explicit final return.
-            if (token_.text == "}" && value.returns_void &&
-                    ((!owner.empty()) || (value.name == "main" && value.parameters.empty()))) {
+            // All void functions and methods may fall through; this is
+            // independent of export status, function name, and arity.
+            // A non-void return obligation is never discharged by a local,
+            // expression or nested lambda. Keep source and lowerer aligned.
+            if (token_.text == "}" && value.returns_void) {
                 require("}");
                 return value;
             }
             if (token_.kind == Kind::End || token_.text == "}") {
-                if (return_guards_started) fail("expected 'return'");
-                fail("missing final return");
+                if (return_guards_started)
+                    fail("RETURN_EXPLICIT_REQUIRED: expected final return");
+                fail("RETURN_EXPLICIT_REQUIRED: missing final return");
             }
             // The initial native finally slice admits only guarded returns
             // and a terminal return in the protected region. No potentially
