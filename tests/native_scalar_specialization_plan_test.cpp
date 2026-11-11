@@ -219,7 +219,24 @@ int main() {
                 (void)check_native_i64_specialization_closure(absent, forged);
             }, "missing emitted native AOT specialization node");
         }
-        std::cout << "NATIVE_I64_SPECIALIZATION_PLAN|symbols=1|negative_cases=15\n";
+        // Deliberately malformed compiler-owned AST, flat rather than deep.
+        // Exactly 131072 scanned nodes fit the scan budget, while the
+        // independent 8 MiB specialization byte estimate must reject it.
+        {
+            auto oversized = fixture();
+            auto container = std::make_unique<Expression>();
+            container->kind = Expression::Kind::Integer;
+            container->arguments.reserve(131071);
+            for (int i = 0; i < 131071; ++i) {
+                auto child = std::make_unique<Expression>();
+                child->kind = Expression::Kind::Integer;
+                container->arguments.push_back(std::move(child));
+            }
+            oversized.functions[0].result = std::move(container);
+            must_reject([&] { (void)freeze_native_i64_specializations(oversized); },
+                        "native AOT specialization byte estimate exceeded");
+        }
+        std::cout << "NATIVE_I64_SPECIALIZATION_PLAN|symbols=1|negative_cases=16\n";
     } catch (const std::exception& error) {
         std::cerr << "NATIVE_I64_SPECIALIZATION_PLAN_FAIL: " << error.what() << '\n';
         return 1;
