@@ -65,6 +65,98 @@ int main() {
             if (image.find_direct(native_function_slot("missing", 0)) != nullptr)
                 throw std::runtime_error("unproved direct target exists in frozen dispatch image");
         }
+        // Tamper each frozen ABI dimension independently. Codegen must
+        // never trust a suffix-only or arity-only certificate when
+        // borrow modes, labels, return type or effects have changed.
+        {
+            const auto image = freeze_native_i64_dispatch_image(source);
+            const auto* original = image.find_direct(selector);
+            if (!original)
+                throw std::runtime_error("missing canonical frozen ABI target");
+            const auto reject_mutation = [&](NativeI64DirectTarget forged) {
+                must_reject([&] {
+                    verify_native_i64_direct_target(source.functions[0], forged);
+                }, "native AOT frozen direct dispatch ABI mismatch");
+            };
+            {
+                auto forged = *original;
+                forged.parameter_abi[0].mode = Parameter::Mode::BorrowMut;
+                reject_mutation(std::move(forged));
+            }
+            {
+                auto forged = *original;
+                forged.parameter_abi[0].name = "renamed";
+                reject_mutation(std::move(forged));
+            }
+            {
+                auto forged = *original;
+                forged.parameter_abi[0].scalar_type = ScalarType::Bool;
+                reject_mutation(std::move(forged));
+            }
+            {
+                auto forged = *original;
+                forged.parameter_abi[0].generic_type = "Undeclared";
+                reject_mutation(std::move(forged));
+            }
+            {
+                auto forged = *original;
+                forged.return_type = ScalarType::String;
+                reject_mutation(std::move(forged));
+            }
+            {
+                auto forged = *original;
+                forged.returns_void = true;
+                reject_mutation(std::move(forged));
+            }
+            {
+                auto forged = *original;
+                forged.declared_effects.bits =
+                    static_cast<std::uint32_t>(FunctionEffect::Io);
+                reject_mutation(std::move(forged));
+            }
+            {
+                auto forged = *original;
+                forged.emitted_suffix = "$atto_g1$bool";
+                reject_mutation(std::move(forged));
+            }
+            {
+                auto forged = *original;
+                forged.exported = !forged.exported;
+                reject_mutation(std::move(forged));
+            }
+        }
+        // Unknown effect bits and unresolved return aliases are invalid
+        // even if injected after the source type-checking pass.
+        {
+            auto bad = fixture();
+            bad.functions[0].has_declared_effects = true;
+            bad.functions[0].declared_effects = FunctionEffects::unresolved_call();
+            must_reject([&] { (void)freeze_native_i64_dispatch_image(bad); },
+                        "native AOT frozen direct dispatch ABI mismatch");
+        }
+        {
+            auto bad = fixture();
+            bad.functions[0].pending_return_type_alias = "Unresolved";
+            must_reject([&] { (void)freeze_native_i64_dispatch_image(bad); },
+                        "native AOT frozen direct dispatch ABI mismatch");
+        }
+        // A valid, previously admitted effect/borrow combination remains
+        // representable in the frozen metadata (not a guest semantic proof).
+        {
+            auto typed = fixture();
+            typed.functions[0].parameters[0].mode = Parameter::Mode::Borrow;
+            typed.functions[0].has_declared_effects = true;
+            typed.functions[0].declared_effects = {
+                static_cast<std::uint32_t>(FunctionEffect::StateRead)
+            };
+            const auto image = freeze_native_i64_dispatch_image(typed);
+            const auto* target = image.find_direct(selector);
+            if (!target || target->parameter_abi[0].mode != Parameter::Mode::Borrow ||
+                !target->has_declared_effects ||
+                target->declared_effects.bits != typed.functions[0].declared_effects.bits)
+                throw std::runtime_error("valid borrowed/effect ABI was not frozen");
+            verify_native_i64_direct_target(typed.functions[0], *target);
+        }
         // The concrete tuple remains declaration-ordered even when defaults
         // refer to earlier parameters. No runtime generic expansion occurs.
         {
@@ -278,7 +370,7 @@ int main() {
             must_reject([&] { (void)freeze_native_i64_specializations(oversized); },
                         "native AOT specialization byte estimate exceeded");
         }
-        std::cout << "NATIVE_I64_SPECIALIZATION_PLAN|symbols=1|negative_cases=16\n";
+        std::cout << "NATIVE_I64_SPECIALIZATION_PLAN|symbols=1|negative_cases=27\n";
     } catch (const std::exception& error) {
         std::cerr << "NATIVE_I64_SPECIALIZATION_PLAN_FAIL: " << error.what() << '\n';
         return 1;
