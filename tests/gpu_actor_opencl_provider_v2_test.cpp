@@ -179,7 +179,7 @@ void actual_provider_api_pipeline_mocked() {
     check(p->try_release_buffer(),"prepared program physically released");
     check(api->program_releases==1,"no leaked compiled program");
     check(p->try_release_buffer(),"idempotent after trusted program close");
-    check(p->observe(result.event)==Port::Observation::CompleteOk,"terminal observation stable");
+    check(p->observe(result.event)==Port::Observation::Unknown,"retired provider cannot replay completion");
 }
 
 void actor_bridge_commits_only_after_kernel_download() {
