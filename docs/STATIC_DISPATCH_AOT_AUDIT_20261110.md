@@ -17,9 +17,11 @@ closure contract, not a declaration that virtual/interface dispatch is implement
   The resolver additionally rejects duplicate class identities and duplicate
   method slots in linked/compiler-owned IR, instead of letting last-match or
   first-match lookup select the implementation.
-- `tests/native_class_methods.py` now checks that calls to known class methods
-  are direct symbol calls in the **actual generated LLVM IR**, before linking
-  and executing those guests. Its existing runtime checks still require 42.
+- `tests/native_static_dispatch_aot.rs` provides an independent Rust-only
+  compiler-to-LLVM-IR assertion for known class methods, then links and
+  executes the guest at both O0 and O2 (expected exit code 42).
+  Its Rust predicate tests reject indirect-call and symbol-spoofing examples.
+  Existing legacy class-method regression fixtures remain unchanged.
 
 ## Semantic rules for future implementations
 
@@ -57,7 +59,9 @@ unresolved virtual/interface calls never silently turn into name lookup.
 For genuinely polymorphic calls add override, base reference, witness,
 and adversarial stale-actor-generation fixtures before claiming parity.
 
-Run the existing CTest `native_source_class_methods_release` and
+Run the new CTests `native_static_dispatch_aot` and
+`native_static_dispatch_predicates`, plus the existing
+`native_source_class_methods_release` and
 `native_source_class_methods_sanitizer` with the actual compiler and clang,
 on the **exact PR head**. Record toolchain, compiler/blob/tree IDs, executed
 steps and final native exit codes; a zero-step runner is NOT_EXECUTED. This
