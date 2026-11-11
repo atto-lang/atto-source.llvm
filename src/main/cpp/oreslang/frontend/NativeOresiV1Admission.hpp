@@ -324,20 +324,25 @@ inline Verified admit(const DependencyPin& pin,
     constexpr std::size_t max_envelope_bytes = 16u*1024u*1024u;
     constexpr std::size_t max_package_bytes = 64u*1024u*1024u;
     std::size_t total_bytes = 0;
+    // Snapshot the complete bounded input before hashing/decoding. A const
+    // reference alone does not freeze caller-owned byte vectors.
+    // As with Java byte[].clone(), concurrent unsynchronized mutation DURING
+    // the copy remains a caller-side data race; the driver must own its inputs.
+    std::map<std::string, std::vector<std::uint8_t>> owned_snapshots;
     for (const auto& [name, bytes] : snapshots) {
-        (void)name;
         if (bytes.size()>max_envelope_bytes ||
             bytes.size()>max_package_bytes-total_bytes)
             detail::reject("package interface byte budget exceeded");
         total_bytes+=bytes.size();
+        owned_snapshots.emplace(name, bytes);
     }
     std::set<std::string> seen;
     std::map<std::string, std::vector<Export>> checked_namespaces;
     for(const auto& ns:pin.namespaces){
         if(!detail::ident(ns.name)||!detail::sha_hex(ns.sha256)||!seen.insert(ns.name).second)
             detail::reject("invalid or duplicate .oresi namespace pin");
-        const auto it=snapshots.find(ns.name);
-        if(it==snapshots.end())detail::reject("missing locked .oresi namespace");
+        const auto it=owned_snapshots.find(ns.name);
+        if(it==owned_snapshots.end())detail::reject("missing locked .oresi namespace");
         const auto& bytes=it->second;
         if(detail::sha256(bytes)!=ns.sha256)detail::reject("locked .oresi digest mismatch");
         auto decoded=detail::decode(bytes);
