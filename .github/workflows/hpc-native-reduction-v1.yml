@@ -5,6 +5,7 @@ on:
       - 'tests/fixtures/hpc-reduction-v1/**'
       - 'tests/fixtures/task-v1-negative/**'
       - 'tests/hpc_reduction_native_v1.rs'
+      - 'tests/hpc_i64_differential_v1.rs'
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
       - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
       - 'src/main/cpp/oreslang/runtime/SourceTaskRuntime.c'
@@ -60,10 +61,31 @@ jobs:
           "$RUNNER_TEMP/atto-hpc-reduction-gate" | tee "$RUNNER_TEMP/atto-hpc-reduction-v1.log"
           test "$(grep -c '^ATTO_HPC_I64_GUEST_PASS ' "$RUNNER_TEMP/atto-hpc-reduction-v1.log")" -eq 4
           grep -q '^ATTO_HPC_I64_GATE_PASS .*executed_guest_cases=4 negative_cases=4' "$RUNNER_TEMP/atto-hpc-reduction-v1.log"
+      - name: Rust numerical oracle and ABI observer unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --edition=2021 -D warnings --test tests/hpc_i64_differential_v1.rs -o "$RUNNER_TEMP/atto-hpc-rust-unit"
+          "$RUNNER_TEMP/atto-hpc-rust-unit" | tee "$RUNNER_TEMP/atto-hpc-rust-unit.log"
+          grep -q 'test result: ok. 3 passed; 0 failed' "$RUNNER_TEMP/atto-hpc-rust-unit.log"
+      - name: Execute full-width native i64 differential guests at O0 and O2
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          rustc --edition=2021 -D warnings tests/hpc_i64_differential_v1.rs -o "$RUNNER_TEMP/atto-hpc-i64-differential"
+          "$RUNNER_TEMP/atto-hpc-i64-differential" | tee "$RUNNER_TEMP/atto-hpc-i64-differential.log"
+          test "$(grep -c '^ATTO_HPC_I64_DIFF_VECTOR_PASS ' "$RUNNER_TEMP/atto-hpc-i64-differential.log")" -eq 214
+          test "$(grep -c '^ATTO_HPC_I64_DIFFERENTIAL_PASS ' "$RUNNER_TEMP/atto-hpc-i64-differential.log")" -eq 2
+          grep -q '^ATTO_HPC_I64_DIFFERENTIAL_GATE_PASS .*executions=214 negative_cases=0' "$RUNNER_TEMP/atto-hpc-i64-differential.log"
       - name: Retain source-local output; no parity or SIMD promotion
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: atto-hpc-i64-native-gate
-          path: ${{ runner.temp }}/atto-hpc-reduction-v1.log
+          path: |
+            ${{ runner.temp }}/atto-hpc-reduction-v1.log
+            ${{ runner.temp }}/atto-hpc-rust-unit.log
+            ${{ runner.temp }}/atto-hpc-i64-differential.log
           if-no-files-found: ignore
