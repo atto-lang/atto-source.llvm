@@ -7,6 +7,7 @@ on:
       - src/main/cpp/oreslang/frontend/MethodResolver.cpp
       - src/main/cpp/oreslang/backend/LlvmCodegen.cpp
       - tests/native_static_dispatch_aot.rs
+      - tests/native_static_dispatch_resolver_test.cpp
       - tests/native_class_methods.py
   workflow_dispatch:
 
@@ -54,10 +55,12 @@ jobs:
             -DLLVM_DIR=/usr/lib/llvm-19/lib/cmake/llvm \
             -DORE_CLANG=/usr/bin/clang-19
           cmake --build build-static-dispatch --parallel 2 \
-            --target oreslang-llvmc oreslang-static-dispatch-aot-build
+            --target oreslang-llvmc oreslang-static-dispatch-aot-build \
+            oreslang-native-static-dispatch-resolver-test
           test -x build-static-dispatch/oreslang-llvmc
           test -x build-static-dispatch/oreslang-static-dispatch-aot
           test -x build-static-dispatch/oreslang-static-dispatch-predicates
+          test -x build-static-dispatch/oreslang-native-static-dispatch-resolver-test
           sha256sum build-static-dispatch/oreslang-llvmc
           sha256sum build-static-dispatch/oreslang-static-dispatch-aot
       - name: Run exact-head compiled guest and negative dispatch proof
@@ -65,7 +68,7 @@ jobs:
         run: |
           set -euo pipefail
           ctest --test-dir build-static-dispatch --output-on-failure -V \
-            -R '^(native_static_dispatch_aot|native_static_dispatch_predicates|native_source_class_methods_release|native_source_class_methods_sanitizer)$'
+            -R '^(native_static_dispatch_aot|native_static_dispatch_predicates|native_static_dispatch_resolver_ir_integrity|native_source_class_methods_release|native_source_class_methods_sanitizer)$'
           echo "ATTO_DISPATCH_GUEST_PROOF=EXECUTED" >> "$GITHUB_STEP_SUMMARY"
           echo "ATTO_DISPATCH_GUEST_PROOF_HEAD=$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
           echo "ATTO_DISPATCH_COMPILER_SHA256=$(sha256sum build-static-dispatch/oreslang-llvmc | cut -d ' ' -f 1)" >> "$GITHUB_STEP_SUMMARY"
