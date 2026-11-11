@@ -34,6 +34,9 @@ class BoundedActorPort final {
         std::size_t bytes;
         std::unique_ptr<T> payload;
         std::uint64_t sequence;
+        // Compiler/generated transport discriminant. Zero means an untagged
+        // legacy frame and must never match a typed selective receive.
+        std::uint32_t match_tag;
     };
     struct State {
         explicit State(std::size_t frames, std::size_t bytes,
@@ -115,7 +118,9 @@ public:
     BoundedActorPort(const BoundedActorPort&) = delete;
     BoundedActorPort& operator=(const BoundedActorPort&) = delete;
 
-    bool offer(T&& payload, std::size_t bytes) {
+    // Nonzero tags are trusted runtime metadata, never guest-controlled
+    // authority or an RTTI/reflection lookup. Legacy untagged traffic is 0.
+    bool offer(T&& payload, std::size_t bytes, std::uint32_t match_tag = 0) {
         if (!bytes) throw std::invalid_argument("actor port frame charge must be positive");
         const auto state = state_;
         {
@@ -159,7 +164,7 @@ public:
         } reservation{state, bytes};
 
         auto owned = std::make_unique<T>(std::move(payload));
-        Envelope frame{0, bytes, std::move(owned), 0};
+        Envelope frame{0, bytes, std::move(owned), 0, match_tag};
         {
             std::lock_guard<std::mutex> guard(state->mutex);
             // A concurrently running close() can seal new admissions while
@@ -196,7 +201,8 @@ public:
      * This transport helper is NOT proof that the pointer's target is
      * shareable; caller must validate actor generation/handle rights first.
      */
-    bool offer_owned(std::unique_ptr<T>& payload, std::size_t bytes) {
+    bool offer_owned(std::unique_ptr<T>& payload, std::size_t bytes,
+                     std::uint32_t match_tag = 0) {
         if (!payload) throw std::invalid_argument("null owned actor payload");
         if (!bytes) throw std::invalid_argument("actor port frame charge must be positive");
         const auto state = state_;
@@ -215,7 +221,7 @@ public:
         ++state->pending_prepares;
 
         try {
-            Envelope frame{state->next_id, bytes, nullptr, 0};
+            Envelope frame{state->next_id, bytes, nullptr, 0, match_tag};
             if (state->ledger) {
                 state->ledger->publish([&](std::uint64_t sequence) {
                     frame.sequence = sequence;
@@ -249,6 +255,65 @@ public:
         auto frame = std::move(state_->queue.front());
         state_->queue.pop_front();
         return std::optional<Delivery>(Delivery(state_, std::move(frame)));
+    }
+
+    // Stage-1 selective receive: inspect AOT-generated immutable message
+    // discriminants without invoking user code or executing a payload guard
+    // while holding the mailbox lock. This is a **host runtime primitive**,
+    // not a guest-language parser/typed-pattern implementation.
+    //
+    // The continuation is tied to this physical port. An incomplete scan can
+    // resume on a subsequent authorized actor turn without rescanning the
+    // already-tested prefix. Publication is append-only, so no lower sequence
+    // can appear after that cursor; the matcher tag MUST stay identical.
+    //
+    // A matched delivery retains all charged credits until physical ACK.
+    // Unmatched messages never move, destruct, lose bytes, or change order.
+    enum class SelectiveStatus { Matched, Continue, NoMatch };
+    struct SelectiveCursor {
+        std::uint64_t through_sequence = 0;
+        std::uint32_t tag = 0;
+        std::weak_ptr<State> owner;
+    };
+    struct SelectiveResult {
+        SelectiveStatus status;
+        std::optional<Delivery> delivery;
+        std::size_t inspected;
+        SelectiveCursor cursor;
+    };
+
+    SelectiveResult try_receive_tagged(
+            std::uint32_t tag, std::size_t scan_budget,
+            const SelectiveCursor& cursor = {}) {
+        if (tag == 0 || scan_budget == 0)
+            throw std::invalid_argument("selective receive needs typed tag and positive scan budget");
+        if (cursor.through_sequence != 0 &&
+                (cursor.tag != tag || cursor.owner.lock() != state_))
+            throw std::invalid_argument("stale, foreign or mismatched selective scan cursor");
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        std::size_t inspected = 0;
+        std::uint64_t last = cursor.through_sequence;
+        for (auto it = state_->queue.begin(); it != state_->queue.end(); ++it) {
+            if (it->sequence <= cursor.through_sequence) continue;
+            if (inspected == scan_budget) {
+                return {SelectiveStatus::Continue, std::nullopt, inspected,
+                        SelectiveCursor{last, tag, state_}};
+            }
+            ++inspected;
+            last = it->sequence;
+            if (it->match_tag != tag) continue;
+
+            // Only move the envelope's owning unique_ptr, never the user T,
+            // and erase under the port lock without running payload code.
+            auto frame = std::move(*it);
+            state_->queue.erase(it);
+            return {SelectiveStatus::Matched,
+                    std::optional<Delivery>(Delivery(state_, std::move(frame))),
+                    inspected, {}};
+        }
+        // A new enqueue after this observation must start a NEW scan.
+        // Retaining an exhausted cursor could miss future messages.
+        return {SelectiveStatus::NoMatch, std::nullopt, inspected, {}};
     }
 
     std::size_t used_frames() const {
