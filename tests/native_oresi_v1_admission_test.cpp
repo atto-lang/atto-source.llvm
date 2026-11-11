@@ -61,6 +61,9 @@ int main() {
         "SHA256 abc known-answer");
 
     const auto math=fixture("math","algebra");
+    require(sha256(math)==
+        "8db5681e1e41c389e2358f9e0cd5c46e78b5b33519ed4769056268a240847f3d",
+        "Java .oresi v1 frozen wire digest drift");
     auto pin=lock("math",math);
     auto guest=admit(pin,{{"math",math}});
     require(guest.alias=="math","alias mismatch");
@@ -123,6 +126,9 @@ int main() {
     auto bad_instance=pin;bad_instance.package_instance_id="../escaped";
     fails("invalid locked",[&]{(void)admit(bad_instance,{{"math",math}});});
 
+    auto legacy_pkg=pin;legacy_pkg.package_instance_id="foo@sha:"+std::string(64,'1');
+    require(admit(legacy_pkg,{{"math",math}}).package_instance_id==
+            legacy_pkg.package_instance_id,"sha-colon package ID rejected");
     auto second_pkg=pin;second_pkg.package_instance_id="acme/math@1#"+std::string(64,'b');
     const auto other=admit(second_pkg,{{"math",math}});
     require(other.package_instance_id!=guest.package_instance_id,
