@@ -1150,11 +1150,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // The existing typed native frontend admits concrete int generic
     // arguments only. Freeze a canonical, bounded one-per-declaration
     // specialization map before emitting any function bodies.
-    const auto frozen_i64_specializations = freeze_native_i64_specializations(source);
-    // freeze_native_i64_specializations itself checks the bounded concrete
-    // dependency closure before LLVM declarations are emitted; do not scan
-    // the full AST a second time here, or accept source-supplied proof flags.
+    const auto frozen_i64_dispatch = freeze_native_i64_dispatch_image(source);
+    // The frozen image carries exact compiler-owned selectors, concrete type
+    // tuples, bounded closure evidence and symbol suffixes. Do not replace
+    // it with JIT profile data or a runtime name registry.
     std::unordered_set<std::string> emitted_function_symbols;
+    std::size_t emitted_concrete_specializations = 0;
     for (const auto& fn : source.functions) {
         const std::string base_symbol = cortex_m_target && fn.name == "main"
             ? "oreslang_cortexm_bootstrap"
@@ -1165,12 +1166,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         // internal ABI parameter list and lookup count unchanged.
         const std::size_t source_arity = native_source_value_arity(
             fn.parameters.size(), !fn.method_owner.empty());
-        const auto specialization = frozen_i64_specializations.find(
+        const auto* specialization = frozen_i64_dispatch.find_direct(
             native_function_slot(fn.name, fn.parameters.size()));
+        if (specialization != nullptr &&
+            (specialization->lowered_arity != fn.parameters.size() ||
+             specialization->concrete_types.size() != fn.generic_parameters.size()))
+            throw std::runtime_error("native AOT frozen direct dispatch ABI mismatch");
         const std::string symbol = (family_sizes.at(fn.name) > 1
             ? native_function_slot(base_symbol, source_arity)
-            : base_symbol) + (specialization == frozen_i64_specializations.end()
-                ? std::string{} : specialization->second);
+            : base_symbol) + (specialization == nullptr
+                ? std::string{} : specialization->emitted_suffix);
         if (!emitted_function_symbols.insert(symbol).second)
             throw std::runtime_error("native AOT emitted function symbol collision");
         std::vector<llvm::Type*> argument_types;
@@ -1195,10 +1200,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             signature,
             (fn.native_internal || fn.async_source_i64 ||
              !fn.c_export_u32_symbol.empty() ||
-             specialization != frozen_i64_specializations.end())
+             specialization != nullptr)
                 ? llvm::Function::InternalLinkage
                 : llvm::Function::ExternalLinkage,
             symbol, module);
+        // LLVM may silently uniquify a symbol after a collision with a
+        // runtime/import declaration. That would sever the frozen dispatch
+        // target even when our source-function symbol set is collision-free.
+        if (declaration->getName().str() != symbol)
+            throw std::runtime_error("native AOT direct dispatch linker symbol collision");
+        if (specialization != nullptr) ++emitted_concrete_specializations;
         // Forward references must already expose parameter labels.
         std::size_t label_index = 0;
         for (auto& formal : declaration->args()) {
@@ -1212,6 +1223,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   declaration).second)
             throw std::runtime_error("native AOT duplicate declaration selector");
     }
+    if (emitted_concrete_specializations != frozen_i64_dispatch.direct_targets.size())
+        throw std::runtime_error("native AOT frozen direct dispatch image incomplete at emission");
     for (const auto& fn : source.functions) {
         llvm::Function* function = declarations.at(native_function_slot(fn.name, fn.parameters.size()));
         llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", function);
