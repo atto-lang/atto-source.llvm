@@ -28,6 +28,27 @@ int main() {
                 {ev("MoneyDeposited(60)"),ev("MoneyDeposited(40)")},b("Ok(balance=100)"));
             assert(!saved.duplicate&&saved.first_version==1&&saved.last_version==2
                    &&saved.reply==b("Ok(balance=100)"));
+            // Compare persisted SQLite bytes, not an in-memory re-encoding:
+            // the exact wire is shared by Java, LLVM, Wasm, Forge and .NET.
+            sqlite3* audit=nullptr;
+            if(sqlite3_open(db.c_str(),&audit)!=SQLITE_OK)
+                throw std::runtime_error("cannot inspect committed command batch");
+            std::string persisted;
+            const int read_status=sqlite3_exec(audit,
+                "SELECT hex(event_batch) FROM command_inbox "
+                "WHERE tenant='tenant-a' AND actor='bank-42' "
+                "AND slot='main' AND op='op-42'",
+                [](void* output,int columns,char** fields,char**)->int {
+                    if(columns!=1 || !fields || !fields[0]) return 1;
+                    *static_cast<std::string*>(output)=fields[0];
+                    return 0;
+                },&persisted,nullptr);
+            sqlite3_close(audit);
+            if(read_status!=SQLITE_OK)
+                throw std::runtime_error("cannot read committed command batch");
+            assert(persisted==
+                "0000000200000001000000124D6F6E65794465706F736974656428363029"
+                "00000001000000124D6F6E65794465706F736974656428343029");
             auto recovered=store.load_fenced(account,1);
             assert(recovered.version==2 && recovered.events.size()==2);
             auto same=store.commit_command(account,1,"op-42",0,b("Deposit(100)"),
