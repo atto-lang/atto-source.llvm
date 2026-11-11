@@ -170,6 +170,118 @@ int main() {
                 target->concrete_types != std::vector<std::string>({"int", "int"}))
                 throw std::runtime_error("dependent concrete i64 tuple was not frozen in order");
         }
+        // The actual LLVM symbol plan must include module ownership,
+        // overload selector and frozen concrete tuple, without trusting a
+        // caller-supplied host linkage name.
+        {
+            auto left = fixture();
+            left.module = "payments";
+            const auto frozen = freeze_native_i64_dispatch_image(left);
+            const auto symbol = plan_native_aot_function_symbol(
+                left, left.functions[0], frozen, 1, false, false);
+            if (symbol != "payments.identity$atto_g1$int")
+                throw std::runtime_error("qualified native generic ABI symbol mismatch");
+            auto right = fixture();
+            right.module = "inventory";
+            const auto other = freeze_native_i64_dispatch_image(right);
+            if (symbol == plan_native_aot_function_symbol(
+                    right, right.functions[0], other, 1, false, false))
+                throw std::runtime_error("two linked module identities share an ABI symbol");
+        }
+        {
+            auto program = fixture();
+            program.module = "payments";
+            Function overloaded = generic("identity");
+            Parameter second;
+            second.name = "scale";
+            overloaded.parameters.push_back(std::move(second));
+            program.functions.push_back(std::move(overloaded));
+            const auto image = freeze_native_i64_dispatch_image(program);
+            const auto one = plan_native_aot_function_symbol(
+                program, program.functions[0], image, 2, false, false);
+            const auto two = plan_native_aot_function_symbol(
+                program, program.functions[1], image, 2, false, false);
+            if (one != "payments.identity$arity1$atto_g1$int" ||
+                two != "payments.identity$arity2$atto_g1$int" || one == two)
+                throw std::runtime_error("overloaded native direct-call symbol collision");
+        }
+        // Do not reserve the AttoLang entrypoint itself on the browser Wasm
+        // target. Native and Cortex-M have their own approved entry rewrites.
+        {
+            Program entry;
+            Function main_fn;
+            main_fn.name = "main";
+            entry.functions.push_back(std::move(main_fn));
+            const auto image = freeze_native_i64_dispatch_image(entry);
+            const auto& fn = entry.functions[0];
+            if (plan_native_aot_function_symbol(entry, fn, image, 1, false, false) != "main" ||
+                plan_native_aot_function_symbol(entry, fn, image, 1, true, false) !=
+                    "__oreslang_guest_main" ||
+                plan_native_aot_function_symbol(entry, fn, image, 1, false, true) !=
+                    "oreslang_cortexm_bootstrap")
+                throw std::runtime_error("native/wasm/cortex entry symbol rewriting drift");
+            entry.module = "payments";
+            if (plan_native_aot_function_symbol(entry, fn, image, 1, true, false) != "payments.main")
+                throw std::runtime_error("module-qualified main ABI lost module identity");
+        }
+        // Runtime/host linker names must be rejected even if an earlier
+        // frontend admitted a forged compiler-owned nongeneric declaration.
+        for (const std::string name : {
+                 "abort", "write", "ores_record_get", "ores_string_print",
+                 "oreslang_source_actor_send", "__oreslang_guest_main", "ores_guest_entry"}) {
+            Program program;
+            Function fn;
+            fn.name = name;
+            program.functions.push_back(std::move(fn));
+            const auto image = freeze_native_i64_dispatch_image(program);
+            must_reject([&] {
+                (void)plan_native_aot_function_symbol(
+                    program, program.functions[0], image, 1, false, false);
+            }, "reserved native AOT runtime symbol collision");
+        }
+        // A module-qualified user method with the same unqualified spelling
+        // has an independent linker identity and must not be rejected.
+        {
+            Program program;
+            program.module = "payments";
+            Function fn;
+            fn.name = "write";
+            program.functions.push_back(std::move(fn));
+            const auto image = freeze_native_i64_dispatch_image(program);
+            if (plan_native_aot_function_symbol(
+                    program, program.functions[0], image, 1, false, false) !=
+                    "payments.write")
+                throw std::runtime_error("qualified user symbol shadowed unrelated host ABI");
+        }
+        {
+            Program program;
+            program.module = "llvm";
+            Function fn;
+            fn.name = "trap";
+            program.functions.push_back(std::move(fn));
+            const auto image = freeze_native_i64_dispatch_image(program);
+            must_reject([&] {
+                (void)plan_native_aot_function_symbol(
+                    program, program.functions[0], image, 1, false, false);
+            }, "reserved LLVM intrinsic symbol collision");
+        }
+        {
+            auto program = fixture();
+            program.module = std::string("tenant\\0spoof", 12);
+            const auto image = freeze_native_i64_dispatch_image(program);
+            must_reject([&] {
+                (void)plan_native_aot_function_symbol(
+                    program, program.functions[0], image, 1, false, false);
+            }, "invalid native AOT emitted symbol identity");
+        }
+        {
+            auto program = fixture();
+            const auto image = freeze_native_i64_dispatch_image(program);
+            must_reject([&] {
+                (void)plan_native_aot_function_symbol(
+                    program, program.functions[0], image, 0, false, false);
+            }, "native AOT missing compiler function family");
+        }
         // The same selected source function/arity is used by all call sites;
         // the producer does not manufacture one method body per call site.
         {
@@ -393,7 +505,7 @@ int main() {
             must_reject([&] { (void)freeze_native_i64_specializations(oversized); },
                         "native AOT specialization byte estimate exceeded");
         }
-        std::cout << "NATIVE_I64_SPECIALIZATION_PLAN|symbols=1|negative_cases=27\n";
+        std::cout << "NATIVE_I64_SPECIALIZATION_PLAN|symbols=1|negative_cases=37\n";
     } catch (const std::exception& error) {
         std::cerr << "NATIVE_I64_SPECIALIZATION_PLAN_FAIL: " << error.what() << '\n';
         return 1;
