@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <atomic>
@@ -368,7 +369,14 @@ static void physically_checked_out_receipt_blocks_finalization_after_stop() {
     inbox.bind_target(actor);
     CHECK(inbox.offer_to(actor, Lane::Normal, 81, 8));
     CHECK(actor.outstanding_resource_loans() == 1);
-    auto checked_out = inbox.try_receive();
+    bool raw_denied = false;
+    try { (void)inbox.try_receive(); }
+    catch (const std::logic_error&) { raw_denied = true; }
+    CHECK(raw_denied);
+    std::optional<Inbox::Delivery> checked_out;
+    CHECK(inbox.dispatch_next(group, actor, [&](Inbox::Delivery& receipt) {
+        checked_out.emplace(std::move(receipt));
+    }) == Inbox::Dispatch::User);
     CHECK(checked_out && checked_out->sequence() == 1);
     CHECK(inbox.used_frames(Lane::Normal) == 1);
     CHECK(!group.finalized(actor)); // handler exited, receipt has not
