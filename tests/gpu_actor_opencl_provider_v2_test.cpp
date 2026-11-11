@@ -157,6 +157,22 @@ void numerical_oracle(const Inputs& in,const std::vector<unsigned char>& out) {
             check(y==expected,"independent fake-kernel f32 oracle");
         }
 }
+void event_info_query_failure_never_forges_terminal_completion() {
+    using S=oreslang::opencl::SystemApi;
+    check(S::classify_event_query(0,0)==EventStatus::Complete,
+          "successful CL_COMPLETE is terminal");
+    check(S::classify_event_query(0,2)==EventStatus::Pending,
+          "running native event is pending");
+    check(S::classify_event_query(0,-5)==EventStatus::Failed,
+          "native command error is terminal");
+    check(S::classify_event_query(-2,0)==EventStatus::DeviceLost,
+          "CL_DEVICE_NOT_AVAILABLE quarantines device loss");
+    check(S::classify_event_query(-58,0)==EventStatus::Pending,
+          "CL_INVALID_EVENT status query cannot release GPU buffers");
+    check(S::classify_event_query(-30,-5)==EventStatus::Pending,
+          "failed query cannot trust command execution status");
+}
+
 void actual_provider_api_pipeline_mocked() {
     Inputs in;
     auto api=std::make_shared<FakeOpenCl>();
@@ -282,6 +298,7 @@ void ambiguous_enqueue_is_retained_not_falsely_aborted() {
 
 int main() {
     actual_provider_api_pipeline_mocked();
+    event_info_query_failure_never_forges_terminal_completion();
     actor_bridge_commits_only_after_kernel_download();
     gpu_loss_requires_native_quiescence_before_cancel_retirement();
     negative_authority_and_missing_gpu_fail_closed();
