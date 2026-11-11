@@ -1190,7 +1190,21 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         if (specialization != nullptr) {
             // Compare the LLVM physical ABI to the independently frozen
             // typed parameter modes before binding the direct-call symbol.
-            if (signature->getNumParams() < specialization->parameter_abi.size() ||
+            // Hidden collection-region pointers and owned-return slots are
+            // compiler-generated ABI parameters. Demand the *exact* count:
+            // matching only explicit source arguments would silently allow
+            // a dropped or forged trailing ownership parameter.
+            std::size_t frozen_hidden_regions = 0;
+            for (const auto& param : specialization->parameter_abi)
+                if (!param.class_name.empty() && class_has_arrays.at(param.class_name))
+                    ++frozen_hidden_regions;
+            const std::size_t frozen_result_slots =
+                class_owns_arrays(specialization->return_class) ? 2 : 0;
+            if (hidden.size() != frozen_hidden_regions ||
+                (owning ? 2u : 0u) != frozen_result_slots ||
+                signature->getNumParams() !=
+                    specialization->parameter_abi.size() +
+                    frozen_hidden_regions + frozen_result_slots ||
                 signature->getReturnType()->isVoidTy() != specialization->returns_void ||
                 (!specialization->returns_void &&
                  signature->getReturnType() != i64))
