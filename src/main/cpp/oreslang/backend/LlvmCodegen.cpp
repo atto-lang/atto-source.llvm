@@ -73,6 +73,10 @@ struct RegionMoveLowering {
     const NativeClassLayouts* layouts = nullptr;
     const Program* sum_program = nullptr;
     llvm::FunctionCallee sum_check;
+    // Compiler-frozen scalar direct targets, never a runtime selector table.
+    const NativeI64DispatchImage* frozen_scalar_dispatch = nullptr;
+    const std::unordered_map<std::string, llvm::Function*>* frozen_scalar_callees = nullptr;
+    const std::unordered_map<std::string, std::string>* frozen_scalar_symbols = nullptr;
 };
 
 llvm::Value* receiver_array_region(const Expression& receiver, const RegionMoveLowering* moves) {
@@ -627,7 +631,32 @@ llvm::Value* lower(const Expression& expr,
             return value;
         }
         case Expression::Kind::Call: {
-            llvm::Function* callee = functions.at(native_function_slot(expr.name, expr.arguments.size()));
+            const std::string call_selector = native_function_slot(
+                expr.name, expr.arguments.size());
+            llvm::Function* callee = functions.at(call_selector);
+            if (moves && moves->frozen_scalar_dispatch) {
+                const auto* witness = moves->frozen_scalar_dispatch->find_direct(call_selector);
+                if (witness) {
+                    if (!moves->frozen_scalar_callees || !moves->frozen_scalar_symbols)
+                        throw std::runtime_error("native AOT static call lacks frozen target ledger");
+                    const auto frozen_callee = moves->frozen_scalar_callees->find(call_selector);
+                    const auto frozen_symbol = moves->frozen_scalar_symbols->find(call_selector);
+                    if (frozen_callee == moves->frozen_scalar_callees->end() ||
+                        frozen_symbol == moves->frozen_scalar_symbols->end() ||
+                        frozen_callee->second != callee)
+                        throw std::runtime_error("native AOT static call callee identity mismatch");
+                    std::vector<std::string> formal_labels;
+                    formal_labels.reserve(witness->parameter_abi.size());
+                    if (callee->arg_size() < witness->parameter_abi.size())
+                        throw std::runtime_error("native AOT static call formal ABI mismatch");
+                    for (std::size_t i = 0; i < witness->parameter_abi.size(); ++i)
+                        formal_labels.push_back(callee->getArg(i)->getName().str());
+                    verify_native_i64_scalar_call_witness(
+                        *witness, call_selector, frozen_symbol->second,
+                        callee->getName().str(), expr.arguments.size(), formal_labels,
+                        callee->getLinkage() == llvm::GlobalValue::InternalLinkage);
+                }
+            }
             const std::vector<std::size_t> no_hidden;
             const auto& hidden = moves && moves->class_array_parameters
                 ? moves->class_array_parameters->at(native_function_slot(expr.name, expr.arguments.size())) : no_hidden;
@@ -1155,6 +1184,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // tuples, bounded closure evidence and symbol suffixes. Do not replace
     // it with JIT profile data or a runtime name registry.
     std::unordered_set<std::string> emitted_function_symbols;
+    std::unordered_map<std::string, llvm::Function*> frozen_scalar_callees;
+    std::unordered_map<std::string, std::string> frozen_scalar_symbols;
     std::size_t emitted_concrete_specializations = 0;
     for (const auto& fn : source.functions) {
         const auto* specialization = frozen_i64_dispatch.find_direct(
@@ -1231,7 +1262,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         // target even when our source-function symbol set is collision-free.
         if (declaration->getName().str() != symbol)
             throw std::runtime_error("native AOT direct dispatch linker symbol collision");
-        if (specialization != nullptr) ++emitted_concrete_specializations;
+        if (specialization != nullptr) {
+            const auto selector = native_function_slot(fn.name, fn.parameters.size());
+            if (!frozen_scalar_callees.emplace(selector, declaration).second ||
+                !frozen_scalar_symbols.emplace(selector, symbol).second)
+                throw std::runtime_error("duplicate native AOT frozen callee ledger identity");
+            ++emitted_concrete_specializations;
+        }
         // Forward references must already expose parameter labels.
         std::size_t label_index = 0;
         for (auto& formal : declaration->args()) {
@@ -1463,6 +1500,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         region_moves.layouts = &layouts;
         region_moves.sum_program = &source;
         region_moves.sum_check = sum_check;
+        region_moves.frozen_scalar_dispatch = &frozen_i64_dispatch;
+        region_moves.frozen_scalar_callees = &frozen_scalar_callees;
+        region_moves.frozen_scalar_symbols = &frozen_scalar_symbols;
 
         std::unordered_map<std::string, llvm::Value*> source_task_handles;
         for (const auto& task : fn.source_tasks) {
