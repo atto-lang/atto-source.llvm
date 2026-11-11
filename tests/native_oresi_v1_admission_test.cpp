@@ -148,6 +148,12 @@ int main() {
     require(two_verified.namespace_count()==2,"multi-namespace pin mismatch");
     fails("invalid locked",[&]{(void)admit(two,{{"math",math}});});
 
+    // Reject excessive interface bytes before expensive SHA256 or parsing.
+    std::vector<std::uint8_t> giant(16u*1024u*1024u+1u,0);
+    fails("package interface byte budget",[&]{
+        (void)admit(pin,{{"math",giant}});
+    });
+
     // Deliberately wrong spelling: Java's package alias grammar is lower-case.
     auto mixed_alias=pin;mixed_alias.alias="mathA";
     fails("invalid locked",[&]{(void)admit(mixed_alias,{{"math",math}});});
