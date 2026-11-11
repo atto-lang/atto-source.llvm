@@ -120,8 +120,13 @@ inline NativeI64SpecializationClosureEvidence check_native_i64_specialization_cl
             throw std::runtime_error("duplicate native AOT specialization graph node");
     };
 
-    for (const auto& fn : program.functions) scan(fn, true);
-    for (const auto& actor : program.actors) scan(actor.on_message, false);
+    // A closed *generic* specialization graph must not consume its
+    // computational budget traversing unrelated functions or actor handlers.
+    // Nongeneric call sites are validated by the normal typed call checker.
+    for (const auto& fn : program.functions) {
+        if (selected.find(native_function_slot(fn.name, fn.parameters.size())) != selected.end())
+            scan(fn, true);
+    }
 
     // Traverse each emitted generic as a root. Recursive calls and diamonds
     // terminate because every concrete specialization is visited once.
@@ -164,12 +169,77 @@ inline NativeI64SpecializationClosureEvidence check_native_i64_specialization_cl
 // Frozen compiler-owned direct-call records. The tuple is concrete and
 // ordered; each record is derived from the admitted Program, never from a
 // source-authored manifest or a runtime symbol registry.
+// Explicit ABI snapshot; label and parameter loan mode are part of the
+// statically checked call contract, even though scalar int/bool values lower
+// into the same physical LLVM i64 register.
+struct NativeI64ParameterAbi {
+    std::string name;
+    ScalarType scalar_type;
+    Parameter::Mode mode;
+    std::string generic_type;
+    std::string class_name;
+    std::string sum_type;
+};
+
 struct NativeI64DirectTarget {
     std::string selector;
     std::string emitted_suffix;
     std::vector<std::string> concrete_types;
     std::size_t lowered_arity;
+    std::vector<NativeI64ParameterAbi> parameter_abi;
+    ScalarType return_type;
+    bool returns_void;
+    std::string return_class;
+    std::string return_sum;
+    bool has_declared_effects;
+    FunctionEffects declared_effects;
+    bool exported;
+    bool native_internal;
 };
+
+// The bridge must not silently change borrow modes, argument labels,
+// concrete generic identities, effects, visibility or return ABI between the
+// frozen typed IR and the LLVM declarations that consume it.
+inline void verify_native_i64_direct_target(
+        const Function& fn, const NativeI64DirectTarget& target) {
+    if (target.selector != native_function_slot(fn.name, fn.parameters.size()) ||
+        target.lowered_arity != fn.parameters.size() ||
+        target.parameter_abi.size() != fn.parameters.size() ||
+        target.concrete_types.size() != fn.generic_parameters.size() ||
+        fn.generic_parameters.empty() ||
+        !fn.pending_return_type_alias.empty() ||
+        !fn.declared_effects.valid() || !target.declared_effects.valid())
+        throw std::runtime_error("native AOT frozen direct dispatch ABI mismatch");
+    std::string expected_suffix = "$atto_g" + std::to_string(fn.generic_parameters.size());
+    for (const auto& type : target.concrete_types) {
+        if (type != "int")
+            throw std::runtime_error("native AOT frozen direct dispatch ABI mismatch");
+        expected_suffix += "$int";
+    }
+    if (target.emitted_suffix != expected_suffix ||
+        target.return_type != fn.return_type ||
+        target.returns_void != fn.returns_void ||
+        target.return_class != fn.return_class ||
+        target.return_sum != fn.return_sum ||
+        target.has_declared_effects != fn.has_declared_effects ||
+        target.declared_effects.bits != fn.declared_effects.bits ||
+        target.exported != fn.exported ||
+        target.native_internal != fn.native_internal ||
+        !fn.c_export_u32_symbol.empty())
+        throw std::runtime_error("native AOT frozen direct dispatch ABI mismatch");
+    for (std::size_t i = 0; i < fn.parameters.size(); ++i) {
+        const auto& param = fn.parameters[i];
+        const auto& frozen = target.parameter_abi[i];
+        if (!param.pending_type_alias.empty() ||
+            frozen.name != param.name ||
+            frozen.scalar_type != param.scalar_type ||
+            frozen.mode != param.mode ||
+            frozen.generic_type != param.generic_type ||
+            frozen.class_name != param.class_name ||
+            frozen.sum_type != param.sum_type)
+            throw std::runtime_error("native AOT frozen direct dispatch ABI mismatch");
+    }
+}
 
 struct NativeI64DispatchImage {
     NativeI64SpecializationClosureEvidence closure;
@@ -269,9 +339,20 @@ inline NativeI64DispatchImage freeze_native_i64_dispatch_image(const Program& pr
         const auto selection = selected.find(selector);
         if (selection == selected.end()) continue;
         std::vector<std::string> types(fn.generic_parameters.size(), "int");
+        std::vector<NativeI64ParameterAbi> parameter_abi;
+        parameter_abi.reserve(fn.parameters.size());
+        for (const auto& param : fn.parameters)
+            parameter_abi.push_back({
+                param.name, param.scalar_type, param.mode, param.generic_type,
+                param.class_name, param.sum_type
+            });
         NativeI64DirectTarget target{
-            selector, selection->second, std::move(types), fn.parameters.size()
+            selector, selection->second, std::move(types), fn.parameters.size(),
+            std::move(parameter_abi), fn.return_type, fn.returns_void,
+            fn.return_class, fn.return_sum, fn.has_declared_effects,
+            fn.declared_effects, fn.exported, fn.native_internal
         };
+        verify_native_i64_direct_target(fn, target);
         if (!image.direct_targets.emplace(selector, std::move(target)).second)
             throw std::runtime_error("duplicate frozen native AOT dispatch target");
     }
