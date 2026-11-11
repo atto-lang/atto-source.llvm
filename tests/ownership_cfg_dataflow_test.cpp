@@ -349,6 +349,14 @@ int main() {
     bad_entry.blocks = {{{op(Kind::ReleaseShared, "x"), op(Kind::Read, "x")}, {}}};
     verify(bad_entry);
 
+    // Even a syntactically valid disconnected block must not escape the
+    // ownership proof and become reachable after a compiler rewrite.
+    Graph disconnected_valid;
+    disconnected_valid.entry = {{"x", cell(kOwned)}};
+    disconnected_valid.blocks = {{{op(Kind::Read, "x")}, {}},
+                                 {{op(Kind::Move, "x")}, {}}};
+    assert(rejected([&] { verify(disconnected_valid); }));
+
     // Verify every CFG successor, not only edges reached by the worklist.
     // An invalid edge in a currently unreachable block must not survive
     // into native emission or become reachable after a later transform.
