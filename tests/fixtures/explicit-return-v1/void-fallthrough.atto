@@ -1,0 +1,7 @@
+// Void function: the closing brace is a valid implicit void exit.
+fnc trace(): void {
+}
+pub fnc main(): int {
+  trace();
+  return 0;
+}
