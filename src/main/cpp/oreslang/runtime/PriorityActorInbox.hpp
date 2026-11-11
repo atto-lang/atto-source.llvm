@@ -155,6 +155,15 @@ public:
      */
     std::optional<Delivery> try_receive() {
         std::lock_guard<std::mutex> guard(service_mutex_);
+        if (bound_target_)
+            throw std::logic_error("bound actor mailbox dequeue requires authorized actor turn");
+        return try_receive_locked();
+    }
+
+private:
+    // Caller must hold service_mutex_ and have either unbound transport
+    // authority or an actor/retirement turn authorized by NativeActorGroup.
+    std::optional<Delivery> try_receive_locked() {
         for (std::size_t checked = 0; checked < service_order_.size(); ++checked) {
             const auto lane = service_order_[next_slot_];
             next_slot_ = (next_slot_ + 1) % service_order_.size();
@@ -165,6 +174,7 @@ public:
         return std::nullopt;
     }
 
+public:
     // Tagged stage-1 selective receive is lane-LOCAL. Existing weighted
     // inter-lane priority scheduling still governs ordinary try_receive(),
     // so a full Erlang single-global-mailbox selective receive is NOT
@@ -234,7 +244,12 @@ public:
         }
         bool consumed = false;
         const auto outcome = group.run_user_turn(actor, [&] {
-            auto next = try_receive();
+            auto next = [&]() {
+                std::lock_guard<std::mutex> guard(service_mutex_);
+                if (!bound_target_ || !same_target(actor))
+                    throw std::logic_error("actor changed during user mailbox turn");
+                return try_receive_locked();
+            }();
             if (!next) return;
             consumed = true;
             process(*next);
@@ -379,7 +394,12 @@ private:
             throw std::logic_error(
                 "actor mailbox terminal retirement requires producer quiescence");
         std::size_t count = 0;
-        while (auto next = try_receive()) {
+        for (;;) {
+            auto next = [&]() {
+                std::lock_guard<std::mutex> guard(service_mutex_);
+                return try_receive_locked();
+            }();
+            if (!next) break;
             if (!next->retire_aborted_after_quiescence())
                 throw std::logic_error("actor mailbox retirement duplicate receipt");
             ++count;
