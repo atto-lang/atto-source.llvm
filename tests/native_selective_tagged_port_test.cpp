@@ -79,6 +79,20 @@ static void bounded_port_selective() {
     CHECK(p.used_frames() == 0 && p.used_bytes() == 0);
     auto no_match = p.try_receive_tagged(shutdown, 4);
     CHECK(no_match.status == Status::NoMatch && !no_match.delivery);
+    // A completed no-match scan has no retained cursor; new publication
+    // must be visible on the next authorized scan, not hidden forever.
+    MoveOnlyMessage late(500), legacy(600);
+    CHECK(p.offer(std::move(legacy), 8)); // tag 0: FIFO-only legacy traffic
+    expect_reject([&] { (void)p.try_receive_tagged(0, 8); });
+    CHECK(p.offer(std::move(late), 8, shutdown));
+    auto after_empty = p.try_receive_tagged(shutdown, 2);
+    CHECK(after_empty.status == Status::Matched && after_empty.delivery);
+    CHECK(*after_empty.delivery->value().value == 500);
+    CHECK(after_empty.delivery->acknowledge_released());
+    auto legacy_fifo = p.try_receive();
+    CHECK(legacy_fifo && *legacy_fifo->value().value == 600);
+    CHECK(legacy_fifo->acknowledge_released());
+    CHECK(p.used_frames() == 0 && p.used_bytes() == 0);
     p.close();
     other.close();
 
