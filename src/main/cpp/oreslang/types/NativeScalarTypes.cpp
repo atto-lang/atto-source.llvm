@@ -55,6 +55,9 @@ void require(Type actual, Type expected, std::size_t offset, const std::string& 
 }
 }
 void validate_native_scalar_types(const Program& program) {
+    // This API also accepts compiler-created ASTs; do not assume that a
+    // caller previously ran resolve_native_sums or the text parser.
+    validate_native_sum_registry(program);
     std::unordered_map<std::string, const ClassDecl*> classes;
     std::unordered_map<std::string, const Function*> functions;
     for (const auto& cls : program.classes) classes.emplace(cls.name, &cls);
