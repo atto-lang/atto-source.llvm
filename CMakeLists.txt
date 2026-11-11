@@ -1093,6 +1093,30 @@ if(BUILD_TESTING)
     set_tests_properties(native_static_dispatch_resolver_ir_integrity
         PROPERTIES TIMEOUT 20)
 
+    # Compile the real post-checked native scalar specialization planner with
+    # the project C++17 standard; reject forged generic identities and ABI.
+    add_executable(oreslang-native-scalar-specialization-plan-test
+        tests/native_scalar_specialization_plan_test.cpp)
+    target_include_directories(oreslang-native-scalar-specialization-plan-test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-scalar-specialization-plan-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-scalar-specialization-plan-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_scalar_i64_specialization_plan
+        COMMAND oreslang-native-scalar-specialization-plan-test)
+    set_tests_properties(native_scalar_i64_specialization_plan PROPERTIES TIMEOUT 20)
+
+    # Not a predicate-only proof: source -> actual LLVM compiler -> IR with
+    # one canonical generic implementation -> Clang -> executed native guest.
+    if(ORE_CLANG)
+        add_test(NAME native_scalar_i64_specialization_guest
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_scalar_generic_source_execution.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}")
+        set_tests_properties(native_scalar_i64_specialization_guest PROPERTIES TIMEOUT 180)
+    endif()
+
     # Direct nominal calls are compiler-bound before linking; prove this
     # against emitted IR and executed O0/O2 AttoLang guests (not host models).
     # The independent Rust predicate tests reject function-pointer regressions.
