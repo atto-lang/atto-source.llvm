@@ -36,7 +36,7 @@ public:
         IsolateHandle() = default;
     };
 
-    class Allocation final {
+    // Canonical name: opaque per-tenant-generation host capability.\n    using TenantVMHandle = IsolateHandle;\n\n    class Allocation final {
         friend class OresVM;
         std::weak_ptr<IsolateVM> state_;
         std::uint64_t generation_ = 0;
@@ -84,6 +84,12 @@ public:
     }
     OresVM(const OresVM&) = delete;
     OresVM& operator=(const OresVM&) = delete;
+
+    // Compatibility-only spelling: this still admits TRUSTED in-process
+    // tenant state only. Untrusted code remains denied by create_isolate.
+    TenantVMHandle create_tenant_vm(TenantVMConfig config) {
+        return create_isolate(std::move(config));
+    }
 
     IsolateHandle create_isolate(IsolateConfig config) {
         // Tenant identifiers are host-owned but can originate from customer
