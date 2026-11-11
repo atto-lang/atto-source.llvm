@@ -279,3 +279,44 @@ The implementation remains confined to the already-checked scalar-int
 specialization slice. Real LLVM/Clang builds, source guest exit codes,
 sanitizer checks, tree/binary hashes and independent reviews are still
 required on this exact PR head before merge.
+
+## 2026-11-11 compiler-bound scalar generic call witness (LLVM follow-up)
+
+The frozen scalar-int direct target now records its **exact** emitted full
+linker symbol alongside the verified module/overload selector and ordered
+concrete type tuple. The codegen symbol planner rederives the symbol and
+rejects any difference before LLVM declaration emission. This prevents a
+forged same-suffix symbol in a different module from being accepted as the
+same compiled target.
+
+The production `RegionMoveLowering` call path now additionally retains
+compiler-created `llvm::Function*` pointers for all frozen scalar generic
+targets and their full emitted symbols. When lowering an ordinary admitted
+generic `Call` with this context, the emitter checks:
+
+- call selector and source argument count equal the frozen target;
+- selected callee pointer equals the exact declaration object in the ledger;
+- emitted and frozen full symbols agree, with no same-suffix alias;
+- internal linkage, source formal names and explicit arity match.
+
+An imported runtime symbol or another compiled function with a matching
+suffix cannot substitute as the selected generic callee through this path.
+The ledger is a compiler-owned lowering structure, not a runtime registry.
+
+The C++ specialization-plan test contains positive and adversarial metadata
+witness cases (selector, arity, module spoof, emitted symbol, formal labels,
+external-linkage rejection). The test's reported adversarial-case count is
+45; this is **a declared test count, not executed passing evidence**.
+
+`tests/native_scalar_generic_source_execution.py` additionally contains
+`nested-generic-direct-chain`: `outer<int>` must invoke `leaf<int>`
+with exactly one internal LLVM definition and one direct call for each
+concrete symbol, and the Clang-linked native guest must exit 42. It does
+not rely on an interpreter or JIT to compile `leaf` at runtime.
+
+**Boundary:** This is concrete scalar-int call-target evidence, **not**
+typeclass witness selection, virtual override devirtualization, or a
+multi-type specialization solver. The remaining callers not lowered through
+`RegionMoveLowering` still rely on the separately checked function-selector
+and declaration maps; no new claim of universal call-site witness coverage
+is made. Real compiler/guest execution and independent review remain gates.
