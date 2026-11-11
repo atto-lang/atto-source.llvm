@@ -158,6 +158,48 @@ int main() {
     reject("invalid-nested-type", [] {
         (void)parse_type(std::string(4097, 'x'));
     });
+    // Programmatically synthesized IR types must obey the same structural
+    // admission rules as text parsed from .atto. Otherwise a later pass could
+    // smuggle arity errors, inferred holes, and invalid qualified names.
+    reject("invalid-type-arity", [&] {
+        (void)map(opt, i, Type{"Option", {}});
+    });
+    reject("invalid-type-arity", [&] {
+        (void)map(opt, i, Type{"Result", {i}});
+    });
+    reject("invalid-nested-type", [&] {
+        (void)map(opt, i, Type{"Record..Nested", {}});
+    });
+    reject("invalid-nested-type", [&] {
+        (void)map_err(res, parse_type("DomainA"), Type{".Type", {}});
+    });
+    reject("unresolved-nested-generic", [&] {
+        (void)map(opt, i, Type{"Result", {i, Type{"_", {}}}});
+    });
+    reject("invalid-functor-payload", [&] {
+        (void)map(opt, i, parse_type("void"));
+    });
+    reject("invalid-type-arity", [&] {
+        (void)and_then(opt, i, Type{"Option", {i, i}});
+    });
+    reject("invalid-nested-type", [] {
+        (void)parse_type("Pkg..Type");
+    });
+    reject("invalid-nested-type", [] {
+        (void)parse_type("Pkg.Type.");
+    });
+    reject("invalid-nested-type", [] {
+        (void)parse_type("Pkg.2Type");
+    });
+    reject("invalid-nested-type", [&] {
+        (void)map(Type{"Option", {Type{"Record..Payload", {}}}}, i, i);
+    });
+    reject("invalid-nested-type", [&] {
+        Type deep = i;
+        for (unsigned n = 0; n != 34; ++n) deep = Type{"Wrapper", {deep}};
+        (void)map(opt, i, deep);
+    });
+
     // Real LLVM compiler resolver boundary, still host-only (no guest IR).
     oreslang::Program admitted;
     admitted.sum_types.push_back({oreslang::NativeSumType::Kind::Option,
