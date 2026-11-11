@@ -4886,6 +4886,18 @@ if(BUILD_TESTING)
     add_test(NAME native_gpu_actor_host_turn_fence_control_v0
         COMMAND oreslang-gpu-actor-host-bridge-v0-test)
     set_tests_properties(native_gpu_actor_host_turn_fence_control_v0 PROPERTIES TIMEOUT 30)
+
+    # Production authority gate: only the supervisor V1 registry may invoke
+    # raw host Boolean completion/release methods. Ensure an ordinary native
+    # translation unit is rejected by the configured compiler.
+    add_test(NAME native_gpu_actor_v0_completion_authority_private
+        COMMAND "${CMAKE_COMMAND}"
+            "-DGPU_ACTOR_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+            "-DGPU_ACTOR_INCLUDE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+            "-DGPU_ACTOR_NEGATIVE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_actor_v0_completion_authority_negative.cpp"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/GpuActorV0CompletionAuthorityGate.cmake")
+    set_tests_properties(native_gpu_actor_v0_completion_authority_private
+        PROPERTIES TIMEOUT 30)
 endif()
 
 # V1 opaque host provider event identity and bounded actor quarantine. This
