@@ -4,12 +4,140 @@
 #include "oreslang/frontend/Parser.hpp"
 
 #include <cstddef>
+#include <memory>
+#include <vector>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 
 namespace oreslang {
+
+// An independently reconstructed, bounded pre-emission dependency proof for
+// the already-supported concrete-i64 specialization slice. This is not trait
+// witness selection or a source-authored certificate. All generic declarations
+// are emission roots because this backend emits their bodies even when unused.
+struct NativeI64SpecializationClosureEvidence {
+    std::size_t scanned_nodes;
+    std::size_t dependency_edges;
+    std::size_t estimated_code_bytes;
+    std::size_t concrete_symbols;
+};
+
+inline NativeI64SpecializationClosureEvidence check_native_i64_specialization_closure(
+        const Program& program,
+        const std::unordered_map<std::string, std::string>& selected) {
+    if (selected.empty()) return {0, 0, 0, 0};
+    constexpr std::size_t kMaxScanNodes = 131072;
+    constexpr std::size_t kMaxEdges = 65536;
+    constexpr std::size_t kMaxEstimatedBytes = 8 * 1024 * 1024;
+    std::unordered_map<std::string, std::unordered_set<std::string>> graph;
+    std::size_t scanned = 0, edges = 0, estimated = 0;
+
+    const auto scan = [&](const Function& fn) {
+        std::vector<const Expression*> expressions;
+        std::vector<const Statement*> statements;
+        const auto push = [&](const std::unique_ptr<Expression>& e) {
+            if (e) expressions.push_back(e.get());
+        };
+        const auto push_local = [&](const LocalBinding& local) {
+            push(local.initializer);
+            for (const auto& arg : local.constructor_arguments) push(arg);
+        };
+        const auto push_statements = [&](const std::vector<Statement>& group) {
+            for (const auto& statement : group) statements.push_back(&statement);
+        };
+
+        push(fn.result);
+        push(fn.caught_throw_value);
+        for (const auto& local : fn.locals) push_local(local);
+        for (const auto& guard : fn.early_returns) {
+            push(guard.condition);
+            push(guard.lhs);
+            push(guard.rhs);
+            push(guard.result);
+        }
+        for (const auto& send : fn.actor_sends) push(send.payload);
+        for (const auto& write : fn.actor_field_writes) push(write.expression);
+        for (const auto& task : fn.source_tasks) push(task.result);
+        push_statements(fn.statements);
+        push_statements(fn.caught_throw_defers);
+
+        std::size_t fn_nodes = 0;
+        std::unordered_set<std::string> outgoing;
+        while (!expressions.empty() || !statements.empty()) {
+            if (++scanned > kMaxScanNodes)
+                throw std::runtime_error("native AOT specialization AST scan budget exceeded");
+            ++fn_nodes;
+            if (!statements.empty()) {
+                const auto* statement = statements.back();
+                statements.pop_back();
+                push(statement->expression);
+                push(statement->condition);
+                push(statement->condition_lhs);
+                push(statement->condition_rhs);
+                push(statement->loop_step);
+                push(statement->array_commit_length);
+                for (const auto& value : statement->array_commit_values) push(value);
+                if (statement->branch_local) push_local(*statement->branch_local);
+                push_statements(statement->then_statements);
+                push_statements(statement->else_statements);
+                continue;
+            }
+            const auto* expr = expressions.back();
+            expressions.pop_back();
+            if (expr->kind == Expression::Kind::Call) {
+                const auto key = native_function_slot(expr->name, expr->arguments.size());
+                if (selected.find(key) != selected.end() && outgoing.insert(key).second) {
+                    if (++edges > kMaxEdges)
+                        throw std::runtime_error("native AOT specialization edge budget exceeded");
+                }
+            }
+            push(expr->left);
+            push(expr->right);
+            push(expr->condition);
+            push(expr->condition_lhs);
+            push(expr->condition_rhs);
+            push(expr->when_true);
+            push(expr->when_false);
+            for (const auto& arg : expr->arguments) push(arg);
+        }
+        const auto selector = native_function_slot(fn.name, fn.parameters.size());
+        if (selected.find(selector) == selected.end()) return;
+        // Conservative pre-emission estimate, not a measured final binary
+        // byte count. Limit growth before creating the native LLVM module.
+        if (fn_nodes > (kMaxEstimatedBytes - estimated - 256) / 64)
+            throw std::runtime_error("native AOT specialization byte estimate exceeded");
+        estimated += 256 + fn_nodes * 64;
+        if (!graph.emplace(selector, std::move(outgoing)).second)
+            throw std::runtime_error("duplicate native AOT specialization graph node");
+    };
+
+    for (const auto& fn : program.functions) scan(fn);
+    for (const auto& actor : program.actors) scan(actor.on_message);
+
+    // Traverse each emitted generic as a root. Recursive calls and diamonds
+    // terminate because every concrete specialization is visited once.
+    std::vector<std::string> pending;
+    for (const auto& pair : selected) pending.push_back(pair.first);
+    std::unordered_set<std::string> visited;
+    while (!pending.empty()) {
+        auto key = std::move(pending.back());
+        pending.pop_back();
+        if (!visited.insert(key).second) continue;
+        const auto node = graph.find(key);
+        if (node == graph.end())
+            throw std::runtime_error("missing emitted native AOT specialization node");
+        for (const auto& dependency : node->second) {
+            if (selected.find(dependency) == selected.end())
+                throw std::runtime_error("missing concrete native AOT specialization dependency");
+            if (visited.find(dependency) == visited.end()) pending.push_back(dependency);
+        }
+    }
+    if (visited.size() != selected.size())
+        throw std::runtime_error("incomplete native AOT specialization closure");
+    return {scanned, edges, estimated, visited.size()};
+}
 
 // Closed, compiler-derived stage-1 native generic ABI. The native scalar type
 // checker currently admits only concrete int for generic type arguments;
@@ -82,6 +210,7 @@ freeze_native_i64_specializations(const Program& program) {
         if (!concrete_symbols.insert(selector + suffix).second)
             throw std::runtime_error("duplicate native AOT specialized symbol");
     }
+    (void)check_native_i64_specialization_closure(program, selected);
     return selected;
 }
 
