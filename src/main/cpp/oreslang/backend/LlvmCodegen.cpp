@@ -1157,25 +1157,18 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     std::unordered_set<std::string> emitted_function_symbols;
     std::size_t emitted_concrete_specializations = 0;
     for (const auto& fn : source.functions) {
-        const std::string base_symbol = cortex_m_target && fn.name == "main"
-            ? "oreslang_cortexm_bootstrap"
-            : (native_main && source.module.empty() && fn.name == "main"
-            ? guest_main_symbol
-            : (source.module.empty() ? fn.name : source.module + "." + fn.name));
-        // Overloaded source selectors erase the hidden receiver. Keep the
-        // internal ABI parameter list and lookup count unchanged.
-        const std::size_t source_arity = native_source_value_arity(
-            fn.parameters.size(), !fn.method_owner.empty());
         const auto* specialization = frozen_i64_dispatch.find_direct(
             native_function_slot(fn.name, fn.parameters.size()));
-        if (specialization != nullptr)
-            verify_native_i64_direct_target(fn, *specialization);
-        const std::string symbol = (family_sizes.at(fn.name) > 1
-            ? native_function_slot(base_symbol, source_arity)
-            : base_symbol) + (specialization == nullptr
-                ? std::string{} : specialization->emitted_suffix);
+        // Single compiler-owned symbol planner covers qualified module names,
+        // overload slots, concrete generic ABI suffixes and reserved runtime
+        // names. Do this before LLVM is allowed to silently uniquify a global.
+        const std::string symbol = plan_native_aot_function_symbol(
+            source, fn, frozen_i64_dispatch, family_sizes.at(fn.name),
+            native_main, cortex_m_target);
         if (!emitted_function_symbols.insert(symbol).second)
             throw std::runtime_error("native AOT emitted function symbol collision");
+        if (module.getNamedValue(symbol))
+            throw std::runtime_error("native AOT direct dispatch linker symbol collision");
         std::vector<llvm::Type*> argument_types;
         for (const auto& param : fn.parameters)
             argument_types.push_back(param.class_name.empty()
