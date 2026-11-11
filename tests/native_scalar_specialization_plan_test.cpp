@@ -91,6 +91,46 @@ int main() {
             must_reject([&] { (void)freeze_native_i64_specializations(bad); },
                         "duplicate native AOT generic specialization identity");
         }
+        // Internal codegen uses name+arity selectors for all functions,
+        // including non-generics. Mixed declarations must fail before ABI
+        // publication; a generic suffix cannot rescue a clashing selector.
+        {
+            auto bad = fixture();
+            Function nongeneric;
+            nongeneric.name = "identity";
+            Parameter arg;
+            arg.name = "value";
+            nongeneric.parameters.push_back(std::move(arg));
+            bad.functions.push_back(std::move(nongeneric));
+            must_reject([&] { (void)freeze_native_i64_specializations(bad); },
+                        "duplicate compiler-owned native function selector");
+        }
+        // Post-checker IR may carry forged scalar tags or stale aliases on
+        // an otherwise valid T parameter. No erased int ABI is allowed.
+        {
+            auto bad = fixture();
+            bad.functions[0].parameters[0].scalar_type = ScalarType::Bool;
+            must_reject([&] { (void)freeze_native_i64_specializations(bad); },
+                        "unresolved native AOT generic parameter ABI");
+        }
+        {
+            auto bad = fixture();
+            bad.functions[0].parameters[0].scalar_type = ScalarType::String;
+            must_reject([&] { (void)freeze_native_i64_specializations(bad); },
+                        "unresolved native AOT generic parameter ABI");
+        }
+        {
+            auto bad = fixture();
+            bad.functions[0].parameters[0].pending_type_alias = "Alias";
+            must_reject([&] { (void)freeze_native_i64_specializations(bad); },
+                        "unresolved native AOT generic parameter ABI");
+        }
+        {
+            auto bad = fixture();
+            bad.functions[0].parameters[0].sum_type = "Option";
+            must_reject([&] { (void)freeze_native_i64_specializations(bad); },
+                        "unresolved native AOT generic parameter ABI");
+        }
         {
             Program bad;
             for (int i = 0; i < 257; ++i)
