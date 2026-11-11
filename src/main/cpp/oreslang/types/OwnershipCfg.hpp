@@ -54,7 +54,11 @@ struct Operation {
         ReadObject, MoveObject, BorrowShared, BorrowExclusive,
         ReleaseShared, ReleaseExclusive
     };
-    Kind kind;
+    // A default-constructed instruction must never expose an indeterminate
+    // enum (undefined behavior under optimizer/sanitizers). The empty place
+    // then fails closed with 'unknown CFG place' if emitted without filling
+    // the operation from typed compiler IR.
+    Kind kind = Kind::Read;
     std::string place;
     // Optional explicit lexical loan identity; absent borrow IDs derive from
     // the original CFG operation site, not the active traversal order.
