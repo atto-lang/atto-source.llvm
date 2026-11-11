@@ -1168,10 +1168,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             fn.parameters.size(), !fn.method_owner.empty());
         const auto* specialization = frozen_i64_dispatch.find_direct(
             native_function_slot(fn.name, fn.parameters.size()));
-        if (specialization != nullptr &&
-            (specialization->lowered_arity != fn.parameters.size() ||
-             specialization->concrete_types.size() != fn.generic_parameters.size()))
-            throw std::runtime_error("native AOT frozen direct dispatch ABI mismatch");
+        if (specialization != nullptr)
+            verify_native_i64_direct_target(fn, *specialization);
         const std::string symbol = (family_sizes.at(fn.name) > 1
             ? native_function_slot(base_symbol, source_arity)
             : base_symbol) + (specialization == nullptr
@@ -1196,6 +1194,23 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         llvm::FunctionType* signature = llvm::FunctionType::get(
             fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
             argument_types, false);
+        if (specialization != nullptr) {
+            // Compare the LLVM physical ABI to the independently frozen
+            // typed parameter modes before binding the direct-call symbol.
+            if (signature->getNumParams() < specialization->parameter_abi.size() ||
+                signature->getReturnType()->isVoidTy() != specialization->returns_void ||
+                (!specialization->returns_void &&
+                 signature->getReturnType() != i64))
+                throw std::runtime_error("native AOT specialized LLVM function ABI mismatch");
+            for (std::size_t i = 0; i < specialization->parameter_abi.size(); ++i) {
+                const auto& param = specialization->parameter_abi[i];
+                llvm::Type* expected = param.class_name.empty()
+                    ? (param.mode == Parameter::Mode::Value ? i64 : loan_ptr)
+                    : native_pointer_type(context, class_types.at(param.class_name));
+                if (signature->getParamType(i) != expected)
+                    throw std::runtime_error("native AOT specialized LLVM parameter ABI mismatch");
+            }
+        }
         llvm::Function* declaration = llvm::Function::Create(
             signature,
             (fn.native_internal || fn.async_source_i64 ||
