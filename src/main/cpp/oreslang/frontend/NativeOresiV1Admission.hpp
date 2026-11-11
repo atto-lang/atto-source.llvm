@@ -181,6 +181,32 @@ inline bool utf8(std::string_view s) {
     }
     return true;
 }
+// Must match Java PinnedPackageInterface.safePublicName. This is an
+// admission policy for external export identities, not a full Atto lexer.
+inline bool safe_public_name(const std::string& value) {
+    if(value.empty()) return false;
+    for(std::size_t i=0;i<value.size();) {
+        const auto ch=static_cast<unsigned char>(value[i]);
+        std::uint32_t cp=ch;
+        std::size_t length=1;
+        if(ch>=0xf0u) { cp=ch&0x07u; length=4; }
+        else if(ch>=0xe0u) { cp=ch&0x0fu; length=3; }
+        else if(ch>=0xc0u) { cp=ch&0x1fu; length=2; }
+        for(std::size_t j=1;j<length;++j)
+            cp=(cp<<6u)|(static_cast<unsigned char>(value[i+j])&0x3fu);
+        if(cp=='/'||cp=='\\'||cp<=0x1fu||
+           (cp>=0x7fu&&cp<=0x9fu)||
+           cp==0x00adu||cp==0x061cu||cp==0x180eu||
+           (cp>=0x200bu&&cp<=0x200fu)||
+           (cp>=0x2028u&&cp<=0x202eu)||
+           (cp>=0x2060u&&cp<=0x206fu)||
+           cp==0xfeffu||(cp>=0xe0020u&&cp<=0xe007fu))
+            return false;
+        i+=length;
+    }
+    return true;
+}
+
 struct Reader {
     const std::vector<std::uint8_t>& bytes;
     std::size_t at=0;
@@ -241,7 +267,8 @@ inline Decoded decode(const std::vector<std::uint8_t>& bytes) {
     for(std::uint32_t i=0;i<count;++i){
         Export entry;
         entry.module=r.str();entry.kind=r.u8();entry.name=r.str();entry.signature=r.str();
-        if(entry.kind>5u||entry.module.empty()||entry.name.empty())
+        if(entry.kind>5u||!safe_public_name(entry.module)||
+           !safe_public_name(entry.name))
             reject("invalid .oresi export");
         if(!out.exports.empty()){
             const auto& last=out.exports.back();
