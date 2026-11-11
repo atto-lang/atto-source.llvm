@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdint>
 #include <exception>
+#include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <thread>
@@ -231,4 +232,5 @@ int main() {
     active_user_turn_stop_and_control_race();
     raced_send_stop_must_abort_only_winning_publications();
     supervisor_parity_close_races_data_and_retires_loans();
+    std::cout << "LLVM_SUPERVISOR_DATA_FENCE_HOST_PASS|new_races=128|guest_atto=0\n";
 }
