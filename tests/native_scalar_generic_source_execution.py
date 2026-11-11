@@ -191,16 +191,16 @@ def verify(compiler, clang):
             # erased unspecialized generic entry or a runtime lookup.
             if name == "specialization-reuse":
                 ir = result.stdout.decode("utf-8")
-                symbol = r'@(?:"identity\\$atto_g1\\$int"|identity\\$atto_g1\\$int)'
+                symbol = r'@(?:"identity\$atto_g1\$int"|identity\$atto_g1\$int)'
                 definitions = re.findall(
-                    rf'(?m)^define\\s+[^\\n]*?{symbol}\\s*\\(', ir)
+                    rf'(?m)^define\s+[^\n]*?{symbol}\s*\(', ir)
                 direct_calls = re.findall(
-                    rf'\\bcall\\s+[^\\n]*?{symbol}\\s*\\(', ir)
+                    rf'\bcall\s+[^\n]*?{symbol}\s*\(', ir)
                 if len(definitions) != 1 or len(direct_calls) != 2:
                     raise AssertionError(
                         f"generic AOT must emit one reused exact symbol; "
                         f"defs={len(definitions)}, calls={len(direct_calls)}")
-                if re.search(r'(?m)^define\\s+[^\\n]*?@identity\\s*\\(', ir):
+                if re.search(r'(?m)^define\s+[^\n]*?@identity\s*\(', ir):
                     raise AssertionError("uninstantiated generic symbol still emitted")
             ll = tmp / (name + ".ll")
             exe = tmp / name
