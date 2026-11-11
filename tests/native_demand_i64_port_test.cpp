@@ -128,10 +128,67 @@ static void producer_cancel_race_never_exceeds_byte_capacity() {
     }
 }
 
+
+static void completed_terminal_cannot_be_rewritten_as_cancellation() {
+    NativeDemandI64Port<2, 2, 16, 4> port;
+    assert(port.subscribe());
+    port.request(2);
+    assert(port.try_offer(101) == decltype(port)::Offer::Accepted);
+    assert(port.try_offer(202) == decltype(port)::Offer::Accepted);
+    assert(port.complete());
+    assert(!port.cancel()); // terminal COMPLETE has already committed
+    assert(port.queued() == 2);
+    auto one = port.try_next();
+    auto two = port.try_next();
+    assert(one.status == decltype(port)::PollStatus::Item && one.value == 101);
+    assert(two.status == decltype(port)::PollStatus::Item && two.value == 202);
+    assert(port.ack(one.ticket));
+    assert(port.ack(two.ticket));
+    assert(port.try_next().status == decltype(port)::PollStatus::Complete);
+    assert(port.retained_bytes() == 0);
+}
+
+static void terminal_race_linearizes_exactly_once() {
+    for (int attempt = 0; attempt < 128; ++attempt) {
+        NativeDemandI64Port<2, 2, 16, 4> port;
+        assert(port.subscribe());
+        port.request(1);
+        assert(port.try_offer(7) == decltype(port)::Offer::Accepted);
+        std::atomic<bool> start{false};
+        bool complete_won = false;
+        bool cancel_won = false;
+        std::thread completion([&] {
+            while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+            complete_won = port.complete();
+        });
+        std::thread cancellation([&] {
+            while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+            cancel_won = port.cancel();
+        });
+        start.store(true, std::memory_order_release);
+        completion.join();
+        cancellation.join();
+        assert(complete_won != cancel_won);
+        if (complete_won) {
+            auto item = port.try_next();
+            assert(item.status == decltype(port)::PollStatus::Item);
+            assert(item.value == 7 && port.ack(item.ticket));
+            assert(port.try_next().status == decltype(port)::PollStatus::Complete);
+        } else {
+            assert(port.try_next().status == decltype(port)::PollStatus::Cancelled);
+        }
+        assert(port.queued() == 0);
+        assert(port.in_flight() == 0);
+        assert(port.retained_bytes() == 0);
+    }
+}
+
 int main() {
     credits_and_rejections_do_not_consume_producer_value();
     byte_quota_includes_checked_out_loans();
     cancellation_and_completion_preserve_order_and_exact_ack();
     requests_are_finite_and_invalid_input_fails_without_mutation();
     producer_cancel_race_never_exceeds_byte_capacity();
+    completed_terminal_cannot_be_rewritten_as_cancellation();
+    terminal_race_linearizes_exactly_once();
 }
