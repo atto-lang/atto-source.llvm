@@ -64,6 +64,17 @@ inline void resolve_native_sums(Program& program) {
     expression = [&](Expression& e, const Env& env, const std::string& expected) -> Hint {
         using E = Expression::Kind;
         if (e.kind == E::SumConstruct) {
+            // Do not admit a partially rewritten/malformed constructor AST.
+            // The native lowering consumes only name + positional payloads;
+            // stray children must not hide effectful or ownership-sensitive IR.
+            if (e.left || e.right || e.condition || e.condition_lhs ||
+                    e.condition_rhs || e.when_true || e.when_false ||
+                    e.type_arguments_present || !e.type_arguments.empty() ||
+                    (!e.argument_names.empty() && e.argument_names.size() != e.arguments.size()))
+                throw std::runtime_error("malformed native sum constructor AST");
+            for (const auto& label : e.argument_names)
+                if (!label.empty())
+                    throw std::runtime_error("malformed native sum constructor AST");
             std::string selected = expected;
             if (selected.empty()) {
                 if (e.name != "Some" || e.arguments.size() != 1) throw std::runtime_error("native sum constructor requires a declared Option/Result context");
