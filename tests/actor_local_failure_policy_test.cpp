@@ -1,4 +1,5 @@
 #include "oreslang/runtime/ActorLocalFailurePolicy.hpp"
+#include "oreslang/runtime/ActorCheckedFrameBudget.hpp"
 #include <stdexcept>
 #include <initializer_list>
 
@@ -53,7 +54,70 @@ static ActorLocalHookReply exit_in_hook(void*, EffectStatus) noexcept {
     return {ActorLocalResolution::Handled, {EffectKind::ProcessExit, 0}};
 }
 
+
+static void verify_checked_frame_budget() {
+    using Limit = ActorFrameOverflowLimit;
+    ActorCheckedFrameBudget failed(64, 2);
+    auto outer = failed.enter_frame(24);
+    auto inner = failed.enter_frame(32);
+    CHECK(failed.active_frames() == 2 && failed.used_bytes() == 56);
+    bool out_of_order = false;
+    try { failed.leave_frame(outer); }
+    catch (const std::logic_error&) { out_of_order = true; }
+    CHECK(out_of_order);
+    bool frame_quota = false;
+    try { failed.enter_frame(1); }
+    catch (const ActorCheckedFrameBudget::Overflow& e) {
+        frame_quota = e.limit() == Limit::FrameCount;
+    }
+    CHECK(frame_quota && failed.terminal_overflow() == Limit::FrameCount);
+    failed.leave_frame(inner);
+    failed.leave_frame(outer);
+    CHECK(failed.used_bytes() == 0 && failed.active_frames() == 0);
+    CHECK(failed.terminal_overflow() == Limit::FrameCount);
+    bool cannot_recover = false;
+    try { failed.enter_frame(1); }
+    catch (const ActorCheckedFrameBudget::Overflow& e) {
+        cannot_recover = e.limit() == Limit::FrameCount;
+    }
+    CHECK(cannot_recover);
+
+    ActorCheckedFrameBudget byte_limit(48, 4);
+    auto initial = byte_limit.enter_frame(32);
+    bool bytes_exhausted = false;
+    try { byte_limit.enter_frame(17); }
+    catch (const ActorCheckedFrameBudget::Overflow& e) {
+        bytes_exhausted = e.limit() == Limit::ByteCapacity;
+    }
+    CHECK(bytes_exhausted && byte_limit.terminal_overflow() == Limit::ByteCapacity);
+    byte_limit.leave_frame(initial);
+    CHECK(byte_limit.used_bytes() == 0);
+    ActorCheckedFrameBudget healthy(48, 2);
+    auto first = healthy.enter_frame(16);
+    bool foreign = false;
+    try { byte_limit.leave_frame(first); }
+    catch (const std::logic_error&) { foreign = true; }
+    CHECK(foreign);
+    healthy.leave_frame(first);
+    bool replay = false;
+    try { healthy.leave_frame(first); }
+    catch (const std::logic_error&) { replay = true; }
+    CHECK(replay);
+    auto replacement = healthy.enter_frame(16);
+    bool stale_generation = false;
+    try { healthy.leave_frame(first); }
+    catch (const std::logic_error&) { stale_generation = true; }
+    CHECK(stale_generation);
+    healthy.leave_frame(replacement);
+    CHECK(!healthy.terminal_overflow() && healthy.used_bytes() == 0);
+    bool invalid_budget = false;
+    try { ActorCheckedFrameBudget bad(0, 1); }
+    catch (const std::invalid_argument&) { invalid_budget = true; }
+    CHECK(invalid_budget);
+}
+
 int main() {
+    verify_checked_frame_budget();
     Counts counts;
     auto a = dispatch_actor_local_unhandled(
             {EffectKind::Throw, 11}, &counts, accept_throw, escalate_raise);
