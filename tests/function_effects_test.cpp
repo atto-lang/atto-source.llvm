@@ -76,6 +76,10 @@ int main() {
                 "effect flags must form the reviewed contiguous bit range");
 
 
+        // Exhaust all 2^10 by 2^10 ordered permission pairs, including
+        // empty, singleton, composite, and disjoint effect sets. Deliberately
+        // run as ordinary executable code: assert() disappears under NDEBUG.
+        constexpr std::uint32_t all_effects = (1u << known.size()) - 1u;
         // Scope-bound actor-state effects: a compatible effect row is necessary
         // but cannot mint the read/write loan or replace region-lifetime proof.
         // Exhaust all admitted rows, and reject invalid/forged effect sets.
@@ -99,10 +103,6 @@ int main() {
         require(!FunctionEffects{all_effects | (1u << 31)}.admissible_with_state_loan(false),
                 "matching forged effect bits cannot bypass loan checking");
 
-        // Exhaust all 2^10 by 2^10 ordered permission pairs, including
-        // empty, singleton, composite, and disjoint effect sets. Deliberately
-        // run as ordinary executable code: assert() disappears under NDEBUG.
-        constexpr std::uint32_t all_effects = (1u << known.size()) - 1u;
         for (std::uint32_t lhs = 0; lhs <= all_effects; ++lhs) {
             const FunctionEffects a{lhs};
             require(a.permits(a), "every effect set must permit itself");
