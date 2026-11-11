@@ -14,7 +14,7 @@ This is source-level C++ API restriction, not cryptographic authority or a guara
 
 `GpuActorOpenClRecoveryWorkerV1.hpp` provides a bounded, in-process, supervisor-owned, single-threaded native work queue. Each request is tied to a specific provider pointer, actor generation, turn sequence and recovery kind. It rejects stale/foreign turns, coalesces duplicate requests and refuses over-capacity work. Queue capacity is explicit (1–4,096). Jobs hold the provider and supervisor registry through the native call.
 
-Four privileged recovery methods are supported:
+Four privileged recovery methods are supported. These V2 entrypoints, plus recovery-turn identity validation, are now **private** and callable only by the friend `OpenClActorRecoveryWorkerV1`. A compile-negative source and an additional CMake/CTest gate require GCC and Clang to reject any ordinary translation unit that attempts to invoke them:
 
 - ambiguous upload/begin after-accept failures
 - ambiguous kernel/download enqueue
@@ -37,7 +37,7 @@ Run the exact source through token-free private GitHub connector mirroring to `s
 - V2 OpenCL provider mock and stalled worker test
 - preexisting OpenCL G3 provider state-machine suite
 - compiler-negative V0 Boolean access tests and reusable CMake negative gate
-- opt-in `ORESLANG_GPU_ACTOR_HOST_ONLY=ON` actual repository CMake/CTest targets
+- opt-in `ORESLANG_GPU_ACTOR_HOST_ONLY=ON` actual repository **six** CMake/CTest host targets, including the new worker-authority denial gate
 - native physical-GPU prerequisite probe, with exit 77 counted as NOT_EXECUTED
 
 The host-only CMake mode builds real repo files but deliberately returns before full LLVM/compiler configuration. It must never be reported as full source-repository compiler/guest CTest.
