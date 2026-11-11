@@ -36,6 +36,12 @@ int main(void){
     assert(ff_drop(&a,&h)==FF_OK);
   }
   assert(drops==3 && drop_sum==58);
+  assert(ff_make(&a,FF_R,FF_R_OK,45,88,true,&h)==FF_OK);
+  assert(ff_map_i64(&a,h,add_two,NULL)==FF_TYPE);
+  assert(ff_map_err_i64(&a,h,46,add_two,NULL)==FF_TYPE);
+  assert(ff_get(&a,h)->value==88 && ff_get(&a,h)->error_domain==45);
+  assert(ff_drop(&a,&h)==FF_OK);
+  assert(drops==4 && drop_sum==146);
   assert(ff_make(&a,FF_R,FF_R_OK,44,10,false,&h)==FF_OK);
   assert(ff_map_i64(&a,h,add_two,NULL)==FF_OK);
   assert(ff_get(&a,h)->value==12 && callbacks==1);
