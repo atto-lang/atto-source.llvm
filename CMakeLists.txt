@@ -1134,6 +1134,17 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
+    # HTTP actor source lowering is not verified on LLVM. These compiler-
+    # negative fixtures must exercise the real oreslang-llvmc, not a host model.
+    oreslang_contract_test(native_http_actor_serial_alias_failclosed
+        native-http-actor-serial-failclosed.atto --diagnostic "HTTP_ACTOR_BACKEND_UNSUPPORTED")
+    oreslang_contract_test(native_http_actor_explicit_1x1_failclosed
+        native-http-actor-explicit-1x1-failclosed.atto --diagnostic "HTTP_ACTOR_BACKEND_UNSUPPORTED")
+    oreslang_contract_test(native_http_actor_nonserial_3x4_failclosed
+        native-http-actor-nonserial-3x4-failclosed.atto --diagnostic "HTTP_ACTOR_BACKEND_UNSUPPORTED")
+    oreslang_contract_test(native_http_actor_public_failclosed
+        native-http-actor-public-failclosed.atto --diagnostic "HTTP_ACTOR_BACKEND_UNSUPPORTED")
+
     # Durable M0 language declarations are compiler-metadata only in Java.
     # LLVM does not have the history/manifest/replay ABI, so native compilation
     # must fail with the same explicit capability marker for all introducers.
