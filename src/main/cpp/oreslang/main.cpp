@@ -1,5 +1,6 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/NominalEnumV1.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ModuleLoader.hpp"
@@ -194,6 +195,7 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
 
 int main(int argc, char** argv) {
     bool experimental_owned_int = false;
+    bool experimental_nominal_enum_v1 = false;
     bool experimental_rt_scalar_loop = false;
     bool wasm32_target = false;
     bool cortex_m_target = false;
@@ -286,6 +288,11 @@ int main(int argc, char** argv) {
                 std::cerr << "duplicate rt scalar loop option\n"; return 2;
             }
             experimental_rt_scalar_loop = true;
+        } else if (arg == "--experimental-nominal-enum-v1") {
+            if (experimental_nominal_enum_v1) {
+                std::cerr << "duplicate nominal enum v1 option\n"; return 2;
+            }
+            experimental_nominal_enum_v1 = true;
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
@@ -396,7 +403,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--experimental-nominal-enum-v1] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -430,8 +437,23 @@ int main(int argc, char** argv) {
         if (native_hard_rt_profile && experimental_owned_int)
             throw std::runtime_error("native-hard-rt profile rejects experimental owned heap lowering");
 
+        // Keep nominal source confined to this explicit compiler-owned
+        // lowering lane. The original file was read and authenticated above;
+        // the synthetic scalar text is never accepted as guest source and
+        // cannot introduce imports, external enum parameters, or raw tags.
+        if (experimental_nominal_enum_v1 &&
+                (experimental_owned_int || experimental_rt_scalar_loop ||
+                 wasm32_target || cortex_m_target || native_hard_rt_profile ||
+                 rt_check_only || rt_report_seen || constraint_descriptors_only ||
+                 tree_shake || !tree_shake_roots.empty() ||
+                 isolate_entry_seen || bounded_allocator_provider ||
+                 library_profile_seen))
+            throw std::runtime_error(
+                "ADT v1 nominal enum lowering supports only isolated host-native source");
+        const std::string admitted_text = experimental_nominal_enum_v1
+            ? oreslang::frontend::lower_nominal_enum_v1(text) : text;
         auto ast = oreslang::load_native_program(
-            path, text, source_identity, experimental_owned_int,
+            path, admitted_text, source_identity, experimental_owned_int,
             experimental_rt_scalar_loop, !wasm32_target && !cortex_m_target,
             admitted_provider_bits);
         source_module = ast.module;
