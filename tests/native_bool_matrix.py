@@ -13,6 +13,11 @@ PAIR = (
 )
 
 POSITIVE = {
+    "atto-neq-and-bang-eq-alias": ("""
+pub fnc main(): int {
+  return (3 eq 3 && 3 neq 4 && 3 !eq 5) ? 42 : 7;
+}
+""", 42),
     "bool-return-call": ("""
 fnc yes(): bool {
   return true;
@@ -160,6 +165,16 @@ pub fnc main(): int {
 }
 
 NEGATIVE = {
+    "atto-reject-spaced-bang-eq-alias": ("""
+pub fnc main(): int {
+  return (3 ! eq 4) ? 42 : 7;
+}
+""", None),
+    "atto-reject-cross-type-word-equality": ("""
+pub fnc main(): int {
+  return (true eq 1) ? 42 : 7;
+}
+""", "equality operands require the same scalar type"),
     "reject-int-ternary-condition": ("""
 pub fnc main(): int {
   return 1 ? 42 : 7;
@@ -249,7 +264,7 @@ def execute(cmd):
 
 
 def compile_and_run(root, name, source, expected, compiler, clang, sanitize):
-    src = root / (name + ".ores")
+    src = root / (name + (".atto" if name.startswith("atto-") else ".ores"))
     src.write_text(source, encoding="utf-8")
     produced = execute([compiler, "--tree-shake", str(src)])
     if "define class" in source:
@@ -291,12 +306,14 @@ def main():
             compile_and_run(root, name, source, expected, a.compiler, a.clang, a.sanitize)
 
         for name, (source, diagnostic) in NEGATIVE.items():
-            src = root / (name + ".ores")
+            src = root / (name + (".atto" if name.startswith("atto-") else ".ores"))
             src.write_text(source, encoding="utf-8")
             rejected = execute([a.compiler, str(src)])
             assert rejected.returncode != 0 and not rejected.stdout, (
                 name, rejected.returncode, rejected.stdout)
-            assert diagnostic in rejected.stderr, (name, diagnostic, rejected.stderr)
+            assert rejected.stderr.strip(), (name, "empty rejection diagnostic")
+            if diagnostic is not None:
+                assert diagnostic in rejected.stderr, (name, diagnostic, rejected.stderr)
 
     print(
         "PASS:",
