@@ -53,6 +53,21 @@ int main(void){
   assert(ff_map_err_i64(&a,h,45,add_two,NULL)==FF_OK && callbacks==2);
   assert(ff_get(&a,h)->value==10);
   assert(ff_drop(&a,&h)==FF_OK);
+  assert(ff_make(&a,FF_OR,FF_OR_SOME_OK,77,42,false,&h)==FF_OK);
+  ff_cell* corrupted=ff_get(&a,h);
+  assert(corrupted!=NULL);
+  corrupted->tag=FF_O_SOME; // invalid combination; cannot silently become Err
+  assert(ff_transpose(&a,h)==FF_TYPE);
+  assert(ff_map_i64(&a,h,add_two,NULL)==FF_TYPE);
+  corrupted->tag=FF_OR_SOME_OK;
+  assert(ff_transpose(&a,h)==FF_OK);
+  assert(ff_drop(&a,&h)==FF_OK);
+  assert(ff_make(&a,FF_R,FF_R_OK,77,2,false,&h)==FF_OK);
+  assert(ff_borrow(&a,h)==FF_OK);
+  assert(ff_map_i64(&a,h,add_two,NULL)==FF_BORROWED);
+  assert(ff_map_err_i64(&a,h,78,add_two,NULL)==FF_BORROWED);
+  assert(ff_end_borrow(&a,h)==FF_OK);
+  assert(ff_drop(&a,&h)==FF_OK);
   ff_handle all[FF_CAP];
   for(unsigned i=0;i<FF_CAP;i++)assert(ff_make(&a,FF_O,FF_O_NONE,0,0,false,&all[i])==FF_OK);
   assert(ff_make(&a,FF_O,FF_O_NONE,0,0,false,&h)==FF_FULL);

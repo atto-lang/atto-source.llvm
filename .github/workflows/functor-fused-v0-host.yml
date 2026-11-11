@@ -25,8 +25,8 @@ jobs:
           for x in src/main/cpp/oreslang/runtime/NativeFunctorFusedV0.h tests/functor_fused_v0_test.c; do
             test "$(git hash-object "$x")" = "$(git rev-parse "HEAD:$x")"
           done
-          test "$(git rev-parse HEAD:src/main/cpp/oreslang/runtime/NativeFunctorFusedV0.h)" = '278a3beb4294a53e8b0caca42b8036719c527bd8'
-          test "$(git rev-parse HEAD:tests/functor_fused_v0_test.c)" = '1fec6c5a0476fe0ce97ed6dad67d972efc6b09bf'
+          test "$(git rev-parse HEAD:src/main/cpp/oreslang/runtime/NativeFunctorFusedV0.h)" = '7269dc1900595197f84feb1cb1c1393f61b74845'
+          test "$(git rev-parse HEAD:tests/functor_fused_v0_test.c)" = 'cba6ccd777760c8760b9ae91734a28b4289ab8da'
       - name: Native GCC O0 and O2 (not AttoLang guests)
         shell: bash
         run: |
