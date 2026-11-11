@@ -151,7 +151,7 @@ public:
 
     Observation observe(const EventHandle& event) override {
         std::lock_guard<std::mutex> guard(mu_);
-        if (!active_ || event != active_ ||
+        if (closed_ || !active_ || event != active_ ||
                 !authentic_local_event(event, active_turn_))
             return Observation::Unknown;
         // A verified failed upload may be reconciled via clFinish without
@@ -226,6 +226,7 @@ public:
             return false;
         }
         operation_.reset();
+        active_.reset(); // retired local token cannot be replayed
         closed_ = true;
         return true;
     }
