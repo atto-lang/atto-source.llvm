@@ -71,6 +71,22 @@ fn successful(program: &str, args: &[&str]) -> String {
         .to_owned()
 }
 
+fn successful_at(stage: &str, program: &str, args: &[&str]) -> String {
+    let result = output(program, args);
+    require(
+        result.status.success(),
+        format!(
+            "stage={stage} program={program} exit={:?} stderr={}",
+            result.status.code(),
+            String::from_utf8_lossy(&result.stderr)
+        ),
+    );
+    String::from_utf8(result.stdout)
+        .unwrap_or_else(|err| fail(format!("stage={stage} invalid UTF-8: {err}")))
+        .trim()
+        .to_owned()
+}
+
 fn sha256(path: &Path) -> String {
     let name = path.to_str().unwrap_or_else(|| fail("non-UTF8 file path"));
     let digest = successful("sha256sum", &[name]);
@@ -253,8 +269,8 @@ fn main() {
     let compiler_hash = sha256(compiler);
     let source_hash = sha256(Path::new(FIXTURE));
     let scratch = Scratch::new();
-    let original_ir = successful(
-        "build/oreslang-llvmc",
+    let original_ir = successful_at(
+        "guest_compiler_ir", "build/oreslang-llvmc",
         &["--target=host", FIXTURE],
     );
     let patched = rewrite_os_entrypoint(&original_ir);
@@ -264,7 +280,7 @@ fn main() {
     fs::write(&c_path, OBSERVER_C).unwrap_or_else(|err| fail(format!("write observer: {err}")));
     let ir_str = ir_path.to_str().unwrap_or_else(|| fail("invalid IR path"));
     let c_str = c_path.to_str().unwrap_or_else(|| fail("invalid C path"));
-    successful("build/oreslang-no-gc-ir-audit", &[ir_str]);
+    successful_at("native_no_gc_ir_audit", "build/oreslang-no-gc-ir-audit", &[ir_str]);
     let ir_hash = sha256(&ir_path);
     let test_vectors = vectors();
     require(
@@ -274,8 +290,8 @@ fn main() {
     for level in ["0", "2"] {
         let binary = scratch.0.join(format!("tile-observer-o{level}"));
         let binary_str = binary.to_str().unwrap_or_else(|| fail("invalid binary path"));
-        successful(
-            "clang",
+        successful_at(
+            "native_clang_link", "clang",
             &[
                 &format!("-O{level}"),
                 "-x", "ir", ir_str, "-x", "c", "-std=c11",
@@ -294,7 +310,7 @@ fn main() {
             require(
                 result.status.success() && result.stderr.is_empty(),
                 format!(
-                    "O{level} vector {index} failed: status={:?} stderr={}",
+                    "stage=native_guest_runtime O{level} vector {index} failed: status={:?} stderr={}",
                     result.status,
                     String::from_utf8_lossy(&result.stderr)
                 ),
@@ -304,7 +320,7 @@ fn main() {
             require(
                 observed == format!("{expected}\n"),
                 format!(
-                    "O{level} vector {index} numerical mismatch: \
+                    "stage=numerical_oracle O{level} vector {index} mismatch: \
                      expected {expected}, observed {:?}, inputs={row:?}",
                     observed
                 ),
@@ -324,7 +340,7 @@ fn main() {
         require(
             sha256(compiler) == compiler_hash
                 && sha256(Path::new(FIXTURE)) == source_hash,
-            "compiler or source was modified during differential verification",
+            "stage=post_execution_identity compiler or source was modified",
         );
     }
     require(
