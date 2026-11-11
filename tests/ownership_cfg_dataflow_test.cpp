@@ -461,6 +461,14 @@ int main() {
     oversized_cfg.blocks.resize(kMaxCfgBlocks + 1);
     assert(rejected([&] { verify(oversized_cfg); }));
 
+    // A massive declared state is itself untrusted input. Check place-count
+    // limits before enumerating path aliases or starting fixed-point work.
+    Graph oversized_places;
+    oversized_places.blocks = {{{}, {}}};
+    for (std::size_t i = 0; i <= kMaxCfgEntryPlaces; ++i)
+        oversized_places.entry.emplace("place" + std::to_string(i), cell(kOwned));
+    assert(rejected([&] { verify(oversized_places); }));
+
     Graph oversized_operations;
     oversized_operations.entry = oversized_cfg.entry;
     oversized_operations.blocks = {{{}, {}}};
