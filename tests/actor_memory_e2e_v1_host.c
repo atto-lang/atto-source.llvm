@@ -13,6 +13,33 @@
 #include <unistd.h>
 #endif
 
+/* Linux link-time instrumentation counts allocator calls originating in
+ * the linked test/ActorArena translation units during admitted actor turns.
+ * This does not intercept every possible libc-internal/FFI allocation. */
+#if defined(__linux__) && defined(ORESLANG_TEST_WRAP_ALLOC)
+#include <stdatomic.h>
+static _Atomic unsigned int count_during_turn = 0;
+static _Atomic unsigned long long alloc_calls_during_turn = 0;
+extern void* __real_malloc(size_t bytes);
+extern void* __real_calloc(size_t count, size_t bytes);
+extern void* __real_realloc(void* old, size_t bytes);
+void* __wrap_malloc(size_t bytes) {
+    if (atomic_load_explicit(&count_during_turn, memory_order_relaxed))
+        atomic_fetch_add_explicit(&alloc_calls_during_turn, 1, memory_order_relaxed);
+    return __real_malloc(bytes);
+}
+void* __wrap_calloc(size_t count, size_t bytes) {
+    if (atomic_load_explicit(&count_during_turn, memory_order_relaxed))
+        atomic_fetch_add_explicit(&alloc_calls_during_turn, 1, memory_order_relaxed);
+    return __real_calloc(count, bytes);
+}
+void* __wrap_realloc(void* old, size_t bytes) {
+    if (atomic_load_explicit(&count_during_turn, memory_order_relaxed))
+        atomic_fetch_add_explicit(&alloc_calls_during_turn, 1, memory_order_relaxed);
+    return __real_realloc(old, bytes);
+}
+#endif
+
 #define REQUIRE(expr) do { if (!(expr)) { \
     fprintf(stderr, "ACTOR_MEMORY_HOST_V1_FAIL line=%d: %s\n", __LINE__, #expr); \
     return 1; } } while (0)
@@ -28,6 +55,10 @@ static int positive_lifecycle(void) {
     ores_actor_arena_write(arena, initial, state, 0, &value, sizeof(value));
     ores_actor_arena_leave(arena, initial);
 
+#if defined(__linux__) && defined(ORESLANG_TEST_WRAP_ALLOC)
+    atomic_store_explicit(&alloc_calls_during_turn, 0, memory_order_relaxed);
+    atomic_store_explicit(&count_during_turn, 1, memory_order_release);
+#endif
     for (uint64_t i = 0; i < 1024; ++i) {
         OresArenaTurn turn = ores_actor_arena_enter_realtime(arena, 101, 7);
         value = 0;
@@ -45,6 +76,10 @@ static int positive_lifecycle(void) {
         ores_actor_arena_drop(arena, turn, temporary);
         ores_actor_arena_leave(arena, turn);
     }
+#if defined(__linux__) && defined(ORESLANG_TEST_WRAP_ALLOC)
+    atomic_store_explicit(&count_during_turn, 0, memory_order_release);
+    REQUIRE(atomic_load_explicit(&alloc_calls_during_turn, memory_order_relaxed) == 0);
+#endif
     OresArenaTurn final = ores_actor_arena_enter(arena, 101, 7);
     value = 0;
     ores_actor_arena_read(arena, final, state, 0, &value, sizeof(value));
@@ -104,6 +139,11 @@ int main(void) {
     REQUIRE(must_abort(2)); /* scratch after turn exit */
 #else
     puts("HOST_NEGATIVE_CONTROLS_NOT_EXECUTED=non-POSIX");
+#endif
+#if defined(__linux__) && defined(ORESLANG_TEST_WRAP_ALLOC)
+    puts("ACTOR_MEMORY_E2E_V1_LINKED_TURN_ALLOC_CALLS=0");
+#else
+    puts("ACTOR_MEMORY_E2E_V1_LINKED_TURN_ALLOC_CALLS=NOT_MEASURED");
 #endif
     puts("ACTOR_MEMORY_E2E_V1_HOST_ONLY=PASS");
     puts("ACTOR_MEMORY_E2E_V1_COMPILED_GUEST=NOT_EXECUTED");
