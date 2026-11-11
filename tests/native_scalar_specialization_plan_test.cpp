@@ -1,0 +1,106 @@
+#include "oreslang/frontend/NativeScalarSpecialization.hpp"
+
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <utility>
+
+namespace {
+using namespace oreslang;
+
+template<class Fn>
+void must_reject(Fn&& run, const std::string& fragment) {
+    try {
+        std::forward<Fn>(run)();
+    } catch (const std::runtime_error& error) {
+        if (std::string(error.what()).find(fragment) != std::string::npos) return;
+        throw std::runtime_error("unexpected specialization denial: " +
+                                 std::string(error.what()));
+    }
+    throw std::runtime_error("unsafe native generic specialization accepted: " + fragment);
+}
+
+Function generic(const std::string& name) {
+    Function fn;
+    fn.name = name;
+    fn.generic_parameters.push_back({"T", ""});
+    Parameter arg;
+    arg.name = "value";
+    arg.generic_type = "T";
+    fn.parameters.push_back(std::move(arg));
+    return fn;
+}
+
+Program fixture() {
+    Program result;
+    result.functions.push_back(generic("identity"));
+    return result;
+}
+} // namespace
+
+int main() {
+    try {
+        auto source = fixture();
+        auto proof = freeze_native_i64_specializations(source);
+        const std::string selector = native_function_slot("identity", 1);
+        if (proof.size() != 1 || proof.at(selector) != "$atto_g1$int")
+            throw std::runtime_error("canonical i64 generic ABI mismatch");
+        if (freeze_native_i64_specializations(source).at(selector) != proof.at(selector))
+            throw std::runtime_error("specialization identity is not deterministic");
+        // The same selected source function/arity is used by all call sites;
+        // the producer does not manufacture one method body per call site.
+        {
+            auto bad = fixture();
+            bad.functions[0].generic_parameters[0].name = "T$forged";
+            must_reject([&] { (void)freeze_native_i64_specializations(bad); },
+                        "invalid native AOT generic parameter identity");
+        }
+        {
+            auto bad = fixture();
+            bad.functions[0].generic_parameters.push_back({"T", ""});
+            must_reject([&] { (void)freeze_native_i64_specializations(bad); },
+                        "invalid native AOT generic parameter identity");
+        }
+        {
+            auto bad = fixture();
+            bad.functions[0].generic_parameters[0].default_type = "T";
+            must_reject([&] { (void)freeze_native_i64_specializations(bad); },
+                        "invalid native AOT generic default dependency");
+        }
+        {
+            auto bad = fixture();
+            bad.functions[0].parameters[0].generic_type = "Unknown";
+            must_reject([&] { (void)freeze_native_i64_specializations(bad); },
+                        "unresolved native AOT generic parameter ABI");
+        }
+        {
+            auto bad = fixture();
+            bad.functions[0].parameters[0].class_name = "Other";
+            must_reject([&] { (void)freeze_native_i64_specializations(bad); },
+                        "unresolved native AOT generic parameter ABI");
+        }
+        {
+            auto bad = fixture();
+            bad.functions[0].method_owner = "Box";
+            must_reject([&] { (void)freeze_native_i64_specializations(bad); },
+                        "native AOT generic method or arity not supported");
+        }
+        {
+            auto bad = fixture();
+            bad.functions.push_back(generic("identity"));
+            must_reject([&] { (void)freeze_native_i64_specializations(bad); },
+                        "duplicate native AOT generic specialization identity");
+        }
+        {
+            Program bad;
+            for (int i = 0; i < 257; ++i)
+                bad.functions.push_back(generic("name" + std::to_string(i)));
+            must_reject([&] { (void)freeze_native_i64_specializations(bad); },
+                        "native AOT generic specialization count exceeded");
+        }
+        std::cout << "NATIVE_I64_SPECIALIZATION_PLAN|symbols=1|negative_cases=8\n";
+    } catch (const std::exception& error) {
+        std::cerr << "NATIVE_I64_SPECIALIZATION_PLAN_FAIL: " << error.what() << '\n';
+        return 1;
+    }
+}
