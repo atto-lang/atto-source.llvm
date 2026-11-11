@@ -453,5 +453,33 @@ int main() {
         verify(proven_read_loop);
     }
 
+    // Fail closed BEFORE fixed-point analysis or large allocations.
+    // This guards the verifier itself against an adversarial typed-CFG
+    // producer and does not claim that the source compiler is complete.
+    Graph oversized_cfg;
+    oversized_cfg.entry = {{"x", cell(kOwned)}};
+    oversized_cfg.blocks.resize(kMaxCfgBlocks + 1);
+    assert(rejected([&] { verify(oversized_cfg); }));
+
+    Graph oversized_operations;
+    oversized_operations.entry = oversized_cfg.entry;
+    oversized_operations.blocks = {{{}, {}}};
+    oversized_operations.blocks[0].operations.assign(
+        kMaxCfgOperationsPerBlock + 1, op(Kind::Read, "x"));
+    assert(rejected([&] { verify(oversized_operations); }));
+
+    Graph oversized_edges;
+    oversized_edges.entry = oversized_cfg.entry;
+    oversized_edges.blocks.resize(2);
+    oversized_edges.blocks[0].successors.assign(kMaxCfgEdges + 1, 1);
+    assert(rejected([&] { verify(oversized_edges); }));
+
+    // At the input limits, budgeted verification still accepts a safe
+    // terminal graph. The limit is inclusive, not an off-by-one rejection.
+    Graph bounded_graph;
+    bounded_graph.entry = {{"x", cell(kOwned)}};
+    bounded_graph.blocks = {{{op(Kind::Read, "x")}, {}}};
+    verify(bounded_graph);
+
     return 0;
 }
