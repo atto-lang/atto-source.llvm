@@ -305,6 +305,9 @@ public:
 
             // Only move the envelope's owning unique_ptr, never the user T,
             // and erase under the port lock without running payload code.
+            // deque::erase can shift O(queue length) handles. This stage-1
+            // implementation has NO hard-real-time WCET guarantee; a future
+            // preallocated indexed queue must bound that mutation cost too.
             auto frame = std::move(*it);
             state_->queue.erase(it);
             return {SelectiveStatus::Matched,
