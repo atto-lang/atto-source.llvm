@@ -151,8 +151,12 @@ inline bool ident(const std::string& x) {
 }
 // Dependency aliases have a stricter, lowercase-only contract than exported
 // namespace identifiers. Match Java's [a-z][a-z0-9_]{0,127} exactly.
+inline bool reserved_name(const std::string& x) {
+    return x=="constructor"||x=="prototype"||x=="__proto__"||x=="__root__";
+}
 inline bool alias(const std::string& x) {
-    if (x.empty() || x.size()>128u || x[0]<'a' || x[0]>'z') return false;
+    if (x.empty() || x.size()>128u || x[0]<'a' || x[0]>'z' ||
+        reserved_name(x)) return false;
     for (std::size_t i=1;i<x.size();++i) {
         const char ch=x[i];
         if (!((ch>='a'&&ch<='z')||(ch>='0'&&ch<='9')||ch=='_')) return false;
@@ -339,7 +343,8 @@ inline Verified admit(const DependencyPin& pin,
     std::set<std::string> seen;
     std::map<std::string, std::vector<Export>> checked_namespaces;
     for(const auto& ns:pin.namespaces){
-        if(!detail::ident(ns.name)||!detail::sha_hex(ns.sha256)||!seen.insert(ns.name).second)
+        if(!detail::ident(ns.name)||detail::reserved_name(ns.name)||
+           !detail::sha_hex(ns.sha256)||!seen.insert(ns.name).second)
             detail::reject("invalid or duplicate .oresi namespace pin");
         const auto it=owned_snapshots.find(ns.name);
         if(it==owned_snapshots.end())detail::reject("missing locked .oresi namespace");
