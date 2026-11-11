@@ -341,6 +341,34 @@ int main() {
         sum.argument_names.push_back("");
         sum.argument_names.push_back("");
     });
+    reject_bad_sum_ast([](oreslang::Expression& sum) {
+        sum.arguments.front().reset();
+    });
+    {
+        auto program = sum_ast();
+        oreslang::LocalBinding invalid;
+        invalid.name = "missing_receiver";
+        invalid.initializer = std::make_unique<oreslang::Expression>();
+        invalid.initializer->kind = oreslang::Expression::Kind::ArrayCall;
+        invalid.initializer->name = "unwrap";
+        program.functions.front().locals.push_back(std::move(invalid));
+        reject_table(std::move(program), "malformed native sum/member access AST");
+    }
+    {
+        auto program = sum_ast();
+        oreslang::LocalBinding invalid;
+        invalid.name = "missing_argument";
+        invalid.initializer = std::make_unique<oreslang::Expression>();
+        invalid.initializer->kind = oreslang::Expression::Kind::ArrayCall;
+        invalid.initializer->name = "unwrap_or";
+        invalid.initializer->left = std::make_unique<oreslang::Expression>();
+        invalid.initializer->left->kind = oreslang::Expression::Kind::Variable;
+        invalid.initializer->left->name = "value";
+        invalid.initializer->arguments.push_back(nullptr);
+        program.functions.front().locals.push_back(std::move(invalid));
+        reject_table(std::move(program), "malformed native sum/member access AST");
+    }
+
 
     auto reject_hidden_scalar_payload = [&](const std::function<void(oreslang::Expression&)>& mutate) {
         auto program = sum_ast();
