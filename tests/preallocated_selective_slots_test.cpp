@@ -57,7 +57,17 @@ int main() {
   bool denied=false;
   try{other.select(7,1,pending.cursor);}catch(const std::invalid_argument&){denied=true;}assert(denied);
   auto removed=q.select(2,2);assert(removed.status==Q::Status::Matched);
+  auto reused=std::make_unique<int>(3);assert(q.push(reused,8,4,next++));
   denied=false;try{q.select(7,1,pending.cursor);}catch(const std::invalid_argument&){denied=true;}assert(denied);
-  assert(q.pop_front());
+  assert(q.pop_front());assert(q.pop_front());
+  auto left=std::make_unique<int>(11),middle=std::make_unique<int>(12),right=std::make_unique<int>(13);
+  assert(q.push(left,8,1,next++));assert(q.push(middle,8,2,next++));
+  assert(q.push(right,8,3,next++));
+  auto prior=q.select(3,1);assert(prior.status==Q::Status::Continue);
+  auto earlier=q.pop_front();assert(earlier); // removing inspected prefix must not invalidate next slot
+  auto after_prior=q.select(3,2,prior.cursor);
+  assert(after_prior.status==Q::Status::Matched&&after_prior.frame);
+  assert(*after_prior.frame->payload==13);
+  assert(q.pop_front());assert(q.size()==0);
   std::cout<<"PASS_PREALLOCATED_SELECTIVE_SLOTS 100000 operations + stale-cursor denial\n";
 }
