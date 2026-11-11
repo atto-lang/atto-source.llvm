@@ -28,10 +28,15 @@ public:
     using Owner = std::unique_ptr<T, Deleter>;
     // A throwing handle move or cleanup would break strong ownership safety
     // during slot unlink or a physical release/ACK boundary.
+    // Clearing a moved-from optional<Frame> happens under the caller's
+    // mailbox lock. Nontrivial deleter move/destruction could re-enter the
+    // mailbox or run guest code even after its unique_ptr becomes null.
+    // Allow only plain-value deleter state: the actual noexcept cleanup
+    // callback runs later, on release of the checked-out owner.
     static_assert(std::is_object_v<Deleter> &&
-                  std::is_nothrow_move_constructible_v<Deleter> &&
-                  std::is_nothrow_destructible_v<Deleter>,
-                  "actor-owned payload deleter must be an owned, nonthrowing value");
+                  std::is_trivially_move_constructible_v<Deleter> &&
+                  std::is_trivially_destructible_v<Deleter>,
+                  "actor-owned deleter state must be trivially movable/destructible");
     // libstdc++ does not annotate default_delete<T>::operator() noexcept:
     // validate the T destructor for the standard deleter, and the callable
     // noexcept contract for custom arena/resource deleters.
