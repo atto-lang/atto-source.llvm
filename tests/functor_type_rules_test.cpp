@@ -1,4 +1,5 @@
 #include "oreslang/types/FunctorTypeRules.hpp"
+#include "oreslang/types/NativeSumTypes.hpp"
 
 #include <functional>
 #include <iostream>
@@ -157,6 +158,33 @@ int main() {
     reject("invalid-nested-type", [] {
         (void)parse_type(std::string(4097, 'x'));
     });
+    // Real LLVM compiler resolver boundary, still host-only (no guest IR).
+    oreslang::Program admitted;
+    admitted.sum_types.push_back({oreslang::NativeSumType::Kind::Option,
+                                  "Option<int>", oreslang::ScalarType::I64, oreslang::ScalarType::I64});
+    admitted.sum_types.push_back({oreslang::NativeSumType::Kind::Result,
+                                  "Result<bool,String>", oreslang::ScalarType::Bool, oreslang::ScalarType::String});
+    oreslang::resolve_native_sums(admitted);
+    check(admitted.sum_types.size() == 2, "canonical scalar sums admitted");
+
+    auto reject_descriptor = [](oreslang::NativeSumType descriptor) {
+        oreslang::Program invalid;
+        invalid.sum_types.push_back(std::move(descriptor));
+        try {
+            oreslang::resolve_native_sums(invalid);
+        } catch (const std::runtime_error& error) {
+            check(std::string(error.what()).find("native sum descriptor type-shape mismatch") != std::string::npos,
+                  "bad sum descriptor rejected before IR with precise message");
+            return;
+        }
+        throw std::runtime_error("native sum resolver accepted malformed descriptor");
+    };
+    reject_descriptor({oreslang::NativeSumType::Kind::Option, "Option<bool>",
+                       oreslang::ScalarType::I64, oreslang::ScalarType::I64});
+    reject_descriptor({oreslang::NativeSumType::Kind::Result, "Result<int,DomainB>",
+                       oreslang::ScalarType::I64, oreslang::ScalarType::String});
+    reject_descriptor({oreslang::NativeSumType::Kind::Option, "Option<Result<int,String>>",
+                       oreslang::ScalarType::I64, oreslang::ScalarType::I64});
     std::cout << "PASS " << passed << " compiler-type-shape host-only checks; "
               << "LLVM guest/native machine-code verification NOT_EXECUTED\n";
     return 0;
