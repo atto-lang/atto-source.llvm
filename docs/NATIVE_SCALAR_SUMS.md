@@ -16,7 +16,12 @@ pub routine main(): int {
 }
 ```
 
-Constructors use positional payloads and a declared contextual type. Option
+Constructors use positional payloads and a declared contextual type. For a
+conditional expression whose branches carry an Option or Result, both arms
+must resolve to the same declared sum type; a raw scalar cannot stand in
+for the other arm's checked descriptor. This is enforced in the source sum
+resolver before LLVM IR generation, not left to native runtime tag checks.
+Option
 provides `is_some`, `is_none`, `unwrap`, and `unwrap_or`; Result provides
 `is_ok`, `is_err`, `unwrap`, and `unwrap_or`. Fallback arguments evaluate
 eagerly, matching Java. `Some(0)`, `Some(false)`, `Some("")`, and `Ok(false)`
