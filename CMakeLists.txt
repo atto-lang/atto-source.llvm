@@ -2226,7 +2226,8 @@ if(BUILD_TESTING)
 
     # Independently buildable host primitive: fixed-capacity intrusive slots,
     # compiler-generated tag selectors and generation-fenced scan continuations.
-    # This does not yet replace the production BoundedActorPort adapter.
+    # BoundedActorPort now uses this queue; full native CMake, ACK, lifecycle
+    # and compiler-generated guest AOT tests remain independent merge gates.
     add_executable(oreslang-preallocated-selective-slots-test
         tests/preallocated_selective_slots_test.cpp)
     target_include_directories(oreslang-preallocated-selective-slots-test PRIVATE
