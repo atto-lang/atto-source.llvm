@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <map>
@@ -244,9 +245,32 @@ inline bool join_into(State& target, const State& incoming) {
     return changed;
 }
 
+// Conservative bounds on untrusted typed-CFG input and fixed-point effort.
+// These protect the native checker itself; they are NOT a certification of
+// source-to-MIR completeness, compiler emissions, or actor heap invariants.
+inline constexpr std::size_t kMaxCfgBlocks = 4096;
+inline constexpr std::size_t kMaxCfgEntryPlaces = 65536;
+inline constexpr std::size_t kMaxCfgEdges = 16384;
+inline constexpr std::size_t kMaxCfgOperationsPerBlock = 1024;
+inline constexpr std::size_t kMaxCfgOperations = 100000;
+inline constexpr std::size_t kMaxCfgWork = 2000000;
+
 inline Analysis verify(const Graph& graph) {
     if (graph.blocks.empty())
         throw std::runtime_error("ownership violation: empty CFG");
+    if (graph.blocks.size() > kMaxCfgBlocks ||
+            graph.entry.size() > kMaxCfgEntryPlaces)
+        throw std::runtime_error("ownership violation: CFG resource budget exceeded");
+    std::size_t total_edges = 0;
+    std::size_t total_operations = 0;
+    for (const auto& block : graph.blocks) {
+        if (block.operations.size() > kMaxCfgOperationsPerBlock ||
+                block.operations.size() > kMaxCfgOperations - total_operations ||
+                block.successors.size() > kMaxCfgEdges - total_edges)
+            throw std::runtime_error("ownership violation: CFG resource budget exceeded");
+        total_operations += block.operations.size();
+        total_edges += block.successors.size();
+    }
     // Each lexical borrow must own a globally unique provenance token,
     // including across mutually exclusive CFG predecessors. Otherwise two
     // different borrows with the same count and token could spuriously join,
@@ -344,13 +368,21 @@ inline Analysis verify(const Graph& graph) {
     std::deque<std::size_t> queue{0};
     std::vector<bool> queued(graph.blocks.size(), false);
     queued[0] = true;
+    // Bound the amount of actual reprocessing after validating input size.
+    // Loops may legitimately need multiple visits; an adversarial CFG must
+    // not monopolize the compiler in an unbounded fixed-point computation.
+    std::size_t remaining_work = kMaxCfgWork;
     while (!queue.empty()) {
+        if (!remaining_work--)
+            throw std::runtime_error("ownership violation: CFG analysis work budget exceeded");
         const auto index = queue.front();
         queue.pop_front();
         queued[index] = false;
         State current = *result.incoming[index];
         const BasicBlock& block = graph.blocks[index];
         for (std::size_t site = 0; site < block.operations.size(); ++site) {
+            if (!remaining_work--)
+                throw std::runtime_error("ownership violation: CFG analysis work budget exceeded");
             // Reserve zero for an explicitly known loan at entry. Source
             // position gives stable IDs across fixed-point reprocessing.
             if (index >= UINT32_MAX || site >= UINT32_MAX)
@@ -365,6 +397,8 @@ inline Analysis verify(const Graph& graph) {
                     violation(item.first, "loan escapes CFG exit");
         result.outgoing[index] = current;
         for (std::size_t next : block.successors) {
+            if (!remaining_work--)
+                throw std::runtime_error("ownership violation: CFG analysis work budget exceeded");
             if (next >= graph.blocks.size())
                 throw std::runtime_error("ownership violation: CFG edge outside graph");
             bool changed = false;
