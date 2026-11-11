@@ -2,6 +2,7 @@
 #include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/types/OwnershipCfg.hpp"
+#include "oreslang/types/SealedStateOwnership.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -581,6 +582,7 @@ void validate_i64_ownership(Program& program) {
     // emitting any LLVM IR; a syntactically pure but undeclared variable
     // must never reach codegen's value slot lookup.
     for (const auto& actor : program.actors) {
+        validate_sealed_actor_ownership(actor);
         if (actor.on_message.locals.empty()) continue;
         const auto& method = actor.on_message;
         if (method.parameters.size() != 1)

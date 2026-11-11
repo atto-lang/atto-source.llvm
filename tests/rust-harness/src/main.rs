@@ -1,11 +1,11 @@
 mod checked_i64;
 mod retained_guest;
+mod sealed_guest;
 
 use std::{
     env,
     ffi::OsStr,
-    fs,
-    io,
+    fs, io,
     path::{Path, PathBuf},
     process::{Command, Output},
     sync::atomic::{AtomicU64, Ordering},
@@ -121,7 +121,10 @@ fn realtime_profile(compiler: &Path) -> Result<(), String> {
     let out = run(compiler, [OsStr::new("--rt-check"), pure.as_os_str()])?;
     require(out.status.success(), stderr(&out))?;
     let report = stdout(&out);
-    require(json_bool(&report, "source_admitted") == Some(true), "pure source must admit")?;
+    require(
+        json_bool(&report, "source_admitted") == Some(true),
+        "pure source must admit",
+    )?;
     require(
         json_bool(&report, "artifact_certified") == Some(false),
         "compiler check must not certify linked artifact",
@@ -142,7 +145,10 @@ fn realtime_profile(compiler: &Path) -> Result<(), String> {
         ],
     )?;
     require(out.status.success(), stderr(&out))?;
-    require(stdout(&out).contains("define"), "admitted profile must emit LLVM IR")?;
+    require(
+        stdout(&out).contains("define"),
+        "admitted profile must emit LLVM IR",
+    )?;
     let persisted = fs::read_to_string(&report_path).map_err(|e| e.to_string())?;
     require(
         json_string(&persisted, "diagnostic").as_deref() == Some("OK"),
@@ -180,7 +186,10 @@ fn realtime_profile(compiler: &Path) -> Result<(), String> {
         "recursion diagnostic",
     )?;
 
-    let out = run(compiler, [OsStr::new("--rt-entry=helper/0"), pure.as_os_str()])?;
+    let out = run(
+        compiler,
+        [OsStr::new("--rt-entry=helper/0"), pure.as_os_str()],
+    )?;
     require(
         out.status.code() == Some(2),
         "rt-entry without an RT analysis mode must reject",
@@ -192,7 +201,11 @@ fn realtime_profile(compiler: &Path) -> Result<(), String> {
     let alias_flag = format!("--rt-report={}", alias.display());
     let out = run(
         compiler,
-        [OsStr::new("--rt-check"), OsStr::new(&alias_flag), pure.as_os_str()],
+        [
+            OsStr::new("--rt-check"),
+            OsStr::new(&alias_flag),
+            pure.as_os_str(),
+        ],
     )?;
     require(
         out.status.code() == Some(1),
@@ -208,7 +221,11 @@ fn realtime_profile(compiler: &Path) -> Result<(), String> {
     let hard_flag = format!("--rt-report={}", hard_alias.display());
     let out = run(
         compiler,
-        [OsStr::new("--rt-check"), OsStr::new(&hard_flag), pure.as_os_str()],
+        [
+            OsStr::new("--rt-check"),
+            OsStr::new(&hard_flag),
+            pure.as_os_str(),
+        ],
     )?;
     require(
         out.status.code() == Some(1),
@@ -229,7 +246,10 @@ fn callable_nominal(compiler: &Path) -> Result<(), String> {
     let mut negatives: Vec<(String, Option<&str>)> = Vec::new();
 
     for name in ["Callable", "Fnc", "Function", "Routine", "Method"] {
-        negatives.push((format!("define class {name} as end\n"), Some("nominal class types")));
+        negatives.push((
+            format!("define class {name} as end\n"),
+            Some("nominal class types"),
+        ));
     }
     negatives.push((
         "define actor Callable as\n  let count: int = 0;\n  pub fnc on_message(int value): int { return value; }\nend\n".to_string(),
@@ -271,9 +291,7 @@ fn callable_nominal(compiler: &Path) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     let out = run(compiler, [source.as_os_str()])?;
     require(
-        out.status.success()
-            && stderr(&out).is_empty()
-            && stdout(&out).starts_with("; ModuleID"),
+        out.status.success() && stderr(&out).is_empty() && stdout(&out).starts_with("; ModuleID"),
         format!(
             "ordinary class affected: stderr={} stdout={}",
             stderr(&out),
@@ -317,8 +335,14 @@ fn nominal_type_binders(compiler: &Path) -> Result<(), String> {
     ).map_err(|e| e.to_string())?;
     let good = run(compiler, [source.as_os_str()])?;
     require(
-        good.status.success() && stderr(&good).is_empty() && stdout(&good).starts_with("; ModuleID"),
-        format!("ordinary nominal declaration regressed: stdout={} stderr={}", stdout(&good), stderr(&good)),
+        good.status.success()
+            && stderr(&good).is_empty()
+            && stdout(&good).starts_with("; ModuleID"),
+        format!(
+            "ordinary nominal declaration regressed: stdout={} stderr={}",
+            stdout(&good),
+            stderr(&good)
+        ),
     )?;
 
     println!("PASS 3 negative native nominal wildcard declarations and one positive class");
@@ -386,7 +410,8 @@ fn aot_driver(driver: &Path, compiler: &Path, clang: &Path) -> Result<(), String
     // runtime, so the driver must link the scheduler/VM/actor heap itself.
     // Two distinct returns prove the exit code comes from the guest.
     let actor_source = temp.path.join("actor.atto");
-    for (label, done_await, expected_exit) in [("actor-ready", false, 44), ("actor-done", true, 45)] {
+    for (label, done_await, expected_exit) in [("actor-ready", false, 44), ("actor-done", true, 45)]
+    {
         let program = format!(
             "define actor Worker as {{\n  let total: int = 0;\n  pub fnc on_message(int n): int {{\n    total = total + n;\n    return total;\n  }}\n}}\n\
              pub fnc main(): int {{\n  const worker: ActorRef<Worker> = spawn Worker();\n{}  stop worker;\n{}  return {expected_exit};\n}}\n",
@@ -396,17 +421,29 @@ fn aot_driver(driver: &Path, compiler: &Path, clang: &Path) -> Result<(), String
             if done_await { "  await worker.get_done();\n" } else { "" });
         fs::write(&actor_source, program).map_err(|e| format!("{label}: write guest: {e}"))?;
         let built = Command::new(driver)
-            .arg(&actor_source).arg(&output)
-            .env("ORESLANG_LLVMC", compiler).env("CLANG", clang)
-            .output().map_err(|e| format!("{label}: AOT driver: {e}"))?;
-        require(built.status.success(),
-            format!("{label}: actor runtime link failed: {}", stderr(&built)))?;
+            .arg(&actor_source)
+            .arg(&output)
+            .env("ORESLANG_LLVMC", compiler)
+            .env("CLANG", clang)
+            .output()
+            .map_err(|e| format!("{label}: AOT driver: {e}"))?;
+        require(
+            built.status.success(),
+            format!("{label}: actor runtime link failed: {}", stderr(&built)),
+        )?;
         let executed = Command::new(&output)
-            .env_clear().env("PATH", "/nonexistent")
-            .output().map_err(|e| format!("{label}: native entrypoint: {e}"))?;
-        require(executed.status.code() == Some(expected_exit),
-            format!("{label}: native actor guest returned {:?} instead of {expected_exit}: {}",
-                executed.status.code(), stderr(&executed)))?;
+            .env_clear()
+            .env("PATH", "/nonexistent")
+            .output()
+            .map_err(|e| format!("{label}: native entrypoint: {e}"))?;
+        require(
+            executed.status.code() == Some(expected_exit),
+            format!(
+                "{label}: native actor guest returned {:?} instead of {expected_exit}: {}",
+                executed.status.code(),
+                stderr(&executed)
+            ),
+        )?;
     }
 
     // Canonical spelling shared with the Java frontend: `as ... end`, a
@@ -416,27 +453,43 @@ fn aot_driver(driver: &Path, compiler: &Path, clang: &Path) -> Result<(), String
 pub fnc main(): int {\n  const worker: ActorRef<Worker> = spawn Worker();\n  worker.stop();\n  await worker.get_done();\n  return 46;\n}\n")
         .map_err(|e| format!("canonical actor: write guest: {e}"))?;
     let built = Command::new(driver)
-        .arg(&actor_source).arg(&output)
-        .env("ORESLANG_LLVMC", compiler).env("CLANG", clang)
-        .output().map_err(|e| format!("canonical actor: AOT driver: {e}"))?;
-    require(built.status.success(),
-        format!("canonical actor: compile/link failed: {}", stderr(&built)))?;
+        .arg(&actor_source)
+        .arg(&output)
+        .env("ORESLANG_LLVMC", compiler)
+        .env("CLANG", clang)
+        .output()
+        .map_err(|e| format!("canonical actor: AOT driver: {e}"))?;
+    require(
+        built.status.success(),
+        format!("canonical actor: compile/link failed: {}", stderr(&built)),
+    )?;
     let executed = Command::new(&output)
-        .env_clear().env("PATH", "/nonexistent")
-        .output().map_err(|e| format!("canonical actor: native entrypoint: {e}"))?;
-    require(executed.status.code() == Some(46),
-        format!("canonical actor guest returned {:?} instead of 46", executed.status.code()))?;
+        .env_clear()
+        .env("PATH", "/nonexistent")
+        .output()
+        .map_err(|e| format!("canonical actor: native entrypoint: {e}"))?;
+    require(
+        executed.status.code() == Some(46),
+        format!(
+            "canonical actor guest returned {:?} instead of 46",
+            executed.status.code()
+        ),
+    )?;
 
     // Rebuild the original image before negative cases: they must preserve
     // exactly these published bytes and never publish a partial executable.
-    fs::write(&source, "fnc main(): int { return 42; }\n")
-        .map_err(|e| e.to_string())?;
+    fs::write(&source, "fnc main(): int { return 42; }\n").map_err(|e| e.to_string())?;
     let restored = Command::new(driver)
-        .arg(&source).arg(&output)
-        .env("ORESLANG_LLVMC", compiler).env("CLANG", clang)
-        .output().map_err(|e| format!("restore linked guest: {e}"))?;
-    require(restored.status.success(),
-        format!("restore linked guest failed: {}", stderr(&restored)))?;
+        .arg(&source)
+        .arg(&output)
+        .env("ORESLANG_LLVMC", compiler)
+        .env("CLANG", clang)
+        .output()
+        .map_err(|e| format!("restore linked guest: {e}"))?;
+    require(
+        restored.status.success(),
+        format!("restore linked guest failed: {}", stderr(&restored)),
+    )?;
     let original = fs::read(&output).map_err(|e| e.to_string())?;
     for text in [
         "import module spin from \"spin\";\n",
@@ -451,7 +504,10 @@ pub fnc main(): int {\n  const worker: ActorRef<Worker> = spawn Worker();\n  wor
             .env("CLANG", clang)
             .output()
             .map_err(|e| format!("run rejected AOT case: {e}"))?;
-        require(!out.status.success(), format!("invalid source admitted: {text:?}"))?;
+        require(
+            !out.status.success(),
+            format!("invalid source admitted: {text:?}"),
+        )?;
         require(
             fs::read(&output).map_err(|e| e.to_string())? == original,
             "failed compile changed existing native output",
@@ -471,10 +527,12 @@ pub fnc main(): int {\n  const worker: ActorRef<Worker> = spawn Worker();\n  wor
         "declare void @gc_collect()",
         r#"declare void @"llvm.g\63root"(ptr, ptr)"#,
     ] {
-        fs::write(&fake, format!("#!/bin/sh\ncat <<'IR'\n{ir}\nIR\n")).map_err(|e| e.to_string())?;
+        fs::write(&fake, format!("#!/bin/sh\ncat <<'IR'\n{ir}\nIR\n"))
+            .map_err(|e| e.to_string())?;
         {
             use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+            fs::set_permissions(&fake, fs::Permissions::from_mode(0o755))
+                .map_err(|e| e.to_string())?;
         }
         let out = Command::new(driver)
             .arg(&source)
@@ -483,10 +541,16 @@ pub fnc main(): int {\n  const worker: ActorRef<Worker> = spawn Worker();\n  wor
             .env("CLANG", clang)
             .output()
             .map_err(|e| format!("run collector IR case: {e}"))?;
-        require(!out.status.success(), format!("collector IR admitted: {ir}"))?;
+        require(
+            !out.status.success(),
+            format!("collector IR admitted: {ir}"),
+        )?;
         require(
             stderr(&out).contains("STRICT_NO_GC_IR_REJECTED"),
-            format!("{ir}: rejected by something other than the gate: {}", stderr(&out)),
+            format!(
+                "{ir}: rejected by something other than the gate: {}",
+                stderr(&out)
+            ),
         )?;
         require(
             fs::read(&output).map_err(|e| e.to_string())? == original,
@@ -513,18 +577,31 @@ pub fnc main(): int {\n  const worker: ActorRef<Worker> = spawn Worker();\n  wor
     Ok(())
 }
 
-
 fn named_call_source_order(compiler: &Path, fixture: &Path) -> Result<(), String> {
     let out = run(compiler, [fixture.as_os_str()])?;
-    require(out.status.success(), format!("compile named-call fixture: {}", stderr(&out)))?;
+    require(
+        out.status.success(),
+        format!("compile named-call fixture: {}", stderr(&out)),
+    )?;
     let ir = stdout(&out);
-    require(ir.starts_with("; ModuleID"), "expected native LLVM module header")?;
-    let second = ir.find("call i64 @read_second(")
+    require(
+        ir.starts_with("; ModuleID"),
+        "expected native LLVM module header",
+    )?;
+    let second = ir
+        .find("call i64 @read_second(")
         .ok_or_else(|| "missing call to read_second".to_string())?;
-    let first = ir.find("call i64 @read_first(")
+    let first = ir
+        .find("call i64 @read_first(")
         .ok_or_else(|| "missing call to read_first".to_string())?;
-    require(second < first, "named arguments evaluated in formal rather than source order")?;
-    require(stderr(&out).is_empty(), format!("unexpected compiler stderr: {}", stderr(&out)))?;
+    require(
+        second < first,
+        "named arguments evaluated in formal rather than source order",
+    )?;
+    require(
+        stderr(&out).is_empty(),
+        format!("unexpected compiler stderr: {}", stderr(&out)),
+    )?;
     println!("named-call source-order IR: PASS");
     Ok(())
 }
@@ -533,8 +610,14 @@ fn actor_persistent_fields(compiler: &Path, clang: &Path, root: &Path) -> Result
     let temp = TempDir::new("ores-actor-fields-").map_err(|e| e.to_string())?;
     let fixture = root.join("tests/fixtures/actor-owned-fields.ores");
     let compiled = run(compiler, [fixture.as_os_str()])?;
-    require(compiled.status.success(), format!("compile actor fields: {}", stderr(&compiled)))?;
-    require(!compiled.stdout.is_empty(), "compiler returned no actor LLVM IR")?;
+    require(
+        compiled.status.success(),
+        format!("compile actor fields: {}", stderr(&compiled)),
+    )?;
+    require(
+        !compiled.stdout.is_empty(),
+        "compiler returned no actor LLVM IR",
+    )?;
     let ir = temp.path.join("actor.ll");
     let binary = temp.path.join("actor");
     fs::write(&ir, &compiled.stdout).map_err(|e| e.to_string())?;
@@ -547,31 +630,53 @@ fn actor_persistent_fields(compiler: &Path, clang: &Path, root: &Path) -> Result
         .arg(&binary)
         .output()
         .map_err(|e| format!("run clang: {e}"))?;
-    require(linked.status.success(), format!("link actor fields: {}", stderr(&linked)))?;
+    require(
+        linked.status.success(),
+        format!("link actor fields: {}", stderr(&linked)),
+    )?;
     let executed = run(&binary, std::iter::empty::<&OsStr>())?;
-    require(executed.status.success(),
-        format!("actor owned-field executable exited {:?}: {}", executed.status.code(), stderr(&executed)))?;
+    require(
+        executed.status.success(),
+        format!(
+            "actor owned-field executable exited {:?}: {}",
+            executed.status.code(),
+            stderr(&executed)
+        ),
+    )?;
     println!("actor persistent fields: PASS");
     Ok(())
 }
 
 fn tagged_message_wire(binary: &Path, vectors: &Path) -> Result<(), String> {
-    let contents = fs::read_to_string(vectors)
-        .map_err(|e| format!("read {}: {e}", vectors.display()))?;
-    require(json_string(&contents, "schema").as_deref() == Some("oreslang.tagged.message.v2"),
-        "tagged-message vector schema mismatch")?;
+    let contents =
+        fs::read_to_string(vectors).map_err(|e| format!("read {}: {e}", vectors.display()))?;
+    require(
+        json_string(&contents, "schema").as_deref() == Some("oreslang.tagged.message.v2"),
+        "tagged-message vector schema mismatch",
+    )?;
     let expected = json_string(&contents, "hex")
         .ok_or_else(|| "missing hex field in tagged-message vector".to_string())?;
-    require(!expected.is_empty() && expected.bytes().all(|b| b.is_ascii_hexdigit()) && expected.len() % 2 == 0,
-        "tagged-message vector hex must be nonempty even-length hexadecimal")?;
+    require(
+        !expected.is_empty()
+            && expected.bytes().all(|b| b.is_ascii_hexdigit())
+            && expected.len() % 2 == 0,
+        "tagged-message vector hex must be nonempty even-length hexadecimal",
+    )?;
     let actual = run(binary, std::iter::empty::<&OsStr>())?;
-    require(actual.status.success(), format!("tagged-message executable failed: {}", stderr(&actual)))?;
-    require(stdout(&actual).trim() == expected,
-        format!("native enum message bytes differ from Java fixture: {} != {expected}", stdout(&actual).trim()))?;
+    require(
+        actual.status.success(),
+        format!("tagged-message executable failed: {}", stderr(&actual)),
+    )?;
+    require(
+        stdout(&actual).trim() == expected,
+        format!(
+            "native enum message bytes differ from Java fixture: {} != {expected}",
+            stdout(&actual).trim()
+        ),
+    )?;
     println!("PASS exact enum tag/identity typed MessagePack v2 vector");
     Ok(())
 }
-
 
 fn native_async_io_boundary(compiler: &Path) -> Result<(), String> {
     let temp = TempDir::new("ores-async-io-boundary-").map_err(|e| e.to_string())?;
@@ -616,11 +721,17 @@ fn native_async_io_boundary(compiler: &Path) -> Result<(), String> {
         )?;
         require(
             stdout(&out).trim().is_empty(),
-            format!("{name}: unsupported native I/O emitted LLVM IR: {}", stdout(&out)),
+            format!(
+                "{name}: unsupported native I/O emitted LLVM IR: {}",
+                stdout(&out)
+            ),
         )?;
         require(
             stderr(&out).contains("unknown function or wrong call arity"),
-            format!("{name}: missing undefined-call rejection diagnostic: {}", stderr(&out)),
+            format!(
+                "{name}: missing undefined-call rejection diagnostic: {}",
+                stderr(&out)
+            ),
         )?;
 
         let global_launder = format!(
@@ -682,8 +793,7 @@ pub fnc main(): int {{
 pub fnc main(): int {{ return {symbol}(41); }}
 "#
         );
-        fs::write(&fixture, program)
-            .map_err(|e| format!("{name}: write positive fixture: {e}"))?;
+        fs::write(&fixture, program).map_err(|e| format!("{name}: write positive fixture: {e}"))?;
         let out = run(compiler, [fixture.as_os_str()])?;
         require(
             out.status.success() && stdout(&out).starts_with("; ModuleID"),
@@ -759,7 +869,10 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
         let out = run(compiler, [source.as_os_str()])?;
         require(
             out.status.success() && stdout(&out).starts_with("; ModuleID"),
-            format!("{name}: compiler rejected source or did not emit IR: {}", stderr(&out)),
+            format!(
+                "{name}: compiler rejected source or did not emit IR: {}",
+                stderr(&out)
+            ),
         )?;
         if name == "mixed-method-arities" {
             let symbols = stdout(&out);
@@ -787,7 +900,11 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
         let executed = run(&executable, [] as [&OsStr; 0])?;
         require(
             executed.status.code() == Some(42),
-            format!("{name}: native return status {:?}, stderr={}", executed.status.code(), stderr(&executed)),
+            format!(
+                "{name}: native return status {:?}, stderr={}",
+                executed.status.code(),
+                stderr(&executed)
+            ),
         )?;
     }
 
@@ -879,11 +996,17 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
             !out.status.success()
                 && stdout(&out).trim().is_empty()
                 && stderr(&out).contains(diagnostic),
-            format!("{name}: expected rejection '{diagnostic}'; status={:?}, stdout={}, stderr={}",
-                out.status.code(), stdout(&out), stderr(&out)),
+            format!(
+                "{name}: expected rejection '{diagnostic}'; status={:?}, stdout={}, stderr={}",
+                out.status.code(),
+                stdout(&out),
+                stderr(&out)
+            ),
         )?;
     }
-    println!("native inline self: 6 compiled/AOT-executed positive cases, 13 fail-closed negatives");
+    println!(
+        "native inline self: 6 compiled/AOT-executed positive cases, 13 fail-closed negatives"
+    );
     Ok(())
 }
 
@@ -926,7 +1049,10 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
         let compiled = run(compiler, [source.as_os_str()])?;
         require(
             compiled.status.success() && stdout(&compiled).starts_with("; ModuleID"),
-            format!("{name}: native frontend rejected source: {}", stderr(&compiled)),
+            format!(
+                "{name}: native frontend rejected source: {}",
+                stderr(&compiled)
+            ),
         )?;
         let llvm_ir = stdout(&compiled);
         if name == "function-param" || name == "negative-function-param" {
@@ -961,27 +1087,50 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
                 executed.status.code() == Some(expected)
                     && executed.stdout.is_empty()
                     && executed.stderr.is_empty(),
-                format!("{name} {level}: observed {:?}, expected {expected}",
-                    executed.status.code()),
+                format!(
+                    "{name} {level}: observed {:?}, expected {expected}",
+                    executed.status.code()
+                ),
             )?;
         }
     }
     let negatives = [
-        ("zero-divisor", "pub fnc main(): int { return 5 % 0; }\n",
-            "nonzero signed integer literal divisor"),
-        ("negative-zero", "pub fnc main(): int { return 5 % -0; }\n",
-            "nonzero signed integer literal divisor"),
-        ("computed-divisor", "pub fnc main(): int { return 5 % (3 - 1); }\n",
-            "nonzero signed integer literal divisor"),
-        ("runtime-divisor", "fnc rem(int n): int { return 5 % n; }\n\
+        (
+            "zero-divisor",
+            "pub fnc main(): int { return 5 % 0; }\n",
+            "nonzero signed integer literal divisor",
+        ),
+        (
+            "negative-zero",
+            "pub fnc main(): int { return 5 % -0; }\n",
+            "nonzero signed integer literal divisor",
+        ),
+        (
+            "computed-divisor",
+            "pub fnc main(): int { return 5 % (3 - 1); }\n",
+            "nonzero signed integer literal divisor",
+        ),
+        (
+            "runtime-divisor",
+            "fnc rem(int n): int { return 5 % n; }\n\
             pub fnc main(): int { return rem(2); }\n",
-            "nonzero signed integer literal divisor"),
-        ("nonliteral-unary", "pub fnc main(): int { return 5 % -(1 + 2); }\n",
-            "nonzero signed integer literal divisor"),
-        ("double-negative", "pub fnc main(): int { return 5 % -(-2); }\n",
-            "nonzero signed integer literal divisor"),
-        ("wrong-type", "pub fnc main(): int { return true % 2; }\n",
-            "arithmetic requires int"),
+            "nonzero signed integer literal divisor",
+        ),
+        (
+            "nonliteral-unary",
+            "pub fnc main(): int { return 5 % -(1 + 2); }\n",
+            "nonzero signed integer literal divisor",
+        ),
+        (
+            "double-negative",
+            "pub fnc main(): int { return 5 % -(-2); }\n",
+            "nonzero signed integer literal divisor",
+        ),
+        (
+            "wrong-type",
+            "pub fnc main(): int { return true % 2; }\n",
+            "arithmetic requires int",
+        ),
     ];
     for (name, program, diagnostic) in negatives {
         fs::write(&source, program).map_err(|e| format!("{name}: write: {e}"))?;
@@ -990,8 +1139,10 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
             !rejected.status.success()
                 && rejected.stdout.is_empty()
                 && stderr(&rejected).contains(diagnostic),
-            format!("{name}: missing fail-closed diagnostic {diagnostic:?}: {}",
-                stderr(&rejected)),
+            format!(
+                "{name}: missing fail-closed diagnostic {diagnostic:?}: {}",
+                stderr(&rejected)
+            ),
         )?;
     }
     println!(
@@ -1010,6 +1161,12 @@ fn path_arg(args: &[String], index: usize, usage: &str) -> Result<PathBuf, Strin
 fn real_main() -> Result<(), String> {
     let args: Vec<String> = env::args().collect();
     match args.get(1).map(String::as_str) {
+        Some("sealed-guest") => {
+            let usage = "usage: sealed-guest <compiler> <clang> <root> <no-gc-auditor> <release|sanitize>";
+            if args.len() != 7 { return Err(usage.into()); }
+            sealed_guest::run_cases(&path_arg(&args, 2, usage)?, &path_arg(&args, 3, usage)?,
+                &path_arg(&args, 4, usage)?, &path_arg(&args, 5, usage)?, &args[6])
+        }
         Some("retained-guest") => {
             let usage = "usage: retained-guest <compiler> <clang> <root> <no-gc-auditor> <release|sanitize>";
             let compiler = path_arg(&args, 2, usage)?;
@@ -1085,4 +1242,3 @@ fn main() {
         std::process::exit(1);
     }
 }
-

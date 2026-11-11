@@ -29,7 +29,7 @@ public:
                                  std::uint64_t continuation_id,
                                  const CriticalStateCallback& callback,
                                  FunctionEffects declared_using,
-                                 bool verified_serial_actor = false) noexcept {
+                                 bool verified_serial_actor) noexcept {
         if (active_) return CriticalStateAdmission::InvalidStateCallback;
         const auto approved = admit_critical_handle_state(
                 callback, declared_using, verified_serial_actor);

@@ -1,0 +1,10 @@
+// After field_write, overflow in the return must not leave half a callback.
+define isolated actor Counter as
+    state { count: int = 0; }
+    pub on_message(int value): int {
+        return self.handle_state(critical-write |s| -> {
+            s.count = s.count + value;
+            return s.count + 1;
+        });
+    }
+end

@@ -1272,6 +1272,10 @@ if(BUILD_TESTING)
 
     add_executable(oreslang-ownership-cfg-dataflow-test
         tests/ownership_cfg_dataflow_test.cpp)
+    add_executable(oreslang-sealed-state-ownership-test tests/sealed_state_ownership_test.cpp)
+    target_include_directories(oreslang-sealed-state-ownership-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-sealed-state-ownership-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_sealed_state_ownership_revalidation COMMAND oreslang-sealed-state-ownership-test)
     target_include_directories(oreslang-ownership-cfg-dataflow-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-ownership-cfg-dataflow-test PRIVATE
@@ -1505,9 +1509,39 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_using_typed_effects using-pure-constant.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_unknown_effect using-unknown-effect.ores --diagnostic "unknown function effect")
     oreslang_contract_test(native_using_duplicate_effect using-duplicate-effect.ores --diagnostic "duplicate function effect")
-    oreslang_contract_test(native_critical_actor_state_not_lowered critical-handle-state-using.ores --diagnostic "native actor state { ... } requires sealed handle_state lowering")
+    oreslang_contract_test(native_critical_actor_state_not_lowered critical-handle-state-using.ores
+        --diagnostic "sealed handle_state plus generation-fenced logical-turn lowering is not executable yet")
     oreslang_contract_test(native_requires_rejects_unverified_wcet requires-unverified.ores --diagnostic "native requires clause awaits verified")
-    oreslang_contract_test(native_actor_state_sealed_until_lowering state-sealed-unsupported.ores --diagnostic "native actor state")
+    oreslang_contract_test(native_actor_state_sealed_until_lowering state-sealed-unsupported.ores
+        --diagnostic "sealed handle_state plus generation-fenced logical-turn lowering is not executable yet")
+    oreslang_contract_test(native_isolated_actor_state_schema_metadata_boundary
+        source-isolated-actor-state-schema-boundary.atto
+        --diagnostic "sealed handle_state plus generation-fenced logical-turn lowering is not executable yet")
+    oreslang_contract_test(native_isolated_actor_state_duplicate_rejected
+        source-isolated-actor-state-duplicate-reject.atto
+        --diagnostic "duplicate actor state field 'count'")
+    oreslang_contract_test(native_isolated_actor_state_type_rejected
+        source-isolated-actor-state-type-reject.atto
+        --diagnostic "native actor state schema admits only int/bool fields in this metadata slice")
+    oreslang_contract_test(native_isolated_actor_state_i64_overflow_rejected
+        source-isolated-actor-state-i64-overflow-reject.atto
+        --diagnostic "integer literal overflows signed 64-bit result")
+    oreslang_contract_test(native_isolated_actor_state_i64_min_reaches_lowering_boundary
+        source-isolated-actor-state-i64-min-boundary.atto
+        --diagnostic "sealed handle_state plus generation-fenced logical-turn lowering is not executable yet")
+    oreslang_contract_test(native_isolated_actor_state_field_limit_rejected
+        source-isolated-actor-state-field-limit-reject.atto
+        --diagnostic "native actor state schema field limit exceeded (16)")
+    oreslang_contract_test(native_isolated_actor_requires_state
+        source-isolated-actor-missing-state-reject.atto
+        --diagnostic "native isolated actor requires sealed state { ... } before methods")
+    oreslang_contract_test(native_isolated_actor_state_empty_rejected
+        source-isolated-actor-state-empty-reject.atto
+        --diagnostic "native actor state schema requires at least one field")
+    oreslang_contract_test(native_isolated_actor_state_negative_overflow_rejected
+        source-isolated-actor-state-negative-overflow-reject.atto
+        --diagnostic "integer literal overflows signed 64-bit result")
+
 
     # Native OS ABI is i32 even though Oreslang int is represented as i64.
     oreslang_contract_test(native_exit_reject_main_arguments exit-invalid-main-args.ores
@@ -2007,6 +2041,26 @@ if(BUILD_TESTING)
     set_tests_properties(source_actor_await_trace_runtime PROPERTIES TIMEOUT 30)
 
     if(ORE_CLANG)
+        # Real compiled Oreslang guest + native scheduler and heap turns.
+        # The test runner uses standard-library Rust (no new Python harness).
+        # The compiled actor-state guest suite is a required test gate.
+        # Missing Rust cannot silently suppress the two CTests.
+        if(ORES_RUST_TEST_HARNESS_BIN)
+            add_custom_target(oreslang-sealed-state-guest-driver
+                DEPENDS oreslang-rust-test-harness)
+            add_test(NAME native_sealed_state_compiled_guest_release
+                COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" sealed-guest
+                    "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}"
+                    "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit" release)
+            set_tests_properties(native_sealed_state_compiled_guest_release PROPERTIES TIMEOUT 180)
+            add_test(NAME native_sealed_state_compiled_guest_sanitized
+                COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" sealed-guest
+                    "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}"
+                    "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit" sanitize)
+            set_tests_properties(native_sealed_state_compiled_guest_sanitized PROPERTIES TIMEOUT 180)
+        endif()
         add_test(NAME source_actor_compiled_native_lifecycle
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_actor_e2e.py"

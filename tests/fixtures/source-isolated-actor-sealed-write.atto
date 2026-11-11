@@ -1,0 +1,20 @@
+// Native v1: executable isolated state accessed only inside critical-write.
+// The real source actor scheduler owns exclusive handler admission.
+define isolated actor Counter as
+    state {
+        count: int = 0;
+    }
+    pub on_message(int value): int {
+        return self.handle_state(critical-write |s| -> {
+            s.count = s.count + value;
+            return s.count;
+        });
+    }
+end
+pub fnc main(): int {
+    const worker = spawn Counter();
+    worker.send(1);
+    worker.send(2);
+    stop worker;
+    return 43;
+}

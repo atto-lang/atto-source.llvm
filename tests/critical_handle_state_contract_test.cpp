@@ -15,8 +15,13 @@ int main() {
     c.one_state_parameter = true;
     c.inferred = row(READ | WRITE);
     const auto using_rw = row(READ | WRITE);
-    CHECK(admit_critical_handle_state(c, using_rw)
+    CHECK(admit_critical_handle_state(c, using_rw, true)
             == CriticalStateAdmission::MissingCallbackCritical);
+    // Scheduler serial admission cannot override the required inline
+    // critical callback syntax or bypass the state capability boundary.
+    CHECK(admit_critical_handle_state(c, using_rw, true)
+            == CriticalStateAdmission::MissingCallbackCritical);
+    c.callback_critical = true;
     CHECK(admit_critical_handle_state(c, using_rw, true)
             == CriticalStateAdmission::Accept);
     c.intrinsic_critical = false;
@@ -37,71 +42,84 @@ int main() {
     c.escapes = false;
     CHECK(admit_critical_handle_state(c, row(READ), true)
             == CriticalStateAdmission::EffectExceedsUsing);
-    // Verified serial admission cannot be inferred from the callback itself;
-    // the two-argument untrusted policy still fails closed.
+    // A valid critical callback does not prove trusted scheduler ownership.
     CHECK(admit_critical_handle_state(c, using_rw)
+            == CriticalStateAdmission::ScopeDenied);
+    c.callback_critical = false;
+    CHECK(admit_critical_handle_state(c, using_rw, true)
             == CriticalStateAdmission::MissingCallbackCritical);
     c.callback_critical = true;
-    CHECK(admit_critical_handle_state(c, using_rw)
+    CHECK(admit_critical_handle_state(c, using_rw, true)
             == CriticalStateAdmission::Accept);
 
     c.intrinsic_critical = false;
-    CHECK(admit_critical_handle_state(c, using_rw)
+    CHECK(admit_critical_handle_state(c, using_rw, true)
             == CriticalStateAdmission::MissingIntrinsicCritical);
     c.intrinsic_critical = true;
 
     c.lexical = false;
-    CHECK(admit_critical_handle_state(c, using_rw)
+    CHECK(admit_critical_handle_state(c, using_rw, true)
             == CriticalStateAdmission::InvalidStateCallback);
     c.lexical = true;
     c.one_state_parameter = false;
-    CHECK(admit_critical_handle_state(c, using_rw)
+    CHECK(admit_critical_handle_state(c, using_rw, true)
             == CriticalStateAdmission::InvalidStateCallback);
     c.one_state_parameter = true;
 
     c.escapes = true;
-    CHECK(admit_critical_handle_state(c, using_rw)
+    CHECK(admit_critical_handle_state(c, using_rw, true)
             == CriticalStateAdmission::CallbackEscape);
     c.escapes = false;
 
-    CHECK(admit_critical_handle_state(c, row(READ))
+    CHECK(admit_critical_handle_state(c, row(READ), true)
             == CriticalStateAdmission::EffectExceedsUsing);
     c.inferred = row(READ);
-    CHECK(admit_critical_handle_state(c, row(READ))
+    CHECK(admit_critical_handle_state(c, row(READ), true)
             == CriticalStateAdmission::Accept);
 
     c.inferred = row(READ | IO);
-    CHECK(admit_critical_handle_state(c, row(READ))
+    CHECK(admit_critical_handle_state(c, row(READ), true)
             == CriticalStateAdmission::EffectExceedsUsing);
-    CHECK(admit_critical_handle_state(c, row(READ | IO))
+    CHECK(admit_critical_handle_state(c, row(READ | IO), true)
+            == CriticalStateAdmission::Accept);
+
+    c.inferred = row(READ);
+    c.state_loan_live_across_suspend = true;
+    CHECK(admit_critical_handle_state(c, row(READ), true)
+            == CriticalStateAdmission::LoanAcrossSuspension);
+    c.state_loan_live_across_suspend = false;
+    CHECK(admit_critical_handle_state(c, row(READ), true)
             == CriticalStateAdmission::Accept);
 
     c.inferred = row(READ | SUSPEND);
-    CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
+    CHECK(admit_critical_handle_state(c, row(READ | SUSPEND), true)
+            == CriticalStateAdmission::MissingLogicalTurnRetention);
+    c.logical_turn_retained_across_suspend = true;
+    CHECK(admit_critical_handle_state(c, row(READ | SUSPEND), true)
             == CriticalStateAdmission::MissingContinuationFence);
     c.continuation_generation_fenced = true;
-    CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
+    CHECK(admit_critical_handle_state(c, row(READ | SUSPEND), true)
             == CriticalStateAdmission::Accept);
     c.state_loan_live_across_suspend = true;
-    CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
+    CHECK(admit_critical_handle_state(c, row(READ | SUSPEND), true)
             == CriticalStateAdmission::LoanAcrossSuspension);
     c.state_loan_live_across_suspend = false;
-    CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
+    CHECK(admit_critical_handle_state(c, row(READ | SUSPEND), true)
             == CriticalStateAdmission::Accept);
 
     // Trusted admission must not accept forged/reserved bits in either the
     // inferred callback row or the caller's upper-bound "using" row.
     constexpr std::uint32_t UNKNOWN = 1u << 31;
     c.inferred = row(READ);
-    CHECK(admit_critical_handle_state(c, row(READ | UNKNOWN))
+    CHECK(admit_critical_handle_state(c, row(READ | UNKNOWN), true)
             == CriticalStateAdmission::EffectExceedsUsing);
     c.inferred = row(READ | UNKNOWN);
-    CHECK(admit_critical_handle_state(c, row(READ | UNKNOWN))
+    CHECK(admit_critical_handle_state(c, row(READ | UNKNOWN), true)
             == CriticalStateAdmission::EffectExceedsUsing);
-    CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
+    CHECK(admit_critical_handle_state(c, row(READ | SUSPEND), true)
             == CriticalStateAdmission::EffectExceedsUsing);
     c.inferred = row(READ);
-    CHECK(admit_critical_handle_state(c, row(READ))
+    CHECK(admit_critical_handle_state(c, row(READ), true)
             == CriticalStateAdmission::Accept);
     return 0;
 }

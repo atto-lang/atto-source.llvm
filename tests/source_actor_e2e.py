@@ -32,6 +32,10 @@ def expected_prefix_last(name, actor_index, processed):
         for n in range(start, start + processed):
             value = 2 * (value + n)
         return value
+    if name == "source-isolated-actor-sealed-write.atto":
+        return sum(range(1, processed + 1))
+    if name == "source-isolated-actor-sealed-read.atto":
+        return 7 + processed
     if name == "source-actor-interleaved-stop.ores":
         sequences = ([1], [3, 4])
         return sum(sequences[actor_index][:processed])
@@ -83,6 +87,8 @@ def main():
         # for all three source spellings of native instance on_message.
         ("source-actor-method-keyword.ores", 1, 2, 3),
         ("source-actor-bare-method.ores", 1, 2, 3),
+        ("source-isolated-actor-sealed-write.atto", 1, 2, 3),
+        ("source-isolated-actor-sealed-read.atto", 1, 2, 9),
         ("source-actor-send.ores", 1, 2, 3),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-await-ready.ores", 1, 2, 3),
@@ -98,6 +104,26 @@ def main():
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
     negatives = {
+        "source-isolated-actor-sealed-read-mutation-reject.atto":
+            "critical-read callback cannot mutate sealed actor state",
+        "source-isolated-actor-sealed-unknown-field-reject.atto":
+            "unknown sealed actor state field",
+        "source-isolated-actor-sealed-wrong-binding-reject.atto":
+            "sealed actor state field must use lexical callback binding",
+        "source-isolated-actor-sealed-unmarked-reject.atto":
+            "expected 'critical'",
+        "source-isolated-actor-sealed-bool-gate-reject.atto":
+            "native sealed-state guest v1 supports only int fields",
+        "source-isolated-actor-sealed-suspend-reject.atto":
+            "native async/channel/select boundary unsupported: suspension-aware borrow checking and cancellation/actor lowering required",
+        "source-isolated-actor-sealed-split-critical-reject.atto":
+            "sealed handle_state requires contiguous critical-read/write modifier",
+        "source-isolated-actor-sealed-multi-write-reject.atto":
+            "native sealed callback v1 allows one write until atomic multi-field commit lowering",
+        "source-isolated-actor-sealed-postcommit-overflow-reject.atto":
+            "native sealed write callback requires nonthrowing scalar return after commit",
+        "source-isolated-actor-sealed-direct-read-reject.atto":
+            "expected 'self'",
         "source-actor-owned-unknown-initializer-reject.ores":
             "unknown parameter 'not_yet_declared'",
         "source-actor-owned-forward-reference-reject.ores":
@@ -174,6 +200,16 @@ def main():
             assert guest.stdout.startswith("; ModuleID"), name
             assert "oreslang_source_actor_spawn" in guest.stdout, name
             assert "oreslang_source_actor_stop" in guest.stdout, name
+            if name.startswith("source-isolated-actor-sealed-"):
+                assert "oreslang_actor_Counter_on_message" in guest.stdout, name
+                assert "ores_actor_i64_heap_field_read" in guest.stdout, name
+                writes = [line for line in guest.stdout.splitlines()
+                          if "call void @ores_actor_i64_heap_field_write(" in line]
+                if name.endswith("-write.atto"):
+                    assert len(writes) == 1, (name, writes)
+                    assert "llvm.sadd.with.overflow.i64" in guest.stdout, name
+                else:
+                    assert not writes, (name, writes)
             if name not in {
                 "source-actor-spawn-stop.ores",
                 "source-actor-await-done.ores",

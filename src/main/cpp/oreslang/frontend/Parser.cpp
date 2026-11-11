@@ -146,7 +146,7 @@ bool reserved(std::string_view name) {
         "throw", "raise", "panic", "recover",
         "finally", "end", "fi", "if", "guard", "do", "else", "then", "new",
         "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "gen", "generator",
-        "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
+        "nlex", "trap", "actor", "isoactor", "isolated", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
         "default", "eq", "neq", "and", "or", "xor", "nb", "select", "readch", "writech",
@@ -312,7 +312,11 @@ public:
         // Admit '@' as a TOKEN only so existing parameter-local @Default guards
         // can issue their specific fail-closed diagnostic instead of a generic
         // unsupported-token error. No annotation execution is enabled.
-        if (std::string_view("(){},:;+-*/%=.<>@?!").find(ch) != std::string_view::npos) {
+        // A single pipe is the lexical delimiter for compiler-owned
+        // sealed-state callbacks (|state|). Keep || as the earlier
+        // two-character logical-or token above; admitting | here does not
+        // enable a guest bitwise/operator surface.
+        if (std::string_view("(){},:;+-*/%=.<>@?!|").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -782,6 +786,10 @@ public:
                 wrapped_module = true;
             } else {
                 if (accept("class")) { auto cls = class_declaration(); cls.exported = exported; program.classes.push_back(std::move(cls)); }
+                else if (accept("isolated")) {
+                    require("actor");
+                    program.actors.push_back(actor_declaration(true));
+                }
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else if (accept_transform_pipe_modifier()) {
                     require("actor");
@@ -1460,9 +1468,10 @@ private:
         return result;
     }
 
-    ActorDecl actor_declaration() {
+    ActorDecl actor_declaration(bool isolated = false) {
         ActorDecl actor;
         actor.offset = token_.offset;
+        actor.isolated = isolated;
         actor.name = nominal_declaration_name();
         if (callable_nominal_name(actor.name))
             fail("callable signatures cannot be declared as nominal actor types");
@@ -1470,8 +1479,195 @@ private:
             fail("builtin Entry is compiler-owned and cannot be declared as a nominal actor type");
         require("as");
         const bool braced = accept("{");
-        if (token_.text == "state") {
-            fail("native actor state { ... } requires sealed handle_state lowering; legacy scalar actor fields are not this contract");
+        if (isolated && token_.text != "state") {
+            fail("native isolated actor requires sealed state { ... } before methods");
+        }
+        if (accept("state")) {
+            actor.has_state_schema = true;
+            require("{");
+            std::unordered_set<std::string> state_names;
+            while (!accept("}")) {
+                if (token_.kind == Kind::End)
+                    fail("unterminated native actor state schema");
+                if (actor.state_schema.size() == 16)
+                    fail("native actor state schema field limit exceeded (16)");
+                ActorStateField field;
+                field.offset = token_.offset;
+                field.name = identifier();
+                if (!state_names.insert(field.name).second)
+                    fail("duplicate actor state field '" + field.name + "'");
+                require(":");
+                if (accept("int")) {
+                    field.type = ScalarType::I64;
+                    require("=");
+                    field.initial_i64 = signed_integer_literal();
+                } else if (accept("bool")) {
+                    field.type = ScalarType::Bool;
+                    require("=");
+                    if (accept("true")) field.initial_i64 = 1;
+                    else if (accept("false")) field.initial_i64 = 0;
+                    else fail("native actor bool state default must be true or false");
+                } else {
+                    fail("native actor state schema admits only int/bool fields in this metadata slice");
+                }
+                require(";");
+                actor.state_schema.push_back(std::move(field));
+            }
+            if (actor.state_schema.empty())
+                fail("native actor state schema requires at least one field");
+            // Preserve the existing fail-closed metadata boundary for legacy
+            // actors and declarations without an explicit sealed callback.
+            // The only executable v1 is an isolated, synchronous on_message
+            // with ONE nonescaping compiler-recognized critical-read/write
+            // callback, no await, FFI, arbitrary functions or bare state access.
+            if (!isolated || token_.text != "pub")
+                fail("native actor state schema parsed; sealed handle_state plus generation-fenced logical-turn lowering is not executable yet");
+            for (const auto& field : actor.state_schema) {
+                if (field.type != ScalarType::I64)
+                    fail("native sealed-state guest v1 supports only int fields");
+            }
+            Function method;
+            method.offset = token_.offset;
+            method.exported = true;
+            require("pub");
+            if (!accept("fnc")) accept("method");
+            require("on_message");
+            method.name = "on_message";
+            require("(");
+            require("int");
+            Parameter param;
+            param.name = identifier();
+            if (state_names.count(param.name))
+                fail("sealed actor message parameter shadows state field");
+            method.parameters.push_back(std::move(param));
+            require(")");
+            require(":");
+            require("int");
+            require("{");
+            require("return");
+            require("self");
+            require(".");
+            require("handle_state");
+            require("(");
+            // Canonical hyphenated critical-read/write is one lexical modifier.
+            // Do not reinterpret guest arithmetic as an access capability.
+            const std::size_t critical_offset = token_.offset;
+            require("critical");
+            if (token_.offset != critical_offset + 8 || token_.text != "-")
+                fail("sealed handle_state requires contiguous critical-read/write modifier");
+            require("-");
+            if (token_.offset != critical_offset + 9)
+                fail("sealed handle_state requires contiguous critical-read/write modifier");
+            const std::string access = identifier();
+            if (access != "read" && access != "write")
+                fail("native sealed handle_state requires critical-read or critical-write");
+            require("|");
+            const std::string binding = identifier();
+            if (binding == method.parameters.front().name || state_names.count(binding))
+                fail("native sealed state callback binding shadows message or state");
+            require("|");
+            require("->");
+            require("{");
+            // Internally the existing actor-owned heap remains the backing
+            // store. It is NOT source-accessible: every field reference must
+            // be the exact lexical s.field inside this sealed callback.
+            // Reusing the checked i64 heap preserves actor-domain/epoch guards
+            // and checked arithmetic in generated LLVM IR.
+            for (const auto& field : actor.state_schema) {
+                LocalBinding slot;
+                slot.name = field.name;
+                slot.offset = field.offset;
+                slot.field_mutable = access == "write"; // read callbacks get immutable native slots
+                slot.initializer = std::make_unique<Expression>();
+                slot.initializer->kind = Expression::Kind::Integer;
+                slot.initializer->integer = field.initial_i64;
+                actor.fields.push_back(std::move(slot));
+            }
+            std::function<void(Expression&)> check_sealed_expression;
+            check_sealed_expression = [&](Expression& e) {
+                switch (e.kind) {
+                    case Expression::Kind::Integer:
+                        return;
+                    case Expression::Kind::Variable:
+                        if (e.name != method.parameters.front().name)
+                            fail("sealed actor state is accessible only through critical callback binding");
+                        return;
+                    case Expression::Kind::Field:
+                        if (!e.left || e.left->kind != Expression::Kind::Variable ||
+                            e.left->name != binding || !state_names.count(e.name))
+                            fail("sealed actor state field must use lexical callback binding");
+                        e.kind = Expression::Kind::Variable;
+                        e.left.reset();
+                        return;
+                    case Expression::Kind::Negate:
+                    case Expression::Kind::Add:
+                    case Expression::Kind::Subtract:
+                    case Expression::Kind::Multiply:
+                        if (!e.left)
+                            fail("invalid sealed state scalar expression");
+                        check_sealed_expression(*e.left);
+                        if (e.kind != Expression::Kind::Negate) {
+                            if (!e.right) fail("invalid sealed state binary expression");
+                            check_sealed_expression(*e.right);
+                        }
+                        return;
+                    default:
+                        fail("native sealed state callback v1 permits only pure integer arithmetic");
+                }
+            };
+            // State writes remain ordered, bounded and synchronous. No
+            // direct field writes, captured state pointers or async frames.
+            while (token_.text != "return") {
+                if (token_.text == "await" || token_.text == "suspend" ||
+                    token_.text == "select" || token_.text == "yield")
+                    fail("native sealed state callback suspend requires generation-fenced continuation lowering");
+                if (token_.kind == Kind::End || token_.text == "}")
+                    fail("native sealed callback requires a return");
+                if (access != "write")
+                    fail("critical-read callback cannot mutate sealed actor state");
+                // There is no multi-field transaction/rollback lowering
+                // yet. Reject a second write rather than commit a prefix
+                // and then trap while evaluating a later checked expression.
+                if (!method.actor_field_writes.empty())
+                    fail("native sealed callback v1 allows one write until atomic multi-field commit lowering");
+                require(binding);
+                require(".");
+                ActorFieldWrite write;
+                write.offset = token_.offset;
+                write.field = identifier();
+                if (!state_names.count(write.field))
+                    fail("unknown sealed actor state field");
+                require("=");
+                write.expression = expression();
+                check_sealed_expression(*write.expression);
+                require(";");
+                method.actor_field_writes.push_back(std::move(write));
+            }
+            require("return");
+            if (token_.text == "await" || token_.text == "suspend" ||
+                token_.text == "select" || token_.text == "yield")
+                fail("native sealed state callback suspend requires generation-fenced continuation lowering");
+            method.result = expression();
+            check_sealed_expression(*method.result);
+            // After the single heap commit, even checked arithmetic could
+            // trap and leave a partially observed callback. Restrict the
+            // return to a nonthrowing scalar load/constant until we can
+            // stage the entire callback's return and writes transactionally.
+            if (!method.actor_field_writes.empty() &&
+                    method.result->kind != Expression::Kind::Variable &&
+                    method.result->kind != Expression::Kind::Integer)
+                fail("native sealed write callback requires nonthrowing scalar return after commit");
+            require(";");
+            require("}");
+            require(")");
+            require(";");
+            require("}");
+            actor.on_message = std::move(method);
+            if (braced) require("}");
+            else require("end");
+            actor.sealed_state_write_v1 = access == "write";
+            actor.sealed_state_synchronous_v1 = true;
+            return actor;
         }
         std::unordered_set<std::string> names;
         while (token_.text == "let" || token_.text == "const" || token_.text == "val") {

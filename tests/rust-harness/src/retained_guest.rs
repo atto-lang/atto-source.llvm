@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-fn bounded(command: &mut Command, prefix: &Path) -> Result<Output, String> {
+pub(crate) fn bounded(command: &mut Command, prefix: &Path) -> Result<Output, String> {
     let out_path = prefix.with_extension("stdout");
     let err_path = prefix.with_extension("stderr");
     let out_file = fs::File::create(&out_path).map_err(|e| e.to_string())?;
@@ -28,7 +28,7 @@ fn bounded(command: &mut Command, prefix: &Path) -> Result<Output, String> {
             let _ = child.kill();
             let _ = child.wait();
             return Err(format!(
-                "retained guest command timed out: {command:?}\n{}",
+                "native guest command timed out: {command:?}\n{}",
                 fs::read_to_string(&err_path).unwrap_or_default()
             ));
         }

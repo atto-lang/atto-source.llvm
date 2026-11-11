@@ -1,4 +1,5 @@
 /build/
+/tests/rust-harness/target/
 /cmake-build-*/
 /.cache/
 *.o
