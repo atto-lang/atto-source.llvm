@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -27,8 +28,10 @@ public:
     using Owner = std::unique_ptr<T, Deleter>;
     // A throwing handle move or cleanup would break strong ownership safety
     // during slot unlink or a physical release/ACK boundary.
-    static_assert(std::is_nothrow_move_constructible_v<Deleter>,
-                  "actor-owned payload deleter must have a nonthrowing move");
+    static_assert(std::is_object_v<Deleter> &&
+                  std::is_nothrow_move_constructible_v<Deleter> &&
+                  std::is_nothrow_destructible_v<Deleter>,
+                  "actor-owned payload deleter must be an owned, nonthrowing value");
     // libstdc++ does not annotate default_delete<T>::operator() noexcept:
     // validate the T destructor for the standard deleter, and the callable
     // noexcept contract for custom arena/resource deleters.
@@ -81,6 +84,14 @@ public:
     PreallocatedSelectiveSlots& operator=(const PreallocatedSelectiveSlots&) = delete;
     PreallocatedSelectiveSlots(PreallocatedSelectiveSlots&&) = delete;
     PreallocatedSelectiveSlots& operator=(PreallocatedSelectiveSlots&&) = delete;
+
+    // The owning runtime must retire or drain queued frames before teardown.
+    // Silent slot destruction would release actor resources without a
+    // supervisor/physical-quiescence proof. Checked-out frames are tracked
+    // separately by the outer mailbox ACK/loan ledger.
+    ~PreallocatedSelectiveSlots() noexcept {
+        if (size_ != 0) std::terminate();
+    }
 
     std::size_t size() const noexcept { return size_; }
     std::size_t capacity() const noexcept { return slots_.size(); }
