@@ -124,7 +124,62 @@ int main() {
             must_reject([&] { (void)freeze_native_i64_specializations(forged); },
                         "undeclared native AOT generic parameter ABI");
         }
-        std::cout << "NATIVE_I64_SPECIALIZATION_PLAN|symbols=1|negative_cases=9\n";
+        // Compiler-owned generic calls form a bounded, concrete dependency
+        // graph. Two calls to the same specialization create only one edge.
+        {
+            auto program = fixture();
+            program.functions.push_back(generic("helper"));
+            auto add = std::make_unique<Expression>();
+            add->kind = Expression::Kind::Add;
+            for (auto* slot : {&add->left, &add->right}) {
+                auto call = std::make_unique<Expression>();
+                call->kind = Expression::Kind::Call;
+                call->name = "helper";
+                auto arg = std::make_unique<Expression>();
+                arg->kind = Expression::Kind::Integer;
+                arg->integer = 1;
+                call->arguments.push_back(std::move(arg));
+                *slot = std::move(call);
+            }
+            program.functions[0].result = std::move(add);
+            const auto symbols = freeze_native_i64_specializations(program);
+            const auto closure = check_native_i64_specialization_closure(program, symbols);
+            if (symbols.size() != 2 || closure.concrete_symbols != 2 ||
+                closure.dependency_edges != 1 || closure.estimated_code_bytes == 0)
+                throw std::runtime_error("reused generic dependency was not deduplicated");
+        }
+        // Cycles in a fixed emitted specialization graph are legal. They do
+        // not cause unbounded runtime creation of new generic symbols.
+        {
+            auto program = fixture();
+            program.functions.push_back(generic("helper"));
+            for (std::size_t i = 0; i < program.functions.size(); ++i) {
+                auto call = std::make_unique<Expression>();
+                call->kind = Expression::Kind::Call;
+                call->name = i == 0 ? "helper" : "identity";
+                auto arg = std::make_unique<Expression>();
+                arg->kind = Expression::Kind::Integer;
+                arg->integer = 42;
+                call->arguments.push_back(std::move(arg));
+                program.functions[i].result = std::move(call);
+            }
+            const auto symbols = freeze_native_i64_specializations(program);
+            const auto closure = check_native_i64_specialization_closure(program, symbols);
+            if (closure.dependency_edges != 2 || closure.concrete_symbols != 2)
+                throw std::runtime_error("bounded recursive specialization closure mismatch");
+        }
+        // The checker must never treat a source/compiler-supplied symbol map
+        // as proof that an implementation body exists.
+        {
+            Program absent;
+            std::unordered_map<std::string, std::string> forged = {
+                {native_function_slot("missing", 0), "$atto_g1$int"}
+            };
+            must_reject([&] {
+                (void)check_native_i64_specialization_closure(absent, forged);
+            }, "missing emitted native AOT specialization node");
+        }
+        std::cout << "NATIVE_I64_SPECIALIZATION_PLAN|symbols=1|negative_cases=10\\n";
     } catch (const std::exception& error) {
         std::cerr << "NATIVE_I64_SPECIALIZATION_PLAN_FAIL: " << error.what() << '\n';
         return 1;
