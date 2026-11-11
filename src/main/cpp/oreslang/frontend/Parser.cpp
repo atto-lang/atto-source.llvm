@@ -5354,10 +5354,29 @@ private:
                         ScalarType::I64)
                     throw std::runtime_error(
                         "native Task<int> producer must return int");
-                if (fn.locals.empty() ||
-                        fn.locals.front().task_await_name != task.name)
+                // Recheck the one permitted pure immutable caller tile
+                // independently of parsing. Codegen starts the capture-free
+                // producer before lowering locals in lexical order, so the
+                // only admitted pre-await work is exactly one value-only int.
+                const bool immediate_await =
+                    !fn.locals.empty() &&
+                    fn.locals.front().task_await_name == task.name;
+                bool immutable_tile_then_await = false;
+                if (fn.locals.size() >= 2) {
+                    const auto& tile = fn.locals.front();
+                    const auto& awaited = fn.locals[1];
+                    immutable_tile_then_await =
+                        awaited.task_await_name == task.name &&
+                        tile.scalar_type == ScalarType::I64 &&
+                        !tile.assignable &&
+                        !tile.heap_owned &&
+                        !tile.int_array &&
+                        tile.initializer &&
+                        native_capture_free_task_tree(*tile.initializer);
+                }
+                if (!immediate_await && !immutable_tile_then_await)
                     throw std::runtime_error(
-                        "native Task<int> v1 await must be the first scalar local");
+                        "native Task<int> await must immediately follow the Task or one pure immutable int tile");
                 if (std::any_of(
                         fn.locals.begin(), fn.locals.end(),
                         [&](const LocalBinding& local) {
