@@ -92,6 +92,14 @@ try{
     backend_parity_certified:false,
     cases:results
   };
+  assert.equal(results.filter(x=>x.kind==="compile_and_execute").length,2);
+  assert.equal(results.filter(x=>x.kind==="compile_reject").length,15);
+  for(const entry of results){
+    const diag=String(entry.diagnostic||"").replace(/\\s+/g," ").slice(0,260);
+    console.log("LLVM_FUNCTOR_CASE id="+entry.id+
+      " evidence="+entry.evidence+" compiler_exit="+entry.compiler_status+
+      " diagnostic="+JSON.stringify(diag));
+  }
   const out=process.env.FUNCTOR_LLVM_RECEIPT_PATH||join(work,"functor-llvm-admission.json");
   writeFileSync(out,JSON.stringify(receipt,null,2)+"\n");
   console.log("FUNCTOR_LLVM_ADMISSION_DONE positives_executed="+nativePositive+
