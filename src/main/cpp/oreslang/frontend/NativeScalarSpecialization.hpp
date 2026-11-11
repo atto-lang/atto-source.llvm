@@ -362,6 +362,66 @@ inline NativeI64DispatchImage freeze_native_i64_dispatch_image(const Program& pr
     return image;
 }
 
+// Predict exact LLVM global symbols *before* declaration, runtime import or
+// wrapper emission. The native linker and the per-module IR generator use the
+// same namespace. Bare host/runtime symbols and LLVM intrinsic names cannot
+// be redefined as ordinary guest functions, regardless of parser provenance.
+inline void validate_native_aot_global_symbol(const std::string& symbol) {
+    if (symbol.empty() || symbol.size() > 1024 ||
+        symbol.find('\\0') != std::string::npos)
+        throw std::runtime_error("invalid native AOT emitted symbol identity");
+    if (symbol.rfind("llvm.", 0) == 0)
+        throw std::runtime_error("reserved LLVM intrinsic symbol collision");
+    // These are exact emitted GLOBAL symbols, not arbitrary source prefixes:
+    // a qualified app.write remains distinct from the host write() import.
+    static const std::unordered_set<std::string> reserved = {
+        "abort", "write", "main", "__oreslang_guest_main",
+        "oreslang_cortexm_bootstrap", "ores_guest_entry",
+        "ores_browser_abi_version", "ores_browser_open",
+        "ores_browser_dispatch", "ores_browser_snapshot",
+        "ores_browser_close",
+        "ores_string_panic_flush", "ores_string_literal",
+        "ores_string_from_i64", "ores_string_from_bool",
+        "ores_string_print", "ores_string_concat", "ores_string_equal",
+        "ores_string_region_begin", "ores_string_region_end",
+        "ores_record_new", "ores_record_get", "ores_record_check_shape",
+        "ores_record_check", "ores_record_region_begin",
+        "ores_record_region_end", "oreslang_source_actor_send",
+        "oreslang_source_actor_spawn", "oreslang_source_actor_stop"
+    };
+    if (reserved.find(symbol) != reserved.end())
+        throw std::runtime_error("reserved native AOT runtime symbol collision");
+}
+
+inline std::string plan_native_aot_function_symbol(
+        const Program& program, const Function& fn,
+        const NativeI64DispatchImage& image, std::size_t family_size,
+        bool native_main, bool cortex_m_target) {
+    if (family_size == 0)
+        throw std::runtime_error("native AOT missing compiler function family");
+    const bool cortex_entry = cortex_m_target && fn.name == "main";
+    const bool native_entry = native_main && program.module.empty() && fn.name == "main";
+    const std::string base = cortex_entry ? "oreslang_cortexm_bootstrap"
+        : native_entry ? "__oreslang_guest_main"
+        : program.module.empty() ? fn.name : program.module + "." + fn.name;
+    const auto* target = image.find_direct(native_function_slot(fn.name, fn.parameters.size()));
+    if (target) verify_native_i64_direct_target(fn, *target);
+    const std::size_t source_arity =
+        native_source_value_arity(fn.parameters.size(), !fn.method_owner.empty());
+    const std::string symbol = (family_size > 1
+        ? native_function_slot(base, source_arity) : base) +
+        (target ? target->emitted_suffix : std::string{});
+    if (symbol.empty() || symbol.size() > 1024 ||
+        symbol.find('\\0') != std::string::npos)
+        throw std::runtime_error("invalid native AOT emitted symbol identity");
+    // Only an actual compiler-rewritten native/cortex entry can use this
+    // internal implementation symbol. Everything else is checked against the
+    // runtime/global namespace before creating any LLVM Function.
+    if ((!cortex_entry && !native_entry) || family_size != 1)
+        validate_native_aot_global_symbol(symbol);
+    return symbol;
+}
+
 // Compatibility entry point for the existing source-level C++ verifier.
 // Production LLVM lowering consumes NativeI64DispatchImage directly.
 inline std::unordered_map<std::string, std::string>
