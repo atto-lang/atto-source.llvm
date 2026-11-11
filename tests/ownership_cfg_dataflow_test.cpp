@@ -474,6 +474,13 @@ int main() {
     oversized_edges.blocks[0].successors.assign(kMaxCfgEdges + 1, 1);
     assert(rejected([&] { verify(oversized_edges); }));
 
+    // Default-constructed operations have a deterministic, harmless enum
+    // value, but their missing place still rejects, even under -DNDEBUG.
+    Graph incomplete_operation;
+    incomplete_operation.entry = {{"x", cell(kOwned)}};
+    incomplete_operation.blocks = {{{Operation{}}, {}}};
+    assert(rejected([&] { verify(incomplete_operation); }));
+
     // At the input limits, budgeted verification still accepts a safe
     // terminal graph. The limit is inclusive, not an off-by-one rejection.
     Graph bounded_graph;
