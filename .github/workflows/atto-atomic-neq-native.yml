@@ -27,6 +27,7 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD:tests/atto-atomic-neq/positive.atto)" = 0e69c04a8a15c3da924183656da10ab7dcdeb9bd
           echo "ATTO_EQ_NEQ_NATIVE_SOURCE_TREE=$(git rev-parse HEAD^{tree})"
       - name: Install LLVM dev, CMake and Clang
         run: |
