@@ -2237,6 +2237,21 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-preallocated-port-oracle-test)
     set_tests_properties(native_actor_preallocated_production_port_oracle PROPERTIES TIMEOUT 30)
 
+    # Full runtime path (not a standalone slot model): bound PriorityActorInbox,
+    # NativeActorGroup CONTROL/user turns, generation-fenced STOP, physical ACK,
+    # and 400 concurrent sender-vs-stop trials.
+    add_executable(oreslang-native-preallocated-supervisor-races-test
+        tests/native_preallocated_supervisor_races_test.cpp)
+    target_include_directories(oreslang-native-preallocated-supervisor-races-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-preallocated-supervisor-races-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-preallocated-supervisor-races-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-preallocated-supervisor-races-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_preallocated_supervisor_races
+        COMMAND oreslang-native-preallocated-supervisor-races-test)
+    set_tests_properties(native_actor_preallocated_supervisor_races PROPERTIES TIMEOUT 60)
+
     # Independently buildable host primitive: fixed-capacity intrusive slots,
     # compiler-generated tag selectors and generation-fenced scan continuations.
     # BoundedActorPort now uses this queue; full native CMake, ACK, lifecycle
