@@ -53,7 +53,7 @@ jobs:
           rustc --edition=2021 -D warnings tests/hpc_reduction_native_v1.rs -o "$RUNNER_TEMP/atto-hpc-reduction-gate"
           "$RUNNER_TEMP/atto-hpc-reduction-gate" | tee "$RUNNER_TEMP/atto-hpc-reduction-v1.log"
           test "$(grep -c '^ATTO_HPC_I64_GUEST_PASS ' "$RUNNER_TEMP/atto-hpc-reduction-v1.log")" -eq 4
-          grep -q '^ATTO_HPC_I64_GATE_PASS .*executed_guest_cases=4 negative_cases=2' "$RUNNER_TEMP/atto-hpc-reduction-v1.log"
+          grep -q '^ATTO_HPC_I64_GATE_PASS .*executed_guest_cases=4 negative_cases=4' "$RUNNER_TEMP/atto-hpc-reduction-v1.log"
       - name: Retain source-local output; no parity or SIMD promotion
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
