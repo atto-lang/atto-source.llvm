@@ -166,3 +166,42 @@ source-org Actions jobs fail with `runner_id=0` / `steps=[]`.
 An admin must restore source-local admission or complete the protected
 source + approved carrier governance before a new exact-head compiler run.
 Earlier guest receipts apply only to their recorded older heads.
+
+## 2026-11-11 compiler-owned concrete direct-dispatch image (LLVM follow-up)
+
+The production `LlvmCodegen.cpp` path now calls
+`freeze_native_i64_dispatch_image(source)`, rather than consuming only an
+unstructured selector-to-suffix map. The frozen image contains:
+
+- one `NativeI64DirectTarget` per admitted generic declaration, with its exact
+  compiler selector, emission suffix, lowered ABI arity and ordered concrete
+  `int` type tuple;
+- the bounded, verified `NativeI64SpecializationClosureEvidence`, including
+  deterministically sorted generic-to-generic direct-call dependencies;
+- exactly one image entry per selected implementation; unmatched selectors
+  receive no specialization target.
+
+The LLVM declaration pass consumes these target records, emits only
+`llvm::Function` direct symbols for this scalar slice, checks source ABI arity
+and concrete type tuple size, rejects a symbol collision even when LLVM would
+otherwise silently uniquify the name, and requires that the number of emitted
+concrete specializations matches the frozen image. Existing type, ownership,
+effect and capability admission must still run before this pass.
+
+`native_scalar_i64_specialization_plan` now also verifies the frozen target
+identity, non-generic absence, ordered two-parameter tuple and exact dependency
+edges for both a two-call diamond/reuse and a two-node recursive cycle. The
+C++ unit test is wired to the same CTest and source exact-head workflow as the
+real LLVM compiler/guest gate.
+
+**Capability boundary:** this is an actual production compiler metadata
+handoff for the already-supported scalar `int` generics, **not** a general
+typed witness resolution engine, virtual override table, per-actor handler
+admission, or five-backend common MIR. Static dispatch must continue to be
+validated independently for the full language and for each backend.
+
+**Verification boundary:** No real source-org job on this new head has supplied
+executed compiler/guest steps. Running source-only or isolated host tests cannot
+promote this to native guest AOT parity. Keep head/tree IDs, emitted IR, Clang
+linked guest exit codes, SHA-256 receipts and independent reviews tied to the
+exact head used for any promotion.
