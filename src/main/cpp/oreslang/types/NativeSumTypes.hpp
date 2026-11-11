@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace oreslang {
 inline std::string native_sum_name(NativeSumType::Kind kind, ScalarType value, ScalarType error = ScalarType::I64) {
@@ -16,6 +17,20 @@ inline std::string native_sum_name(NativeSumType::Kind kind, ScalarType value, S
 inline const NativeSumType& native_sum(const Program& program, const std::string& name) {
     for (const auto& type : program.sum_types) if (type.name == name) return type;
     throw std::runtime_error("unknown native sum type '" + name + "'");
+}
+// Module linking coalesces identical standard Option/Result shapes while
+// rejecting conflicting ABI descriptions before the resolver sees them.
+inline void merge_native_sum_descriptor(std::vector<NativeSumType>& target,
+                                        const NativeSumType& incoming) {
+    for (const auto& existing : target) {
+        if (existing.name != incoming.name) continue;
+        if (existing.kind != incoming.kind ||
+                existing.value_type != incoming.value_type ||
+                existing.error_type != incoming.error_type)
+            throw std::runtime_error("conflicting linked native sum type descriptor '" + incoming.name + "'");
+        return;
+    }
+    target.push_back(incoming);
 }
 // Context resolves constructors; the nominal type checker still independently
 // validates every payload and use. This pass never turns arbitrary i64 into a sum.
