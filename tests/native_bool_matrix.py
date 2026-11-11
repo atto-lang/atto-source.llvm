@@ -18,6 +18,11 @@ pub fnc main(): int {
   return (3 eq 3 && 3 neq 4 && 3 !eq 5) ? 42 : 7;
 }
 """, 42),
+    "atto-neq-alias-comment-isolation": ("""
+pub fnc main(): int {
+  return (3 eq 3 && 3 !eq /* alias in block comment: !eq */ 4) ? 42 : 7;
+}
+""", 42),
     "bool-return-call": ("""
 fnc yes(): bool {
   return true;
@@ -168,6 +173,11 @@ NEGATIVE = {
     "atto-reject-spaced-bang-eq-alias": ("""
 pub fnc main(): int {
   return (3 ! eq 4) ? 42 : 7;
+}
+""", None),
+    "atto-reject-neq-identifier-prefix": ("""
+pub fnc main(): int {
+  return (3 !equivalent 4) ? 42 : 7;
 }
 """, None),
     "atto-reject-cross-type-word-equality": ("""
