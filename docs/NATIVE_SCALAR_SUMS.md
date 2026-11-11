@@ -122,3 +122,18 @@ standalone native-sum admission suite to 37 assertion **definitions**.
 Re-execute this changed source at the exact PR head before claiming
 37 passing assertions; previous host-carrier receipts apply only to
 their original byte-identical compiler/test blobs.
+
+## Shared untrusted-AST shape validation
+
+Both `resolve_native_sums` and `validate_native_scalar_types` now invoke the
+same `validate_native_sum_expression_shape` preflight before walking AST
+children. It rejects null tagged constructor/member arguments, missing
+member receivers, incomplete conditional predicates, ambiguous dual
+conditional predicates, and missing conditional result arms. The scalar
+typechecker's loop and scoped-binding dereferences receive the same
+explicit rejection as the sum resolver.
+
+Five additional host mutations expand the regression corpus from 37 to
+42 **defined** assertions. These checks need a fresh exact-source test
+run; previously successful selected-blob carrier runs do not certify
+this new compiler/test source tree or guest `.atto` execution.

@@ -192,7 +192,54 @@ int main() {
                 "missing loop or scoped declaration binding");
         }
 
-        std::cout << "native sum typed payload admission: PASS 37 assertions (host-only)\n";
+        // Both the resolver and scalar type checker must reject these AST
+        // shapes before any dereference or ambiguous predicate lowering.
+        {
+            Program p = conditional("Option<int>",
+                constructor("Some", scalar(Kind::Integer)), constructor("None"));
+            p.functions.front().locals.front().initializer->condition.reset();
+            require_rejection(std::move(p), "native conditional requires exactly one complete condition",
+                "missing conditional predicate");
+        }
+        {
+            Program p = conditional("Option<int>",
+                constructor("Some", scalar(Kind::Integer)), constructor("None"));
+            auto& e = p.functions.front().locals.front().initializer;
+            e->condition.reset();
+            e->condition_lhs = scalar(Kind::Boolean);
+            require_rejection(std::move(p), "native conditional requires exactly one complete condition",
+                "half-built legacy conditional predicate");
+        }
+        {
+            Program p = conditional("Option<int>",
+                constructor("Some", scalar(Kind::Integer)), constructor("None"));
+            auto& e = p.functions.front().locals.front().initializer;
+            e->condition_lhs = scalar(Kind::Boolean);
+            e->condition_rhs = scalar(Kind::Boolean);
+            require_rejection(std::move(p), "native conditional requires exactly one complete condition",
+                "ambiguous direct and legacy conditional predicates");
+        }
+        {
+            Program p = initial("Option<int>", "None");
+            auto access = scalar(Kind::SumAccess);
+            access->name = "is_some";
+            p.functions.front().locals.front().initializer = std::move(access);
+            require_rejection(std::move(p), "native member access requires receiver",
+                "null sum member receiver");
+        }
+        {
+            Program p = initial("Option<int>", "None");
+            auto access = scalar(Kind::SumAccess);
+            access->name = "is_some";
+            access->left = scalar(Kind::Variable);
+            access->left->name = "value";
+            access->arguments.push_back(nullptr);
+            p.functions.front().locals.front().initializer = std::move(access);
+            require_rejection(std::move(p), "native expression has missing argument",
+                "null sum member argument");
+        }
+
+        std::cout << "native sum typed payload admission: PASS 42 assertions (host-only)\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "native sum typed payload admission: " << e.what() << '\n';

@@ -43,6 +43,28 @@ inline void validate_native_sum_registry(const Program& program) {
             throw std::runtime_error("duplicate native sum descriptor");
     }
 }
+// Both compiler entrypoints accept internally generated ASTs, not just
+// parser-vetted source. Validate pointer-bearing shapes before either pass
+// can dereference an unchecked child or silently infer a scalar handle.
+inline void validate_native_sum_expression_shape(const Expression& e) {
+    using K = Expression::Kind;
+    for (const auto& arg : e.arguments) {
+        if (!arg) {
+            if (e.kind == K::SumConstruct)
+                throw std::runtime_error("native sum constructor has missing payload expression");
+            throw std::runtime_error("native expression has missing argument");
+        }
+    }
+    if ((e.kind == K::ArrayCall || e.kind == K::SumAccess) && !e.left)
+        throw std::runtime_error("native member access requires receiver");
+    if (e.kind == K::Conditional) {
+        if (!e.when_true || !e.when_false)
+            throw std::runtime_error("native conditional has missing value branch");
+        if ((e.condition && (e.condition_lhs || e.condition_rhs)) ||
+            (!e.condition && (!e.condition_lhs || !e.condition_rhs)))
+            throw std::runtime_error("native conditional requires exactly one complete condition");
+    }
+}
 inline const NativeSumType& native_sum(const Program& program, const std::string& name) {
     for (const auto& type : program.sum_types) if (type.name == name) return type;
     throw std::runtime_error("unknown native sum type '" + name + "'");
@@ -72,11 +94,9 @@ inline void resolve_native_sums(Program& program) {
     };
     std::function<Hint(Expression&, const Env&, const std::string&)> expression;
     expression = [&](Expression& e, const Env& env, const std::string& expected) -> Hint {
+        validate_native_sum_expression_shape(e);
         using E = Expression::Kind;
         if (e.kind == E::SumConstruct) {
-            for (const auto& payload : e.arguments)
-                if (!payload)
-                    throw std::runtime_error("native sum constructor has missing payload expression");
             std::string selected = expected;
             if (selected.empty()) {
                 if (e.name != "Some" || e.arguments.size() != 1) throw std::runtime_error("native sum constructor requires a declared Option/Result context");
@@ -165,8 +185,6 @@ inline void resolve_native_sums(Program& program) {
             return {owner.element, {}, owner.element_class};
         }
         if (e.kind == E::Conditional) {
-            if (!e.when_true || !e.when_false)
-                throw std::runtime_error("native conditional has missing value branch");
             if (e.condition) expression(*e.condition, env, {});
             if (e.condition_lhs) expression(*e.condition_lhs, env, {});
             if (e.condition_rhs) expression(*e.condition_rhs, env, {});
