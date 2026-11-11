@@ -2238,6 +2238,18 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_preallocated_selective_slots
         COMMAND oreslang-preallocated-selective-slots-test)
     set_tests_properties(native_actor_preallocated_selective_slots PROPERTIES TIMEOUT 30)
+    # Compile-negative actor safety gate: custom deleter destructors or moves
+    # must not call back into an actor mailbox while the physical lock is held.
+    if(UNIX)
+        add_test(NAME native_actor_preallocated_selective_deleter_rejections
+            COMMAND "${CMAKE_COMMAND}"
+                "-DCXX=${CMAKE_CXX_COMPILER}"
+                "-DINCLUDE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+                "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/preallocated_selective_slots_negative_compile.cpp"
+                "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/preallocated_selective_slots_negative_compile.cmake")
+        set_tests_properties(native_actor_preallocated_selective_deleter_rejections
+            PROPERTIES TIMEOUT 30)
+    endif()
 
     add_executable(oreslang-native-mailbox-parallel-terminal-test
         tests/native_mailbox_parallel_terminal_test.cpp)
