@@ -39,6 +39,8 @@ struct FakeOpenCl : oreslang::opencl::Api {
     int program_releases=0, buffer_releases=0, event_releases=0;
     int uploads=0, kernels=0, downloads=0, polls=0;
     bool reject_prepare=false, fail_kernel=false, fail_upload=false, fail_download=false;
+    bool throw_after_upload_accept=false, throw_after_kernel_accept=false;
+    bool throw_after_download_accept=false;
     bool delayed=false, device_loss=false, allow_loss_quiescence=false;
     bool fail_buffer_release_once=false;
     std::vector<Event*> events;
@@ -78,6 +80,8 @@ struct FakeOpenCl : oreslang::opencl::Api {
         if(fail_upload) throw std::runtime_error("GPU_V2_FAKE_UPLOAD_FAILED");
         auto& d=static_cast<Buffer*>(dst)->bytes;
         std::copy(bytes,bytes+n,d.begin());
+        if (throw_after_upload_accept)
+            throw std::runtime_error("GPU_V2_FAKE_UPLOAD_ACCEPTED_EXCEPTION");
         return next_event();
     }
     Handle enqueue_kernel(Handle,Handle in,Handle out,std::uint64_t,
@@ -92,6 +96,8 @@ struct FakeOpenCl : oreslang::opencl::Api {
             value=value*1.5f-2.0f; // deterministic fake kernel, NOT GPU
             std::memcpy(y.data()+i,&value,sizeof(value));
         }
+        if (throw_after_kernel_accept)
+            throw std::runtime_error("GPU_V2_FAKE_KERNEL_ACCEPTED_EXCEPTION");
         return next_event();
     }
     Handle enqueue_download(Handle from,unsigned char* dst,std::size_t n) override {
@@ -99,6 +105,8 @@ struct FakeOpenCl : oreslang::opencl::Api {
         if (fail_download) throw std::runtime_error("GPU_V2_FAKE_DOWNLOAD_FAILED");
         const auto& x=static_cast<Buffer*>(from)->bytes;
         std::copy(x.begin(),x.begin()+static_cast<std::ptrdiff_t>(n),dst);
+        if (throw_after_download_accept)
+            throw std::runtime_error("GPU_V2_FAKE_DOWNLOAD_ACCEPTED_EXCEPTION");
         return next_event();
     }
     EventStatus poll_event(Handle h) override {
@@ -273,16 +281,19 @@ void negative_authority_and_missing_gpu_fail_closed() {
     // CI does not require a GPU; missing GPU is NOT reported as a success.
 }
 
-void ambiguous_enqueue_is_retained_not_falsely_aborted() {
+void ambiguous_enqueue_is_retained_not_falsely_aborted(bool after_accept) {
     Inputs in;
     auto api=std::make_shared<FakeOpenCl>();
     auto p=make_port(api,in);
-    api->fail_upload=true;
+    api->fail_upload=!after_accept;
+    api->throw_after_upload_accept=after_accept;
     auto reg=std::make_shared<Registry>(1);
     auto lane=std::make_shared<Lane>(1);
     auto actor=std::make_unique<GpuActorProviderBridgeV1>(
         reg,p,lane,Lane::ActorKey{"actor",3},"root",in.plan.byte_length());
-    denied([&]{(void)actor->submit(7);},"GPU_V2_FAKE_UPLOAD_FAILED");
+    denied([&]{(void)actor->submit(7);},
+           after_accept ? "GPU_V2_FAKE_UPLOAD_ACCEPTED_EXCEPTION"
+                        : "GPU_V2_FAKE_UPLOAD_FAILED");
     check(actor->committed_state()==0,"ambiguous enqueue cannot publish state");
     actor.reset();
     check(reg->quarantined_count()==1,"ambiguity pins actor and owned device context");
@@ -306,11 +317,14 @@ void ambiguous_enqueue_is_retained_not_falsely_aborted() {
     check(lane->reserved_count()==0,"recovered upload CONTROL lane retired");
 }
 
-void ambiguous_kernel_or_download_never_releases_before_proof(bool download) {
+void ambiguous_kernel_or_download_never_releases_before_proof(bool download,
+                                                               bool after_accept) {
     Inputs in;
     auto api=std::make_shared<FakeOpenCl>();
-    api->fail_kernel=!download;
-    api->fail_download=download;
+    api->fail_kernel=!download && !after_accept;
+    api->fail_download=download && !after_accept;
+    api->throw_after_kernel_accept=!download && after_accept;
+    api->throw_after_download_accept=download && after_accept;
     auto p=make_port(api,in);
     auto reg=std::make_shared<Registry>(1);
     auto lane=std::make_shared<Lane>(1);
@@ -350,10 +364,13 @@ int main() {
     negative_authority_and_missing_gpu_fail_closed();
     // Keep one unresolved ambiguous provider operation deliberately rooted:
     // a failed enqueue API call is not proof no device command was accepted.
-    ambiguous_enqueue_is_retained_not_falsely_aborted();
-    ambiguous_kernel_or_download_never_releases_before_proof(false);
-    ambiguous_kernel_or_download_never_releases_before_proof(true);
-    if(checks<35) throw std::runtime_error("GPU_V2_TEST_COVERAGE_UNDERFLOW");
+    ambiguous_enqueue_is_retained_not_falsely_aborted(false);
+    ambiguous_enqueue_is_retained_not_falsely_aborted(true);
+    ambiguous_kernel_or_download_never_releases_before_proof(false,false);
+    ambiguous_kernel_or_download_never_releases_before_proof(false,true);
+    ambiguous_kernel_or_download_never_releases_before_proof(true,false);
+    ambiguous_kernel_or_download_never_releases_before_proof(true,true);
+    if(checks<115) throw std::runtime_error("GPU_V2_TEST_COVERAGE_UNDERFLOW");
     std::cout<<"GPU_ACTOR_OPENCL_V2_HOST_MOCK_PASS checks="<<checks
              <<" physical_gpu=false device_events=fake_api"<<std::endl;
 }
