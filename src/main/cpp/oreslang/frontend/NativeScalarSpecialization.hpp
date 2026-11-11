@@ -184,6 +184,7 @@ struct NativeI64ParameterAbi {
 struct NativeI64DirectTarget {
     std::string selector;
     std::string emitted_suffix;
+    std::string emitted_full_symbol; // canonical compiler-linker identity
     std::vector<std::string> concrete_types;
     std::size_t lowered_arity;
     std::vector<NativeI64ParameterAbi> parameter_abi;
@@ -217,6 +218,10 @@ inline void verify_native_i64_direct_target(
         expected_suffix += "$int";
     }
     if (target.emitted_suffix != expected_suffix ||
+        target.emitted_full_symbol.size() <= target.emitted_suffix.size() ||
+        target.emitted_full_symbol.compare(
+            target.emitted_full_symbol.size() - target.emitted_suffix.size(),
+            target.emitted_suffix.size(), target.emitted_suffix) != 0 ||
         target.return_type != fn.return_type ||
         target.returns_void != fn.returns_void ||
         target.return_class != fn.return_class ||
@@ -331,6 +336,8 @@ select_native_i64_specializations(const Program& program) {
 // its bounded specialization closure and LLVM's direct call declarations.
 inline NativeI64DispatchImage freeze_native_i64_dispatch_image(const Program& program) {
     auto selected = select_native_i64_specializations(program);
+    std::unordered_map<std::string, std::size_t> family_sizes;
+    for (const auto& fn : program.functions) ++family_sizes[fn.name];
     NativeI64DispatchImage image{
         check_native_i64_specialization_closure(program, selected), {}
     };
@@ -346,8 +353,17 @@ inline NativeI64DispatchImage freeze_native_i64_dispatch_image(const Program& pr
                 param.name, param.scalar_type, param.mode, param.generic_type,
                 param.class_name, param.sum_type
             });
+        // Generic native entrypoints are not admitted. Freeze the same
+        // module/overload/concrete suffix that codegen must emit.
+        const std::string qualified = program.module.empty()
+            ? fn.name : program.module + "." + fn.name;
+        const std::string emitted_full_symbol =
+            (family_sizes.at(fn.name) > 1
+                ? native_function_slot(qualified, fn.parameters.size())
+                : qualified) + selection->second;
         NativeI64DirectTarget target{
-            selector, selection->second, std::move(types), fn.parameters.size(),
+            selector, selection->second, emitted_full_symbol,
+            std::move(types), fn.parameters.size(),
             std::move(parameter_abi), fn.return_type, fn.returns_void,
             fn.return_class, fn.return_sum, fn.has_declared_effects,
             fn.declared_effects, fn.exported, fn.native_internal
@@ -414,6 +430,8 @@ inline std::string plan_native_aot_function_symbol(
     if (symbol.empty() || symbol.size() > 1024 ||
         symbol.find('\0') != std::string::npos)
         throw std::runtime_error("invalid native AOT emitted symbol identity");
+    if (target && target->emitted_full_symbol != symbol)
+        throw std::runtime_error("native AOT frozen direct dispatch symbol mismatch");
     // Only an actual compiler-rewritten native/cortex entry can use this
     // internal implementation symbol. Everything else is checked against the
     // runtime/global namespace before creating any LLVM Function.
@@ -437,6 +455,7 @@ inline void verify_native_i64_scalar_call_witness(
         const std::vector<std::string>& emitted_formal_labels,
         bool internal_linkage) {
     if (target.selector != resolved_selector ||
+        target.emitted_full_symbol != frozen_symbol ||
         target.lowered_arity != source_argument_count ||
         target.parameter_abi.size() != source_argument_count ||
         !internal_linkage || frozen_symbol != actual_symbol ||
