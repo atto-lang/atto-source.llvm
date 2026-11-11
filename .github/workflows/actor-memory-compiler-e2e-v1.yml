@@ -43,22 +43,28 @@ jobs:
           set -euo pipefail
           for compiler in gcc clang; do
             "$compiler" -std=c11 -O2 -Wall -Wextra -Werror \
+              -DORESLANG_TEST_WRAP_ALLOC \
               -I src/main/cpp tests/actor_memory_e2e_v1_host.c \
               src/main/cpp/oreslang/runtime/ActorArena.c \
+              -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc \
               -o "$RUNNER_TEMP/actor-memory-$compiler"
             "$RUNNER_TEMP/actor-memory-$compiler" \
               | tee "$RUNNER_TEMP/actor-memory-$compiler.log"
             grep -Fx 'ACTOR_MEMORY_E2E_V1_HOST_ONLY=PASS' "$RUNNER_TEMP/actor-memory-$compiler.log"
+            grep -Fx 'ACTOR_MEMORY_E2E_V1_LINKED_TURN_ALLOC_CALLS=0' "$RUNNER_TEMP/actor-memory-$compiler.log"
             grep -Fx 'ACTOR_MEMORY_E2E_V1_COMPILED_GUEST=NOT_EXECUTED' "$RUNNER_TEMP/actor-memory-$compiler.log"
           done
           clang -std=c11 -O1 -g -Wall -Wextra -Werror \
             -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -DORESLANG_TEST_WRAP_ALLOC \
             -I src/main/cpp tests/actor_memory_e2e_v1_host.c \
             src/main/cpp/oreslang/runtime/ActorArena.c \
+            -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc \
             -o "$RUNNER_TEMP/actor-memory-sanitized"
           "$RUNNER_TEMP/actor-memory-sanitized" \
             | tee "$RUNNER_TEMP/actor-memory-sanitized.log"
           grep -Fx 'ACTOR_MEMORY_E2E_V1_HOST_ONLY=PASS' "$RUNNER_TEMP/actor-memory-sanitized.log"
+          grep -Fx 'ACTOR_MEMORY_E2E_V1_LINKED_TURN_ALLOC_CALLS=0' "$RUNNER_TEMP/actor-memory-sanitized.log"
       - name: Install prerequisites for actual LLVM guest compilation
         shell: bash
         run: |
@@ -154,6 +160,8 @@ jobs:
               "run_id": os.environ["GITHUB_RUN_ID"],
               "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
               "host_substrate": "PASS",
+              "linked_actor_turn_alloc_calls": 0,
+              "linked_alloc_coverage": "test/ActorArena translation units only",
               "compiled_guest": "NARROW_EXECUTED",
               "compiled_actor_owned_i64": "PASS",
               "compiled_class_owned_array": "PASS",
