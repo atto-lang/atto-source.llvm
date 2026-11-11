@@ -3,6 +3,8 @@
 
 #include <functional>
 #include <iostream>
+#include <memory>
+#include <utility>
 #include <stdexcept>
 #include <string>
 
@@ -270,6 +272,60 @@ int main() {
                                     "Option<int>", oreslang::ScalarType::I64, oreslang::ScalarType::String});
         reject_table(std::move(forged), "invalid native sum scalar ABI descriptor");
     }
+    // Construct a syntactically valid AST and then mutate its unused fields:
+    // the production sum resolver must fail before the compiler lowers them.
+    auto sum_ast = [] {
+        oreslang::Program program;
+        program.sum_types.push_back({oreslang::NativeSumType::Kind::Option,
+                                     "Option<int>", oreslang::ScalarType::I64, oreslang::ScalarType::I64});
+        oreslang::Function fn;
+        fn.name = "sum_ast";
+        oreslang::LocalBinding local;
+        local.name = "value";
+        local.sum_type = "Option<int>";
+        local.initializer = std::make_unique<oreslang::Expression>();
+        local.initializer->kind = oreslang::Expression::Kind::SumConstruct;
+        local.initializer->name = "Some";
+        auto value = std::make_unique<oreslang::Expression>();
+        value->kind = oreslang::Expression::Kind::Integer;
+        local.initializer->arguments.push_back(std::move(value));
+        fn.locals.push_back(std::move(local));
+        program.functions.push_back(std::move(fn));
+        return program;
+    };
+    {
+        auto valid = sum_ast();
+        oreslang::resolve_native_sums(valid);
+        check(valid.functions.front().locals.front().initializer->sum_type == "Option<int>",
+              "well-formed sum constructor AST still admitted");
+    }
+    auto reject_bad_sum_ast = [&](const std::function<void(oreslang::Expression&)>& mutate) {
+        auto program = sum_ast();
+        mutate(*program.functions.front().locals.front().initializer);
+        reject_table(std::move(program), "malformed native sum constructor AST");
+    };
+    reject_bad_sum_ast([](oreslang::Expression& sum) {
+        sum.left = std::make_unique<oreslang::Expression>();
+        sum.left->kind = oreslang::Expression::Kind::String;
+    });
+    reject_bad_sum_ast([](oreslang::Expression& sum) {
+        sum.when_false = std::make_unique<oreslang::Expression>();
+        sum.when_false->kind = oreslang::Expression::Kind::Integer;
+    });
+    reject_bad_sum_ast([](oreslang::Expression& sum) {
+        sum.type_arguments_present = true;
+    });
+    reject_bad_sum_ast([](oreslang::Expression& sum) {
+        sum.type_arguments.push_back({"T", "int", false});
+    });
+    reject_bad_sum_ast([](oreslang::Expression& sum) {
+        sum.argument_names.push_back("payload");
+    });
+    reject_bad_sum_ast([](oreslang::Expression& sum) {
+        sum.argument_names.push_back("");
+        sum.argument_names.push_back("");
+    });
+
     std::cout << "PASS " << passed << " compiler-type-shape host-only checks; "
               << "LLVM guest/native machine-code verification NOT_EXECUTED\n";
     return 0;
