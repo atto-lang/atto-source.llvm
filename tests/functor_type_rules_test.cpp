@@ -390,6 +390,30 @@ int main() {
     reject_hidden_scalar_payload([](oreslang::Expression& payload) {
         payload.arguments.push_back(std::make_unique<oreslang::Expression>());
     });
+    // Exercise the exact ABI merge helper used by the real module loader.
+    // Repeated identical descriptors from separate imports are legal; a
+    // conflicting descriptor with the same name must never win by order.
+    std::vector<oreslang::NativeSumType> linked;
+    const oreslang::NativeSumType option_int{
+        oreslang::NativeSumType::Kind::Option,
+        "Option<int>", oreslang::ScalarType::I64, oreslang::ScalarType::I64
+    };
+    oreslang::merge_native_sum_descriptor(linked, option_int);
+    oreslang::merge_native_sum_descriptor(linked, option_int);
+    check(linked.size() == 1, "identical imported Option<int> descriptors coalesced");
+    oreslang::merge_native_sum_descriptor(linked,
+        {oreslang::NativeSumType::Kind::Result, "Result<bool,String>",
+         oreslang::ScalarType::Bool, oreslang::ScalarType::String});
+    check(linked.size() == 2, "distinct imported sum descriptors retained");
+    try {
+        oreslang::merge_native_sum_descriptor(linked,
+            {oreslang::NativeSumType::Kind::Option, "Option<int>",
+             oreslang::ScalarType::String, oreslang::ScalarType::I64});
+        throw std::runtime_error("conflicting imported ABI descriptor was accepted");
+    } catch (const std::runtime_error& error) {
+        check(std::string(error.what()).find("conflicting linked native sum type descriptor") !=
+                  std::string::npos, "conflicting imported sum ABI rejected");
+    }
     std::cout << "PASS " << passed << " compiler-type-shape host-only checks; "
               << "LLVM guest/native machine-code verification NOT_EXECUTED\n";
     return 0;
