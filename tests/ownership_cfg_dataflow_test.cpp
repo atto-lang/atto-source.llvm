@@ -484,6 +484,16 @@ int main() {
         kMaxCfgOperationsPerBlock + 1, op(Kind::Read, "x"));
     assert(rejected([&] { verify(oversized_operations); }));
 
+    // The aggregate operation budget is independent of the per-block cap.
+    // This graph stays under the 4096-block and 1024-op/block ceilings.
+    Graph oversized_total_operations;
+    oversized_total_operations.entry = oversized_cfg.entry;
+    oversized_total_operations.blocks.resize(
+        kMaxCfgOperations / kMaxCfgOperationsPerBlock + 1);
+    for (auto& block : oversized_total_operations.blocks)
+        block.operations.assign(kMaxCfgOperationsPerBlock, op(Kind::Read, "x"));
+    assert(rejected([&] { verify(oversized_total_operations); }));
+
     Graph oversized_edges;
     oversized_edges.entry = oversized_cfg.entry;
     oversized_edges.blocks.resize(2);
