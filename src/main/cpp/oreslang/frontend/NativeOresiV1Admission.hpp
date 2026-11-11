@@ -134,6 +134,16 @@ inline bool ident(const std::string& x) {
             !(x[i]>='0'&&x[i]<='9')&&x[i]!='_') return false;
     return true;
 }
+// Dependency aliases have a stricter, lowercase-only contract than exported
+// namespace identifiers. Match Java's [a-z][a-z0-9_]{0,127} exactly.
+inline bool alias(const std::string& x) {
+    if (x.empty() || x.size()>128u || x[0]<'a' || x[0]>'z') return false;
+    for (std::size_t i=1;i<x.size();++i) {
+        const char ch=x[i];
+        if (!((ch>='a'&&ch<='z')||(ch>='0'&&ch<='9')||ch=='_')) return false;
+    }
+    return true;
+}
 inline bool sha_hex(const std::string& x) {
     if (x.size()!=64) return false;
     for (const char c : x) if (!((c>='0'&&c<='9')||(c>='a'&&c<='f'))) return false;
@@ -223,6 +233,10 @@ inline Decoded decode(const std::vector<std::uint8_t>& bytes) {
     out.ns=r.str();out.compiler=r.str();out.target=r.str();out.policy=r.str();
     const auto count=r.u32();
     if(count>100000u)reject("oversized .oresi symbol table");
+    // Every accepted symbol uses at least 15 bytes (two nonempty names).
+    // Reject hostile count fields before reserving attacker-sized tables.
+    if(count>(bytes.size()-r.at)/15u)
+        reject("impossible .oresi export count");
     out.exports.reserve(count);
     for(std::uint32_t i=0;i<count;++i){
         Export entry;
@@ -258,8 +272,7 @@ inline std::string sha256(const std::vector<std::uint8_t>& bytes) {
 
 inline Verified admit(const DependencyPin& pin,
                       const std::map<std::string,std::vector<std::uint8_t>>& snapshots) {
-    if(pin.alias.empty()||pin.alias[0]<'a'||pin.alias[0]>'z'||
-       !detail::ident(pin.alias)||!detail::package_instance(pin.package_instance_id)||
+    if(!detail::alias(pin.alias)||!detail::package_instance(pin.package_instance_id)||
        pin.compiler_version.empty()||pin.target_abi.empty()||pin.feature_policy.empty()||
        pin.namespaces.empty()||pin.namespaces.size()>4096u||
        snapshots.size()!=pin.namespaces.size())
