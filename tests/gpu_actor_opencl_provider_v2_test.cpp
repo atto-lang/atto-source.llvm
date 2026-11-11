@@ -255,8 +255,9 @@ int main() {
     actual_provider_api_pipeline_mocked();
     actor_bridge_commits_only_after_kernel_download();
     negative_authority_and_missing_gpu_fail_closed();
-    // The ambiguous physical begin path deliberately remains a blocker;
-    // a dedicated negative test must be isolated from other root ledgers.
+    // Keep one unresolved ambiguous provider operation deliberately rooted:
+    // a failed enqueue API call is not proof no device command was accepted.
+    ambiguous_enqueue_is_retained_not_falsely_aborted();
     if(checks<35) throw std::runtime_error("GPU_V2_TEST_COVERAGE_UNDERFLOW");
     std::cout<<"GPU_ACTOR_OPENCL_V2_HOST_MOCK_PASS checks="<<checks
              <<" physical_gpu=false device_events=fake_api"<<std::endl;
