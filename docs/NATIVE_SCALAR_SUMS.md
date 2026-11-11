@@ -110,3 +110,15 @@ cases, alongside the existing conditional-arm and payload tests. These
 are compiler-host tests, **not** evidence of source-defined nominal
 `define enum`, recursive ADTs, .atto guest execution, or Native AOT
 parity. Exact-head LLVM CTest execution is required.
+
+## Malformed compiler ASTs
+
+The resolver explicitly rejects null sum-constructor payload pointers,
+conditional expressions with a missing true/false value arm, and scoped
+or iteration statements missing their declaration binding. This prevents
+null-pointer dereferences when an internal compiler stage supplies a
+malformed AST. Six additional host-only negative mutations raise the
+standalone native-sum admission suite to 37 assertion **definitions**.
+Re-execute this changed source at the exact PR head before claiming
+37 passing assertions; previous host-carrier receipts apply only to
+their original byte-identical compiler/test blobs.

@@ -74,6 +74,9 @@ inline void resolve_native_sums(Program& program) {
     expression = [&](Expression& e, const Env& env, const std::string& expected) -> Hint {
         using E = Expression::Kind;
         if (e.kind == E::SumConstruct) {
+            for (const auto& payload : e.arguments)
+                if (!payload)
+                    throw std::runtime_error("native sum constructor has missing payload expression");
             std::string selected = expected;
             if (selected.empty()) {
                 if (e.name != "Some" || e.arguments.size() != 1) throw std::runtime_error("native sum constructor requires a declared Option/Result context");
@@ -162,6 +165,8 @@ inline void resolve_native_sums(Program& program) {
             return {owner.element, {}, owner.element_class};
         }
         if (e.kind == E::Conditional) {
+            if (!e.when_true || !e.when_false)
+                throw std::runtime_error("native conditional has missing value branch");
             if (e.condition) expression(*e.condition, env, {});
             if (e.condition_lhs) expression(*e.condition_lhs, env, {});
             if (e.condition_rhs) expression(*e.condition_rhs, env, {});
@@ -211,6 +216,13 @@ inline void resolve_native_sums(Program& program) {
         std::function<void(std::vector<Statement>&, Env&)> statements;
         statements = [&](std::vector<Statement>& items, Env& scope) {
             for (auto& item : items) {
+                // Compiler-created ASTs are not implicitly trusted. A
+                // malformed loop/scoped declaration must not crash this pass.
+                if ((item.kind == Statement::Kind::ForEach ||
+                     item.kind == Statement::Kind::ForIndex ||
+                     item.kind == Statement::Kind::ScopedLocal) &&
+                    !item.branch_local)
+                    throw std::runtime_error("native scoped/iteration statement requires local binding");
                 if (item.branch_local && item.branch_local->initializer) expression(*item.branch_local->initializer, scope, item.branch_local->sum_type);
                 if (item.kind == Statement::Kind::ForEach || item.kind == Statement::Kind::ForIndex) {
                     if (item.expression) expression(*item.expression, scope, {});

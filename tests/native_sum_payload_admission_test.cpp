@@ -170,7 +170,29 @@ int main() {
             p.sum_types.back().error_type = static_cast<ScalarType>(255);
         }, "invalid native sum scalar payload kind", "invalid Result error payload byte");
 
-        std::cout << "native sum typed payload admission: PASS 31 assertions (host-only)\n";
+        // Malformed compiler-AST mutations must produce stable typed errors.
+        {
+            Program p = initial("Option<int>", "Some", scalar(Kind::Integer));
+            p.functions.front().locals.front().initializer->arguments.front().reset();
+            require_rejection(std::move(p), "native sum constructor has missing payload expression",
+                "null Some payload is rejected");
+        }
+        require_rejection(conditional("Option<int>", nullptr, constructor("None")),
+            "native conditional has missing value branch", "null conditional true arm");
+        require_rejection(conditional("Option<int>", constructor("None"), nullptr),
+            "native conditional has missing value branch", "null conditional false arm");
+        for (auto kind : {Statement::Kind::ForEach, Statement::Kind::ForIndex,
+                          Statement::Kind::ScopedLocal}) {
+            Program p = initial("Option<int>", "None");
+            Statement malformed;
+            malformed.kind = kind;
+            p.functions.front().statements.push_back(std::move(malformed));
+            require_rejection(std::move(p),
+                "native scoped/iteration statement requires local binding",
+                "missing loop or scoped declaration binding");
+        }
+
+        std::cout << "native sum typed payload admission: PASS 37 assertions (host-only)\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "native sum typed payload admission: " << e.what() << '\n';
