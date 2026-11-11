@@ -4,6 +4,7 @@
 // Native sum lowering currently handles scalar payloads only. Never promote
 // host-only tests of these rules to LLVM machine-code/ownership conformance.
 #include <cctype>
+#include <cstddef>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -45,6 +46,9 @@ inline void require_arity(const Type& type, std::size_t count) {
         throw TypeError("invalid-type-arity",
                         type.name + " requires " + std::to_string(count) + " type argument(s)");
 }
+
+inline void validate_type(const Type& type, unsigned depth,
+                          std::size_t* visited);
 
 class Parser final {
     std::string_view input_;
@@ -101,13 +105,66 @@ public:
         spaces();
         if (pos_ != input_.size())
             throw TypeError("invalid-nested-type", "unexpected trailing type tokens");
+        validate_type(value, 0, nullptr);
         return value;
     }
 };
 
 inline Type parse_type(std::string_view source) { return Parser(source).parse(); }
 
+// Programmatic Type objects can also originate in the compiler, not just in
+// parse_type(). Do not let fabricated trees bypass constructor arity or the
+// bounded source parser before an AST reaches native lowering. This is a
+// syntactic and shape admission guard, not proof that a nominal is declared.
+inline void validate_type(const Type& type, unsigned depth = 0,
+                          std::size_t* visited = nullptr) {
+    std::size_t local_visited = 0;
+    if (!visited) visited = &local_visited;
+    if (depth > 32 || ++(*visited) > 512)
+        throw TypeError("invalid-nested-type", "functor type exceeds depth/node limit");
+    if (type.name.empty() || type.name.size() > 256)
+        throw TypeError("invalid-nested-type", "empty or overlong nominal type name");
+    bool after_dot = true;
+    for (const auto raw : type.name) {
+        const auto ch = static_cast<unsigned char>(raw);
+        if (ch == '.') {
+            if (after_dot) throw TypeError("invalid-nested-type", "empty qualified type segment");
+            after_dot = true;
+        } else if (after_dot) {
+            if (!(std::isalpha(ch) || ch == '_'))
+                throw TypeError("invalid-nested-type", "invalid first character of type segment");
+            after_dot = false;
+        } else if (!(std::isalnum(ch) || ch == '_')) {
+            throw TypeError("invalid-nested-type", "invalid nominal type character");
+        }
+    }
+    if (after_dot) throw TypeError("invalid-nested-type", "type ends with an empty qualified segment");
+    if (type.name == "_")
+        throw TypeError("unresolved-nested-generic", "type inference hole must be resolved before lowering");
+    if (type.name == "string")
+        throw TypeError("invalid-nested-type", "uncanonicalized string alias in typed IR");
+    if (type.name == "Option" || type.name == "Tree") require_arity(type, 1);
+    else if (type.name == "Result" || type.name == "Either") require_arity(type, 2);
+    else if ((type.name == "int" || type.name == "bool" ||
+              type.name == "String" || type.name == "void") && !type.arguments.empty())
+        throw TypeError("invalid-type-arity", "scalar type cannot take generic arguments");
+    if (type.arguments.size() > 256)
+        throw TypeError("invalid-nested-type", "generic argument count exceeds limit");
+    for (const auto& child : type.arguments) validate_type(child, depth + 1, visited);
+}
+
+inline void validate_value_type(const Type& type) {
+    validate_type(type);
+    if (type.name == "void")
+        throw TypeError("invalid-functor-payload", "void is not a storable functor payload");
+}
+
 inline void require_functor(const Type& source) {
+    validate_type(source);
+    for (const auto& child : source.arguments) {
+        if (child.name == "void")
+            throw TypeError("invalid-functor-payload", "void is not a storable functor payload");
+    }
     if (source.name == "Option") require_arity(source, 1);
     else if (source.name == "Result") require_arity(source, 2);
     else throw TypeError("invalid-functor-receiver", "expected Option<T> or Result<T,E>");
@@ -122,6 +179,8 @@ inline void require_input(const Type& source, const Type& callback_input) {
 inline Type map(const Type& source, const Type& callback_input, const Type& callback_result) {
     require_functor(source);
     require_input(source, callback_input);
+    validate_value_type(callback_input);
+    validate_value_type(callback_result);
     Type output = source;
     output.arguments[0] = callback_result;
     return output;
@@ -131,6 +190,9 @@ inline Type map_err(const Type& source, const Type& callback_input, const Type& 
     if (source.name != "Result")
         throw TypeError("invalid-functor-receiver", "map_err requires Result<T,E>");
     require_arity(source, 2);
+    validate_type(source);
+    validate_value_type(callback_input);
+    validate_value_type(callback_result);
     if (source.arguments[1] != callback_input)
         throw TypeError("wrong-callback-input-type", "map_err callback must receive the nominal error type");
     return Type{"Result", {source.arguments[0], callback_result}};
@@ -139,6 +201,8 @@ inline Type map_err(const Type& source, const Type& callback_input, const Type& 
 inline Type and_then(const Type& source, const Type& callback_input, const Type& callback_result) {
     require_functor(source);
     require_input(source, callback_input);
+    validate_value_type(callback_input);
+    validate_type(callback_result);
     if (callback_result.name != source.name)
         throw TypeError("wrong-return-type", "and_then callback must return the same outer functor");
     require_functor(callback_result);
