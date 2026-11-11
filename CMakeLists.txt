@@ -2210,6 +2210,20 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-bounded-actor-port-test PRIVATE Threads::Threads)
     set_tests_properties(native_actor_port_bounded_owned_transport PROPERTIES TIMEOUT 30)
 
+    # Host-runtime-only typed-tag selective mailbox primitive. A full
+    # guest-language selective receive and compiled matcher remains separate.
+    add_executable(oreslang-native-selective-tagged-port-test
+        tests/native_selective_tagged_port_test.cpp)
+    target_include_directories(oreslang-native-selective-tagged-port-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-selective-tagged-port-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-selective-tagged-port-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-selective-tagged-port-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_tag_selective_bounded_receive
+        COMMAND oreslang-native-selective-tagged-port-test)
+    set_tests_properties(native_actor_tag_selective_bounded_receive PROPERTIES TIMEOUT 30)
+
     add_executable(oreslang-native-mailbox-parallel-terminal-test
         tests/native_mailbox_parallel_terminal_test.cpp)
     target_include_directories(oreslang-native-mailbox-parallel-terminal-test PRIVATE
