@@ -147,7 +147,7 @@ inline bool package_instance(const std::string& x) {
     if (!((x[0]>='A'&&x[0]<='Z')||(x[0]>='a'&&x[0]<='z')||(x[0]>='0'&&x[0]<='9')))return false;
     for (char c : x)
         if (!((c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9')||
-              c=='_'||c=='.'||c=='/'||c=='@'||c=='#'||c=='+'||c=='-'))
+              c=='_'||c=='.'||c=='/'||c=='@'||c=='#'||c==':'||c=='+'||c=='-'))
             return false;
     return true;
 }
