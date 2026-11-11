@@ -4525,3 +4525,23 @@ if(BUILD_TESTING AND UNIX)
         set_tests_properties(native_actor_arena_sqlite_reactivation_host_only PROPERTIES TIMEOUT 45)
     endif()
 endif()
+
+# Native v2 durable logical-command host-only conformance: real WAL/FULL and SIGKILL.
+# This does not compile an AttoLang/Oreslang guest actor.
+if(BUILD_TESTING AND UNIX)
+    find_package(SQLite3 QUIET)
+    if(SQLite3_FOUND)
+        add_executable(oreslang-native-command-v2-sqlite-test
+            tests/native_command_persistence_v2_test.cpp)
+        target_include_directories(oreslang-native-command-v2-sqlite-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime")
+        target_compile_features(oreslang-native-command-v2-sqlite-test PRIVATE cxx_std_17)
+        target_compile_options(oreslang-native-command-v2-sqlite-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        target_link_libraries(oreslang-native-command-v2-sqlite-test PRIVATE SQLite::SQLite3)
+        add_test(NAME native_v2_sqlite_command_epoch_retry_crash_host_only
+            COMMAND oreslang-native-command-v2-sqlite-test)
+        set_tests_properties(native_v2_sqlite_command_epoch_retry_crash_host_only
+            PROPERTIES TIMEOUT 60)
+    endif()
+endif()
