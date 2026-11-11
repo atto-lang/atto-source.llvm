@@ -273,10 +273,21 @@ public:
     // A matched delivery retains all charged credits until physical ACK.
     // Unmatched messages never move, destruct, lose bytes, or change order.
     enum class SelectiveStatus { Matched, Continue, NoMatch };
-    struct SelectiveCursor {
-        std::uint64_t through_sequence = 0;
-        std::uint32_t tag = 0;
-        std::weak_ptr<State> owner;
+    // The cursor is opaque: a caller cannot fabricate a skip-ahead sequence,
+    // substitute a forged tag, or attach it to a different mailbox owner.
+    // Only the producing physical port can mint a continuation.
+    class SelectiveCursor final {
+    public:
+        SelectiveCursor() = default;
+        std::uint64_t through_sequence() const noexcept { return through_sequence_; }
+    private:
+        friend class BoundedActorPort<T>;
+        SelectiveCursor(std::uint64_t through, std::uint32_t tag,
+                        std::weak_ptr<State> owner) noexcept
+            : through_sequence_(through), tag_(tag), owner_(std::move(owner)) {}
+        std::uint64_t through_sequence_ = 0;
+        std::uint32_t tag_ = 0;
+        std::weak_ptr<State> owner_;
     };
     struct SelectiveResult {
         SelectiveStatus status;
@@ -290,19 +301,19 @@ public:
             const SelectiveCursor& cursor = {}) {
         if (tag == 0 || scan_budget == 0)
             throw std::invalid_argument("selective receive needs typed tag and positive scan budget");
-        if (cursor.through_sequence != 0 &&
-                (cursor.tag != tag || cursor.owner.lock() != state_))
+        if (cursor.through_sequence_ != 0 &&
+                (cursor.tag_ != tag || cursor.owner_.lock() != state_))
             throw std::invalid_argument("stale, foreign or mismatched selective scan cursor");
         std::lock_guard<std::mutex> guard(state_->mutex);
         std::size_t inspected = 0;
-        std::uint64_t last = cursor.through_sequence;
+        std::uint64_t last = cursor.through_sequence_;
         // Every port publishes envelopes in strictly increasing sequence
         // order. Binary seek avoids rescanning an unbounded prior prefix on
         // each resumed actor turn; std::deque has random-access iterators.
         // The seek is O(log(queue length)), plus at most scan_budget inspected
         // tags. Queue length is bounded by max_frames, but erase remains O(n).
         auto it = std::upper_bound(state_->queue.begin(), state_->queue.end(),
-                cursor.through_sequence,
+                cursor.through_sequence_,
                 [](std::uint64_t sequence, const Envelope& frame) {
                     return sequence < frame.sequence;
                 });
