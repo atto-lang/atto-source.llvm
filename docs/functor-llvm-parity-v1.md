@@ -19,6 +19,8 @@ The header src/main/cpp/oreslang/types/FunctorTypeRules.hpp is a pure value-type
 - denied rebuilding affine payloads through shared/mutable loans or after a move (host policy, NOT proven actual loan tracking).
 - bounded generic syntax and deterministic negative mutation categories.
 
+The real native scalar sum resolver now calls this shape parser to reject corrupted or nested NativeSumType descriptors before IR; **no nested payload has become admitted**.
+
 tests/functor_type_rules_test.cpp is an independent **host-only** test; it is not a .atto fixture and does not invoke oreslang-llvmc. .github/workflows/functor-type-shape-host.yml attempts GCC C++17 execution and Clang ASan/UBSan on the exact PR head, with tracked-file blob attestations. **A workflow with no executed steps is NOT_EXECUTED**, even if a run object exists.
 
 ## Blocking native gaps confirmed by source inspection
