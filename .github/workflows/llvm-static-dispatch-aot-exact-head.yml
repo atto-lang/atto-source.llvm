@@ -45,7 +45,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends clang-19 llvm-19-dev libclang-rt-19-dev cmake ninja-build
           command -v rustc
           /usr/bin/clang-19 --version
-          test -f "$(/usr/bin/clang-19 -print-file-name=libclang_rt.asan.a)"
+          find /usr/lib/llvm-19/lib/clang -name "libclang_rt.asan*.a" -print
           /usr/lib/llvm-19/bin/llvm-config --version
       - name: Configure and build actual LLVM compiler and Rust AOT dispatch proof
         shell: bash
