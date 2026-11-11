@@ -124,7 +124,7 @@ int main() {
             must_reject([&] { (void)freeze_native_i64_specializations(forged); },
                         "undeclared native AOT generic parameter ABI");
         }
-        std::cout << "NATIVE_I64_SPECIALIZATION_PLAN|symbols=1|negative_cases=9\\n";
+        std::cout << "NATIVE_I64_SPECIALIZATION_PLAN|symbols=1|negative_cases=9\n";
     } catch (const std::exception& error) {
         std::cerr << "NATIVE_I64_SPECIALIZATION_PLAN_FAIL: " << error.what() << '\n';
         return 1;
