@@ -10,7 +10,7 @@
 
 // Thread-local, one-shot injected allocator fault: no global OOM and no
 // other thread can consume our fault. All payloads are allocated before
-// arming the fault; the only expected new inside offer_owned is deque growth.
+// arming the fault: offer_owned must NOT allocate during queue publication.
 static thread_local bool fail_next_allocation = false;
 
 __attribute__((noinline)) void* operator new(std::size_t count) {
@@ -33,52 +33,58 @@ int main() {
     using oreslang::runtime::BoundedActorPort;
     auto ledger = std::make_shared<ActorMailboxCompletion>(512);
     BoundedActorPort<int> port(512, 512 * sizeof(int), ledger);
-    bool injected = false;
-    std::size_t committed = 0;
+    // Physical slot memory was allocated by the constructor. The shared
+    // completion ledger was initialized before any injection. Neither
+    // offer_owned nor a full-capacity rejection may allocate.
     for (int i = 0; i < 512; ++i) {
         auto owner = std::make_unique<int>(i);
-        const auto pre_frames = port.used_frames();
-        const auto pre_bytes = port.used_bytes();
-        const auto pre_sequence = ledger->snapshot();
+        const auto before = ledger->snapshot();
         fail_next_allocation = true;
-        bool threw = false;
-        try {
-            check(port.offer_owned(owner, sizeof(int)));
-        } catch (const std::bad_alloc&) {
-            threw = true;
-        }
+        bool published = false;
+        try { published = port.offer_owned(owner, sizeof(int), 11); }
+        catch (...) { fail_next_allocation = false; throw; }
+        check(published && !owner);
+        check(fail_next_allocation); // injected operator new never called
         fail_next_allocation = false;
-        if (threw) {
-            // This proves both global admission rollback and caller ownership.
-            check(owner && *owner == i);
-            check(port.used_frames() == pre_frames);
-            check(port.used_bytes() == pre_bytes);
-            check(ledger->snapshot() == pre_sequence);
-            injected = true;
-            // The failed attempt must not produce a sequence gap, even if
-            // urgent/normal consumers already hold older receipts.
-            check(port.offer_owned(owner, sizeof(int)));
-            check(!owner);
-            ++committed;
-            break;
-        }
-        check(!owner);
-        ++committed;
+        check(ledger->snapshot() == before + 1);
+        check(port.used_frames() == static_cast<std::size_t>(i + 1));
     }
-    check(injected);
-    check(port.used_frames() == committed);
-    check(ledger->snapshot() == committed);
-    for (std::size_t sequence = 1; sequence <= committed; ++sequence) {
+    auto rejected_owner = std::make_unique<int>(777);
+    fail_next_allocation = true;
+    check(!port.offer_owned(rejected_owner, sizeof(int), 11));
+    check(fail_next_allocation && rejected_owner && *rejected_owner == 777);
+    fail_next_allocation = false;
+    check(ledger->snapshot() == 512);
+    for (int i = 0; i < 512; ++i) {
         auto delivery = port.try_receive();
-        check(delivery.has_value());
-        check(delivery->sequence() == sequence);
-        check(delivery->value() == static_cast<int>(sequence - 1));
+        check(delivery && delivery->sequence() == static_cast<std::uint64_t>(i + 1));
+        check(delivery->id() == static_cast<std::uint64_t>(i + 1));
+        check(delivery->value() == i);
         check(delivery->acknowledge_released());
-        // BoundedActorPort is intentionally lower-level; caller records ACK.
         ledger->complete(delivery->sequence());
     }
-    check(port.used_frames() == 0);
-    check(port.used_bytes() == 0);
-    check(ledger->watermark() == committed);
+    check(port.used_frames() == 0 && port.used_bytes() == 0);
+    check(ledger->watermark() == 512);
+
+    // offer(T&&) is allowed to allocate for its standalone payload owner,
+    // but an allocation failure MUST roll back every reservation. The
+    // producer still owns the original T and no sequence is published.
+    int retry = 1234;
+    fail_next_allocation = true;
+    bool injected_oom = false;
+    try { (void)port.offer(std::move(retry), sizeof(int), 17); }
+    catch (const std::bad_alloc&) { injected_oom = true; }
+    fail_next_allocation = false;
+    check(injected_oom && retry == 1234);
+    check(port.used_frames() == 0 && port.used_bytes() == 0);
+    check(ledger->snapshot() == 512);
+    check(port.offer(std::move(retry), sizeof(int), 17));
+    auto last = port.try_receive_tagged(17, 2);
+    check(last.status == BoundedActorPort<int>::SelectiveStatus::Matched);
+    check(last.delivery && last.delivery->id() == 513);
+    check(last.delivery->sequence() == 513 && last.delivery->value() == 1234);
+    check(last.delivery->acknowledge_released());
+    ledger->complete(last.delivery->sequence());
+    check(ledger->completed_through(513));
     port.close();
 }
