@@ -2252,6 +2252,21 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-preallocated-supervisor-races-test)
     set_tests_properties(native_actor_preallocated_supervisor_races PROPERTIES TIMEOUT 60)
 
+    # Separately executable exact native host-component regression:
+    # NativeActorGroup CONTROL/STOP, BoundedActorPort preallocated slots,
+    # sequence-ledger gap fencing and 600 admission-vs-STOP races.
+    add_executable(oreslang-native-group-physical-port-stress-test
+        tests/native_group_physical_port_stress_test.cpp)
+    target_include_directories(oreslang-native-group-physical-port-stress-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-group-physical-port-stress-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-group-physical-port-stress-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-group-physical-port-stress-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_group_physical_port_stop_races
+        COMMAND oreslang-native-group-physical-port-stress-test)
+    set_tests_properties(native_actor_group_physical_port_stop_races PROPERTIES TIMEOUT 60)
+
     # Independently buildable host primitive: fixed-capacity intrusive slots,
     # compiler-generated tag selectors and generation-fenced scan continuations.
     # BoundedActorPort now uses this queue; full native CMake, ACK, lifecycle
