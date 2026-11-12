@@ -61,12 +61,12 @@ def main() -> int:
                                    str(count) + ': ' + repr(result.stderr[:512]))
         # A line comment in interpolation ends on CR, LF, or CRLF.
         # Require actual LLVM IR, not merely a scanner acceptance oracle.
-        for label, newline in (('lf', '\\n'), ('cr', '\\r'), ('crlf', '\\r\\n')):
+        for label, newline in (('lf', '\n'), ('cr', '\r'), ('crlf', '\r\n')):
             path.write_text(
-                'pub fnc main(): int {\\n'
-                '  const quote = `prefix ${// ignored }' + newline + '"ok"} suffix`;\\n'
-                '  return 42;\\n'
-                '}\\n',
+                'pub fnc main(): int {\n'
+                '  const quote = `prefix ${// ignored }' + newline + '"ok"} suffix`;\n'
+                '  return 42;\n'
+                '}\n',
                 encoding='utf-8',
             )
             compiled = run(compiler, path)
