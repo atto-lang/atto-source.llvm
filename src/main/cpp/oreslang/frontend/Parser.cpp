@@ -5030,6 +5030,9 @@ private:
         }
         std::function<void(const Statement&)> validate_statement_effects;
         validate_statement_effects = [&](const Statement& stmt) {
+            if (stmt.kind == Statement::Kind::UsingTelemetrySpan)
+                throw std::runtime_error(
+                    "native instrumentation scopes require checked effect summaries");
             if (stmt.kind == Statement::Kind::ArrayCommitFilled &&
                     !fn.declared_effects.has(FunctionEffect::Alloc))
                 throw std::runtime_error("filled array commit violates using signature without alloc");
@@ -5532,6 +5535,15 @@ private:
             using NameSet = std::unordered_set<std::string>;
             std::function<void(const Statement&, NameSet&)> check_statement_names;
             check_statement_names = [&](const Statement& stmt, NameSet& names) {
+                if (stmt.kind == Statement::Kind::UsingTelemetrySpan) {
+                    if (names.count(stmt.receiver))
+                        throw std::runtime_error(
+                            "native telemetry scope aliases an existing lexical owner");
+                    NameSet body = names;
+                    for (const auto& action : stmt.then_statements)
+                        check_statement_names(action, body);
+                    return;
+                }
                 if (stmt.kind == Statement::Kind::ForIndex) {
                     validate_expression(*stmt.branch_local->initializer, names, functions);
                     NameSet body = names;
@@ -5708,6 +5720,12 @@ private:
                         if (leaf.field->int_array) scope.emplace(local.name + "." + leaf.path + ".$element", leaf.field->array_element_type);
                     }
                 };
+                if (stmt.kind == Statement::Kind::UsingTelemetrySpan) {
+                    TypeMap body = env;
+                    for (const auto& action : stmt.then_statements)
+                        check_statement_types(action, body);
+                    return;
+                }
                 if (stmt.kind == Statement::Kind::ForIndex) {
                     require_scalar(*stmt.branch_local->initializer, ScalarType::I64, "index initializer", env);
                     TypeMap body = env; scoped_type(*stmt.branch_local, body);
