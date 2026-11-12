@@ -132,6 +132,25 @@ fn main() {
         .output().expect("run production compiler negative gate");
     assert!(!rejected.status.success(), "unsupported full Redis source compiled silently");
     assert!(rejected.stdout.is_empty(), "unsupported native Redis emitted partial IR");
+    // Pin and test the *actual* 100-client batched Atto Redis guest.
+    // It must not silently degrade to this scalar-only actor compiler path.
+    const CANONICAL_100_GIT_BLOB: &str = "5b6474bba468eea50a6f3f1a8dd81186ee977172";
+    let canonical_100 = root.join("tests/fixtures/atto-redis-native-binary-100-batch-parity.atto");
+    let canonical_text = fs::read_to_string(&canonical_100)
+        .expect("exact canonical 100-client batched Redis guest");
+    assert!(canonical_text.contains("read_resp2_binary_batch_async(16)"));
+    assert!(canonical_text.contains("Map<Bytes,Bytes>"));
+    assert!(canonical_text.contains("worker.outputs.next()"));
+    assert!(canonical_text.contains("reply_100"));
+    // The caller's exact-source CI independently checks this Git blob.
+    let rejected_100 = Command::new(&compiler).arg(&canonical_100)
+        .output().expect("run canonical 100-client guest fail-closed gate");
+    assert!(!rejected_100.status.success(),
+        "native compiler silently accepted 100-client typed Bytes/TCP source");
+    assert!(rejected_100.stdout.is_empty(),
+        "unsupported native 100-client Redis emitted partial LLVM IR");
+    println!("ATTO_REDIS_LLVM_CANONICAL_100_BLOB={CANONICAL_100_GIT_BLOB}");
+    println!("ATTO_REDIS_LLVM_CANONICAL_100_FULL_TCP=FAIL_CLOSED");
     println!("ATTO_REDIS_LLVM_COMPILER_NATIVE_BATCH_ACTOR=EXECUTED_PASS");
     println!("ATTO_REDIS_LLVM_NATIVE_BATCH_ACCEPTED={accepted} PROCESSED={processed} ABANDONED={abandoned}");
     println!("ATTO_REDIS_LLVM_BATCH_LOGICAL_COMMANDS=12 MAILBOX_MESSAGES=3");
