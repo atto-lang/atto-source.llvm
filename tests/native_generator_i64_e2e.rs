@@ -306,6 +306,59 @@ pub gen* middle(): Iterator<int> {
         "compiled .ores generator iteration should return 42: stderr={}",
         String::from_utf8_lossy(&guest_run.stderr));
 
+    // Two lexical activations inside a native index-loop must reuse
+    // entry-allocated frame storage but reset generator state per iteration.
+    let repeated_source = r#"pub fnc main(): int {
+  let int total = 0;
+  for (let int i = 0; i < 2; i = i + 1) {
+    for const value of values() {
+      total = total + value;
+    }
+  }
+  return total;
+}
+pub gen* values(): Iterator<int> {
+  yield 20;
+  yield 22;
+  return;
+}
+"#;
+    let repeated = compile(
+        &compiler, &dir.0, "generator-for-of-repeat.ores", repeated_source);
+    assert!(repeated.status.success(),
+        "nested source for-of compilation failed: {}",
+        String::from_utf8_lossy(&repeated.stderr));
+    let repeated_ll = dir.0.join("generator-for-of-repeat.ll");
+    let repeated_exe = dir.0.join(if cfg!(windows) {
+        "generator-for-of-repeat.exe"
+    } else {
+        "generator-for-of-repeat"
+    });
+    fs::write(&repeated_ll, &repeated.stdout).expect("write repeated for-of IR");
+    let repeated_link = Command::new(&clang)
+        .arg("-O2").arg("-Wno-override-module")
+        .arg("-x").arg("ir").arg(&repeated_ll)
+        .arg("-o").arg(&repeated_exe).current_dir(&dir.0)
+        .output().expect("link repeated generator guest");
+    assert!(repeated_link.status.success(),
+        "repeated native for-of link failed: {}",
+        String::from_utf8_lossy(&repeated_link.stderr));
+    let repeated_run = Command::new(&repeated_exe).current_dir(&dir.0)
+        .output().expect("run repeated native generator guest");
+    assert_eq!(repeated_run.status.code(), Some(84),
+        "repeated lexical generator should return 84: stderr={}",
+        String::from_utf8_lossy(&repeated_run.stderr));
+
+    rejected(&compiler, &dir.0, "forof-impure-call.ores", r#"
+pub fnc impure(): int { return 1; }
+pub gen* g(): Iterator<int> { yield 1; return; }
+pub fnc main(): int {
+  let int total = 0;
+  for const value of g() { total = impure(); }
+  return total;
+}
+"#, "native generator for-of body requires scalar writes only with pure expressions");
+
     rejected(&compiler, &dir.0, "forof-missing-gen.ores", r#"
 pub fnc main(): int {
   let int x = 0;
