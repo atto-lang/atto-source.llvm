@@ -1,0 +1,22 @@
+// Genuine compiler-generated native Atto actor for bounded Kafka partition
+// command ordering. Integer-only, experimental: no Kafka TCP/Bytes/fsync/ACK.
+define actor KafkaPartition as {
+  let next_offset: int = 0;
+  let order_hash: int = 0;
+  pub fnc on_message(int ordinal): int {
+    next_offset = next_offset + 1;
+    order_hash = order_hash * 11 + ordinal;
+    return order_hash;
+  }
+}
+
+pub fnc main(): int {
+  const partition = spawn KafkaPartition();
+  partition.send(1);
+  partition.send(2);
+  partition.send(3);
+  partition.send(4);
+  partition.send(5);
+  stop partition;
+  return 43;
+}

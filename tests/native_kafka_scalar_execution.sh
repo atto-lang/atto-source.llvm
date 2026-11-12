@@ -24,6 +24,64 @@ for opt in O0 O2; do
   test "$result" -eq 42 && test ! -s "$tmp/$opt.stdout" && test ! -s "$tmp/$opt.stderr"
   echo "ATTO_KAFKA_LLVM_NATIVE_SCALAR_$opt=EXECUTED_PASS exit=42"
 done
+
+# The current LLVM compiler genuinely lowers a restricted scalar actor
+# into a native MAIN-domain OresVM with a bounded FIFO and actor-owned heap.
+actor="$root/tests/fixtures/kafka_partition_actor_native.atto"
+test -f "$actor" && test ! -L "$actor"
+echo "LLVM_KAFKA_ACTOR_BLOB=$(git -C "$root" hash-object "$actor")"
+"$compiler" "$actor" > "$tmp/kafka-actor.ll" 2> "$tmp/actor-compile.err"
+test -s "$tmp/kafka-actor.ll" && test ! -s "$tmp/actor-compile.err"
+for symbol in oreslang_source_actor_spawn oreslang_source_actor_send oreslang_source_actor_stop; do
+  grep -Fq "$symbol" "$tmp/kafka-actor.ll" || { echo "missing compiler-generated actor $symbol" >&2; exit 1; }
+done
+native="$root/src/main/cpp/oreslang/runtime"
+for opt in O0 O2; do
+  clang "-$opt" -x ir "$tmp/kafka-actor.ll" \
+    -x c "$native/ActorOwnedI64Heap.c" "$native/NativeActorScheduler.c" \
+    "$native/NativeOresVM.c" "$native/NativeActorFuture.c" \
+    "$native/SourceActorBootstrap.c" "$native/NativeExecutionContextStore.c" \
+    "$native/NativeContinuationStore.c" "$native/NativeAwaitTraceBridge.c" \
+    "$native/NativeLogicalTrace.c" \
+    -std=c11 -pthread -I "$root/src/main/cpp" \
+    -DORESLANG_SOURCE_ACTOR_TESTING -o "$tmp/kafka-actor-$opt"
+  set +e
+  "$tmp/kafka-actor-$opt" > "$tmp/actor-$opt.stdout" 2> "$tmp/actor-$opt.stderr"
+  result=$?
+  set -e
+  test "$result" -eq 43 && test ! -s "$tmp/actor-$opt.stdout"
+  receipt="$(grep -F 'SOURCE_ACTOR_SPAWN_STOP_VERIFIED ' "$tmp/actor-$opt.stderr" || true)"
+  test "$(printf '%s\n' "$receipt" | grep -c 'SOURCE_ACTOR_SPAWN_STOP_VERIFIED' || true)" -eq 1
+  read -r -a fields <<< "$receipt"
+  test "${fields[0]}" = 'SOURCE_ACTOR_SPAWN_STOP_VERIFIED'
+  declare -A attributes=()
+  for part in "${fields[@]:1}"; do
+    key="${part%%=*}"; value="${part#*=}"
+    case "$key" in
+      constructor_on_worker|released|ready|accepted|processed|abandoned|last) ;;
+      *) echo "unexpected actor receipt key $key" >&2; exit 1 ;;
+    esac
+    [[ "$value" =~ ^[0-9]+$ ]] || exit 1
+    test -z "${attributes[$key]+present}" || exit 1
+    attributes[$key]="$value"
+  done
+  test "${#attributes[@]}" -eq 7
+  test "${attributes[released]}" -eq 1
+  test "${attributes[accepted]}" -eq 5
+  processed="${attributes[processed]}"
+  test "$processed" -ge 0 && test "$processed" -le 5
+  test "${attributes[abandoned]}" -eq "$((5 - processed))"
+  hashes=(0 1 13 146 1610 17715)
+  test "${attributes[last]}" -eq "${hashes[$processed]}"
+  if [[ "${attributes[constructor_on_worker]}" == 0 ]]; then
+    test "${attributes[ready]}" -eq 0 && test "$processed" -eq 0
+  fi
+  grep -Fq 'SOURCE_ACTOR_VM_ROUTING_VERIFIED domains=4 main=1 cold_carriers=0' "$tmp/actor-$opt.stderr"
+  unset attributes
+  echo "ATTO_KAFKA_LLVM_NATIVE_ACTOR_$opt=EXECUTED_PASS accepted=5 processed=$processed abandoned=$((5 - processed))"
+done
+echo 'ATTO_KAFKA_LLVM_NATIVE_ACTOR_SCOPE=I64_ONLY_NO_TCP_OR_FSYNC'
+
 if "$compiler" "$negative" > "$tmp/actor.ll" 2> "$tmp/actor.stderr"; then
   echo "LLVM_KAFKA_ACTOR_UNEXPECTEDLY_COMPILED: must add runtime gate" >&2
   exit 1

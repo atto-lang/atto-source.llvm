@@ -1,4 +1,4 @@
-name: Atto Kafka scalar guest — genuine LLVM AOT (not broker)
+name: Atto Kafka scalar + actor guests — genuine LLVM AOT (not broker)
 on:
   pull_request:
     paths:
@@ -46,12 +46,12 @@ jobs:
           cmake --build "$RUNNER_TEMP/kafka-llvm-build" --target oreslang-llvmc --parallel 2
           test -x "$RUNNER_TEMP/kafka-llvm-build/oreslang-llvmc"
           sha256sum "$RUNNER_TEMP/kafka-llvm-build/oreslang-llvmc"
-      - name: Compile Atto and execute LLVM O0/O2; reject unsupported full actor
+      - name: Execute scalar and native actor Atto O0/O2; reject unsupported durable actor
         run: |
           set -euo pipefail
           bash tests/native_kafka_scalar_execution.sh "$RUNNER_TEMP/kafka-llvm-build/oreslang-llvmc"
       - name: Evidence boundary
         run: |
-          echo 'LLVM_KAFKA_SCALAR=COMPILER_GENERATED_NATIVE_GUEST'
+          echo 'LLVM_KAFKA_SCALAR_AND_I64_ACTOR=COMPILER_GENERATED_NATIVE_GUEST'
           echo 'LLVM_KAFKA_DURABLE_ATTO_ACTOR=NOT_EXECUTED'
           echo 'LLVM_KAFKA_TCP_OR_FSYNC=NOT_EXECUTED'
