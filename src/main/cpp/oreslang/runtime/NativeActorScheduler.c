@@ -1113,6 +1113,56 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
     unlock(s);
     return status;
 }
+OresNativeTaskAdmissionStatus ores_native_actor_scheduler_try_schedule_task(
+        OresNativeActorScheduler* s, OresNativeActorRef actor, uint64_t task_handle) {
+    if (!s || !task_handle || !actor.scheduler_domain)
+        return ORES_NATIVE_TASK_INVALID_ACTOR;
+    if (!s->task_callback || !s->task_cancel_callback)
+        return ORES_NATIVE_TASK_NOT_CONFIGURED;
+    /* Verify the physical single-writer lease BEFORE taking scheduler lock:
+     * authority inspection itself uses the lane's independent phase mutex.
+     * This admits nested TASK and authenticated WAKE turns, never CONTROL
+     * or a foreign Future, reactor, root Task or another actor. */
+    if (executing_kind == TURN_CONTROL
+            || (executing_kind != TURN_DATA && executing_kind != TURN_TASK
+                    && executing_kind != TURN_WAKE)
+            || !ores_native_actor_scheduler_is_current_actor(s, actor))
+        return ORES_NATIVE_TASK_FOREIGN_CARRIER;
+
+    lock(s);
+    OresNativeTaskAdmissionStatus status;
+    if (!matching(s, actor)) {
+        status = ORES_NATIVE_TASK_INVALID_ACTOR;
+    } else {
+        ActorLane* lane = &s->actors[actor.actor_slot];
+        if (s->retired || lane->retired) {
+            status = ORES_NATIVE_TASK_STOPPED;
+        } else if (lane->task_queued >= ORES_NATIVE_TASK_SLOTS_PER_ACTOR) {
+            status = ORES_NATIVE_TASK_MAILBOX_FULL;
+        } else if (s->accepted >= UINT64_MAX - s->reserved_wakes
+                || s->outstanding == UINT64_MAX
+                || !execution_slot_available_locked(s)) {
+            status = ORES_NATIVE_TASK_RESOURCE_EXHAUSTED;
+        } else {
+            /* Caller currently owns the actor lane, so its scheduler already
+             * has a live carrier; no new pthread, supervisor worker, or
+             * inline callback is ever introduced by task admission. */
+            lane->tasks[lane->task_tail] = task_handle;
+            if (++lane->task_tail == ORES_NATIVE_TASK_SLOTS_PER_ACTOR)
+                lane->task_tail = 0;
+            ++lane->task_queued;
+            ++s->reserved_executions;
+            ++s->outstanding;
+            ++s->accepted;
+            (void)rq_sync_locked(s, (size_t)actor.actor_slot);
+            RQ_VALIDATE(s);
+            status = ORES_NATIVE_TASK_ACCEPTED;
+        }
+    }
+    unlock(s);
+    return status;
+}
+
 int ores_native_actor_scheduler_send(OresNativeActorScheduler* s,
                                      OresNativeActorRef actor, uint64_t payload) {
     return ores_native_actor_scheduler_try_send(s, actor, payload)
