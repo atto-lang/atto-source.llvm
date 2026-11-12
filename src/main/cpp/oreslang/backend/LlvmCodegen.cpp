@@ -901,7 +901,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             if (s.branch_local->array_element_type == ScalarType::String) string_runtime = true;
             if (!s.branch_local->array_record_class.empty()) record_runtime = true;
         }
-        if (s.kind == Statement::Kind::ForEach || s.kind == Statement::Kind::ForIndex)
+        if (s.kind == Statement::Kind::ForEach ||
+                s.kind == Statement::Kind::GeneratorForEach ||
+                s.kind == Statement::Kind::ForIndex)
             iteration_runtime = true;
         scan_string(s.expression.get()); scan_string(s.condition.get());
         scan_string(s.loop_step.get());
@@ -1192,6 +1194,31 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     }
 
     for (const auto& type : source.sum_types) record_schemas.emplace(type.name, record_schemas.size() + 1);
+
+    // Emit the native generator ABI declarations before ordinary function
+    // bodies so a source for-of can call a same-unit generator defined later.
+    // Definitions are filled below; no host/runtime bridge is introduced.
+    struct NativeGeneratorAbi {
+        llvm::Function* init;
+        llvm::Function* next;
+        llvm::Function* close;
+    };
+    std::unordered_map<std::string, NativeGeneratorAbi> native_generator_abis;
+    for (const auto& gen : source.generators) {
+        const auto linkage = gen.exported
+            ? llvm::Function::ExternalLinkage : llvm::Function::InternalLinkage;
+        const auto prefix = "oreslang_rt_gen_" + gen.name + "_";
+        NativeGeneratorAbi abi{
+            llvm::Function::Create(llvm::FunctionType::get(i32, {loan_ptr}, false),
+                linkage, prefix + "init", module),
+            llvm::Function::Create(llvm::FunctionType::get(i32, {loan_ptr, loan_ptr}, false),
+                linkage, prefix + "next", module),
+            llvm::Function::Create(llvm::FunctionType::get(i32, {loan_ptr}, false),
+                linkage, prefix + "close", module)
+        };
+        if (!native_generator_abis.emplace(gen.name, abi).second)
+            throw std::runtime_error("duplicate native generator ABI declaration");
+    }
 
     // Exact by-value i64 / borrowed-i64-pointer argument types for all
     // same-module functions; no unsound conversion to i64 is permitted.
@@ -2023,7 +2050,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             const auto scope_start = active_scopes.size();
             for (const auto& action : arm) {
                 if (builder.GetInsertBlock()->getTerminator()) break;
-                if (action.kind == Statement::Kind::ForEach || action.kind == Statement::Kind::ForIndex || action.kind == Statement::Kind::Conditional || action.kind == Statement::Kind::Return) {
+                if (action.kind == Statement::Kind::ForEach ||
+                        action.kind == Statement::Kind::GeneratorForEach ||
+                        action.kind == Statement::Kind::ForIndex ||
+                        action.kind == Statement::Kind::Conditional ||
+                        action.kind == Statement::Kind::Return) {
                     lower_control(action); continue;
                 }
                 if (action.kind != Statement::Kind::ScopedLocal) {
@@ -2064,6 +2095,53 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     builder.CreateStore(next, counter.address); builder.CreateBr(header);
                 }
                 active_scopes.pop_back(); builder.SetInsertPoint(exit); end_scope(counter); return;
+            }
+            if (stmt.kind == Statement::Kind::GeneratorForEach) {
+                const auto& abi = native_generator_abis.at(stmt.generator_name);
+                // A single native activation lives only within this lexical
+                // for-of invocation. The frame must never escape the caller.
+                auto* frame = builder.CreateAlloca(i64,
+                    llvm::ConstantInt::get(i64, 2), "gen.iter.frame");
+                auto* frame_cursor = builder.CreateInBoundsGEP(i64, frame,
+                    llvm::ConstantInt::get(i64, 1));
+                auto* yielded_value = builder.CreateAlloca(i64, nullptr, "gen.iter.value");
+                builder.CreateStore(llvm::ConstantInt::get(i64, 0), frame);
+                builder.CreateStore(llvm::ConstantInt::get(i64, 0), frame_cursor);
+                auto* initialized = builder.CreateCall(abi.init, {frame}, "gen.iter.init");
+                auto* header = llvm::BasicBlock::Create(context, "gen.iter.poll", function);
+                auto* body = llvm::BasicBlock::Create(context, "gen.iter.body", function);
+                auto* terminal = llvm::BasicBlock::Create(context, "gen.iter.done", function);
+                auto* exit = llvm::BasicBlock::Create(context, "gen.iter.exit", function);
+                auto* invalid = llvm::BasicBlock::Create(context, "gen.iter.invalid", function);
+                builder.CreateCondBr(builder.CreateICmpEQ(initialized,
+                    llvm::ConstantInt::get(i32, 1)), header, invalid);
+                builder.SetInsertPoint(header);
+                auto* step = builder.CreateCall(abi.next, {frame, yielded_value}, "gen.iter.step");
+                auto* step_switch = builder.CreateSwitch(step, invalid, 2);
+                step_switch->addCase(llvm::ConstantInt::get(i32, 1), body);
+                step_switch->addCase(llvm::ConstantInt::get(i32, 0), terminal);
+                builder.SetInsertPoint(body);
+                auto* element = builder.CreateLoad(i64, yielded_value, "gen.iter.yielded");
+                auto scope = scoped_value(*stmt.branch_local, element);
+                active_scopes.push_back(scope);
+                lower_arm(stmt.then_statements);
+                active_scopes.pop_back();
+                // Parser limits this initial body to ordinary scalar writes.
+                // There is no early return or unsafe skip over close().
+                if (builder.GetInsertBlock()->getTerminator())
+                    throw std::runtime_error("native generator for-of escaped lexical cleanup");
+                end_scope(scope);
+                builder.CreateBr(header);
+                builder.SetInsertPoint(terminal);
+                auto* closed = builder.CreateCall(abi.close, {frame}, "gen.iter.close");
+                builder.CreateCondBr(builder.CreateICmpEQ(closed,
+                    llvm::ConstantInt::get(i32, 0)), exit, invalid);
+                builder.SetInsertPoint(invalid);
+                builder.CreateCall(llvm::Intrinsic::getDeclaration(
+                    &module, llvm::Intrinsic::trap));
+                builder.CreateUnreachable();
+                builder.SetInsertPoint(exit);
+                return;
             }
             if (stmt.kind == Statement::Kind::ForEach) {
                 auto* selected = receiver_array_region(*stmt.expression, &region_moves);
@@ -2140,7 +2218,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 ordered_root_scopes.push_back(scoped_value(local, value));
                 continue;
             }
-            if (stmt.kind == Statement::Kind::ForEach || stmt.kind == Statement::Kind::ForIndex ||
+            if (stmt.kind == Statement::Kind::ForEach ||
+                    stmt.kind == Statement::Kind::GeneratorForEach ||
+                    stmt.kind == Statement::Kind::ForIndex ||
                     stmt.kind == Statement::Kind::Conditional) {
                 lower_control(stmt); continue;
             }
@@ -2623,19 +2703,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         throw std::runtime_error(
             "native generator v1 is not yet admitted for wasm32/Cortex-M targets");
     for (const auto& generator : source.generators) {
-        const auto linkage = generator.exported
-            ? llvm::Function::ExternalLinkage
-            : llvm::Function::InternalLinkage;
-        const std::string prefix = "oreslang_rt_gen_" + generator.name + "_";
-        auto* init = llvm::Function::Create(
-            llvm::FunctionType::get(i32, {loan_ptr}, false),
-            linkage, prefix + "init", module);
-        auto* next = llvm::Function::Create(
-            llvm::FunctionType::get(i32, {loan_ptr, loan_ptr}, false),
-            linkage, prefix + "next", module);
-        auto* close = llvm::Function::Create(
-            llvm::FunctionType::get(i32, {loan_ptr}, false),
-            linkage, prefix + "close", module);
+        const auto& abi = native_generator_abis.at(generator.name);
+        auto* init = abi.init;
+        auto* next = abi.next;
+        auto* close = abi.close;
         auto* zero = llvm::ConstantInt::get(i64, 0);
         auto* active_state = llvm::ConstantInt::get(i64, 1);
         auto* done_state = llvm::ConstantInt::get(i64, 2);
