@@ -706,6 +706,7 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_options(
     s->control_callback = control_callback;
     s->panic_callback = panic_callback;
     s->wake_callback = wake_callback;
+    s->wake_settled_callback = options->after_wake;
     s->context = ctx;
     for (size_t i = 0; i < actors; ++i) {
         for (int k = 0; k < TURN_CLASSES; ++k)
