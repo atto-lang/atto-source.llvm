@@ -69,7 +69,8 @@ def main():
     # New guest fixtures use .atto; both the native LLVM compiler and the
     # Java reference can run these through the existing differential harness.
     implicit_self = Path(__file__).resolve().parent / 'fixtures' / 'implicit-self'
-    for case in ('private-helper', 'arity', 'mut-receiver'):
+    for case in ('private-helper', 'arity', 'mut-receiver',
+                 'family-over-free', 'scoped-shadow-does-not-leak'):
         positives.append(('implicit-' + case, {
             'main.atto': (implicit_self / (case + '.atto')).read_text()
         }))
@@ -116,9 +117,9 @@ def main():
         ('escaped-bound-method', COUNTER+'pub fnc main():int{let Counter c=new Counter();return c.read;}',{},'unknown class field'),
     ]
     negatives.extend([
-        ('implicit-ambiguous-free',
-         (implicit_self / 'ambiguous-free.atto').read_text(), {},
-         'ambiguous unqualified call'),
+        ('implicit-wrong-arity-no-free-fallback',
+         (implicit_self / 'wrong-arity-no-free-fallback.atto').read_text(), {},
+         'wrong implicit call arity'),
         ('implicit-shadowed-parameter',
          (implicit_self / 'shadowed-parameter.atto').read_text(), {},
          'unqualified method call is shadowed'),
