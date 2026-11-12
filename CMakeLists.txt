@@ -116,6 +116,20 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Real binary-safe native String.contains_literal implementation with
+    # embedded NUL, bounds, empty needle, and fail-closed invalid handles.
+    # This C runtime ABI test is distinct from source-to-native Atto execution.
+    add_executable(oreslang-native-string-contains-literal-test
+        tests/native_string_contains_literal_test.c
+        src/main/cpp/oreslang/runtime/NativeStringRegion.c)
+    target_include_directories(oreslang-native-string-contains-literal-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-string-contains-literal-test PRIVATE pthread)
+    target_compile_options(oreslang-native-string-contains-literal-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_string_contains_literal_binary_unit
+        COMMAND oreslang-native-string-contains-literal-test)
+    set_tests_properties(native_string_contains_literal_binary_unit PROPERTIES TIMEOUT 20)
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
     add_executable(oreslang-native-sum-payload-admission-test
