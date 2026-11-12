@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real Oreslang source -> LLVM -> Clang -> native actor scheduler regression."""
 import argparse
+import hashlib
 import pathlib
 import re
 import subprocess
@@ -9,6 +10,22 @@ import tempfile
 # Every safety assertion below is part of the CI gate: never silently remove it.
 if not __debug__:
     raise SystemExit("source actor execution gate forbids optimized Python (-O)")
+
+# Git blob identities for the canonical .atto executable/negative source corpus.
+# Never infer these from the compiler output or from a carrier mirror.
+ATTO_SOURCE_BLOBS = {
+    "atto-actor-two-owned-states.atto": "fba83828646529f680759d2670bb9f67aaefe63c",
+    "atto-actor-send-after-stop-negative.atto": "d9bb93cf379422e149961622e0ea9b810e02e945",
+    "atto-actor-borrow-send-negative.atto": "b1d4dedad1b570dfa8ac2ca93c024c2752097d15",
+}
+
+def check_atto_source_blobs(fixtures):
+    for name, expected in ATTO_SOURCE_BLOBS.items():
+        path = fixtures / name
+        assert path.is_file() and not path.is_symlink(), ("untrusted fixture", name)
+        raw = path.read_bytes()
+        blob = hashlib.sha1(b"blob " + str(len(raw)).encode("ascii") + b"\\0" + raw).hexdigest()
+        assert blob == expected, ("unexpected source blob", name, blob, expected)
 
 def run(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=90, **kw)
@@ -75,9 +92,12 @@ def main():
     ap.add_argument("--clang", required=True)
     ap.add_argument("--root", required=True)
     ap.add_argument("--sanitize", action="store_true")
+    ap.add_argument("--atto-only", action="store_true",
+                    help="run the SHA-pinned native Atto source cases only")
     args = ap.parse_args()
     root = pathlib.Path(args.root)
     fixtures = root / "tests" / "fixtures"
+    check_atto_source_blobs(fixtures)
     runtime = root / "src" / "main" / "cpp" / "oreslang" / "runtime"
     source_dirs = root / "src" / "main" / "cpp"
     positives = [
@@ -161,6 +181,11 @@ def main():
         "atto-actor-send-after-stop-negative.atto": "actor message sent after stop",
         "atto-actor-borrow-send-negative.atto": "borrowed reference may only be passed",
     }
+    if args.atto_only:
+        positives = [case for case in positives if case[0] in ATTO_SOURCE_BLOBS]
+        negatives = {name: diag for name, diag in negatives.items()
+                     if name in ATTO_SOURCE_BLOBS}
+        assert len(positives) == 1 and len(negatives) == 2
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
             name.startswith("source-actor-scoped-owned-")
