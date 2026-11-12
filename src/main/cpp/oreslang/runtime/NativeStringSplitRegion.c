@@ -9,7 +9,7 @@
  * partially filled arrays.
  */
 #include "oreslang/runtime/NativeStringRegion.h"
-#include "oreslang/runtime/NativeIntArrayRegion.h"
+#include "oreslang/runtime/NativeStringSplitRegion.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
