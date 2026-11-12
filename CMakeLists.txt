@@ -623,7 +623,15 @@ if(BUILD_TESTING)
         set(ORE_SOURCE_I64_CLANG "${CMAKE_CURRENT_BINARY_DIR}/missing-source-i64-clang")
     endif()
     # Real LLVM guest -> dormant span intrinsics -> Clang-linked C11 runtime
-    # -> actual native OS process; three positive exits and four negatives.
+    # -> actual native OS process; five positive, five negative cases.
+    # The host toggle test verifies same-process AOT activation/deactivation.
+    add_test(NAME native_telemetry_live_toggle_aot_guest
+        COMMAND bash
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_telemetry_live_toggle_aot.sh"
+            "$<TARGET_FILE:oreslang-llvmc>"
+            "${ORE_SOURCE_I64_CLANG}"
+            "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(native_telemetry_live_toggle_aot_guest PROPERTIES TIMEOUT 150)
     add_test(NAME native_telemetry_using_scope_aot_guest
         COMMAND bash
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_telemetry_using_aot.sh"
