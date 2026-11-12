@@ -70,15 +70,22 @@ branch blobs:
 - `NativeTelemetrySpan.c`: `3f0ddf6930566e207c5673eedc1ca5fda2c404cb`
 - `native_telemetry_span_runtime_test.c`: `59ea5f8b30f5505ba9a1ccd3fe9b216a854110bd`
 
+**ALSO EXECUTED LOCALLY:** The exact committed C11 runtime test
+passed with GCC and Clang under **ASan+UBSan**. Separately, a hand-authored
+LLVM IR smoke fixture was linked with the exact runtime by Clang 17 and
+executed; it exited with code 42 and the native host observed one clean
+begin/end pair. **Hand-authored IR is not the Atto compiler.**
+
 **NOT EXECUTED:** End-to-end source -> native Parser/ownership ->
 LLVM IR -> Clang -> native executable path. That validation is registered
 as `native_telemetry_using_scope_aot_guest` in CTest and invokes
 `tests/native_telemetry_using_aot.sh`:
 - 3 positive native-process fixtures (early return, nested early
-  return, normal fallthrough) with exact exit codes and a trusted
-  host destructor checking started == ended == expected, active == 0;
-- 4 negative admission cases for forged factory, nonliteral name,
-  escaped handle, forged/manual close;
+  return, normal fallthrough) at **Clang -O0 and -O2**, with exact
+  exit codes and a trusted host destructor checking started == ended
+  == expected, active == 0;
+- 5 negative admission cases for forged factory, nonliteral name,
+  escaped handle, forged/manual close, and unbudgeted hard-real-time;
 - verifies generated LLVM actually calls begin/end. Source-only grep
   is not considered a passing compiled guest run.
 
@@ -92,11 +99,13 @@ latest exact head. Neither branch is ready to merge on current receipts.
    test-defined `SpanScope` and observer calls; LLVM currently uses
    an opaque compiler-owned AOT span. A common native Atto stdlib type
    must own the public contract across both backends.
-3. Implement full `ScopedResource` ownership/effect checks, avoid alias
+3. Prove a bounded WCET and clock/probe budget before allowing
+   `using` under `--profile=native-hard-rt`; it currently fails closed.
+4. Implement full `ScopedResource` ownership/effect checks, avoid alias
    shadowing, and prove cleanup cannot throw or suspend.
-4. Add task/actor-continuation trace-context transfer and explicit
+5. Add task/actor-continuation trace-context transfer and explicit
    cancellation unwinds. The native TLS AOT span stack is insufficient
    for suspension or carrier migration.
-5. Implement bounded OTLP-compatible native collector/export and
+6. Implement bounded OTLP-compatible native collector/export and
    permission checks, plus genuine live Graal Truffle JIT attachment.
-6. Prove five-backend semantics independently for Forge, .NET and Wasm.
+7. Prove five-backend semantics independently for Forge, .NET and Wasm.
