@@ -66,6 +66,13 @@ def main():
     positives.append(('ordinary-send-is-not-actor-send', {
         'main.ores':'define class Sender as let int value=40;pub send(int n):int{return self.value+n;}end pub fnc main():int{let Sender s=new Sender();return s.send(2);}',
     }))
+    # New guest fixtures use .atto; both the native LLVM compiler and the
+    # Java reference can run these through the existing differential harness.
+    implicit_self = Path(__file__).resolve().parent / 'fixtures' / 'implicit-self'
+    for case in ('private-helper', 'arity', 'mut-receiver'):
+        positives.append(('implicit-' + case, {
+            'main.atto': (implicit_self / (case + '.atto')).read_text()
+        }))
     java_unsupported={'imported-public-class','imported-nominal-identities','imported-data-only-class'}
     negatives=[
         ('public-constructor-private-class', 'define class Box as let int value=42;pub constructor(){return;}end pub fnc main():int{return 0;}',{},'public constructor requires a public class'),
@@ -108,13 +115,24 @@ def main():
           pub static fnc read():int{return 1;}end pub fnc main():int{return 0;}''',{},'expected'),
         ('escaped-bound-method', COUNTER+'pub fnc main():int{let Counter c=new Counter();return c.read;}',{},'unknown class field'),
     ]
+    negatives.extend([
+        ('implicit-ambiguous-free',
+         (implicit_self / 'ambiguous-free.atto').read_text(), {},
+         'ambiguous unqualified call'),
+        ('implicit-shadowed-parameter',
+         (implicit_self / 'shadowed-parameter.atto').read_text(), {},
+         'unqualified method call is shadowed'),
+        ('implicit-sealed-actor-not-ready',
+         (implicit_self / 'sealed-actor-not-ready.atto').read_text(), {},
+         'native actor state { ... } requires sealed handle_state lowering'),
+    ])
     passed=compared=0
     with tempfile.TemporaryDirectory(prefix='ores-native-method-') as temporary:
         root=Path(temporary)
         for name,files in positives:
             directory=root/name;directory.mkdir()
             for path,source in files.items():(directory/path).write_text(source)
-            source=directory/'main.ores'
+            source=directory/('main.atto' if 'main.atto' in files else 'main.ores')
             result=run([a.compiler,str(source)])
             if result.returncode:raise AssertionError((name,result.stderr))
             (directory/'main.ll').write_text(result.stdout)
@@ -131,9 +149,10 @@ def main():
             passed+=1
         for name,source,dependencies,diagnostic in negatives:
             directory=root/name;directory.mkdir()
-            (directory/'main.ores').write_text(source)
+            guest_name='main.atto' if name.startswith('implicit-') else 'main.ores'
+            (directory/guest_name).write_text(source)
             for path,text in dependencies.items():(directory/path).write_text(text)
-            result=run([a.compiler,str(directory/'main.ores')])
+            result=run([a.compiler,str(directory/guest_name)])
             if not result.returncode or result.stdout or diagnostic not in result.stderr:
                 raise AssertionError((name,diagnostic,result.returncode,result.stdout[:80],result.stderr))
             passed+=1
