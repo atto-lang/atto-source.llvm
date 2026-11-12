@@ -8,6 +8,8 @@ on:
       - 'tests/fixtures/declared-actor-namespace-v1/**'
       - 'tests/fixtures/declared-actor-use-namespace-reject.atto'
       - 'tests/fixtures/use-namespace-llvm-scalar-main.atto'
+      - 'tests/fixtures/use-namespace-nonliteral-reject.atto'
+      - 'tests/fixtures/use-namespace-multifunction-reject.atto'
       - 'tests/cmake/native_declared_actor_llvm_frontend_gate.cmake'
       - 'docs/DECLARED_ACTOR_CRITICAL_STATE_PARITY_STAGING.md'
       - 'CMakeLists.txt'
@@ -42,6 +44,8 @@ jobs:
           printf 'RECEIPT llvm_source_tree=%s\n' "$(git rev-parse HEAD^{tree})"
           for path in \
               tests/fixtures/use-namespace-llvm-scalar-main.atto \
+              tests/fixtures/use-namespace-nonliteral-reject.atto \
+              tests/fixtures/use-namespace-multifunction-reject.atto \
               tests/fixtures/declared-actor-use-namespace-reject.atto \
               tests/fixtures/declared-actor-namespace-v1/{actor,contract,state,increment,get_count}.atto; do
             test -s "$path"
