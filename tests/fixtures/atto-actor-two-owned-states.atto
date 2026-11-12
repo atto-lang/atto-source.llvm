@@ -1,0 +1,21 @@
+// Real Atto source: two independent actor-owned scalar states and owned DATA.
+// Existing native LLVM on_message is transitional; this is not the canonical
+// namespace declare-actor / ActorMail<T> / critical-state ABI.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const a: ActorRef<Worker> = spawn Worker();
+  const b: ActorRef<Worker> = spawn Worker();
+  a.send(1);
+  b.send(5);
+  a.send(2);
+  b.send(6);
+  stop a;
+  stop b;
+  return 43;
+}
