@@ -2,7 +2,7 @@
 //! This is a scalar Redis-style actor state-machine proof. It is NOT a
 //! source-compiled RESP2/Bytes/TCP server, so do not market it as one.
 use std::{env, fs};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output};
 
 const COMMANDS: [i64; 8] = [107, 201, 301, 201, 109, 201, 301, 401];
