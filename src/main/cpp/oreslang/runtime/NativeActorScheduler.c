@@ -568,6 +568,7 @@ static void* carrier(void* raw) {
             .continuation = {0, 0}
         };
         executing = s;
+        executing_turn_kind = kind;
         executing_wake_valid = kind == TURN_WAKE;
         executing_wake = wake_ticket;
         executing_wake_outcome = kind == TURN_WAKE
