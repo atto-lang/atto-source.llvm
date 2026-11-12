@@ -22,6 +22,7 @@ typedef struct {
     atomic_int task_runs;
     atomic_int task_cancels;
     atomic_int nested;
+    atomic_int wakes;
 } Domain;
 
 static void actor_turn(Domain* d, size_t index) {
@@ -75,7 +76,7 @@ static void task_callback(void* opaque, size_t index, uint64_t handle) {
         while (!atomic_load(&d->release)) sched_yield();
     } else {
         assert(d->domain == ORES_NATIVE_VM_TRUSTED_PRIVATE);
-        assert(handle == 3 || handle == 33);
+        assert(handle == 3 || handle == 33 || handle == 44);
         if (handle == 3) {
             assert(ores_native_vm_try_schedule_task(
                 d->vm, d->domain, d->actor, 33) == ORES_NATIVE_TASK_ACCEPTED);
@@ -83,6 +84,23 @@ static void task_callback(void* opaque, size_t index, uint64_t handle) {
         }
     }
     atomic_fetch_add(&d->task_runs, 1);
+    assert(atomic_fetch_sub(&d->active, 1) == 1);
+}
+
+/* A native Future producer publishes only a WAKE ticket, not a TASK.
+ * The authenticated WAKE callback reacquires its owning actor's lease,
+ * then admits the persisted continuation handle onto that actor's TASK lane. */
+static void wake_callback(void* opaque, size_t index,
+        OresNativeWakeTicket ticket, OresNativeWakeOutcome outcome) {
+    Domain* d = (Domain*)opaque;
+    actor_turn(d, index);
+    assert(d->domain == ORES_NATIVE_VM_TRUSTED_PRIVATE);
+    assert(outcome == ORES_NATIVE_WAKE_READY);
+    assert(ores_native_vm_actor_is_current_wake(d->vm, d->domain, ticket));
+    assert(atomic_fetch_add(&d->active, 1) == 0);
+    assert(ores_native_vm_try_schedule_task(
+        d->vm, d->domain, d->actor, 44) == ORES_NATIVE_TASK_ACCEPTED);
+    atomic_fetch_add(&d->wakes, 1);
     assert(atomic_fetch_sub(&d->active, 1) == 1);
 }
 
@@ -112,6 +130,7 @@ static void until(atomic_int* flag, int wanted) {
 int main(void) {
     OresNativeVMConfig cfg = {0};
     OresNativeVMTaskConfig tasks = {0};
+    OresNativeVMWakeConfig wakes = {0};
     Domain d[ORES_NATIVE_VM_DOMAIN_COUNT] = {0};
 
     assert(!ores_native_vm_open_with_tasks(&cfg, NULL));
@@ -132,7 +151,9 @@ int main(void) {
     invalid.on_task_cancel[ORES_NATIVE_VM_MAIN] = NULL;
     assert(!ores_native_vm_open_with_tasks(&cfg, &invalid));
 
-    OresNativeVM* vm = ores_native_vm_open_with_tasks(&cfg, &tasks);
+    wakes.domains[ORES_NATIVE_VM_TRUSTED_PRIVATE] = wake_callback;
+    OresNativeVM* vm = ores_native_vm_open_with_wakes_and_tasks(
+        &cfg, &wakes, &tasks);
     assert(vm);
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
         d[i].vm = vm;
@@ -154,6 +175,27 @@ int main(void) {
         vm, (enum OresNativeVMDomain)-1, d[0].actor, 1)
         == ORES_NATIVE_TASK_INVALID_ACTOR);
 
+    /* Reserve, transfer and publish an authenticated continuation readiness
+     * from the host. No TASK admission is permitted on this producer thread. */
+    OresNativeWakeTicket ticket = {0};
+    assert(ores_native_vm_actor_reserve_wake(
+        vm, ORES_NATIVE_VM_TRUSTED_PRIVATE, d[2].actor, d[2].actor,
+        44, 1, 1, 1, &ticket));
+    assert(ticket.slot_generation != 0);
+    assert(ores_native_vm_actor_transfer_wake(
+        vm, ORES_NATIVE_VM_TRUSTED_PRIVATE, ticket));
+    OresNativeWakeTicket forged = ticket;
+    forged.continuation_generation++;
+    assert(ores_native_vm_actor_publish_wake(
+        vm, ORES_NATIVE_VM_TRUSTED_PRIVATE, forged,
+        ORES_NATIVE_WAKE_READY) == ORES_NATIVE_WAKE_INVALID);
+    assert(ores_native_vm_actor_publish_wake(
+        vm, ORES_NATIVE_VM_TRUSTED_PRIVATE, ticket,
+        ORES_NATIVE_WAKE_READY) == ORES_NATIVE_WAKE_PUBLISHED);
+    assert(ores_native_vm_actor_publish_wake(
+        vm, ORES_NATIVE_VM_TRUSTED_PRIVATE, ticket,
+        ORES_NATIVE_WAKE_READY) == ORES_NATIVE_WAKE_INVALID);
+
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
         assert(ores_native_vm_try_send(vm, d[i].domain, d[i].actor,
             (uint64_t)i + 1u) == ORES_NATIVE_SEND_ACCEPTED);
@@ -172,7 +214,8 @@ int main(void) {
     atomic_store(&d[1].release, 1);
 
     /* TRUSTED_PRIVATE: nested tasks remain on the owning actor's own pool. */
-    until(&d[ORES_NATIVE_VM_TRUSTED_PRIVATE].task_runs, 2);
+    until(&d[ORES_NATIVE_VM_TRUSTED_PRIVATE].task_runs, 3);
+    assert(atomic_load(&d[2].wakes) == 1);
     assert(ores_native_vm_stop_sealed(
         vm, ORES_NATIVE_VM_TRUSTED_PRIVATE, d[2].actor));
     assert(ores_native_vm_stop_sealed(
@@ -185,11 +228,11 @@ int main(void) {
     assert(atomic_load(&d[0].task_runs) == 1);
     assert(atomic_load(&d[1].task_runs) == 0);
     assert(atomic_load(&d[1].task_cancels) == 1);
-    assert(atomic_load(&d[2].task_runs) == 2);
+    assert(atomic_load(&d[2].task_runs) == 3);
     assert(atomic_load(&d[2].nested) == 1);
     assert(atomic_load(&d[3].task_runs) == 0);
 
     assert(ores_native_vm_close(vm));
-    puts("NATIVE_VM_ACTOR_TASK_BRIDGE_PASS running=1 cancelled=1 nested=1");
+    puts("NATIVE_VM_ACTOR_TASK_BRIDGE_PASS running=1 cancelled=1 nested=1 wake=1");
     return 0;
 }
