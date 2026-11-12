@@ -85,6 +85,17 @@ fn main() {
     assert!(rejected.stdout.is_empty(), "LLVM IR emitted for rejected namespace");
     assert!(String::from_utf8_lossy(&rejected.stderr)
         .contains("duplicate native namespace header"), "unexpected rejection diagnostic");
+    // Preserve the fail-closed boundary: namespace + a second source entry
+    // cannot silently compile as a cross-module/exportable program.
+    let too_many = work.join("atto-rmq-namespace-extra-function.atto");
+    fs::write(&too_many, format!("{source_bytes}\npub fnc extra(): int {{ return 1; }}\n"))
+        .expect("write two-function negative fixture");
+    let rejected_extra = Command::new(&compiler).arg(&too_many).output()
+        .expect("run real compiler on unsupported namespace topology");
+    assert!(!rejected_extra.status.success(), "unsupported namespace link topology accepted");
+    assert!(rejected_extra.stdout.is_empty(), "LLVM IR emitted for unsupported namespace topology");
+    assert!(String::from_utf8_lossy(&rejected_extra.stderr)
+        .contains("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED"), "missing fail-closed namespace diagnostic");
     let output = run(Command::new(&compiler).arg(&source));
     let ir = String::from_utf8(output.stdout).expect("compiler must emit UTF-8 LLVM IR");
     assert!(ir.starts_with("; ModuleID"), "no real generated LLVM module");
