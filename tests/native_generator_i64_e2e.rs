@@ -300,8 +300,10 @@ gen* values(): Iterator<int> { yield 1; return; }\n";
         "gen* values(): Iterator<int> { yield* other(2); return; }\n",
         "expected ')'");
     rejected(&compiler, &dir.0, "delegate-cycle.ores",
-        "gen* a(): Iterator<int> { yield* b(); return; }\n\\
-gen* b(): Iterator<int> { yield* a(); return; }\n",
+        concat!(
+            "gen* a(): Iterator<int> { yield* b(); return; }\n",
+            "gen* b(): Iterator<int> { yield* a(); return; }\n",
+        ),
         "native generator yield* cycle");
     let expanded_overflow = String::from("gen* inner(): Iterator<int> {\n");
     for _ in 0..2048 { expanded_overflow.push_str(" yield 1;\n"); }
