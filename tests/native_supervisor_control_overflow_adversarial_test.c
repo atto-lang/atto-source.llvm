@@ -22,9 +22,14 @@ typedef struct {
     int count;
 } State;
 
-static void require(int condition) {
-    if (!condition) abort();
+static void require_at(int condition, int line) {
+    if (!condition) {
+        fprintf(stderr, "NATIVE_SUPERVISOR_ASSERTION_FAILED line=%d\\n", line);
+        fflush(stderr);
+        abort();
+    }
 }
+#define require(condition) require_at(!!(condition), __LINE__)
 
 static void tick(void) {
     struct timespec delay = {0, 1000000};
