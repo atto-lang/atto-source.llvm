@@ -24,7 +24,8 @@ static unsigned expected;
 __attribute__((constructor)) static void before_guest(void) {
     const char* text = getenv("ORES_EXPECT_SPANS");
     expected = text ? (unsigned)strtoul(text, 0, 10) : 0;
-    ores_native_telemetry_set_enabled(1);
+    const char* enable = getenv("ORES_TEST_TRACING_ON");
+    ores_native_telemetry_set_enabled(enable && enable[0] == '1');
 }
 __attribute__((destructor)) static void after_guest(void) {
     const OresNativeTelemetrySnapshot s = ores_native_telemetry_snapshot();
@@ -41,7 +42,11 @@ C
 
 compile_and_run() {
   local name="$1" expected_exit="$2" expected_scopes="$3"
-  "$COMPILER" "$OUT/$name.atto" > "$OUT/$name.ll" 2> "$OUT/$name.compiler.log"
+  if ! "$COMPILER" "$OUT/$name.atto" > "$OUT/$name.ll" 2> "$OUT/$name.compiler.log"; then
+    echo "Atto compiler rejected $name before native executable" >&2
+    cat "$OUT/$name.compiler.log" >&2
+    exit 1
+  fi
   grep -q 'ores_native_telemetry_span_begin' "$OUT/$name.ll" ||
     { echo "LLVM missing actual span begin" >&2; exit 1; }
   grep -q 'ores_native_telemetry_span_end' "$OUT/$name.ll" ||
@@ -50,15 +55,21 @@ compile_and_run() {
   for OPT in 0 2; do
     "$CLANG" "-O$OPT" -I"$ROOT/src/main/cpp" -x ir "$OUT/$name.ll" \
       -x c "$RUNTIME" "$OUT/host-proof.c" -o "$OUT/$name-O$OPT"
-    local observed=0
-    ORES_EXPECT_SPANS="$expected_scopes" "$OUT/$name-O$OPT" \
-      > "$OUT/$name-O$OPT.stdout" 2> "$OUT/$name-O$OPT.stderr" || observed=$?
-    test "$observed" -eq "$expected_exit" ||
-      { echo "$name -O$OPT returned $observed, expected $expected_exit" >&2; cat "$OUT/$name-O$OPT.stderr" >&2; exit 1; }
-    test ! -s "$OUT/$name-O$OPT.stdout" ||
-      { echo "unexpected native guest stdout" >&2; exit 1; }
-    grep -qx "NATIVE_GUEST_SPAN_CLEANUP_PASS:$expected_scopes" "$OUT/$name-O$OPT.stderr" ||
-      { echo "$name -O$OPT failed exact span lifecycle check" >&2; cat "$OUT/$name-O$OPT.stderr" >&2; exit 1; }
+    # Both enabled and disabled recording must preserve the guest OS exit,
+    # including the same emitted probe sites and no event when disabled.
+    for mode in on off; do
+      local count="$expected_scopes" enabled=1
+      if [[ "$mode" == off ]]; then count=0; enabled=0; fi
+      local observed=0
+      ORES_TEST_TRACING_ON="$enabled" ORES_EXPECT_SPANS="$count" "$OUT/$name-O$OPT" \
+        > "$OUT/$name-O$OPT-$mode.stdout" 2> "$OUT/$name-O$OPT-$mode.stderr" || observed=$?
+      test "$observed" -eq "$expected_exit" ||
+        { echo "$name -O$OPT $mode returned $observed, expected $expected_exit" >&2; cat "$OUT/$name-O$OPT-$mode.stderr" >&2; exit 1; }
+      test ! -s "$OUT/$name-O$OPT-$mode.stdout" ||
+        { echo "unexpected native guest stdout for $name -O$OPT $mode" >&2; exit 1; }
+      grep -qx "NATIVE_GUEST_SPAN_CLEANUP_PASS:$count" "$OUT/$name-O$OPT-$mode.stderr" ||
+        { echo "$name -O$OPT $mode failed exact span lifetime check" >&2; cat "$OUT/$name-O$OPT-$mode.stderr" >&2; exit 1; }
+    done
   done
 }
 
@@ -92,6 +103,32 @@ pub fnc main(): int {
 }
 ATTO
 compile_and_run normal 44 1
+
+cat > "$OUT/conditional-true.atto" <<'ATTO'
+pub fnc main(): int {
+  if true {
+    using telemetry.span("true-branch") as chosen {
+      return 45;
+    }
+  } else {
+  } fi
+  return 1;
+}
+ATTO
+compile_and_run conditional-true 45 1
+
+cat > "$OUT/conditional-false.atto" <<'ATTO'
+pub fnc main(): int {
+  if false {
+    using telemetry.span("not-taken") as unentered {
+      return 12;
+    }
+  } else {
+  } fi
+  return 46;
+}
+ATTO
+compile_and_run conditional-false 46 0
 
 reject_source() {
   local name="$1"
@@ -143,4 +180,4 @@ test ! -s "$OUT/hard-rt.ll" ||
 grep -q "telemetry using lacks bounded WCET" "$OUT/hard-rt.err" ||
   { echo "hard-real-time telemetry denial did not reach WCET gate" >&2; cat "$OUT/hard-rt.err" >&2; exit 1; }
 
-echo 'LLVM_AOT_GUEST_TELEMETRY_SCOPE_EXECUTION_PASS:3:5'
+echo 'LLVM_AOT_GUEST_TELEMETRY_SCOPE_EXECUTION_PASS:5:5'
