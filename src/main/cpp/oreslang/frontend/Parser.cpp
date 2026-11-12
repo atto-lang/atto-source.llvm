@@ -2442,6 +2442,28 @@ private:
                 } else require("int");
                 require(">"); require("("); require(")");
                 binding.int_array = binding.owner_mutable = true;
+            } else if (token_.text == "val" && [&] {
+                    // An inferred owned Array<String> is admitted only
+                    // for String.split_literal(String); the result has a
+                    // compiler-owned cleanup shadow, never a raw pointer.
+                    Lexer look = lexer_;
+                    const Token name = look.next();
+                    return name.kind == Kind::Identifier &&
+                           look.next().text == "=";
+                }()) {
+                advance();
+                binding.name = identifier();
+                require("=");
+                binding.initializer = expression();
+                if (!binding.initializer ||
+                        binding.initializer->kind != Expression::Kind::ArrayCall ||
+                        binding.initializer->name != "split_literal" ||
+                        !binding.initializer->left ||
+                        binding.initializer->arguments.size() != 1)
+                    fail("inferred native array val requires String.split_literal(String)");
+                binding.int_array = true;
+                binding.owner_mutable = true;
+                binding.array_element_type = ScalarType::String;
             } else if ((token_.text == "val" || token_.text == "const") &&
                     [&] { Lexer look = lexer_; const auto type = look.next();
                         return type.text == "string" || type.text == "String" ||
@@ -2632,6 +2654,29 @@ private:
             if (token_.text == "owned") fail("branch-local owned value requires destructor/drop lowering");
             auto local = std::make_unique<LocalBinding>(); local->offset = statement.offset;
             local->assignable = mutable_slot; local->owner_mutable = mutable_referent;
+            // Canonical AttoNATS validates early before creating token
+            // arrays. This ordered, scoped lexical owner must share the
+            // same checked String/Array region semantics as an initial val.
+            // Do not generalize inferred val to untyped scalars/classes.
+            if (!mutable_slot && mutable_referent &&
+                    token_.kind == Kind::Identifier &&
+                    [&] { Lexer look = lexer_; return look.next().text == "="; }()) {
+                local->name = identifier();
+                require("=");
+                local->initializer = expression();
+                if (!local->initializer ||
+                        local->initializer->kind != Expression::Kind::ArrayCall ||
+                        local->initializer->name != "split_literal" ||
+                        !local->initializer->left ||
+                        local->initializer->arguments.size() != 1)
+                    fail("inferred ordered val requires String.split_literal(String)");
+                local->int_array = true;
+                local->array_element_type = ScalarType::String;
+                local->owner_mutable = true;
+                require(";");
+                statement.branch_local = std::move(local);
+                return statement;
+            }
             if (accept("Array")) {
                 local->owner_mutable = mutable_slot ? explicit_mutable : mutable_referent;
                 require("<"); array_element(*local); require(">");
@@ -2794,7 +2839,25 @@ private:
                     statement.condition = expression();
                     if (accept_keyword_if_header()) {
                         statement.then_statements = branch_arm(false, true);
-                        if (accept("else")) statement.else_statements = branch_arm(false, true);
+                        // Canonical Atto `elif` shares one final fi.
+                        // Lower it to the ordinary path-sensitive nested
+                        // conditional AST; no duplicate condition evaluation.
+                        auto* tail = &statement.else_statements;
+                        for (std::size_t count = 0; token_.text == "elif"; ++count) {
+                            if (count == 16)
+                                fail("native elif chain exceeds 16 arms");
+                            Statement next;
+                            next.kind = Statement::Kind::Conditional;
+                            next.offset = token_.offset;
+                            require("elif");
+                            next.condition = expression();
+                            if (!accept_keyword_if_header())
+                                fail("native elif requires then/do header");
+                            next.then_statements = branch_arm(false, true);
+                            tail->push_back(std::move(next));
+                            tail = &tail->back().else_statements;
+                        }
+                        if (accept("else")) *tail = branch_arm(false, true);
                     } else {
                         require("{"); statement.then_statements = branch_arm(false, false); require("}");
                         if (accept("else")) { require("{"); statement.else_statements = branch_arm(false, false); require("}"); }
@@ -4727,6 +4790,26 @@ private:
                         throw std::runtime_error(
                             "named native array/member arguments require checked lowering at byte " +
                             std::to_string(expr.offset));
+                // String.split_literal returns one non-Copy Array<String>
+                // owner. The inferred lexical val binding is the only
+                // admitted place for the opaque native array handle.
+                if (expr.name == "split_literal") {
+                    if (!expr.left || expr.arguments.size() != 1)
+                        throw std::runtime_error(
+                            "String.split_literal requires exactly one String delimiter at byte " +
+                            std::to_string(expr.offset));
+                    if (validate_scalar_expression(*expr.left, variables, functions, depth + 1)
+                            != ScalarType::String)
+                        throw std::runtime_error(
+                            "String.split_literal requires a String receiver at byte " +
+                            std::to_string(expr.offset));
+                    if (validate_scalar_expression(*expr.arguments.front(), variables, functions, depth + 1)
+                            != ScalarType::String)
+                        throw std::runtime_error(
+                            "String.split_literal requires a String delimiter at byte " +
+                            std::to_string(expr.offset));
+                    return expr.resolved_type = ScalarType::I64;
+                }
                 // String.contains_literal(String) is a scalar, pure,
                 // length-delimited native operation, never an array handle.
                 if (expr.name == "contains_literal") {
@@ -5599,6 +5682,9 @@ private:
 
             for (const auto& binding : fn.locals) {
                 if (binding.int_array || binding.new_class || binding.move_class) {
+                    if (binding.int_array && binding.initializer)
+                        require_scalar(*binding.initializer, ScalarType::I64,
+                            "native split array initializer", scalar_types);
                     scalar_types.emplace(binding.name, ScalarType::I64);
                     if (binding.int_array)
                         scalar_types.emplace(binding.name + ".$element", binding.array_element_type);

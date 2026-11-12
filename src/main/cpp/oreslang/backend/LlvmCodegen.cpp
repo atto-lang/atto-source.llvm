@@ -1604,7 +1604,44 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
 
         for (const auto& binding : fn.locals) {
             if (binding.int_array) {
+                llvm::Value* split_source = nullptr;
+                llvm::Value* split_delimiter = nullptr;
+                if (binding.initializer) {
+                    const Expression& split = *binding.initializer;
+                    if (split.kind != Expression::Kind::ArrayCall ||
+                            split.name != "split_literal" || !split.left ||
+                            split.arguments.size() != 1 ||
+                            binding.array_element_type != ScalarType::String)
+                        throw std::runtime_error("unchecked native owned String split initializer");
+                    // Preserve lexical evaluation of String expressions
+                    // before allocating the output array.
+                    split_source = lower(*split.left, builder, i64,
+                        storage, field_storage, declarations, &region_moves);
+                    split_delimiter = lower(*split.arguments.front(), builder, i64,
+                        storage, field_storage, declarations, &region_moves);
+                }
                 llvm::Value* handle = new_checked_array(binding.name);
+                if (binding.initializer) {
+                    if (!array_region || !array_failure || !array_failure_status)
+                        throw std::runtime_error("native String split has no owned array region");
+                    auto split_call = module.getOrInsertFunction(
+                        "ores_string_split_literal",
+                        llvm::FunctionType::get(llvm::Type::getInt32Ty(context),
+                            {native_ptr, i64, i64, i64}, false));
+                    auto* status = builder.CreateCall(split_call,
+                        {array_region, handle, split_source, split_delimiter},
+                        binding.name + ".split.status");
+                    auto* ok = llvm::BasicBlock::Create(context,
+                        binding.name + ".split.ok", function);
+                    auto* denied = llvm::BasicBlock::Create(context,
+                        binding.name + ".split.denied", function);
+                    builder.CreateCondBr(builder.CreateICmpEQ(status,
+                        llvm::ConstantInt::get(status->getType(), 0)), ok, denied);
+                    builder.SetInsertPoint(denied);
+                    builder.CreateStore(status, array_failure_status);
+                    builder.CreateBr(array_failure);
+                    builder.SetInsertPoint(ok);
+                }
                 llvm::Value* slot = builder.CreateAlloca(i64, nullptr,
                     binding.name + ".array.owner");
                 builder.CreateStore(handle, slot);
@@ -1967,9 +2004,43 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             if (!local.int_array) native_lifetime_start(builder, slot, bytes);
             ScopedSlot result{local.name, slot, bytes, {}, {}};
             if (local.int_array) {
+                llvm::Value* split_source = nullptr;
+                llvm::Value* split_delimiter = nullptr;
+                if (local.initializer) {
+                    const auto& split = *local.initializer;
+                    if (split.kind != Expression::Kind::ArrayCall ||
+                            split.name != "split_literal" || !split.left ||
+                            split.arguments.size() != 1 ||
+                            local.array_element_type != ScalarType::String)
+                        throw std::runtime_error("unchecked scoped String.split_literal owner");
+                    split_source = lower(*split.left, builder, i64,
+                        storage, field_storage, declarations, &region_moves);
+                    split_delimiter = lower(*split.arguments.front(), builder, i64,
+                        storage, field_storage, declarations, &region_moves);
+                }
                 init = new_checked_array(local.name);
                 result.array_shadow = array_failure_places.at(local.name);
                 array_names.insert(local.name);
+                if (local.initializer) {
+                    if (!array_region || !array_failure || !array_failure_status)
+                        throw std::runtime_error("scoped String.split_literal lacks array region");
+                    auto split_call = module.getOrInsertFunction("ores_string_split_literal",
+                        llvm::FunctionType::get(llvm::Type::getInt32Ty(context),
+                            {native_ptr, i64, i64, i64}, false));
+                    auto* status = builder.CreateCall(split_call,
+                        {array_region, init, split_source, split_delimiter},
+                        local.name + ".scoped.split.status");
+                    auto* ok = llvm::BasicBlock::Create(
+                        context, local.name + ".scoped.split.ok", function);
+                    auto* denied = llvm::BasicBlock::Create(
+                        context, local.name + ".scoped.split.denied", function);
+                    builder.CreateCondBr(builder.CreateICmpEQ(status,
+                        llvm::ConstantInt::get(status->getType(), 0)), ok, denied);
+                    builder.SetInsertPoint(denied);
+                    builder.CreateStore(status, array_failure_status);
+                    builder.CreateBr(array_failure);
+                    builder.SetInsertPoint(ok);
+                }
             }
             if (record) {
                 const auto& cls = *record_classes.at(local.class_name);
@@ -2041,8 +2112,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     continue;
                 }
                 const LocalBinding& local = *action.branch_local;
-                llvm::Value* init = local.initializer ? lower(*local.initializer, builder, i64,
-                    storage, field_storage, declarations, &region_moves) : nullptr;
+                llvm::Value* init = (local.initializer && !local.int_array)
+                    ? lower(*local.initializer, builder, i64,
+                        storage, field_storage, declarations, &region_moves) : nullptr;
                 active_scopes.push_back(scoped_value(local, init));
             }
             while (active_scopes.size() > scope_start) {
@@ -2146,7 +2218,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             if (builder.GetInsertBlock()->getTerminator()) break;
             if (stmt.kind == Statement::Kind::ScopedLocal) {
                 const auto& local = *stmt.branch_local;
-                auto* value = local.initializer ? lower(*local.initializer, builder, i64, storage, field_storage, declarations, &region_moves) : nullptr;
+                auto* value = (local.initializer && !local.int_array)
+                    ? lower(*local.initializer, builder, i64, storage, field_storage, declarations, &region_moves)
+                    : nullptr;
                 ordered_root_scopes.push_back(scoped_value(local, value));
                 continue;
             }

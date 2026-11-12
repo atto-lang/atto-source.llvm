@@ -130,6 +130,21 @@ if(BUILD_TESTING)
     add_test(NAME native_string_contains_literal_binary_unit
         COMMAND oreslang-native-string-contains-literal-test)
     set_tests_properties(native_string_contains_literal_binary_unit PROPERTIES TIMEOUT 20)
+    # Real native String-region + checked owned Array<String> cross-boundary
+    # runtime. This C ABI test is in addition to source/LLVM/Clang guests.
+    add_executable(oreslang-native-string-split-test
+        tests/native_string_split_test.c
+        src/main/cpp/oreslang/runtime/NativeStringSplit.c
+        src/main/cpp/oreslang/runtime/NativeStringRegion.c
+        src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c)
+    target_include_directories(oreslang-native-string-split-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-string-split-test PRIVATE pthread)
+    target_compile_options(oreslang-native-string-split-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_string_split_owned_array_region
+        COMMAND oreslang-native-string-split-test)
+    set_tests_properties(native_string_split_owned_array_region PROPERTIES TIMEOUT 30)
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
     add_executable(oreslang-native-sum-payload-admission-test
@@ -4464,6 +4479,22 @@ if(BUILD_TESTING AND ORE_CLANG)
     endif()
     set_tests_properties(native_atto_nats_pretokenized_string_aot
         PROPERTIES TIMEOUT 180)
+
+    # Canonical core AttoNATS subjects.atto, exact application Git blob,
+    # plus a native compiler-to-Clang validation/matching guest. This MUST
+    # execute both real AOT optimization levels, not a source-only oracle.
+    if(ORE_NO_GC_RUSTC)
+        add_test(NAME native_atto_nats_canonical_subjects_aot
+            COMMAND bash
+                "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-atto-nats-subjects-native-aot.sh"
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}"
+                "${ORE_NO_GC_IR_AUDIT}")
+    else()
+        add_test(NAME native_atto_nats_canonical_subjects_aot
+            COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
+    set_tests_properties(native_atto_nats_canonical_subjects_aot
+        PROPERTIES TIMEOUT 240)
 
     add_test(NAME native_aot_driver
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" aot-driver
