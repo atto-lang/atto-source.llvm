@@ -88,7 +88,10 @@ static void on_data(void* opaque, size_t index, uint64_t payload) {
     uint64_t sequence = 0;
     assert(ores_native_actor_scheduler_current_data_mail_sequence(
         s->scheduler, s->actor[index], &sequence));
-    assert(sequence == 1);
+    /* This actor receives a second DATA message in the running-task STOP
+     * barrier test. The source-mail ordinal must advance per admitted DATA,
+     * while TASK and CONTROL callbacks remain ordinal-free. */
+    assert(sequence == (index == 0 && payload == 3 ? 2u : 1u));
     if (index == 0) {
         if (payload == 3) {
             assert(ores_native_actor_scheduler_try_schedule_task(
