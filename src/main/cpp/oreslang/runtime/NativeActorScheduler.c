@@ -124,6 +124,7 @@ struct OresNativeActorScheduler {
     OresNativeActorTaskFn control_callback;
     OresNativeActorPanicFn panic_callback;
     OresNativeActorWakeFn wake_callback;
+    OresNativeActorWakeSettledFn wake_settled_callback;
     void* context;
     OresNativePhysicalTurnGate* physical_turn_gate;
 };
