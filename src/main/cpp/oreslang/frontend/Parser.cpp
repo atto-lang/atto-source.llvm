@@ -2724,6 +2724,36 @@ private:
         };
         std::size_t statement_depth = 0;
         foreach_statement = [&]() {
+            // Canonical native generator for-of: a fresh, caller-owned frame
+            // is created by the compiler when the loop is entered. Unlike the
+            // array form below this does not carry a source-level i64 handle.
+            if (peek_next().text != "(") {
+                Statement loop;
+                loop.kind = Statement::Kind::GeneratorForEach;
+                loop.offset = token_.offset;
+                require("for");
+                if (!accept("const")) require("val");
+                loop.branch_local = std::make_unique<LocalBinding>();
+                loop.branch_local->offset = token_.offset;
+                loop.branch_local->name = identifier();
+                loop.branch_local->assignable = false;
+                loop.branch_local->owner_mutable = false;
+                loop.branch_local->scalar_type = ScalarType::I64;
+                require("of");
+                loop.generator_name = identifier();
+                require("(");
+                require(")");
+                require("{");
+                loop.then_statements = branch_arm(false, false);
+                require("}");
+                // No return/break/continue/defer or guest calls may bypass
+                // next()/close() cleanup while this first lowering slice has
+                // no general scoped iterator unwind obligations.
+                for (const auto& action : loop.then_statements)
+                    if (action.kind != Statement::Kind::ScalarWrite)
+                        fail("native generator for-of body requires scalar writes only until cleanup-aware exit lowering");
+                return loop;
+            }
             Lexer look = lexer_;
             const auto open = look.next(), mode = look.next(), name = look.next(), of = look.next();
             if (open.text == "(" && mode.text == "let" && name.text == "int") {
@@ -5511,6 +5541,18 @@ private:
                     if (stmt.expression) validate_expression(*stmt.expression, names, functions);
                     return;
                 }
+                if (stmt.kind == Statement::Kind::GeneratorForEach) {
+                    const auto found = std::find_if(program.generators.begin(), program.generators.end(),
+                        [&](const ScalarGenerator& g) { return g.name == stmt.generator_name; });
+                    if (found == program.generators.end())
+                        throw std::runtime_error("native generator for-of requires a same-file gen* declaration '" +
+                            stmt.generator_name + "'");
+                    NameSet body = names;
+                    if (!body.insert(stmt.branch_local->name).second)
+                        throw std::runtime_error("native for-of element shadows a live owner");
+                    for (const auto& action : stmt.then_statements) check_statement_names(action, body);
+                    return;
+                }
                 if (stmt.kind == Statement::Kind::ForEach) {
                     validate_expression(*stmt.expression, names, functions);
                     NameSet body = names;
@@ -5685,6 +5727,11 @@ private:
                 }
                 if (stmt.kind == Statement::Kind::Return) {
                     if (stmt.expression) require_scalar(*stmt.expression, fn.return_type, "structured return", env);
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::GeneratorForEach) {
+                    TypeMap body = env; scoped_type(*stmt.branch_local, body);
+                    for (const auto& action : stmt.then_statements) check_statement_types(action, body);
                     return;
                 }
                 if (stmt.kind == Statement::Kind::ForEach) {
