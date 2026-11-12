@@ -961,6 +961,22 @@ void validate_i64_ownership(Program& program) {
                     throw std::runtime_error("ownership violation: index back-edge must preserve outer owners and loans");
                 return;
             }
+            if (stmt.kind == Statement::Kind::GeneratorForEach) {
+                // The generator frame is a fresh caller-owned stack
+                // activation. Neither the scalar element nor the compiler-
+                // resolved literal generator retains an ordinary loan.
+                // Every backedge must preserve outer affine ownership.
+                const Locals entrance = state;
+                Locals body = entrance;
+                const auto& iterator = *stmt.branch_local;
+                if (!body.emplace(iterator.name, scoped_entry(iterator)).second)
+                    throw std::runtime_error("native generator for-of element shadows live owner");
+                scoped_effects(stmt.then_statements, body);
+                body.erase(iterator.name);
+                if (!same_affine_state(entrance, body))
+                    throw std::runtime_error("ownership violation: generator for-of back-edge changed affine owner");
+                return;
+            }
             if (stmt.kind == Statement::Kind::ForEach) {
                 auto& owner = array_owner(*stmt.expression, state, false);
                 ++owner.shared_loans;
