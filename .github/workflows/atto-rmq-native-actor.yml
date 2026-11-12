@@ -4,7 +4,8 @@ on:
     branches: [perf/atto-rmq-native-actor-llvm-20261112]
   pull_request:
     paths:
-      - 'tests/fixtures/atto-rmq-native-preface-actor.ores'
+      - 'tests/fixtures/atto-rmq-native-preface-actor.atto'
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
       - 'tests/atto_rmq_native_actor_guest.rs'
       - '.github/workflows/atto-rmq-native-actor.yml'
 permissions:
@@ -27,7 +28,8 @@ jobs:
           test -z "$(git status --porcelain)"
           echo "LLVM_SOURCE_HEAD=$EXPECTED_HEAD"
           echo "LLVM_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
-          git hash-object tests/fixtures/atto-rmq-native-preface-actor.ores
+          git hash-object tests/fixtures/atto-rmq-native-preface-actor.atto
+          git hash-object src/main/cpp/oreslang/frontend/Parser.cpp
           git hash-object tests/atto_rmq_native_actor_guest.rs
       - name: Install native compiler dependencies
         run: |
