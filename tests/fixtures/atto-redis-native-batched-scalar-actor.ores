@@ -1,0 +1,62 @@
+// Native LLVM actor mailbox batching: 4 Redis-style operations in EACH
+// one bounded i64 actor message. This compiler admission is scalar only,
+// not Map<Bytes,Bytes>, RESP2 parsing, or TCP. All mutable state is actor-owned.
+//
+// Encoded commands: 1=SET 7, 2=SET 9, 3=GET, 4=DEL, 5=PING.
+// Every 4-digit packed command yields one BASE-1000 ordered reply digest.
+// 1353: SET 7, GET 7, PING, GET 7 => 107,207,401,207
+// 3435: GET 7, DEL 1, GET nil, PING => 207,301,200,401
+// 2343: SET 9, GET 9, DEL 1, GET nil => 109,209,301,200
+define actor NativeBatchedScalarRedis as {
+  let stored: int = 0;
+  let present: int = 0;
+  let previously_present: int = 0;
+  let digest: int = 0;
+
+  pub fnc on_message(int batch): int {
+    const a: int = batch / 1000;
+    const b: int = (batch / 100) - a * 10;
+    const c: int = (batch / 10) - a * 100 - b * 10;
+    const d: int = batch - a * 1000 - b * 100 - c * 10;
+
+    // First operation: apply state change before calculating read/delete.
+    previously_present = present;
+    stored = (a eq 1) ? 7 : ((a eq 2) ? 9 : stored);
+    present = (a eq 1) ? 1 : ((a eq 2) ? 1 : ((a eq 4) ? 0 : present));
+    digest = (a eq 1) ? 107 : ((a eq 2) ? 109 :
+      ((a eq 3) ? ((present eq 1) ? 200 + stored : 200) :
+      ((a eq 4) ? 300 + previously_present : ((a eq 5) ? 401 : 0))));
+
+    previously_present = present;
+    stored = (b eq 1) ? 7 : ((b eq 2) ? 9 : stored);
+    present = (b eq 1) ? 1 : ((b eq 2) ? 1 : ((b eq 4) ? 0 : present));
+    digest = digest * 1000 + ((b eq 1) ? 107 : ((b eq 2) ? 109 :
+      ((b eq 3) ? ((present eq 1) ? 200 + stored : 200) :
+      ((b eq 4) ? 300 + previously_present : ((b eq 5) ? 401 : 0)))));
+
+    previously_present = present;
+    stored = (c eq 1) ? 7 : ((c eq 2) ? 9 : stored);
+    present = (c eq 1) ? 1 : ((c eq 2) ? 1 : ((c eq 4) ? 0 : present));
+    digest = digest * 1000 + ((c eq 1) ? 107 : ((c eq 2) ? 109 :
+      ((c eq 3) ? ((present eq 1) ? 200 + stored : 200) :
+      ((c eq 4) ? 300 + previously_present : ((c eq 5) ? 401 : 0)))));
+
+    previously_present = present;
+    stored = (d eq 1) ? 7 : ((d eq 2) ? 9 : stored);
+    present = (d eq 1) ? 1 : ((d eq 2) ? 1 : ((d eq 4) ? 0 : present));
+    digest = digest * 1000 + ((d eq 1) ? 107 : ((d eq 2) ? 109 :
+      ((d eq 3) ? ((present eq 1) ? 200 + stored : 200) :
+      ((d eq 4) ? 300 + previously_present : ((d eq 5) ? 401 : 0)))));
+    return digest;
+  }
+}
+
+pub fnc main(): int {
+  const worker = spawn NativeBatchedScalarRedis();
+  await worker.get_ready();
+  worker.send(1353);
+  worker.send(3435);
+  worker.send(2343);
+  stop worker;
+  return 43;
+}
