@@ -35,6 +35,9 @@ def expected_prefix_last(name, actor_index, processed):
     if name == "source-actor-interleaved-stop.ores":
         sequences = ([1], [3, 4])
         return sum(sequences[actor_index][:processed])
+    if name == "source-actor-counter-four-mailbox.ores":
+        sequences = ([1, 2, 3, 4], [7, 8])
+        return sum(sequences[actor_index][:processed])
     return sum([1, 2][:processed])
 
 def parse_actor_receipt(line):
@@ -91,6 +94,7 @@ def main():
         ("source-actor-await-done.ores", 1, 0, None),
         ("source-actor-five-workers.ores", 5, 2, 3),
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
+        ("source-actor-counter-four-mailbox.ores", 2, None, None),
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
         ("source-actor-two-owned-heaps.ores", 2, 4, None),
         ("source-actor-interleaved-stop.ores", 2, None, None),
@@ -266,6 +270,7 @@ def main():
                 expected_accepted = (
                     [1, 2][i]
                     if name == "source-actor-interleaved-stop.ores"
+                    else [4, 2][i] if name == "source-actor-counter-four-mailbox.ores"
                     else count)
                 assert accepted == expected_accepted, (
                     name, i, accepted, expected_accepted)
