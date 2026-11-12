@@ -5562,3 +5562,18 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-oresvm-resource-retirement-test)
     set_tests_properties(native_oresvm_actor_resource_retirement PROPERTIES TIMEOUT 30)
 endif()
+
+# Compiler-backed native Atto Redis scalar actor: source -> LLVM IR -> Clang
+# and the actual OresVM actor scheduler + actor heap (not a TCP/Bytes backend).
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_program(ORE_REDIS_RUSTC rustc REQUIRED)
+    find_program(ORE_REDIS_CLANG clang REQUIRED)
+    add_test(NAME atto_redis_llvm_native_actor_guest_scalar
+        COMMAND bash
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-atto-redis-native-llvm.sh"
+            "$<TARGET_FILE:oreslang-llvmc>"
+            "${ORE_REDIS_CLANG}"
+            "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(atto_redis_llvm_native_actor_guest_scalar
+        PROPERTIES TIMEOUT 110)
+endif()
