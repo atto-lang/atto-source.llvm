@@ -106,10 +106,14 @@ int ores_native_actor_task_claim_wake(
         pthread_mutex_unlock(&t->mutex);
         return 0;
     }
+    /* The scheduler calls after_wake only AFTER the guest callback and
+     * its execution claim have unwound. Until then keep the physical loan. */
+    t->in_wake = 1;
+    t->active_ticket = wake;
     if (t->cancellation_requested
             || !ores_native_actor_scheduler_is_current_ready_wake(
                 t->scheduler, wake)) {
-        (void)retire_locked(t);
+        t->phase = ORES_ACTOR_TASK_FINISH_PENDING;
         pthread_mutex_unlock(&t->mutex);
         return 0;
     }
@@ -157,8 +161,12 @@ int ores_native_actor_task_publish(
         } else {
             if (published == ORES_NATIVE_WAKE_PRODUCER_RETIRED
                     || ores_native_actor_scheduler_abort_transferred_wake(
-                        t->scheduler, t->ticket))
-                (void)retire_locked(t);
+                        t->scheduler, t->ticket)) {
+                if (t->in_wake)
+                    t->phase = ORES_ACTOR_TASK_FINISH_PENDING;
+                else
+                    (void)retire_locked(t);
+            }
             ok = 0;
         }
     }
@@ -169,8 +177,29 @@ int ores_native_actor_task_finish(OresNativeActorTask* t) {
     if (!t || !t->initialized) return 0;
     pthread_mutex_lock(&t->mutex);
     int ok = (t->phase == ORES_ACTOR_TASK_RUNNING)
-        && ores_native_actor_scheduler_is_current_wake(t->scheduler, t->ticket)
-        && retire_locked(t);
+        && t->in_wake
+        && ores_native_actor_scheduler_is_current_wake(
+            t->scheduler, t->active_ticket);
+    if (ok) t->phase = ORES_ACTOR_TASK_FINISH_PENDING;
+    pthread_mutex_unlock(&t->mutex);
+    return ok;
+}
+/* Physical retirement after the guest WAKE and scheduler claim exited.
+ * The actor scheduler's outstanding turn still pins lane/heap lifetime here.
+ * Future producers are unable to invoke this callback with a valid wake. */
+int ores_native_actor_task_after_wake(
+        OresNativeActorTask* t, OresNativeWakeTicket wake) {
+    if (!t || !t->initialized
+            || ores_native_actor_scheduler_in_any_actor_turn())
+        return 0;
+    pthread_mutex_lock(&t->mutex);
+    int ok = t->in_wake && same_ticket(t->active_ticket, wake);
+    if (ok) {
+        t->in_wake = 0;
+        t->active_ticket = (OresNativeWakeTicket){0};
+        if (t->phase == ORES_ACTOR_TASK_FINISH_PENDING)
+            ok = retire_locked(t);
+    }
     pthread_mutex_unlock(&t->mutex);
     return ok;
 }
@@ -183,8 +212,12 @@ int ores_native_actor_task_cancel(OresNativeActorTask* t) {
         t->cancellation_requested = 1;
         if (t->phase == ORES_ACTOR_TASK_SUSPENDED) {
             if (ores_native_actor_scheduler_abort_transferred_wake(
-                    t->scheduler, t->ticket))
-                (void)retire_locked(t);
+                    t->scheduler, t->ticket)) {
+                if (t->in_wake)
+                    t->phase = ORES_ACTOR_TASK_FINISH_PENDING;
+                else
+                    (void)retire_locked(t);
+            }
             /* Failed abort means a scheduler or publication contract broke:
              * preserve the loan and quarantine, never manufacture DONE. */
         } else if (t->phase == ORES_ACTOR_TASK_QUEUED) {
@@ -211,15 +244,16 @@ int ores_native_actor_task_cancel_requested(OresNativeActorTask* t) {
 int ores_native_actor_task_physically_done(OresNativeActorTask* t) {
     if (!t || !t->initialized) return 0;
     pthread_mutex_lock(&t->mutex);
-    int done = t->phase == ORES_ACTOR_TASK_RETIRED && !t->resource_loan;
+    int done = t->phase == ORES_ACTOR_TASK_RETIRED
+        && !t->resource_loan && !t->in_wake;
     pthread_mutex_unlock(&t->mutex);
     return done;
 }
 int ores_native_actor_task_close(OresNativeActorTask* t) {
     if (!t || !t->initialized) return 0;
     pthread_mutex_lock(&t->mutex);
-    int ok = t->phase == ORES_ACTOR_TASK_NEW
-        || (t->phase == ORES_ACTOR_TASK_RETIRED && !t->resource_loan);
+    int ok = !t->in_wake && (t->phase == ORES_ACTOR_TASK_NEW
+        || (t->phase == ORES_ACTOR_TASK_RETIRED && !t->resource_loan));
     if (ok) t->initialized = 0;
     pthread_mutex_unlock(&t->mutex);
     if (ok && pthread_mutex_destroy(&t->mutex) != 0) return 0;
