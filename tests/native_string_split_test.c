@@ -81,7 +81,25 @@ int main(void) {
     CHECK(ores_string_split_literal(arrays, e, large, dot) == ORES_NATIVE_ARRAY_LIMIT);
     CHECK(oreslang_int_array_length(arrays, e) == 0);
     free(oversized);
-    /* Rejected token counts cannot poison or disable subsequent admission. */
+    /* A pathological long shared-prefix comparison is bounded BEFORE
+     * any array element or String view publication, even with few tokens.
+     */
+    enum { LONG_INPUT = 131072, LONG_SEPARATOR = 4096 };
+    char *adversarial_input = malloc(LONG_INPUT);
+    char *adversarial_separator = malloc(LONG_SEPARATOR);
+    CHECK(adversarial_input && adversarial_separator);
+    memset(adversarial_input, 'a', LONG_INPUT);
+    memset(adversarial_separator, 'a', LONG_SEPARATOR);
+    adversarial_separator[LONG_SEPARATOR - 1] = 'b';
+    const int64_t hostile = ores_string_literal(adversarial_input, LONG_INPUT);
+    const int64_t hostile_delimiter =
+        ores_string_literal(adversarial_separator, LONG_SEPARATOR);
+    CHECK(hostile && hostile_delimiter);
+    CHECK(ores_string_split_literal(arrays, e, hostile, hostile_delimiter)
+        == ORES_NATIVE_ARRAY_LIMIT);
+    CHECK(oreslang_int_array_length(arrays, e) == 0);
+    free(adversarial_input); free(adversarial_separator);
+    /* Rejected work/token budgets cannot poison subsequent admission. */
     CHECK(ores_string_split_literal(arrays, e, subject, dot) == ORES_NATIVE_ARRAY_OK);
     CHECK(oreslang_int_array_length(arrays, e) == 5);
     oreslang_int_array_drop(arrays, e);
