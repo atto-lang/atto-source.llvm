@@ -3489,8 +3489,16 @@ private:
 
     std::unique_ptr<Expression> logical_xor() {
         auto left = logical_and();
-        if (token_.text == "^^")
-            fail("'^^' is reserved and is not AttoLang source syntax; use Xor(a, b)");
+        // The lexer emits adjacent ^^ as one token; single ^ remains invalid.
+        // LLVM's existing LogicalXor lowering is eager and bool-only.
+        while (token_.text == "^^") {
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::LogicalXor, offset);
+            expr->left = std::move(left);
+            expr->right = logical_and();
+            left = std::move(expr);
+        }
         return left;
     }
 
