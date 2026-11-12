@@ -279,6 +279,12 @@ void validate_native_scalar_types(const Program& program) {
                 } else if (item.kind == Statement::Kind::Return) {
                     if (item.expression) require(expression(*item.expression, scope), result_type(fn), item.offset, "structured return type");
                     else if (!fn.returns_void) fail(item.offset, "non-void structured return requires value");
+                } else if (item.kind == Statement::Kind::GeneratorForEach) {
+                    const auto& iterator = *item.branch_local;
+                    require(local_type(iterator), scalar(false), item.offset,
+                        "native generator for-of element requires int");
+                    Locals body = scope; body.emplace(iterator.name, scalar(false));
+                    statements(item.then_statements, body);
                 } else if (item.kind == Statement::Kind::ForEach) {
                     const auto source = expression(*item.expression, scope);
                     if (source.kind != Kind::Array) fail(item.offset, "for-of requires an array");
