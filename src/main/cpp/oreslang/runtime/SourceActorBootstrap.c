@@ -31,6 +31,8 @@ typedef struct {
     atomic_int startup_state;
     atomic_int constructor_started;
     atomic_int stop_requested;
+    /* Graceful stop drains already-admitted DATA; immediate stop cancels it. */
+    atomic_int graceful_requested;
     atomic_int join_started;
     atomic_uint_fast64_t processed;
     atomic_int_fast64_t last_result;
@@ -414,7 +416,9 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
      */
     group_lock();
     if (atomic_load_explicit(
-            &instance->stop_requested, memory_order_acquire)) {
+            &instance->stop_requested, memory_order_acquire) &&
+        !atomic_load_explicit(
+            &instance->graceful_requested, memory_order_acquire)) {
         atomic_store_explicit(
             &instance->startup_state,
             ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY,
@@ -461,7 +465,9 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
      */
     group_lock();
     if (atomic_load_explicit(
-            &instance->stop_requested, memory_order_acquire)) {
+            &instance->stop_requested, memory_order_acquire) &&
+        !atomic_load_explicit(
+            &instance->graceful_requested, memory_order_acquire)) {
         atomic_store_explicit(
             &instance->startup_state,
             ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY,
@@ -581,6 +587,7 @@ void* oreslang_source_actor_spawn(
         &instance->startup_state, ORES_SOURCE_ACTOR_STARTUP_PENDING);
     atomic_init(&instance->constructor_started, 0);
     atomic_init(&instance->stop_requested, 0);
+    atomic_init(&instance->graceful_requested, 0);
     atomic_init(&instance->join_started, 0);
     atomic_init(&instance->processed, 0);
     atomic_init(&instance->last_result, 0);
@@ -825,17 +832,23 @@ int oreslang_source_actor_snapshot_current_trace(
         out);
 }
 
-void oreslang_source_actor_request_stop(void* opaque) {
+static void request_stop_mode(void* opaque, int graceful) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
 
     /*
-     * Stop admission shares the group mutex with startup/readiness publication
-     * so exactly one side wins the stop-vs-ready linearization point.
-     * This phase still never waits for physical completion.
+     * Source-level graceful_stop drains accepted DATA. Immediate stop
+     * retains stop_sealed cancellation behavior and may abandon queued DATA.
+     * Both modes linearize with startup publication and with one another under
+     * the same group mutex; only the first mode may consume the ActorRef.
+     * Do not wait while holding the group mutex or on an actor carrier.
      */
     group_lock();
     int expected = 0;
+    if (graceful) {
+        atomic_store_explicit(
+            &instance->graceful_requested, 1, memory_order_release);
+    }
     ensure(atomic_compare_exchange_strong_explicit(
         &instance->stop_requested,
         &expected,
@@ -846,14 +859,25 @@ void oreslang_source_actor_request_stop(void* opaque) {
     const size_t slot = (size_t)instance->ref.actor_slot;
     ensure(group.vm && slot < group.next_slot
         && group.actors[slot] == instance);
-    /*
-     * Source stop matches Java ActorRef.stop(), not gracefulStop(): reject
-     * future DATA and abandon queued DATA, while an already-active turn is
-     * allowed to cross its physical execution boundary.
-     */
-    ensure(ores_native_vm_stop_sealed(
-        group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
+    if (graceful) {
+        ensure(ores_native_vm_stop(
+            group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
+    } else {
+        ensure(ores_native_vm_stop_sealed(
+            group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
+    }
     group_unlock();
+}
+
+void oreslang_source_actor_request_stop(void* opaque) {
+    request_stop_mode(opaque, 0);
+}
+
+void oreslang_source_actor_graceful_stop(void* opaque) {
+    // This synchronous ABI is permitted only from compiler-owned trusted
+    // top-level main, not an actor carrier; join_done enforces the fence.
+    request_stop_mode(opaque, 1);
+    oreslang_source_actor_join_done(opaque);
 }
 
 void oreslang_source_actor_join_done(void* opaque) {
