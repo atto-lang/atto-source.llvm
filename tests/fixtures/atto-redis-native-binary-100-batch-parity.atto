@@ -1,0 +1,1673 @@
+// Up to 100 concurrently owned NIO2 TCP sessions. One Atto actor is
+// the sole mutable KV owner; a single broker consumes its output stream.
+// Exactly one finite actor-mail batch per client can be in flight.
+// This fixture is bounded to 100 total accepts for deterministic CI cleanup.
+// Bounded request Channel capacity 32; reply Channel capacity 1/client.
+// It does not implement a shared-memory arena or transfer raw pointers.
+// Native Atto: one mailbox message executes one finite 1..16-command batch.
+// Every Redis key/value stays inside this actor's Map<Bytes,Bytes>.
+// Guest TCP sockets remain affine to the owning session Task.
+define actor TaggedBatchKvActor implements StreamOperator<Tuple[int, int, List<Tuple[int, Bytes, Bytes]>], Tuple[int, int, List<Tuple[string, Bytes]>]> as
+  let Map<Bytes,Bytes> values;
+
+  on_start(): void {
+    self.values = ~map<Bytes,Bytes>();
+    return;
+  }
+
+  receive(ActorMail<Tuple[int, int, List<Tuple[int, Bytes, Bytes]>]> mail): void {
+    const Tuple[int, int, List<Tuple[int, Bytes, Bytes]>] request = mail.value;
+    const int client_id = request[0];
+    const int batch_id = request[1];
+    const List<Tuple[int, Bytes, Bytes]> commands = request[2];
+    let mut List<Tuple[string, Bytes]> results = [];
+    if client_id == 0 && batch_id == 0 && commands.size == 0; do
+      self.send((0, 0, results));
+      self.end();
+      return;
+    fi
+    let int i = 0;
+    loop {
+      if i == commands.size then break; fi
+      const Tuple[int, Bytes, Bytes] command = commands.get(i);
+      const int kind = command[0];
+      const Bytes key = command[1];
+      const Bytes value = command[2];
+      if kind == 1; do
+        results.add(("PONG", value));
+      elseif kind == 3; do
+        self.values.set(key, value);
+        results.add(("OK", value));
+      elseif kind == 2; do
+        val found = self.values.get_optional(key);
+        if found.is_none(); do
+          results.add(("NIL", value));
+        else
+          results.add(("VALUE", found.unwrap()));
+        fi
+      elseif kind == 4; do
+        if self.values.delete(key); do
+          results.add(("ONE", value));
+        else
+          results.add(("ZERO", value));
+        fi
+      else
+        results.add(("ERR", value));
+      fi
+      i = i + 1;
+    }
+    // A complete command batch is one serialized actor turn.
+    self.send((client_id, batch_id, results));
+    return;
+  }
+end
+
+// Only this task owns socket. It forwards a finite OWNED List through the
+// bounded Channel, then checks the matching per-client batch reply sequence.
+// No mutable borrow, socket pointer or raw address crosses any mailbox.
+pub async fnc serve_tagged_batch_session(
+    NioConnection socket,
+    int client_id,
+    Channel<Tuple[int, int, List<Tuple[int, Bytes, Bytes]>]> requests,
+    Channel<Tuple[int, List<Tuple[string, Bytes]>]> replies
+): void {
+  let int next_batch_id = 0;
+  try {
+    loop {
+      let mut List<Tuple[int, string, Bytes, Bytes]> frames = [];
+      // Treat only failed NIO read completion as a normal disconnected peer.
+      try {
+        frames = await socket.read_resp2_binary_batch_async(16);
+      } catch (read_error) {
+        return;
+      }
+      if frames.size == 0 then return; fi
+      let mut List<Tuple[int, Bytes, Bytes]> commands = [];
+      let int terminate = 0;
+      let int i = 0;
+      loop {
+        if i == frames.size then break; fi
+        const Tuple[int, string, Bytes, Bytes] frame = frames.get(i);
+        const int kind = frame[0];
+        if kind == 0; do
+          terminate = 1;
+          break;
+        fi
+        if kind == 5; do
+          terminate = 2;
+          break;
+        fi
+        commands.add((kind, frame[2], frame[3]));
+        i = i + 1;
+      }
+
+      if commands.size > 0; do
+        // Move-only data is never inspected after channel admission.
+        const int expected_replies = commands.size;
+        next_batch_id = next_batch_id + 1;
+        writech requests, (client_id, next_batch_id, commands);
+        const Tuple[int, List<Tuple[string, Bytes]>] answer = await (nb readch replies);
+        if answer[0] != next_batch_id || answer[1].size != expected_replies; do
+          // Mismatched generation/sequence/cardinality cannot reach the wire.
+          return;
+        fi
+        await socket.write_resp2_binary_batch_async(answer[1]);
+      fi
+
+      if terminate != 0; do
+        if terminate == 2; do
+          const Tuple[int, string, Bytes, Bytes] quit_frame = frames.get(i);
+          await socket.write_resp2_binary_async("OK", quit_frame[3]);
+        fi
+        return;
+      fi
+    }
+  } finally {
+    // One retirement notice on QUIT, EOF or failure. Socket never shared.
+    await socket.close_async();
+    let mut List<Tuple[int, Bytes, Bytes]> retirement = [];
+    writech requests, (client_id, -1, retirement);
+  }
+}
+
+pub async routine main(): void {
+  val worker = spawn TaggedBatchKvActor();
+  await worker.get_ready();
+  val listener = await network.listen_async("127.0.0.1", 16399);
+  val Channel<Tuple[int, int, List<Tuple[int, Bytes, Bytes]>]> requests =
+      Channel.new<Tuple[int, int, List<Tuple[int, Bytes, Bytes]>]>(32);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_1 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_2 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_3 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_4 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_5 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_6 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_7 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_8 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_9 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_10 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_11 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_12 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_13 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_14 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_15 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_16 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_17 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_18 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_19 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_20 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_21 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_22 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_23 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_24 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_25 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_26 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_27 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_28 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_29 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_30 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_31 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_32 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_33 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_34 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_35 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_36 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_37 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_38 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_39 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_40 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_41 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_42 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_43 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_44 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_45 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_46 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_47 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_48 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_49 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_50 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_51 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_52 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_53 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_54 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_55 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_56 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_57 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_58 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_59 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_60 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_61 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_62 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_63 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_64 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_65 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_66 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_67 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_68 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_69 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_70 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_71 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_72 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_73 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_74 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_75 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_76 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_77 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_78 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_79 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_80 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_81 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_82 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_83 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_84 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_85 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_86 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_87 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_88 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_89 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_90 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_91 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_92 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_93 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_94 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_95 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_96 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_97 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_98 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_99 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val Channel<Tuple[int, List<Tuple[string, Bytes]>]> reply_100 =
+      Channel.new<Tuple[int, List<Tuple[string, Bytes]>]>(1);
+  val NioConnection first = await listener.accept_async();
+  task scope {
+    let Future<void> intake = task {
+      let int retired = 0;
+      loop {
+        const Tuple[int, int, List<Tuple[int, Bytes, Bytes]>] request =
+            await (nb readch requests);
+        if request[1] == -1; do
+          retired = retired + 1;
+          if retired == 100; do
+            let mut List<Tuple[int, Bytes, Bytes]> stop_batch = [];
+            worker.send((0, 0, stop_batch));
+            await worker.get_done();
+            return;
+          fi
+        else
+          worker.send((request[0], request[1], request[2]));
+        fi
+      }
+    };
+    // The only actor-output consumer; each per-client reply channel has
+    // capacity 1 and receives one finite authenticated actor batch at a time.
+    let Future<void> broker = task {
+      let int last_1 = 0;
+      let int last_2 = 0;
+      let int last_3 = 0;
+      let int last_4 = 0;
+      let int last_5 = 0;
+      let int last_6 = 0;
+      let int last_7 = 0;
+      let int last_8 = 0;
+      let int last_9 = 0;
+      let int last_10 = 0;
+      let int last_11 = 0;
+      let int last_12 = 0;
+      let int last_13 = 0;
+      let int last_14 = 0;
+      let int last_15 = 0;
+      let int last_16 = 0;
+      let int last_17 = 0;
+      let int last_18 = 0;
+      let int last_19 = 0;
+      let int last_20 = 0;
+      let int last_21 = 0;
+      let int last_22 = 0;
+      let int last_23 = 0;
+      let int last_24 = 0;
+      let int last_25 = 0;
+      let int last_26 = 0;
+      let int last_27 = 0;
+      let int last_28 = 0;
+      let int last_29 = 0;
+      let int last_30 = 0;
+      let int last_31 = 0;
+      let int last_32 = 0;
+      let int last_33 = 0;
+      let int last_34 = 0;
+      let int last_35 = 0;
+      let int last_36 = 0;
+      let int last_37 = 0;
+      let int last_38 = 0;
+      let int last_39 = 0;
+      let int last_40 = 0;
+      let int last_41 = 0;
+      let int last_42 = 0;
+      let int last_43 = 0;
+      let int last_44 = 0;
+      let int last_45 = 0;
+      let int last_46 = 0;
+      let int last_47 = 0;
+      let int last_48 = 0;
+      let int last_49 = 0;
+      let int last_50 = 0;
+      let int last_51 = 0;
+      let int last_52 = 0;
+      let int last_53 = 0;
+      let int last_54 = 0;
+      let int last_55 = 0;
+      let int last_56 = 0;
+      let int last_57 = 0;
+      let int last_58 = 0;
+      let int last_59 = 0;
+      let int last_60 = 0;
+      let int last_61 = 0;
+      let int last_62 = 0;
+      let int last_63 = 0;
+      let int last_64 = 0;
+      let int last_65 = 0;
+      let int last_66 = 0;
+      let int last_67 = 0;
+      let int last_68 = 0;
+      let int last_69 = 0;
+      let int last_70 = 0;
+      let int last_71 = 0;
+      let int last_72 = 0;
+      let int last_73 = 0;
+      let int last_74 = 0;
+      let int last_75 = 0;
+      let int last_76 = 0;
+      let int last_77 = 0;
+      let int last_78 = 0;
+      let int last_79 = 0;
+      let int last_80 = 0;
+      let int last_81 = 0;
+      let int last_82 = 0;
+      let int last_83 = 0;
+      let int last_84 = 0;
+      let int last_85 = 0;
+      let int last_86 = 0;
+      let int last_87 = 0;
+      let int last_88 = 0;
+      let int last_89 = 0;
+      let int last_90 = 0;
+      let int last_91 = 0;
+      let int last_92 = 0;
+      let int last_93 = 0;
+      let int last_94 = 0;
+      let int last_95 = 0;
+      let int last_96 = 0;
+      let int last_97 = 0;
+      let int last_98 = 0;
+      let int last_99 = 0;
+      let int last_100 = 0;
+      loop {
+        val output = (await worker.outputs.next()).value.unwrap();
+        const Tuple[int, int, List<Tuple[string, Bytes]>] reply = output.value;
+        if reply[0] == 0 && reply[1] == 0; do
+          return;
+        fi
+        if reply[0] == 1; do
+          if reply[1] != last_1 + 1; do
+            writech reply_1, (-1, reply[2]);
+          else
+            last_1 = reply[1];
+            writech reply_1, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 2; do
+          if reply[1] != last_2 + 1; do
+            writech reply_2, (-1, reply[2]);
+          else
+            last_2 = reply[1];
+            writech reply_2, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 3; do
+          if reply[1] != last_3 + 1; do
+            writech reply_3, (-1, reply[2]);
+          else
+            last_3 = reply[1];
+            writech reply_3, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 4; do
+          if reply[1] != last_4 + 1; do
+            writech reply_4, (-1, reply[2]);
+          else
+            last_4 = reply[1];
+            writech reply_4, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 5; do
+          if reply[1] != last_5 + 1; do
+            writech reply_5, (-1, reply[2]);
+          else
+            last_5 = reply[1];
+            writech reply_5, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 6; do
+          if reply[1] != last_6 + 1; do
+            writech reply_6, (-1, reply[2]);
+          else
+            last_6 = reply[1];
+            writech reply_6, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 7; do
+          if reply[1] != last_7 + 1; do
+            writech reply_7, (-1, reply[2]);
+          else
+            last_7 = reply[1];
+            writech reply_7, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 8; do
+          if reply[1] != last_8 + 1; do
+            writech reply_8, (-1, reply[2]);
+          else
+            last_8 = reply[1];
+            writech reply_8, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 9; do
+          if reply[1] != last_9 + 1; do
+            writech reply_9, (-1, reply[2]);
+          else
+            last_9 = reply[1];
+            writech reply_9, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 10; do
+          if reply[1] != last_10 + 1; do
+            writech reply_10, (-1, reply[2]);
+          else
+            last_10 = reply[1];
+            writech reply_10, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 11; do
+          if reply[1] != last_11 + 1; do
+            writech reply_11, (-1, reply[2]);
+          else
+            last_11 = reply[1];
+            writech reply_11, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 12; do
+          if reply[1] != last_12 + 1; do
+            writech reply_12, (-1, reply[2]);
+          else
+            last_12 = reply[1];
+            writech reply_12, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 13; do
+          if reply[1] != last_13 + 1; do
+            writech reply_13, (-1, reply[2]);
+          else
+            last_13 = reply[1];
+            writech reply_13, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 14; do
+          if reply[1] != last_14 + 1; do
+            writech reply_14, (-1, reply[2]);
+          else
+            last_14 = reply[1];
+            writech reply_14, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 15; do
+          if reply[1] != last_15 + 1; do
+            writech reply_15, (-1, reply[2]);
+          else
+            last_15 = reply[1];
+            writech reply_15, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 16; do
+          if reply[1] != last_16 + 1; do
+            writech reply_16, (-1, reply[2]);
+          else
+            last_16 = reply[1];
+            writech reply_16, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 17; do
+          if reply[1] != last_17 + 1; do
+            writech reply_17, (-1, reply[2]);
+          else
+            last_17 = reply[1];
+            writech reply_17, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 18; do
+          if reply[1] != last_18 + 1; do
+            writech reply_18, (-1, reply[2]);
+          else
+            last_18 = reply[1];
+            writech reply_18, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 19; do
+          if reply[1] != last_19 + 1; do
+            writech reply_19, (-1, reply[2]);
+          else
+            last_19 = reply[1];
+            writech reply_19, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 20; do
+          if reply[1] != last_20 + 1; do
+            writech reply_20, (-1, reply[2]);
+          else
+            last_20 = reply[1];
+            writech reply_20, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 21; do
+          if reply[1] != last_21 + 1; do
+            writech reply_21, (-1, reply[2]);
+          else
+            last_21 = reply[1];
+            writech reply_21, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 22; do
+          if reply[1] != last_22 + 1; do
+            writech reply_22, (-1, reply[2]);
+          else
+            last_22 = reply[1];
+            writech reply_22, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 23; do
+          if reply[1] != last_23 + 1; do
+            writech reply_23, (-1, reply[2]);
+          else
+            last_23 = reply[1];
+            writech reply_23, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 24; do
+          if reply[1] != last_24 + 1; do
+            writech reply_24, (-1, reply[2]);
+          else
+            last_24 = reply[1];
+            writech reply_24, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 25; do
+          if reply[1] != last_25 + 1; do
+            writech reply_25, (-1, reply[2]);
+          else
+            last_25 = reply[1];
+            writech reply_25, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 26; do
+          if reply[1] != last_26 + 1; do
+            writech reply_26, (-1, reply[2]);
+          else
+            last_26 = reply[1];
+            writech reply_26, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 27; do
+          if reply[1] != last_27 + 1; do
+            writech reply_27, (-1, reply[2]);
+          else
+            last_27 = reply[1];
+            writech reply_27, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 28; do
+          if reply[1] != last_28 + 1; do
+            writech reply_28, (-1, reply[2]);
+          else
+            last_28 = reply[1];
+            writech reply_28, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 29; do
+          if reply[1] != last_29 + 1; do
+            writech reply_29, (-1, reply[2]);
+          else
+            last_29 = reply[1];
+            writech reply_29, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 30; do
+          if reply[1] != last_30 + 1; do
+            writech reply_30, (-1, reply[2]);
+          else
+            last_30 = reply[1];
+            writech reply_30, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 31; do
+          if reply[1] != last_31 + 1; do
+            writech reply_31, (-1, reply[2]);
+          else
+            last_31 = reply[1];
+            writech reply_31, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 32; do
+          if reply[1] != last_32 + 1; do
+            writech reply_32, (-1, reply[2]);
+          else
+            last_32 = reply[1];
+            writech reply_32, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 33; do
+          if reply[1] != last_33 + 1; do
+            writech reply_33, (-1, reply[2]);
+          else
+            last_33 = reply[1];
+            writech reply_33, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 34; do
+          if reply[1] != last_34 + 1; do
+            writech reply_34, (-1, reply[2]);
+          else
+            last_34 = reply[1];
+            writech reply_34, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 35; do
+          if reply[1] != last_35 + 1; do
+            writech reply_35, (-1, reply[2]);
+          else
+            last_35 = reply[1];
+            writech reply_35, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 36; do
+          if reply[1] != last_36 + 1; do
+            writech reply_36, (-1, reply[2]);
+          else
+            last_36 = reply[1];
+            writech reply_36, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 37; do
+          if reply[1] != last_37 + 1; do
+            writech reply_37, (-1, reply[2]);
+          else
+            last_37 = reply[1];
+            writech reply_37, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 38; do
+          if reply[1] != last_38 + 1; do
+            writech reply_38, (-1, reply[2]);
+          else
+            last_38 = reply[1];
+            writech reply_38, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 39; do
+          if reply[1] != last_39 + 1; do
+            writech reply_39, (-1, reply[2]);
+          else
+            last_39 = reply[1];
+            writech reply_39, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 40; do
+          if reply[1] != last_40 + 1; do
+            writech reply_40, (-1, reply[2]);
+          else
+            last_40 = reply[1];
+            writech reply_40, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 41; do
+          if reply[1] != last_41 + 1; do
+            writech reply_41, (-1, reply[2]);
+          else
+            last_41 = reply[1];
+            writech reply_41, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 42; do
+          if reply[1] != last_42 + 1; do
+            writech reply_42, (-1, reply[2]);
+          else
+            last_42 = reply[1];
+            writech reply_42, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 43; do
+          if reply[1] != last_43 + 1; do
+            writech reply_43, (-1, reply[2]);
+          else
+            last_43 = reply[1];
+            writech reply_43, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 44; do
+          if reply[1] != last_44 + 1; do
+            writech reply_44, (-1, reply[2]);
+          else
+            last_44 = reply[1];
+            writech reply_44, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 45; do
+          if reply[1] != last_45 + 1; do
+            writech reply_45, (-1, reply[2]);
+          else
+            last_45 = reply[1];
+            writech reply_45, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 46; do
+          if reply[1] != last_46 + 1; do
+            writech reply_46, (-1, reply[2]);
+          else
+            last_46 = reply[1];
+            writech reply_46, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 47; do
+          if reply[1] != last_47 + 1; do
+            writech reply_47, (-1, reply[2]);
+          else
+            last_47 = reply[1];
+            writech reply_47, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 48; do
+          if reply[1] != last_48 + 1; do
+            writech reply_48, (-1, reply[2]);
+          else
+            last_48 = reply[1];
+            writech reply_48, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 49; do
+          if reply[1] != last_49 + 1; do
+            writech reply_49, (-1, reply[2]);
+          else
+            last_49 = reply[1];
+            writech reply_49, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 50; do
+          if reply[1] != last_50 + 1; do
+            writech reply_50, (-1, reply[2]);
+          else
+            last_50 = reply[1];
+            writech reply_50, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 51; do
+          if reply[1] != last_51 + 1; do
+            writech reply_51, (-1, reply[2]);
+          else
+            last_51 = reply[1];
+            writech reply_51, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 52; do
+          if reply[1] != last_52 + 1; do
+            writech reply_52, (-1, reply[2]);
+          else
+            last_52 = reply[1];
+            writech reply_52, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 53; do
+          if reply[1] != last_53 + 1; do
+            writech reply_53, (-1, reply[2]);
+          else
+            last_53 = reply[1];
+            writech reply_53, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 54; do
+          if reply[1] != last_54 + 1; do
+            writech reply_54, (-1, reply[2]);
+          else
+            last_54 = reply[1];
+            writech reply_54, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 55; do
+          if reply[1] != last_55 + 1; do
+            writech reply_55, (-1, reply[2]);
+          else
+            last_55 = reply[1];
+            writech reply_55, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 56; do
+          if reply[1] != last_56 + 1; do
+            writech reply_56, (-1, reply[2]);
+          else
+            last_56 = reply[1];
+            writech reply_56, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 57; do
+          if reply[1] != last_57 + 1; do
+            writech reply_57, (-1, reply[2]);
+          else
+            last_57 = reply[1];
+            writech reply_57, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 58; do
+          if reply[1] != last_58 + 1; do
+            writech reply_58, (-1, reply[2]);
+          else
+            last_58 = reply[1];
+            writech reply_58, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 59; do
+          if reply[1] != last_59 + 1; do
+            writech reply_59, (-1, reply[2]);
+          else
+            last_59 = reply[1];
+            writech reply_59, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 60; do
+          if reply[1] != last_60 + 1; do
+            writech reply_60, (-1, reply[2]);
+          else
+            last_60 = reply[1];
+            writech reply_60, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 61; do
+          if reply[1] != last_61 + 1; do
+            writech reply_61, (-1, reply[2]);
+          else
+            last_61 = reply[1];
+            writech reply_61, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 62; do
+          if reply[1] != last_62 + 1; do
+            writech reply_62, (-1, reply[2]);
+          else
+            last_62 = reply[1];
+            writech reply_62, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 63; do
+          if reply[1] != last_63 + 1; do
+            writech reply_63, (-1, reply[2]);
+          else
+            last_63 = reply[1];
+            writech reply_63, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 64; do
+          if reply[1] != last_64 + 1; do
+            writech reply_64, (-1, reply[2]);
+          else
+            last_64 = reply[1];
+            writech reply_64, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 65; do
+          if reply[1] != last_65 + 1; do
+            writech reply_65, (-1, reply[2]);
+          else
+            last_65 = reply[1];
+            writech reply_65, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 66; do
+          if reply[1] != last_66 + 1; do
+            writech reply_66, (-1, reply[2]);
+          else
+            last_66 = reply[1];
+            writech reply_66, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 67; do
+          if reply[1] != last_67 + 1; do
+            writech reply_67, (-1, reply[2]);
+          else
+            last_67 = reply[1];
+            writech reply_67, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 68; do
+          if reply[1] != last_68 + 1; do
+            writech reply_68, (-1, reply[2]);
+          else
+            last_68 = reply[1];
+            writech reply_68, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 69; do
+          if reply[1] != last_69 + 1; do
+            writech reply_69, (-1, reply[2]);
+          else
+            last_69 = reply[1];
+            writech reply_69, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 70; do
+          if reply[1] != last_70 + 1; do
+            writech reply_70, (-1, reply[2]);
+          else
+            last_70 = reply[1];
+            writech reply_70, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 71; do
+          if reply[1] != last_71 + 1; do
+            writech reply_71, (-1, reply[2]);
+          else
+            last_71 = reply[1];
+            writech reply_71, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 72; do
+          if reply[1] != last_72 + 1; do
+            writech reply_72, (-1, reply[2]);
+          else
+            last_72 = reply[1];
+            writech reply_72, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 73; do
+          if reply[1] != last_73 + 1; do
+            writech reply_73, (-1, reply[2]);
+          else
+            last_73 = reply[1];
+            writech reply_73, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 74; do
+          if reply[1] != last_74 + 1; do
+            writech reply_74, (-1, reply[2]);
+          else
+            last_74 = reply[1];
+            writech reply_74, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 75; do
+          if reply[1] != last_75 + 1; do
+            writech reply_75, (-1, reply[2]);
+          else
+            last_75 = reply[1];
+            writech reply_75, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 76; do
+          if reply[1] != last_76 + 1; do
+            writech reply_76, (-1, reply[2]);
+          else
+            last_76 = reply[1];
+            writech reply_76, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 77; do
+          if reply[1] != last_77 + 1; do
+            writech reply_77, (-1, reply[2]);
+          else
+            last_77 = reply[1];
+            writech reply_77, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 78; do
+          if reply[1] != last_78 + 1; do
+            writech reply_78, (-1, reply[2]);
+          else
+            last_78 = reply[1];
+            writech reply_78, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 79; do
+          if reply[1] != last_79 + 1; do
+            writech reply_79, (-1, reply[2]);
+          else
+            last_79 = reply[1];
+            writech reply_79, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 80; do
+          if reply[1] != last_80 + 1; do
+            writech reply_80, (-1, reply[2]);
+          else
+            last_80 = reply[1];
+            writech reply_80, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 81; do
+          if reply[1] != last_81 + 1; do
+            writech reply_81, (-1, reply[2]);
+          else
+            last_81 = reply[1];
+            writech reply_81, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 82; do
+          if reply[1] != last_82 + 1; do
+            writech reply_82, (-1, reply[2]);
+          else
+            last_82 = reply[1];
+            writech reply_82, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 83; do
+          if reply[1] != last_83 + 1; do
+            writech reply_83, (-1, reply[2]);
+          else
+            last_83 = reply[1];
+            writech reply_83, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 84; do
+          if reply[1] != last_84 + 1; do
+            writech reply_84, (-1, reply[2]);
+          else
+            last_84 = reply[1];
+            writech reply_84, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 85; do
+          if reply[1] != last_85 + 1; do
+            writech reply_85, (-1, reply[2]);
+          else
+            last_85 = reply[1];
+            writech reply_85, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 86; do
+          if reply[1] != last_86 + 1; do
+            writech reply_86, (-1, reply[2]);
+          else
+            last_86 = reply[1];
+            writech reply_86, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 87; do
+          if reply[1] != last_87 + 1; do
+            writech reply_87, (-1, reply[2]);
+          else
+            last_87 = reply[1];
+            writech reply_87, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 88; do
+          if reply[1] != last_88 + 1; do
+            writech reply_88, (-1, reply[2]);
+          else
+            last_88 = reply[1];
+            writech reply_88, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 89; do
+          if reply[1] != last_89 + 1; do
+            writech reply_89, (-1, reply[2]);
+          else
+            last_89 = reply[1];
+            writech reply_89, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 90; do
+          if reply[1] != last_90 + 1; do
+            writech reply_90, (-1, reply[2]);
+          else
+            last_90 = reply[1];
+            writech reply_90, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 91; do
+          if reply[1] != last_91 + 1; do
+            writech reply_91, (-1, reply[2]);
+          else
+            last_91 = reply[1];
+            writech reply_91, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 92; do
+          if reply[1] != last_92 + 1; do
+            writech reply_92, (-1, reply[2]);
+          else
+            last_92 = reply[1];
+            writech reply_92, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 93; do
+          if reply[1] != last_93 + 1; do
+            writech reply_93, (-1, reply[2]);
+          else
+            last_93 = reply[1];
+            writech reply_93, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 94; do
+          if reply[1] != last_94 + 1; do
+            writech reply_94, (-1, reply[2]);
+          else
+            last_94 = reply[1];
+            writech reply_94, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 95; do
+          if reply[1] != last_95 + 1; do
+            writech reply_95, (-1, reply[2]);
+          else
+            last_95 = reply[1];
+            writech reply_95, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 96; do
+          if reply[1] != last_96 + 1; do
+            writech reply_96, (-1, reply[2]);
+          else
+            last_96 = reply[1];
+            writech reply_96, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 97; do
+          if reply[1] != last_97 + 1; do
+            writech reply_97, (-1, reply[2]);
+          else
+            last_97 = reply[1];
+            writech reply_97, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 98; do
+          if reply[1] != last_98 + 1; do
+            writech reply_98, (-1, reply[2]);
+          else
+            last_98 = reply[1];
+            writech reply_98, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 99; do
+          if reply[1] != last_99 + 1; do
+            writech reply_99, (-1, reply[2]);
+          else
+            last_99 = reply[1];
+            writech reply_99, (reply[1], reply[2]);
+          fi
+        elseif reply[0] == 100; do
+          if reply[1] != last_100 + 1; do
+            writech reply_100, (-1, reply[2]);
+          else
+            last_100 = reply[1];
+            writech reply_100, (reply[1], reply[2]);
+          fi
+        fi
+      }
+    };
+    let Future<void> client_1 = task {
+      await serve_tagged_batch_session(first, 1, requests, reply_1);
+      return;
+    };
+    val NioConnection socket_2 = await listener.accept_async();
+    let Future<void> client_2 = task {
+      await serve_tagged_batch_session(socket_2, 2, requests, reply_2);
+      return;
+    };
+    val NioConnection socket_3 = await listener.accept_async();
+    let Future<void> client_3 = task {
+      await serve_tagged_batch_session(socket_3, 3, requests, reply_3);
+      return;
+    };
+    val NioConnection socket_4 = await listener.accept_async();
+    let Future<void> client_4 = task {
+      await serve_tagged_batch_session(socket_4, 4, requests, reply_4);
+      return;
+    };
+    val NioConnection socket_5 = await listener.accept_async();
+    let Future<void> client_5 = task {
+      await serve_tagged_batch_session(socket_5, 5, requests, reply_5);
+      return;
+    };
+    val NioConnection socket_6 = await listener.accept_async();
+    let Future<void> client_6 = task {
+      await serve_tagged_batch_session(socket_6, 6, requests, reply_6);
+      return;
+    };
+    val NioConnection socket_7 = await listener.accept_async();
+    let Future<void> client_7 = task {
+      await serve_tagged_batch_session(socket_7, 7, requests, reply_7);
+      return;
+    };
+    val NioConnection socket_8 = await listener.accept_async();
+    let Future<void> client_8 = task {
+      await serve_tagged_batch_session(socket_8, 8, requests, reply_8);
+      return;
+    };
+    val NioConnection socket_9 = await listener.accept_async();
+    let Future<void> client_9 = task {
+      await serve_tagged_batch_session(socket_9, 9, requests, reply_9);
+      return;
+    };
+    val NioConnection socket_10 = await listener.accept_async();
+    let Future<void> client_10 = task {
+      await serve_tagged_batch_session(socket_10, 10, requests, reply_10);
+      return;
+    };
+    val NioConnection socket_11 = await listener.accept_async();
+    let Future<void> client_11 = task {
+      await serve_tagged_batch_session(socket_11, 11, requests, reply_11);
+      return;
+    };
+    val NioConnection socket_12 = await listener.accept_async();
+    let Future<void> client_12 = task {
+      await serve_tagged_batch_session(socket_12, 12, requests, reply_12);
+      return;
+    };
+    val NioConnection socket_13 = await listener.accept_async();
+    let Future<void> client_13 = task {
+      await serve_tagged_batch_session(socket_13, 13, requests, reply_13);
+      return;
+    };
+    val NioConnection socket_14 = await listener.accept_async();
+    let Future<void> client_14 = task {
+      await serve_tagged_batch_session(socket_14, 14, requests, reply_14);
+      return;
+    };
+    val NioConnection socket_15 = await listener.accept_async();
+    let Future<void> client_15 = task {
+      await serve_tagged_batch_session(socket_15, 15, requests, reply_15);
+      return;
+    };
+    val NioConnection socket_16 = await listener.accept_async();
+    let Future<void> client_16 = task {
+      await serve_tagged_batch_session(socket_16, 16, requests, reply_16);
+      return;
+    };
+    val NioConnection socket_17 = await listener.accept_async();
+    let Future<void> client_17 = task {
+      await serve_tagged_batch_session(socket_17, 17, requests, reply_17);
+      return;
+    };
+    val NioConnection socket_18 = await listener.accept_async();
+    let Future<void> client_18 = task {
+      await serve_tagged_batch_session(socket_18, 18, requests, reply_18);
+      return;
+    };
+    val NioConnection socket_19 = await listener.accept_async();
+    let Future<void> client_19 = task {
+      await serve_tagged_batch_session(socket_19, 19, requests, reply_19);
+      return;
+    };
+    val NioConnection socket_20 = await listener.accept_async();
+    let Future<void> client_20 = task {
+      await serve_tagged_batch_session(socket_20, 20, requests, reply_20);
+      return;
+    };
+    val NioConnection socket_21 = await listener.accept_async();
+    let Future<void> client_21 = task {
+      await serve_tagged_batch_session(socket_21, 21, requests, reply_21);
+      return;
+    };
+    val NioConnection socket_22 = await listener.accept_async();
+    let Future<void> client_22 = task {
+      await serve_tagged_batch_session(socket_22, 22, requests, reply_22);
+      return;
+    };
+    val NioConnection socket_23 = await listener.accept_async();
+    let Future<void> client_23 = task {
+      await serve_tagged_batch_session(socket_23, 23, requests, reply_23);
+      return;
+    };
+    val NioConnection socket_24 = await listener.accept_async();
+    let Future<void> client_24 = task {
+      await serve_tagged_batch_session(socket_24, 24, requests, reply_24);
+      return;
+    };
+    val NioConnection socket_25 = await listener.accept_async();
+    let Future<void> client_25 = task {
+      await serve_tagged_batch_session(socket_25, 25, requests, reply_25);
+      return;
+    };
+    val NioConnection socket_26 = await listener.accept_async();
+    let Future<void> client_26 = task {
+      await serve_tagged_batch_session(socket_26, 26, requests, reply_26);
+      return;
+    };
+    val NioConnection socket_27 = await listener.accept_async();
+    let Future<void> client_27 = task {
+      await serve_tagged_batch_session(socket_27, 27, requests, reply_27);
+      return;
+    };
+    val NioConnection socket_28 = await listener.accept_async();
+    let Future<void> client_28 = task {
+      await serve_tagged_batch_session(socket_28, 28, requests, reply_28);
+      return;
+    };
+    val NioConnection socket_29 = await listener.accept_async();
+    let Future<void> client_29 = task {
+      await serve_tagged_batch_session(socket_29, 29, requests, reply_29);
+      return;
+    };
+    val NioConnection socket_30 = await listener.accept_async();
+    let Future<void> client_30 = task {
+      await serve_tagged_batch_session(socket_30, 30, requests, reply_30);
+      return;
+    };
+    val NioConnection socket_31 = await listener.accept_async();
+    let Future<void> client_31 = task {
+      await serve_tagged_batch_session(socket_31, 31, requests, reply_31);
+      return;
+    };
+    val NioConnection socket_32 = await listener.accept_async();
+    let Future<void> client_32 = task {
+      await serve_tagged_batch_session(socket_32, 32, requests, reply_32);
+      return;
+    };
+    val NioConnection socket_33 = await listener.accept_async();
+    let Future<void> client_33 = task {
+      await serve_tagged_batch_session(socket_33, 33, requests, reply_33);
+      return;
+    };
+    val NioConnection socket_34 = await listener.accept_async();
+    let Future<void> client_34 = task {
+      await serve_tagged_batch_session(socket_34, 34, requests, reply_34);
+      return;
+    };
+    val NioConnection socket_35 = await listener.accept_async();
+    let Future<void> client_35 = task {
+      await serve_tagged_batch_session(socket_35, 35, requests, reply_35);
+      return;
+    };
+    val NioConnection socket_36 = await listener.accept_async();
+    let Future<void> client_36 = task {
+      await serve_tagged_batch_session(socket_36, 36, requests, reply_36);
+      return;
+    };
+    val NioConnection socket_37 = await listener.accept_async();
+    let Future<void> client_37 = task {
+      await serve_tagged_batch_session(socket_37, 37, requests, reply_37);
+      return;
+    };
+    val NioConnection socket_38 = await listener.accept_async();
+    let Future<void> client_38 = task {
+      await serve_tagged_batch_session(socket_38, 38, requests, reply_38);
+      return;
+    };
+    val NioConnection socket_39 = await listener.accept_async();
+    let Future<void> client_39 = task {
+      await serve_tagged_batch_session(socket_39, 39, requests, reply_39);
+      return;
+    };
+    val NioConnection socket_40 = await listener.accept_async();
+    let Future<void> client_40 = task {
+      await serve_tagged_batch_session(socket_40, 40, requests, reply_40);
+      return;
+    };
+    val NioConnection socket_41 = await listener.accept_async();
+    let Future<void> client_41 = task {
+      await serve_tagged_batch_session(socket_41, 41, requests, reply_41);
+      return;
+    };
+    val NioConnection socket_42 = await listener.accept_async();
+    let Future<void> client_42 = task {
+      await serve_tagged_batch_session(socket_42, 42, requests, reply_42);
+      return;
+    };
+    val NioConnection socket_43 = await listener.accept_async();
+    let Future<void> client_43 = task {
+      await serve_tagged_batch_session(socket_43, 43, requests, reply_43);
+      return;
+    };
+    val NioConnection socket_44 = await listener.accept_async();
+    let Future<void> client_44 = task {
+      await serve_tagged_batch_session(socket_44, 44, requests, reply_44);
+      return;
+    };
+    val NioConnection socket_45 = await listener.accept_async();
+    let Future<void> client_45 = task {
+      await serve_tagged_batch_session(socket_45, 45, requests, reply_45);
+      return;
+    };
+    val NioConnection socket_46 = await listener.accept_async();
+    let Future<void> client_46 = task {
+      await serve_tagged_batch_session(socket_46, 46, requests, reply_46);
+      return;
+    };
+    val NioConnection socket_47 = await listener.accept_async();
+    let Future<void> client_47 = task {
+      await serve_tagged_batch_session(socket_47, 47, requests, reply_47);
+      return;
+    };
+    val NioConnection socket_48 = await listener.accept_async();
+    let Future<void> client_48 = task {
+      await serve_tagged_batch_session(socket_48, 48, requests, reply_48);
+      return;
+    };
+    val NioConnection socket_49 = await listener.accept_async();
+    let Future<void> client_49 = task {
+      await serve_tagged_batch_session(socket_49, 49, requests, reply_49);
+      return;
+    };
+    val NioConnection socket_50 = await listener.accept_async();
+    let Future<void> client_50 = task {
+      await serve_tagged_batch_session(socket_50, 50, requests, reply_50);
+      return;
+    };
+    val NioConnection socket_51 = await listener.accept_async();
+    let Future<void> client_51 = task {
+      await serve_tagged_batch_session(socket_51, 51, requests, reply_51);
+      return;
+    };
+    val NioConnection socket_52 = await listener.accept_async();
+    let Future<void> client_52 = task {
+      await serve_tagged_batch_session(socket_52, 52, requests, reply_52);
+      return;
+    };
+    val NioConnection socket_53 = await listener.accept_async();
+    let Future<void> client_53 = task {
+      await serve_tagged_batch_session(socket_53, 53, requests, reply_53);
+      return;
+    };
+    val NioConnection socket_54 = await listener.accept_async();
+    let Future<void> client_54 = task {
+      await serve_tagged_batch_session(socket_54, 54, requests, reply_54);
+      return;
+    };
+    val NioConnection socket_55 = await listener.accept_async();
+    let Future<void> client_55 = task {
+      await serve_tagged_batch_session(socket_55, 55, requests, reply_55);
+      return;
+    };
+    val NioConnection socket_56 = await listener.accept_async();
+    let Future<void> client_56 = task {
+      await serve_tagged_batch_session(socket_56, 56, requests, reply_56);
+      return;
+    };
+    val NioConnection socket_57 = await listener.accept_async();
+    let Future<void> client_57 = task {
+      await serve_tagged_batch_session(socket_57, 57, requests, reply_57);
+      return;
+    };
+    val NioConnection socket_58 = await listener.accept_async();
+    let Future<void> client_58 = task {
+      await serve_tagged_batch_session(socket_58, 58, requests, reply_58);
+      return;
+    };
+    val NioConnection socket_59 = await listener.accept_async();
+    let Future<void> client_59 = task {
+      await serve_tagged_batch_session(socket_59, 59, requests, reply_59);
+      return;
+    };
+    val NioConnection socket_60 = await listener.accept_async();
+    let Future<void> client_60 = task {
+      await serve_tagged_batch_session(socket_60, 60, requests, reply_60);
+      return;
+    };
+    val NioConnection socket_61 = await listener.accept_async();
+    let Future<void> client_61 = task {
+      await serve_tagged_batch_session(socket_61, 61, requests, reply_61);
+      return;
+    };
+    val NioConnection socket_62 = await listener.accept_async();
+    let Future<void> client_62 = task {
+      await serve_tagged_batch_session(socket_62, 62, requests, reply_62);
+      return;
+    };
+    val NioConnection socket_63 = await listener.accept_async();
+    let Future<void> client_63 = task {
+      await serve_tagged_batch_session(socket_63, 63, requests, reply_63);
+      return;
+    };
+    val NioConnection socket_64 = await listener.accept_async();
+    let Future<void> client_64 = task {
+      await serve_tagged_batch_session(socket_64, 64, requests, reply_64);
+      return;
+    };
+    val NioConnection socket_65 = await listener.accept_async();
+    let Future<void> client_65 = task {
+      await serve_tagged_batch_session(socket_65, 65, requests, reply_65);
+      return;
+    };
+    val NioConnection socket_66 = await listener.accept_async();
+    let Future<void> client_66 = task {
+      await serve_tagged_batch_session(socket_66, 66, requests, reply_66);
+      return;
+    };
+    val NioConnection socket_67 = await listener.accept_async();
+    let Future<void> client_67 = task {
+      await serve_tagged_batch_session(socket_67, 67, requests, reply_67);
+      return;
+    };
+    val NioConnection socket_68 = await listener.accept_async();
+    let Future<void> client_68 = task {
+      await serve_tagged_batch_session(socket_68, 68, requests, reply_68);
+      return;
+    };
+    val NioConnection socket_69 = await listener.accept_async();
+    let Future<void> client_69 = task {
+      await serve_tagged_batch_session(socket_69, 69, requests, reply_69);
+      return;
+    };
+    val NioConnection socket_70 = await listener.accept_async();
+    let Future<void> client_70 = task {
+      await serve_tagged_batch_session(socket_70, 70, requests, reply_70);
+      return;
+    };
+    val NioConnection socket_71 = await listener.accept_async();
+    let Future<void> client_71 = task {
+      await serve_tagged_batch_session(socket_71, 71, requests, reply_71);
+      return;
+    };
+    val NioConnection socket_72 = await listener.accept_async();
+    let Future<void> client_72 = task {
+      await serve_tagged_batch_session(socket_72, 72, requests, reply_72);
+      return;
+    };
+    val NioConnection socket_73 = await listener.accept_async();
+    let Future<void> client_73 = task {
+      await serve_tagged_batch_session(socket_73, 73, requests, reply_73);
+      return;
+    };
+    val NioConnection socket_74 = await listener.accept_async();
+    let Future<void> client_74 = task {
+      await serve_tagged_batch_session(socket_74, 74, requests, reply_74);
+      return;
+    };
+    val NioConnection socket_75 = await listener.accept_async();
+    let Future<void> client_75 = task {
+      await serve_tagged_batch_session(socket_75, 75, requests, reply_75);
+      return;
+    };
+    val NioConnection socket_76 = await listener.accept_async();
+    let Future<void> client_76 = task {
+      await serve_tagged_batch_session(socket_76, 76, requests, reply_76);
+      return;
+    };
+    val NioConnection socket_77 = await listener.accept_async();
+    let Future<void> client_77 = task {
+      await serve_tagged_batch_session(socket_77, 77, requests, reply_77);
+      return;
+    };
+    val NioConnection socket_78 = await listener.accept_async();
+    let Future<void> client_78 = task {
+      await serve_tagged_batch_session(socket_78, 78, requests, reply_78);
+      return;
+    };
+    val NioConnection socket_79 = await listener.accept_async();
+    let Future<void> client_79 = task {
+      await serve_tagged_batch_session(socket_79, 79, requests, reply_79);
+      return;
+    };
+    val NioConnection socket_80 = await listener.accept_async();
+    let Future<void> client_80 = task {
+      await serve_tagged_batch_session(socket_80, 80, requests, reply_80);
+      return;
+    };
+    val NioConnection socket_81 = await listener.accept_async();
+    let Future<void> client_81 = task {
+      await serve_tagged_batch_session(socket_81, 81, requests, reply_81);
+      return;
+    };
+    val NioConnection socket_82 = await listener.accept_async();
+    let Future<void> client_82 = task {
+      await serve_tagged_batch_session(socket_82, 82, requests, reply_82);
+      return;
+    };
+    val NioConnection socket_83 = await listener.accept_async();
+    let Future<void> client_83 = task {
+      await serve_tagged_batch_session(socket_83, 83, requests, reply_83);
+      return;
+    };
+    val NioConnection socket_84 = await listener.accept_async();
+    let Future<void> client_84 = task {
+      await serve_tagged_batch_session(socket_84, 84, requests, reply_84);
+      return;
+    };
+    val NioConnection socket_85 = await listener.accept_async();
+    let Future<void> client_85 = task {
+      await serve_tagged_batch_session(socket_85, 85, requests, reply_85);
+      return;
+    };
+    val NioConnection socket_86 = await listener.accept_async();
+    let Future<void> client_86 = task {
+      await serve_tagged_batch_session(socket_86, 86, requests, reply_86);
+      return;
+    };
+    val NioConnection socket_87 = await listener.accept_async();
+    let Future<void> client_87 = task {
+      await serve_tagged_batch_session(socket_87, 87, requests, reply_87);
+      return;
+    };
+    val NioConnection socket_88 = await listener.accept_async();
+    let Future<void> client_88 = task {
+      await serve_tagged_batch_session(socket_88, 88, requests, reply_88);
+      return;
+    };
+    val NioConnection socket_89 = await listener.accept_async();
+    let Future<void> client_89 = task {
+      await serve_tagged_batch_session(socket_89, 89, requests, reply_89);
+      return;
+    };
+    val NioConnection socket_90 = await listener.accept_async();
+    let Future<void> client_90 = task {
+      await serve_tagged_batch_session(socket_90, 90, requests, reply_90);
+      return;
+    };
+    val NioConnection socket_91 = await listener.accept_async();
+    let Future<void> client_91 = task {
+      await serve_tagged_batch_session(socket_91, 91, requests, reply_91);
+      return;
+    };
+    val NioConnection socket_92 = await listener.accept_async();
+    let Future<void> client_92 = task {
+      await serve_tagged_batch_session(socket_92, 92, requests, reply_92);
+      return;
+    };
+    val NioConnection socket_93 = await listener.accept_async();
+    let Future<void> client_93 = task {
+      await serve_tagged_batch_session(socket_93, 93, requests, reply_93);
+      return;
+    };
+    val NioConnection socket_94 = await listener.accept_async();
+    let Future<void> client_94 = task {
+      await serve_tagged_batch_session(socket_94, 94, requests, reply_94);
+      return;
+    };
+    val NioConnection socket_95 = await listener.accept_async();
+    let Future<void> client_95 = task {
+      await serve_tagged_batch_session(socket_95, 95, requests, reply_95);
+      return;
+    };
+    val NioConnection socket_96 = await listener.accept_async();
+    let Future<void> client_96 = task {
+      await serve_tagged_batch_session(socket_96, 96, requests, reply_96);
+      return;
+    };
+    val NioConnection socket_97 = await listener.accept_async();
+    let Future<void> client_97 = task {
+      await serve_tagged_batch_session(socket_97, 97, requests, reply_97);
+      return;
+    };
+    val NioConnection socket_98 = await listener.accept_async();
+    let Future<void> client_98 = task {
+      await serve_tagged_batch_session(socket_98, 98, requests, reply_98);
+      return;
+    };
+    val NioConnection socket_99 = await listener.accept_async();
+    let Future<void> client_99 = task {
+      await serve_tagged_batch_session(socket_99, 99, requests, reply_99);
+      return;
+    };
+    val NioConnection socket_100 = await listener.accept_async();
+    let Future<void> client_100 = task {
+      await serve_tagged_batch_session(socket_100, 100, requests, reply_100);
+      return;
+    };
+  }
+  await listener.close_async();
+  return;
+}
