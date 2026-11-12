@@ -131,6 +131,27 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-telemetry-span-runtime-test)
     set_tests_properties(native_telemetry_dormant_span_runtime PROPERTIES TIMEOUT 20)
 
+    # Real POSIX carrier isolation: compare unique span IDs across pthreads,
+    # then prove the wrong-carrier close receives SIGABRT in a forked child.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        find_package(Threads REQUIRED)
+        add_executable(oreslang-native-telemetry-cross-carrier-test
+            tests/native_telemetry_cross_carrier_test.c
+            src/main/cpp/oreslang/runtime/NativeTelemetrySpan.c)
+        target_include_directories(oreslang-native-telemetry-cross-carrier-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-telemetry-cross-carrier-test PRIVATE
+            Threads::Threads)
+        set_target_properties(oreslang-native-telemetry-cross-carrier-test PROPERTIES
+            C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+        target_compile_options(oreslang-native-telemetry-cross-carrier-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_telemetry_cross_carrier_nonforgeability
+            COMMAND oreslang-native-telemetry-cross-carrier-test)
+        set_tests_properties(native_telemetry_cross_carrier_nonforgeability
+            PROPERTIES TIMEOUT 20)
+    endif()
+
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
     add_executable(oreslang-native-sum-payload-admission-test
