@@ -67,8 +67,18 @@ was checked against the SHA returned by GitHub for the corresponding
 branch blobs:
 
 - `NativeTelemetrySpan.h`: `6f3927b30e83ac4908d041fc7e77302024f5844f`
-- `NativeTelemetrySpan.c`: `3f0ddf6930566e207c5673eedc1ca5fda2c404cb`
+- `NativeTelemetrySpan.c`: `76d38ae2097dcebc1df4fc8b80a7a296cb6de688`
 - `native_telemetry_span_runtime_test.c`: `59ea5f8b30f5505ba9a1ccd3fe9b216a854110bd`
+
+**ALSO EXECUTED LOCALLY:** Carrier-tagged runtime tokens now encode
+a bounded, globally assigned carrier identity and a per-carrier serial
+counter; identical depth/serial on different threads cannot alias.
+`tests/native_telemetry_cross_carrier_test.c` was compiled and executed
+with **GCC and Clang**, including a real pthread attempt to close a
+foreign token in a fork-isolated negative check; both passed. Exact
+blob SHA `31560ffafb4050a3a1f716fea53819ee5369d7ff`.
+The cross-carrier test is registered as
+`native_telemetry_cross_carrier_nonforgeability` in Linux CTest.
 
 **ALSO EXECUTED LOCALLY:** The exact committed C11 runtime test
 passed with GCC and Clang under **ASan+UBSan**. Separately, a hand-authored
