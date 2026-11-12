@@ -54,10 +54,11 @@ def main() -> int:
             result = run(compiler, path)
             if b'block comment nesting limit exceeded (128)' in result.stderr:
                 raise RuntimeError('valid comment depth rejected: '+str(count))
-            # This only proves lexical admission, not typed String support.
-            # If compiler rejects later, require some diagnostic and zero LLVM IR.
-            if result.returncode and (not result.stderr or result.stdout):
-                raise RuntimeError('unexplained post-admission compiler failure')
+            # Executed compiler must actually emit LLVM IR for each valid input.
+            # This is compilation evidence only; no guest executable is run here.
+            if result.returncode != 0 or b'define i64 @__oreslang_guest_main(' not in result.stdout:
+                raise RuntimeError('valid template did not compile at depth ' +
+                                   str(count) + ': ' + repr(result.stderr[:512]))
         path.write_text(source(129), encoding='utf-8')
         rejected = run(compiler, path)
         if (rejected.returncode == 0 or rejected.stdout or
