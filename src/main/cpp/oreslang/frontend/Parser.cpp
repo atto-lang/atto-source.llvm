@@ -2750,8 +2750,10 @@ private:
                 // next()/close() cleanup while this first lowering slice has
                 // no general scoped iterator unwind obligations.
                 for (const auto& action : loop.then_statements)
-                    if (action.kind != Statement::Kind::ScalarWrite)
-                        fail("native generator for-of body requires scalar writes only until cleanup-aware exit lowering");
+                    if (action.kind != Statement::Kind::ScalarWrite ||
+                            !action.expression ||
+                            !native_pure_scalar_tree(*action.expression))
+                        fail("native generator for-of body requires scalar writes only with pure expressions until cleanup-aware exit lowering");
                 return loop;
             }
             Lexer look = lexer_;
