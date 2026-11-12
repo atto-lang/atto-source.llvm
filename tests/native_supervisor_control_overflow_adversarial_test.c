@@ -75,8 +75,12 @@ static void on_data(void* opaque, size_t actor, uint64_t payload) {
 }
 
 static void on_control(void* opaque, size_t actor, uint64_t payload) {
-    (void)opaque; (void)actor; (void)payload;
-    abort(); /* typed failures, never a user CONTROL envelope */
+    State* s = (State*)opaque;
+    require(actor == 0 && payload == 777);
+    start_parent_turn(s);
+    require(s->count < 8);
+    s->trace[s->count++] = (int)payload;
+    end_parent_turn(s);
 }
 
 static int ref_matches(OresNativeActorRef left, OresNativeActorRef right) {
@@ -226,6 +230,11 @@ int main(void) {
     require(ores_native_actor_scheduler_try_send(s.scheduler, s.parent, 14)
             == ORES_NATIVE_SEND_MAILBOX_FULL);
 
+    /* Generic CONTROL must be independently reservable even when USER
+     * is saturated; child failure receipts may coexist with its slot. */
+    require(ores_native_actor_scheduler_publish_control(s.scheduler, s.parent, 777));
+    require(!ores_native_actor_scheduler_publish_control(s.scheduler, s.parent, 778));
+
     const OresNativeActorTerminalFailure a =
         {ORES_NATIVE_CONTROL_PANIC, s.child_a, 99, 101};
     const OresNativeActorTerminalFailure b =
@@ -244,11 +253,11 @@ int main(void) {
     require(ores_native_actor_scheduler_drain(s.scheduler));
 
     /* CONTROL gets the next parent turn; USER remains FIFO and is not lost. */
-    require(s.count == 5);
+    require(s.count == 6);
     require(s.trace[0] == 11 && s.trace[1] == 101
-            && s.trace[2] == 102 && s.trace[3] == 12
-            && s.trace[4] == 13);
-    require(ores_native_actor_scheduler_control_completed(s.scheduler) == 2);
+            && s.trace[2] == 102 && s.trace[3] == 777
+            && s.trace[4] == 12 && s.trace[5] == 13);
+    require(ores_native_actor_scheduler_control_completed(s.scheduler) == 3);
     require(atomic_load(&s.peak_parent_active) == 1);
     require(ores_native_actor_scheduler_poll_done(s.scheduler, s.child_a));
     require(!ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, b));
