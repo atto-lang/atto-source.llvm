@@ -83,12 +83,30 @@ static void on_wake(void* opaque, size_t actor,
         signal_host(f, &f->child_done);
     } else atomic_fetch_add(&f->errors, 1);
 }
+static void after_wake(void* opaque, size_t actor,
+        OresNativeWakeTicket wake) {
+    Fixture* f = (Fixture*)opaque;
+    if (actor != 0 || ores_native_actor_scheduler_in_any_actor_turn()) {
+        atomic_fetch_add(&f->errors, 1);
+        return;
+    }
+    OresNativeActorTask* record = wake.continuation_slot == 1
+        ? &f->parent : wake.continuation_slot == 2 ? &f->child : NULL;
+    if (!record || !ores_native_actor_task_after_wake(record, wake))
+        atomic_fetch_add(&f->errors, 1);
+}
 static void open_fixture(Fixture* f, int mode) {
     f->mode = mode;
     CHECK(pthread_mutex_init(&f->mutex, NULL) == 0);
     CHECK(pthread_cond_init(&f->cv, NULL) == 0);
-    f->scheduler = ores_native_actor_scheduler_open_with_wakes(
-        1, 4, 2, on_data, on_control, NULL, on_wake, f);
+    OresNativeActorSchedulerOptions opts = {
+        .actor_count = 1, .per_actor_capacity = 4, .workers = 2,
+        .on_message = on_data, .on_control = on_control,
+        .on_panic = NULL, .on_wake = on_wake, .ctx = f,
+        .lock_protocol = ORES_NATIVE_SCHEDULER_LOCK_PRIORITY_INHERIT,
+        .after_wake = after_wake
+    };
+    f->scheduler = ores_native_actor_scheduler_open_with_options(&opts);
     CHECK(f->scheduler != NULL);
     f->actor = ores_native_actor_scheduler_spawn(f->scheduler, 0);
     CHECK(f->actor.scheduler_domain && f->actor.generation);
@@ -120,6 +138,9 @@ int main(void) {
         &f.parent, 1001, ORES_NATIVE_WAKE_READY));
     CHECK(!ores_native_actor_scheduler_in_any_actor_turn());
     wait_host(&f, &f.parent_done);
+    /* Only the scheduler's post-WAKE retirement hook can complete getDone.
+     * An in-callback signal alone would be an insufficient physical proof. */
+    CHECK(ores_native_actor_scheduler_drain(f.scheduler));
     CHECK(ores_native_actor_task_physically_done(&f.parent));
     CHECK(ores_native_actor_task_physically_done(&f.child));
     CHECK(atomic_load(&f.parent_turns) == 2);
