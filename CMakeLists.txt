@@ -2080,6 +2080,23 @@ if(BUILD_TESTING)
                 --clang "${ORE_CLANG}"
                 --root "${CMAKE_CURRENT_SOURCE_DIR}" --sanitize)
         set_tests_properties(source_actor_compiled_native_asan_ubsan PROPERTIES TIMEOUT 180)
+        # Actual .atto source -> llvmc IR -> Clang native actor runtime.
+        # Uses the existing source-actor harness, not a host-only behavioral model.
+        # O0 and O2 execute the same SHA-pinned .atto source with physical receipts.
+        add_test(NAME native_atto_two_actor_owned_state_o0_o2
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_actor_e2e.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --root "${CMAKE_CURRENT_SOURCE_DIR}" --atto-only)
+        add_test(NAME native_atto_two_actor_owned_state_asan_ubsan
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_actor_e2e.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --root "${CMAKE_CURRENT_SOURCE_DIR}" --atto-only --sanitize)
+        set_tests_properties(native_atto_two_actor_owned_state_o0_o2
+            native_atto_two_actor_owned_state_asan_ubsan PROPERTIES TIMEOUT 180)
     endif()
 
     # Run both direct await and typed Future<void> source through real
