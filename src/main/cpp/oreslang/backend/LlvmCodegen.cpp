@@ -2100,11 +2100,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 const auto& abi = native_generator_abis.at(stmt.generator_name);
                 // A single native activation lives only within this lexical
                 // for-of invocation. The frame must never escape the caller.
-                auto* frame = builder.CreateAlloca(i64,
+                // Hoist physical stack storage out of any enclosing
+                // source loop. Reset both slots at each lexical activation,
+                // but never allocate a fresh native frame on a backedge.
+                llvm::IRBuilder<> entry_allocas(
+                    &function->getEntryBlock(), function->getEntryBlock().begin());
+                auto* frame = entry_allocas.CreateAlloca(i64,
                     llvm::ConstantInt::get(i64, 2), "gen.iter.frame");
                 auto* frame_cursor = builder.CreateInBoundsGEP(i64, frame,
                     llvm::ConstantInt::get(i64, 1));
-                auto* yielded_value = builder.CreateAlloca(i64, nullptr, "gen.iter.value");
+                auto* yielded_value = entry_allocas.CreateAlloca(
+                    i64, nullptr, "gen.iter.value");
                 builder.CreateStore(llvm::ConstantInt::get(i64, 0), frame);
                 builder.CreateStore(llvm::ConstantInt::get(i64, 0), frame_cursor);
                 auto* initialized = builder.CreateCall(abi.init, {frame}, "gen.iter.init");
