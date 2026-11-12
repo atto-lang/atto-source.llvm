@@ -1,0 +1,9 @@
+define class Box as
+  let int value = 40;
+  read(): int { return self.value; }
+  pub answer(int read): int { return read() + 2; }
+end
+pub fnc main(): int {
+  let Box box = new Box();
+  return box.answer(1);
+}
