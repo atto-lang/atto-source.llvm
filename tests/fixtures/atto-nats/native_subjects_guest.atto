@@ -1,0 +1,39 @@
+use namespace guest;
+
+// Compiles the ACTUAL immutable AttoNATS src/core/subjects.atto code.
+// This bounded native proof is not a broker, throughput, or 512-round
+// shared String-region stress test.
+pub routine main(): int {
+    if !valid_subject_token("orders") || valid_subject_token("") ||
+       valid_subject_token("has space") || valid_subject_token("has\u0000nul") then
+        return 1;
+    fi
+    if !valid_publish_subject("orders.created.eu") ||
+       valid_publish_subject("orders..created") ||
+       valid_publish_subject("orders.*") ||
+       valid_publish_subject("orders.>") then
+        return 2;
+    fi
+    if !valid_subscribe_pattern("orders.*") ||
+       !valid_subscribe_pattern("orders.>") ||
+       valid_subscribe_pattern("orders.>.later") ||
+       valid_subscribe_pattern("orders.cr*") then
+        return 3;
+    fi
+    if !subject_matches("orders.*", "orders.created") ||
+       !subject_matches("orders.>", "orders.created.eu") ||
+       !subject_matches(">", "orders") ||
+       subject_matches("orders.>", "orders") ||
+       subject_matches("orders.*", "orders.created.eu") ||
+       subject_matches("orders..created", "orders.created") ||
+       subject_matches("orders.*", "orders.created ") ||
+       subject_matches("orders.created", "orders.crea>ted") then
+        return 4;
+    fi
+    if !direct_subject_match("foo.*", "foo.bar") ||
+       direct_subject_match("foo.*", "foo.bar.baz") then
+        return 5;
+    fi
+    stdio.println("ATTO_NATS_CANONICAL_SUBJECTS_LLVM_NATIVE_PASS");
+    return 0;
+}

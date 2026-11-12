@@ -4482,6 +4482,21 @@ if(BUILD_TESTING AND ORE_CLANG)
     set_tests_properties(native_atto_nats_pretokenized_string_aot
         PROPERTIES TIMEOUT 180)
 
+    # Exact original AttoNATS validators, String split + native LLVM O0/O2.
+    # Different from both host C ABI test and the pretokenized-only gate.
+    if(ORE_NO_GC_RUSTC)
+        add_test(NAME native_atto_nats_subjects_string_split_aot
+            COMMAND bash
+                "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-atto-nats-subjects-aot.sh"
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}"
+                "${ORE_NO_GC_IR_AUDIT}")
+    else()
+        add_test(NAME native_atto_nats_subjects_string_split_aot
+            COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
+    set_tests_properties(native_atto_nats_subjects_string_split_aot
+        PROPERTIES TIMEOUT 180)
+
     add_test(NAME native_aot_driver
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" aot-driver
             "${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh"
