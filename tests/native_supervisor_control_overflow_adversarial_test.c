@@ -98,6 +98,103 @@ static void on_panic(void* opaque, size_t actor, OresNativeActorTerminalFailure 
     end_parent_turn(s);
 }
 
+
+/* A single parent USER turn stays active while every child takes its own
+ * bounded, preallocated failure receipt. No per-failure allocation or retry.
+ * The check explicitly pins physical DONE until all receipts are ACKed. */
+enum { STRESS_CHILDREN = 1000 };
+typedef struct {
+    OresNativeActorScheduler* scheduler;
+    OresNativeActorRef parent;
+    OresNativeActorRef children[STRESS_CHILDREN];
+    unsigned char seen[STRESS_CHILDREN];
+    size_t notified;
+    atomic_int parent_entered;
+    atomic_int release_parent;
+} StressState;
+
+static void stress_on_data(void* opaque, size_t actor, uint64_t payload) {
+    StressState* state = (StressState*)opaque;
+    require(actor == 0 && (payload == 7 || payload == 8));
+    require(ores_native_actor_scheduler_is_current_actor(
+            state->scheduler, state->parent));
+    if (payload == 7) {
+        atomic_store(&state->parent_entered, 1);
+        while (!atomic_load(&state->release_parent)) tick();
+    }
+}
+
+static void stress_on_panic(
+        void* opaque, size_t actor, OresNativeActorTerminalFailure failure) {
+    StressState* state = (StressState*)opaque;
+    require(actor == 0);
+    require(ores_native_actor_scheduler_is_current_actor(
+            state->scheduler, state->parent));
+    require(failure.kind == ORES_NATIVE_CONTROL_PANIC
+            && failure.failure_code == 99);
+    require(failure.child.actor_slot >= 1
+            && failure.child.actor_slot <= STRESS_CHILDREN);
+    const size_t index = (size_t)failure.child.actor_slot - 1;
+    require(ref_matches(failure.child, state->children[index]));
+    require(failure.correlation == (uint64_t)index + 123);
+    require(!state->seen[index]);
+    state->seen[index] = 1;
+    ++state->notified;
+}
+
+static void stress_thousand_failures_without_retries(void) {
+    StressState* state = (StressState*)calloc(1, sizeof(StressState));
+    require(state != NULL);
+    state->scheduler = ores_native_actor_scheduler_open_typed_control(
+            STRESS_CHILDREN + 1, 1, 2,
+            stress_on_data, NULL, stress_on_panic, state);
+    require(state->scheduler != NULL);
+    state->parent = ores_native_actor_scheduler_spawn(state->scheduler, 0);
+    require(state->parent.scheduler_domain != 0);
+    for (size_t i = 0; i < STRESS_CHILDREN; ++i) {
+        state->children[i] = ores_native_actor_scheduler_spawn(
+                state->scheduler, i + 1);
+        require(state->children[i].scheduler_domain != 0);
+        require(ores_native_actor_scheduler_bind_supervisor(
+                state->scheduler, state->parent, state->children[i]));
+    }
+    require(ores_native_actor_scheduler_send(
+            state->scheduler, state->parent, 7));
+    await_flag(&state->parent_entered);
+    require(ores_native_actor_scheduler_send(
+            state->scheduler, state->parent, 8));
+    require(ores_native_actor_scheduler_try_send(
+            state->scheduler, state->parent, 9)
+            == ORES_NATIVE_SEND_MAILBOX_FULL);
+    for (size_t i = 0; i < STRESS_CHILDREN; ++i) {
+        OresNativeActorTerminalFailure failure = {
+            ORES_NATIVE_CONTROL_PANIC, state->children[i], 99, (uint64_t)i + 123
+        };
+        require(ores_native_actor_scheduler_publish_failure(
+                state->scheduler, state->parent, failure));
+        require(!ores_native_actor_scheduler_publish_failure(
+                state->scheduler, state->parent, failure));
+        require(ores_native_actor_scheduler_stop(
+                state->scheduler, state->children[i]));
+        require(!ores_native_actor_scheduler_poll_done(
+                state->scheduler, state->children[i]));
+    }
+    atomic_store(&state->release_parent, 1);
+    require(ores_native_actor_scheduler_drain(state->scheduler));
+    require(state->notified == STRESS_CHILDREN);
+    require(ores_native_actor_scheduler_control_completed(state->scheduler)
+            == STRESS_CHILDREN);
+    for (size_t i = 0; i < STRESS_CHILDREN; ++i) {
+        require(state->seen[i]);
+        require(ores_native_actor_scheduler_poll_done(
+                state->scheduler, state->children[i]));
+    }
+    require(ores_native_actor_scheduler_stop(state->scheduler, state->parent));
+    ores_native_actor_scheduler_retire(state->scheduler);
+    require(ores_native_actor_scheduler_try_destroy(state->scheduler));
+    free(state);
+}
+
 int main(void) {
     State s = {0};
     s.scheduler = ores_native_actor_scheduler_open_typed_control(
@@ -133,6 +230,10 @@ int main(void) {
     require(ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, b));
     require(!ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, a));
     require(!ores_native_actor_scheduler_publish_failure(s.scheduler, s.child_a, b));
+    /* Child physical DONE is not observable while its terminal receipt
+     * has not been acknowledged by the owning supervisor. */
+    require(ores_native_actor_scheduler_stop(s.scheduler, s.child_a));
+    require(!ores_native_actor_scheduler_poll_done(s.scheduler, s.child_a));
     require(s.count == 1);
     atomic_store(&s.unblock_first, 1);
     require(ores_native_actor_scheduler_drain(s.scheduler));
@@ -144,14 +245,15 @@ int main(void) {
             && s.trace[4] == 13);
     require(ores_native_actor_scheduler_control_completed(s.scheduler) == 2);
     require(atomic_load(&s.peak_parent_active) == 1);
+    require(ores_native_actor_scheduler_poll_done(s.scheduler, s.child_a));
     require(!ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, b));
 
     require(ores_native_actor_scheduler_stop(s.scheduler, s.parent));
     require(!ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, a));
-    require(ores_native_actor_scheduler_stop(s.scheduler, s.child_a));
     require(ores_native_actor_scheduler_stop(s.scheduler, s.child_b));
     ores_native_actor_scheduler_retire(s.scheduler);
     require(ores_native_actor_scheduler_try_destroy(s.scheduler));
-    puts("NATIVE_SUPERVISOR_CONTROL_LOSSLESS: distinct_children=2 manual_retry=0");
+    stress_thousand_failures_without_retries();
+    puts("NATIVE_SUPERVISOR_CONTROL_LOSSLESS: distinct_children=1000 manual_retry=0");
     return 0;
 }
