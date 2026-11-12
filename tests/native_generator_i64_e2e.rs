@@ -306,21 +306,38 @@ pub gen* middle(): Iterator<int> {
         "compiled .ores generator iteration should return 42: stderr={}",
         String::from_utf8_lossy(&guest_run.stderr));
 
-    rejected(&compiler, &dir.0, "forof-missing-gen.ores",
-        "pub fnc main(): int { let int x = 0; for const v of missing() { x = x + v; } return x; }\\n",
-        "native generator for-of requires a same-file gen* declaration");
-    rejected(&compiler, &dir.0, "forof-early-return.ores",
-        "pub gen* g(): Iterator<int> { yield 1; return; }\\n\\
-pub fnc main(): int { for const v of g() { return v; } return 0; }\\n",
-        "native generator for-of body requires scalar writes only");
-    rejected(&compiler, &dir.0, "forof-dynamic-args.ores",
-        "pub gen* g(): Iterator<int> { yield 1; return; }\\n\\
-pub fnc main(): int { let int x = 0; for const v of g(1) { x = x + v; } return x; }\\n",
-        "expected ')'");
-    rejected(&compiler, &dir.0, "forof-nested-unsupported.ores",
-        "pub gen* g(): Iterator<int> { yield 1; return; }\\n\\
-pub fnc main(): int { let int x = 0; for const v of g() { for const w of g() { x = x + w; } } return x; }\\n",
-        "native generator for-of body requires scalar writes only");
+    rejected(&compiler, &dir.0, "forof-missing-gen.ores", r#"
+pub fnc main(): int {
+  let int x = 0;
+  for const v of missing() { x = x + v; }
+  return x;
+}
+"#, "native generator for-of requires a same-file gen* declaration");
+    rejected(&compiler, &dir.0, "forof-early-return.ores", r#"
+pub gen* g(): Iterator<int> { yield 1; return; }
+pub fnc main(): int {
+  for const v of g() { return v; }
+  return 0;
+}
+"#, "native generator for-of body requires scalar writes only");
+    rejected(&compiler, &dir.0, "forof-dynamic-args.ores", r#"
+pub gen* g(): Iterator<int> { yield 1; return; }
+pub fnc main(): int {
+  let int x = 0;
+  for const v of g(1) { x = x + v; }
+  return x;
+}
+"#, "expected ')'");
+    rejected(&compiler, &dir.0, "forof-nested-unsupported.ores", r#"
+pub gen* g(): Iterator<int> { yield 1; return; }
+pub fnc main(): int {
+  let int x = 0;
+  for const v of g() {
+    for const w of g() { x = x + w; }
+  }
+  return x;
+}
+"#, "native generator for-of body requires scalar writes only");
 
     rejected(&compiler, &dir.0, "starless-generator.ores",
         "pub generator values(): Iterator<int> { yield 1; return; }\n",
