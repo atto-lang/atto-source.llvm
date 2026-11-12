@@ -4435,6 +4435,22 @@ if(BUILD_TESTING AND ORE_CLANG)
     else()
         add_test(NAME native_no_gc_ir_audit_unit COMMAND "${CMAKE_COMMAND}" -E false)
     endif()
+    # Exact canonical AttoNATS source -> LLVM IR/no-GC audit -> Clang O0/O2
+    # -> real native guest execution. Distinct from host-only policy tests.
+    # Authenticated actor-owned routing is a separate acceptance gate.
+    if(ORE_NO_GC_RUSTC)
+        add_test(NAME native_atto_nats_pretokenized_string_aot
+            COMMAND bash
+                "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-atto-nats-string-aot.sh"
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}"
+                "${ORE_NO_GC_IR_AUDIT}")
+    else()
+        add_test(NAME native_atto_nats_pretokenized_string_aot
+            COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
+    set_tests_properties(native_atto_nats_pretokenized_string_aot
+        PROPERTIES TIMEOUT 180)
+
     add_test(NAME native_aot_driver
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" aot-driver
             "${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh"
