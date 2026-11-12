@@ -1,6 +1,8 @@
 pub fnc main(): int {
-  val and: bool = true && true;
-  val or: bool = false || false;
-  val xor: bool = true ^^ false;
-  return (and && !or && xor) ? 42 : 7;
+  bool a = true;
+  bool b = false;
+  bool and = a && !b;
+  bool or = a || b;
+  bool xor = a ^^ b;
+  return (and && or && xor) ? 42 : 7;
 }
