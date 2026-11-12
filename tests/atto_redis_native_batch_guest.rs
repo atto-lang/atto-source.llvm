@@ -41,7 +41,9 @@ fn verify_guest_source(source: &str) {
     assert!(source.contains("let stored: int = 0;"));
     assert!(source.contains("let present: int = 0;"));
     assert!(source.contains("let digest: int = 0;"));
-    assert!(source.contains("const a: int = batch / 1000;"));
+    assert!(source.contains("digit = remaining / 1000;"));
+    assert!(source.contains("remaining = batch;"));
+    assert!(source.contains("let digit: int = 0;"));
     assert!(source.contains("digest = digest * 1000"));
     assert!(source.contains("pub fnc on_message(int batch): int"));
     assert!(source.contains("await worker.get_ready();"));
