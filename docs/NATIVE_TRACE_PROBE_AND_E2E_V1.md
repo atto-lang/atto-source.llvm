@@ -33,9 +33,13 @@ context. This helper does **not** generate secure entropy and does **not**
 support arbitrary versions, `tracestate`, or export.
 
 `tests/native_traceparent_v00_test.cpp` is registered in the
-standard and LLVM-free host-only CMake profiles. A separate **isolated
-C++17 equivalent-source smoke** compiled and ran successfully with GCC and
-Clang; an exact-head LLVM repository CMake/CTest execution has NOT occurred.
+standard and LLVM-free host-only CMake profiles. An **isolated exact-GitHub-blob host compile/test** passed for header blob
+`643e7e3a5ac826a516ae8cbbee0f7f19274163dd` and test blob
+`f6c1e612e9493ceb1b99b50681e9e05783da5c85` under GCC 14.2 and
+Clang 17 C++17 with `-Wall -Wextra -Wpedantic -Werror`, `-UNDEBUG`,
+AddressSanitizer and UndefinedBehaviorSanitizer. Both compiled binaries
+exited 0. **This is NOT an exact-head LLVM repository CMake/CTest run**
+and does not execute Atto language source.
 The LLVM-native Atto guest cannot yet parse `using telemetry.span`, execute
 native source-level HTTP/actor propagation, or emit OTLP; full conformance
 remains **NOT_IMPLEMENTED**.
