@@ -1,6 +1,6 @@
 // Native LLVM actor mailbox batching: 4 Redis-style operations in EACH
 // one bounded i64 actor message. This compiler admission is scalar only,
-// not Map<Bytes,Bytes>, RESP2 parsing, or TCP. All mutable state is actor-owned.
+// not a native binary key/value map, RESP2 parser or TCP socket. All state is actor-owned.
 //
 // Encoded commands: 1=SET 7, 2=SET 9, 3=GET, 4=DEL, 5=PING.
 // Every 4-digit packed command yields one BASE-1000 ordered reply digest.
