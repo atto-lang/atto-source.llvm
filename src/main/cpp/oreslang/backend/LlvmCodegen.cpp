@@ -2118,8 +2118,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 builder.SetInsertPoint(header);
                 auto* step = builder.CreateCall(abi.next, {frame, yielded_value}, "gen.iter.step");
                 auto* step_switch = builder.CreateSwitch(step, invalid, 2);
-                step_switch->addCase(llvm::ConstantInt::get(i32, 1), body);
-                step_switch->addCase(llvm::ConstantInt::get(i32, 0), terminal);
+                step_switch->addCase(llvm::ConstantInt::get(
+                    llvm::Type::getInt32Ty(context), 1), body);
+                step_switch->addCase(llvm::ConstantInt::get(
+                    llvm::Type::getInt32Ty(context), 0), terminal);
                 builder.SetInsertPoint(body);
                 auto* element = builder.CreateLoad(i64, yielded_value, "gen.iter.yielded");
                 auto scope = scoped_value(*stmt.branch_local, element);
