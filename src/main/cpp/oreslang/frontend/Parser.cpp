@@ -175,7 +175,8 @@ public:
             const unsigned char ch = static_cast<unsigned char>(source_[at_]);
             if (std::isspace(ch)) { ++at_; continue; }
             if (source_.substr(at_, 2) == "//") {
-                const auto end = source_.find('\n', at_ + 2);
+                // Both CR and LF end comments; match template interpolation scanning.
+                const auto end = source_.find_first_of("\r\n", at_ + 2);
                 at_ = end == std::string_view::npos ? source_.size() : end;
                 continue;
             }
