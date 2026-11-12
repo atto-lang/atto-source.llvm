@@ -1,0 +1,15 @@
+define class Box as
+  let int value = 40;
+  bump(mut self)(int extra): void {
+    self.value = self.value + extra;
+    return;
+  }
+  pub answer(mut self)(): int {
+    bump(2);
+    return self.value;
+  }
+end
+pub fnc main(): int {
+  let mut Box box = new Box();
+  return box.answer();
+}
