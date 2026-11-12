@@ -80,7 +80,6 @@ int main(void) {
     CHECK(large != 0);
     CHECK(ores_string_split_literal(arrays, e, large, dot) == ORES_NATIVE_ARRAY_LIMIT);
     CHECK(oreslang_int_array_length(arrays, e) == 0);
-    free(oversized);
     /* A pathological long shared-prefix comparison is bounded BEFORE
      * any array element or String view publication, even with few tokens.
      */
@@ -98,7 +97,6 @@ int main(void) {
     CHECK(ores_string_split_literal(arrays, e, hostile, hostile_delimiter)
         == ORES_NATIVE_ARRAY_LIMIT);
     CHECK(oreslang_int_array_length(arrays, e) == 0);
-    free(adversarial_input); free(adversarial_separator);
     /* Rejected work/token budgets cannot poison subsequent admission. */
     CHECK(ores_string_split_literal(arrays, e, subject, dot) == ORES_NATIVE_ARRAY_OK);
     CHECK(oreslang_int_array_length(arrays, e) == 5);
@@ -109,6 +107,12 @@ int main(void) {
     oreslang_int_array_drop(arrays, a);
     oreslang_int_array_region_close(arrays);
     CHECK(ores_string_region_end() == 0);
+    /* Borrowed byte spans supplied to ores_string_literal must outlive the
+     * complete String invocation, including its region_end() teardown.
+     */
+    free(oversized);
+    free(adversarial_input);
+    free(adversarial_separator);
     puts("NATIVE_STRING_SPLIT_OWNED_ARRAY_C_ABI_PASS");
     return 0;
 }
