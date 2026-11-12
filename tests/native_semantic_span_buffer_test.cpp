@@ -67,6 +67,12 @@ int main() {
     assert(!recorder.record(invalid, true));
     invalid = fixture(6, 0, 2);
     assert(!recorder.record(invalid, true));
+    invalid = fixture(7, 201, 2);
+    invalid.parent_span_id = invalid.context.span_id;
+    assert(!recorder.record(invalid, true)); // W3C span cannot parent itself
+    invalid = fixture(8, 201, 2);
+    invalid.http_status = 99;
+    assert(!recorder.record(invalid, true)); // invalid HTTP response code
     assert(recorder.dropped_count() == 1);
 
     constexpr std::uint32_t CAPACITY = 64;
@@ -98,5 +104,11 @@ int main() {
     NativeSemanticSpanBuffer empty(nullptr, 0);
     assert(!empty.record(server, true));
     assert(!empty.read(0, ignored));
+    // Do not allow an unchecked caller-provided capacity to wrap/escape the
+    // fixed 64 Ki slot budget, even when an array pointer exists.
+    std::array<NativeSemanticSpanSlot, 1> small_slots{};
+    NativeSemanticSpanBuffer invalid_capacity(small_slots.data(), 65537);
+    assert(!invalid_capacity.record(server, true));
+    assert(invalid_capacity.reserved_count() == 0);
     return 0;
 }
