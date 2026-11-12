@@ -67,7 +67,27 @@ int main(void) {
     owner = oreslang_int_array_new(arrays);
     CHECK(ores_string_split_literal_fill(flood, dot, arrays, owner) == ORES_NATIVE_ARRAY_LIMIT);
     oreslang_int_array_drop(arrays, owner);
+    owner = oreslang_int_array_new(arrays);
+    const int64_t empty_separator = ores_string_literal("", 0);
+    CHECK(ores_string_split_literal_fill(source, empty_separator, arrays, owner)
+        == ORES_NATIVE_ARRAY_LIMIT);
+    CHECK(oreslang_int_array_length(arrays, owner) == 0);
+    oreslang_int_array_drop(arrays, owner);
     oreslang_int_array_region_close(arrays);
     CHECK(ores_string_region_end() == 0);
+
+    /* A bad source handle must poison the String invocation and cannot
+     * be turned into a valid array or silently accepted by subject ACLs. */
+    CHECK(ores_string_region_begin(0) == 0);
+    arrays = oreslang_int_array_region_open();
+    CHECK(arrays);
+    owner = oreslang_int_array_new(arrays);
+    const int64_t valid_delimiter = ores_string_literal(".", 1);
+    CHECK(ores_string_split_literal_fill(0, valid_delimiter, arrays, owner)
+        == ORES_NATIVE_ARRAY_LIMIT);
+    CHECK(oreslang_int_array_length(arrays, owner) == 0);
+    oreslang_int_array_drop(arrays, owner);
+    oreslang_int_array_region_close(arrays);
+    CHECK(ores_string_region_end() != 0);
     return 0;
 }
