@@ -1013,6 +1013,8 @@ fn main() {
         ("atto-nats-split-wrong-arity", "pub fnc main():int{val String subject=\"a.b\";val parts=subject.split_literal(\".\",\"-\");return 0;}".to_owned(), foo.to_owned()),
         ("atto-nats-split-named-delimiter", "pub fnc main():int{val String subject=\"a.b\";val parts=subject.split_literal(delimiter:\".\");return 0;}".to_owned(), foo.to_owned()),
         ("atto-nats-split-owner-as-int", "pub fnc main():int{val String subject=\"a.b\";val parts=subject.split_literal(\".\");val int token=parts;return token;}".to_owned(), foo.to_owned()),
+        ("nats-native-string-abi-spoof", "pub fnc ores_string_split_literal():int{return 42;}pub fnc main():int{return ores_string_split_literal();}".to_owned(), foo.to_owned()),
+        ("nats-native-string-containment-abi-spoof", "pub fnc ores_string_contains_literal():int{return 42;}pub fnc main():int{return ores_string_contains_literal();}".to_owned(), foo.to_owned()),
         ("nats-string-contains-int-receiver", "pub routine main():int{val n: int = 42;return n.contains_literal(\"4\")?0:1;}".to_owned(), foo.to_owned()),
         ("nats-string-contains-int-needle", "pub routine main():int{val String s=\"abc\";return s.contains_literal(42)?0:1;}".to_owned(), foo.to_owned()),
         ("nats-string-contains-wrong-arity", "pub routine main():int{val String s=\"abc\";return s.contains_literal(\"a\",\"b\")?0:1;}".to_owned(), foo.to_owned()),
