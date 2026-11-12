@@ -9,31 +9,21 @@
 define actor NativeScalarRedis as {
   let stored: int = 0;
   let present: int = 0;
+  let previously_present: int = 0;
 
   pub fnc on_message(int command): int {
-    if (command eq 107) {
-      stored = 7;
-      present = 1;
-      return 107;
-    } fi
-    if (command eq 109) {
-      stored = 9;
-      present = 1;
-      return 109;
-    } fi
-    if (command eq 201) {
-      if (present eq 1) { return 200 + stored; } fi
-      return 200;
-    } fi
-    if (command eq 301) {
-      if (present eq 1) {
-        present = 0;
-        return 301;
-      } fi
-      return 300;
-    } fi
-    if (command eq 401) { return 401; } fi
-    return -1;
+    // Preserve the pre-DEL presence bit before the state transition.
+    previously_present = present;
+    // Production native actor frontend supports typed pure ternary scalar
+    // expressions. No host-owned KV store or dynamic interpreter fallback.
+    stored = (command eq 107) ? 7 : ((command eq 109) ? 9 : stored);
+    present = (command eq 107) ? 1 :
+      ((command eq 109) ? 1 : ((command eq 301) ? 0 : present));
+    return (command eq 107) ? 107 :
+      ((command eq 109) ? 109 :
+      ((command eq 201) ? ((present eq 1) ? 200 + stored : 200) :
+      ((command eq 301) ? 300 + previously_present :
+      ((command eq 401) ? 401 : -1))));
   }
 }
 
