@@ -23,6 +23,8 @@ typedef struct {
     atomic_int task_cancels;
     atomic_int nested;
     atomic_int wakes;
+    atomic_int wake_reserved;
+    OresNativeWakeTicket ticket;
 } Domain;
 
 static void actor_turn(Domain* d, size_t index) {
@@ -56,6 +58,17 @@ static void data_callback(void* opaque, size_t index, uint64_t payload) {
         assert(ores_native_vm_try_schedule_task(
             d->vm, d->domain, d->actor, (uint64_t)payload)
             == ORES_NATIVE_TASK_ACCEPTED);
+        if (d->domain == ORES_NATIVE_VM_TRUSTED_PRIVATE) {
+            /* The producer Future must be registered in a real DATA turn,
+             * before a remote completion thread can transfer its wake. */
+            OresNativeWakeTicket ticket = {0};
+            assert(ores_native_vm_actor_reserve_wake(
+                d->vm, d->domain, d->actor, d->actor,
+                44, 1, 1, 1, &ticket));
+            assert(ticket.slot_generation != 0);
+            d->ticket = ticket;
+            atomic_store_explicit(&d->wake_reserved, 1, memory_order_release);
+        }
         if (d->domain == ORES_NATIVE_VM_SHARED) {
             /* STOP seals while DATA owns the physical lease. The queued
              * task is cleanup-only; it must not execute guest on_task. */
@@ -175,13 +188,16 @@ int main(void) {
         vm, (enum OresNativeVMDomain)-1, d[0].actor, 1)
         == ORES_NATIVE_TASK_INVALID_ACTOR);
 
-    /* Reserve, transfer and publish an authenticated continuation readiness
-     * from the host. No TASK admission is permitted on this producer thread. */
-    OresNativeWakeTicket ticket = {0};
-    assert(ores_native_vm_actor_reserve_wake(
-        vm, ORES_NATIVE_VM_TRUSTED_PRIVATE, d[2].actor, d[2].actor,
-        44, 1, 1, 1, &ticket));
-    assert(ticket.slot_generation != 0);
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
+        assert(ores_native_vm_try_send(vm, d[i].domain, d[i].actor,
+            (uint64_t)i + 1u) == ORES_NATIVE_SEND_ACCEPTED);
+    }
+
+    /* A physical actor DATA turn reserves the wake; only a separate,
+     * trusted Future producer thread may transfer/publish its readiness.
+     * No producer can schedule TASK directly. */
+    until(&d[ORES_NATIVE_VM_TRUSTED_PRIVATE].wake_reserved, 1);
+    const OresNativeWakeTicket ticket = d[2].ticket;
     assert(ores_native_vm_actor_transfer_wake(
         vm, ORES_NATIVE_VM_TRUSTED_PRIVATE, ticket));
     OresNativeWakeTicket forged = ticket;
@@ -195,11 +211,6 @@ int main(void) {
     assert(ores_native_vm_actor_publish_wake(
         vm, ORES_NATIVE_VM_TRUSTED_PRIVATE, ticket,
         ORES_NATIVE_WAKE_READY) == ORES_NATIVE_WAKE_INVALID);
-
-    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
-        assert(ores_native_vm_try_send(vm, d[i].domain, d[i].actor,
-            (uint64_t)i + 1u) == ORES_NATIVE_SEND_ACCEPTED);
-    }
 
     /* MAIN: an already-running TASK is a physical DONE barrier after STOP. */
     until(&d[ORES_NATIVE_VM_MAIN].running, 1);
