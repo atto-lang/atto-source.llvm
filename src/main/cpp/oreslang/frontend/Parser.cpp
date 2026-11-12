@@ -720,6 +720,10 @@ public:
             require(";");
             program.imports.push_back(std::move(imported));
         }
+        // Match Java: a contextual "use" in the source header selects the
+        // SAME flat namespace; it does not authorize cross-package binding.
+        if (token_.text == "use" && peek_next().text == "namespace")
+            advance();
         if (accept("namespace")) {
             program.namespace_name = identifier();
             require(";");
@@ -733,6 +737,15 @@ public:
             if (at_type_only_introducer()) {
                 type_only_declaration(program);
                 continue;
+            }
+            // Unlike complete defined actors, declaration-only actors require
+            // manifest-proven cross-file method/state linkage before any LLVM
+            // IR may be emitted. Do not disguise them as empty actor classes.
+            if (token_.text == "declare"
+                    || (token_.text == "pub" && peek_next().text == "declare")) {
+                fail("DECLARED_ACTOR_CODEGEN_UNSUPPORTED: native actor receiver, "
+                     "sealed state and mailbox lowering require a verified "
+                     "same-manifest namespace source set");
             }
             bool exported = accept("pub");
             require("define");
