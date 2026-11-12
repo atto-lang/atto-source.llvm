@@ -3,11 +3,11 @@
 //! /tmp/guest-check /path/to/oreslang-llvmc clang /path/to/source-checkout /tmp/work-dir
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output};
 
 const BYTES: [i64; 8] = [65, 77, 81, 80, 0, 0, 9, 1];
-const RUNTIME: [&str; 10] = [
+const RUNTIME: [&str; 9] = [
     "ActorOwnedI64Heap.c",
     "NativeActorScheduler.c",
     "NativeOresVM.c",
@@ -17,7 +17,6 @@ const RUNTIME: [&str; 10] = [
     "NativeContinuationStore.c",
     "NativeAwaitTraceBridge.c",
     "NativeLogicalTrace.c",
-    "NativeOresVMNio.cpp", // intentionally NOT linked: native source actor does not own I/O
 ];
 
 fn run(cmd: &mut Command) -> Output {
@@ -99,7 +98,7 @@ fn main() {
     let runtime = root.join("src/main/cpp/oreslang/runtime");
     let mut link = Command::new(clang);
     link.arg("-O1").arg("-x").arg("ir").arg(&ll).arg("-x").arg("c");
-    for name in RUNTIME[..RUNTIME.len() - 1].iter() {
+    for name in RUNTIME.iter() {
         link.arg(runtime.join(name));
     }
     link.arg("-std=c11").arg("-pthread")
