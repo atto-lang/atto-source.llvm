@@ -39,3 +39,11 @@ The current LLVM actor frontend handles only synchronous `on_message(int)`, not 
 Required final acceptance: compile one unchanged `.atto` fixture across Java, LLVM, Rust and Wasm; run real guest tasks; prove same-actor nonreentrancy, cross-actor overlap, cross-worker carrier handoff, STOP/cancellation/late completion, and independent review. This bridge alone does not meet that claim.
 
 Security: private source must not be mirrored into unapproved organizations; require source-side approval, independent security review, and exact byte/tree identities for any authorized carrier.
+
+## Security audit and carrier approval (2026-11-12)
+
+Audited fixture previously reserved its continuation WAKE ticket from root host code. The current test instead reserves **inside the real actor's DATA turn**, stores its immutable ticket, and transfers/publishes readiness only from the external host. This grounds producer registration in the physical actor context while preserving the rule that a producer cannot schedule TASK directly.
+
+Current PR #1731 branch native source head `28112e763223aa1fe2cc800125842dbb76396f2c`, root Git tree `c699b2046f9a5ebf629cac05bf47db3c38ba895d`; native fixture blob `9544d73a910cc45d0956df50c7ec1f3c86460e03`. **No exact-head C executable pass yet.**
+
+The LLVM source policy currently approves only `streempilot-test/browser-studio-e2e` as a destination, but its reviewed carrier contract includes no test plan for #1731. Security issue [#1732](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1732) requests a narrowly scoped plan with pinned workflow/test-plan hashes, independent approval, protected source main, and exact-tree validation. No private source mirror was attempted. Older successful carrier runs do not authorize this head or prove current remaining minutes.
