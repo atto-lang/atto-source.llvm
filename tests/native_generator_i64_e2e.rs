@@ -110,6 +110,11 @@ int main(void) {
     check(forged_done[0]==2 && forged_done[1]==1, "forged terminal rejection mutated frame");
     check(oreslang_rt_gen_values_init(frame)==1, "init failed");
     check(oreslang_rt_gen_values_init(frame)==0, "double init accepted");
+    check(oreslang_rt_gen_values_next(frame,frame)==-1,
+          "next accepted output alias of frame state");
+    check(oreslang_rt_gen_values_next(frame,frame+1)==-1,
+          "next accepted output alias of frame index");
+    check(frame[0]==1 && frame[1]==0, "alias rejection mutated frame");
     const int64_t expected_values[3] = {1, INT64_MIN, INT64_MAX};
     for (size_t i=0; i<3; ++i) {
         value = -1;
