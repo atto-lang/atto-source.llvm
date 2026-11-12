@@ -45,6 +45,7 @@ bool identifier_part(char ch) { return identifier_start(ch) || digit(ch); }
 inline constexpr std::size_t kMaxNativeTemplateNesting = 32;
 inline constexpr std::size_t kMaxNativeTemplateBraceNesting = 256;
 inline constexpr std::size_t kMaxNativeTemplateInterpolations = 1024;
+inline constexpr std::size_t kMaxNativeTemplateCommentNesting = 128;
 
 [[noreturn]] void template_error(std::string_view detail, std::size_t offset) {
     throw std::runtime_error("native template " + std::string(detail) +
@@ -70,7 +71,8 @@ std::size_t skip_template_block_comment(std::string_view source, std::size_t at,
     std::size_t depth = 1;
     while (at < source.size()) {
         if (source.substr(at, 2) == "/*") {
-            ++depth;
+            if (++depth > kMaxNativeTemplateCommentNesting)
+                template_error("block comment nesting limit exceeded (128)", origin);
             at += 2;
         } else if (source.substr(at, 2) == "*/") {
             at += 2;
