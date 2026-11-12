@@ -43,6 +43,7 @@ static void on_task(void* opaque, size_t index, uint64_t handle) {
     State* s = (State*)opaque;
     assert_actor_turn(s, index);
     assert(index == 0);
+    assert(atomic_load_explicit(&s->control_callbacks, memory_order_acquire) == 1);
     assert((handle >= 1 && handle <= 8) || handle == 101 || handle == 102);
     assert(atomic_fetch_add(&s->active[index], 1) == 0);
     uint64_t sequence = 999;
@@ -108,6 +109,8 @@ static void on_data(void* opaque, size_t index, uint64_t payload) {
         assert(ores_native_actor_scheduler_try_schedule_task(
             s->scheduler, s->actor[0], 99)
             == ORES_NATIVE_TASK_MAILBOX_FULL);
+        assert(ores_native_actor_scheduler_publish_control(
+            s->scheduler, s->actor[0], 99));
         }
     } else {
         assert(index == 1 && payload == 2);
@@ -125,10 +128,14 @@ static void on_data(void* opaque, size_t index, uint64_t payload) {
 
 static void on_control(void* opaque, size_t index, uint64_t payload) {
     State* s = (State*)opaque;
-    (void)index;
-    (void)payload;
-    atomic_fetch_add(&s->control_callbacks, 1);
-    abort(); /* supervisor CONTROL callback must not execute an actor Task */
+    assert(index == 0 && payload == 99);
+    assert_actor_turn(s, index);
+    /* CONTROL callbacks have actor identity but NO guest Task admission
+     * authority; they must not bypass ordinary actor queue scheduling. */
+    assert(ores_native_actor_scheduler_try_schedule_task(
+        s->scheduler, s->actor[0], 777)
+        == ORES_NATIVE_TASK_FOREIGN_CARRIER);
+    atomic_fetch_add_explicit(&s->control_callbacks, 1, memory_order_release);
 }
 
 int main(void) {
@@ -181,7 +188,7 @@ int main(void) {
     assert(atomic_load(&state.normal_tasks) == 9);
     assert(atomic_load(&state.nested_admissions) == 1);
     assert(atomic_load(&state.cancelled_tasks) == 1);
-    assert(atomic_load(&state.control_callbacks) == 0);
+    assert(atomic_load(&state.control_callbacks) == 1);
     assert(atomic_load(&state.active[0]) == 0);
     assert(atomic_load(&state.active[1]) == 0);
     /* A running Task cannot be discarded as if it were merely queued.
@@ -205,6 +212,6 @@ int main(void) {
     assert(!ores_native_actor_scheduler_in_any_actor_turn());
     ores_native_actor_scheduler_retire(state.scheduler);
     assert(ores_native_actor_scheduler_try_destroy(state.scheduler));
-    printf("NATIVE_ACTOR_TASK_POOL_PASS normal=9 cancel=1 nested=1\n");
+    printf("NATIVE_ACTOR_TASK_POOL_PASS normal=10 cancel=1 nested=1 control=1\n");
     return 0;
 }
