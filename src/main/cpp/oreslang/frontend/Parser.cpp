@@ -923,6 +923,7 @@ public:
         for (auto& method : methods_) program.functions.push_back(std::move(method));
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
+        resolve_scalar_generator_delegation(program);
         validate_type_only_declarations(program);
         if (!program.namespace_name.empty() &&
                 (!program.functions.empty() || !program.classes.empty() ||
@@ -1884,10 +1885,20 @@ private:
             if (token_.kind == Kind::End)
                 fail("unterminated native generator body");
             if (accept("yield")) {
-                if (accept("*"))
-                    fail("native generator yield* requires delegated iterator ownership and close lowering");
-                generator.yields.push_back(signed_integer_literal());
-                if (generator.yields.size() > 4096)
+                ScalarGeneratorStep step;
+                if (accept("*")) {
+                    // The only safe native v1 delegate is a named generator
+                    // defined in this same source file. No expressions,
+                    // parameters, actor owners or foreign iterator handles.
+                    step.delegate = true;
+                    step.target = identifier();
+                    require("(");
+                    require(")");
+                } else {
+                    step.value = signed_integer_literal();
+                }
+                generator.steps.push_back(std::move(step));
+                if (generator.steps.size() > 4096)
                     fail("native generator v1 exceeds 4096 yielded elements");
                 require(";");
                 continue;
@@ -1902,6 +1913,47 @@ private:
             fail("native sync generator v1 admits only integer yield statements and bare return");
         }
         return generator;
+    }
+
+    // Resolve pure literal yield* delegation once, at compiler admission.
+    // Since neither producer has captures, callbacks, awaits nor cleanup,
+    // static inlining is observationally equivalent to pulling each child in
+    // order. All other forms continue to fail closed in scalar_generator().
+    static void resolve_scalar_generator_delegation(Program& program) {
+        const std::size_t count = program.generators.size();
+        std::unordered_map<std::string, std::size_t> names;
+        for (std::size_t i = 0; i < count; ++i)
+            names.emplace(program.generators[i].name, i);
+        std::vector<unsigned char> state(count, 0);
+        std::function<void(std::size_t)> resolve = [&](std::size_t index) {
+            if (state[index] == 2) return;
+            if (state[index] == 1)
+                throw std::runtime_error("native generator yield* cycle at '" +
+                    program.generators[index].name + "'");
+            state[index] = 1;
+            auto& generator = program.generators[index];
+            std::vector<std::int64_t> result;
+            for (const auto& step : generator.steps) {
+                if (!step.delegate) {
+                    if (result.size() >= 4096)
+                        throw std::runtime_error("native generator v1 exceeds 4096 yielded elements");
+                    result.push_back(step.value);
+                    continue;
+                }
+                const auto target = names.find(step.target);
+                if (target == names.end())
+                    throw std::runtime_error("native generator yield* target is not a same-file literal generator: '" +
+                        step.target + "'");
+                resolve(target->second);
+                const auto& child = program.generators[target->second].yields;
+                if (child.size() > 4096 - result.size())
+                    throw std::runtime_error("native generator v1 exceeds 4096 yielded elements after yield*");
+                result.insert(result.end(), child.begin(), child.end());
+            }
+            generator.yields = std::move(result);
+            state[index] = 2;
+        };
+        for (std::size_t i = 0; i < count; ++i) resolve(i);
     }
 
     CooperativeScalarLoop cooperative_scalar_loop() {
