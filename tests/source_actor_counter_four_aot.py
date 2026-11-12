@@ -6,6 +6,7 @@ The *separate* declared-actor + attached-state syntax remains fail-closed.
 """
 import argparse
 import pathlib
+import hashlib
 import subprocess
 import tempfile
 
@@ -26,6 +27,33 @@ def main():
     fixture = root / "tests" / "fixtures" / "source-actor-counter-four.ores"
     unsupported = root / "tests" / "fixtures" / "declare-state-counter-native-unsupported.atto"
     harness = root / "tests" / "source_actor_counter_four_harness.c"
+    shared_root = root / "contracts" / "declared-actor-stateful-counter-v2"
+    identical_shared_blobs = {
+        ".atto.pkg.toml": "500be9437a53a6767002280d60507587c947b92c",
+        "src/counter/contract.atto": "213541736c415d30fc54bc0f413d8b0f77b623e4",
+        "src/counter/actor.atto": "5135f72fac5b9ccb5c2a418f0d9f79bdd3f5ea32",
+        "src/counter/state.atto": "5a63c3a307ec47e19025848fb979ceb42e9980c5",
+        "src/counter/method.atto": "e7efbde0987013bc231eef40ec0524eeadc636e8",
+        "src/counter/receive.atto": "e3f4b13503a1475b716756f54b3a77f28c8ccbc7",
+        "src/counter/main.atto": "90d33cf97bfe553021cf340af8f62e4036a884e1",
+    }
+    for relative, expected in identical_shared_blobs.items():
+        body = (shared_root / relative).read_bytes()
+        digest = hashlib.sha1(
+            b"blob " + str(len(body)).encode("ascii") + b"\\0" + body
+        ).hexdigest()
+        assert digest == expected, (
+            "java/llvm shared Counter V2 source identity drift", relative, digest)
+    # The new sealed-state syntax has not been lowered by the LLVM backend.
+    # In particular, never accept it through the older mutable field ABI.
+    for path in ("src/counter/actor.atto", "src/counter/state.atto",
+                 "src/counter/receive.atto"):
+        attempt = run([opts.compiler, str(shared_root / path)])
+        assert attempt.returncode != 0, (
+            "unverified declared actor compiled on LLVM", path)
+        assert not attempt.stdout.strip(), (
+            "unverified critical state source emitted LLVM IR", path)
+
     native = root / "src" / "main" / "cpp" / "oreslang" / "runtime"
     include = root / "src" / "main" / "cpp"
 

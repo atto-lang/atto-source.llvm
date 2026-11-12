@@ -1,0 +1,22 @@
+namespace counter;
+pub async routine main(): void {
+  val worker = spawn Counter();
+  await worker.get_ready();
+  worker.send(1);
+  worker.send(2);
+  worker.send(3);
+  worker.send(4);
+  val a = (await worker.outputs.next()).value.unwrap();
+  val b = (await worker.outputs.next()).value.unwrap();
+  val c = (await worker.outputs.next()).value.unwrap();
+  val d = (await worker.outputs.next()).value.unwrap();
+  stdio.stdout.write(a.value);
+  stdio.stdout.write("|");
+  stdio.stdout.write(b.value);
+  stdio.stdout.write("|");
+  stdio.stdout.write(c.value);
+  stdio.stdout.write("|");
+  stdio.stdout.write(d.value);
+  await worker.get_done();
+  return;
+}
