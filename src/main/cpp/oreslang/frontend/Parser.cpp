@@ -766,6 +766,8 @@ public:
                 program.contracts.push_back(contract());
                 continue;
             }
+            if (accept("abstract"))
+                fail("NATIVE_PRIVATE_ABSTRACT_UNSUPPORTED: native abstract declarations require inherited virtual-slot and override proof; no IR emitted");
             if (exported && token_.text != "class") fail("native public module wrapper is not supported in the i64 subset");
             if (accept("serial")) {
                 require("actor");
@@ -892,6 +894,8 @@ public:
                     fail("NATIVE_SUPERVISOR_UNSUPPORTED: source supervisor requires immutable typed Failure and compiler-owned CONTROL lowering");
                 if (token_.text == "model")
                     fail("MODEL_BACKEND_UNSUPPORTED: native model graph requires verified operation provenance, configuration and codegen parity");
+                if (accept("abstract"))
+                    fail("NATIVE_PRIVATE_ABSTRACT_UNSUPPORTED: native abstract declarations require inherited virtual-slot and override proof; no IR emitted");
                 if (public_class && token_.text != "class") fail("native pub define currently supports only class declarations");
                 if (accept("serial")) {
                     require("actor");
@@ -1496,6 +1500,15 @@ private:
         if (token_.text == "final") {
             fail("native final actor fields require typed field initialization and ownership lowering");
         }
+        // Canonical receive / private abstract hooks are trusted runtime ingress,
+        // never legacy on_message(int). Reject both Self spellings before
+        // attempting method lowering; never accidentally interpret a hook as
+        // an actor field or untrusted callable entrypoint.
+        if (token_.text == "receive" || token_.text == "external" ||
+                (token_.text == "pub" && peek_next().text == "receive") ||
+                (token_.text == "private" && peek_next().text == "abstract") ||
+                token_.text == "abstract")
+            fail("NATIVE_ACTOR_INGRESS_UNSUPPORTED: receive/private abstract hooks require compiler-owned mailbox dispatch; no IR emitted");
         if (actor.fields.empty()) fail("actor requires at least one scalar field");
         Function method;
         method.offset = token_.offset;
@@ -1605,12 +1618,20 @@ private:
             fail("callable signatures cannot be declared as nominal class types");
         if (entry_builtin_name(result.name))
             fail("builtin Entry is compiler-owned and cannot be declared as a nominal class type");
+        if (token_.text == "extends" || token_.text == "from")
+            fail("NATIVE_PRIVATE_ABSTRACT_UNSUPPORTED: native class inheritance requires originating-slot authority and vtable lowering; no IR emitted");
         require("as");
         std::unordered_set<std::string> seen;
         while (token_.text != "end") {
             if (token_.kind == Kind::End) fail("expected 'end'");
+            if (token_.text == "abstract" ||
+                    (token_.text == "private" && peek_next().text == "abstract") ||
+                    (token_.text == "pub" && peek_next().text == "abstract"))
+                fail("NATIVE_PRIVATE_ABSTRACT_UNSUPPORTED: private abstract virtual slots need originating-declaration override proof; no IR emitted");
             const bool publicly_visible = accept("pub");
             if (!publicly_visible) accept("private");
+            if (token_.text == "abstract")
+                fail("NATIVE_PRIVATE_ABSTRACT_UNSUPPORTED: abstract method slots cannot lower as scalar fields or methods; no IR emitted");
             // Formatter may insert 'mtd', but method identity and receiver
             // erasure must remain unchanged. Never consume it as a class field.
             const bool method_marker = accept("mtd");
