@@ -1006,6 +1006,35 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // The test-only native owned-int experiment must never leak declarations
     // or allocations into ordinary int code. Resolve the ABI only when a
     // program actually contains a gated experimental heap-owned local.
+    // AOT scoped probes remain dormant unless trusted native host control
+    // explicitly enables them. Only hosted LLVM targets have the bounded,
+    // C11 thread-local telemetry ABI; freestanding/Wasm must fail closed.
+    std::function<bool(const Statement&)> has_native_scope =
+        [&](const Statement& statement) -> bool {
+            return statement.kind == Statement::Kind::UsingTelemetrySpan
+                || std::any_of(statement.then_statements.begin(),
+                               statement.then_statements.end(), has_native_scope)
+                || std::any_of(statement.else_statements.begin(),
+                               statement.else_statements.end(), has_native_scope);
+        };
+    const bool has_native_telemetry = std::any_of(
+        source.functions.begin(), source.functions.end(),
+        [&](const Function& fn) {
+            return std::any_of(fn.statements.begin(), fn.statements.end(),
+                               has_native_scope);
+        });
+    if (has_native_telemetry && (wasm32_target || cortex_m_target))
+        throw std::runtime_error(
+            "native telemetry span runtime currently supports only hosted LLVM AOT");
+    llvm::FunctionCallee telemetryBegin, telemetryEnd;
+    if (has_native_telemetry) {
+        telemetryBegin = module.getOrInsertFunction(
+            "ores_native_telemetry_span_begin",
+            llvm::FunctionType::get(i64, {native_ptr, i64}, false));
+        telemetryEnd = module.getOrInsertFunction(
+            "ores_native_telemetry_span_end",
+            llvm::FunctionType::get(llvm::Type::getVoidTy(context), {i64}, false));
+    }
     const bool has_source_tasks = std::any_of(
         source.functions.begin(), source.functions.end(),
         [](const Function& fn) {
@@ -2010,6 +2039,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             storage.erase(slot.name);
         };
         std::vector<ScopedSlot> active_scopes;
+        // Compiler-owned opaque span tokens: not visible to guest expressions.
+        // This stack represents only the non-suspending region being lowered.
+        std::vector<llvm::Value*> active_telemetry_scopes;
         std::vector<ScopedSlot> ordered_root_scopes;
         auto forget_scope = [&](const ScopedSlot& slot) {
             forget_array_scope(slot);
@@ -2023,7 +2055,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             const auto scope_start = active_scopes.size();
             for (const auto& action : arm) {
                 if (builder.GetInsertBlock()->getTerminator()) break;
-                if (action.kind == Statement::Kind::ForEach || action.kind == Statement::Kind::ForIndex || action.kind == Statement::Kind::Conditional || action.kind == Statement::Kind::Return) {
+                if (action.kind == Statement::Kind::ForEach || action.kind == Statement::Kind::ForIndex || action.kind == Statement::Kind::Conditional || action.kind == Statement::Kind::Return || action.kind == Statement::Kind::UsingTelemetrySpan) {
                     lower_control(action); continue;
                 }
                 if (action.kind != Statement::Kind::ScopedLocal) {
@@ -2042,9 +2074,31 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             }
         };
         lower_control = [&](const Statement& stmt) {
+            if (stmt.kind == Statement::Kind::UsingTelemetrySpan) {
+                if (!has_native_telemetry || !telemetryBegin.getCallee()
+                        || !telemetryEnd.getCallee())
+                    throw std::runtime_error("LLVM native telemetry ABI missing");
+                llvm::Value* name = builder.CreateGlobalStringPtr(
+                    stmt.telemetry_operation, "atto.telemetry.operation");
+                llvm::Value* token = builder.CreateCall(
+                    telemetryBegin,
+                    {name, llvm::ConstantInt::get(i64, stmt.telemetry_operation.size())},
+                    "atto.telemetry.scope.token");
+                active_telemetry_scopes.push_back(token);
+                lower_arm(stmt.then_statements);
+                active_telemetry_scopes.pop_back();
+                if (!builder.GetInsertBlock()->getTerminator())
+                    builder.CreateCall(telemetryEnd, {token});
+                return;
+            }
             if (stmt.kind == Statement::Kind::Return) {
                 auto* result = stmt.expression ? lower(*stmt.expression, builder, i64, storage, field_storage, declarations, &region_moves) : nullptr;
                 if (!fn.returns_void) builder.CreateStore(result, structured_snapshot);
+                // End only the live lexical span stack, LIFO, before dropping
+                // temporary owners and taking the structured cleanup edge.
+                for (auto it = active_telemetry_scopes.rbegin();
+                     it != active_telemetry_scopes.rend(); ++it)
+                    builder.CreateCall(telemetryEnd, {*it});
                 for (auto it = active_scopes.rbegin(); it != active_scopes.rend(); ++it)
                     finish_scope(*it);
                 builder.CreateBr(structured_cleanup); return;
@@ -2141,7 +2195,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 continue;
             }
             if (stmt.kind == Statement::Kind::ForEach || stmt.kind == Statement::Kind::ForIndex ||
-                    stmt.kind == Statement::Kind::Conditional) {
+                    stmt.kind == Statement::Kind::Conditional || stmt.kind == Statement::Kind::UsingTelemetrySpan) {
                 lower_control(stmt); continue;
             }
             lower_effect(stmt);
