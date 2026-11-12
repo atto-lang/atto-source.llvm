@@ -71,7 +71,9 @@ int main(void) {
 }
 C
 for OPT in 0 2; do
-  "$CLANG" "-O$OPT" -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+  # Suppress only Clang's expected IR target-triple override diagnostic:
+  # native hosted AOT uses the runner's explicit host target at link time.
+  "$CLANG" "-O$OPT" -Wall -Wextra -Wpedantic -Werror -Wno-override-module -UNDEBUG \
     -I"$ROOT/src/main/cpp" -x ir "$OUT/toggle.ll" \
     -x c "$ROOT/src/main/cpp/oreslang/runtime/NativeTelemetrySpan.c" \
     "$OUT/host-toggle.c" -o "$OUT/toggle-O$OPT"
