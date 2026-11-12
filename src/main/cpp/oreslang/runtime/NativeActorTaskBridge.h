@@ -39,6 +39,7 @@ typedef struct {
     OresNativeActorTaskPhase phase;
     int initialized;
     int resource_loan;
+    int in_wake; /* remains true until scheduler's AFTER-WAKE hook */
     int cancellation_requested;
 } OresNativeActorTask;
 
