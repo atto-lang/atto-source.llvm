@@ -32,6 +32,9 @@ def expected_prefix_last(name, actor_index, processed):
         for n in range(start, start + processed):
             value = 2 * (value + n)
         return value
+    if name == "atto-actor-two-owned-states.atto":
+        sequences = ([1, 2], [5, 6])
+        return sum(sequences[actor_index][:processed])
     if name == "source-actor-interleaved-stop.ores":
         sequences = ([1], [3, 4])
         return sum(sequences[actor_index][:processed])
@@ -96,6 +99,8 @@ def main():
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
+        # The native Atto case also executes at both O0 and O2, per fixture.
+        ("atto-actor-two-owned-states.atto", 2, 2, None),
     ]
     negatives = {
         "source-actor-owned-unknown-initializer-reject.ores":
@@ -153,6 +158,8 @@ def main():
         # ownership or suspension-aware continuation lowering.
         "source-actor-final-group-field-reject.ores": "native final actor fields require typed field initialization and ownership lowering",
         "source-actor-suspend-method-reject.ores": "native suspends actor method requires continuation lowering",
+        "atto-actor-send-after-stop-negative.atto": "actor message sent after stop",
+        "atto-actor-borrow-send-negative.atto": "borrowed reference may only be passed",
     }
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
@@ -214,73 +221,77 @@ def main():
                 first_stop = guest.stdout.find("call void @oreslang_source_actor_stop")
                 final_send = guest.stdout.rfind("call void @oreslang_source_actor_send")
                 assert 0 <= first_stop < final_send, (name, "source actor effects reordered")
-            ll = pathlib.Path(temp, name + ".ll")
-            ll.write_text(guest.stdout)
-            exe = pathlib.Path(temp, name + ".guest")
-            flags = (["-O1", "-g", "-fno-omit-frame-pointer", "-fsanitize=address,undefined"]
-                     if args.sanitize else ["-O1"])
-            command = [
-                args.clang, *flags, "-x", "ir", str(ll),
-                "-x", "c", str(runtime / "ActorOwnedI64Heap.c"),
-                str(runtime / "NativeActorScheduler.c"),
-                str(runtime / "NativeOresVM.c"),
-                str(runtime / "NativeActorFuture.c"),
-                str(runtime / "SourceActorBootstrap.c"),
-                str(runtime / "NativeExecutionContextStore.c"),
-                str(runtime / "NativeContinuationStore.c"),
-                str(runtime / "NativeAwaitTraceBridge.c"),
-                str(runtime / "NativeLogicalTrace.c"),
-                "-std=c11", "-pthread", "-I", str(source_dirs),
-                "-DORESLANG_SOURCE_ACTOR_TESTING", "-o", str(exe)
-            ]
-            linked = run(command)
-            assert linked.returncode == 0, (name, linked.stderr)
-            executed = run([str(exe)])
-            assert executed.returncode == 43, (name, executed.returncode, executed.stderr)
-            vm_lines = [line for line in executed.stderr.splitlines()
-                        if "SOURCE_ACTOR_VM_ROUTING_VERIFIED" in line]
-            assert len(vm_lines) == 1 and (
-                "domains=4 main=1 cold_carriers=0" in vm_lines[0]), (
-                name, vm_lines)
-            if name in {"source-actor-await-ready.ores",
-                        "source-actor-await-worker.ores",
-                        "source-actor-future-void-ready.ores"}:
-                trace_lines = [line for line in executed.stderr.splitlines()
-                               if "SOURCE_AWAIT_READY_TRACE_PASS" in line]
-                assert len(trace_lines) == 1, (name, trace_lines)
-                assert "execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
-            if name == "source-actor-await-done.ores":
-                trace_lines = [line for line in executed.stderr.splitlines()
-                               if "SOURCE_AWAIT_DONE_TRACE_PASS" in line]
-                assert len(trace_lines) == 1, (name, trace_lines)
-                assert "terminal_ack=1 execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
-            lines = [line for line in executed.stderr.splitlines()
-                     if "SOURCE_ACTOR_SPAWN_STOP_VERIFIED" in line]
-            assert len(lines) == actors, (name, lines)
-            receipts = [parse_actor_receipt(line) for line in lines]
-            for i, receipt in enumerate(receipts):
-                accepted = receipt["accepted"]
-                processed = receipt["processed"]
-                abandoned = receipt["abandoned"]
-                observed_last = receipt["last"]
-                expected_accepted = (
-                    [1, 2][i]
-                    if name == "source-actor-interleaved-stop.ores"
-                    else count)
-                assert accepted == expected_accepted, (
-                    name, i, accepted, expected_accepted)
-                assert 0 <= processed <= accepted, (name, i, processed, accepted)
-                assert abandoned == accepted - processed, (
-                    name, i, accepted, processed, abandoned)
-                assert observed_last == expected_prefix_last(
-                    name, i, processed), (
-                    name, i, processed, observed_last)
-            if name == "source-actor-two-owned-heaps.ores":
-                assert [r["last"] for r in receipts] == [
-                    expected_prefix_last(name, i, r["processed"])
-                    for i, r in enumerate(receipts)
-                ], (name, receipts)
-            print("PASS native source actor:", name, "actors", actors, flush=True)
+            optimization_levels = ("-O0", "-O2") if (
+                name.endswith(".atto") and not args.sanitize
+            ) else ("-O1",)
+            for optimization in optimization_levels:
+                ll = pathlib.Path(temp, name + ".ll")
+                ll.write_text(guest.stdout)
+                exe = pathlib.Path(temp, name + ".guest")
+                flags = (["-O1", "-g", "-fno-omit-frame-pointer", "-fsanitize=address,undefined"]
+                         if args.sanitize else [optimization])
+                command = [
+                    args.clang, *flags, "-x", "ir", str(ll),
+                    "-x", "c", str(runtime / "ActorOwnedI64Heap.c"),
+                    str(runtime / "NativeActorScheduler.c"),
+                    str(runtime / "NativeOresVM.c"),
+                    str(runtime / "NativeActorFuture.c"),
+                    str(runtime / "SourceActorBootstrap.c"),
+                    str(runtime / "NativeExecutionContextStore.c"),
+                    str(runtime / "NativeContinuationStore.c"),
+                    str(runtime / "NativeAwaitTraceBridge.c"),
+                    str(runtime / "NativeLogicalTrace.c"),
+                    "-std=c11", "-pthread", "-I", str(source_dirs),
+                    "-DORESLANG_SOURCE_ACTOR_TESTING", "-o", str(exe)
+                ]
+                linked = run(command)
+                assert linked.returncode == 0, (name, linked.stderr)
+                executed = run([str(exe)])
+                assert executed.returncode == 43, (name, executed.returncode, executed.stderr)
+                vm_lines = [line for line in executed.stderr.splitlines()
+                            if "SOURCE_ACTOR_VM_ROUTING_VERIFIED" in line]
+                assert len(vm_lines) == 1 and (
+                    "domains=4 main=1 cold_carriers=0" in vm_lines[0]), (
+                    name, vm_lines)
+                if name in {"source-actor-await-ready.ores",
+                            "source-actor-await-worker.ores",
+                            "source-actor-future-void-ready.ores"}:
+                    trace_lines = [line for line in executed.stderr.splitlines()
+                                   if "SOURCE_AWAIT_READY_TRACE_PASS" in line]
+                    assert len(trace_lines) == 1, (name, trace_lines)
+                    assert "execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
+                if name == "source-actor-await-done.ores":
+                    trace_lines = [line for line in executed.stderr.splitlines()
+                                   if "SOURCE_AWAIT_DONE_TRACE_PASS" in line]
+                    assert len(trace_lines) == 1, (name, trace_lines)
+                    assert "terminal_ack=1 execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
+                lines = [line for line in executed.stderr.splitlines()
+                         if "SOURCE_ACTOR_SPAWN_STOP_VERIFIED" in line]
+                assert len(lines) == actors, (name, lines)
+                receipts = [parse_actor_receipt(line) for line in lines]
+                for i, receipt in enumerate(receipts):
+                    accepted = receipt["accepted"]
+                    processed = receipt["processed"]
+                    abandoned = receipt["abandoned"]
+                    observed_last = receipt["last"]
+                    expected_accepted = (
+                        [1, 2][i]
+                        if name == "source-actor-interleaved-stop.ores"
+                        else count)
+                    assert accepted == expected_accepted, (
+                        name, i, accepted, expected_accepted)
+                    assert 0 <= processed <= accepted, (name, i, processed, accepted)
+                    assert abandoned == accepted - processed, (
+                        name, i, accepted, processed, abandoned)
+                    assert observed_last == expected_prefix_last(
+                        name, i, processed), (
+                        name, i, processed, observed_last)
+                if name == "source-actor-two-owned-heaps.ores":
+                    assert [r["last"] for r in receipts] == [
+                        expected_prefix_last(name, i, r["processed"])
+                        for i, r in enumerate(receipts)
+                    ], (name, receipts)
+                print("PASS native source actor:", name, "opt", optimization, "actors", actors, flush=True)
     print("PASS current-source actor lowering and physical heap reclamation")
 
 if __name__ == "__main__":
