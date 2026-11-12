@@ -20,6 +20,8 @@ typedef struct {
     atomic_int stop_ready;
     atomic_int release_stop;
     atomic_int nested_admissions;
+    atomic_int task_running;
+    atomic_int release_task;
 } State;
 
 static void assert_actor_turn(State* s, size_t index) {
@@ -41,7 +43,7 @@ static void on_task(void* opaque, size_t index, uint64_t handle) {
     State* s = (State*)opaque;
     assert_actor_turn(s, index);
     assert(index == 0);
-    assert((handle >= 1 && handle <= 8) || handle == 101);
+    assert((handle >= 1 && handle <= 8) || handle == 101 || handle == 102);
     assert(atomic_fetch_add(&s->active[index], 1) == 0);
     uint64_t sequence = 999;
     assert(!ores_native_actor_scheduler_current_data_mail_sequence(
@@ -52,6 +54,13 @@ static void on_task(void* opaque, size_t index, uint64_t handle) {
         assert(ores_native_actor_scheduler_try_schedule_task(
             s->scheduler, s->actor[index], 101) == ORES_NATIVE_TASK_ACCEPTED);
         atomic_fetch_add(&s->nested_admissions, 1);
+    }
+    if (handle == 102) {
+        /* STOP may seal while this task remains physically executing.
+         * It must not publish DONE until the exact actor lease retires. */
+        atomic_store_explicit(&s->task_running, 1, memory_order_release);
+        while (!atomic_load_explicit(&s->release_task, memory_order_acquire))
+            sched_yield();
     }
     atomic_fetch_add(&s->normal_tasks, 1);
     assert(atomic_fetch_sub(&s->active[index], 1) == 1);
@@ -80,6 +89,10 @@ static void on_data(void* opaque, size_t index, uint64_t payload) {
         s->scheduler, s->actor[index], &sequence));
     assert(sequence == 1);
     if (index == 0) {
+        if (payload == 3) {
+            assert(ores_native_actor_scheduler_try_schedule_task(
+                s->scheduler, s->actor[0], 102) == ORES_NATIVE_TASK_ACCEPTED);
+        } else {
         assert(payload == 1);
         /* Other actors and zero handles are never Task capabilities. */
         assert(ores_native_actor_scheduler_try_schedule_task(
@@ -95,6 +108,7 @@ static void on_data(void* opaque, size_t index, uint64_t payload) {
         assert(ores_native_actor_scheduler_try_schedule_task(
             s->scheduler, s->actor[0], 99)
             == ORES_NATIVE_TASK_MAILBOX_FULL);
+        }
     } else {
         assert(index == 1 && payload == 2);
         assert(ores_native_actor_scheduler_try_schedule_task(
@@ -170,9 +184,24 @@ int main(void) {
     assert(atomic_load(&state.control_callbacks) == 0);
     assert(atomic_load(&state.active[0]) == 0);
     assert(atomic_load(&state.active[1]) == 0);
-    assert(ores_native_actor_scheduler_stop(state.scheduler, state.actor[0]));
+    /* A running Task cannot be discarded as if it were merely queued.
+     * A STOP must be nonblocking, but DONE must wait for physical quiescence. */
+    assert(ores_native_actor_scheduler_try_send(
+        state.scheduler, state.actor[0], 3) == ORES_NATIVE_SEND_ACCEPTED);
+    assert(timespec_get(&start, TIME_UTC) == TIME_UTC);
+    for (;;) {
+        if (atomic_load_explicit(&state.task_running, memory_order_acquire)) break;
+        struct timespec now;
+        assert(timespec_get(&now, TIME_UTC) == TIME_UTC);
+        assert(now.tv_sec - start.tv_sec < 15);
+        sched_yield();
+    }
+    assert(ores_native_actor_scheduler_stop_sealed(state.scheduler, state.actor[0]));
+    assert(!ores_native_actor_scheduler_poll_done(state.scheduler, state.actor[0]));
+    atomic_store_explicit(&state.release_task, 1, memory_order_release);
     assert(ores_native_actor_scheduler_wait_done(
         state.scheduler, state.actor[0]));
+    assert(atomic_load(&state.normal_tasks) == 10);
     assert(!ores_native_actor_scheduler_in_any_actor_turn());
     ores_native_actor_scheduler_retire(state.scheduler);
     assert(ores_native_actor_scheduler_try_destroy(state.scheduler));
