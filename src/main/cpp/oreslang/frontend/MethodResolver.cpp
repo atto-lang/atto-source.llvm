@@ -33,6 +33,20 @@ void resolve_native_methods(Program& program) {
         for (const auto& binding : fn.locals)
             if (!binding.class_name.empty()) owners.emplace(binding.name, binding.class_name);
         for (const auto& binding : fn.locals) if (binding.int_array) arrays.emplace(binding.name, &binding);
+        // Conservatively reserve every lexical name, including names introduced
+        // in nested statement scopes. A local/parameter collision must never
+        // silently become a receiver call when the scalar frontend cannot call
+        // local callable values.
+        std::unordered_set<std::string> shadowed;
+        for (const auto& parameter : fn.parameters) shadowed.insert(parameter.name);
+        for (const auto& binding : fn.locals) shadowed.insert(binding.name);
+        std::function<void(const Statement&)> collect_shadows = [&](const Statement& stmt) {
+            if (stmt.branch_local) shadowed.insert(stmt.branch_local->name);
+            for (const auto& nested : stmt.then_statements) collect_shadows(nested);
+            for (const auto& nested : stmt.else_statements) collect_shadows(nested);
+        };
+        for (const auto& stmt : fn.statements) collect_shadows(stmt);
+        for (const auto& stmt : fn.caught_throw_defers) collect_shadows(stmt);
         std::function<std::string(const Expression&)> nominal = [&](const Expression& expr) -> std::string {
             if (expr.kind == Expression::Kind::Variable) return owners.count(expr.name) ? owners.at(expr.name) : std::string{};
             if (expr.kind != Expression::Kind::Field || !expr.left) return {};
@@ -47,6 +61,38 @@ void resolve_native_methods(Program& program) {
             expression(expr->condition.get()); expression(expr->condition_lhs.get()); expression(expr->condition_rhs.get());
             expression(expr->when_true.get()); expression(expr->when_false.get());
             for (auto& arg : expr->arguments) expression(arg.get());
+            if (expr->kind == Expression::Kind::Call && !fn.method_owner.empty()) {
+                const auto cls = classes.find(fn.method_owner);
+                if (cls == classes.end())
+                    throw std::runtime_error("unknown lexical self class");
+                const ClassMethod* implicit = nullptr;
+                for (const auto& candidate : cls->second->methods) {
+                    if (candidate.name != expr->name || candidate.arity != expr->arguments.size()) continue;
+                    if (implicit)
+                        throw std::runtime_error("ambiguous compiler-owned native implicit method slot");
+                    implicit = &candidate;
+                }
+                if (implicit) {
+                    if (shadowed.count(expr->name))
+                        throw std::runtime_error("unqualified method call is shadowed by a lexical name; use self." + expr->name);
+                    for (const auto& other : program.functions) {
+                        if (other.method_owner.empty() && other.name == expr->name
+                                && other.parameters.size() == expr->arguments.size())
+                            throw std::runtime_error(
+                                "ambiguous unqualified call '" + expr->name +
+                                "': both an instance method and a free callable match; use self.");
+                    }
+                    // Reuse the explicit receiver resolver and its checked
+                    // Borrow/BorrowMut insertion. Nothing reaches codegen via
+                    // a dynamic string lookup or a forged receiver capability.
+                    auto self_ref = std::make_unique<Expression>();
+                    self_ref->kind = Expression::Kind::Variable;
+                    self_ref->name = "self";
+                    self_ref->offset = expr->offset;
+                    expr->left = std::move(self_ref);
+                    expr->kind = Expression::Kind::ArrayCall;
+                }
+            }
             if (expr->kind != Expression::Kind::ArrayCall || !expr->left) return;
             const auto owner = nominal(*expr->left);
             if (owner.empty()) return; // array receiver validates separately
