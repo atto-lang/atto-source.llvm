@@ -60,6 +60,55 @@ def main():
         assert executed.stderr.count("LLVM_COUNTER_FOUR_VERIFIED left=10 right=15 turns=8") == 1, (
             "native compiled Counter did not execute eight correct checked turns",
             executed.stderr)
+        # The scheduler path processes a real compiled guest main with
+        # independently owned actors. STOP is permitted to abandon already
+        # accepted queued DATA, so validate each completed FIFO prefix.
+        mailbox = root / "tests" / "fixtures" / "source-actor-counter-four-mailbox.ores"
+        mailbox_ir = run([opts.compiler, str(mailbox)])
+        assert mailbox_ir.returncode == 0, mailbox_ir.stderr
+        assert "oreslang_source_actor_spawn" in mailbox_ir.stdout
+        assert "oreslang_source_actor_send" in mailbox_ir.stdout
+        assert "oreslang_source_actor_stop" in mailbox_ir.stdout
+        linked_ll = work / "counter-mailbox.ll"
+        linked_ll.write_text(mailbox_ir.stdout)
+        scheduler_exe = work / "counter-mailbox"
+        scheduler_sources = [
+            "ActorOwnedI64Heap.c", "NativeActorScheduler.c", "NativeOresVM.c",
+            "NativeActorFuture.c", "SourceActorBootstrap.c",
+            "NativeExecutionContextStore.c", "NativeContinuationStore.c",
+            "NativeAwaitTraceBridge.c", "NativeLogicalTrace.c",
+        ]
+        command = [opts.clang, *flags,
+                   "-x", "ir", str(linked_ll), "-x", "c",
+                   *(str(native / s) for s in scheduler_sources),
+                   "-std=c11", "-pthread", "-I", str(include),
+                   "-DORESLANG_SOURCE_ACTOR_TESTING", "-o", str(scheduler_exe)]
+        compiled_scheduler = run(command)
+        assert compiled_scheduler.returncode == 0, compiled_scheduler.stderr
+        active = run([str(scheduler_exe)])
+        assert active.returncode == 43, (active.returncode, active.stderr)
+        receipts = [x.split() for x in active.stderr.splitlines()
+                    if x.startswith("SOURCE_ACTOR_SPAWN_STOP_VERIFIED ")]
+        assert len(receipts) == 2, (len(receipts), active.stderr)
+        observed_totals = []
+        for i, tokens in enumerate(receipts):
+            parsed = {}
+            for token in tokens[1:]:
+                key, sep, value = token.partition("=")
+                assert sep and key not in parsed and value.lstrip("-").isdigit(), token
+                parsed[key] = int(value)
+            assert set(parsed) == {
+                "constructor_on_worker", "released", "ready",
+                "accepted", "processed", "abandoned", "last"}, parsed
+            assert parsed["released"] == 1, parsed
+            messages = ([1, 2, 3, 4], [7, 8])[i]
+            assert parsed["accepted"] == len(messages), parsed
+            assert 0 <= parsed["processed"] <= len(messages), parsed
+            assert parsed["abandoned"] == len(messages) - parsed["processed"], parsed
+            assert parsed["last"] == sum(messages[:parsed["processed"]]), parsed
+            observed_totals.append(parsed["last"])
+        print("PASS LLVM scheduler actors: two independent FIFO prefixes",
+              observed_totals)
     print("PASS real LLVM guest Counter: left=10 right=15, independent actor heaps, 8 turns")
 
 if __name__ == "__main__":
