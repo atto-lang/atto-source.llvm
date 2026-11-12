@@ -2820,6 +2820,24 @@ if(BUILD_TESTING)
     set_tests_properties(native_source_task_i64_shared_scheduler_runtime
         PROPERTIES TIMEOUT 30)
 
+    # Actor-owned Task wake bridge: real native actor DATA->WAKE->AWAIT->WAKE
+    # dispatch on the existing scheduler pool, without per-task threads.
+    # Staging host ABI only; the compiler still rejects guest actor task syntax.
+    add_executable(oreslang-native-actor-owned-task-wake-test
+        tests/native_actor_owned_task_wake_test.c
+        src/main/cpp/oreslang/runtime/NativeActorTaskBridge.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-owned-task-wake-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-owned-task-wake-test PRIVATE c_std_11)
+    target_compile_options(oreslang-native-actor-owned-task-wake-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-actor-owned-task-wake-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_actor_owned_task_wake_host_v1
+        COMMAND oreslang-native-actor-owned-task-wake-test)
+    set_tests_properties(native_actor_owned_task_wake_host_v1 PROPERTIES TIMEOUT 30)
+
     set(ORE_SOURCE_TASK_E2E
         "${CMAKE_CURRENT_BINARY_DIR}/oreslang-source-task-i64-e2e")
     add_custom_command(
