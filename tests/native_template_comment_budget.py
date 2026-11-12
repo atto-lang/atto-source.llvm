@@ -59,6 +59,20 @@ def main() -> int:
             if result.returncode != 0 or b'define i64 @__oreslang_guest_main(' not in result.stdout:
                 raise RuntimeError('valid template did not compile at depth ' +
                                    str(count) + ': ' + repr(result.stderr[:512]))
+        # A line comment in interpolation ends on CR, LF, or CRLF.
+        # Require actual LLVM IR, not merely a scanner acceptance oracle.
+        for label, newline in (('lf', '\\n'), ('cr', '\\r'), ('crlf', '\\r\\n')):
+            path.write_text(
+                'pub fnc main(): int {\\n'
+                '  const quote = `prefix ${// ignored }' + newline + '"ok"} suffix`;\\n'
+                '  return 42;\\n'
+                '}\\n',
+                encoding='utf-8',
+            )
+            compiled = run(compiler, path)
+            if compiled.returncode != 0 or b'define i64 @__oreslang_guest_main(' not in compiled.stdout:
+                raise RuntimeError('native template line-comment ' + label +
+                                   ' did not compile: ' + repr(compiled.stderr[:512]))
         path.write_text(source(129), encoding='utf-8')
         rejected = run(compiler, path)
         if (rejected.returncode == 0 or rejected.stdout or
