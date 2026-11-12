@@ -2689,6 +2689,26 @@ if(BUILD_TESTING)
     # boundary/epoch/domain identity and Send gating independently.
     find_program(ORE_RUSTC NAMES rustc REQUIRED)
 
+    # Security gate: execute *the PR-head compiled LLVM frontend*, not a
+    # source-free manifest checker. Rust harness asserts no IR/artifacts on
+    # unsupported private-abstract and runtime-only mailbox hook sources.
+    set(ORE_NATIVE_PRIVATE_ABSTRACT_NEGATIVE
+        "${CMAKE_CURRENT_BINARY_DIR}/oreslang-private-abstract-ingress-negative")
+    add_custom_command(
+        OUTPUT "${ORE_NATIVE_PRIVATE_ABSTRACT_NEGATIVE}"
+        COMMAND "${ORE_RUSTC}" --edition=2021 -D warnings
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/private_abstract_ingress_negative.rs"
+            -o "${ORE_NATIVE_PRIVATE_ABSTRACT_NEGATIVE}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/private_abstract_ingress_negative.rs"
+        VERBATIM)
+    add_custom_target(oreslang-private-abstract-negative-build ALL
+        DEPENDS "${ORE_NATIVE_PRIVATE_ABSTRACT_NEGATIVE}")
+    add_test(NAME native_private_abstract_actor_ingress_negative
+        COMMAND "${ORE_NATIVE_PRIVATE_ABSTRACT_NEGATIVE}"
+            "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_private_abstract_actor_ingress_negative
+        PROPERTIES TIMEOUT 75)
+
     # Generator v1 native source-to-frame E2E. Preserve the existing fail-closed
     # fixture matrix while also proving the admitted canonical sync slice.
     set(ORE_NATIVE_GENERATOR_E2E
