@@ -7,11 +7,17 @@
 #include <time.h>
 
 enum { ORES_TRACE_MAX_DEPTH = 64, ORES_TRACE_MAX_NAME_BYTES = 256 };
+/* 20-bit globally unique carrier identity, 37-bit per-carrier generation,
+ * 7-bit stack slot. Exhaustion drops observations, never reuses a token.
+ */
+#define ORES_TRACE_MAX_CARRIER_ID ((UINT64_C(1) << 20) - 1)
+#define ORES_TRACE_MAX_GENERATION ((UINT64_C(1) << 37) - 1)
 typedef struct {
     uint64_t token;
     uint64_t start_ns;
 } OresNativeTelemetryFrame;
 typedef struct {
+    uint64_t carrier_id;
     uint64_t next_id;
     uint32_t depth;
     uint64_t started;
@@ -22,7 +28,27 @@ typedef struct {
 } OresNativeTelemetryCarrier;
 
 static atomic_int ores_telemetry_enabled = ATOMIC_VAR_INIT(0);
+static atomic_uint_fast64_t ores_telemetry_next_carrier = ATOMIC_VAR_INIT(1);
 static _Thread_local OresNativeTelemetryCarrier ores_telemetry_carrier;
+
+/* Each carrier receives a unique, never-reused ID before its first span.
+ * No allocation, OS thread-ID reuse, or host-pointer identity is involved.
+ * The compare/exchange saturates instead of wrapping to a previously used ID.
+ */
+static uint64_t ores_telemetry_carrier_id(OresNativeTelemetryCarrier* c) {
+    if (c->carrier_id != 0) return c->carrier_id;
+    uint_fast64_t next = atomic_load_explicit(
+            &ores_telemetry_next_carrier, memory_order_relaxed);
+    while (next <= ORES_TRACE_MAX_CARRIER_ID) {
+        if (atomic_compare_exchange_weak_explicit(
+                &ores_telemetry_next_carrier, &next, next + 1,
+                memory_order_relaxed, memory_order_relaxed)) {
+            c->carrier_id = (uint64_t)next;
+            return c->carrier_id;
+        }
+    }
+    return 0;
+}
 
 static uint64_t ores_telemetry_monotonic_ns(void) {
     struct timespec time;
@@ -47,12 +73,14 @@ uint64_t ores_native_telemetry_span_begin(const char* operation, uint64_t length
     OresNativeTelemetryCarrier* c = &ores_telemetry_carrier;
     if (operation == NULL || length == 0 || length > ORES_TRACE_MAX_NAME_BYTES
             || c->depth >= ORES_TRACE_MAX_DEPTH
-            || c->next_id >= (UINT64_MAX >> 7)) {
+            || c->next_id >= ORES_TRACE_MAX_GENERATION
+            || ores_telemetry_carrier_id(c) == 0) {
         ++c->dropped;
         return 0;
     }
     const uint64_t id = ++c->next_id;
-    const uint64_t token = (id << 7) | (uint64_t)(c->depth + 1);
+    const uint64_t token = (c->carrier_id << 44) | (id << 7)
+            | (uint64_t)(c->depth + 1);
     OresNativeTelemetryFrame* frame = &c->frames[c->depth++];
     frame->token = token;
     frame->start_ns = ores_telemetry_monotonic_ns();
