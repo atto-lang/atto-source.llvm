@@ -34,6 +34,23 @@ for opt in 0 2; do
     exit 1
   fi
 done
+# Lowercase operator words remain ordinary user identifiers (not keywords).
+identifier_ir="$tmp/keyword-identifiers.ll"
+"$compiler" "$fixtures/keyword-identifiers.atto" > "$identifier_ir"
+if [[ ! -s "$identifier_ir" ]]; then
+  echo "compiler emitted empty IR for keyword identifiers" >&2
+  exit 1
+fi
+for opt in 0 2; do
+  binary="$tmp/identifiers-O$opt"
+  "$clang" "-O$opt" -x ir "$identifier_ir" -o "$binary"
+  status=0
+  "$binary" || status=$?
+  if [[ "$status" -ne 42 ]]; then
+    echo "identifier fixture returned $status at O$opt, expected 42" >&2
+    exit 1
+  fi
+done
 for name in reject-int-and reject-int-or reject-int-xor reject-single-caret reject-bare-pipe reject-bare-ampersand; do
   out="$tmp/$name.ll"
   diagnostic="$tmp/$name.stderr"
