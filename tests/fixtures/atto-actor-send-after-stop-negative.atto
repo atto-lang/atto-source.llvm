@@ -1,0 +1,14 @@
+// Admission must fail before IR: a stopped actor cannot receive DATA.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const worker = spawn Worker();
+  stop worker;
+  worker.send(1);
+  return 43;
+}
