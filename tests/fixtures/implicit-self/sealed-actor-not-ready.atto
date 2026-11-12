@@ -1,0 +1,9 @@
+define actor WalWriterActor as
+  state { let int accepted_operations = 0; }
+  critical admit_append(): bool {
+    return handle_state(|borrow mut s| -> bool {
+      s.accepted_operations += 1;
+      return true;
+    });
+  }
+end
