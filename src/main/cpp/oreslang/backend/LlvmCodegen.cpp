@@ -2,6 +2,7 @@
 #include "oreslang/backend/NativeFlatClasses.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
+#include "oreslang/frontend/NativeScalarSpecialization.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 #include "oreslang/runtime/OresIsolateAbi.h"
 
@@ -72,6 +73,10 @@ struct RegionMoveLowering {
     const NativeClassLayouts* layouts = nullptr;
     const Program* sum_program = nullptr;
     llvm::FunctionCallee sum_check;
+    // Compiler-frozen scalar direct targets, never a runtime selector table.
+    const NativeI64DispatchImage* frozen_scalar_dispatch = nullptr;
+    const std::unordered_map<std::string, llvm::Function*>* frozen_scalar_callees = nullptr;
+    const std::unordered_map<std::string, std::string>* frozen_scalar_symbols = nullptr;
 };
 
 llvm::Value* receiver_array_region(const Expression& receiver, const RegionMoveLowering* moves) {
@@ -648,7 +653,32 @@ llvm::Value* lower(const Expression& expr,
             return value;
         }
         case Expression::Kind::Call: {
-            llvm::Function* callee = functions.at(native_function_slot(expr.name, expr.arguments.size()));
+            const std::string call_selector = native_function_slot(
+                expr.name, expr.arguments.size());
+            llvm::Function* callee = functions.at(call_selector);
+            if (moves && moves->frozen_scalar_dispatch) {
+                const auto* witness = moves->frozen_scalar_dispatch->find_direct(call_selector);
+                if (witness) {
+                    if (!moves->frozen_scalar_callees || !moves->frozen_scalar_symbols)
+                        throw std::runtime_error("native AOT static call lacks frozen target ledger");
+                    const auto frozen_callee = moves->frozen_scalar_callees->find(call_selector);
+                    const auto frozen_symbol = moves->frozen_scalar_symbols->find(call_selector);
+                    if (frozen_callee == moves->frozen_scalar_callees->end() ||
+                        frozen_symbol == moves->frozen_scalar_symbols->end() ||
+                        frozen_callee->second != callee)
+                        throw std::runtime_error("native AOT static call callee identity mismatch");
+                    std::vector<std::string> formal_labels;
+                    formal_labels.reserve(witness->parameter_abi.size());
+                    if (callee->arg_size() < witness->parameter_abi.size())
+                        throw std::runtime_error("native AOT static call formal ABI mismatch");
+                    for (std::size_t i = 0; i < witness->parameter_abi.size(); ++i)
+                        formal_labels.push_back(callee->getArg(i)->getName().str());
+                    verify_native_i64_scalar_call_witness(
+                        *witness, call_selector, frozen_symbol->second,
+                        callee->getName().str(), expr.arguments.size(), formal_labels,
+                        callee->getLinkage() == llvm::GlobalValue::InternalLinkage);
+                }
+            }
             const std::vector<std::size_t> no_hidden;
             const auto& hidden = moves && moves->class_array_parameters
                 ? moves->class_array_parameters->at(native_function_slot(expr.name, expr.arguments.size())) : no_hidden;
@@ -1168,19 +1198,30 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // Unique free functions retain their ABI symbol, overloaded families use arity slots.
     std::unordered_map<std::string, std::size_t> family_sizes;
     for (const auto& fn : source.functions) ++family_sizes[fn.name];
+    // The existing typed native frontend admits concrete int generic
+    // arguments only. Freeze a canonical, bounded one-per-declaration
+    // specialization map before emitting any function bodies.
+    const auto frozen_i64_dispatch = freeze_native_i64_dispatch_image(source);
+    // The frozen image carries exact compiler-owned selectors, concrete type
+    // tuples, bounded closure evidence and symbol suffixes. Do not replace
+    // it with JIT profile data or a runtime name registry.
+    std::unordered_set<std::string> emitted_function_symbols;
+    std::unordered_map<std::string, llvm::Function*> frozen_scalar_callees;
+    std::unordered_map<std::string, std::string> frozen_scalar_symbols;
+    std::size_t emitted_concrete_specializations = 0;
     for (const auto& fn : source.functions) {
-        const std::string base_symbol = cortex_m_target && fn.name == "main"
-            ? "oreslang_cortexm_bootstrap"
-            : (native_main && source.module.empty() && fn.name == "main"
-            ? guest_main_symbol
-            : (source.module.empty() ? fn.name : source.module + "." + fn.name));
-        // Overloaded source selectors erase the hidden receiver. Keep the
-        // internal ABI parameter list and lookup count unchanged.
-        const std::size_t source_arity = native_source_value_arity(
-            fn.parameters.size(), !fn.method_owner.empty());
-        const std::string symbol = family_sizes.at(fn.name) > 1
-            ? native_function_slot(base_symbol, source_arity)
-            : base_symbol;
+        const auto* specialization = frozen_i64_dispatch.find_direct(
+            native_function_slot(fn.name, fn.parameters.size()));
+        // Single compiler-owned symbol planner covers qualified module names,
+        // overload slots, concrete generic ABI suffixes and reserved runtime
+        // names. Do this before LLVM is allowed to silently uniquify a global.
+        const std::string symbol = plan_native_aot_function_symbol(
+            source, fn, frozen_i64_dispatch, family_sizes.at(fn.name),
+            native_main, cortex_m_target);
+        if (!emitted_function_symbols.insert(symbol).second)
+            throw std::runtime_error("native AOT emitted function symbol collision");
+        if (module.getNamedValue(symbol))
+            throw std::runtime_error("native AOT direct dispatch linker symbol collision");
         std::vector<llvm::Type*> argument_types;
         for (const auto& param : fn.parameters)
             argument_types.push_back(param.class_name.empty()
@@ -1199,13 +1240,57 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         llvm::FunctionType* signature = llvm::FunctionType::get(
             fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
             argument_types, false);
+        if (specialization != nullptr) {
+            // Compare the LLVM physical ABI to the independently frozen
+            // typed parameter modes before binding the direct-call symbol.
+            // Hidden collection-region pointers and owned-return slots are
+            // compiler-generated ABI parameters. Demand the *exact* count:
+            // matching only explicit source arguments would silently allow
+            // a dropped or forged trailing ownership parameter.
+            std::size_t frozen_hidden_regions = 0;
+            for (const auto& param : specialization->parameter_abi)
+                if (!param.class_name.empty() && class_has_arrays.at(param.class_name))
+                    ++frozen_hidden_regions;
+            const std::size_t frozen_result_slots =
+                class_owns_arrays(specialization->return_class) ? 2 : 0;
+            if (hidden.size() != frozen_hidden_regions ||
+                (owning ? 2u : 0u) != frozen_result_slots ||
+                signature->getNumParams() !=
+                    specialization->parameter_abi.size() +
+                    frozen_hidden_regions + frozen_result_slots ||
+                signature->getReturnType()->isVoidTy() != specialization->returns_void ||
+                (!specialization->returns_void &&
+                 signature->getReturnType() != i64))
+                throw std::runtime_error("native AOT specialized LLVM function ABI mismatch");
+            for (std::size_t i = 0; i < specialization->parameter_abi.size(); ++i) {
+                const auto& param = specialization->parameter_abi[i];
+                llvm::Type* expected = param.class_name.empty()
+                    ? (param.mode == Parameter::Mode::Value ? i64 : loan_ptr)
+                    : native_pointer_type(context, class_types.at(param.class_name));
+                if (signature->getParamType(i) != expected)
+                    throw std::runtime_error("native AOT specialized LLVM parameter ABI mismatch");
+            }
+        }
         llvm::Function* declaration = llvm::Function::Create(
             signature,
             (fn.native_internal || fn.async_source_i64 ||
-             !fn.c_export_u32_symbol.empty())
+             !fn.c_export_u32_symbol.empty() ||
+             specialization != nullptr)
                 ? llvm::Function::InternalLinkage
                 : llvm::Function::ExternalLinkage,
             symbol, module);
+        // LLVM may silently uniquify a symbol after a collision with a
+        // runtime/import declaration. That would sever the frozen dispatch
+        // target even when our source-function symbol set is collision-free.
+        if (declaration->getName().str() != symbol)
+            throw std::runtime_error("native AOT direct dispatch linker symbol collision");
+        if (specialization != nullptr) {
+            const auto selector = native_function_slot(fn.name, fn.parameters.size());
+            if (!frozen_scalar_callees.emplace(selector, declaration).second ||
+                !frozen_scalar_symbols.emplace(selector, symbol).second)
+                throw std::runtime_error("duplicate native AOT frozen callee ledger identity");
+            ++emitted_concrete_specializations;
+        }
         // Forward references must already expose parameter labels.
         std::size_t label_index = 0;
         for (auto& formal : declaration->args()) {
@@ -1215,8 +1300,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             else formal.setName(label_index == fn.parameters.size() + hidden.size() ? "$result" : "$result.region");
             ++label_index;
         }
-        declarations.emplace(native_function_slot(fn.name, fn.parameters.size()), declaration);
+        if (!declarations.emplace(native_function_slot(fn.name, fn.parameters.size()),
+                                  declaration).second)
+            throw std::runtime_error("native AOT duplicate declaration selector");
     }
+    if (emitted_concrete_specializations != frozen_i64_dispatch.direct_targets.size())
+        throw std::runtime_error("native AOT frozen direct dispatch image incomplete at emission");
     for (const auto& fn : source.functions) {
         llvm::Function* function = declarations.at(native_function_slot(fn.name, fn.parameters.size()));
         llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", function);
@@ -1433,6 +1522,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         region_moves.layouts = &layouts;
         region_moves.sum_program = &source;
         region_moves.sum_check = sum_check;
+        region_moves.frozen_scalar_dispatch = &frozen_i64_dispatch;
+        region_moves.frozen_scalar_callees = &frozen_scalar_callees;
+        region_moves.frozen_scalar_symbols = &frozen_scalar_symbols;
 
         std::unordered_map<std::string, llvm::Value*> source_task_handles;
         for (const auto& task : fn.source_tasks) {

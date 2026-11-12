@@ -4200,10 +4200,26 @@ private:
         if (token_.text != "<") return false;
         Lexer probe = lexer_; // already positioned immediately after '<'
         std::size_t budget = 0;
+        std::size_t nested = 0;
+        // Look ahead through nested type arguments, even though this native
+        // scalar compiler deliberately rejects their concrete ABI. Otherwise
+        // an unsupported call such as fixed<Array<int>>() can be misparsed as
+        // a comparison/shift expression and leak an unrelated diagnostic.
+        // Keep this probe bounded; it does not allocate or admit nested types.
         while (++budget <= 64) {
             const Token next = probe.next();
             if (next.kind == Kind::End) return false;
-            if (next.text == ">") return probe.next().text == "(";
+            if (next.text == "<") {
+                if (++nested > 16) return false;
+                continue;
+            }
+            if (next.text == ">") {
+                if (nested != 0) {
+                    --nested;
+                    continue;
+                }
+                return probe.next().text == "(";
+            }
             if (next.text == "," || next.text == "=" || next.text == "_" ||
                     next.text == "int" || next.kind == Kind::Identifier)
                 continue;
