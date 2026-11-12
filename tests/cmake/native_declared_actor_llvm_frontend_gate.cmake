@@ -1,7 +1,7 @@
 # Exact-source native AOT smoke and deliberately unsupported actor source.
 # LLVM IR is written only for the supported scalar guest, never for an
 # unverified declaration-only actor. No Java runtime or Python is used.
-foreach(required COMPILER CLANG POSITIVE NEGATIVE OUTPUT_DIR)
+foreach(required COMPILER CLANG POSITIVE NEGATIVE SOURCE_DIR OUTPUT_DIR)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     message(FATAL_ERROR "missing mandatory ${required}")
   endif()
@@ -58,4 +58,30 @@ endif()
 if(NOT forbidden_ir STREQUAL "")
   message(FATAL_ERROR "LLVM leaked partial IR for an unsupported actor")
 endif()
-message(STATUS "LLVM use namespace real scalar AOT PASS (exit 42); actor codegen still gated")
+# Every constituent is a separate same-namespace source unit. Until
+# compiler-owned manifest/linking exists none may accidentally compile alone
+# or emit partial IR. The nominal actor gets the precise diagnostic above.
+foreach(unit actor contract state increment get_count)
+  set(source "${SOURCE_DIR}/${unit}.atto")
+  if(NOT EXISTS "${source}")
+    message(FATAL_ERROR "missing cross-file declared actor source ${source}")
+  endif()
+  execute_process(
+    COMMAND "${COMPILER}" "${source}"
+    RESULT_VARIABLE rejected
+    OUTPUT_VARIABLE leaked_ir
+    ERROR_VARIABLE diagnostics
+  )
+  if("${rejected}" STREQUAL "0")
+    message(FATAL_ERROR "unsafe standalone ${unit}.atto compiled without actor linker")
+  endif()
+  if(NOT leaked_ir STREQUAL "")
+    message(FATAL_ERROR "partial LLVM IR leaked for ${unit}.atto")
+  endif()
+  if("${unit}" STREQUAL "actor"
+          AND NOT diagnostics MATCHES "DECLARED_ACTOR_CODEGEN_UNSUPPORTED")
+    message(FATAL_ERROR "nominal actor missing fail-closed diagnostic: ${diagnostics}")
+  endif()
+endforeach()
+message(STATUS "LLVM use namespace real scalar AOT PASS (exit 42); all five unlowered actor units rejected")
+
