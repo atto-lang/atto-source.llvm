@@ -101,7 +101,9 @@ std::size_t template_interpolation_close(std::string_view source, std::size_t fr
             at = template_close(source, at + 1, nesting + 1, origin) + 1;
         } else if (source.substr(at, 2) == "//") {
             at += 2;
-            while (at < source.size() && source[at] != '\n') ++at;
+            // Keep template interpolation comments consistent with native
+            // line-comment lexing on both Unix LF and standalone/CRLF input.
+            while (at < source.size() && source[at] != '\n' && source[at] != '\r') ++at;
         } else if (source.substr(at, 2) == "/*") {
             at = skip_template_block_comment(source, at + 2, origin);
         } else if (ch == '{') {
