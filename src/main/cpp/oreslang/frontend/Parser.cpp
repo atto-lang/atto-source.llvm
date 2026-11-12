@@ -3334,25 +3334,32 @@ private:
             }
             Statement statement;
             statement.offset = token_.offset;
-            // Java/canonical spelling `worker.stop();` is the same request as
-            // the native `stop worker;` statement on a direct ActorRef. `stop` is
-            // a keyword, so recognise it by lookahead before expression parsing.
+            // `worker.stop()` keeps immediate/sealed cancellation semantics.
+            // `worker.graceful_stop()` is a separate, explicit linear
+            // retirement that drains accepted DATA before physical completion.
+            // Both are compiler-owned direct ActorRef effects, never ambient
+            // methods that can be forged through an ordinary class receiver.
             if (token_.kind == Kind::Identifier && !reserved(token_.text) && [&] {
                     Lexer look = lexer_;
-                    return look.next().text == "." && look.next().text == "stop"
+                    if (look.next().text != ".") return false;
+                    const auto operation = look.next().text;
+                    return (operation == "stop" || operation == "graceful_stop")
                         && look.next().text == "(";
                 }()) {
                 const std::string reference = identifier();
                 require(".");
-                require("stop");
+                const bool graceful = accept("graceful_stop");
+                if (!graceful) require("stop");
                 require("(");
                 require(")");
                 require(";");
                 if (!value.done_await_actor.empty())
                     fail("actor effects after await get_done are unsupported");
                 value.actor_stops.push_back(reference);
-                value.actor_actions.push_back({ActorAction::Kind::Stop,
-                                               value.actor_stops.size() - 1});
+                value.actor_actions.push_back({
+                    graceful ? ActorAction::Kind::GracefulStop
+                             : ActorAction::Kind::Stop,
+                    value.actor_stops.size() - 1});
                 continue;
             }
             auto action = primary();
@@ -5522,6 +5529,17 @@ private:
                     const auto& stop = fn.actor_stops.at(action.index);
                     if (!live_actors.erase(stop))
                         throw std::runtime_error("invalid or repeated actor stop '" + stop + "'");
+                }
+            }
+            // graceful_stop() synchronously waits for physical drain on the
+            // trusted outer main thread. Combining it with get_done's
+            // continuation lowerer is unsupported; do not silently use the
+            // sealed request_stop ABI or double-join the ActorRef.
+            if (!fn.done_await_actor.empty()) {
+                for (const auto& action : fn.actor_actions) {
+                    if (action.kind == ActorAction::Kind::GracefulStop)
+                        throw std::runtime_error(
+                            "native graceful_stop with await get_done requires separate continuation lowering");
                 }
             }
             if (!fn.done_await_actor.empty() && live_actors.count(fn.done_await_actor))
