@@ -182,6 +182,7 @@ typedef struct {
     OresNativeActorWakeFn on_wake;     /* optional; enables wake escrow */
     void* ctx;
     OresNativeSchedulerLockProtocol lock_protocol;
+    OresNativeActorWakeSettledFn after_wake; /* optional, host-only */
 } OresNativeActorSchedulerOptions;
 /* Superset of every open_* variant. Returns NULL for invalid options,
  * including an unknown lock protocol. */
