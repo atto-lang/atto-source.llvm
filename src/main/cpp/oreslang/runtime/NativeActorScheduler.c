@@ -686,7 +686,8 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_options(
     if (protocol != ORES_NATIVE_SCHEDULER_LOCK_PRIORITY_INHERIT
             && protocol != ORES_NATIVE_SCHEDULER_LOCK_THROUGHPUT)
         return NULL;
-    if (!callback || !actors || actors > ORES_NATIVE_SCHEDULER_MAX_ACTORS
+    if ((options->after_wake != NULL && wake_callback == NULL)
+        || !callback || !actors || actors > ORES_NATIVE_SCHEDULER_MAX_ACTORS
         || actors > SIZE_MAX / ORES_NATIVE_WAKE_CREDITS_PER_ACTOR
         || !capacity || capacity > 65536
         || !workers || workers > MAX_CARRIERS || actors > SIZE_MAX / capacity)
