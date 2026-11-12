@@ -16,7 +16,7 @@ typedef struct {
     pthread_mutex_t mutex;
     pthread_cond_t cv;
     int mode; /* 1=nest+external completion, 2=STOP while suspended */
-    int suspended, child_done, parent_done;
+    int suspended, child_done, parent_done, allow_parent_wake_exit;
     atomic_int parent_turns, child_turns, control_turns, errors;
 } Fixture;
 
@@ -70,6 +70,13 @@ static void on_wake(void* opaque, size_t actor,
             if (!ores_native_actor_task_finish(&f->parent))
                 atomic_fetch_add(&f->errors, 1);
             signal_host(f, &f->parent_done);
+            /* Host-only deterministic barrier: prove task physical DONE is
+             * NOT visible while the final guest WAKE is still on-stack.
+             * This is not a production guest blocking pattern. */
+            CHECK(pthread_mutex_lock(&f->mutex) == 0);
+            while (!f->allow_parent_wake_exit)
+                CHECK(pthread_cond_wait(&f->cv, &f->mutex) == 0);
+            CHECK(pthread_mutex_unlock(&f->mutex) == 0);
         } else atomic_fetch_add(&f->errors, 1);
     } else if (wake.continuation_slot == 2) {
         if (!ores_native_actor_task_claim_wake(&f->child, wake)) {
@@ -138,6 +145,8 @@ int main(void) {
         &f.parent, 1001, ORES_NATIVE_WAKE_READY));
     CHECK(!ores_native_actor_scheduler_in_any_actor_turn());
     wait_host(&f, &f.parent_done);
+    CHECK(!ores_native_actor_task_physically_done(&f.parent));
+    signal_host(&f, &f.allow_parent_wake_exit);
     /* Only the scheduler's post-WAKE retirement hook can complete getDone.
      * An in-callback signal alone would be an insufficient physical proof. */
     CHECK(ores_native_actor_scheduler_drain(f.scheduler));
