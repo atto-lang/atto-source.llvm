@@ -18,3 +18,24 @@ The equivalent Java/Graal internal assumption gate is in [PR #2989](https://gith
 6. For hybrid/JIT targets only: a **future governed** ORC JIT could compile a new instrumented version of a function from retained verified typed MIR, publish it through a generation-fenced dispatch cell and reclaim only after frame quiescence. Sealed AOT and hard-RT targets must use precompiled hooks or redeploy; no executable memory patching or monkey patching.
 
 A local independent GCC 14 C++17 compile/run of the gate logic passed. It is **not an exact-source CMake/CTest or LLVM guest receipt**. No five-backend parity claim is made.
+
+
+## W3C wire-context native ABI extension
+
+`src/main/cpp/oreslang/runtime/NativeTraceParentV00.hpp` now defines
+a small, allocation-free `NativeTraceParentV00` (16-byte trace ID, 8-byte
+span ID and flags) with strict fixed-width version-00
+`parse_traceparent_v00`, `format_traceparent_v00`, nonzero-ID validation and
+`trace_child_context` (caller must supply its own securely minted child ID).
+It is **not** the existing `NativeLogicalTrace` execution/continuation ancestry;
+they serve distinct purposes, and no pointer or actor payload enters the wire
+context. This helper does **not** generate secure entropy and does **not**
+support arbitrary versions, `tracestate`, or export.
+
+`tests/native_traceparent_v00_test.cpp` is registered in the
+standard and LLVM-free host-only CMake profiles. A separate **isolated
+C++17 equivalent-source smoke** compiled and ran successfully with GCC and
+Clang; an exact-head LLVM repository CMake/CTest execution has NOT occurred.
+The LLVM-native Atto guest cannot yet parse `using telemetry.span`, execute
+native source-level HTTP/actor propagation, or emit OTLP; full conformance
+remains **NOT_IMPLEMENTED**.
