@@ -2714,6 +2714,23 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             b.SetInsertPoint(null_invalid);
             return_i32(b, -1);
             b.SetInsertPoint(nonnull);
+            // The next() ABI writes a value through 'out' and advances the
+            // two-word frame. Disallow output aliasing either frame slot:
+            // otherwise out=frame could forge state and out=frame+1 could
+            // overwrite the just-updated index (violating single delivery).
+            auto* frame_index_addr = b.CreateInBoundsGEP(
+                i64, frame, llvm::ConstantInt::get(i64, 1));
+            auto* output_disjoint = b.CreateAnd(
+                b.CreateICmpNE(out, frame),
+                b.CreateICmpNE(out, frame_index_addr));
+            auto* alias_invalid = llvm::BasicBlock::Create(
+                context, "frame.output.alias", next);
+            auto* alias_valid = llvm::BasicBlock::Create(
+                context, "frame.output.disjoint", next);
+            b.CreateCondBr(output_disjoint, alias_valid, alias_invalid);
+            b.SetInsertPoint(alias_invalid);
+            return_i32(b, -1);
+            b.SetInsertPoint(alias_valid);
             auto* state = b.CreateLoad(i64, frame, "state");
             auto* active = llvm::BasicBlock::Create(context, "active", next);
             auto* done = llvm::BasicBlock::Create(context, "done", next);
