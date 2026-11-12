@@ -276,6 +276,12 @@ int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* sch
 /* Exact live actor identity for trusted callback/FFI bridges only. */
 int ores_native_actor_scheduler_is_current_actor(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+/* Source Task admission: authenticated, RUNNING actor DATA or successful
+ * READY WAKE only. Never supervisor CONTROL, cancellation-only WAKE, stopped
+ * incarnation, external producer, or another actor carrier. This is merely a
+ * preflight: reserve_wake is the actual linearized STOP/admission gate. */
+int ores_native_actor_scheduler_can_start_task(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
 /* Original DATA-mail admission sequence for the current authenticated
  * physical actor carrier only. Returns 0 (without modifying *out_sequence)
  * on any non-DATA, STOP, foreign actor/thread or nonexecuting context.
