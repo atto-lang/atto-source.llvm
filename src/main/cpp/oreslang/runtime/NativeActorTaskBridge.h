@@ -31,6 +31,7 @@ typedef struct {
     OresNativeActorScheduler* scheduler;
     OresNativeActorRef actor;
     OresNativeWakeTicket ticket;
+    OresNativeWakeTicket active_ticket; /* guest callback pending physical ACK */
     uint64_t task_slot;
     uint64_t task_generation;
     uint64_t code_generation;
