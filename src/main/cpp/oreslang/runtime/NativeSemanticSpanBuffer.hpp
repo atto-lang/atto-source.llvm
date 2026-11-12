@@ -48,13 +48,15 @@ public:
             bool tracing_enabled) noexcept {
         // No clock, CAS, event allocation or pointer dereference when off.
         if (!tracing_enabled || !span.context.sampled()) return false;
-        if (slots_ == nullptr || capacity_ == 0
+        if (slots_ == nullptr || capacity_ == 0 || capacity_ > 65536
                 || trace_all_zero(span.context.trace_id)
                 || trace_all_zero(span.context.span_id)
+                || span.parent_span_id == span.context.span_id
                 || span.operation_id == 0
                 || span.kind == 0 || span.kind > 5
                 || span.start_unix_ns == 0
                 || span.end_unix_ns < span.start_unix_ns
+                || (span.http_status != 0 && span.http_status < 100)
                 || span.http_status > 599) {
             return false;
         }
