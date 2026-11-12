@@ -41,7 +41,7 @@ fn verify_guest_source(source: &str) {
     assert!(source.contains("let stored: int = 0;"));
     assert!(source.contains("let present: int = 0;"));
     assert!(source.contains("let digest: int = 0;"));
-    assert!(source.contains("digit = remaining / 1000;"));
+    assert!(source.contains("digit = (remaining >= 5000) ? 5"));
     assert!(source.contains("remaining = batch;"));
     assert!(source.contains("let digit: int = 0;"));
     assert!(source.contains("digest = digest * 1000"));

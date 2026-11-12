@@ -16,7 +16,7 @@ define actor NativeBatchedScalarRedis as {
   pub fnc on_message(int batch): int {
     remaining = batch;
 
-    digit = remaining / 1000;
+    digit = (remaining >= 5000) ? 5 : ((remaining >= 4000) ? 4 : ((remaining >= 3000) ? 3 : ((remaining >= 2000) ? 2 : ((remaining >= 1000) ? 1 : 0))));
     remaining = remaining - digit * 1000;
     previously_present = present;
     stored = (digit eq 1) ? 7 : ((digit eq 2) ? 9 : stored);
@@ -28,7 +28,7 @@ define actor NativeBatchedScalarRedis as {
       ((digit eq 4) ? 300 + previously_present :
       ((digit eq 5) ? 401 : 0)))));
 
-    digit = remaining / 100;
+    digit = (remaining >= 500) ? 5 : ((remaining >= 400) ? 4 : ((remaining >= 300) ? 3 : ((remaining >= 200) ? 2 : ((remaining >= 100) ? 1 : 0))));
     remaining = remaining - digit * 100;
     previously_present = present;
     stored = (digit eq 1) ? 7 : ((digit eq 2) ? 9 : stored);
@@ -40,7 +40,7 @@ define actor NativeBatchedScalarRedis as {
       ((digit eq 4) ? 300 + previously_present :
       ((digit eq 5) ? 401 : 0)))));
 
-    digit = remaining / 10;
+    digit = (remaining >= 50) ? 5 : ((remaining >= 40) ? 4 : ((remaining >= 30) ? 3 : ((remaining >= 20) ? 2 : ((remaining >= 10) ? 1 : 0))));
     remaining = remaining - digit * 10;
     previously_present = present;
     stored = (digit eq 1) ? 7 : ((digit eq 2) ? 9 : stored);
@@ -52,7 +52,7 @@ define actor NativeBatchedScalarRedis as {
       ((digit eq 4) ? 300 + previously_present :
       ((digit eq 5) ? 401 : 0)))));
 
-    digit = remaining / 1;
+    digit = (remaining >= 5) ? 5 : ((remaining >= 4) ? 4 : ((remaining >= 3) ? 3 : ((remaining >= 2) ? 2 : ((remaining >= 1) ? 1 : 0))));
     remaining = remaining - digit * 1;
     previously_present = present;
     stored = (digit eq 1) ? 7 : ((digit eq 2) ? 9 : stored);
