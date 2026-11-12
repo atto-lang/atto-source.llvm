@@ -1,6 +1,7 @@
-// Real Atto source: two independent actor-owned scalar states and owned DATA.
-// Existing native LLVM on_message is transitional; this is not the canonical
-// namespace declare-actor / ActorMail<T> / critical-state ABI.
+// Two distinct native Atto actor-owned heaps, four admitted DATA messages.
+// Immediate stop() cancels queued DATA, so require explicit graceful_stop()
+// which seals new sends, drains accepted work and joins physical termination.
+// This is transitional inline on_message, not multi-file declare actor.
 define actor Worker as {
   let total: int = 0;
   pub fnc on_message(int n): int {
@@ -15,7 +16,7 @@ pub fnc main(): int {
   b.send(5);
   a.send(2);
   b.send(6);
-  stop a;
-  stop b;
+  a.graceful_stop();
+  b.graceful_stop();
   return 43;
 }
