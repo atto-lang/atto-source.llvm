@@ -1012,6 +1012,14 @@ void validate_i64_ownership(Program& program) {
                     throw std::runtime_error("ownership violation: branch local shadows live owner at byte " +
                         std::to_string(local.offset));
                 if (local.initializer) check_value(*local.initializer, state, functions);
+                if (local.native_split_literal) {
+                    if (!local.int_array || !local.split_source || !local.split_delimiter ||
+                            local.array_element_type != ScalarType::String ||
+                            !local.owner_mutable)
+                        throw std::runtime_error("ownership violation: malformed scoped String split owner");
+                    check_value(*local.split_source, state, functions);
+                    check_value(*local.split_delimiter, state, functions);
+                }
                 state.emplace(local.name, scoped_entry(local));
                 return;
             }

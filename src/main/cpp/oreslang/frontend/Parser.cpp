@@ -2668,6 +2668,28 @@ private:
         std::function<std::vector<Statement>(bool, bool)> branch_arm;
         std::function<Statement()> dispatch_statement;
         std::function<Statement()> foreach_statement;
+        std::function<void(Statement&, bool)> parse_else_elif;
+        parse_else_elif = [&](Statement& current, bool then_form) {
+            if (accept("elif")) {
+                // Lower elif as the else predecessor of a fresh checked
+                // conditional. Exactly one final fi closes the full chain.
+                if (!then_form) fail("native elif requires an if/then header");
+                Statement nested; nested.kind = Statement::Kind::Conditional;
+                nested.offset = token_.offset;
+                nested.condition = expression();
+                if (!accept_keyword_if_header())
+                    fail("native elif requires a then header");
+                nested.then_statements = branch_arm(false, true);
+                parse_else_elif(nested, true);
+                current.else_statements.push_back(std::move(nested));
+            } else if (accept("else")) {
+                if (!then_form) require("{");
+                current.else_statements = branch_arm(false, then_form);
+                if (!then_form) require("}");
+            } else if (!then_form) {
+                fail("native braced if requires else");
+            }
+        };
         auto scoped_local = [&]() {
             Statement statement; statement.kind = Statement::Kind::ScopedLocal;
             statement.offset = token_.offset;
@@ -2677,17 +2699,32 @@ private:
             if (token_.text == "owned") fail("branch-local owned value requires destructor/drop lowering");
             auto local = std::make_unique<LocalBinding>(); local->offset = statement.offset;
             local->assignable = mutable_slot; local->owner_mutable = mutable_referent;
+            if (token_.kind == Kind::Identifier && peek_next().text == "=") {
+                // The canonical NATS validators put this binding *after* a
+                // guarded return; only this proven owned-array initializer
+                // admits an inferred type in structured source statements.
+                local->name = identifier(); require("=");
+                local->array_element_type = ScalarType::String;
+                parse_split_literal_initializer(*local);
+                require(";");
+                statement.branch_local = std::move(local); return statement;
+            }
             if (accept("Array")) {
                 local->owner_mutable = mutable_slot ? explicit_mutable : mutable_referent;
                 require("<"); array_element(*local); require(">");
                 local->int_array = true;
                 local->name = identifier(); require("=");
-                require("new"); require("Array"); require("<");
-                LocalBinding constructed; array_element(constructed); require(">");
-                if (constructed.array_element_type != local->array_element_type ||
-                        constructed.array_record_class != local->array_record_class)
-                    fail("array constructor element type mismatch");
-                require("("); require(")"); require(";");
+                if (token_.text == "new") {
+                    require("new"); require("Array"); require("<");
+                    LocalBinding constructed; array_element(constructed); require(">");
+                    if (constructed.array_element_type != local->array_element_type ||
+                            constructed.array_record_class != local->array_record_class)
+                        fail("array constructor element type mismatch");
+                    require("("); require(")");
+                } else {
+                    parse_split_literal_initializer(*local);
+                }
+                require(";");
                 statement.branch_local = std::move(local); return statement;
             }
             auto type_name = [&]() -> std::string {
@@ -2837,13 +2874,10 @@ private:
                 if (token_.text == "if" && !finally_scope) {
                     advance(); statement.kind = Statement::Kind::Conditional;
                     statement.condition = expression();
-                    if (accept_keyword_if_header()) {
-                        statement.then_statements = branch_arm(false, true);
-                        if (accept("else")) statement.else_statements = branch_arm(false, true);
-                    } else {
-                        require("{"); statement.then_statements = branch_arm(false, false); require("}");
-                        if (accept("else")) { require("{"); statement.else_statements = branch_arm(false, false); require("}"); }
-                    }
+                    const bool then_header = accept_keyword_if_header();
+                    if (then_header) statement.then_statements = branch_arm(false, true);
+                    else { require("{"); statement.then_statements = branch_arm(false, false); require("}"); }
+                    parse_else_elif(statement, then_header);
                     require("fi"); actions.push_back(std::move(statement)); continue;
                 }
                 if (finally_scope && (token_.text == "return" ||
@@ -3252,11 +3286,7 @@ private:
                     conditional.condition = std::move(condition);
                     conditional.then_statements = branch_arm(false, then_form);
                     if (!then_form) require("}");
-                    if (accept("else")) {
-                        if (!then_form) require("{");
-                        conditional.else_statements = branch_arm(false, then_form);
-                        if (!then_form) require("}");
-                    } else if (!then_form) require("else");
+                    parse_else_elif(conditional, then_form);
                     require("fi");
                     value.statements.push_back(std::move(conditional));
                 }
@@ -5564,6 +5594,13 @@ private:
                 if (stmt.kind == Statement::Kind::ScopedLocal) {
                     const LocalBinding& local = *stmt.branch_local;
                     if (local.initializer) validate_expression(*local.initializer, names, functions);
+                    if (local.native_split_literal) {
+                        if (!local.split_source || !local.split_delimiter ||
+                                !local.int_array || local.array_element_type != ScalarType::String)
+                            throw std::runtime_error("malformed native scoped split binding");
+                        validate_expression(*local.split_source, names, functions);
+                        validate_expression(*local.split_delimiter, names, functions);
+                    }
                     if (!names.insert(local.name).second)
                         throw std::runtime_error("duplicate branch-local name '" +
                             local.name + "' at byte " + std::to_string(local.offset));
@@ -5747,6 +5784,12 @@ private:
                     const LocalBinding& local = *stmt.branch_local;
                     if (local.initializer) require_scalar(*local.initializer, local.scalar_type,
                         "native branch-local initializer", env);
+                    if (local.native_split_literal) {
+                        require_scalar(*local.split_source, ScalarType::String,
+                            "native scoped String.split_literal receiver", env);
+                        require_scalar(*local.split_delimiter, ScalarType::String,
+                            "native scoped String.split_literal delimiter", env);
+                    }
                     scoped_type(local, env);
                     return;
                 }

@@ -916,7 +916,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         scan_string(s.expression.get()); scan_string(s.condition.get());
         scan_string(s.loop_step.get());
         scan_string(s.condition_lhs.get()); scan_string(s.condition_rhs.get());
-        if (s.branch_local) scan_string(s.branch_local->initializer.get());
+        if (s.branch_local) {
+            scan_string(s.branch_local->initializer.get());
+            scan_string(s.branch_local->split_source.get());
+            scan_string(s.branch_local->split_delimiter.get());
+        }
         for (const auto& child : s.then_statements) scan_statement(child);
         for (const auto& child : s.else_statements) scan_statement(child);
     };
@@ -2012,6 +2016,30 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 }
             } else builder.CreateStore(init, slot);
             if (!storage.emplace(local.name, slot).second) throw std::runtime_error("scoped value shadows existing storage");
+            if (local.native_split_literal) {
+                if (!local.int_array || !local.split_source || !local.split_delimiter ||
+                        !result.array_shadow || !array_region || !array_failure_status ||
+                        !array_failure)
+                    throw std::runtime_error("scoped split lacks verified native region ownership");
+                auto* source_string = lower(*local.split_source, builder, i64,
+                    storage, field_storage, declarations, &region_moves);
+                auto* delimiter = lower(*local.split_delimiter, builder, i64,
+                    storage, field_storage, declarations, &region_moves);
+                auto split = module.getOrInsertFunction("ores_string_split_literal_fill",
+                    llvm::FunctionType::get(llvm::Type::getInt32Ty(context),
+                        {i64, i64, native_ptr, i64}, false));
+                auto* status = builder.CreateCall(split,
+                    {source_string, delimiter, array_region, init},
+                    local.name + ".scoped.split.status");
+                auto* ok = llvm::BasicBlock::Create(context, "scoped.split.ok", function);
+                auto* failed = llvm::BasicBlock::Create(context, "scoped.split.failed", function);
+                builder.CreateCondBr(builder.CreateICmpEQ(status,
+                    llvm::ConstantInt::get(status->getType(), 0)), ok, failed);
+                builder.SetInsertPoint(failed);
+                builder.CreateStore(status, array_failure_status);
+                builder.CreateBr(array_failure);
+                builder.SetInsertPoint(ok);
+            }
             if (record) result.subobjects = register_subobjects(local.name, local.class_name, slot);
             return result;
         };

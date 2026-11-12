@@ -631,6 +631,30 @@ fn main() {
     // The pinned Java parser still requires an initializer for final class fields.
     let native_only = [
         // The pinned Java reference predates declare-type source syntax.
+        ("nats-split-after-guard-and-elif", r#"
+          fnc valid_tokens(String subject):bool {
+            if subject == "" then return false; fi
+            val parts = subject.split_literal(".");
+            for (let int i = 0; i < parts.size; i = i + 1) {
+              val String token = parts.get(i);
+              if token == ">" then
+                return false;
+              elif token != "*" then
+                if token == "" || token.contains_literal(">") then
+                  return false;
+                fi
+              fi
+            }
+            return true;
+          }
+          pub routine main():int{
+            return valid_tokens("foo.*") &&
+              valid_tokens("foo.bar") &&
+              !valid_tokens("") &&
+              !valid_tokens("foo..bar") &&
+              !valid_tokens("foo.>") &&
+              !valid_tokens("foo.x>y") ? 0 : 1;
+          }"#, ""),
         ("nats-string-split-literal-owned", r#"pub routine main():int{
           val String subject="orders..created.";
           val parts = subject.split_literal(".");
@@ -1009,6 +1033,9 @@ fn main() {
         ("nats-string-contains-int-needle", "pub routine main():int{val String s=\"abc\";return s.contains_literal(42)?0:1;}".to_owned(), foo.to_owned()),
         ("nats-string-contains-wrong-arity", "pub routine main():int{val String s=\"abc\";return s.contains_literal(\"a\",\"b\")?0:1;}".to_owned(), foo.to_owned()),
         ("nats-string-contains-named-needle-rejected", "pub routine main():int{val String s=\"abc\";return s.contains_literal(needle:\"a\")?0:1;}".to_owned(), foo.to_owned()),
+        ("nats-split-scoped-self-reference", "pub routine main():int{if true then stdio.print(\"x\");fi val parts=parts.split_literal(\".\");return parts.size;}".to_owned(), foo.to_owned()),
+        ("nats-split-scoped-int-receiver", "pub routine main():int{val int n=12;if n==12 then stdio.print(\"x\");fi val parts=n.split_literal(\".\");return parts.size;}".to_owned(), foo.to_owned()),
+        ("nats-split-scoped-wrong-array-element", "pub routine main():int{val String s=\"a.b\";if s==\"\" then return 1;fi val Array<int> parts=s.split_literal(\".\");return parts.size;}".to_owned(), foo.to_owned()),
         ("nats-split-wrong-receiver", "pub routine main():int{val int n=12;val parts=n.split_literal(\".\");return parts.size;}".to_owned(), foo.to_owned()),
         ("nats-split-int-delimiter", "pub routine main():int{val String s=\"a.b\";val parts=s.split_literal(42);return parts.size;}".to_owned(), foo.to_owned()),
         ("nats-split-empty-delimiter", "pub routine main():int{val String s=\"a.b\";val parts=s.split_literal(\"\");return parts.size;}".to_owned(), foo.to_owned()),
