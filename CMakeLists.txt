@@ -116,6 +116,38 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # An actual C11 native state gate, shared with LLVM's future typed
+    # handle_state lowering. This is HOST execution, not guest .atto dispatch.
+    add_executable(oreslang-declared-actor-critical-counter-test
+        tests/native_declared_actor_critical_counter_gate_test.c)
+    set_target_properties(oreslang-declared-actor-critical-counter-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_include_directories(oreslang-declared-actor-critical-counter-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-declared-actor-critical-counter-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_declared_actor_critical_counter_host_state_gate
+        COMMAND oreslang-declared-actor-critical-counter-test)
+    set_tests_properties(native_declared_actor_critical_counter_host_state_gate
+        PROPERTIES TIMEOUT 20)
+
+    # The first cross-backend namespace-header AOT receipt executes actual
+    # guest-generated LLVM IR with Clang. Declared actor source remains a
+    # separate strict negative codegen test until mailbox/loan MIR exists.
+    find_program(ORE_DECLARED_ACTOR_CLANG NAMES clang-20 clang-19 clang-18 clang-17 clang clang-16 clang-15 clang-14)
+    if(ORE_DECLARED_ACTOR_CLANG)
+        add_test(NAME native_use_namespace_scalar_aot_and_actor_codegen_gate
+            COMMAND "${CMAKE_COMMAND}"
+                "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                "-DCLANG=${ORE_DECLARED_ACTOR_CLANG}"
+                "-DPOSITIVE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/use-namespace-llvm-scalar-main.atto"
+                "-DNEGATIVE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/declared-actor-use-namespace-reject.atto"
+                "-DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/declared-actor-native-aot"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/native_declared_actor_llvm_frontend_gate.cmake")
+        set_tests_properties(native_use_namespace_scalar_aot_and_actor_codegen_gate
+            PROPERTIES TIMEOUT 90)
+    endif()
+
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
     add_executable(oreslang-native-sum-payload-admission-test
