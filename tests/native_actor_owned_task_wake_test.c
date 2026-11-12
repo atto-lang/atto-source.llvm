@@ -93,7 +93,7 @@ static void on_wake(void* opaque, size_t actor,
 static void after_wake(void* opaque, size_t actor,
         OresNativeWakeTicket wake) {
     Fixture* f = (Fixture*)opaque;
-    if (actor != 0 || ores_native_actor_scheduler_in_any_actor_turn()) {
+    if (actor != 0 || ores_native_actor_scheduler_is_current_carrier(f->scheduler)) {
         atomic_fetch_add(&f->errors, 1);
         return;
     }
@@ -139,11 +139,11 @@ int main(void) {
     CHECK(ores_native_actor_scheduler_send(f.scheduler, f.actor, 1));
     wait_host(&f, &f.suspended);
     wait_host(&f, &f.child_done);
-    CHECK(!ores_native_actor_scheduler_in_any_actor_turn());
+    CHECK(!ores_native_actor_scheduler_is_current_carrier(f->scheduler));
     CHECK(!ores_native_actor_task_publish(&f.parent, 9999, ORES_NATIVE_WAKE_READY));
     CHECK(ores_native_actor_task_publish(
         &f.parent, 1001, ORES_NATIVE_WAKE_READY));
-    CHECK(!ores_native_actor_scheduler_in_any_actor_turn());
+    CHECK(!ores_native_actor_scheduler_is_current_carrier(f->scheduler));
     wait_host(&f, &f.parent_done);
     CHECK(!ores_native_actor_task_physically_done(&f.parent));
     signal_host(&f, &f.allow_parent_wake_exit);
