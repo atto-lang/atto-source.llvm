@@ -578,6 +578,7 @@ static void* carrier(void* raw) {
         else if (kind == 1) s->wake_callback(s->context, i, wake_ticket, wake_outcome);
         else s->callback(s->context, i, payload);
         executing_wake_valid = 0;
+        executing_turn_kind = -1;
         executing_wake = (OresNativeWakeTicket){0};
         executing_wake_outcome = ORES_NATIVE_WAKE_FAILED;
         executing_actor = (OresNativeActorRef){0, 0, 0};
