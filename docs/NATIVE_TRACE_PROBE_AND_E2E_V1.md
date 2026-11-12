@@ -43,3 +43,30 @@ and does not execute Atto language source.
 The LLVM-native Atto guest cannot yet parse `using telemetry.span`, execute
 native source-level HTTP/actor propagation, or emit OTLP; full conformance
 remains **NOT_IMPLEMENTED**.
+
+
+## Bounded native semantic staging (host-only parity slice)
+
+`src/main/cpp/oreslang/runtime/NativeSemanticSpanBuffer.hpp` now
+provides caller-preallocated, fixed-capacity immutable
+`NativeCompletedSpan` staging with release/acquire published slots,
+nonblocking CAS reservations, saturating overflow accounting, sampled
+trace context, and numeric operations 201 SERVER, 501 ACTOR TURN and
+200 CLIENT. The hot-path record function does not allocate, read clocks,
+perform I/O, acquire a lock or call userland. It stores W3C ID bytes,
+not raw URLs, secrets or guest-owned pointers.
+
+`tests/native_semantic_span_buffer_test.cpp` is registered in the
+full and LLVM-free host-only CMake profiles. Both exact GitHub blobs
+`e9e00d7efa5c60b0d5dcb4792dec74b8afe8e008` (header) and
+`cb5f92dd152cb80c5ddb617148279c2ce4b9eddc` (test) were
+copied byte-for-byte and SHA-verified locally. GCC 14.2 and Clang 17
+compiled the real C++17 test under `-Wall -Wextra -Wpedantic -Werror`,
+`-UNDEBUG`, ASan and UBSan and both executions **passed**.
+The test verified one SERVER→ACTOR→CLIENT parent chain and concurrent
+800 producer calls with capacity 64 and 736 accounted drops.
+
+**Limit:** this is a host-only C++ native primitive. It is NOT currently
+wired to LLVM-generated Atto code, mailbox send/receive, trusted sampling,
+manual `using` scopes or OTLP; no complete LLVM compiler/guest test
+has run, so no five-backend parity can be claimed.
