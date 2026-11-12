@@ -590,6 +590,11 @@ int main(int argc, char** argv) {
                         throw std::runtime_error("cortex-m duplicate actor ref");
                 }
                 for (const auto& action : start.actor_actions) {
+                    // Cortex-M bootstrapping has no compiler-owned graceful
+                    // shutdown ABI. Never alias it to generic stop silently.
+                    if (action.kind == oreslang::ActorAction::Kind::GracefulStop)
+                        throw std::runtime_error(
+                            "cortex-m graceful actor stop requires verified native drain ABI");
                     std::string ref;
                     if (action.kind == oreslang::ActorAction::Kind::Send) {
                         if (action.index >= start.actor_sends.size())
