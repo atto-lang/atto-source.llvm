@@ -51,7 +51,7 @@ for opt in 0 2; do
     exit 1
   fi
 done
-for name in reject-int-and reject-int-or reject-int-xor reject-single-caret reject-bare-pipe reject-bare-ampersand; do
+for name in reject-int-and reject-int-or reject-int-xor reject-single-caret reject-spaced-caret reject-bare-pipe reject-bare-ampersand; do
   out="$tmp/$name.ll"
   diagnostic="$tmp/$name.stderr"
   if "$compiler" "$fixtures/$name.atto" >"$out" 2>"$diagnostic"; then
