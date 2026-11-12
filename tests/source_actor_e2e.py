@@ -24,7 +24,7 @@ def check_atto_source_blobs(fixtures):
         path = fixtures / name
         assert path.is_file() and not path.is_symlink(), ("untrusted fixture", name)
         raw = path.read_bytes()
-        blob = hashlib.sha1(b"blob " + str(len(raw)).encode("ascii") + b"\\0" + raw).hexdigest()
+        blob = hashlib.sha1(b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw).hexdigest()
         assert blob == expected, ("unexpected source blob", name, blob, expected)
 
 def run(cmd, **kw):
