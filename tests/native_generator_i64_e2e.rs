@@ -255,6 +255,73 @@ int main(void) {
     assert!(String::from_utf8_lossy(&delegate_run.stdout)
         .contains("NATIVE_PURE_DELEGATION_PASS"));
 
+    // Unlike the legacy C ABI harness, this is an actual compiled Atto
+    // entrypoint consuming its own generator through source-level for-of.
+    // A successful run must exit 42, not just emit plausible LLVM IR.
+    let guest_source = r#"pub fnc main(): int {
+  let int total = 0;
+  for const value of values() {
+    total = total + value;
+  }
+  return total;
+}
+pub gen* values(): Iterator<int> {
+  yield 20;
+  yield* middle();
+  return;
+}
+pub gen* middle(): Iterator<int> {
+  yield 22;
+  return;
+}
+"#;
+    let guest_compiled = compile(
+        &compiler, &dir.0, "generator-for-of-main.ores", guest_source);
+    assert!(guest_compiled.status.success(),
+        "native guest for-of source compilation failed: {}",
+        String::from_utf8_lossy(&guest_compiled.stderr));
+    let guest_ir = String::from_utf8_lossy(&guest_compiled.stdout);
+    for needle in ["gen.iter.poll", "gen.iter.body", "gen.iter.close",
+                   "define i32 @oreslang_rt_gen_values_next("] {
+        assert!(guest_ir.contains(needle), "native source for-of IR lacks {needle}");
+    }
+    let guest_ll = dir.0.join("generator-for-of-main.ll");
+    let guest_exe = dir.0.join(if cfg!(windows) {
+        "generator-for-of-main.exe"
+    } else {
+        "generator-for-of-main"
+    });
+    fs::write(&guest_ll, &guest_compiled.stdout).expect("write for-of guest LLVM IR");
+    let guest_link = Command::new(&clang)
+        .arg("-O2").arg("-Wno-override-module")
+        .arg("-x").arg("ir").arg(&guest_ll)
+        .arg("-o").arg(&guest_exe).current_dir(&dir.0)
+        .output().expect("link native generator guest entrypoint");
+    assert!(guest_link.status.success(),
+        "native generator guest link failed: {}",
+        String::from_utf8_lossy(&guest_link.stderr));
+    let guest_run = Command::new(&guest_exe).current_dir(&dir.0)
+        .output().expect("run compiled source for-of");
+    assert_eq!(guest_run.status.code(), Some(42),
+        "compiled .ores generator iteration should return 42: stderr={}",
+        String::from_utf8_lossy(&guest_run.stderr));
+
+    rejected(&compiler, &dir.0, "forof-missing-gen.ores",
+        "pub fnc main(): int { let int x = 0; for const v of missing() { x = x + v; } return x; }\\n",
+        "native generator for-of requires a same-file gen* declaration");
+    rejected(&compiler, &dir.0, "forof-early-return.ores",
+        "pub gen* g(): Iterator<int> { yield 1; return; }\\n\\
+pub fnc main(): int { for const v of g() { return v; } return 0; }\\n",
+        "native generator for-of body requires scalar writes only");
+    rejected(&compiler, &dir.0, "forof-dynamic-args.ores",
+        "pub gen* g(): Iterator<int> { yield 1; return; }\\n\\
+pub fnc main(): int { let int x = 0; for const v of g(1) { x = x + v; } return x; }\\n",
+        "expected ')'");
+    rejected(&compiler, &dir.0, "forof-nested-unsupported.ores",
+        "pub gen* g(): Iterator<int> { yield 1; return; }\\n\\
+pub fnc main(): int { let int x = 0; for const v of g() { for const w of g() { x = x + w; } } return x; }\\n",
+        "native generator for-of body requires scalar writes only");
+
     rejected(&compiler, &dir.0, "starless-generator.ores",
         "pub generator values(): Iterator<int> { yield 1; return; }\n",
         "bare native generator declaration requires 'generator*'");
