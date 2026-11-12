@@ -41,6 +41,7 @@ fn field(line: &str, key: &str) -> i64 {
 fn assert_source(source: &str) {
     let contents = source.lines().filter(|line| !line.trim_start().starts_with("//"))
         .collect::<Vec<_>>().join("\n");
+    assert!(contents.starts_with("use namespace rmq;"));
     assert!(contents.contains("define actor PrefaceActor as {"));
     assert!(contents.contains("pub fnc on_message(int byte): int"));
     assert!(contents.contains("digest = digest * 17 + byte;"));
@@ -64,9 +65,27 @@ fn main() {
     let work = PathBuf::from(&args[4]);
     assert!(compiler.is_file(), "real native compiler required");
     fs::create_dir_all(&work).expect("create build dir");
-    let source = root.join("tests/fixtures/atto-rmq-native-preface-actor.ores");
+    let source = root.join("tests/fixtures/atto-rmq-native-preface-actor.atto");
     let source_bytes = fs::read_to_string(&source).expect("read native actor guest");
     assert_source(&source_bytes);
+    // Both supported namespace spellings must compile the identical actor
+    // declarations, without CI stripping or rewriting the header.
+    let canonical = work.join("atto-rmq-canonical-namespace.atto");
+    let canonical_source = source_bytes.replacen("use namespace rmq;", "namespace rmq;", 1);
+    assert_ne!(canonical_source, source_bytes);
+    fs::write(&canonical, canonical_source).expect("write canonical comparison fixture");
+    let canonical_ir = run(Command::new(&compiler).arg(&canonical));
+    assert!(String::from_utf8_lossy(&canonical_ir.stdout).contains("oreslang_source_actor_spawn"));
+    // Double namespace is forbidden even when both names are identical.
+    let duplicate = work.join("atto-rmq-duplicate-namespace.atto");
+    fs::write(&duplicate, source_bytes.replacen("use namespace rmq;",
+        "use namespace rmq;\nnamespace rmq;", 1)).expect("write negative fixture");
+    let rejected = Command::new(&compiler).arg(&duplicate).output()
+        .expect("run real compiler on double namespace");
+    assert!(!rejected.status.success(), "duplicate native namespace accepted");
+    assert!(rejected.stdout.is_empty(), "LLVM IR emitted for rejected namespace");
+    assert!(String::from_utf8_lossy(&rejected.stderr)
+        .contains("duplicate native namespace header"), "unexpected rejection diagnostic");
     let output = run(Command::new(&compiler).arg(&source));
     let ir = String::from_utf8(output.stdout).expect("compiler must emit UTF-8 LLVM IR");
     assert!(ir.starts_with("; ModuleID"), "no real generated LLVM module");
