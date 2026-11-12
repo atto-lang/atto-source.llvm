@@ -2622,6 +2622,8 @@ private:
         // agree at the join; checked below by the ownership verifier.
         std::function<std::vector<Statement>(bool, bool)> branch_arm;
         std::function<Statement()> dispatch_statement;
+        std::function<Statement()> using_telemetry_span;
+        std::unordered_set<std::string> active_trace_aliases;
         std::function<Statement()> foreach_statement;
         auto scoped_local = [&]() {
             Statement statement; statement.kind = Statement::Kind::ScopedLocal;
@@ -2727,6 +2729,9 @@ private:
             while (token_.text != "}" && (!then_scope || (token_.text != "fi" && token_.text != "else" && token_.text != "elif"))) {
                 if (token_.kind == Kind::End || actions.size() == 16)
                     fail("native conditional arm limit exceeded (16)");
+                if (token_.text == "using" && !finally_scope) {
+                    actions.push_back(using_telemetry_span()); continue;
+                }
                 if (token_.text == "for" && !finally_scope) {
                     actions.push_back(foreach_statement()); continue;
                 }
@@ -2958,6 +2963,80 @@ private:
             }
             return std::move(tail.front());
         };
+        // Strict first native AOT scope slice. The compiler owns the span
+        // token; it is never a scalar local, closure capture, actor message,
+        // pointer or portable class instance. Full native ScopedResource and
+        // suspending scope protocols are not certified by this parser.
+        using_telemetry_span = [&]() -> Statement {
+            Statement scope;
+            scope.kind = Statement::Kind::UsingTelemetrySpan;
+            scope.offset = token_.offset;
+            require("using"); require("telemetry"); require(".");
+            require("span"); require("(");
+            if (token_.kind != Kind::String)
+                fail("native using telemetry.span requires one literal operation name");
+            scope.telemetry_operation = string_literal(token_.text);
+            if (scope.telemetry_operation.empty() || scope.telemetry_operation.size() > 256)
+                fail("native telemetry span name requires 1..256 UTF-8 bytes");
+            advance();
+            require(")"); require("as");
+            scope.receiver = identifier();
+            if (scope.receiver == "_" || active_trace_aliases.count(scope.receiver)
+                    || std::any_of(value.parameters.begin(), value.parameters.end(),
+                        [&](const Parameter& p) { return p.name == scope.receiver; })
+                    || std::any_of(value.locals.begin(), value.locals.end(),
+                        [&](const LocalBinding& local) { return local.name == scope.receiver; }))
+                fail("native telemetry span alias shadows an active or existing owner");
+            require("{");
+            active_trace_aliases.insert(scope.receiver);
+            scope.then_statements = branch_arm(false, false);
+            active_trace_aliases.erase(scope.receiver);
+            require("}");
+
+            // Do not accidentally admit aliases by treating them as i64,
+            // nor leak the scope through a call/return/borrow/assignment.
+            // This recursively scans every reachable expression/statement,
+            // including nested conditionals and scope bodies.
+            auto references = [&](const auto& self, const Expression* expr) -> bool {
+                if (!expr) return false;
+                if (expr->kind == Expression::Kind::Variable
+                        && expr->name == scope.receiver) return true;
+                if (self(self, expr->left.get()) || self(self, expr->right.get())
+                        || self(self, expr->condition.get())
+                        || self(self, expr->condition_lhs.get())
+                        || self(self, expr->condition_rhs.get())
+                        || self(self, expr->when_true.get())
+                        || self(self, expr->when_false.get())) return true;
+                for (const auto& arg : expr->arguments)
+                    if (self(self, arg.get())) return true;
+                return false;
+            };
+            auto leaks = [&](const auto& self, const Statement& stmt) -> bool {
+                if (stmt.receiver == scope.receiver
+                        || references(references, stmt.expression.get())
+                        || references(references, stmt.condition.get())
+                        || references(references, stmt.condition_lhs.get())
+                        || references(references, stmt.condition_rhs.get())
+                        || references(references, stmt.loop_step.get())
+                        || references(references, stmt.array_commit_length.get())
+                        || (stmt.branch_local
+                            && (stmt.branch_local->name == scope.receiver
+                                || references(references, stmt.branch_local->initializer.get()))))
+                    return true;
+                for (const auto& arg : stmt.array_commit_values)
+                    if (references(references, arg.get())) return true;
+                for (const auto& inner : stmt.then_statements)
+                    if (self(self, inner)) return true;
+                for (const auto& inner : stmt.else_statements)
+                    if (self(self, inner)) return true;
+                return false;
+            };
+            for (const auto& inner : scope.then_statements)
+                if (leaks(leaks, inner))
+                    fail("native telemetry SpanScope handle is opaque and cannot escape or be referenced");
+            return scope;
+        };
+
         bool return_guards_started = false;
         bool terminal_try_finally = false;
         std::size_t branch_count = 0;
@@ -3219,6 +3298,12 @@ private:
             }
             if (return_guards_started)
                 fail("native statements cannot follow guarded returns");
+            if (token_.text == "using") {
+                if (terminal_try_finally)
+                    fail("native telemetry scope inside protected try requires unified unwind proof");
+                value.statements.push_back(using_telemetry_span());
+                continue;
+            }
             if (ready_future_local()) continue;
             if (token_.text == "const" || token_.text == "val" || token_.text == "let") {
                 value.statements.push_back(scoped_local()); continue;
