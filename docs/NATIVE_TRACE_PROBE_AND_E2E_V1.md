@@ -70,3 +70,36 @@ The test verified one SERVER→ACTOR→CLIENT parent chain and concurrent
 wired to LLVM-generated Atto code, mailbox send/receive, trusted sampling,
 manual `using` scopes or OTLP; no complete LLVM compiler/guest test
 has run, so no five-backend parity can be claimed.
+
+## 2026-11-12 LLVM source-hardening and exact-blob sanitizer receipt
+
+The native staging buffer now rejects a `NativeCompletedSpan` whose
+parent ID equals its own span ID, an HTTP status in 1..99, or a caller-supplied
+capacity above 65,536. All invalid records are rejected **before** reserving
+a slot; unsampled or disabled telemetry still bypasses clock/I/O/CAS.
+
+Host regression vectors were added in
+`tests/native_semantic_span_buffer_test.cpp`: self-parent and invalid
+status, oversized capacity, invalid trace ID, zero-operation ID,
+SERVER→ACTOR→CLIENT parentage and eight concurrent producers offering
+800 events into a capacity-64 fixed array (736 accounted drops).
+
+Locally verified the **exact GitHub blob SHAs** before testing:
+- `NativeTraceParentV00.hpp`:
+  `643e7e3a5ac826a516ae8cbbee0f7f19274163dd`
+- `NativeSemanticSpanBuffer.hpp`:
+  `bb39188be23afe5b5adcecba3c87f5ef4eb9006d`
+- `native_semantic_span_buffer_test.cpp`:
+  `6ac537ca7ef9c9d9995616e739da81ec11b98fc0`
+
+Both **GCC 14.2** and **Clang 17** compiled and executed the test
+successfully under `-std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror
+-UNDEBUG -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer`.
+These are **source-exact C++ host tests**, not LLVM-compiled Atto guest runs.
+
+Private CI mirroring remains governed by source
+`.github/private-ci-approved-repositories.txt` and
+`.github/private-ci-carrier-contracts.json`. Their existing reviewed
+carrier plans do not authorize exporting PR #1713 to the successful
+source-free `benefactor-cc/benefactor-e2e` capacity probe.
+Do not transfer LLVM private source there without independent authorization.
