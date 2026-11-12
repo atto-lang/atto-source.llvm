@@ -1573,6 +1573,22 @@ int ores_native_actor_scheduler_is_current_actor(
     // is acquired here, never while an actor callback itself is invoked.
     return ores_execution_owns(&s->actors[actor.actor_slot].authority, executing_claim);
 }
+int ores_native_actor_scheduler_can_start_task(
+        OresNativeActorScheduler* s, OresNativeActorRef actor) {
+    if (!ores_native_actor_scheduler_is_current_actor(s, actor)
+            || (executing_turn_kind != TURN_DATA
+                && executing_turn_kind != TURN_WAKE))
+        return 0;
+    if (executing_turn_kind == TURN_WAKE
+            && (!executing_wake_valid
+                || executing_wake_outcome != ORES_NATIVE_WAKE_READY))
+        return 0;
+    /* STOP can still win after this preflight. reserve_wake/transfer_wake
+     * arbitrate against STOP under the scheduler lock; the bridge must treat
+     * a lost race as a failed admission, never as guest authority. */
+    return ores_execution_owns_running(
+        &s->actors[actor.actor_slot].authority, executing_claim);
+}
 /* Original user DATA-mail sequence is available only while the authenticated
  * actor callback is RUNNING on this scheduler's physical carrier. It is not
  * available to CONTROL, WAKE, detached Tasks or external Future producers.
