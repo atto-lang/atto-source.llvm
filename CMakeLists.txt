@@ -2820,6 +2820,24 @@ if(BUILD_TESTING)
     set_tests_properties(native_source_task_i64_shared_scheduler_runtime
         PROPERTIES TIMEOUT 30)
 
+    # Actor-owned runtime Task lane shares the existing actor scheduler's
+    # single-writer lease and worker pool. This is a native host acceptance
+    # test, NOT compiler-lowered .atto task/await guest execution.
+    add_executable(oreslang-native-actor-task-pool-affinity-test
+        tests/native_actor_task_pool_affinity_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-task-pool-affinity-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-task-pool-affinity-test PRIVATE c_std_11)
+    target_compile_options(oreslang-native-actor-task-pool-affinity-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-actor-task-pool-affinity-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_actor_task_pool_affinity_host_only
+        COMMAND oreslang-native-actor-task-pool-affinity-test)
+    set_tests_properties(native_actor_task_pool_affinity_host_only
+        PROPERTIES TIMEOUT 40)
+
     set(ORE_SOURCE_TASK_E2E
         "${CMAKE_CURRENT_BINARY_DIR}/oreslang-source-task-i64-e2e")
     add_custom_command(
