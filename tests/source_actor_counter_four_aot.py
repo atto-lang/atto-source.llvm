@@ -40,7 +40,7 @@ def main():
     for relative, expected in identical_shared_blobs.items():
         body = (shared_root / relative).read_bytes()
         digest = hashlib.sha1(
-            b"blob " + str(len(body)).encode("ascii") + b"\\0" + body
+            b"blob " + str(len(body)).encode("ascii") + b"\0" + body
         ).hexdigest()
         assert digest == expected, (
             "java/llvm shared Counter V2 source identity drift", relative, digest)
