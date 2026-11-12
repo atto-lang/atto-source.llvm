@@ -631,6 +631,20 @@ fn main() {
     // The pinned Java parser still requires an initializer for final class fields.
     let native_only = [
         // The pinned Java reference predates declare-type source syntax.
+        ("nats-string-split-literal-owned", r#"pub routine main():int{
+          val String subject="orders..created.";
+          val parts = subject.split_literal(".");
+          val Array<String> typed = subject.split_literal(".");
+          return parts.size==4&&parts.get(0)=="orders"&&parts.get(1)==""&&
+                 parts.get(2)=="created"&&parts.get(3)==""&&
+                 typed.size==4&&typed.get(2)=="created" ? 0:1;
+        }"#, ""),
+        ("nats-string-split-multichar", r#"pub routine main():int{
+          val String source="a::b::::c";
+          val parts=source.split_literal("::");
+          return parts.size==4&&parts.get(0)=="a"&&parts.get(1)=="b"&&
+            parts.get(2)==""&&parts.get(3)=="c" ? 0:1;
+        }"#, ""),
         ("ordered-transparent-alias-and-extension", "declare type Count = int;define mtd double on Count():int{return self+self;}fnc touch():void{return;}pub fnc main():int{touch();let value:Count=21;value=value.double();return value==42?0:1;}", ""),
         // Java currently treats variant calls in field defaults as unproven
         // effects; native lowering recognizes literal compiler-owned variants.
@@ -722,6 +736,7 @@ fn main() {
             .arg(PathBuf::from(&runtime).parent().unwrap().parent().unwrap().parent().unwrap())
             .arg(&runtime)
             .arg(PathBuf::from(&runtime).parent().unwrap().join("NativeIntArrayRegion.c"))
+            .arg(PathBuf::from(&runtime).parent().unwrap().join("NativeStringSplitRegion.c"))
             .arg(PathBuf::from(&runtime).parent().unwrap().join("NativeRecordRegion.c"))
             .arg("-pthread")
             .arg("-o")
@@ -994,6 +1009,12 @@ fn main() {
         ("nats-string-contains-int-needle", "pub routine main():int{val String s=\"abc\";return s.contains_literal(42)?0:1;}".to_owned(), foo.to_owned()),
         ("nats-string-contains-wrong-arity", "pub routine main():int{val String s=\"abc\";return s.contains_literal(\"a\",\"b\")?0:1;}".to_owned(), foo.to_owned()),
         ("nats-string-contains-named-needle-rejected", "pub routine main():int{val String s=\"abc\";return s.contains_literal(needle:\"a\")?0:1;}".to_owned(), foo.to_owned()),
+        ("nats-split-wrong-receiver", "pub routine main():int{val int n=12;val parts=n.split_literal(\".\");return parts.size;}".to_owned(), foo.to_owned()),
+        ("nats-split-int-delimiter", "pub routine main():int{val String s=\"a.b\";val parts=s.split_literal(42);return parts.size;}".to_owned(), foo.to_owned()),
+        ("nats-split-empty-delimiter", "pub routine main():int{val String s=\"a.b\";val parts=s.split_literal(\"\");return parts.size;}".to_owned(), foo.to_owned()),
+        ("nats-split-nonliteral-delimiter", "pub routine main():int{val String s=\"a.b\";val String d=\".\";val parts=s.split_literal(d);return parts.size;}".to_owned(), foo.to_owned()),
+        ("nats-split-wrong-owned-element", "pub routine main():int{val String s=\"a.b\";val Array<int> parts=s.split_literal(\".\");return parts.size;}".to_owned(), foo.to_owned()),
+        ("nats-split-wrong-arity", "pub routine main():int{val String s=\"a.b\";val parts=s.split_literal(\".\",\"-\");return parts.size;}".to_owned(), foo.to_owned()),
         ("string-array-integer-add", "pub fnc main():int{val Array<String> a=new Array<String>();a.add(42);return 0;}".to_owned(), foo.to_owned()),
         ("integer-array-string-add", "pub fnc main():int{val Array<int> a=new Array<int>();a.add(\"bad\");return 0;}".to_owned(), foo.to_owned()),
         ("string-array-string-index", "pub fnc main():int{val Array<String> a=new Array<String>();return a.get(\"bad\")==\"x\"?0:1;}".to_owned(), foo.to_owned()),

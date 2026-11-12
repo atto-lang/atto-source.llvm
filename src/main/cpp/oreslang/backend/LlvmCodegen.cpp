@@ -928,6 +928,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             if (!local.array_record_class.empty() || (local.record_view && !class_owns_arrays(local.class_name))) record_runtime = true;
             if (local.int_array && local.array_element_type == ScalarType::String) string_runtime = true;
             scan_string(local.initializer.get());
+            scan_string(local.split_source.get());
+            scan_string(local.split_delimiter.get());
             for (const auto& arg : local.constructor_arguments) scan_string(arg.get());
         }
         for (const auto& s : fn.statements) scan_statement(s);
@@ -1610,6 +1612,31 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 builder.CreateStore(handle, slot);
                 storage.emplace(binding.name, slot);
                 lexical_slots.push_back({binding.name, slot, false, 8, true});
+                if (binding.native_split_literal) {
+                    if (!binding.split_source || !binding.split_delimiter ||
+                            !array_region || !array_failure || !array_failure_status)
+                        throw std::runtime_error("native split lacks region cleanup authority");
+                    auto* source_string = lower(*binding.split_source, builder, i64, storage,
+                        field_storage, declarations, &region_moves);
+                    auto* delimiter = lower(*binding.split_delimiter, builder, i64, storage,
+                        field_storage, declarations, &region_moves);
+                    auto split = module.getOrInsertFunction("ores_string_split_literal_fill",
+                        llvm::FunctionType::get(llvm::Type::getInt32Ty(context),
+                            {i64, i64, native_ptr, i64}, false));
+                    auto* status = builder.CreateCall(split,
+                        {source_string, delimiter, array_region, handle},
+                        binding.name + ".split.status");
+                    auto* success = llvm::BasicBlock::Create(context,
+                        binding.name + ".split.success", function);
+                    auto* failed = llvm::BasicBlock::Create(context,
+                        binding.name + ".split.failed", function);
+                    builder.CreateCondBr(builder.CreateICmpEQ(status,
+                        llvm::ConstantInt::get(status->getType(), 0)), success, failed);
+                    builder.SetInsertPoint(failed);
+                    builder.CreateStore(status, array_failure_status);
+                    builder.CreateBr(array_failure);
+                    builder.SetInsertPoint(success);
+                }
                 continue;
             }
             if (binding.record_view && class_owns_arrays(binding.class_name)) {

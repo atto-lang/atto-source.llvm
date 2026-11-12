@@ -87,6 +87,12 @@ fi
 if grep -Eq 'declare .*@oreslang_int_array_' "$work/program.ll"; then
   runtime_sources+=("$root/src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c")
 fi
+# Only compiler-emitted String.split_literal bindings bring in this
+# two-region glue. Every standalone non-split array/string ABI remains
+# link-compatible with its existing independent runtime tests.
+if grep -Eq 'declare .*@ores_string_split_literal_fill' "$work/program.ll"; then
+  runtime_sources+=("$root/src/main/cpp/oreslang/runtime/NativeStringSplitRegion.c")
+fi
 if grep -Eq 'declare .*@(oreslang_source_actor_|ores_actor_)' "$work/program.ll"; then
   # Source actors: the native scheduler, VM and actor-owned i64 heap. Same
   # set tests/source_actor_e2e.py links, minus its test-only receipt define.

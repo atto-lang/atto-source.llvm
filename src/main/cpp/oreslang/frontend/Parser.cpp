@@ -2358,6 +2358,30 @@ private:
             require(";");
             return true;
         };
+        // Native slice: exactly one lexical owner receives a prevalidated
+        // literal delimiter split. No general Array<String> return ABI,
+        // cross-actor result transfer, or borrowed array alias is introduced.
+        auto parse_split_literal_initializer = [&](LocalBinding& binding) {
+            if (binding.array_element_type != ScalarType::String ||
+                    !binding.array_record_class.empty())
+                fail("String.split_literal requires owned Array<String>");
+            const auto source_offset = token_.offset;
+            auto source = make_expression(Expression::Kind::Variable, source_offset);
+            source->name = identifier();
+            require(".");
+            require("split_literal");
+            require("(");
+            auto delimiter = expression();
+            require(")");
+            if (delimiter->kind != Expression::Kind::String ||
+                    delimiter->name.empty() || delimiter->name.size() > 64)
+                fail("native String.split_literal requires a nonempty literal delimiter of at most 64 bytes");
+            binding.native_split_literal = true;
+            binding.split_source = std::move(source);
+            binding.split_delimiter = std::move(delimiter);
+            binding.int_array = true;
+            binding.owner_mutable = true;
+        };
         while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio" || array_effect_ahead()) {
             // Typed Future<void> is admitted ONLY as a linear lexical alias
             // for one already-spawned ActorRef.get_ready() lifecycle promise.
@@ -2434,14 +2458,31 @@ private:
                 advance(); require("Array"); require("<");
                 array_element(binding);
                 require(">"); binding.name = identifier(); require("=");
-                require("new"); require("Array"); require("<");
-                if (!binding.array_record_class.empty()) {
-                    if (type_identifier() != binding.array_record_class) fail("array constructor element type mismatch");
-                } else if (binding.array_element_type == ScalarType::String) {
-                    if (!accept("String")) require("string");
-                } else require("int");
-                require(">"); require("("); require(")");
-                binding.int_array = binding.owner_mutable = true;
+                if (token_.text == "new") {
+                    require("new"); require("Array"); require("<");
+                    if (!binding.array_record_class.empty()) {
+                        if (type_identifier() != binding.array_record_class) fail("array constructor element type mismatch");
+                    } else if (binding.array_element_type == ScalarType::String) {
+                        if (!accept("String")) require("string");
+                    } else require("int");
+                    require(">"); require("("); require(")");
+                    binding.int_array = binding.owner_mutable = true;
+                } else {
+                    parse_split_literal_initializer(binding);
+                }
+            } else if (token_.text == "val" &&
+                    [&] {
+                        Lexer look = lexer_;
+                        const Token name = look.next(), equals = look.next();
+                        return name.kind == Kind::Identifier && equals.text == "=";
+                    }()) {
+                // Canonical AttoNATS spelling: val parts = subject.split_literal(".");
+                // This does NOT admit untyped scalar inference in general.
+                advance();
+                binding.name = identifier();
+                require("=");
+                binding.array_element_type = ScalarType::String;
+                parse_split_literal_initializer(binding);
             } else if ((token_.text == "val" || token_.text == "const") &&
                     [&] { Lexer look = lexer_; const auto type = look.next();
                         return type.text == "string" || type.text == "String" ||
@@ -2496,18 +2537,22 @@ private:
                     require(">");
                     binding.name = identifier();
                     require("=");
-                    require("new");
-                    require("Array");
-                    require("<");
-                    if (!binding.array_record_class.empty()) {
-                        if (type_identifier() != binding.array_record_class) fail("array constructor element type mismatch");
-                    } else if (binding.array_element_type == ScalarType::String) {
-                        if (!accept("String")) require("string");
-                    } else require("int");
-                    require(">");
-                    require("(");
-                    require(")");
-                    binding.int_array = true;
+                    if (token_.text == "new") {
+                        require("new");
+                        require("Array");
+                        require("<");
+                        if (!binding.array_record_class.empty()) {
+                            if (type_identifier() != binding.array_record_class) fail("array constructor element type mismatch");
+                        } else if (binding.array_element_type == ScalarType::String) {
+                            if (!accept("String")) require("string");
+                        } else require("int");
+                        require(">");
+                        require("(");
+                        require(")");
+                        binding.int_array = true;
+                    } else {
+                        parse_split_literal_initializer(binding);
+                    }
                 } else {
                 binding.class_name = type_identifier();
                 binding.name = identifier();
@@ -5404,9 +5449,15 @@ private:
             for (const auto& binding : fn.locals) {
                 // Validate before publishing the name: reject self/forward reads.
                 if (binding.int_array) {
-                    // Construction was parsed as exactly new Array<int>().
-                    // Its initializer is a trusted runtime operation, never
-                    // a user-callable scalar or transferable class value.
+                    // Only native Array construction or this compiler-checked
+                    // lexical String.split_literal initializer is accepted.
+                    if (binding.native_split_literal) {
+                        if (!binding.split_source || !binding.split_delimiter ||
+                                binding.array_element_type != ScalarType::String)
+                            throw std::runtime_error("malformed native String.split_literal owner");
+                        validate_expression(*binding.split_source, params, functions);
+                        validate_expression(*binding.split_delimiter, params, functions);
+                    }
                 } else if (binding.new_class || binding.move_class) {
                     if (classes.count(binding.class_name) == 0)
                         throw std::runtime_error("unknown class '" + binding.class_name + "'");
@@ -5599,6 +5650,12 @@ private:
 
             for (const auto& binding : fn.locals) {
                 if (binding.int_array || binding.new_class || binding.move_class) {
+                    if (binding.native_split_literal) {
+                        require_scalar(*binding.split_source, ScalarType::String,
+                            "native String.split_literal receiver", scalar_types);
+                        require_scalar(*binding.split_delimiter, ScalarType::String,
+                            "native String.split_literal delimiter", scalar_types);
+                    }
                     scalar_types.emplace(binding.name, ScalarType::I64);
                     if (binding.int_array)
                         scalar_types.emplace(binding.name + ".$element", binding.array_element_type);

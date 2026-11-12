@@ -130,6 +130,23 @@ if(BUILD_TESTING)
     add_test(NAME native_string_contains_literal_binary_unit
         COMMAND oreslang-native-string-contains-literal-test)
     set_tests_properties(native_string_contains_literal_binary_unit PROPERTIES TIMEOUT 20)
+
+    # The real C bridge joins the independently scoped native String
+    # region to a uniquely-owned Array<String> handle; only the test
+    # executable links all three native objects.
+    add_executable(oreslang-native-string-split-literal-test
+        tests/native_string_split_literal_test.c
+        src/main/cpp/oreslang/runtime/NativeStringSplitRegion.c
+        src/main/cpp/oreslang/runtime/NativeStringRegion.c
+        src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c)
+    target_include_directories(oreslang-native-string-split-literal-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-string-split-literal-test PRIVATE pthread)
+    target_compile_options(oreslang-native-string-split-literal-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_string_split_literal_binary_unit
+        COMMAND oreslang-native-string-split-literal-test)
+    set_tests_properties(native_string_split_literal_binary_unit PROPERTIES TIMEOUT 20)
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
     add_executable(oreslang-native-sum-payload-admission-test

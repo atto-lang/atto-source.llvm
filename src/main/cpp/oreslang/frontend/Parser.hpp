@@ -89,6 +89,12 @@ struct LocalBinding {
     std::unique_ptr<Expression> initializer;
     bool heap_owned = false;
     bool int_array = false; // non-Copy owned i64-slot array local, no escape
+    // One strictly bounded compiler-intrinsic String.split_literal(".")
+    // initializer. Its result owns a native Array<String> handle; source
+    // String bytes remain pinned in the same invocation region until drop.
+    bool native_split_literal = false;
+    std::unique_ptr<Expression> split_source;
+    std::unique_ptr<Expression> split_delimiter;
     ScalarType array_element_type = ScalarType::I64; // int value or checked immutable String handle
     std::string array_record_class;
     bool record_view = false; // class-valued initializer: leaf view or uniquely owned array-containing call result

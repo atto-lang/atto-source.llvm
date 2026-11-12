@@ -203,6 +203,24 @@ int64_t ores_string_equal(int64_t left, int64_t right) {
  * No malloc, pointer escape, mutation or implicit zero-terminator semantics.
  * Empty needle matches, mirroring ordinary String contains semantics.
  */
+int32_t ores_string_region_borrow_span(int64_t handle, const char **data, uint64_t *size) {
+    if (!data || !size) { atomic_store(&region.failed, 1); return 1; }
+    String value = lookup(handle);
+    if (atomic_load(&region.failed)) return 1;
+    *data = value.data;
+    *size = value.size;
+    return 0;
+}
+int64_t ores_string_region_publish_slice(int64_t source, uint64_t start, uint64_t size) {
+    String value = lookup(source);
+    if (atomic_load(&region.failed) || start > value.size || size > value.size - start) {
+        atomic_store(&region.failed, 1); return 0;
+    }
+    // All views pin their source allocation in the same invocation String
+    // region. Metadata growth moves String records, never backing bytes.
+    const char *part = value.data ? value.data + start : "";
+    return publish((String){part, (size_t)size, NULL});
+}
 int64_t ores_string_contains_literal(int64_t haystack, int64_t needle) {
     String text = lookup(haystack), pattern = lookup(needle);
     if (atomic_load(&region.failed)) return 0;

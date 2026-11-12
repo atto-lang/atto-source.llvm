@@ -233,6 +233,13 @@ inline void scan_binding(const LocalBinding& binding, DirectFacts& facts) {
     if (!binding.task_await_name.empty() || !binding.future_await_name.empty())
         add_effect(facts, FunctionEffect::Suspend);
     scan_expression(binding.initializer.get(), facts);
+    scan_expression(binding.split_source.get(), facts);
+    scan_expression(binding.split_delimiter.get(), facts);
+    if (binding.native_split_literal) {
+        // Split may allocate a native handle/metadata and scan a bounded
+        // input; it is not hard real-time even if its result is never used.
+        add_effect(facts, FunctionEffect::Alloc);
+    }
     for (const auto& argument : binding.constructor_arguments) {
         scan_expression(argument.get(), facts);
         if (facts.call_budget_exceeded) return;

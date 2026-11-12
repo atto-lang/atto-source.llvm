@@ -727,6 +727,13 @@ void validate_i64_ownership(Program& program) {
             if (binding.int_array) {
                 if (!binding.owner_mutable || binding.heap_owned || binding.initializer)
                     throw std::runtime_error("invalid native Array<int> owner");
+                if (binding.native_split_literal) {
+                    if (!binding.split_source || !binding.split_delimiter ||
+                            binding.array_element_type != ScalarType::String)
+                        throw std::runtime_error("ownership violation: malformed String split owner");
+                    check_value(*binding.split_source, locals, functions);
+                    check_value(*binding.split_delimiter, locals, functions);
+                }
             } else if (binding.name.rfind("$effect", 0) == 0 && binding.initializer &&
                     binding.initializer->kind == Expression::Kind::ArrayCall) {
                 const auto& call = *binding.initializer;
