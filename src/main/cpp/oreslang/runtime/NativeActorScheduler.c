@@ -599,6 +599,20 @@ static void* carrier(void* raw) {
          * still trying to signal that scheduler. Without a gate there is
          * nothing to release, so the turn finishes in this same section. */
         if (!ores_execution_leave(&lane->authority, execution_claim, 0)) abort();
+        /* A Task's physical DONE may not be published by its last guest
+         * instruction: the WAKE callback and execution claim must unwind
+         * first. Keep lane.active/outstanding as a lifetime pin while a
+         * bounded, non-guest retirement hook releases exact Task loans.
+         * No scheduler lock is held: that hook may release a resource. */
+        if (kind == TURN_WAKE && s->wake_settled_callback) {
+            unlock(s);
+            s->wake_settled_callback(s->context, i, wake_ticket);
+            lock(s);
+            if (!lane->active || !lane->carrier_owner_valid
+                    || !pthread_equal(lane->carrier_owner, pthread_self())
+                    || !s->outstanding)
+                abort();
+        }
         if (gate_held) {
             unlock(s);
             ores_native_turn_gate_release(s->physical_turn_gate);
