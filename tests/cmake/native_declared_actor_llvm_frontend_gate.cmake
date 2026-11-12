@@ -1,7 +1,7 @@
 # Exact-source native AOT smoke and deliberately unsupported actor source.
 # LLVM IR is written only for the supported scalar guest, never for an
 # unverified declaration-only actor. No Java runtime or Python is used.
-foreach(required COMPILER CLANG POSITIVE NEGATIVE SOURCE_DIR OUTPUT_DIR)
+foreach(required COMPILER CLANG POSITIVE NEGATIVE BAD_NONLITERAL BAD_MULTIFUNCTION SOURCE_DIR OUTPUT_DIR)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     message(FATAL_ERROR "missing mandatory ${required}")
   endif()
@@ -58,6 +58,23 @@ endif()
 if(NOT forbidden_ir STREQUAL "")
   message(FATAL_ERROR "LLVM leaked partial IR for an unsupported actor")
 endif()
+# The first namespace runtime slice must remain narrow; ordinary calls,
+# arithmetic and multiple functions still need checked namespace lowering.
+foreach(source IN ITEMS "${BAD_NONLITERAL}" "${BAD_MULTIFUNCTION}")
+  execute_process(
+    COMMAND "${COMPILER}" "${source}"
+    RESULT_VARIABLE rejected
+    OUTPUT_VARIABLE leaked_ir
+    ERROR_VARIABLE diagnostics
+  )
+  if("${rejected}" STREQUAL "0" OR NOT leaked_ir STREQUAL "")
+    message(FATAL_ERROR "unsupported namespace function escaped first-stage gate: ${source}")
+  endif()
+  if(NOT diagnostics MATCHES "NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED")
+    message(FATAL_ERROR "missing explicit unsupported-namespace diagnostic: ${diagnostics}")
+  endif()
+endforeach()
+
 # Every constituent is a separate same-namespace source unit. Until
 # compiler-owned manifest/linking exists none may accidentally compile alone
 # or emit partial IR. The nominal actor gets the precise diagnostic above.
