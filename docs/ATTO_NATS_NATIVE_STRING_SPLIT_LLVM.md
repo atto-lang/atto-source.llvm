@@ -28,7 +28,11 @@ Core operations:
   invocation ends. Split tokens are non-owning view String handles, and
   the `Array<String>` owns the handle vector (not raw byte pointers).
 - The splitter validates a 65,536-token bound, the existing String-region
-  65,536-handle/64-MiB budgets, and checked native array region capacities.
+  65,536-handle/64-MiB budgets, checked native array region capacities, and
+  a 128-MiB conservative worst-case comparison-work budget
+  (`source_bytes * separator_bytes` tested without integer overflow).
+  Search uses `memchr` for the delimiter's first byte; a one-byte NATS dot
+  never invokes per-candidate multi-byte `memcmp`.
   Scratch allocations, array reserve and String metadata publication are
   staged: nonzero resource statuses cannot leave partially published guest
   array elements. Existing array/resource failure epilogues drop the owner.
