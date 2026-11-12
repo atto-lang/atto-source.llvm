@@ -1,0 +1,50 @@
+name: Native actor-owned Task wake bridge
+on:
+  push:
+    branches:
+      - feature/native-actor-task-wake-bridge-v1-20261112
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-actor-task-wake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact source-org HEAD
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Identify exact commit
+        run: |
+          set -eu
+          git rev-parse HEAD
+          git status --porcelain
+      - name: GCC O1 native host execution
+        run: |
+          set -euo pipefail
+          gcc -std=c11 -O1 -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Isrc/main/cpp tests/native_actor_owned_task_wake_test.c \
+            src/main/cpp/oreslang/runtime/NativeActorTaskBridge.c \
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            -o /tmp/actor-task-wake-gcc
+          timeout 45s /tmp/actor-task-wake-gcc
+      - name: Clang O2 native host execution
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Isrc/main/cpp tests/native_actor_owned_task_wake_test.c \
+            src/main/cpp/oreslang/runtime/NativeActorTaskBridge.c \
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            -o /tmp/actor-task-wake-clang
+          timeout 45s /tmp/actor-task-wake-clang
+      - name: GCC ASan and UBSan
+        run: |
+          set -euo pipefail
+          gcc -std=c11 -O1 -g -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp tests/native_actor_owned_task_wake_test.c \
+            src/main/cpp/oreslang/runtime/NativeActorTaskBridge.c \
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            -o /tmp/actor-task-wake-sanitized
+          ASAN_OPTIONS=detect_leaks=1 timeout 45s /tmp/actor-task-wake-sanitized
