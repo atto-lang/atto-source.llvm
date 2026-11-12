@@ -1,0 +1,15 @@
+// Graceful actor termination consumes the linear ActorRef exactly once.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const worker = spawn Worker();
+  worker.send(1);
+  worker.graceful_stop();
+  worker.graceful_stop();
+  return 43;
+}
