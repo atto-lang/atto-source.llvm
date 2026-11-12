@@ -762,6 +762,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_string_", 0) == 0)
             throw std::runtime_error("reserved native string runtime symbol collision");
+    for (const auto& fn : source.functions)
+        if (fn.name.rfind("ores_native_telemetry_", 0) == 0)
+            throw std::runtime_error("reserved native telemetry ABI symbol collision");
 
     // First OresVM entry is deliberately a one-function, pure scalar state
     // transition. Runtime-owned state is injected, never a mutable LLVM global.
