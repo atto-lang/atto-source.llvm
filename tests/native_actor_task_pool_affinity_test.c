@@ -41,7 +41,7 @@ static void on_task(void* opaque, size_t index, uint64_t handle) {
     State* s = (State*)opaque;
     assert_actor_turn(s, index);
     assert(index == 0);
-    assert(handle >= 1 && handle <= 8 || handle == 101);
+    assert((handle >= 1 && handle <= 8) || handle == 101);
     assert(atomic_fetch_add(&s->active[index], 1) == 0);
     uint64_t sequence = 999;
     assert(!ores_native_actor_scheduler_current_data_mail_sequence(
@@ -114,7 +114,7 @@ static void on_control(void* opaque, size_t index, uint64_t payload) {
     (void)index;
     (void)payload;
     atomic_fetch_add(&s->control_callbacks, 1);
-    assert(!"unexpected supervisor CONTROL callback during actor Tasks");
+    abort(); /* supervisor CONTROL callback must not execute an actor Task */
 }
 
 int main(void) {
@@ -176,6 +176,6 @@ int main(void) {
     assert(!ores_native_actor_scheduler_in_any_actor_turn());
     ores_native_actor_scheduler_retire(state.scheduler);
     assert(ores_native_actor_scheduler_try_destroy(state.scheduler));
-    printf("NATIVE_ACTOR_TASK_POOL_PASS normal=9 cancel=1 nested=1\\n");
+    printf("NATIVE_ACTOR_TASK_POOL_PASS normal=9 cancel=1 nested=1\n");
     return 0;
 }
