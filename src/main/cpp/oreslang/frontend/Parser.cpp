@@ -661,6 +661,14 @@ public:
 
     Program parse() {
         Program program;
+        // A source-local namespace header is descriptive, not an import or
+        // permission to bypass the native parser. Admit both canonical forms.
+        // The 'use namespace' form must precede imports and other definitions.
+        if (accept("use")) {
+            require("namespace");
+            program.namespace_name = identifier();
+            require(";");
+        }
         while (token_.text == "import") {
             advance();
             if (token_.text == "contract")
@@ -721,6 +729,8 @@ public:
             program.imports.push_back(std::move(imported));
         }
         if (accept("namespace")) {
+            if (!program.namespace_name.empty())
+                fail("duplicate native namespace header");
             program.namespace_name = identifier();
             require(";");
         }
