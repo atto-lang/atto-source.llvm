@@ -2358,7 +2358,9 @@ private:
             require(";");
             return true;
         };
-        while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio" || array_effect_ahead()) {
+        while (token_.text == "const" || token_.text == "val" || token_.text == "let" ||
+               token_.text == "stdio" || array_effect_ahead() ||
+               (token_.text == "bool" && peek_next().kind == Kind::Identifier)) {
             // Typed Future<void> is admitted ONLY as a linear lexical alias
             // for one already-spawned ActorRef.get_ready() lifecycle promise.
             // No scalar/object borrow crosses this suspension, and general
@@ -2370,7 +2372,19 @@ private:
             binding.offset = token_.offset;
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
-            if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
+            // Match Java's immutable-by-default type-first bool local syntax:
+            //   bool and = a && b; bool or = a || b; bool xor = a ^^ b;
+            // This is a const binding, not a mutable alias, and must be
+            // admitted through the same typed scalar checks as prefixed locals.
+            if (token_.text == "bool" && peek_next().kind == Kind::Identifier) {
+                advance();
+                binding.scalar_type = ScalarType::Bool;
+                binding.assignable = false;
+                binding.owner_mutable = false;
+                binding.name = identifier();
+                require("=");
+                binding.initializer = expression();
+            } else if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
                     (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string")) {
                 const auto mode = token_.text; advance(); if (mode == "let") accept("mut");
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
