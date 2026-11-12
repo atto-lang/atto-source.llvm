@@ -59,6 +59,13 @@ void oreslang_source_actor_send(void* actor, int64_t payload);
 void oreslang_source_actor_request_stop(void* actor);
 void oreslang_source_actor_join_done(void* actor);
 void oreslang_source_actor_stop(void* actor);
+/*
+ * Compiler-owned graceful actor retirement for direct ActorRef.graceful_stop().
+ * Stops new admissions, drains accepted messages and joins physical termination
+ * before returning to trusted top-level main. Unlike immediate stop(), this
+ * does not abandon admitted DATA; no guest carrier may call this blocking ABI.
+ */
+void oreslang_source_actor_graceful_stop(void* actor);
 
 /*
  * Restricted compiler-generated await slice:
