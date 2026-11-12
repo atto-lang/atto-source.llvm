@@ -197,7 +197,11 @@ pub gen* forwarded(): Iterator<int> {
         "forwarded native generator ABI missing");
     let delegated_ll = dir.0.join("pure-delegation.ll");
     let delegated_c = dir.0.join("pure-delegation-harness.c");
-    let delegated_exe = dir.0.join("pure-delegation-harness");
+    let delegated_exe = dir.0.join(if cfg!(windows) {
+        "pure-delegation-harness.exe"
+    } else {
+        "pure-delegation-harness"
+    });
     fs::write(&delegated_ll, &delegated.stdout).expect("write delegated IR");
     fs::write(&delegated_c, r#"
 #include <stdint.h>
