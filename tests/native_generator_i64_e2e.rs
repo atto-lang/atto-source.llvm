@@ -398,7 +398,7 @@ gen* values(): Iterator<int> { yield 1; return; }\n";
             "gen* b(): Iterator<int> { yield* a(); return; }\n",
         ),
         "native generator yield* cycle");
-    let expanded_overflow = String::from("gen* inner(): Iterator<int> {\n");
+    let mut expanded_overflow = String::from("gen* inner(): Iterator<int> {\n");
     for _ in 0..2049 { expanded_overflow.push_str(" yield 1;\n"); }
     expanded_overflow.push_str(
         "}\ngen* outer(): Iterator<int> { yield* inner(); yield* inner(); yield 1; return; }\n");
