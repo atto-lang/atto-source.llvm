@@ -33,20 +33,14 @@ void resolve_native_methods(Program& program) {
         for (const auto& binding : fn.locals)
             if (!binding.class_name.empty()) owners.emplace(binding.name, binding.class_name);
         for (const auto& binding : fn.locals) if (binding.int_array) arrays.emplace(binding.name, &binding);
-        // Conservatively reserve every lexical name, including names introduced
-        // in nested statement scopes. A local/parameter collision must never
-        // silently become a receiver call when the scalar frontend cannot call
-        // local callable values.
+        // Parameters and function-owned locals are live for the whole method.
+        // Structured branch locals are added when their declaration is visited
+        // and revoked at the lexical scope boundary, never precollected from
+        // sibling or future branches. Native local callable values remain
+        // unsupported: a shadowed method name fails closed.
         std::unordered_set<std::string> shadowed;
         for (const auto& parameter : fn.parameters) shadowed.insert(parameter.name);
         for (const auto& binding : fn.locals) shadowed.insert(binding.name);
-        std::function<void(const Statement&)> collect_shadows = [&](const Statement& stmt) {
-            if (stmt.branch_local) shadowed.insert(stmt.branch_local->name);
-            for (const auto& nested : stmt.then_statements) collect_shadows(nested);
-            for (const auto& nested : stmt.else_statements) collect_shadows(nested);
-        };
-        for (const auto& stmt : fn.statements) collect_shadows(stmt);
-        for (const auto& stmt : fn.caught_throw_defers) collect_shadows(stmt);
         std::function<std::string(const Expression&)> nominal = [&](const Expression& expr) -> std::string {
             if (expr.kind == Expression::Kind::Variable) return owners.count(expr.name) ? owners.at(expr.name) : std::string{};
             if (expr.kind != Expression::Kind::Field || !expr.left) return {};
@@ -65,23 +59,24 @@ void resolve_native_methods(Program& program) {
                 const auto cls = classes.find(fn.method_owner);
                 if (cls == classes.end())
                     throw std::runtime_error("unknown lexical self class");
+                bool has_method_family = false;
                 const ClassMethod* implicit = nullptr;
                 for (const auto& candidate : cls->second->methods) {
-                    if (candidate.name != expr->name || candidate.arity != expr->arguments.size()) continue;
+                    if (candidate.name != expr->name) continue;
+                    has_method_family = true;
+                    if (candidate.arity != expr->arguments.size()) continue;
                     if (implicit)
                         throw std::runtime_error("ambiguous compiler-owned native implicit method slot");
                     implicit = &candidate;
                 }
-                if (implicit) {
+                if (has_method_family) {
                     if (shadowed.count(expr->name))
                         throw std::runtime_error("unqualified method call is shadowed by a lexical name; use self." + expr->name);
-                    for (const auto& other : program.functions) {
-                        if (other.method_owner.empty() && other.name == expr->name
-                                && other.parameters.size() == expr->arguments.size())
-                            throw std::runtime_error(
-                                "ambiguous unqualified call '" + expr->name +
-                                "': both an instance method and a free callable match; use self.");
-                    }
+                    if (!implicit)
+                        throw std::runtime_error("unknown method or wrong implicit call arity '" + expr->name + "'");
+                    // A lexical method family wins over same-named free functions,
+                    // even when their arity matches. This must not fall through
+                    // after a wrong-arity self call. Select before virtual dispatch.
                     // Reuse the explicit receiver resolver and its checked
                     // Borrow/BorrowMut insertion. Nothing reaches codegen via
                     // a dynamic string lookup or a forged receiver capability.
@@ -138,9 +133,26 @@ void resolve_native_methods(Program& program) {
                 iterator.record_view = !iterator.class_name.empty();
                 expression(stmt.expression.get());
                 const auto saved = owners;
+                const auto saved_shadowed = shadowed;
+                shadowed.insert(iterator.name);
                 if (!iterator.class_name.empty()) owners.emplace(iterator.name, iterator.class_name);
                 for (auto& child : stmt.then_statements) statement(child);
                 owners = saved;
+                shadowed = saved_shadowed;
+                return;
+            }
+            if (stmt.kind == Statement::Kind::ForIndex && stmt.branch_local) {
+                // Its initializer runs outside the new scope; condition, step
+                // and body run with the loop binder in scope.
+                expression(stmt.branch_local->initializer.get());
+                const auto saved_shadowed = shadowed;
+                const auto saved = owners;
+                shadowed.insert(stmt.branch_local->name);
+                expression(stmt.condition.get());
+                expression(stmt.loop_step.get());
+                for (auto& child : stmt.then_statements) statement(child);
+                owners = saved;
+                shadowed = saved_shadowed;
                 return;
             }
             expression(stmt.expression.get()); expression(stmt.condition.get()); expression(stmt.condition_lhs.get()); expression(stmt.condition_rhs.get());
@@ -149,13 +161,19 @@ void resolve_native_methods(Program& program) {
             for (auto& item : stmt.array_commit_values) expression(item.get());
             if (stmt.branch_local) {
                 expression(stmt.branch_local->initializer.get());
-                if (!stmt.branch_local->class_name.empty()) owners.emplace(stmt.branch_local->name, stmt.branch_local->class_name);
+                if (!stmt.branch_local->class_name.empty())
+                    owners.emplace(stmt.branch_local->name, stmt.branch_local->class_name);
+                if (stmt.kind == Statement::Kind::ScopedLocal)
+                    shadowed.insert(stmt.branch_local->name);
             }
             const auto saved = owners;
+            const auto saved_shadowed = shadowed;
             for (auto& arm : stmt.then_statements) statement(arm);
             owners = saved;
+            shadowed = saved_shadowed;
             for (auto& arm : stmt.else_statements) statement(arm);
             owners = saved;
+            shadowed = saved_shadowed;
         };
         for (auto& local : fn.locals) {
             expression(local.initializer.get());
