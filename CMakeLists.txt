@@ -5576,4 +5576,12 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
             "${CMAKE_CURRENT_SOURCE_DIR}")
     set_tests_properties(atto_redis_llvm_native_actor_guest_scalar
         PROPERTIES TIMEOUT 110)
+    add_test(NAME atto_redis_llvm_native_actor_guest_batched
+        COMMAND bash
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-atto-redis-native-batch-llvm.sh"
+            "$<TARGET_FILE:oreslang-llvmc>"
+            "${ORE_REDIS_CLANG}"
+            "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(atto_redis_llvm_native_actor_guest_batched
+        PROPERTIES TIMEOUT 120)
 endif()
