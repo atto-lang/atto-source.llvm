@@ -55,6 +55,39 @@ fn assert_source(source: &str) {
     assert!(!contents.contains("read_buffer_async"));
 }
 
+fn run_pure_preface_predicate(compiler: &PathBuf, clang: &PathBuf, root: &PathBuf, work: &PathBuf) {
+    // A distinct executable Atto guest checks the complete protocol signature
+    // and several wrong-version, malformed or out-of-range octets.
+    let source = root.join("tests/fixtures/atto-rmq-native-preface-predicate.atto");
+    let text = fs::read_to_string(&source).expect("read Atto pure predicate");
+    assert!(text.contains("pub fnc valid_amqp_preface("));
+    assert!(text.contains("valid_amqp_preface(65, 77, 81, 80, 0, 0, 9, 1)"));
+    assert!(text.contains("!valid_amqp_preface(65, 77, 81, 80, 0, 0, 9, 2)"));
+    assert!(text.contains("!valid_amqp_preface(-1, 77, 81, 80, 0, 0, 9, 1)"));
+    let compiled = run(Command::new(compiler).arg(&source));
+    let ir = String::from_utf8(compiled.stdout).expect("LLVM IR UTF-8");
+    assert!(ir.starts_with("; ModuleID"), "missing native LLVM module");
+    assert!(ir.contains("valid_amqp_preface"), "Atto function not lowered to native LLVM");
+    let ll = work.join("atto-rmq-preface-predicate.ll");
+    fs::write(&ll, ir).expect("store native IR");
+    for optimization in ["O0", "O2"] {
+        let executable = work.join(format!("atto-rmq-preface-{optimization}"));
+        run(Command::new(clang)
+            .arg(format!("-{optimization}"))
+            .arg("-Werror")
+            .arg("-Wno-override-module")
+            .arg("-x").arg("ir").arg(&ll)
+            .arg("-o").arg(&executable));
+        let result = Command::new(&executable).output().expect("run native pure guest");
+        assert_eq!(result.status.code(), Some(43),
+                   "invalid compiled AMQP predicate at {optimization}; stderr={}",
+                   String::from_utf8_lossy(&result.stderr));
+        assert!(result.stdout.is_empty(), "unexpected pure guest stdout");
+        assert!(result.stderr.is_empty(), "unexpected pure guest stderr");
+        println!("ATTO_RMQ_LLVM_AMQP_PREFACE_PREDICATE_{optimization}=PASS");
+    }
+}
+
 fn main() {
     let args: Vec<_> = env::args_os().collect();
     assert_eq!(args.len(), 5, "usage: harness COMPILER CLANG SOURCE_ROOT WORK_DIR");
@@ -64,6 +97,7 @@ fn main() {
     let work = PathBuf::from(&args[4]);
     assert!(compiler.is_file(), "real native compiler required");
     fs::create_dir_all(&work).expect("create build dir");
+    run_pure_preface_predicate(&compiler, &clang, &root, &work);
     let source = root.join("tests/fixtures/atto-rmq-native-preface-actor.atto");
     let source_bytes = fs::read_to_string(&source).expect("read native actor guest");
     assert_source(&source_bytes);
