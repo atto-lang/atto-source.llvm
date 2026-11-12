@@ -895,32 +895,46 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
     let ir = temp.path.join("remainder.ll");
     let executable = temp.path.join("remainder-native");
 
-    let positives = [
-        ("positive", "pub fnc main(): int { return 17 % 5; }\n", 2),
-        ("negative-dividend", "pub fnc main(): int { return (-17 % 5) + 10; }\n", 8),
-        ("precedence", "pub fnc main(): int { return 4 + 17 % 5 * 3; }\n", 10),
-        ("associativity", "pub fnc main(): int { return 20 % 6 % 4; }\n", 2),
-        ("function-param", "fnc rem(int n): int { return n % 7; }\n\
-            pub fnc main(): int { return rem(52); }\n", 3),
-        ("exact-divisor", "pub fnc main(): int { return 64 % 8; }\n", 0),
-        ("divisor-one", "pub fnc main(): int { return (-14 % 1) + 6; }\n", 6),
-        ("signed-min-divisor-one", "pub fnc main(): int { return ((-9223372036854775807 - 1) % 1) + 11; }\n", 11),
-        ("negative-divisor", "pub fnc main(): int { return 17 % -5; }\n", 2),
-        ("both-negative", "pub fnc main(): int { return (-17 % -5) + 10; }\n", 8),
-        ("negative-precedence", "pub fnc main(): int { return 4 + 17 % -5 * 3; }\n", 10),
-        ("negative-associativity", "pub fnc main(): int { return 20 % 6 % -4; }\n", 2),
-        ("negative-function-param", "fnc rem(int n): int { return n % -7; }\n\
-            pub fnc main(): int { return rem(52); }\n", 3),
-        ("negative-minus-one", "pub fnc main(): int { return 5 % -1; }\n", 0),
-        ("min-dividend-minus-one", "pub fnc main(): int { return ((-9223372036854775807 - 1) % -1) + 13; }\n", 13),
-        ("signed-min-divisor", "pub fnc main(): int { return 5 % -9223372036854775808; }\n", 5),
-        ("min-both-sides", "pub fnc main(): int { return ((-9223372036854775807 - 1) % -9223372036854775808) + 17; }\n", 17),
+    // %, ^ and ^^ are reserved. Named Integer operations carry the semantics:
+    // rem truncates toward zero, mod is never negative, and a zero divisor traps.
+    let min = "(-9223372036854775807 - 1)";
+    let rem_fn = "fnc r(int a, int b): int { return Integer.rem(a, b); }\n";
+    let mod_fn = "fnc m(int a, int b): int { return Integer.mod(a, b); }\n";
+    let positives: Vec<(&str, String, i32)> = vec![
+        ("positive", "pub fnc main(): int { return Integer.rem(17, 5); }\n".into(), 2),
+        ("negative-dividend", "pub fnc main(): int { return Integer.rem(-17, 5) + 10; }\n".into(), 8),
+        ("precedence", "pub fnc main(): int { return 4 + Integer.rem(17, 5) * 3; }\n".into(), 10),
+        ("nested", "pub fnc main(): int { return Integer.rem(Integer.rem(20, 6), 4); }\n".into(), 2),
+        ("function-param", "fnc rem(int n): int { return Integer.rem(n, 7); }\n\
+            pub fnc main(): int { return rem(52); }\n".into(), 3),
+        ("exact-divisor", "pub fnc main(): int { return Integer.rem(64, 8); }\n".into(), 0),
+        ("divisor-one", "pub fnc main(): int { return Integer.rem(-14, 1) + 6; }\n".into(), 6),
+        ("signed-min-divisor-one", format!("pub fnc main(): int {{ return Integer.rem({min}, 1) + 11; }}\n"), 11),
+        ("negative-divisor", "pub fnc main(): int { return Integer.rem(17, -5); }\n".into(), 2),
+        ("both-negative", "pub fnc main(): int { return Integer.rem(-17, -5) + 10; }\n".into(), 8),
+        ("negative-minus-one", "pub fnc main(): int { return Integer.rem(5, -1); }\n".into(), 0),
+        ("min-dividend-minus-one", format!("pub fnc main(): int {{ return Integer.rem({min}, -1) + 13; }}\n"), 13),
+        ("signed-min-divisor", format!("pub fnc main(): int {{ return Integer.rem(5, {min}); }}\n"), 5),
+        ("min-both-sides", format!("pub fnc main(): int {{ return Integer.rem({min}, {min}) + 17; }}\n"), 17),
         // Full signed-i64 equality returns 0/1; POSIX process exit status
         // otherwise truncates an incorrect large result modulo 256.
-        ("full-width-min-negative-seven", "pub fnc main(): int { return (((-9223372036854775807 - 1) % -7) == -1) ? 0 : 1; }\n", 0),
-        ("full-width-max-negative-seven", "pub fnc main(): int { return ((9223372036854775807 % -7) == 0) ? 0 : 1; }\n", 0),
+        ("full-width-min-negative-seven", format!("pub fnc main(): int {{ return (Integer.rem({min}, -7) == -1) ? 0 : 1; }}\n"), 0),
+        ("full-width-max-negative-seven", "pub fnc main(): int { return (Integer.rem(9223372036854775807, -7) == 0) ? 0 : 1; }\n".into(), 0),
+        ("runtime-divisor", format!("{rem_fn}pub fnc main(): int {{ return r(52, 7); }}\n"), 3),
+        ("runtime-negative-divisor", format!("{rem_fn}pub fnc main(): int {{ return r(-17, -5) + 10; }}\n"), 8),
+        ("runtime-min-minus-one", format!("{rem_fn}pub fnc main(): int {{ return r({min}, -1) + 21; }}\n"), 21),
+        ("mod-negative-dividend", "pub fnc main(): int { return Integer.mod(-9, 4); }\n".into(), 3),
+        ("mod-both-negative", "pub fnc main(): int { return Integer.mod(-9, -4); }\n".into(), 3),
+        ("mod-negative-divisor", "pub fnc main(): int { return Integer.mod(9, -4); }\n".into(), 1),
+        ("mod-runtime", format!("{mod_fn}pub fnc main(): int {{ return m(-9, 4); }}\n"), 3),
+        ("mod-runtime-min-minus-one", format!("{mod_fn}pub fnc main(): int {{ return m({min}, -1) + 5; }}\n"), 5),
+        ("mod-full-width", format!("{mod_fn}pub fnc main(): int {{ return (m(-1, {min}) == 9223372036854775807) ? 0 : 1; }}\n"), 0),
+        ("bitxor", "pub fnc main(): int { return Integer.bitXor(5, 3); }\n".into(), 6),
+        ("bitxor-full-width", format!("pub fnc main(): int {{ return (Integer.bitXor({min}, 9223372036854775807) == -1) ? 0 : 1; }}\n"), 0),
+        ("bool-xor", "pub fnc main(): int { return (Xor(true, false) && !Xor(true, true)) ? 0 : 1; }\n".into(), 0),
     ];
-    for (name, program, expected) in positives {
+    for (name, program, expected) in &positives {
+        let (name, expected) = (*name, *expected);
         fs::write(&source, program).map_err(|e| format!("{name}: write: {e}"))?;
         let compiled = run(compiler, [source.as_os_str()])?;
         require(
@@ -928,16 +942,16 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
             format!("{name}: native frontend rejected source: {}", stderr(&compiled)),
         )?;
         let llvm_ir = stdout(&compiled);
-        if name == "function-param" || name == "negative-function-param" {
+        if name == "function-param" || name == "runtime-divisor" {
             require(
                 llvm_ir.contains("srem i64 "),
                 format!("{name}: emitted IR lacks runtime signed remainder"),
             )?;
         }
-        if name == "min-dividend-minus-one" {
+        if name == "runtime-min-minus-one" {
             require(
-                !llvm_ir.contains("srem i64 "),
-                format!("{name}: emitted unsafe signed-min / -1 srem"),
+                llvm_ir.contains("rem.divisor"),
+                format!("{name}: missing the -1 divisor guard that avoids srem poison"),
             )?;
         }
         fs::write(&ir, &compiled.stdout).map_err(|e| format!("{name}: IR: {e}"))?;
@@ -965,22 +979,33 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
             )?;
         }
     }
+    let traps: Vec<(&str, String)> = vec![
+        ("zero-literal-divisor", "pub fnc main(): int { return Integer.rem(5, 0); }\n".into()),
+        ("zero-runtime-divisor", format!("{rem_fn}pub fnc main(): int {{ return r(5, 0); }}\n")),
+        ("mod-zero-runtime-divisor", format!("{mod_fn}pub fnc main(): int {{ return m(5, 0); }}\n")),
+    ];
+    for (name, program) in &traps {
+        fs::write(&source, program).map_err(|e| format!("{name}: write: {e}"))?;
+        let compiled = run(compiler, [source.as_os_str()])?;
+        require(compiled.status.success(),
+            format!("{name}: native frontend rejected source: {}", stderr(&compiled)))?;
+        fs::write(&ir, &compiled.stdout).map_err(|e| format!("{name}: IR: {e}"))?;
+        for level in ["-O0", "-O2"] {
+            let linked = run(clang, [OsStr::new(level), ir.as_os_str(), OsStr::new("-o"), executable.as_os_str()])?;
+            require(linked.status.success(), format!("{name} {level}: Clang failed: {}", stderr(&linked)))?;
+            let executed = run(&executable, std::iter::empty::<&str>())?;
+            // A zero divisor must stop the program, never return a value.
+            require(executed.status.code().is_none(),
+                format!("{name} {level}: expected a trap, observed exit {:?}", executed.status.code()))?;
+        }
+    }
     let negatives = [
-        ("zero-divisor", "pub fnc main(): int { return 5 % 0; }\n",
-            "nonzero signed integer literal divisor"),
-        ("negative-zero", "pub fnc main(): int { return 5 % -0; }\n",
-            "nonzero signed integer literal divisor"),
-        ("computed-divisor", "pub fnc main(): int { return 5 % (3 - 1); }\n",
-            "nonzero signed integer literal divisor"),
-        ("runtime-divisor", "fnc rem(int n): int { return 5 % n; }\n\
-            pub fnc main(): int { return rem(2); }\n",
-            "nonzero signed integer literal divisor"),
-        ("nonliteral-unary", "pub fnc main(): int { return 5 % -(1 + 2); }\n",
-            "nonzero signed integer literal divisor"),
-        ("double-negative", "pub fnc main(): int { return 5 % -(-2); }\n",
-            "nonzero signed integer literal divisor"),
-        ("wrong-type", "pub fnc main(): int { return true % 2; }\n",
-            "arithmetic requires int"),
+        ("percent", "pub fnc main(): int { return 17 % 5; }\n", "'%' is reserved"),
+        ("caret", "pub fnc main(): int { return 5 ^ 3; }\n", "'^' is reserved"),
+        ("double-caret", "pub fnc main(): int { return (true ^^ false) ? 1 : 0; }\n", "'^^' is reserved"),
+        ("pow-unsupported", "pub fnc main(): int { return Integer.pow(2, 3); }\n", "Integer.pow is unsupported"),
+        ("wrong-type", "pub fnc main(): int { return Integer.rem(true, 2); }\n", "arithmetic requires int"),
+        ("xor-shadowing", "fnc Xor(bool a, bool b): bool { return a; }\npub fnc main(): int { return 0; }\n", "expected non-keyword identifier"),
     ];
     for (name, program, diagnostic) in negatives {
         fs::write(&source, program).map_err(|e| format!("{name}: write: {e}"))?;
@@ -994,8 +1019,8 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
         )?;
     }
     println!(
-        "Native Java-compatible signed remainder: {} compiled cases at -O0/-O2, {} fail-closed negatives",
-        positives.len(), negatives.len()
+        "Native Integer.rem/mod/bitXor: {} compiled cases and {} zero-divisor traps at -O0/-O2, {} reserved-operator negatives",
+        positives.len(), traps.len(), negatives.len()
     );
     Ok(())
 }
