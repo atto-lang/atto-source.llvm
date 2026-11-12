@@ -89,3 +89,34 @@ establish meaningful AttoNATS broker performance or parity.
 **Review requirement:** Keep this as a draft until an exact-head
 nonzero-step current LLVM test and independent review pass. No new
 private LLVM source was exported to an unapproved external carrier.
+
+### Historical native String-array kernel executed after explicit syntax adaptation
+
+**PASS (historical compiler, NOT canonical source identity)**:
+[private run #43284475095](https://github.com/honeypot-r-us-test/hnpt-lib-core/actions/runs/43284475095),
+job `131414085353`, original existing private LLVM compiler tree unchanged
+at base carrier `622be2cca084187e856f1706847429d2d3693f65`.
+The carrier branch head
+`c2761fb80dd1a17408bc4b83319f01760eb52010`
+added only the two byte-identical Atto app blobs and a test workflow,
+never new LLVM private compiler source.
+
+The workflow built the actual LLVM 18.1.3 C++ compiler, then constructed
+a **derived diagnostic source file** by (1) removing only the two
+`use namespace` headers and (2) replacing trailing
+`if <condition> then` with the older compiler's equivalent
+`if <condition>; then`. Its logs explicitly state
+`CANONICAL_ATTO_NATS_SOURCE_EXECUTED=false` and
+`HISTORICAL_IF_THEN_HEADER_ADAPTATION=DIAGNOSTIC_ONLY`.
+
+The historical compiler emitted LLVM IR including the native String
+equality and Array get lowering, and the actual AttoNATS matching
+guest ran with Clang O0 **PASS** and O2 **PASS**. Both returned zero
+with exactly the guest-origin `ATTO_NATS_TOKEN_MATCH_PASS`
+stdout marker. This is meaningful historical backend algorithm
+execution evidence, **not** canonical exact-source parity, not
+proof for current LLVM `main` and not an actor/NATS broker test.
+
+The committed CTest from this PR must still execute with
+*only namespace header removal*, **no conditional syntax rewrite**,
+using the current LLVM source before LLVM String-array parity is promoted.
