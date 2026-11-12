@@ -70,8 +70,14 @@ int ores_native_actor_task_publish(
     OresNativeActorTask* task, uint64_t task_generation,
     OresNativeWakeOutcome outcome);
 /* Called inside the same authenticated actor wake, after DONE/error.
- * Releases the actor-incarnation physical loan exactly once. */
+ * Marks guest-complete. Physical loan retirement is deferred until the
+ * native scheduler has actually unwound this guest WAKE callback/claim. */
 int ores_native_actor_task_finish(OresNativeActorTask* task);
+/* Must be wired to OresNativeActorSchedulerOptions.after_wake. Executes with
+ * guest context ALREADY CLEARED, no scheduler lock held, and lane physically
+ * pinned. The last guest frame has exited before this acknowledgement. */
+int ores_native_actor_task_after_wake(
+    OresNativeActorTask* task, OresNativeWakeTicket ticket);
 /* Cancellation is nonparking: suspended transferred wake is aborted, queued
  * wake is drained without guest execution, running guest finishes at its
  * cooperative boundary. STOP may only finish after this receipt retires. */
