@@ -579,6 +579,16 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_source_budget.py"
             "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_compiler_source_budget PROPERTIES TIMEOUT 25)
+    # Exact portable 128/129 nested template-comment budget, exercised via
+    # production oreslang-llvmc rather than an independent scanner.
+    # Source lexical admission is not a String guest runtime execution proof.
+    add_test(NAME native_template_comment_nesting_admission
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_template_comment_budget.py"
+            "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_template_comment_nesting_admission
+        PROPERTIES TIMEOUT 60)
+
     # End-to-end source -> LLVM IR -> Clang -> actual native OS process.
     # Four portable cases have lossless exit status; DO NOT claim seven.
     find_program(ORE_SOURCE_I64_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
