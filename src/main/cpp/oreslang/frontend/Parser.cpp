@@ -941,7 +941,38 @@ public:
                 (!program.functions.empty() || !program.classes.empty() ||
                  !program.actors.empty() || !program.contracts.empty() ||
                  !program.cooperative_loops.empty() || !program.generators.empty())) {
-            fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native namespace v1 is metadata-only");
+            // First real native namespace execution slice: exactly one
+            // standalone, pure, zero-arg scalar main returning a literal.
+            // No imports, namespace cross-file linking, actors, closures or
+            // source FFI can acquire identity/dispatch authority here.
+            const bool literal_main = program.imports.empty()
+                    && program.functions.size() == 1
+                    && program.classes.empty() && program.actors.empty()
+                    && program.contracts.empty() && program.conforms.empty()
+                    && program.cooperative_loops.empty() && program.generators.empty()
+                    && program.type_only_declarations.empty()
+                    && program.functions.front().name == "main"
+                    && program.functions.front().parameters.empty()
+                    && program.functions.front().generic_parameters.empty()
+                    && !program.functions.front().returns_void
+                    && program.functions.front().return_type == ScalarType::I64
+                    && !program.functions.front().async_source_i64
+                    && !program.functions.front().has_declared_effects
+                    && program.functions.front().result
+                    && program.functions.front().result->kind == Expression::Kind::Integer
+                    && program.functions.front().result->arguments.empty()
+                    && program.functions.front().locals.empty()
+                    && program.functions.front().statements.empty()
+                    && program.functions.front().early_returns.empty()
+                    && program.functions.front().actor_spawns.empty()
+                    && program.functions.front().actor_sends.empty()
+                    && program.functions.front().actor_stops.empty()
+                    && program.functions.front().source_tasks.empty()
+                    && program.functions.front().future_pipelines.empty()
+                    && program.functions.front().actor_field_writes.empty()
+                    && !program.functions.front().caught_throw_value;
+            if (!literal_main)
+                fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: only standalone literal-i64 main is native-lowered; multi-file actor namespaces remain gated");
         }
         compile_type_constraint_descriptors(program);
         lower_extension_calls(program);
