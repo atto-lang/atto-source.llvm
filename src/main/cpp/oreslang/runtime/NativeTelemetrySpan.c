@@ -27,8 +27,8 @@ typedef struct {
     OresNativeTelemetryFrame frames[ORES_TRACE_MAX_DEPTH];
 } OresNativeTelemetryCarrier;
 
-static atomic_int ores_telemetry_enabled = ATOMIC_VAR_INIT(0);
-static atomic_uint_fast64_t ores_telemetry_next_carrier = ATOMIC_VAR_INIT(1);
+static atomic_int ores_telemetry_enabled = 0;
+static atomic_uint_fast64_t ores_telemetry_next_carrier = 1;
 static _Thread_local OresNativeTelemetryCarrier ores_telemetry_carrier;
 
 /* Each carrier receives a unique, never-reused ID before its first span.
