@@ -5122,6 +5122,10 @@ private:
                 const bool runtime_symbol =
                     fn.name == "abort" ||
                     fn.name == "__oreslang_guest_main" ||
+                    // String region, substring predicate and split iterator
+                    // are compiler-owned C ABIs. A guest function must not
+                    // shadow their linker symbols or provoke LLVM auto-rename.
+                    fn.name.rfind("ores_string_", 0) == 0 ||
                     fn.name.rfind("oreslang_owned_i64_region_", 0) == 0 ||
                     fn.name.rfind("ores_actor_i64_heap_", 0) == 0 ||
                     fn.name.rfind("oreslang_source_actor_", 0) == 0 ||
