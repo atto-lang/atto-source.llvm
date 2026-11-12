@@ -129,4 +129,15 @@ pub fnc main(): int {
 ATTO
 reject_source forged-close
 
-echo 'LLVM_AOT_GUEST_TELEMETRY_SCOPE_EXECUTION_PASS:3:4'
+# Enabled instrumentation is not yet admitted by hard-real-time WCET policy.
+if "$COMPILER" --profile=native-hard-rt "$OUT/normal.atto" \
+    > "$OUT/hard-rt.ll" 2> "$OUT/hard-rt.err"; then
+  echo "unbudgeted native telemetry incorrectly certified as hard-real-time" >&2
+  exit 1
+fi
+test ! -s "$OUT/hard-rt.ll" ||
+  { echo "hard-real-time denial emitted partial LLVM IR" >&2; exit 1; }
+grep -q "telemetry using lacks bounded WCET" "$OUT/hard-rt.err" ||
+  { echo "hard-real-time telemetry denial did not reach WCET gate" >&2; cat "$OUT/hard-rt.err" >&2; exit 1; }
+
+echo 'LLVM_AOT_GUEST_TELEMETRY_SCOPE_EXECUTION_PASS:3:5'
