@@ -190,7 +190,7 @@ int ores_native_actor_task_finish(OresNativeActorTask* t) {
 int ores_native_actor_task_after_wake(
         OresNativeActorTask* t, OresNativeWakeTicket wake) {
     if (!t || !t->initialized
-            || ores_native_actor_scheduler_in_any_actor_turn())
+            || ores_native_actor_scheduler_is_current_carrier(t->scheduler))
         return 0;
     pthread_mutex_lock(&t->mutex);
     int ok = t->in_wake && same_ticket(t->active_ticket, wake);
