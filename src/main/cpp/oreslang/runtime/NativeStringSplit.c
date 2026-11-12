@@ -10,17 +10,29 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { MAX_SPLIT_TOKENS = 65536 };
+enum { MAX_SPLIT_TOKENS = 65536, MAX_SPLIT_COMPARISON_BYTES = 128 * 1024 * 1024 };
 static void invalid(void) { abort(); }
 
-/* Literal bytes are separators, not regex syntax. One final (possibly
- * empty) token is always produced. Multiple-byte separators do not overlap.
+/* Search for the next literal byte separator without re-comparing every
+ * possible offset when the delimiter's first byte is rare (NATS dot path).
+ * Empty separators are denied before entry. The caller checks a bounded
+ * source_length * delimiter_length worst-case comparison budget.
  */
-static int at_separator(const char *source, size_t length,
-                        const char *separator, size_t separator_length,
-                        size_t index) {
-    return separator_length <= length - index &&
-        memcmp(source + index, separator, separator_length) == 0;
+static size_t next_separator(const char *source, size_t length,
+                             const char *separator, size_t separator_length,
+                             size_t from) {
+    if (from > length || separator_length > length - from) return SIZE_MAX;
+    const size_t last = length - separator_length;
+    while (from <= last) {
+        const char *at = memchr(source + from, (unsigned char)separator[0],
+            last - from + 1);
+        if (!at) return SIZE_MAX;
+        const size_t found = (size_t)(at - source);
+        if (separator_length == 1 ||
+                memcmp(at, separator, separator_length) == 0) return found;
+        from = found + 1;
+    }
+    return SIZE_MAX;
 }
 
 OresNativeIntArrayStatus ores_string_split_literal(
@@ -40,16 +52,23 @@ OresNativeIntArrayStatus ores_string_split_literal(
      * Fail closed rather than guessing Java String.split_literal behavior.
      */
     if (separator_length == 0) invalid();
+    /* This is a synchronous operation: prevent pathological repeated-prefix
+     * separators from monopolizing an actor turn. NATS dot matching is one
+     * byte and uses the fast-path scan, independent of its source length.
+     * Reject before allocating an array or publishing any String handles.
+     */
+    if (source_length &&
+            separator_length > MAX_SPLIT_COMPARISON_BYTES / source_length)
+        return ORES_NATIVE_ARRAY_LIMIT;
 
     size_t count = 1;
     size_t index = 0;
-    while (index < source_length && separator_length <= source_length - index) {
-        if (at_separator(source, source_length, separator, separator_length, index)) {
-            if (++count > MAX_SPLIT_TOKENS) return ORES_NATIVE_ARRAY_LIMIT;
-            index += separator_length;
-        } else {
-            ++index;
-        }
+    for (;;) {
+        const size_t found = next_separator(
+            source, source_length, separator, separator_length, index);
+        if (found == SIZE_MAX) break;
+        if (++count > MAX_SPLIT_TOKENS) return ORES_NATIVE_ARRAY_LIMIT;
+        index = found + separator_length;
     }
     /* count is bounded and cannot overflow size_t in the scratch plan. */
     size_t *offsets = malloc(count * sizeof(*offsets));
@@ -61,15 +80,14 @@ OresNativeIntArrayStatus ores_string_split_literal(
     }
     size_t token = 0, start = 0;
     index = 0;
-    while (index < source_length && separator_length <= source_length - index) {
-        if (at_separator(source, source_length, separator, separator_length, index)) {
-            offsets[token] = start;
-            sizes[token++] = index - start;
-            index += separator_length;
-            start = index;
-        } else {
-            ++index;
-        }
+    for (;;) {
+        const size_t found = next_separator(
+            source, source_length, separator, separator_length, index);
+        if (found == SIZE_MAX) break;
+        offsets[token] = start;
+        sizes[token++] = found - start;
+        index = found + separator_length;
+        start = index;
     }
     offsets[token] = start;
     sizes[token++] = source_length - start;
