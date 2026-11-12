@@ -1,0 +1,150 @@
+#define _POSIX_C_SOURCE 200809L
+#include "oreslang/runtime/NativeActorTaskBridge.h"
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdio.h>
+#include <stdlib.h>
+#define CHECK(c) do { if (!(c)) { \
+    fprintf(stderr, "ACTOR_TASK_WAKE_FAIL %s:%d: %s\\n", __FILE__, __LINE__, #c); \
+    abort(); \
+} } while (0)
+
+typedef struct {
+    OresNativeActorScheduler* scheduler;
+    OresNativeActorRef actor;
+    OresNativeActorTask parent, child;
+    pthread_mutex_t mutex;
+    pthread_cond_t cv;
+    int mode; /* 1=nest+external completion, 2=STOP while suspended */
+    int suspended, child_done, parent_done;
+    atomic_int parent_turns, child_turns, control_turns, errors;
+} Fixture;
+
+static void signal_host(Fixture* f, int* field) {
+    CHECK(pthread_mutex_lock(&f->mutex) == 0);
+    *field = 1;
+    CHECK(pthread_cond_broadcast(&f->cv) == 0);
+    CHECK(pthread_mutex_unlock(&f->mutex) == 0);
+}
+static void wait_host(Fixture* f, int* field) {
+    CHECK(pthread_mutex_lock(&f->mutex) == 0);
+    while (!*field)
+        CHECK(pthread_cond_wait(&f->cv, &f->mutex) == 0);
+    CHECK(pthread_mutex_unlock(&f->mutex) == 0);
+}
+static void on_data(void* opaque, size_t actor, uint64_t message) {
+    Fixture* f = (Fixture*)opaque;
+    if (actor != 0 || message != 1
+            || !ores_native_actor_scheduler_is_current_actor(f->scheduler, f->actor)
+            || !ores_native_actor_scheduler_can_start_task(f->scheduler, f->actor)
+            || !ores_native_actor_task_start(&f->parent))
+        atomic_fetch_add(&f->errors, 1);
+}
+static void on_control(void* opaque, size_t actor, uint64_t message) {
+    Fixture* f = (Fixture*)opaque;
+    if (actor != 0 || message != 99
+            || ores_native_actor_scheduler_can_start_task(f->scheduler, f->actor)
+            || ores_native_actor_task_start(&f->parent))
+        atomic_fetch_add(&f->errors, 1);
+    atomic_fetch_add(&f->control_turns, 1);
+}
+static void on_wake(void* opaque, size_t actor,
+        OresNativeWakeTicket wake, OresNativeWakeOutcome outcome) {
+    Fixture* f = (Fixture*)opaque;
+    if (actor != 0 || outcome != ORES_NATIVE_WAKE_READY
+            || !ores_native_actor_scheduler_is_current_wake(f->scheduler, wake)) {
+        atomic_fetch_add(&f->errors, 1);
+        return;
+    }
+    if (wake.continuation_slot == 1) {
+        if (!ores_native_actor_task_claim_wake(&f->parent, wake))
+            return; /* STOP/cancellation does not run guest code */
+        int turn = atomic_fetch_add(&f->parent_turns, 1);
+        if (turn == 0) {
+            if (f->mode == 1 && !ores_native_actor_task_start(&f->child))
+                atomic_fetch_add(&f->errors, 1);
+            if (!ores_native_actor_task_suspend(&f->parent))
+                atomic_fetch_add(&f->errors, 1);
+            signal_host(f, &f->suspended);
+        } else if (turn == 1) {
+            if (!ores_native_actor_task_finish(&f->parent))
+                atomic_fetch_add(&f->errors, 1);
+            signal_host(f, &f->parent_done);
+        } else atomic_fetch_add(&f->errors, 1);
+    } else if (wake.continuation_slot == 2) {
+        if (!ores_native_actor_task_claim_wake(&f->child, wake)) {
+            atomic_fetch_add(&f->errors, 1);
+            return;
+        }
+        if (!ores_native_actor_scheduler_is_current_actor(f->scheduler, f->actor)
+                || !ores_native_actor_task_finish(&f->child))
+            atomic_fetch_add(&f->errors, 1);
+        atomic_fetch_add(&f->child_turns, 1);
+        signal_host(f, &f->child_done);
+    } else atomic_fetch_add(&f->errors, 1);
+}
+static void open_fixture(Fixture* f, int mode) {
+    f->mode = mode;
+    CHECK(pthread_mutex_init(&f->mutex, NULL) == 0);
+    CHECK(pthread_cond_init(&f->cv, NULL) == 0);
+    f->scheduler = ores_native_actor_scheduler_open_with_wakes(
+        1, 4, 2, on_data, on_control, NULL, on_wake, f);
+    CHECK(f->scheduler != NULL);
+    f->actor = ores_native_actor_scheduler_spawn(f->scheduler, 0);
+    CHECK(f->actor.scheduler_domain && f->actor.generation);
+    CHECK(ores_native_actor_task_init(
+        &f->parent, f->scheduler, f->actor, 1, 1001, 77));
+    CHECK(ores_native_actor_task_init(
+        &f->child, f->scheduler, f->actor, 2, 1002, 77));
+    /* A producer without an authenticated actor lease cannot start a Task. */
+    CHECK(!ores_native_actor_task_start(&f->parent));
+}
+static void close_fixture(Fixture* f) {
+    CHECK(!atomic_load(&f->errors));
+    CHECK(ores_native_actor_task_close(&f->child));
+    CHECK(ores_native_actor_task_close(&f->parent));
+    ores_native_actor_scheduler_retire(f->scheduler);
+    CHECK(ores_native_actor_scheduler_try_destroy(f->scheduler));
+    CHECK(pthread_cond_destroy(&f->cv) == 0);
+    CHECK(pthread_mutex_destroy(&f->mutex) == 0);
+}
+int main(void) {
+    Fixture f = {0};
+    open_fixture(&f, 1);
+    CHECK(ores_native_actor_scheduler_send(f.scheduler, f.actor, 1));
+    wait_host(&f, &f.suspended);
+    wait_host(&f, &f.child_done);
+    CHECK(!ores_native_actor_scheduler_in_any_actor_turn());
+    CHECK(!ores_native_actor_task_publish(&f.parent, 9999, ORES_NATIVE_WAKE_READY));
+    CHECK(ores_native_actor_task_publish(
+        &f.parent, 1001, ORES_NATIVE_WAKE_READY));
+    CHECK(!ores_native_actor_scheduler_in_any_actor_turn());
+    wait_host(&f, &f.parent_done);
+    CHECK(ores_native_actor_task_physically_done(&f.parent));
+    CHECK(ores_native_actor_task_physically_done(&f.child));
+    CHECK(atomic_load(&f.parent_turns) == 2);
+    CHECK(atomic_load(&f.child_turns) == 1);
+    CHECK(ores_native_actor_scheduler_publish_control(f.scheduler, f.actor, 99));
+    CHECK(ores_native_actor_scheduler_drain(f.scheduler));
+    CHECK(atomic_load(&f.control_turns) == 1);
+    CHECK(ores_native_actor_scheduler_stop(f.scheduler, f.actor));
+    CHECK(ores_native_actor_scheduler_wait_done(f.scheduler, f.actor));
+    close_fixture(&f);
+
+    Fixture stopped = {0};
+    open_fixture(&stopped, 2);
+    CHECK(ores_native_actor_scheduler_send(stopped.scheduler, stopped.actor, 1));
+    wait_host(&stopped, &stopped.suspended);
+    CHECK(atomic_load(&stopped.parent_turns) == 1);
+    CHECK(!ores_native_actor_task_physically_done(&stopped.parent));
+    CHECK(ores_native_actor_task_stop_actor(&stopped.parent));
+    CHECK(ores_native_actor_scheduler_wait_done(stopped.scheduler, stopped.actor));
+    CHECK(ores_native_actor_task_physically_done(&stopped.parent));
+    CHECK(!ores_native_actor_task_publish(
+        &stopped.parent, 1001, ORES_NATIVE_WAKE_READY));
+    CHECK(atomic_load(&stopped.parent_turns) == 1);
+    CHECK(atomic_load(&stopped.child_turns) == 0);
+    close_fixture(&stopped);
+    puts("NATIVE_ACTOR_OWNED_TASK_WAKE_PASS");
+    return 0;
+}
