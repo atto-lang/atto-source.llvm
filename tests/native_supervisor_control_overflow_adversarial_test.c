@@ -151,7 +151,7 @@ static void stress_thousand_failures_without_retries(void) {
     StressState* state = (StressState*)calloc(1, sizeof(StressState));
     require(state != NULL);
     state->scheduler = ores_native_actor_scheduler_open_typed_control(
-            STRESS_CHILDREN + 1, 1, 2,
+            STRESS_CHILDREN + 1, 2, 2,
             stress_on_data, NULL, stress_on_panic, state);
     require(state->scheduler != NULL);
     state->parent = ores_native_actor_scheduler_spawn(state->scheduler, 0);
