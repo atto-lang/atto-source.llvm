@@ -46,17 +46,20 @@ compile_and_run() {
     { echo "LLVM missing actual span begin" >&2; exit 1; }
   grep -q 'ores_native_telemetry_span_end' "$OUT/$name.ll" ||
     { echo "LLVM missing actual span end" >&2; exit 1; }
-  "$CLANG" -O1 -I"$ROOT/src/main/cpp" -x ir "$OUT/$name.ll" \
-    -x c "$RUNTIME" "$OUT/host-proof.c" -o "$OUT/$name"
-  local observed=0
-  ORES_EXPECT_SPANS="$expected_scopes" "$OUT/$name" \
-    > "$OUT/$name.stdout" 2> "$OUT/$name.stderr" || observed=$?
-  test "$observed" -eq "$expected_exit" ||
-    { echo "$name guest process returned $observed, expected $expected_exit" >&2; cat "$OUT/$name.stderr" >&2; exit 1; }
-  test ! -s "$OUT/$name.stdout" ||
-    { echo "unexpected native guest stdout" >&2; exit 1; }
-  grep -qx "NATIVE_GUEST_SPAN_CLEANUP_PASS:$expected_scopes" "$OUT/$name.stderr" ||
-    { echo "$name failed exact span lifecycle check" >&2; cat "$OUT/$name.stderr" >&2; exit 1; }
+  # Check both unoptimized and optimized compiler-generated native code.
+  for OPT in 0 2; do
+    "$CLANG" "-O$OPT" -I"$ROOT/src/main/cpp" -x ir "$OUT/$name.ll" \
+      -x c "$RUNTIME" "$OUT/host-proof.c" -o "$OUT/$name-O$OPT"
+    local observed=0
+    ORES_EXPECT_SPANS="$expected_scopes" "$OUT/$name-O$OPT" \
+      > "$OUT/$name-O$OPT.stdout" 2> "$OUT/$name-O$OPT.stderr" || observed=$?
+    test "$observed" -eq "$expected_exit" ||
+      { echo "$name -O$OPT returned $observed, expected $expected_exit" >&2; cat "$OUT/$name-O$OPT.stderr" >&2; exit 1; }
+    test ! -s "$OUT/$name-O$OPT.stdout" ||
+      { echo "unexpected native guest stdout" >&2; exit 1; }
+    grep -qx "NATIVE_GUEST_SPAN_CLEANUP_PASS:$expected_scopes" "$OUT/$name-O$OPT.stderr" ||
+      { echo "$name -O$OPT failed exact span lifecycle check" >&2; cat "$OUT/$name-O$OPT.stderr" >&2; exit 1; }
+  done
 }
 
 cat > "$OUT/early.atto" <<'ATTO'
