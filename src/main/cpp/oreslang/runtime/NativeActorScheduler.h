@@ -143,6 +143,12 @@ typedef void (*OresNativeActorTaskFn)(void* ctx, size_t actor_index, uint64_t pa
 typedef void (*OresNativeActorWakeFn)(
     void* ctx, size_t actor_index, OresNativeWakeTicket ticket,
     OresNativeWakeOutcome outcome);
+/* Trusted non-guest physical retirement hook. Called after the WAKE guest
+ * callback returned AND its execution claim was released, but before the
+ * scheduler drops the lane's physical outstanding turn. May release task
+ * resources; MUST NOT block or execute guest code. This is a host-only hook. */
+typedef void (*OresNativeActorWakeSettledFn)(
+    void* ctx, size_t actor_index, OresNativeWakeTicket ticket);
 /* One reserved CONTROL message per actor, independent of normal-mail
  * capacity; only an admitted actor lane may invoke the CONTROL handler.
  * CONTROL callbacks never run on a failed child's carrier by direct call.
