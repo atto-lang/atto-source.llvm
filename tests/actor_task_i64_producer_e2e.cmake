@@ -8,6 +8,14 @@ foreach(required IN ITEMS SOURCE_COMPILER CLANG FIXTURE HARNESS EXPECTED OUTPUT_
     endif()
 endforeach()
 file(MAKE_DIRECTORY "${OUTPUT_DIR}")
+set(clang_sanitizers)
+if(SANITIZE)
+    set(clang_sanitizers
+        -fsanitize=address,undefined
+        -fno-sanitize-recover=undefined
+        -fno-omit-frame-pointer)
+    find_program(TASK_PROBE_NM NAMES llvm-nm nm REQUIRED)
+endif()
 set(ir "${OUTPUT_DIR}/atto-actor-task-producer.ll")
 execute_process(
     COMMAND "${SOURCE_COMPILER}" --emit-actor-task-producer-ir-only "${FIXTURE}"
@@ -34,17 +42,29 @@ foreach(opt IN ITEMS O0 O2)
     set(object "${OUTPUT_DIR}/atto-producer-${opt}.o")
     set(binary "${OUTPUT_DIR}/atto-producer-${opt}")
     execute_process(
-        COMMAND "${CLANG}" "-${opt}" -c -x ir "${ir}" -o "${object}"
+        COMMAND "${CLANG}" "-${opt}" ${clang_sanitizers}
+            -c -x ir "${ir}" -o "${object}"
         ERROR_VARIABLE ir_errors RESULT_VARIABLE ir_result)
     if(NOT ir_result STREQUAL "0")
         message(FATAL_ERROR "Clang ${opt} Task LLVM IR object generation failed: ${ir_errors}")
     endif()
     execute_process(
-        COMMAND "${CLANG}" "-${opt}" -std=c11 -Wall -Wextra -Wpedantic -Werror
+        COMMAND "${CLANG}" "-${opt}" ${clang_sanitizers}
+            -std=c11 -Wall -Wextra -Wpedantic -Werror
             "${HARNESS}" "${object}" -o "${binary}"
         ERROR_VARIABLE clang_errors RESULT_VARIABLE clang_result)
     if(NOT clang_result STREQUAL "0")
         message(FATAL_ERROR "Clang ${opt} native Task probe failed: ${clang_errors}")
+    endif()
+    if(SANITIZE)
+        execute_process(COMMAND "${TASK_PROBE_NM}" "${binary}"
+            OUTPUT_VARIABLE sanitizer_symbols
+            RESULT_VARIABLE nm_result)
+        if(NOT nm_result STREQUAL "0" OR
+                NOT sanitizer_symbols MATCHES "__asan_init")
+            message(FATAL_ERROR
+                "sanitizer-configured generated Task probe lacks ASan instrumentation")
+        endif()
     endif()
     execute_process(
         COMMAND "${binary}" "${EXPECTED}"
@@ -62,7 +82,8 @@ foreach(opt IN ITEMS O0 O2)
         endif()
         set(bridge "${OUTPUT_DIR}/atto-producer-native-wake-${opt}")
         execute_process(
-            COMMAND "${CLANG}" "-${opt}" -std=c11 -Wall -Wextra -Wpedantic -Werror
+            COMMAND "${CLANG}" "-${opt}" ${clang_sanitizers}
+                -std=c11 -Wall -Wextra -Wpedantic -Werror
                 -UNDEBUG -pthread
                 "-I${SOURCE_ROOT}/src/main/cpp"
                 -DATTO_ACTOR_TASK_PRODUCER_PROBE=1
@@ -77,6 +98,16 @@ foreach(opt IN ITEMS O0 O2)
         if(NOT bridge_compile_result STREQUAL "0")
             message(FATAL_ERROR "compiled Atto producer + native actor WAKE link failed: ${bridge_compile_result} ${bridge_errors}")
         endif()
+        if(SANITIZE)
+            execute_process(COMMAND "${TASK_PROBE_NM}" "${bridge}"
+                OUTPUT_VARIABLE bridge_sanitizer_symbols
+                RESULT_VARIABLE bridge_nm_result)
+            if(NOT bridge_nm_result STREQUAL "0" OR
+                    NOT bridge_sanitizer_symbols MATCHES "__asan_init")
+                message(FATAL_ERROR
+                    "sanitizer-configured actor TASK/WAKE probe lacks ASan instrumentation")
+            endif()
+        endif()
         execute_process(
             COMMAND "${bridge}"
             RESULT_VARIABLE bridge_result OUTPUT_VARIABLE bridge_output
@@ -87,4 +118,8 @@ foreach(opt IN ITEMS O0 O2)
         endif()
     endif()
 endforeach()
-message(STATUS "ATTO_TASK_I64_PRODUCER_IR_ONLY_O0_O2_PASS; NOT actor await parity")
+if(SANITIZE)
+    message(STATUS "ATTO_TASK_I64_PRODUCER_IR_ONLY_O0_O2_ASAN_UBSAN_PASS; NOT actor await parity")
+else()
+    message(STATUS "ATTO_TASK_I64_PRODUCER_IR_ONLY_O0_O2_PASS; NOT actor await parity")
+endif()
