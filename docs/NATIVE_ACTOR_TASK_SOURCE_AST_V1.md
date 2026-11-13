@@ -172,3 +172,81 @@ an object** at O0/O2, then links that object with the C native scheduler
 fixture. This prevents C-language-only compile flags being applied to LLVM IR.
 All four new executable compiler test registrations still require **actual
 nonzero-step CI execution** and are NOT_EXECUTED at the time of authoring.
+
+## 2026-11-13 compiler-generated fenced continuation-frame ABI (IR-only)
+
+The IR-only compiler probe now emits three additional **compiler-generated**
+functions from the validated restricted `suspends fnc/mtd` AST, alongside
+the previously emitted pure task producer and post-await return bodies:
+
+```c
+int32_t atto_actor_task_i64_frame_init_probe(
+    int64_t words[6], uint64_t actor_generation,
+    uint64_t task_generation, int64_t copied_incoming);
+int32_t atto_actor_task_i64_frame_step_probe(
+    int64_t words[6], uint64_t actor_generation, uint64_t task_generation);
+int32_t atto_actor_task_i64_frame_resume_probe(
+    int64_t words[6], uint64_t actor_generation,
+    uint64_t task_generation, int64_t* result_out);
+```
+
+The trusted host must supply **six zero-initialized 64-bit words** in
+persistent, adequately aligned storage and retain them until physical
+after-WAKE completion and scope retirement. This staging test uses
+preallocated fixture memory; the production actor arena allocator is
+not yet connected and the frame is **not** a safe general-purpose FFI
+interface. Word layout is:
+
+| Word | Meaning |
+| --- | --- |
+| 0 | Actor incarnation / scheduler generation |
+| 1 | Compiler/host Task generation (not user-selected) |
+| 2 | Immutable copied `on_message(int)` capture |
+| 3 | Source-compiled Task producer result |
+| 4 | Compiler continuation phase: 0=NEW; 1=QUEUED; 2=READY; 3=RETIRED; 4=FAILED |
+| 5 | Fixed ABI version marker `0x4154544f5441534b` |
+
+Status codes: **0** success, **1** checked signed-i64 overflow,
+**2** null frame/result pointer, **3** invalid actor/task generation
+or ABI marker, **4** incorrect phase, replay or reinitialization.
+
+- `frame_init` requires zeroed storage, nonzero actor and Task generations.
+  It refuses a second initialization or reinitialization of a retired frame.
+- `frame_step` authenticates the exact stored generations and marker,
+  requires QUEUED, calls the source-compiled checked scalar producer,
+  records the result and moves to READY. Overflow is nontrapping,
+  leaves the previous result unchanged and marks FAILED. Duplicate
+  child execution is denied.
+- `frame_resume` requires the same generations, marker and READY phase;
+  invokes the source-compiled post-`await` return body and transitions
+  to RETIRED only on success. Premature, stale and repeat resumptions are
+  denied without writing the caller output.
+- All three functions are pure generated AOT code: **no foreign Task
+  executor, JIT, new thread, blocking wait, or implicit WAKE permission**.
+
+The native C bridge fixture links these actual generated functions at
+Clang O0/O2, initializes the persistent frame from the actor's DATA
+message, runs `frame_step` in an authenticated child WAKE, publishes
+the parent Future **after** child completion, then runs `frame_resume`
+in the authenticated parent WAKE. The standalone C harness also checks
+premature resume, stale actor generation, wrong Task generation,
+double step/resume, null pointers, failure-state rejection and
+signed-overflow nontrapping behavior.
+
+**Security boundary:** The checks authenticate supplied provenance
+against values stored by `frame_init`; they **do not** grant authority
+to call the generated functions. The actor scheduler's current-WAKE
+authentication, trusted NativeActorTaskRegistry, exact Task generation,
+single-owner actor arena, physical after-WAKE acknowledgement and STOP
+seal still must be enforced by production integration. An arbitrary
+FFI caller holding the frame pointer is not authorized to run guest
+code. This implementation is still IR-only and the **normal full source
+compiler deliberately rejects actor `await`** until actor-owned frame
+allocation, generated Task start, Future subscription, and compiler
+WAKE callback wiring exist.
+
+**Evidence as authored:** generated compiler code and C test
+harnesses are committed, but full `oreslang-llvmc` and linked
+native test executions on this PR head are **NOT_EXECUTED** until
+separately approved private CI source transfer. No full guest `await`
+backend parity is claimed.
