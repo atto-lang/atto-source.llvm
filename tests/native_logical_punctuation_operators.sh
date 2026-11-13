@@ -86,7 +86,7 @@ echo "ATTO_LOGICAL_SHORT_CIRCUIT_RUNTIME_O0_O2_PASS"
 order_ir="$tmp/xor-order-once.ll"
 timeout 40s "$compiler" --target=host "$fixtures/xor-order-once.atto" >"$order_ir"
 test -s "$order_ir" || { echo "missing XOR order IR" >&2; exit 1; }
-printf '1\\n2\\n' >"$tmp/xor-order.expected"
+printf '1\n2\n' >"$tmp/xor-order.expected"
 for opt in 0 2; do
   binary="$tmp/xor-order-O$opt"
   timeout 40s "$clang" "-O$opt" -x ir "$order_ir" -o "$binary"
