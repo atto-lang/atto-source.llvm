@@ -14,6 +14,12 @@ extern "C" {
 typedef void (*OresSourceActorInit)(OresActorI64Heap*, uint64_t, uint64_t);
 typedef int64_t (*OresSourceActorMessage)(
     OresActorI64Heap*, uint64_t, uint64_t, int64_t);
+/* Checked actor handler ABI v1: status == ORES_ACTOR_LOAN_OK succeeds.
+ * Any nonzero OresActorLoanStatus retires the current actor turn and seals
+ * its mailbox; the result out parameter is ignored on failure. Legacy
+ * OresSourceActorMessage remains ABI-stable for existing native clients. */
+typedef int (*OresSourceActorCheckedMessage)(
+    OresActorI64Heap*, uint64_t, uint64_t, int64_t, int64_t*);
 typedef int64_t (*OresSourceActorContinuation)(void* actor);
 
 enum {
@@ -40,6 +46,18 @@ int oreslang_source_actor_test_readiness_publication_entered(void);
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
                                   OresSourceActorMessage on_message,
                                   uint64_t fields);
+void* oreslang_source_actor_spawn_checked(
+    OresSourceActorInit initializer,
+    OresSourceActorCheckedMessage on_message,
+    uint64_t fields);
+/* The following observations are valid only while the opaque actor ref is
+ * owned by its caller (before join_done frees it). A nonzero fault status
+ * identifies failure of a checked handler, NOT a supervisor notification.
+ * Scheduler processed_user_messages counts physically executed DATA turns,
+ * including failed turns; successful_messages never counts a failed turn. */
+int oreslang_source_actor_fault_status(void* actor);
+uint64_t oreslang_source_actor_successful_messages(void* actor);
+uint64_t oreslang_source_actor_failed_messages(void* actor);
 /* Nonblocking bounded one-way send. Overload currently fails closed with a
  * host error; a typed guest overload result still needs compiler lowering.
  */
