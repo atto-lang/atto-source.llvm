@@ -1316,6 +1316,28 @@ int ores_native_actor_scheduler_is_current_wake(
         return 0;
     return ores_native_actor_scheduler_is_current_actor(s, ticket.producer);
 }
+int ores_native_actor_scheduler_is_after_wake(
+        OresNativeActorScheduler* s, OresNativeWakeTicket ticket) {
+    if (!s || settling_scheduler != s
+            || !settling_wake.producer.scheduler_domain
+            || ticket.producer.scheduler_domain != settling_wake.producer.scheduler_domain
+            || ticket.producer.actor_slot != settling_wake.producer.actor_slot
+            || ticket.producer.generation != settling_wake.producer.generation
+            || ticket.target.scheduler_domain != settling_wake.target.scheduler_domain
+            || ticket.target.actor_slot != settling_wake.target.actor_slot
+            || ticket.target.generation != settling_wake.target.generation
+            || ticket.slot != settling_wake.slot
+            || ticket.slot_generation != settling_wake.slot_generation
+            || ticket.continuation_slot != settling_wake.continuation_slot
+            || ticket.continuation_generation != settling_wake.continuation_generation
+            || ticket.code_generation != settling_wake.code_generation
+            || ticket.descriptor_generation != settling_wake.descriptor_generation)
+        return 0;
+    /* Guest execution is already unbound, and this is not a caller-supplied
+     * completion event. Only scheduler-internal post-dispatch can install
+     * settling_scheduler on its trusted carrier thread. */
+    return executing == NULL;
+}
 /* Request-local SourceTask resume may access its original scope only on the
  * exact scheduler-issued continuation WAKE, with a successful READY outcome,
  * and only while its producer actor remains RUNNING on this physical carrier.
