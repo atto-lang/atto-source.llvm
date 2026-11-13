@@ -41,7 +41,8 @@ typedef struct {
     pthread_cond_t cv;
     int mode; /* 1=nested complete, 2=STOP, 3=parent DONE before child */
     int suspended, suspension_physically_returned, allow_suspend_guest_exit;
-    int child_done, child_suspended, parent_done, parent_physically_returned;
+    int child_done, child_suspended, child_physically_returned;
+    int parent_done, parent_physically_returned;
     int allow_parent_wake_exit;
     atomic_int parent_turns, child_turns, control_turns, errors;
 #ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
@@ -226,8 +227,11 @@ static void after_wake(void* opaque, size_t actor,
         } else {
             signal_host(f, &f->parent_physically_returned);
         }
-    } else if (wake.continuation_slot == 2 && f->mode == 3) {
-        signal_host(f, &f->child_suspended);
+    } else if (wake.continuation_slot == 2) {
+        if (f->mode == 3)
+            signal_host(f, &f->child_suspended);
+        else
+            signal_host(f, &f->child_physically_returned);
     }
 }
 static void open_fixture(Fixture* f, int mode) {
@@ -318,6 +322,11 @@ int main(void) {
     wait_host(&f, &f.suspension_physically_returned);
 #ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
     wait_host(&f, &f.child_done);
+    /* A child finish() inside its WAKE is not yet physical retirement.
+     * Only the authenticated scheduler after-WAKE callback may settle the
+     * child resource loan. Do not publish the parent's READY Future earlier. */
+    wait_host(&f, &f.child_physically_returned);
+    CHECK(ores_native_actor_task_physically_done(&f.child));
     CHECK(f.compiled_task_frame[4] == 2);
     CHECK(f.compiled_task_frame[3] ==
           (int64_t)ATTO_ACTOR_TASK_PRODUCER_EXPECTED);
