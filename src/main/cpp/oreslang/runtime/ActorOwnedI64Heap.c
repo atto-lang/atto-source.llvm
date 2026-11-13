@@ -535,6 +535,61 @@ void ores_actor_i64_heap_field_init_mutable(OresActorI64Heap* heap,
     unlock_heap(heap);
 }
 
+/* Compiler-lowered scalar actor-field ABI. Each operation is bounded and
+ * independently authenticated; rejected reads zero output and rejected
+ * writes do not mutate the actor heap. This does not check source-level
+ * lifetime/await borrowing and is not guest-accessible as a raw pointer. */
+OresActorLoanStatus ores_actor_i64_heap_try_field_read(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
+        uint64_t index, int64_t* out_value) {
+    if (!out_value) return ORES_ACTOR_LOAN_BAD_HANDLE;
+    *out_value = 0;
+    if (!heap) return ORES_ACTOR_LOAN_BAD_HANDLE;
+    if (atomic_flag_test_and_set_explicit(&heap->mutex, memory_order_acquire))
+        return ORES_ACTOR_LOAN_BUSY;
+    OresActorLoanStatus status = ORES_ACTOR_LOAN_OK;
+    if (heap->retiring) status = ORES_ACTOR_LOAN_RETIRED;
+    else if (!heap->turn_active || domain != heap->domain
+        || epoch != heap->turn_epoch) status = ORES_ACTOR_LOAN_BAD_TURN;
+    else if (index >= heap->capacity
+        || !heap->slots[index].live || !heap->slots[index].fixed_field
+        || heap->slots[index].writer_active)
+        status = ORES_ACTOR_LOAN_BAD_HANDLE;
+    if (status == ORES_ACTOR_LOAN_OK) {
+        const ActorSlot* s = &heap->slots[index];
+        *out_value = s->value;
+        record_access(heap, (OresActorTurn){domain, epoch}, index, s->generation,
+                      ORES_ACTOR_HEAP_ACCESS_FIELD_READ);
+    }
+    unlock_heap(heap);
+    return status;
+}
+OresActorLoanStatus ores_actor_i64_heap_try_field_write(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
+        uint64_t index, int64_t value) {
+    if (!heap) return ORES_ACTOR_LOAN_BAD_HANDLE;
+    if (atomic_flag_test_and_set_explicit(&heap->mutex, memory_order_acquire))
+        return ORES_ACTOR_LOAN_BUSY;
+    OresActorLoanStatus status = ORES_ACTOR_LOAN_OK;
+    if (heap->retiring) status = ORES_ACTOR_LOAN_RETIRED;
+    else if (!heap->turn_active || domain != heap->domain
+        || epoch != heap->turn_epoch) status = ORES_ACTOR_LOAN_BAD_TURN;
+    else if (index >= heap->capacity
+        || !heap->slots[index].live || !heap->slots[index].fixed_field
+        || !heap->slots[index].field_mutable
+        || heap->slots[index].writer_active
+        || heap->slots[index].loans != 0)
+        status = ORES_ACTOR_LOAN_BAD_HANDLE;
+    if (status == ORES_ACTOR_LOAN_OK) {
+        ActorSlot* s = &heap->slots[index];
+        s->value = value;
+        record_access(heap, (OresActorTurn){domain, epoch}, index, s->generation,
+                      ORES_ACTOR_HEAP_ACCESS_FIELD_WRITE);
+    }
+    unlock_heap(heap);
+    return status;
+}
+
 void ores_actor_i64_heap_field_write(OresActorI64Heap* heap,
                                      uint64_t domain, uint64_t epoch,
                                      uint64_t index, int64_t value) {
