@@ -42,6 +42,24 @@ static void on_data(void* opaque, size_t actor_index, uint64_t payload) {
           && bytes[1] == 0 && bytes[2] == 255 && bytes[3] == 10);
     atomic_fetch_add_explicit(&ctx->completed, 1, memory_order_release);
 }
+/* Separate scalar lane proves that Bytes-only is an explicit irreversible
+ * actor admission choice, not a global break of scalar actor semantics. */
+typedef struct {
+    atomic_int processed;
+    atomic_int incorrect_commit_calls;
+} ScalarContext;
+static void on_scalar(void* opaque, size_t actor_index, uint64_t payload) {
+    ScalarContext* ctx = (ScalarContext*)opaque;
+    check(actor_index == 0 && payload == 42);
+    atomic_fetch_add_explicit(&ctx->processed, 1, memory_order_release);
+}
+static int must_not_commit(void* opaque, uint64_t ordinal) {
+    ScalarContext* ctx = (ScalarContext*)opaque;
+    (void)ordinal;
+    atomic_fetch_add_explicit(
+        &ctx->incorrect_commit_calls, 1, memory_order_release);
+    return 1;
+}
 int main(void) {
     Context ctx = {0};
     ctx.scheduler = ores_native_actor_scheduler_open(2, 8, 2, on_data, &ctx);
@@ -127,6 +145,95 @@ int main(void) {
     ores_native_actor_scheduler_retire(ctx.scheduler);
     check(ores_native_actor_scheduler_drain(ctx.scheduler));
     check(ores_native_actor_scheduler_try_destroy(ctx.scheduler));
-    puts("NATIVE_ACTOR_BYTES_PHYSICAL_TURN_HOST_ONLY_PASS actors=2 current_data=2 foreign=DENIED external=DENIED atomic_admission=2 rejected_without_stray_data=2 sequence_fenced=2 mixed_scalar=DENIED");
+    /* Ordinary scalar actor continues working. An unbound committed Bytes
+     * path cannot invoke arbitrary commit callbacks, and bind cannot be
+     * retrofitted after *any* scalar DATA was successfully admitted. */
+    ScalarContext scalar = {0};
+    OresNativeActorScheduler* scalar_sched =
+        ores_native_actor_scheduler_open(1, 2, 1, on_scalar, &scalar);
+    check(scalar_sched != NULL);
+    OresNativeActorRef scalar_ref =
+        ores_native_actor_scheduler_spawn(scalar_sched, 0);
+    check(scalar_ref.scheduler_domain && scalar_ref.generation);
+    check(ores_native_actor_scheduler_try_send_committed(
+        scalar_sched, scalar_ref, 999, must_not_commit, &scalar)
+        == ORES_NATIVE_SEND_WRONG_MAIL_KIND);
+    check(atomic_load_explicit(
+        &scalar.incorrect_commit_calls, memory_order_acquire) == 0);
+    check(ores_native_actor_scheduler_try_send(
+        scalar_sched, scalar_ref, 42) == ORES_NATIVE_SEND_ACCEPTED);
+    OresNativeActorBytesInbox* invalid_binding =
+        ores_native_actor_bytes_open(1, scalar_ref.generation, 2, 64, 128);
+    check(invalid_binding != NULL);
+    OresNativeActorBytesSchedulerBinding rejected = {0};
+    check(!ores_native_actor_bytes_bind_scheduler(
+        &rejected, scalar_sched, scalar_ref, invalid_binding));
+    OresNativeActorBytesRef legacy_ref =
+        ores_native_actor_bytes_ref(invalid_binding);
+    /* A failed bind did NOT partially seal the private inbox either. */
+    unsigned char legacy_value = 42;
+    check(ores_native_actor_bytes_try_send(
+        invalid_binding, legacy_ref, &legacy_value, 1) == ORES_ACTOR_BYTES_OK);
+    size_t old_length = SIZE_MAX;
+    unsigned char old_output = 0;
+    check(ores_native_actor_bytes_try_receive(
+        invalid_binding, legacy_ref, &old_output, 1, &old_length)
+        == ORES_ACTOR_BYTES_OK);
+    check(old_length == 1 && old_output == legacy_value);
+    check(ores_native_actor_scheduler_stop(scalar_sched, scalar_ref));
+    check(ores_native_actor_scheduler_wait_done(scalar_sched, scalar_ref));
+    OresNativeActorTerminalState scalar_terminal = {0};
+    check(ores_native_actor_scheduler_terminal_state(
+        scalar_sched, scalar_ref, &scalar_terminal));
+    check(scalar_terminal.accepted_user_messages == 1 &&
+          scalar_terminal.processed_user_messages == 1 &&
+          scalar_terminal.abandoned_user_messages == 0);
+    check(atomic_load_explicit(&scalar.processed, memory_order_acquire) == 1);
+    check(ores_native_actor_bytes_try_retire(
+        invalid_binding, legacy_ref) == ORES_ACTOR_BYTES_OK);
+    check(ores_native_actor_bytes_try_destroy(
+        invalid_binding, legacy_ref) == ORES_ACTOR_BYTES_OK);
+    ores_native_actor_scheduler_retire(scalar_sched);
+    check(ores_native_actor_scheduler_drain(scalar_sched));
+    check(ores_native_actor_scheduler_try_destroy(scalar_sched));
+
+    /* A STOP that linearizes first seals both message kind entrypoints.
+     * The private slab stays empty and can be physically scrubbed once
+     * the scheduler has published DONE and producers are quiescent. */
+    Context stopped = {0};
+    stopped.scheduler = ores_native_actor_scheduler_open(
+        1, 2, 1, on_data, &stopped);
+    check(stopped.scheduler);
+    OresNativeActorRef stopped_ref =
+        ores_native_actor_scheduler_spawn(stopped.scheduler, 0);
+    OresNativeActorBytesInbox* stopped_inbox =
+        ores_native_actor_bytes_open(1, stopped_ref.generation, 2, 64, 128);
+    check(stopped_inbox);
+    check(ores_native_actor_bytes_bind_scheduler(
+        &stopped.bindings[0], stopped.scheduler, stopped_ref, stopped_inbox));
+    check(ores_native_actor_scheduler_stop_sealed(
+        stopped.scheduler, stopped_ref));
+    unsigned char stopped_frame[] = {70, 0, 255, 10};
+    check(ores_native_actor_bytes_try_send_atomic(
+        &stopped.bindings[0], 900, stopped_frame, sizeof(stopped_frame))
+        == ORES_NATIVE_SEND_TERMINATED);
+    check(ores_native_actor_scheduler_try_send(
+        stopped.scheduler, stopped_ref, 900) == ORES_NATIVE_SEND_TERMINATED);
+    check(!ores_native_actor_scheduler_submit(stopped.scheduler, 0, 900));
+    check(ores_native_actor_scheduler_wait_done(
+        stopped.scheduler, stopped_ref));
+    size_t stopped_count = SIZE_MAX, stopped_bytes = SIZE_MAX;
+    check(ores_native_actor_bytes_observe(
+        stopped_inbox, stopped.bindings[0].storage,
+        &stopped_count, &stopped_bytes) == ORES_ACTOR_BYTES_OK);
+    check(stopped_count == 0 && stopped_bytes == 0);
+    check(ores_native_actor_bytes_try_retire(
+        stopped_inbox, stopped.bindings[0].storage) == ORES_ACTOR_BYTES_OK);
+    check(ores_native_actor_bytes_try_destroy(
+        stopped_inbox, stopped.bindings[0].storage) == ORES_ACTOR_BYTES_OK);
+    ores_native_actor_scheduler_retire(stopped.scheduler);
+    check(ores_native_actor_scheduler_drain(stopped.scheduler));
+    check(ores_native_actor_scheduler_try_destroy(stopped.scheduler));
+    puts("NATIVE_ACTOR_BYTES_PHYSICAL_TURN_HOST_ONLY_PASS actors=2 current_data=2 foreign=DENIED external=DENIED atomic_admission=2 rejected_without_stray_data=2 sequence_fenced=2 mixed_scalar=DENIED scalar_lane=PASS failed_bind=ATOMIC stop_seal=PASS");
     return 0;
 }
