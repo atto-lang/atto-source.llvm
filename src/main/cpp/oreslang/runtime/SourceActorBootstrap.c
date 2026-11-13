@@ -27,6 +27,10 @@ typedef struct {
     OresNativeActorRef ref;
     OresSourceActorInit constructor;
     OresSourceActorMessage on_message;
+    OresSourceActorCheckedMessage checked_on_message;
+    atomic_int fault_status;
+    atomic_uint_fast64_t successful;
+    atomic_uint_fast64_t failed;
     atomic_int initialized;
     atomic_int startup_state;
     atomic_int constructor_started;
@@ -484,16 +488,55 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
 static void deliver(void* raw, size_t slot, uint64_t payload) {
     ensure(raw == &group && slot != SOURCE_GROUP_ROOT_SLOT);
     SourceActor* instance = lookup(slot);
-    ensure(instance->on_message != NULL);
+    ensure(instance->on_message != NULL || instance->checked_on_message != NULL);
     ensure(atomic_load_explicit(
         &instance->initialized, memory_order_acquire) == 1);
     OresActorTurn turn =
         ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
-    const int64_t result = instance->on_message(
-        instance->heap, turn.domain, turn.epoch, (int64_t)payload);
-    ores_actor_i64_heap_leave(instance->heap, turn);
-    atomic_store_explicit(
-        &instance->last_result, result, memory_order_relaxed);
+    int64_t result = 0;
+    int status = ORES_ACTOR_LOAN_OK;
+    if (instance->checked_on_message) {
+        status = instance->checked_on_message(
+            instance->heap, turn.domain, turn.epoch,
+            (int64_t)payload, &result);
+        /* Unknown statuses indicate a broken trusted compiler/runtime ABI.
+         * Valid typed statuses are explicitly handled without process abort. */
+        ensure(status >= ORES_ACTOR_LOAN_OK
+            && status <= ORES_ACTOR_LOAN_RETIRED);
+    } else {
+        result = instance->on_message(
+            instance->heap, turn.domain, turn.epoch, (int64_t)payload);
+    }
+    if (status == ORES_ACTOR_LOAN_OK) {
+        ores_actor_i64_heap_leave(instance->heap, turn);
+        atomic_store_explicit(
+            &instance->last_result, result, memory_order_relaxed);
+        atomic_fetch_add_explicit(
+            &instance->successful, 1, memory_order_release);
+    } else {
+        /* This callback owns its scheduler lane, so it must not block for
+         * another actor. The checked heap transition is a single attempt.
+         * BUSY here remains a trusted-runtime hard failure requiring future
+         * scheduler re-admission; do not report false actor-local success. */
+        ensure(ores_actor_i64_heap_fault_turn(instance->heap, turn)
+            == ORES_ACTOR_LOAN_OK);
+        atomic_store_explicit(
+            &instance->fault_status, status, memory_order_release);
+        atomic_fetch_add_explicit(
+            &instance->failed, 1, memory_order_release);
+        /* A stop already admitted by trusted main will finish normally.
+         * Otherwise seal only this actor's queued DATA; the active callback
+         * has already returned a typed fault, not a successful result. */
+        int expected = 0;
+        if (atomic_compare_exchange_strong_explicit(
+                &instance->stop_requested, &expected, 1,
+                memory_order_acq_rel, memory_order_acquire))
+            ensure(ores_native_vm_stop_sealed(
+                group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
+    }
+    /* Scheduler processed_user_messages tracks physical callback turns
+     * (including a faulted callback), not successful guest messages.
+     * Track successful/failed outcomes separately with explicit counters. */
     atomic_fetch_add_explicit(
         &instance->processed, 1, memory_order_release);
 }
@@ -552,11 +595,14 @@ static void open_group_locked(void) {
 #endif
 }
 
-void* oreslang_source_actor_spawn(
+static void* source_actor_spawn_with_handler(
         OresSourceActorInit constructor,
         OresSourceActorMessage on_message,
+        OresSourceActorCheckedMessage checked_on_message,
         uint64_t fields) {
-    ensure(constructor != NULL && fields >= 1 && fields <= 4096);
+    ensure(constructor != NULL
+        && ((on_message != NULL) != (checked_on_message != NULL))
+        && fields >= 1 && fields <= 4096);
     group_lock();
     if (!group.vm) open_group_locked();
 
@@ -570,6 +616,7 @@ void* oreslang_source_actor_spawn(
     ensure(instance->id != 0 && instance->id != UINT64_MAX);
     instance->constructor = constructor;
     instance->on_message = on_message;
+    instance->checked_on_message = checked_on_message;
 
     /*
      * SourceActor is dynamically allocated. Initialize every C11 atomic
@@ -583,6 +630,9 @@ void* oreslang_source_actor_spawn(
     atomic_init(&instance->stop_requested, 0);
     atomic_init(&instance->join_started, 0);
     atomic_init(&instance->processed, 0);
+    atomic_init(&instance->successful, 0);
+    atomic_init(&instance->failed, 0);
+    atomic_init(&instance->fault_status, ORES_ACTOR_LOAN_OK);
     atomic_init(&instance->last_result, 0);
 
     instance->heap = ores_actor_i64_heap_open(instance->id, 1, fields);
@@ -601,10 +651,43 @@ void* oreslang_source_actor_spawn(
     return instance;
 }
 
+void* oreslang_source_actor_spawn(
+        OresSourceActorInit constructor,
+        OresSourceActorMessage on_message,
+        uint64_t fields) {
+    return source_actor_spawn_with_handler(
+        constructor, on_message, NULL, fields);
+}
+void* oreslang_source_actor_spawn_checked(
+        OresSourceActorInit constructor,
+        OresSourceActorCheckedMessage checked_on_message,
+        uint64_t fields) {
+    return source_actor_spawn_with_handler(
+        constructor, NULL, checked_on_message, fields);
+}
+int oreslang_source_actor_fault_status(void* opaque) {
+    SourceActor* instance = (SourceActor*)opaque;
+    ensure(instance != NULL && instance->magic == SOURCE_ACTOR_MAGIC);
+    return atomic_load_explicit(
+        &instance->fault_status, memory_order_acquire);
+}
+uint64_t oreslang_source_actor_successful_messages(void* opaque) {
+    SourceActor* instance = (SourceActor*)opaque;
+    ensure(instance != NULL && instance->magic == SOURCE_ACTOR_MAGIC);
+    return atomic_load_explicit(
+        &instance->successful, memory_order_acquire);
+}
+uint64_t oreslang_source_actor_failed_messages(void* opaque) {
+    SourceActor* instance = (SourceActor*)opaque;
+    ensure(instance != NULL && instance->magic == SOURCE_ACTOR_MAGIC);
+    return atomic_load_explicit(
+        &instance->failed, memory_order_acquire);
+}
+
 void oreslang_source_actor_send(void* opaque, int64_t payload) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC
-        && instance->on_message);
+        && (instance->on_message || instance->checked_on_message));
     ensure(ores_native_vm_try_send(
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref, (uint64_t)payload)
         == ORES_NATIVE_SEND_ACCEPTED);
@@ -836,12 +919,19 @@ void oreslang_source_actor_request_stop(void* opaque) {
      */
     group_lock();
     int expected = 0;
-    ensure(atomic_compare_exchange_strong_explicit(
-        &instance->stop_requested,
-        &expected,
-        1,
-        memory_order_acq_rel,
-        memory_order_acquire));
+    if (!atomic_compare_exchange_strong_explicit(
+            &instance->stop_requested,
+            &expected,
+            1,
+            memory_order_acq_rel,
+            memory_order_acquire)) {
+        /* An earlier checked handler fault already sealed this actor.
+         * Plain stop remains single-admission for unchanged legacy ABI. */
+        ensure(expected == 1 && atomic_load_explicit(
+            &instance->fault_status, memory_order_acquire) != ORES_ACTOR_LOAN_OK);
+        group_unlock();
+        return;
+    }
 
     const size_t slot = (size_t)instance->ref.actor_slot;
     ensure(group.vm && slot < group.next_slot
@@ -901,6 +991,10 @@ void oreslang_source_actor_join_done(void* opaque) {
         + terminal.abandoned_user_messages
         == terminal.accepted_user_messages);
     ensure(terminal.processed_user_messages
+        == atomic_load_explicit(&instance->processed, memory_order_acquire));
+    ensure(atomic_load_explicit(
+        &instance->successful, memory_order_acquire)
+        + atomic_load_explicit(&instance->failed, memory_order_acquire)
         == atomic_load_explicit(&instance->processed, memory_order_acquire));
     ensure(terminal.abandoned_control_messages == 0);
 
