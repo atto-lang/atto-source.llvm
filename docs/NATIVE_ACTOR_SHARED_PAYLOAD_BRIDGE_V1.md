@@ -4,7 +4,7 @@
 
 The native actor scheduler already has a bounded, generation-checked DATA mailbox whose payload is an opaque u64. New host class NativeActorSharedPayloadBridge binds a target actor incarnation to preallocated immutable-buffer descriptor slots. The **existing** ores_native_actor_scheduler_try_send is the only delivery/admission route, and the C scheduler's separate CONTROL lane retains priority.
 
-- A source actor must be the scheduler's **currently executing** actor to invoke try_send_from; a forged or external actor reference is rejected.
+- A source actor must hold an **authenticated currently executing DATA turn** with a native scheduler-minted DATA-mail sequence; CONTROL/WAKE/host callbacks and forged/external actor references are rejected.
 - The bridge issues a preallocated slot ticket (32-bit generation, 32-bit nonzero slot index). No payload bytes or C++ addresses appear in actor DATA messages.
 - A descriptor holds immutable backing once; copies are reference-counted without copying 1 MiB of bytes. Both the registry and target callback hold independent lifetime references.
 - Byte credits reserve the entire backing allocation per queued ticket. All admission failures return the ticket slot and drop its reference; the native scheduler is the authority for bounded admission.
