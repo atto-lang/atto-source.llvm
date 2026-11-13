@@ -22,6 +22,7 @@ class NativeFixedBufferPool final {
         std::uint64_t generation = 1;
         std::uint64_t actor_id = 0;
         bool leased = false;
+        bool escrow = false; // sender capability is inaccessible during admission
         bool disabled = false;
     };
     struct State {
@@ -50,17 +51,9 @@ public:
         }
         ~Lease() { release(); }
 
-        // After move/transfer the old actor cannot access the payload. The
-        // caller identity must come from the trusted runtime, not guest input.
-        bool transfer(std::uint64_t from_actor, std::uint64_t to_actor) noexcept {
-            if (to_actor == 0 || !state_) return false;
-            std::lock_guard<std::mutex> lock(state_->mutex);
-            Slot& slot = state_->slots[index_];
-            if (state_->retired || !valid(slot) || slot.actor_id != from_actor)
-                return false;
-            slot.actor_id = to_actor;
-            return true;
-        }
+        // No direct transfer: only try_prepare_transfer consumes the sender
+        // handle, and PendingTransfer::commit mints the receiver handle.
+        // This prevents a sender from releasing a successful transfer.
 
         // Scoped views are valid ONLY for the duration of this synchronous
         // callback. Never suspend, reenter the pool, or capture the span.
@@ -70,7 +63,7 @@ public:
             if (!state_) return false;
             std::lock_guard<std::mutex> lock(state_->mutex);
             Slot& slot = state_->slots[index_];
-            if (state_->retired || !valid(slot) || slot.actor_id != actor)
+            if (state_->retired || !valid(slot) || slot.escrow || slot.actor_id != actor)
                 return false;
             callback(std::span<std::uint8_t>(
                 state_->bytes.data() + index_ * state_->slot_bytes,
@@ -83,7 +76,7 @@ public:
             if (!state_) return false;
             std::lock_guard<std::mutex> lock(state_->mutex);
             const Slot& slot = state_->slots[index_];
-            if (state_->retired || !valid(slot) || slot.actor_id != actor)
+            if (state_->retired || !valid(slot) || slot.escrow || slot.actor_id != actor)
                 return false;
             callback(std::span<const std::uint8_t>(
                 state_->bytes.data() + index_ * state_->slot_bytes,
@@ -93,6 +86,12 @@ public:
 
         bool release() noexcept {
             if (!state_) return false;
+            // An in-flight escrow cannot be released through its Lease.
+            // Its pending receipt must commit, abort, or explicitly discard.
+            {
+                std::lock_guard<std::mutex> lock(state_->mutex);
+                if (state_->slots[index_].escrow) return false;
+            }
             // Keep State alive until AFTER the guard releases the mutex, even
             // when the pool is already destroyed and this is its final lease.
             auto state = std::move(state_);
@@ -120,6 +119,7 @@ public:
 
     private:
         friend class NativeFixedBufferPool;
+        friend class PendingTransfer;
         Lease(std::shared_ptr<State> state, std::size_t index,
               std::uint64_t generation) noexcept
             : state_(std::move(state)), index_(index), generation_(generation) {}
@@ -136,6 +136,78 @@ public:
         std::shared_ptr<State> state_;
         std::size_t index_ = 0;
         std::uint64_t generation_ = 0;
+    };
+
+    // Owns the unique sender lease during mailbox admission. Destroying an
+    // unsettled escrow discards it safely; explicit abort restores ownership.
+    // Only trusted host scheduler code may drive these methods. No guest access.
+    class PendingTransfer final {
+    public:
+        PendingTransfer(const PendingTransfer&) = delete;
+        PendingTransfer& operator=(const PendingTransfer&) = delete;
+        PendingTransfer(PendingTransfer&&) noexcept = default;
+        PendingTransfer& operator=(PendingTransfer&&) = delete;
+        ~PendingTransfer() { discard(); }
+
+        std::optional<Lease> commit(std::uint64_t recipient_actor) noexcept {
+            if (!held_ || !held_->state_ || recipient_actor == 0) return std::nullopt;
+            const auto state = held_->state_;
+            {
+                std::lock_guard<std::mutex> lock(state->mutex);
+                Slot& slot = state->slots[held_->index_];
+                if (state->retired || !held_->valid(slot) || !slot.escrow ||
+                    slot.actor_id != original_actor_)
+                    return std::nullopt;
+                slot.actor_id = recipient_actor;
+                slot.escrow = false;
+            }
+            return take();
+        }
+
+        std::optional<Lease> abort() noexcept {
+            if (!held_ || !held_->state_) return std::nullopt;
+            const auto state = held_->state_;
+            {
+                std::lock_guard<std::mutex> lock(state->mutex);
+                Slot& slot = state->slots[held_->index_];
+                if (!held_->valid(slot) || !slot.escrow ||
+                    slot.actor_id != original_actor_)
+                    return std::nullopt;
+                // Abort succeeds even after retirement; release remains legal.
+                slot.escrow = false;
+            }
+            return take();
+        }
+
+        // Dropped or cancelled without an explicit abort: revoke and scrub,
+        // never silently put the lease back in the original sender's hands.
+        bool discard() noexcept {
+            if (!held_ || !held_->state_) return false;
+            const auto state = held_->state_;
+            {
+                std::lock_guard<std::mutex> lock(state->mutex);
+                Slot& slot = state->slots[held_->index_];
+                if (!held_->valid(slot) || !slot.escrow ||
+                    slot.actor_id != original_actor_)
+                    return false;
+                slot.escrow = false;
+            }
+            const bool released = held_->release();
+            held_.reset();
+            return released;
+        }
+
+    private:
+        friend class NativeFixedBufferPool;
+        PendingTransfer(Lease&& owner, std::uint64_t source) noexcept
+            : held_(std::move(owner)), original_actor_(source) {}
+        std::optional<Lease> take() noexcept {
+            auto moved = std::move(held_);
+            held_.reset();
+            return moved;
+        }
+        std::optional<Lease> held_;
+        std::uint64_t original_actor_ = 0;
     };
 
     static constexpr std::size_t max_pool_bytes = 1024u * 1024u * 1024u;
@@ -166,6 +238,22 @@ public:
             return Lease(state_, i, slot.generation);
         }
         return std::nullopt;
+    }
+
+    // Two-phase admission. Success immediately invalidates the caller's
+    // Lease object; commit returns a new exclusive receiver Lease. Failed
+    // preparation leaves the exact sender Lease untouched. No heap allocation.
+    std::optional<PendingTransfer> try_prepare_transfer(
+        Lease& sender, std::uint64_t expected_actor) noexcept {
+        if (!sender.state_ || sender.state_.get() != state_.get() ||
+            expected_actor == 0) return std::nullopt;
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        if (state_->retired) return std::nullopt;
+        Slot& slot = state_->slots[sender.index_];
+        if (!sender.valid(slot) || slot.escrow ||
+            slot.actor_id != expected_actor) return std::nullopt;
+        slot.escrow = true;
+        return PendingTransfer(std::move(sender), expected_actor);
     }
 
     void retire() noexcept {
