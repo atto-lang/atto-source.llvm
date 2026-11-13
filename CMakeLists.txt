@@ -1942,6 +1942,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_actor_suspends_i64_typed_ast_codegen_gate
         native-actor-task-i64-typed-gate.atto
         --diagnostic "native actor Task<int> requires compiler-owned continuation frame and actor TASK/WAKE ABI lowering")
+    oreslang_contract_test(native_actor_suspends_mtd_typed_ast_codegen_gate
+        native-actor-task-i64-mtd-gate.atto
+        --diagnostic "native actor Task<int> requires compiler-owned continuation frame and actor TASK/WAKE ABI lowering")
     oreslang_contract_test(native_actor_suspends_field_capture_denied
         native-actor-task-field-capture-reject.atto
         --diagnostic "native actor Task<int> capture must be a copied incoming int only")
