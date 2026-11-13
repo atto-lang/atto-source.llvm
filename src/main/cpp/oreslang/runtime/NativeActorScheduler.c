@@ -956,7 +956,9 @@ int ores_native_actor_scheduler_priority_inheritance_enabled(
     unlock(s);
     return enabled;
 }
-static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payload) {
+static int enqueue_with_commit_locked(
+        OresNativeActorScheduler* s, size_t i, uint64_t payload,
+        OresNativeActorPayloadCommitFn commit, void* context) {
     if (s->retired || i >= s->actor_count
         || !s->actors[i].spawned || s->actors[i].retired
         || s->actors[i].accepted_user_messages == UINT64_MAX
@@ -972,12 +974,20 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
         if (s->rejected != UINT64_MAX) ++s->rejected;
         return 0;
     }
+    /* All fallible scheduler reservations have succeeded. The callback
+     * must be nonblocking, bounded and either commit exactly one owned
+     * payload or leave the private inbox completely unchanged. The scheduler
+     * mutex excludes STOP and any other admission until DATA is published. */
+    const uint64_t admitted_sequence = a->accepted_user_messages + UINT64_C(1);
+    if (commit && !commit(context, admitted_sequence)) {
+        if (s->rejected != UINT64_MAX) ++s->rejected;
+        return 0;
+    }
     if (new_lane) ++s->runnable_lanes;
     /* The source-mail ordinal is minted at SUCCESSFUL enqueue, not inferred
      * from payload, carrier, or the number of completed callbacks. The pair
      * lives in parallel preallocated ring slots and cannot be reassigned by a
      * producer's Future completion or a guest-supplied token. */
-    const uint64_t admitted_sequence = a->accepted_user_messages + UINT64_C(1);
     a->messages[a->tail] = payload;
     a->mail_sequences[a->tail] = admitted_sequence;
     if (++a->tail == s->per_actor_capacity) a->tail = 0;
@@ -991,6 +1001,9 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     if (rq_sync_locked(s, i)) wake_one_locked(s);
     RQ_VALIDATE(s);
     return 1;
+}
+static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payload) {
+    return enqueue_with_commit_locked(s, i, payload, NULL, NULL);
 }
 int ores_native_actor_scheduler_configure_turn_gate(
         OresNativeActorScheduler* s, OresNativePhysicalTurnGate* gate) {
@@ -1034,8 +1047,10 @@ OresNativeActorRef ores_native_actor_scheduler_spawn(
     unlock(s);
     return ref;
 }
-OresNativeSendStatus ores_native_actor_scheduler_try_send(
-    OresNativeActorScheduler* s, OresNativeActorRef actor, uint64_t payload) {
+OresNativeSendStatus ores_native_actor_scheduler_try_send_committed(
+    OresNativeActorScheduler* s, OresNativeActorRef actor, uint64_t payload,
+    OresNativeActorPayloadCommitFn commit, void* context) {
+    if (!commit) return ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
     if (!s) return ORES_NATIVE_SEND_INVALID_REF;
     lock(s);
     OresNativeSendStatus status;
@@ -1056,7 +1071,8 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
             /* enqueue_locked and stop() arbitrate under this same lock.
              * A successful admission precedes stop, even if processing later
              * fails; a stop that wins first is always rejected. */
-            if (enqueue_locked(s, (size_t)actor.actor_slot, payload)) {
+            if (enqueue_with_commit_locked(
+                    s, (size_t)actor.actor_slot, payload, commit, context)) {
                 status = ORES_NATIVE_SEND_ACCEPTED;
             } else {
                 /* enqueue_locked already counted this rejected admission. */
@@ -1067,6 +1083,38 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
     }
     if (status != ORES_NATIVE_SEND_ACCEPTED && !counted_in_enqueue
         && s->rejected != UINT64_MAX)
+        s->rejected++;
+    unlock(s);
+    return status;
+}
+OresNativeSendStatus ores_native_actor_scheduler_try_send(
+        OresNativeActorScheduler* s, OresNativeActorRef actor, uint64_t payload) {
+    /* Existing scalar admission stays independent of Bytes publication. */
+    if (!s) return ORES_NATIVE_SEND_INVALID_REF;
+    lock(s);
+    OresNativeSendStatus status;
+    int counted_in_enqueue = 0;
+    if (!matching(s, actor)) {
+        status = ORES_NATIVE_SEND_INVALID_REF;
+    } else {
+        ActorLane* lane = &s->actors[actor.actor_slot];
+        if (s->retired || lane->retired) {
+            status = ORES_NATIVE_SEND_TERMINATED;
+        } else if (lane->accepted_user_messages == UINT64_MAX
+                || lane->queued + lane->active >= s->per_actor_capacity) {
+            status = ORES_NATIVE_SEND_MAILBOX_FULL;
+        } else if (s->accepted >= UINT64_MAX - s->reserved_wakes
+                || !execution_slot_available_locked(s)) {
+            status = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+        } else if (enqueue_locked(s, (size_t)actor.actor_slot, payload)) {
+            status = ORES_NATIVE_SEND_ACCEPTED;
+        } else {
+            counted_in_enqueue = 1;
+            status = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+        }
+    }
+    if (status != ORES_NATIVE_SEND_ACCEPTED && !counted_in_enqueue
+            && s->rejected != UINT64_MAX)
         s->rejected++;
     unlock(s);
     return status;
