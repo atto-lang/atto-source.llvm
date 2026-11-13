@@ -55,6 +55,8 @@ typedef struct {
     OresNativeActorTerminalFailure failure;
     unsigned control_is_failure;
     unsigned spawned, retired;
+    /* Immutable after pristine bind; only affects DATA, never CONTROL/WAKE. */
+    unsigned bytes_only_mailbox;
     uint64_t generation;
     uint64_t resource_loans; /* exact-incarnation external physical resources */
     uint64_t accepted_user_messages;
@@ -969,6 +971,12 @@ static int enqueue_with_commit_locked(
         return 0;
     }
     ActorLane* a = &s->actors[i];
+    /* Legacy index submit passes commit=NULL and must never inject a DATA
+     * turn into a sequence-bound Bytes inbox. The reverse is also denied. */
+    if ((a->bytes_only_mailbox != 0) != (commit != NULL)) {
+        if (s->rejected != UINT64_MAX) ++s->rejected;
+        return 0;
+    }
     const int new_lane = !a->active && !lane_has_work(a);
     if (!ensure_workers_locked(s, s->runnable_lanes + (size_t)new_lane)) {
         if (s->rejected != UINT64_MAX) ++s->rejected;
@@ -1047,6 +1055,28 @@ OresNativeActorRef ores_native_actor_scheduler_spawn(
     unlock(s);
     return ref;
 }
+/* Binding is one transaction against STOP and all scalar/Bytes sends.
+ * The callback is trusted and may only try-lock the private inbox. It
+ * must not reenter this scheduler, allocate, wait or call user code. */
+int ores_native_actor_scheduler_bind_bytes_only(
+    OresNativeActorScheduler* s, OresNativeActorRef actor,
+    OresNativeActorMailboxBindFn bind, void* context) {
+    if (!s || !bind) return 0;
+    lock(s);
+    int ok = matching(s, actor) && !s->retired;
+    if (ok) {
+        ActorLane* lane = &s->actors[actor.actor_slot];
+        ok = !lane->retired && !lane->bytes_only_mailbox &&
+            lane->accepted_user_messages == 0 && !lane->queued &&
+            !lane->active && !lane->carrier_owner_valid &&
+            !lane->has_control && !lane->wake_live && !lane->wake_ready &&
+            !lane->resource_loans && !lane->terminal_valid;
+        if (ok && bind(context)) lane->bytes_only_mailbox = 1;
+        else ok = 0;
+    }
+    unlock(s);
+    return ok;
+}
 OresNativeSendStatus ores_native_actor_scheduler_try_send_committed(
     OresNativeActorScheduler* s, OresNativeActorRef actor, uint64_t payload,
     OresNativeActorPayloadCommitFn commit, void* context) {
@@ -1061,6 +1091,8 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send_committed(
         ActorLane* lane = &s->actors[actor.actor_slot];
         if (s->retired || lane->retired) {
             status = ORES_NATIVE_SEND_TERMINATED;
+        } else if (!lane->bytes_only_mailbox) {
+            status = ORES_NATIVE_SEND_WRONG_MAIL_KIND;
         } else if (lane->accepted_user_messages == UINT64_MAX
                 || lane->queued + lane->active >= s->per_actor_capacity) {
             status = ORES_NATIVE_SEND_MAILBOX_FULL;
@@ -1100,6 +1132,8 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
         ActorLane* lane = &s->actors[actor.actor_slot];
         if (s->retired || lane->retired) {
             status = ORES_NATIVE_SEND_TERMINATED;
+        } else if (lane->bytes_only_mailbox) {
+            status = ORES_NATIVE_SEND_WRONG_MAIL_KIND;
         } else if (lane->accepted_user_messages == UINT64_MAX
                 || lane->queued + lane->active >= s->per_actor_capacity) {
             status = ORES_NATIVE_SEND_MAILBOX_FULL;
