@@ -1,0 +1,16 @@
+// Canonical .atto positive source actor: compiled checked field reads/writes.
+// No host C implementation of the guest algorithm; LLVM must lower it.
+define actor Worker as {
+  let total: int = 0;
+  pub method on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const worker = spawn Worker();
+  worker.send(1);
+  worker.send(2);
+  stop worker;
+  return 43;
+}
