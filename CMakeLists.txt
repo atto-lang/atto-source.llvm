@@ -5703,6 +5703,50 @@ if(BUILD_TESTING AND UNIX)
     endif()
 endif()
 
+# Stress the new typed Bytes-plus-DATA atomic transaction across four
+# concurrent HOST producers and one real native scheduler actor. This verifies
+# exact-once byte delivery and credits, NOT source .atto lowering or TCP I/O.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-actor-bytes-atomic-contention-test
+        tests/native_actor_bytes_atomic_contention_test.c
+        src/main/cpp/oreslang/runtime/NativeActorBytesInbox.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-bytes-atomic-contention-test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-bytes-atomic-contention-test
+        PRIVATE Threads::Threads)
+    target_compile_features(oreslang-native-actor-bytes-atomic-contention-test
+        PRIVATE c_std_11)
+    target_compile_options(oreslang-native-actor-bytes-atomic-contention-test
+        PRIVATE $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_actor_bytes_atomic_contention_host_only
+        COMMAND oreslang-native-actor-bytes-atomic-contention-test)
+    set_tests_properties(native_actor_bytes_atomic_contention_host_only
+        PROPERTIES TIMEOUT 60)
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        add_executable(oreslang-native-actor-bytes-atomic-contention-san
+            tests/native_actor_bytes_atomic_contention_test.c
+            src/main/cpp/oreslang/runtime/NativeActorBytesInbox.c
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+        target_include_directories(oreslang-native-actor-bytes-atomic-contention-san
+            PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-actor-bytes-atomic-contention-san
+            PRIVATE Threads::Threads)
+        target_compile_features(oreslang-native-actor-bytes-atomic-contention-san
+            PRIVATE c_std_11)
+        target_compile_options(oreslang-native-actor-bytes-atomic-contention-san
+            PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG -O1 -g
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(oreslang-native-actor-bytes-atomic-contention-san
+            PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+        add_test(NAME native_actor_bytes_atomic_contention_asan_ubsan
+            COMMAND oreslang-native-actor-bytes-atomic-contention-san)
+        set_tests_properties(native_actor_bytes_atomic_contention_asan_ubsan
+            PROPERTIES TIMEOUT 90)
+    endif()
+endif()
+
 # Real frontend negative: until source Bytes is lowered, reject the guest
 # completely and emit zero LLVM IR rather than calling a host-only C model.
 if(BUILD_TESTING)
