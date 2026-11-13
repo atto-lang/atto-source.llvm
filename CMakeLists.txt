@@ -1044,7 +1044,9 @@ if(BUILD_TESTING)
         add_test(NAME native_source_class_methods_${mode}
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_class_methods.py"
                 --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}" ${native_method_extra})
-        set_tests_properties(native_source_class_methods_${mode} PROPERTIES TIMEOUT 120)
+        # Both O0 and O2 compile/link/execute each native method guest; allow
+        # sanitizer builds sufficient time without weakening per-command limits.
+        set_tests_properties(native_source_class_methods_${mode} PROPERTIES TIMEOUT 240)
     endforeach()
 
     foreach(mode IN ITEMS release sanitizer)
