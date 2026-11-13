@@ -209,7 +209,29 @@ static void test_hole_alignment_and_nonoverlap(void) {
     ores_elastic_native_close_v1(a);
     assert(ores_elastic_budget_used_v1(&budget)==0);
 }
+static void test_forged_ref32_stride_cannot_wrap_32bit_host_size_t(void) {
+    OresElasticNativeBudgetV1 budget;
+    assert(ores_elastic_budget_init_v1(&budget,4096));
+    OresElasticNativeArenaV1* a=ores_elastic_native_open_v1(
+        500,1,1024,4,&budget,&budget);
+    assert(a);
+    OresElasticNativeHandleV1 authentic;
+    assert(ores_elastic_native_allocate_v1(a,8,8,&authentic));
+    assert(authentic.word==1);
+    assert(ores_elastic_native_write_i64_v1(a,authentic,0,431));
+    /* (0x20000001-1)*8 wraps to zero if decoded in 32-bit size_t. */
+    OresElasticNativeHandleV1 forged=authentic;
+    forged.word=UINT32_C(0x20000001);
+    int64_t observed=0;
+    assert(!ores_elastic_native_read_i64_v1(a,forged,0,&observed));
+    assert(!ores_elastic_native_write_i64_v1(a,forged,0,777));
+    assert(!ores_elastic_native_drop_v1(a,forged));
+    assert(ores_elastic_native_read_i64_v1(a,authentic,0,&observed) && observed==431);
+    ores_elastic_native_close_v1(a);
+    assert(ores_elastic_budget_used_v1(&budget)==0);
+}
 int main(void){
+    test_forged_ref32_stride_cannot_wrap_32bit_host_size_t();
     test_peak_quota_and_actor_survival();
     test_relocation_and_injected_failure();
     test_peak_limit_rejects_relocation();
