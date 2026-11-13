@@ -200,14 +200,20 @@ int main(void) {
     CHECK(!ores_native_actor_scheduler_is_current_carrier(f.scheduler));
     CHECK(!ores_native_actor_task_physically_done(&f.parent));
     CHECK(!ores_native_actor_task_publish(&f.parent, 9999, ORES_NATIVE_WAKE_READY));
-    /* Even a valid producer generation must fail before after-WAKE physical
-     * retirement. Do not confuse logical suspend with callback exit. */
+    /* A fast Future completion is accepted exactly once into escrow, but
+     * MUST NOT dispatch guest while the suspending callback is still on-stack.
+     * The trusted post-WAKE callback flushes it after the physical claim
+     * unwinds. A second producer loses the one-winner race. */
+    CHECK(ores_native_actor_task_publish(&f.parent, 1001, ORES_NATIVE_WAKE_READY));
     CHECK(!ores_native_actor_task_publish(&f.parent, 1001, ORES_NATIVE_WAKE_READY));
+    CHECK(atomic_load(&f.parent_turns) == 1);
+    CHECK(!ores_native_actor_task_physically_done(&f.parent));
     signal_host(&f, &f.allow_suspend_guest_exit);
     wait_host(&f, &f.suspension_physically_returned);
-    wait_host(&f, &f.child_done);
     CHECK(!ores_native_actor_scheduler_is_current_carrier(f.scheduler));
-    CHECK(ores_native_actor_task_publish(
+    /* Completion was already escrowed: replay after physical exit is
+     * forbidden, and the child/parent resume must drain exactly once. */
+    CHECK(!ores_native_actor_task_publish(
         &f.parent, 1001, ORES_NATIVE_WAKE_READY));
     CHECK(!ores_native_actor_scheduler_is_current_carrier(f.scheduler));
     wait_host(&f, &f.parent_done);
@@ -246,6 +252,10 @@ int main(void) {
     wait_host(&stopped, &stopped.suspended);
     CHECK(atomic_load(&stopped.parent_turns) == 1);
     CHECK(!ores_native_actor_task_physically_done(&stopped.parent));
+    /* STOP wins over an escrowed READY outcome before physical callback
+     * exit. This must never resurrect the guest or claim premature DONE. */
+    CHECK(ores_native_actor_task_publish(
+        &stopped.parent, 1001, ORES_NATIVE_WAKE_READY));
     CHECK(!ores_native_actor_task_publish(
         &stopped.parent, 1001, ORES_NATIVE_WAKE_READY));
     /* STOP during SUSPENDING revokes the transferred wake, but cannot
