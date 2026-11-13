@@ -15,6 +15,22 @@ using oreslang::runtime::SharedImmutablePayload;
 using oreslang::runtime::SharedPayloadInbox;
 using Result = SharedPayloadInbox::SendResult;
 
+struct BorrowedSpanReturn {
+    std::span<const std::uint8_t> operator()(
+        std::span<const std::uint8_t> bytes) const { return bytes; }
+};
+struct VoidSpanConsumer {
+    void operator()(std::span<const std::uint8_t>) const { }
+};
+template<class Fn>
+concept AllowedSpanCallback = requires(const SharedImmutablePayload& value, Fn callback) {
+    value.with_read_only_span(callback);
+};
+static_assert(!AllowedSpanCallback<BorrowedSpanReturn>,
+              "payload span must not escape directly through a callback return");
+static_assert(AllowedSpanCallback<VoidSpanConsumer>,
+              "a synchronous void consumer must remain admissible");
+
 int main() {
     static_assert(std::is_same_v<decltype(std::declval<const SharedImmutablePayload&>()
                          .read_byte(0)), std::optional<std::uint8_t>>);
