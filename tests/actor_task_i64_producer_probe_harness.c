@@ -55,6 +55,10 @@ int main(int argc, char** argv) {
             frame, 11, 1002, 41) != 0 || frame[4] != 1) return 23;
     if (atto_actor_task_i64_frame_init_probe(
             frame, 11, 1002, 41) != 4) return 24;
+    int64_t premature = INT64_C(-99);
+    if (atto_actor_task_i64_frame_resume_probe(
+            frame, 11, 1002, &premature) != 4 ||
+            premature != -99 || frame[4] != 1) return 40;
     if (atto_actor_task_i64_frame_step_probe(
             frame, 12, 1002) != 3 || frame[4] != 1) return 25;
     if (atto_actor_task_i64_frame_step_probe(
