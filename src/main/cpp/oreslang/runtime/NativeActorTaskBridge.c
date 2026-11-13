@@ -269,6 +269,7 @@ int ores_native_actor_task_is_current_running(OresNativeActorTask* t) {
     if (!t || !t->initialized) return 0;
     pthread_mutex_lock(&t->mutex);
     int ok = t->phase == ORES_ACTOR_TASK_RUNNING && t->in_wake
+        && !t->cancellation_requested
         && ores_native_actor_scheduler_is_current_ready_wake(
             t->scheduler, t->active_ticket);
     pthread_mutex_unlock(&t->mutex);
