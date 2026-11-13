@@ -18,14 +18,47 @@ void resolve_native_methods(Program& program) {
             if (!seen_slots.insert(native_function_slot(method.name, method.arity)).second)
                 throw std::runtime_error("duplicate compiler-owned native method slot");
     }
+    // Validate the bidirectional method-declaration/function-body link before
+    // giving any lowered Function compiler-owned receiver authority. Matching
+    // a class name and a parameter literally named 'self' is insufficient:
+    // malformed or linked IR must not impersonate an undeclared private method.
+    std::unordered_set<std::string> backed_method_slots;
     for (auto& fn : program.functions) {
         if (!fn.method_owner.empty()) {
-            if (!classes.count(fn.method_owner) || fn.parameters.empty()
+            const auto owner = classes.find(fn.method_owner);
+            if (owner == classes.end() || fn.parameters.empty()
                     || fn.parameters.front().name != "self"
                     || fn.parameters.front().class_name != fn.method_owner)
                 throw std::runtime_error("invalid compiler-owned method receiver");
+            const std::string prefix = fn.method_owner + ".";
+            if (fn.name.compare(0, prefix.size(), prefix) != 0)
+                throw std::runtime_error("compiler-owned native method name/owner mismatch");
+            const std::string member_name = fn.name.substr(prefix.size());
+            const std::size_t source_arity = fn.parameters.size() - 1;
+            const ClassMethod* declared = nullptr;
+            for (const auto& candidate : owner->second->methods)
+                if (candidate.name == member_name && candidate.arity == source_arity)
+                    declared = &candidate;
+            if (!declared)
+                throw std::runtime_error("compiler-owned native method body has no declared slot");
+            if (declared->public_member != fn.exported
+                    || declared->mutable_receiver !=
+                            (fn.parameters.front().mode == Parameter::Mode::BorrowMut))
+                throw std::runtime_error("compiler-owned native method signature/visibility mismatch");
+            const std::string identity = fn.method_owner + "." +
+                    native_function_slot(member_name, source_arity);
+            if (!backed_method_slots.insert(identity).second)
+                throw std::runtime_error("duplicate compiler-owned native method body");
             fn.native_internal = true; // source visibility is not a raw FFI export
         }
+    }
+    for (const auto& cls : program.classes)
+        for (const auto& declared : cls.methods)
+            if (!backed_method_slots.count(
+                    cls.name + "." + native_function_slot(declared.name, declared.arity)))
+                throw std::runtime_error("declared compiler-owned native method has no body");
+
+    for (auto& fn : program.functions) {
         std::unordered_map<std::string, std::string> owners;
         std::unordered_map<std::string, const LocalBinding*> arrays;
         for (const auto& parameter : fn.parameters)
