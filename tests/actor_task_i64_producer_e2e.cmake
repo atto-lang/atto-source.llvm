@@ -19,8 +19,12 @@ endif()
 file(READ "${ir}" emitted)
 if(NOT emitted MATCHES "define i32 @atto_actor_task_i64_producer_probe"
         OR NOT emitted MATCHES "define i32 @atto_actor_task_i64_resume_probe"
+        OR NOT emitted MATCHES "define i32 @atto_actor_task_i64_frame_init_probe"
+        OR NOT emitted MATCHES "define i32 @atto_actor_task_i64_frame_step_probe"
+        OR NOT emitted MATCHES "define i32 @atto_actor_task_i64_frame_resume_probe"
         OR NOT emitted MATCHES "llvm\\.s(add|sub|mul)\\.with\\.overflow\\.i64")
-    message(FATAL_ERROR "missing checked compiler-generated Atto Task producer ABI")
+    message(FATAL_ERROR
+        "missing checked compiled Atto producer, continuation body, or fenced frame ABI")
 endif()
 if(emitted MATCHES "llvm\\.trap" OR emitted MATCHES "oreslang_source_actor_"
         OR emitted MATCHES "SourceTaskRuntime" OR emitted MATCHES "pthread")
