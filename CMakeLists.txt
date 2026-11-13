@@ -5681,3 +5681,15 @@ if(BUILD_TESTING AND UNIX)
     set_tests_properties(native_actor_bytes_physical_data_turn_host_only
         PROPERTIES TIMEOUT 30)
 endif()
+
+# Real frontend negative: until source Bytes is lowered, reject the guest
+# completely and emit zero LLVM IR rather than calling a host-only C model.
+if(BUILD_TESTING)
+    add_test(NAME native_actor_bytes_source_unsupported_no_ir
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/source-actor-bytes-unsupported.atto"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_bytes_source_negative.cmake")
+    set_tests_properties(native_actor_bytes_source_unsupported_no_ir
+        PROPERTIES TIMEOUT 30)
+endif()
