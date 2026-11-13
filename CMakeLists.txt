@@ -1952,6 +1952,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_actor_task_await_wrong_owner_reject
         source-actor-task-await-wrong-owner-reject.atto
         --diagnostic "ATTO_TASK_E_ACTOR_TASK_AWAIT")
+    oreslang_contract_test(native_actor_task_await_wrong_type_reject
+        source-actor-task-await-wrong-type-reject.atto
+        --diagnostic "ATTO_TASK_E_ACTOR_TASK_TYPE")
     oreslang_contract_test(native_actor_task_await_missing_child_reject
         source-actor-task-await-missing-child-reject.atto
         --diagnostic "ATTO_TASK_E_ACTOR_TASK_SHAPE")
