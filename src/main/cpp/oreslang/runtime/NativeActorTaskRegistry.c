@@ -18,7 +18,8 @@ int ores_native_actor_task_registry_init(
         size_t capacity) {
     if (!r || !s || !entries || !capacity
             || capacity > ORES_NATIVE_WAKE_CREDITS_PER_ACTOR
-            || !actor.scheduler_domain || !actor.generation)
+            || !actor.scheduler_domain || !actor.generation
+            || !ores_native_actor_scheduler_poll_ready(s, actor))
         return 0;
     memset(r, 0, sizeof(*r));
     if (pthread_mutex_init(&r->mutex, NULL) != 0) return 0;
