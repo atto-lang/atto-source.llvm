@@ -566,6 +566,52 @@ int64_t ores_actor_i64_heap_field_read(OresActorI64Heap* heap,
     return value;
 }
 
+/* Supervisor-only fault transition after a checked guest loan operation
+ * rejected the active actor turn. This is a nonblocking handoff: no actor
+ * carrier waits for the heap mutex. An exclusive token belongs only to this
+ * turn; revoke all such tokens so an abandoned frame cannot strand teardown.
+ * Shared read loans survive until their independently fenced holders release.
+ * This never frees a heap; the supervisor must first fence pending timers,
+ * sends, callbacks and continuations, then wait for try_destroy quiescence. */
+OresActorLoanStatus ores_actor_i64_heap_fault_turn(
+        OresActorI64Heap* heap, OresActorTurn turn) {
+    if (!heap) return ORES_ACTOR_LOAN_BAD_HANDLE;
+    if (atomic_flag_test_and_set_explicit(&heap->mutex, memory_order_acquire))
+        return ORES_ACTOR_LOAN_BUSY;
+    if (heap->retiring) {
+        unlock_heap(heap);
+        return ORES_ACTOR_LOAN_RETIRED;
+    }
+    if (!heap->turn_active || turn.domain != heap->domain
+        || turn.epoch != heap->turn_epoch) {
+        unlock_heap(heap);
+        return ORES_ACTOR_LOAN_BAD_TURN;
+    }
+    for (unsigned i = 0; i < MAX_LOANS; ++i) {
+        ActorLoanEntry* entry = &heap->loan_entries[i];
+        if (!entry->exclusive) continue;
+        /* Only correctly admitted exclusive loans may have these values.
+         * A corrupt host table is not a recoverable guest fault. */
+        if (!entry->nonce || entry->index >= heap->capacity
+            || entry->turn_epoch != turn.epoch
+            || !heap->slots[entry->index].live
+            || !heap->slots[entry->index].writer_active
+            || heap->slots[entry->index].loans != 0
+            || heap->active_exclusive_loans == 0
+            || heap->active_loans == 0)
+            rejected();
+        heap->slots[entry->index].writer_active = 0;
+        --heap->active_exclusive_loans;
+        --heap->active_loans;
+        memset(entry, 0, sizeof(*entry));
+    }
+    if (heap->active_exclusive_loans != 0) rejected();
+    heap->turn_active = 0;
+    heap->retiring = 1;
+    unlock_heap(heap);
+    return ORES_ACTOR_LOAN_OK;
+}
+
 void ores_actor_i64_heap_retire(OresActorI64Heap* heap) {
     lock_heap(heap);
     heap->retiring = 1; /* no subsequent actor turn may enter */
