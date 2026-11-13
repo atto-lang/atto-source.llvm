@@ -5826,3 +5826,56 @@ if(BUILD_TESTING AND UNIX)
             PROPERTIES TIMEOUT 30)
     endif()
 endif()
+
+# Opt-in OresVM-owned actor Bytes lifecycle. Link the REAL four-domain VM,
+# actor scheduler and private slab, not a synthetic host actor stand-in.
+# No .atto frontend/lowering, Kafka network/disk or hard-RT claim.
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Threads REQUIRED)
+    foreach(optimization IN ITEMS 0 2)
+        set(vm_bytes_target "oreslang-native-vm-owned-bytes-o${optimization}")
+        add_executable(${vm_bytes_target}
+            tests/native_vm_owned_bytes_lifecycle_test.c
+            src/main/cpp/oreslang/runtime/NativeOresVM.c
+            src/main/cpp/oreslang/runtime/NativeActorFuture.c
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+            src/main/cpp/oreslang/runtime/NativeActorBytesInbox.c)
+        target_include_directories(${vm_bytes_target} PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features(${vm_bytes_target} PRIVATE c_std_11)
+        target_compile_definitions(${vm_bytes_target}
+            PRIVATE ORESLANG_ACTOR_BYTES_TESTING=1)
+        target_link_libraries(${vm_bytes_target} PRIVATE Threads::Threads)
+        target_compile_options(${vm_bytes_target} PRIVATE
+            $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG -O${optimization}>)
+        add_test(NAME native_vm_owned_bytes_done_cleanup_o${optimization}_host_only
+            COMMAND ${vm_bytes_target})
+        set_tests_properties(native_vm_owned_bytes_done_cleanup_o${optimization}_host_only
+            PROPERTIES TIMEOUT 40)
+    endforeach()
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        add_executable(oreslang-native-vm-owned-bytes-asan
+            tests/native_vm_owned_bytes_lifecycle_test.c
+            src/main/cpp/oreslang/runtime/NativeOresVM.c
+            src/main/cpp/oreslang/runtime/NativeActorFuture.c
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+            src/main/cpp/oreslang/runtime/NativeActorBytesInbox.c)
+        target_include_directories(oreslang-native-vm-owned-bytes-asan
+            PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features(oreslang-native-vm-owned-bytes-asan
+            PRIVATE c_std_11)
+        target_compile_definitions(oreslang-native-vm-owned-bytes-asan
+            PRIVATE ORESLANG_ACTOR_BYTES_TESTING=1)
+        target_link_libraries(oreslang-native-vm-owned-bytes-asan
+            PRIVATE Threads::Threads)
+        target_compile_options(oreslang-native-vm-owned-bytes-asan PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG -O1 -g
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(oreslang-native-vm-owned-bytes-asan PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        add_test(NAME native_vm_owned_bytes_done_cleanup_asan_ubsan_host_only
+            COMMAND oreslang-native-vm-owned-bytes-asan)
+        set_tests_properties(native_vm_owned_bytes_done_cleanup_asan_ubsan_host_only
+            PROPERTIES TIMEOUT 60)
+    endif()
+endif()
