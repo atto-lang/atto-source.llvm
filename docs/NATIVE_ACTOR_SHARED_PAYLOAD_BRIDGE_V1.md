@@ -15,7 +15,7 @@ The native actor scheduler already has a bounded, generation-checked DATA mailbo
 
 ## Integration test and limitations
 
-The CTest target native_actor_shared_payload_real_scheduler compiles the real NativeActorScheduler.c with a C++ test. One native actor publishes a 1 MiB allocation into the bridge from its authenticated callback. A second actor receives 100 mailbox tickets, checks the same immutable backing address and octets, and rejects replays. An independently reserved supervisor CONTROL envelope must run first. A second run uses one worker and STOP_SEALED to abandon all 100 accepted DATA messages, proving terminal cleanup/refcount release. The test also rejects external senders.
+The CTest target native_actor_shared_payload_real_scheduler compiles the real NativeActorScheduler.c with a C++ test. One native actor publishes a 1 MiB allocation into the bridge from its authenticated callback. A second actor receives 100 legitimate descriptor tickets, checks the same immutable backing address and octets, and rejects replays. The source deliberately injects a forged first DATA envelope containing the *valid-looking first descriptor ticket* before publishing it, making mail #1 carry an exact ticket for mail #2. Only sequence-bound redemption rejects this cross-mail substitution (one denied cross-mail plus 100 denied post-delivery replays). An independently reserved supervisor CONTROL envelope must run first. A second run uses one worker and STOP_SEALED to abandon all 101 accepted DATA messages (100 retained descriptors), proving terminal cleanup/refcount release. The test also rejects external senders.
 
 Outstanding security and language gates:
 
