@@ -1,0 +1,17 @@
+// One linear ActorRef cannot be consumed by graceful_stop and then awaited.
+// The native source compiler must reject mixing synchronous graceful join
+// with get_done continuation lowering, rather than double-joining the heap.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const worker: ActorRef<Worker> = spawn Worker();
+  worker.send(1);
+  worker.graceful_stop();
+  await worker.get_done();
+  return 43;
+}
