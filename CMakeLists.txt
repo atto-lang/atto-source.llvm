@@ -5666,6 +5666,7 @@ if(BUILD_TESTING AND UNIX)
     find_package(Threads REQUIRED)
     add_executable(oreslang-native-actor-bytes-scheduler-turn-test
         tests/native_actor_bytes_scheduler_turn_test.c
+        tests/native_actor_bytes_cross_tu_send.c
         src/main/cpp/oreslang/runtime/NativeActorBytesInbox.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
     target_include_directories(oreslang-native-actor-bytes-scheduler-turn-test
@@ -5683,6 +5684,7 @@ if(BUILD_TESTING AND UNIX)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         add_executable(oreslang-native-actor-bytes-atomic-asan-test
             tests/native_actor_bytes_scheduler_turn_test.c
+            tests/native_actor_bytes_cross_tu_send.c
             src/main/cpp/oreslang/runtime/NativeActorBytesInbox.c
             src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
         target_include_directories(oreslang-native-actor-bytes-atomic-asan-test

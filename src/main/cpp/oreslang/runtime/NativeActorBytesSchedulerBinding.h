@@ -42,7 +42,8 @@ static inline int ores_native_actor_bytes_bind_scheduler(
      * unchanged. No user/guest code can invoke the trusted commit. */
     OresNativeActorBytesBindContext context = {inbox, storage};
     if (!ores_native_actor_scheduler_bind_bytes_only(
-            scheduler, actor, ores_native_actor_bytes_bind_commit, &context))
+            scheduler, actor, ores_native_actor_bytes_commit_payload,
+            ores_native_actor_bytes_bind_commit, &context))
         return 0;
     *out = (OresNativeActorBytesSchedulerBinding){
         scheduler, actor, inbox, storage
@@ -50,22 +51,9 @@ static inline int ores_native_actor_bytes_bind_scheduler(
     return 1;
 }
 
-/* Scheduler -> inbox is the ONLY permitted lock ordering. This
- * immediate borrowed source is copied to the target's private slab during
- * the scheduler's one atomic payload-plus-DATA admission transaction. */
-typedef struct {
-    const OresNativeActorBytesSchedulerBinding* binding;
-    const void* bytes;
-    size_t length;
-} OresNativeActorBytesCommitContext;
-static inline int ores_native_actor_bytes_commit_payload(
-    void* opaque, uint64_t sequence) {
-    const OresNativeActorBytesCommitContext* ctx =
-        (const OresNativeActorBytesCommitContext*)opaque;
-    return ores_native_actor_bytes_try_send_sequenced(
-        ctx->binding->inbox, ctx->binding->storage,
-        ctx->bytes, ctx->length, sequence) == ORES_ACTOR_BYTES_OK;
-}
+/* Scheduler -> inbox is the ONLY permitted lock ordering. The stable
+ * linked callback copies Bytes to the actor-private slab before publishing
+ * its matching scheduler DATA ordinal. */
 /* Trusted native scheduler admission ONLY, not user-callable source ABI.
  * Legacy inbox.try_send + scheduler.try_send is NOT an atomic substitute.
  * No DATA message or owned payload is admitted on a rejected result. */
@@ -75,7 +63,9 @@ static inline OresNativeSendStatus ores_native_actor_bytes_try_send_atomic(
     if (!binding || !binding->scheduler || !binding->inbox ||
         !binding->storage.nonce || (length && !bytes))
         return ORES_NATIVE_SEND_INVALID_REF;
-    OresNativeActorBytesCommitContext commit = {binding, bytes, length};
+    OresNativeActorBytesCommitContext commit = {
+        binding->inbox, binding->storage, bytes, length
+    };
     return ores_native_actor_scheduler_try_send_committed(
         binding->scheduler, binding->actor, payload,
         ores_native_actor_bytes_commit_payload, &commit);

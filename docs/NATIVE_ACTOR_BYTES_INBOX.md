@@ -173,3 +173,24 @@ GCC/Clang O0/O2 and sanitizer stress runs are now registered in the
 standalone source-pinned script; an exact-head source CI outcome has
 not been obtained. This test does not establish atomic OresVM
 DATA-plus-byte publication or native TCP/durability behavior.
+
+## Exact commit callback identity (stacked hardening, host-only)
+
+The Bytes-only scheduler DATA lane now pins one externally linked commit
+function at its atomic bind transition. A different native commit function
+is refused under the scheduler lock before any DATA ordinal or private
+payload can be published. This prevents host adapters accidentally sending
+an unpaired source DATA message to the actor-owned Bytes inbox.
+
+The callback is one C symbol implemented in `NativeActorBytesInbox.c`, not
+a `static inline` function in a header: header-defined function addresses
+are different across translation units. The physical scheduler-turn test
+therefore sends from a separately compiled C module and asserts that it is
+accepted; a forged callback must be denied without invocation. Both normal
+host and ASan/UBSan CTest targets link the cross-TU helper.
+
+This is **trusted native host code only**; it does not expose FFI or raw
+Bytes pointers to `.atto` guests. The source compiler, OresVM lifecycle,
+shared descriptor/zero-copy path and final actor STOP/DONE cleanup are
+separate integration gates. No exact-head executed CI or .atto guest proof
+is claimed by this draft.

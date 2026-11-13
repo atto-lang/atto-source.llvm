@@ -116,9 +116,12 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
  * A fail-closed bind can be retried from a trusted host before any mail.
  * This API does NOT create guest ActorMail<Bytes> source lowering.
  */
+typedef int (*OresNativeActorPayloadCommitFn)(
+    void* context, uint64_t admitted_sequence);
 typedef int (*OresNativeActorMailboxBindFn)(void* context);
 int ores_native_actor_scheduler_bind_bytes_only(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
+    OresNativeActorPayloadCommitFn expected_commit,
     OresNativeActorMailboxBindFn bind, void* context);
 
 /* Trusted, atomic payload-plus-DATA admission. Called ONLY after the exact
@@ -136,8 +139,6 @@ int ores_native_actor_scheduler_bind_bytes_only(
  * A failed callback yields RESOURCE_EXHAUSTED with zero DATA admission.
  * This is a trusted native substrate, NOT Atto ActorMail<Bytes> lowering.
  */
-typedef int (*OresNativeActorPayloadCommitFn)(
-    void* context, uint64_t admitted_sequence);
 OresNativeSendStatus ores_native_actor_scheduler_try_send_committed(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
     uint64_t payload, OresNativeActorPayloadCommitFn commit, void* context);

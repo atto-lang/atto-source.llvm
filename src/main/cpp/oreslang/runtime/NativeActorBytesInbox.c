@@ -130,6 +130,17 @@ int ores_native_actor_bytes_try_send_sequenced(OresNativeActorBytesInbox* b,
     if (!source_mail_sequence) return ORES_ACTOR_BYTES_DENIED;
     return send_internal(b, target, bytes, length, source_mail_sequence);
 }
+/* One externally linked commit callback gives the scheduler a stable
+ * function identity across separate native binding and sending TUs. */
+int ores_native_actor_bytes_commit_payload(void* opaque, uint64_t sequence) {
+    const OresNativeActorBytesCommitContext* ctx =
+        (const OresNativeActorBytesCommitContext*)opaque;
+    if (!ctx || !ctx->inbox || !ctx->storage.nonce ||
+        (ctx->length && !ctx->bytes)) return 0;
+    return ores_native_actor_bytes_try_send_sequenced(
+        ctx->inbox, ctx->storage,
+        ctx->bytes, ctx->length, sequence) == ORES_ACTOR_BYTES_OK;
+}
 static int receive_internal(OresNativeActorBytesInbox* b,
     OresNativeActorBytesRef receiver, uint64_t sequence,
     void* output, size_t capacity, size_t* required_length) {
