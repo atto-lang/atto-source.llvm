@@ -119,7 +119,12 @@ static ElasticSlotV1* checked(OresElasticNativeArenaV1* a,OresElasticNativeHandl
     if(!a || h.domain!=a->domain || h.incarnation!=a->incarnation ||
        h.word==0 || h.generation==0 || h.slot>=a->max_slots) return NULL;
     ElasticSlotV1* slot=&a->slots[h.slot];
-    const size_t offset=((size_t)h.word-1)*8;
+    /* A forged u32 word can overflow size_t on 32-bit hosts before an
+     * otherwise valid slot/generation check. Decode with a 64-bit witness
+     * and bound it to this actor's private allocation domain first. */
+    const uint64_t decoded=((uint64_t)h.word-1u)*UINT64_C(8);
+    if(decoded>a->hard_limit || decoded>SIZE_MAX)return NULL;
+    const size_t offset=(size_t)decoded;
     if(!slot->live || slot->offset!=offset || slot->generation!=h.generation)
         return NULL;
     return slot;
