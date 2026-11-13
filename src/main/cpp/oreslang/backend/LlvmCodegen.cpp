@@ -814,6 +814,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     if (!source.imports.empty())
         throw std::runtime_error("unresolved native module imports cannot reach LLVM emission");
     for (const auto& actor : source.actors) {
+        if (actor.suspending_task) {
+            /* A parsed and validated AST is not an execution capability.
+             * Until generated frames, cleanup and same-actor WAKE dispatch
+             * are wired into SourceActorBootstrap, emitting the legacy
+             * synchronous on_message ABI or root Task pool is forbidden. */
+            throw std::runtime_error(
+                "native actor Task<int> requires compiler-owned continuation frame "
+                "and actor TASK/WAKE ABI lowering");
+        }
         if (actor.max_actor_threads != MaxActorThreads::LOW) {
             throw std::runtime_error("parallel actor LLVM lowering requires compiler-proven per-turn actor state isolation");
         }
