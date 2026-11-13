@@ -75,6 +75,32 @@ if(ORESLANG_PROXY_SLAB_HOST_ONLY)
     return()
 endif()
 
+# Narrow actual C++ host-runtime test, runnable without LLVM developer headers.
+# This is NOT compiler-lowered .atto Map<Bytes,Bytes> or typed ActorMail.
+option(ORESLANG_ACTOR_BYTES_MAP_HOST_ONLY
+    "Build only the bounded actor-owned Bytes map native host regression" OFF)
+if(ORESLANG_ACTOR_BYTES_MAP_HOST_ONLY)
+    include(CTest)
+    if(NOT BUILD_TESTING)
+        message(FATAL_ERROR "Actor Bytes map host proof requires BUILD_TESTING=ON")
+    endif()
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-actor-bytes-map-test
+        tests/native_actor_bytes_map_test.cpp)
+    target_include_directories(oreslang-native-actor-bytes-map-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-bytes-map-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-actor-bytes-map-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-actor-bytes-map-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_actor_owned_bytes_map_host_only
+        COMMAND oreslang-native-actor-bytes-map-test)
+    set_tests_properties(native_actor_owned_bytes_map_host_only
+        PROPERTIES TIMEOUT 60)
+    return()
+endif()
+
 # Managed Oreslang references are a language/runtime storage policy, separate
 # from the native target ABI. Keep compact actor-local references as the
 # default on 64-bit hosts while preserving an explicit full-width mode.
@@ -116,6 +142,21 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Fixed-budget, byte-exact Map<Bytes,Bytes> substrate. C++ host regression,
+    # not compiler-lowered .atto or authenticated typed mailbox dispatch.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-actor-bytes-map-test
+        tests/native_actor_bytes_map_test.cpp)
+    target_include_directories(oreslang-native-actor-bytes-map-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-bytes-map-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-actor-bytes-map-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-actor-bytes-map-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_owned_bytes_map_host_only
+        COMMAND oreslang-native-actor-bytes-map-test)
+    set_tests_properties(native_actor_owned_bytes_map_host_only
+        PROPERTIES TIMEOUT 60)
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
     add_executable(oreslang-native-sum-payload-admission-test
