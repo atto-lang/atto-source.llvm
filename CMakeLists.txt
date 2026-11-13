@@ -2835,6 +2835,7 @@ if(BUILD_TESTING)
     add_executable(oreslang-native-actor-owned-task-wake-test
         tests/native_actor_owned_task_wake_test.c
         src/main/cpp/oreslang/runtime/NativeActorTaskBridge.c
+        src/main/cpp/oreslang/runtime/NativeActorTaskRegistry.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
     target_include_directories(oreslang-native-actor-owned-task-wake-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
