@@ -107,6 +107,88 @@ static void positive(void) {
     puts("HOST_ONLY_EXCLUSIVE_LOAN_POSITIVE_PASS");
 }
 
+/* Invalid guest-originated loan credentials must be reportable to the
+ * caller instead of killing the native process or another independent actor.
+ * This proves only the checked C ABI, not compiler branch lowering. */
+static void checked_loan_status_positive(void) {
+    OresActorI64Heap* a = ores_actor_i64_heap_open(301, 1, 8);
+    OresActorI64Heap* sibling = ores_actor_i64_heap_open(302, 1, 8);
+    OresActorTurn ta = ores_actor_i64_heap_enter(a, 301, 1);
+    OresActorTurn ts = ores_actor_i64_heap_enter(sibling, 302, 1);
+    OresActorSlot sa = ores_actor_i64_heap_new(a, ta, 17);
+    OresActorSlot ss = ores_actor_i64_heap_new(sibling, ts, 29);
+    OresActorLoan owner;
+    OresActorLoan sibling_owner;
+    REQUIRE(ores_actor_i64_heap_try_borrow_mut(a, ta, sa, &owner) == 1);
+    REQUIRE(ores_actor_i64_heap_try_borrow_mut(sibling, ts, ss, &sibling_owner) == 1);
+    int64_t value = 999;
+    REQUIRE(ores_actor_i64_heap_try_loan_read_mut(a, ta, owner, &value)
+            == ORES_ACTOR_LOAN_OK && value == 17);
+    REQUIRE(ores_actor_i64_heap_try_loan_write(a, ta, owner, 18)
+            == ORES_ACTOR_LOAN_OK);
+    value = 999;
+    REQUIRE(ores_actor_i64_heap_try_loan_read_mut(a, ta, owner, &value)
+            == ORES_ACTOR_LOAN_OK && value == 18);
+
+    OresActorLoan wrong = owner;
+    ++wrong.nonce;
+    REQUIRE(ores_actor_i64_heap_try_loan_write(a, ta, wrong, 98)
+            == ORES_ACTOR_LOAN_BAD_HANDLE);
+    value = 999;
+    REQUIRE(ores_actor_i64_heap_try_loan_read_mut(a, ta, wrong, &value)
+            == ORES_ACTOR_LOAN_BAD_HANDLE && value == 0);
+    wrong = owner;
+    wrong.index = UINT64_MAX;
+    REQUIRE(ores_actor_i64_heap_try_loan_write(a, ta, wrong, 98)
+            == ORES_ACTOR_LOAN_BAD_HANDLE);
+    REQUIRE(ores_actor_i64_heap_try_loan_write(a, ta, sibling_owner, 98)
+            == ORES_ACTOR_LOAN_BAD_HANDLE);
+    REQUIRE(ores_actor_i64_heap_try_loan_write(sibling, ts, owner, 98)
+            == ORES_ACTOR_LOAN_BAD_HANDLE);
+    OresActorTurn stale = {ta.domain, ta.epoch + 1};
+    REQUIRE(ores_actor_i64_heap_try_loan_write(a, stale, owner, 98)
+            == ORES_ACTOR_LOAN_BAD_TURN);
+    value = 999;
+    REQUIRE(ores_actor_i64_heap_try_loan_read_mut(a, stale, owner, &value)
+            == ORES_ACTOR_LOAN_BAD_TURN && value == 0);
+    REQUIRE(ores_actor_i64_heap_try_loan_read_mut(a, ta, owner, NULL)
+            == ORES_ACTOR_LOAN_BAD_HANDLE);
+    REQUIRE(ores_actor_i64_heap_try_loan_write(NULL, ta, owner, 98)
+            == ORES_ACTOR_LOAN_BAD_HANDLE);
+
+    OresActorSlot second = ores_actor_i64_heap_new(a, ta, 5);
+    OresActorLoan shared = ores_actor_i64_heap_borrow(a, ta, second);
+    REQUIRE(ores_actor_i64_heap_try_loan_write(a, ta, shared, 98)
+            == ORES_ACTOR_LOAN_BAD_HANDLE);
+    ores_actor_i64_heap_release(a, shared);
+
+    // All rejected operations leave the owner and sibling heaps intact.
+    REQUIRE(ores_actor_i64_heap_try_loan_read_mut(a, ta, owner, &value)
+            == ORES_ACTOR_LOAN_OK && value == 18);
+    REQUIRE(ores_actor_i64_heap_try_loan_read_mut(
+                sibling, ts, sibling_owner, &value)
+            == ORES_ACTOR_LOAN_OK && value == 29);
+    REQUIRE(ores_actor_i64_heap_try_loan_write(sibling, ts, sibling_owner, 30)
+            == ORES_ACTOR_LOAN_OK);
+
+    ores_actor_i64_heap_release(a, owner);
+    REQUIRE(ores_actor_i64_heap_try_loan_write(a, ta, owner, 99)
+            == ORES_ACTOR_LOAN_BAD_HANDLE);
+    ores_actor_i64_heap_release(sibling, sibling_owner);
+    REQUIRE(ores_actor_i64_heap_read(a, ta, sa) == 18);
+    REQUIRE(ores_actor_i64_heap_read(sibling, ts, ss) == 30);
+    ores_actor_i64_heap_leave(a, ta);
+    ores_actor_i64_heap_leave(sibling, ts);
+    ores_actor_i64_heap_retire(a);
+    value = 999;
+    REQUIRE(ores_actor_i64_heap_try_loan_read_mut(a, ta, owner, &value)
+            == ORES_ACTOR_LOAN_RETIRED && value == 0);
+    REQUIRE(ores_actor_i64_heap_try_destroy(a) == 1);
+    ores_actor_i64_heap_retire(sibling);
+    REQUIRE(ores_actor_i64_heap_try_destroy(sibling) == 1);
+    puts("HOST_ONLY_EXCLUSIVE_LOAN_TYPED_FAULT_PASS");
+}
+
 static void negative(unsigned case_number) {
     OresActorI64Heap* a = ores_actor_i64_heap_open(201, 1, 8);
     OresActorTurn ta = ores_actor_i64_heap_enter(a, 201, 1);
@@ -199,6 +281,7 @@ int main(void) {
     const struct rlimit core = {0, 0};
     REQUIRE(setrlimit(RLIMIT_CORE, &core) == 0);
     positive();
+    checked_loan_status_positive();
     for (unsigned test = 1; test <= 16; ++test) {
         pid_t child = fork();
         REQUIRE(child >= 0);
