@@ -161,7 +161,11 @@ int ores_native_actor_task_registry_close(
     pthread_mutex_lock(&r->mutex);
     /* Closing an unsealed actor registry could silently disable automatic
      * Task tracking while the actor is still accepting guest calls. */
-    int ok = r->sealed && r->count == 0;
+    /* A sealed task registry is still referenced by the current DATA/WAKE
+     * callback until the native actor's exact physical DONE barrier. Neither
+     * an empty ledger nor a sealed mailbox is permission to free that mutex. */
+    int ok = r->sealed && r->count == 0
+        && ores_native_actor_scheduler_poll_done(r->scheduler, r->actor);
     if (ok) r->initialized = 0;
     pthread_mutex_unlock(&r->mutex);
     if (ok && pthread_mutex_destroy(&r->mutex) != 0) return 0;
