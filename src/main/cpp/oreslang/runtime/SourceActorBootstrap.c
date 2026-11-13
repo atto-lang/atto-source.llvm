@@ -520,10 +520,13 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
          * scheduler re-admission; do not report false actor-local success. */
         ensure(ores_actor_i64_heap_fault_turn(instance->heap, turn)
             == ORES_ACTOR_LOAN_OK);
-        atomic_store_explicit(
-            &instance->fault_status, status, memory_order_release);
+        /* Publish accounting before the release-store fault status: an
+         * observer that acquires the fault must also see the failed count.
+         * Never expose a status with success-only accounting. */
         atomic_fetch_add_explicit(
             &instance->failed, 1, memory_order_release);
+        atomic_store_explicit(
+            &instance->fault_status, status, memory_order_release);
         /* A stop already admitted by trusted main will finish normally.
          * Otherwise seal only this actor's queued DATA; the active callback
          * has already returned a typed fault, not a successful result. */
