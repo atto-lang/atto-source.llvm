@@ -26,6 +26,7 @@ jobs:
           gcc -std=c11 -O1 -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
             -Isrc/main/cpp tests/native_actor_owned_task_wake_test.c \
             src/main/cpp/oreslang/runtime/NativeActorTaskBridge.c \
+            src/main/cpp/oreslang/runtime/NativeActorTaskRegistry.c \
             src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
             -o /tmp/actor-task-wake-gcc
           timeout 45s /tmp/actor-task-wake-gcc
@@ -35,6 +36,7 @@ jobs:
           clang -std=c11 -O2 -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
             -Isrc/main/cpp tests/native_actor_owned_task_wake_test.c \
             src/main/cpp/oreslang/runtime/NativeActorTaskBridge.c \
+            src/main/cpp/oreslang/runtime/NativeActorTaskRegistry.c \
             src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
             -o /tmp/actor-task-wake-clang
           timeout 45s /tmp/actor-task-wake-clang
@@ -45,6 +47,7 @@ jobs:
             -fsanitize=address,undefined -fno-omit-frame-pointer \
             -Isrc/main/cpp tests/native_actor_owned_task_wake_test.c \
             src/main/cpp/oreslang/runtime/NativeActorTaskBridge.c \
+            src/main/cpp/oreslang/runtime/NativeActorTaskRegistry.c \
             src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
             -o /tmp/actor-task-wake-sanitized
           ASAN_OPTIONS=detect_leaks=1 timeout 45s /tmp/actor-task-wake-sanitized
