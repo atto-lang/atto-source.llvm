@@ -89,6 +89,19 @@ int main(void) {
     for (size_t i = 0; i < 2; ++i) {
         check(ores_native_actor_scheduler_stop(ctx.scheduler, actors[i]));
         check(ores_native_actor_scheduler_wait_done(ctx.scheduler, actors[i]));
+        OresNativeActorTerminalState terminal = {0};
+        check(ores_native_actor_scheduler_terminal_state(
+            ctx.scheduler, actors[i], &terminal));
+        /* The overlong rejected payload must not have consumed one DATA
+         * ordinal, credit, or terminal processed count. */
+        check(terminal.accepted_user_messages == 1);
+        check(terminal.processed_user_messages == 1);
+        check(terminal.abandoned_user_messages == 0);
+        size_t pending = SIZE_MAX, used = SIZE_MAX;
+        check(ores_native_actor_bytes_observe(
+            inbox[i], ctx.bindings[i].storage, &pending, &used)
+            == ORES_ACTOR_BYTES_OK);
+        check(pending == 0 && used == 0);
         check(ores_native_actor_bytes_try_retire(
             inbox[i], ctx.bindings[i].storage) == ORES_ACTOR_BYTES_OK);
         check(ores_native_actor_bytes_try_destroy(
