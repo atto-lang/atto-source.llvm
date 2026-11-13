@@ -4752,6 +4752,21 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set_tests_properties(native_epoll_reactor_manager_rt_preallocated PROPERTIES TIMEOUT 20)
 endif()
 
+# Trusted native host-only immutable payload descriptors and bounded DATA inbox.
+# Zero-copy proof is NOT compiled .atto actor mailbox lowering or guest parity.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-shared-immutable-payload-test
+        tests/native_shared_immutable_payload_test.cpp)
+    target_include_directories(oreslang-native-shared-immutable-payload-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-shared-immutable-payload-test PRIVATE cxx_std_20)
+    target_link_libraries(oreslang-native-shared-immutable-payload-test PRIVATE Threads::Threads)
+    add_test(NAME native_shared_immutable_payload_host
+        COMMAND oreslang-native-shared-immutable-payload-test)
+    set_tests_properties(native_shared_immutable_payload_host PROPERTIES TIMEOUT 25)
+endif()
+
 # Host-only actor-shared TCP/HTTP pool over real loopback sockets (POSIX).
 # NOT compiled .atto guest networking.
 if(BUILD_TESTING AND UNIX)
