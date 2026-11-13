@@ -17,10 +17,22 @@
 
 namespace oreslang::runtime {
 
+// A value-key only: the trusted scheduler must authenticate the caller.
+// Never accept a key assembled from untrusted guest-provided IDs.
+struct BufferActorIdentity final {
+    std::uint64_t tenant_id;
+    std::uint64_t actor_id;
+    std::uint64_t generation;
+    constexpr explicit operator bool() const noexcept {
+        return tenant_id != 0 && actor_id != 0 && generation != 0;
+    }
+    constexpr bool operator==(const BufferActorIdentity&) const noexcept = default;
+};
+
 class NativeFixedBufferPool final {
     struct Slot {
         std::uint64_t generation = 1;
-        std::uint64_t actor_id = 0;
+        BufferActorIdentity owner{0, 0, 0};
         bool leased = false;
         bool escrow = false; // sender capability is inaccessible during admission
         bool disabled = false;
@@ -59,11 +71,11 @@ public:
         // callback. Never suspend, reenter the pool, or capture the span.
         // This does not implement an async-I/O pin or shared-memory authority.
         template <typename F>
-        bool with_mutable_bytes(std::uint64_t actor, F&& callback) {
+        bool with_mutable_bytes(BufferActorIdentity actor, F&& callback) {
             if (!state_) return false;
             std::lock_guard<std::mutex> lock(state_->mutex);
             Slot& slot = state_->slots[index_];
-            if (state_->retired || !valid(slot) || slot.escrow || slot.actor_id != actor)
+            if (state_->retired || !valid(slot) || slot.escrow || slot.owner != actor)
                 return false;
             callback(std::span<std::uint8_t>(
                 state_->bytes.data() + index_ * state_->slot_bytes,
@@ -72,11 +84,11 @@ public:
         }
 
         template <typename F>
-        bool with_read_only_bytes(std::uint64_t actor, F&& callback) const {
+        bool with_read_only_bytes(BufferActorIdentity actor, F&& callback) const {
             if (!state_) return false;
             std::lock_guard<std::mutex> lock(state_->mutex);
             const Slot& slot = state_->slots[index_];
-            if (state_->retired || !valid(slot) || slot.escrow || slot.actor_id != actor)
+            if (state_->retired || !valid(slot) || slot.escrow || slot.owner != actor)
                 return false;
             callback(std::span<const std::uint8_t>(
                 state_->bytes.data() + index_ * state_->slot_bytes,
@@ -105,7 +117,7 @@ public:
                     std::fill_n(state->bytes.data() + index_ * state->slot_bytes,
                                 state->slot_bytes, std::uint8_t{0});
                     slot.leased = false;
-                    slot.actor_id = 0;
+                    slot.owner = {0, 0, 0};
                     if (slot.generation == std::numeric_limits<std::uint64_t>::max()) {
                         slot.disabled = true; // fail closed; never wrap a generation
                     } else {
@@ -149,16 +161,17 @@ public:
         PendingTransfer& operator=(PendingTransfer&&) = delete;
         ~PendingTransfer() { discard(); }
 
-        std::optional<Lease> commit(std::uint64_t recipient_actor) noexcept {
-            if (!held_ || !held_->state_ || recipient_actor == 0) return std::nullopt;
+        std::optional<Lease> commit(BufferActorIdentity recipient_actor) noexcept {
+            if (!held_ || !held_->state_ || !recipient_actor) return std::nullopt;
             const auto state = held_->state_;
             {
                 std::lock_guard<std::mutex> lock(state->mutex);
                 Slot& slot = state->slots[held_->index_];
                 if (state->retired || !held_->valid(slot) || !slot.escrow ||
-                    slot.actor_id != original_actor_)
+                    slot.owner != original_actor_ ||
+                    recipient_actor.tenant_id != original_actor_.tenant_id)
                     return std::nullopt;
-                slot.actor_id = recipient_actor;
+                slot.owner = recipient_actor;
                 slot.escrow = false;
             }
             return take();
@@ -171,7 +184,7 @@ public:
                 std::lock_guard<std::mutex> lock(state->mutex);
                 Slot& slot = state->slots[held_->index_];
                 if (!held_->valid(slot) || !slot.escrow ||
-                    slot.actor_id != original_actor_)
+                    slot.owner != original_actor_)
                     return std::nullopt;
                 // Abort succeeds even after retirement; release remains legal.
                 slot.escrow = false;
@@ -188,7 +201,7 @@ public:
                 std::lock_guard<std::mutex> lock(state->mutex);
                 Slot& slot = state->slots[held_->index_];
                 if (!held_->valid(slot) || !slot.escrow ||
-                    slot.actor_id != original_actor_)
+                    slot.owner != original_actor_)
                     return false;
                 slot.escrow = false;
             }
@@ -199,7 +212,7 @@ public:
 
     private:
         friend class NativeFixedBufferPool;
-        PendingTransfer(Lease&& owner, std::uint64_t source) noexcept
+        PendingTransfer(Lease&& owner, BufferActorIdentity source) noexcept
             : held_(std::move(owner)), original_actor_(source) {}
         std::optional<Lease> take() noexcept {
             auto moved = std::move(held_);
@@ -207,7 +220,7 @@ public:
             return moved;
         }
         std::optional<Lease> held_;
-        std::uint64_t original_actor_ = 0;
+        BufferActorIdentity original_actor_{0, 0, 0};
     };
 
     static constexpr std::size_t max_pool_bytes = 1024u * 1024u * 1024u;
@@ -225,15 +238,15 @@ public:
 
     // Preallocated slot metadata and storage: this is allocation-free once
     // the constructor has succeeded. On exhaustion return nullopt; never grow.
-    std::optional<Lease> try_acquire(std::uint64_t actor) {
-        if (actor == 0) return std::nullopt;
+    std::optional<Lease> try_acquire(BufferActorIdentity actor) {
+        if (!actor) return std::nullopt;
         std::lock_guard<std::mutex> lock(state_->mutex);
         if (state_->retired) return std::nullopt;
         for (std::size_t i = 0; i < state_->slots.size(); ++i) {
             Slot& slot = state_->slots[i];
             if (slot.leased || slot.disabled) continue;
             slot.leased = true;
-            slot.actor_id = actor;
+            slot.owner = actor;
             ++state_->in_use;
             return Lease(state_, i, slot.generation);
         }
@@ -244,14 +257,14 @@ public:
     // Lease object; commit returns a new exclusive receiver Lease. Failed
     // preparation leaves the exact sender Lease untouched. No heap allocation.
     std::optional<PendingTransfer> try_prepare_transfer(
-        Lease& sender, std::uint64_t expected_actor) noexcept {
+        Lease& sender, BufferActorIdentity expected_actor) noexcept {
         if (!sender.state_ || sender.state_.get() != state_.get() ||
-            expected_actor == 0) return std::nullopt;
+            !expected_actor) return std::nullopt;
         std::lock_guard<std::mutex> lock(state_->mutex);
         if (state_->retired) return std::nullopt;
         Slot& slot = state_->slots[sender.index_];
         if (!sender.valid(slot) || slot.escrow ||
-            slot.actor_id != expected_actor) return std::nullopt;
+            slot.owner != expected_actor) return std::nullopt;
         slot.escrow = true;
         return PendingTransfer(std::move(sender), expected_actor);
     }
