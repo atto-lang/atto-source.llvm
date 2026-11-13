@@ -62,7 +62,49 @@ for opt in 0 2; do
     exit 1
   fi
 done
-for name in reject-int-and reject-int-or reject-int-xor reject-single-caret reject-spaced-caret reject-bare-pipe reject-bare-ampersand; do
+# A real runtime-trap RHS must be skipped by false && and true ||.
+# These executable tests go beyond the pure truth table and verify CFG behavior.
+short_ir="$tmp/short-circuit-runtime.ll"
+timeout 40s "$compiler" --target=host "$fixtures/short-circuit-runtime.atto" >"$short_ir"
+test -s "$short_ir" || { echo "missing short-circuit IR" >&2; exit 1; }
+for opt in 0 2; do
+  binary="$tmp/short-circuit-O$opt"
+  timeout 40s "$clang" "-O$opt" -x ir "$short_ir" -o "$binary"
+  status=0
+  timeout 20s "$binary" >"$tmp/short-circuit-O$opt.stdout" 2>"$tmp/short-circuit-O$opt.stderr" || status=$?
+  if [[ "$status" -ne 42 || -s "$tmp/short-circuit-O$opt.stdout" ]]; then
+    echo "short-circuit runtime guest failed at O$opt: status=$status" >&2
+    cat "$tmp/short-circuit-O$opt.stderr" >&2
+    exit 1
+  fi
+done
+echo "ATTO_LOGICAL_SHORT_CIRCUIT_RUNTIME_O0_O2_PASS"
+
+# XOR always visits RHS, whereas AND/OR visit RHS only when needed.
+# llvm.trap is emitted by checked Integer.rem with zero divisor.
+for name in xor-eager-trap and-reached-rhs-trap or-reached-rhs-trap; do
+  ir="$tmp/$name.ll"
+  timeout 40s "$compiler" --target=host "$fixtures/$name.atto" >"$ir"
+  test -s "$ir" || { echo "missing runtime trap IR for $name" >&2; exit 1; }
+  grep -q 'llvm.trap' "$ir" || { echo "expected checked runtime trap in $name" >&2; exit 1; }
+  for opt in 0 2; do
+    binary="$tmp/$name-O$opt"
+    timeout 40s "$clang" "-O$opt" -x ir "$ir" -o "$binary"
+    status=0
+    timeout 20s "$binary" >"$tmp/$name-O$opt.stdout" 2>"$tmp/$name-O$opt.stderr" || status=$?
+    if (( status <= 128 || status == 124 || status == 125 || status == 126 || status == 127 )); then
+      echo "expected native guest trap for $name at O$opt; got status=$status" >&2
+      exit 1
+    fi
+    if [[ -s "$tmp/$name-O$opt.stdout" ]]; then
+      echo "unexpected stdout from trapping $name at O$opt" >&2
+      exit 1
+    fi
+  done
+  echo "ATTO_LOGICAL_TRAP_RUNTIME_O0_O2_PASS name=$name"
+done
+
+for name in reject-int-and reject-int-or reject-int-xor reject-int-and-dead-rhs reject-int-or-dead-rhs reject-int-xor-left reject-single-caret reject-spaced-caret reject-bare-pipe reject-bare-ampersand; do
   out="$tmp/$name.ll"
   diagnostic="$tmp/$name.stderr"
   status=0
@@ -84,4 +126,4 @@ for name in reject-int-and reject-int-or reject-int-xor reject-single-caret reje
     exit 1
   fi
 done
-echo "logical punctuation: native O0/O2 + compile negatives passed"
+echo "logical punctuation: native O0/O2 + short-circuit/trap execution + compile negatives passed"
