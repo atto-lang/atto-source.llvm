@@ -242,6 +242,12 @@ int ores_native_actor_task_after_wake(
              * callback physically exited, so its resource loan can retire.
              * It is unsafe to retire on cancel() itself while guest runs. */
             ok = retire_locked(t);
+        } else {
+            /* Broken guest lowering returned from an active Task callback
+             * without DONE, AWAIT, or authenticated cancellation. This is a
+             * physical-lifecycle protocol failure: keep the actor's loan
+             * pinned and quarantine instead of fabricating Task completion. */
+            ok = 0;
         }
     }
     pthread_mutex_unlock(&t->mutex);
