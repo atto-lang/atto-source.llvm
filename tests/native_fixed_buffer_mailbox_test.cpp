@@ -62,6 +62,10 @@ int main() {
     assert(before != 0 && before == after); // exact same native buffer backing
     assert(delivery->acknowledge_released());
     assert(!delivery->acknowledge_released());
+    bool rejected_stale_delivery = false;
+    try { (void)delivery->lease(); }
+    catch (const std::logic_error&) { rejected_stale_delivery = true; }
+    assert(rejected_stale_delivery);
     assert(mailbox.charged() == 0);
     assert(mailbox.try_offer(pool, *second, 11));
     auto second_delivery = mailbox.try_receive();
