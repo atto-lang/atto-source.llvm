@@ -1,6 +1,7 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
+#include "oreslang/frontend/ActorSourceSetAdmission.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ModuleLoader.hpp"
 #include "oreslang/frontend/LibraryProfile.hpp"
@@ -208,6 +209,9 @@ int main(int argc, char** argv) {
     bool rt_entry_seen = false;
     bool rt_report_seen = false;
     bool constraint_descriptors_only = false;
+    bool verify_actor_source_set_only = false;
+    bool expected_source_set_seen = false;
+    std::string expected_source_set_sha;
     std::string rt_entry = "main/0";
     std::string rt_report_path;
     bool tree_shake = false;
@@ -277,6 +281,20 @@ int main(int argc, char** argv) {
                 return 2;
             }
             constraint_descriptors_only = true;
+        } else if (arg == "--verify-actor-source-set-only") {
+            if (verify_actor_source_set_only) {
+                std::cerr << "duplicate actor source-set verification option\n";
+                return 2;
+            }
+            verify_actor_source_set_only = true;
+        } else if (arg.rfind("--expected-source-set-git-sha=", 0) == 0) {
+            if (expected_source_set_seen) {
+                std::cerr << "duplicate trusted source-set SHA option\n";
+                return 2;
+            }
+            expected_source_set_seen = true;
+            expected_source_set_sha =
+                arg.substr(std::string("--expected-source-set-git-sha=").size());
         } else if (arg.rfind("--core-log-level=", 0) == 0) {
             coreLogLevel = arg.substr(std::string_view("--core-log-level=").size());
         } else if (arg == "--no-core-log") {
@@ -325,6 +343,33 @@ int main(int argc, char** argv) {
             return 2;
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
+    }
+    // Source-set integrity is an independent read-only admission: it never
+    // calls the actor parser, emits IR, or grants a mailbox/critical capability.
+    // The expected Git SHA must come from an independently trusted CI plan.
+    if (verify_actor_source_set_only || expected_source_set_seen) {
+        if (!verify_actor_source_set_only || !expected_source_set_seen ||
+            path == nullptr || target_seen || profile_seen || library_profile_seen ||
+            allocator_provider_seen || rt_check_only || rt_entry_seen || rt_report_seen ||
+            constraint_descriptors_only || tree_shake || !tree_shake_roots.empty() ||
+            isolate_entry_seen || experimental_owned_int || experimental_rt_scalar_loop) {
+            std::cerr << "actor source-set verification requires only trusted SHA, manifest path and verification-only mode\n";
+            return 2;
+        }
+        try {
+            const auto receipt = oreslang::frontend::verify_actor_source_set_only(
+                path, expected_source_set_sha);
+            std::cout << "ACTOR_SOURCE_SET_INTEGRITY_ONLY"
+                      << " units=" << receipt.unit_count
+                      << " namespace=" << receipt.name_space
+                      << " actor=" << receipt.actor
+                      << " NO_AST_NO_IR_NO_GUEST\n";
+            return 0;
+        } catch (const std::exception& error) {
+            print_safe_diagnostic(std::cerr, error.what(), 512);
+            std::cerr << '\n';
+            return 1;
+        }
     }
     // Public library architecture has exactly two layers. For now the native
     // backend only certifies the freestanding core profile on targets whose ABI
