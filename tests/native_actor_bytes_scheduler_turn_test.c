@@ -60,6 +60,11 @@ static int must_not_commit(void* opaque, uint64_t ordinal) {
         &ctx->incorrect_commit_calls, 1, memory_order_release);
     return 1;
 }
+static int reject_initial_bind(void* opaque) {
+    atomic_int* calls = (atomic_int*)opaque;
+    atomic_fetch_add_explicit(calls, 1, memory_order_relaxed);
+    return 0; /* critical negative: cannot partially change mailbox kind */
+}
 int main(void) {
     Context ctx = {0};
     ctx.scheduler = ores_native_actor_scheduler_open(2, 8, 2, on_data, &ctx);
@@ -209,8 +214,27 @@ int main(void) {
     OresNativeActorBytesInbox* stopped_inbox =
         ores_native_actor_bytes_open(1, stopped_ref.generation, 2, 64, 128);
     check(stopped_inbox);
+    atomic_int rejected_bind_calls = 0;
+    check(!ores_native_actor_scheduler_bind_bytes_only(
+        stopped.scheduler, stopped_ref, reject_initial_bind,
+        &rejected_bind_calls));
+    check(atomic_load_explicit(
+        &rejected_bind_calls, memory_order_relaxed) == 1);
+    check(ores_native_actor_scheduler_try_send_committed(
+        stopped.scheduler, stopped_ref, 900, must_not_commit, &scalar)
+        == ORES_NATIVE_SEND_WRONG_MAIL_KIND);
+    check(atomic_load_explicit(
+        &scalar.incorrect_commit_calls, memory_order_acquire) == 0);
+    /* A second, valid bind commits the private inbox and scheduler type
+     * together. Attempts to bind again must fail without resetting it. */
     check(ores_native_actor_bytes_bind_scheduler(
         &stopped.bindings[0], stopped.scheduler, stopped_ref, stopped_inbox));
+    OresNativeActorBytesSchedulerBinding rejected_second_bind = {0};
+    check(!ores_native_actor_bytes_bind_scheduler(
+        &rejected_second_bind, stopped.scheduler, stopped_ref, stopped_inbox));
+    check(ores_native_actor_scheduler_try_send(
+        stopped.scheduler, stopped_ref, 900)
+        == ORES_NATIVE_SEND_WRONG_MAIL_KIND);
     check(ores_native_actor_scheduler_stop_sealed(
         stopped.scheduler, stopped_ref));
     unsigned char stopped_frame[] = {70, 0, 255, 10};
@@ -234,6 +258,6 @@ int main(void) {
     ores_native_actor_scheduler_retire(stopped.scheduler);
     check(ores_native_actor_scheduler_drain(stopped.scheduler));
     check(ores_native_actor_scheduler_try_destroy(stopped.scheduler));
-    puts("NATIVE_ACTOR_BYTES_PHYSICAL_TURN_HOST_ONLY_PASS actors=2 current_data=2 foreign=DENIED external=DENIED atomic_admission=2 rejected_without_stray_data=2 sequence_fenced=2 mixed_scalar=DENIED scalar_lane=PASS failed_bind=ATOMIC stop_seal=PASS");
+    puts("NATIVE_ACTOR_BYTES_PHYSICAL_TURN_HOST_ONLY_PASS actors=2 current_data=2 foreign=DENIED external=DENIED atomic_admission=2 rejected_without_stray_data=2 sequence_fenced=2 mixed_scalar=DENIED scalar_lane=PASS failed_bind=ATOMIC rebind=DENIED stop_seal=PASS");
     return 0;
 }
