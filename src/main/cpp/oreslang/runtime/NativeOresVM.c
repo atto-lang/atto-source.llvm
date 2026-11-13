@@ -94,6 +94,8 @@ static OresNativeVM* open_vm_internal(
         vm->owned[i] = (OresVMOwnedSlot*)calloc(p->actor_slots,
             sizeof(*vm->owned[i]));
         if (!vm->owned[i]) goto failed;
+        for (size_t slot = 0; slot < p->actor_slots; ++slot)
+            atomic_init(&vm->owned[i][slot].resource, NULL);
         vm->actor_slots[i] = p->actor_slots;
         vm->typed_failure_enabled[i] = p->on_failure != NULL;
         vm->workers[i] = workers;
