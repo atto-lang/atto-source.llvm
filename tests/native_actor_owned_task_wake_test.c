@@ -19,9 +19,10 @@ typedef struct {
     OresNativeWakeTicket finishing_parent_wake;
     pthread_mutex_t mutex;
     pthread_cond_t cv;
-    int mode; /* 1=nest+external completion, 2=STOP while suspended */
+    int mode; /* 1=nested complete, 2=STOP, 3=parent DONE before child */
     int suspended, suspension_physically_returned, allow_suspend_guest_exit;
-    int child_done, parent_done, allow_parent_wake_exit;
+    int child_done, child_suspended, parent_done, parent_physically_returned;
+    int allow_parent_wake_exit;
     atomic_int parent_turns, child_turns, control_turns, errors;
 } Fixture;
 
@@ -69,7 +70,7 @@ static void on_wake(void* opaque, size_t actor,
             return; /* STOP/cancellation does not run guest code */
         int turn = atomic_fetch_add(&f->parent_turns, 1);
         if (turn == 0) {
-            if (f->mode == 1
+            if (f->mode != 2
                     && !ores_native_actor_task_registry_start(
                         &f->registry, &f->child, &f->parent))
                 atomic_fetch_add(&f->errors, 1);
@@ -102,9 +103,14 @@ static void on_wake(void* opaque, size_t actor,
             atomic_fetch_add(&f->errors, 1);
             return;
         }
-        if (!ores_native_actor_scheduler_is_current_actor(f->scheduler, f->actor)
-                || !ores_native_actor_task_finish(&f->child))
+        if (!ores_native_actor_scheduler_is_current_actor(f->scheduler, f->actor))
             atomic_fetch_add(&f->errors, 1);
+        if (f->mode == 3) {
+            if (!ores_native_actor_task_suspend(&f->child))
+                atomic_fetch_add(&f->errors, 1);
+        } else if (!ores_native_actor_task_finish(&f->child)) {
+            atomic_fetch_add(&f->errors, 1);
+        }
         atomic_fetch_add(&f->child_turns, 1);
         signal_host(f, &f->child_done);
     } else atomic_fetch_add(&f->errors, 1);
@@ -122,11 +128,15 @@ static void after_wake(void* opaque, size_t actor,
         ? &f->parent : wake.continuation_slot == 2 ? &f->child : NULL;
     if (!record || !ores_native_actor_task_after_wake(record, wake)) {
         atomic_fetch_add(&f->errors, 1);
-    } else if (wake.continuation_slot == 1
-            && atomic_load(&f->parent_turns) == 1) {
-        /* A true scheduler-issued physical-turn return, not a user-visible
-         * logical await signal, makes the next WAKE publishable. */
-        signal_host(f, &f->suspension_physically_returned);
+    } else if (wake.continuation_slot == 1) {
+        if (atomic_load(&f->parent_turns) == 1) {
+            /* Guest callback exit authorizes Future publication. */
+            signal_host(f, &f->suspension_physically_returned);
+        } else {
+            signal_host(f, &f->parent_physically_returned);
+        }
+    } else if (wake.continuation_slot == 2 && f->mode == 3) {
+        signal_host(f, &f->child_suspended);
     }
 }
 static void open_fixture(Fixture* f, int mode) {
@@ -162,7 +172,7 @@ static void open_fixture(Fixture* f, int mode) {
 static void close_fixture(Fixture* f) {
     CHECK(!atomic_load(&f->errors));
     CHECK(!ores_native_actor_task_registry_close(&f->registry));
-    if (f->mode == 1) {
+    if (f->mode != 2) {
         /* A physically finished parent must remain registered until each
          * nested child has retired and been removed from the ledger. */
         CHECK(!ores_native_actor_task_registry_unregister(
@@ -255,6 +265,45 @@ int main(void) {
     CHECK(atomic_load(&stopped.parent_turns) == 1);
     CHECK(atomic_load(&stopped.child_turns) == 0);
     close_fixture(&stopped);
+
+    /* A parent can publish its own physical retirement before a child
+     * becomes ready. Structured get_done must still join the child, and
+     * cancellation of an already-terminal parent must revoke descendants.
+     * This test has no actor worker parked on host-side Future completion. */
+    Fixture lineage = {0};
+    open_fixture(&lineage, 3);
+    CHECK(ores_native_actor_scheduler_send(
+        lineage.scheduler, lineage.actor, 1));
+    wait_host(&lineage, &lineage.suspended);
+    signal_host(&lineage, &lineage.allow_suspend_guest_exit);
+    wait_host(&lineage, &lineage.suspension_physically_returned);
+    wait_host(&lineage, &lineage.child_suspended);
+    CHECK(!ores_native_actor_task_physically_done(&lineage.child));
+    CHECK(!ores_native_actor_task_registry_scope_done(
+        &lineage.registry, &lineage.parent));
+    CHECK(ores_native_actor_task_publish(
+        &lineage.parent, 1001, ORES_NATIVE_WAKE_READY));
+    wait_host(&lineage, &lineage.parent_done);
+    signal_host(&lineage, &lineage.allow_parent_wake_exit);
+    wait_host(&lineage, &lineage.parent_physically_returned);
+    CHECK(ores_native_actor_task_physically_done(&lineage.parent));
+    CHECK(!ores_native_actor_task_physically_done(&lineage.child));
+    CHECK(!ores_native_actor_task_registry_scope_done(
+        &lineage.registry, &lineage.parent));
+    CHECK(ores_native_actor_task_registry_cancel(
+        &lineage.registry, &lineage.parent));
+    CHECK(ores_native_actor_task_physically_done(&lineage.child));
+    CHECK(ores_native_actor_task_registry_scope_done(
+        &lineage.registry, &lineage.parent));
+    CHECK(!ores_native_actor_task_publish(
+        &lineage.child, 1002, ORES_NATIVE_WAKE_READY));
+    CHECK(ores_native_actor_task_registry_stop(&lineage.registry));
+    CHECK(!ores_native_actor_task_registry_start(
+        &lineage.registry, &lineage.control_probe, NULL));
+    CHECK(ores_native_actor_scheduler_wait_done(
+        lineage.scheduler, lineage.actor));
+    CHECK(atomic_load(&lineage.child_turns) == 1);
+    close_fixture(&lineage);
     puts("NATIVE_ACTOR_OWNED_TASK_WAKE_PASS");
     return 0;
 }
