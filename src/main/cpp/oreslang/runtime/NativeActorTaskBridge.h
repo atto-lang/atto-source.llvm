@@ -91,6 +91,9 @@ int ores_native_actor_task_cancel(OresNativeActorTask* task);
 int ores_native_actor_task_stop_actor(OresNativeActorTask* task);
 int ores_native_actor_task_cancel_requested(OresNativeActorTask* task);
 int ores_native_actor_task_physically_done(OresNativeActorTask* task);
+/* Internal registry authority: parent must be RUNNING in its own READY WAKE
+ * on this exact physical actor carrier before child Task admission. */
+int ores_native_actor_task_is_current_running(OresNativeActorTask* task);
 /* Requires NEW or physically RETIRED; never destroy a live mutex/record. */
 int ores_native_actor_task_close(OresNativeActorTask* task);
 
