@@ -1547,6 +1547,15 @@ private:
         // borrow/take/await need separate lifetime-aware lowering.
         while (token_.text != "return") {
             if (token_.kind == Kind::End || token_.text == "}") fail("actor handler requires return");
+            /* A native TASK-lane host ABI is not a source continuation.
+             * Never interpret task/await as a synchronous field write, nor
+             * quietly send it to the legacy foreign source Task pool. */
+            if (token_.text == "task" ||
+                    ((token_.text == "let" || token_.text == "val" ||
+                      token_.text == "const") && peek_next().text == "Task"))
+                fail("native actor task body requires compiler-owned continuation lowering");
+            if (token_.text == "await")
+                fail("native actor await requires suspends fnc/mtd and compiler-owned continuation lowering");
             if (token_.text == "const") {
                 if (!method.actor_field_writes.empty())
                     fail("native actor owned temporaries must precede field writes");
@@ -1585,6 +1594,8 @@ private:
             method.actor_field_writes.push_back(std::move(write));
         }
         require("return");
+        if (token_.text == "await")
+            fail("native actor await requires suspends fnc/mtd and compiler-owned continuation lowering");
         method.result = expression();
         if (!method.locals.empty()) {
             // This slice has one drop epilogue. No taken/moved or borrowed
