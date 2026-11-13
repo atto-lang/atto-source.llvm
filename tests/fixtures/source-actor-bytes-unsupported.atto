@@ -1,0 +1,15 @@
+// Compiler negative gate until typed Bytes mailbox/affine move lowering exists.
+// Runtime C inbox admission is NOT proof of executable source-level Bytes.
+define actor ByteWriter as {
+  let accepted: int = 0;
+  pub fnc on_message(Bytes payload): int {
+    accepted = accepted + 1;
+    return accepted;
+  }
+}
+pub fnc main(): int {
+  const actor: ActorRef<ByteWriter> = spawn ByteWriter();
+  actor.send(Bytes[1, 2, 3, 255]);
+  stop actor;
+  return 43;
+}
