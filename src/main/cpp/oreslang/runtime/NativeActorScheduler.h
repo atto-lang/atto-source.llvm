@@ -100,6 +100,27 @@ typedef enum {
 } OresNativeSendStatus;
 OresNativeSendStatus ores_native_actor_scheduler_try_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
+/* Trusted, atomic payload-plus-DATA admission. Called ONLY after the exact
+ * actor incarnation, scheduler mailbox credits and worker availability have
+ * been checked under the scheduler mutex. The callback publishes a
+ * preallocated, fully-owned payload using the scheduler-minted source-mail
+ * ordinal; 1 means COMMITTED, 0 means NO MUTATION/REJECTED.
+ *
+ * The callback MUST NOT call scheduler APIs, allocate, park, wait on I/O,
+ * reenter host code or modify bytes on a rejected return. It may try-lock a
+ * separate actor-owned payload slab; lock order is scheduler -> payload.
+ * Once it returns 1, the scheduler enqueues DATA before releasing its lock:
+ * STOP, competing sends and physical carriers cannot observe half-admission.
+ * Source guests cannot directly supply this callback or mint the ordinal.
+ * A failed callback yields RESOURCE_EXHAUSTED with zero DATA admission.
+ * This is a trusted native substrate, NOT Atto ActorMail<Bytes> lowering.
+ */
+typedef int (*OresNativeActorPayloadCommitFn)(
+    void* context, uint64_t admitted_sequence);
+OresNativeSendStatus ores_native_actor_scheduler_try_send_committed(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
+    uint64_t payload, OresNativeActorPayloadCommitFn commit, void* context);
+
 /* Compatibility API: 1 iff accepted, 0 otherwise. Prefer typed try_send. */
 int ores_native_actor_scheduler_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
