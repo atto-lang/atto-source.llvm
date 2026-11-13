@@ -2206,16 +2206,20 @@ private:
             // Never accept an uncertified realtime property as a mere annotation.
             fail("native requires clause awaits verified WCET/allocation/blocking analysis");
         }
-        // End-delimited class methods use the same Function / hidden-receiver
-        // representation as braced methods. Until general structured-body
-        // lowering is shared, permit only an empty/return-only void body or
-        // one scalar terminal return; reject every other statement.
-        // This is not an alternate arity or method ABI.
-        if (token_.text == "::") {
-            if (owner.empty()) fail("native '::' body requires a class method");
+        // Explicit '::' supports both class methods and free/module callables.
+        // A free/module callable can omit '::' only if the first body token
+        // begins on a later physical source line than its complete return type.
+        // This deliberately shares the existing terminal-return-only lowering;
+        // structured if/match blocks need the separate CFG implementation.
+        const bool explicit_end_body = token_.text == "::";
+        const bool newline_end_body = owner.empty() && arrow_return_type &&
+            token_.text != "{" && last_token_end_ <= token_.offset &&
+            source_.substr(last_token_end_, token_.offset - last_token_end_)
+                .find_first_of("\r\n") != std::string_view::npos;
+        if (explicit_end_body || newline_end_body) {
             if (!arrow_return_type)
-                fail("native '::' method requires '->' return syntax");
-            require("::");
+                fail("native end-delimited callable requires '->' return syntax");
+            if (explicit_end_body) require("::");
             if (value.returns_void) {
                 if (accept("return")) {
                     if (!accept(";") && token_.text != "end")
@@ -2225,13 +2229,15 @@ private:
                 require("return");
                 value.result = expression();
                 if (!accept(";") && token_.text != "end")
-                    fail("native end-delimited method requires terminal return");
+                    fail("native end-delimited callable requires terminal return");
             }
             if (token_.text != "end")
-                fail("native end-delimited method supports only one terminal return");
+                fail("native end-delimited callable supports only one terminal return");
             require("end");
             return value;
         }
+        if (owner.empty() && arrow_return_type && token_.text == "return")
+            fail("native compact end-delimited callable requires '::' before same-line body");
         require("{");
         auto array_effect_ahead = [&] {
             return peek_next().text == "." && std::any_of(value.locals.begin(), value.locals.end(),
@@ -6057,7 +6063,10 @@ private:
 
 
 
-    void advance() { token_ = lexer_.next(); }
+    void advance() {
+        last_token_end_ = token_.offset + token_.text.size();
+        token_ = lexer_.next();
+    }
     [[noreturn]] void fail(const std::string& reason) const {
         if (token_.text == "gpu" || token_.text == "cpu" || token_.text == "quantum") {
             const char* domain = token_.text == "cpu"
@@ -6097,6 +6106,7 @@ private:
     std::string_view source_;
     Lexer lexer_;
     Token token_;
+    std::size_t last_token_end_ = 0;
     std::unordered_set<std::string> module_names_;
     std::unordered_set<std::string> function_import_names_;
     std::string method_scope_;

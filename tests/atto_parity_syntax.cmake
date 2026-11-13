@@ -74,12 +74,23 @@ function(reject_case name text needle)
   set(failures ${failures} PARENT_SCOPE)
 endfunction()
 
+run_case(end_scalar_newline "${fixtures}/end_scalar_newline.atto" 42)
+run_case(end_scalar_marker "${fixtures}/end_scalar_marker.atto" 42)
 run_case(if_then "${fixtures}/if_then.atto" 0)
 run_case(stdout_write "${fixtures}/stdout_write.atto" 0)
 run_case(expect_ok "${fixtures}/expect_ok.atto" 42)
 run_case(expect_err "${fixtures}/expect_err.atto" nonzero)
 run_case(import_fnc "${fixtures}/import_fnc/main.atto" 0)
 
+reject_case(end_scalar_compact_missing_delimiter
+  "fnc add_one(int x) -> int return x + 1; end\nfnc main(): int { return add_one(41); }\n"
+  "native compact end-delimited callable requires '::'")
+reject_case(end_scalar_reject_unlowered_if
+  "fnc add_one(int x) -> int :: if x > 0 then return x + 1; fi end\nfnc main(): int { return add_one(41); }\n"
+  "expected return")
+reject_case(end_scalar_reject_missing_end
+  "fnc add_one(int x) -> int :: return x + 1;\n"
+  "native end-delimited callable")
 reject_case(import_private_fnc
   "import fnc hidden from \"./lib\";\nfnc main(): int { return hidden(1); }\n"
   "unknown or private imported function 'hidden'")
