@@ -84,14 +84,21 @@ echo "ATTO_LOGICAL_SHORT_CIRCUIT_RUNTIME_O0_O2_PASS"
 # boolean truth tables: the two skipped rhs() calls must emit nothing,
 # followed by exactly one left and one right emission from ^^.
 order_ir="$tmp/xor-order-once.ll"
+# Native stdio (including int output) uses the compiler-owned string region.
+# Its reactor admits pipes and sockets, not a redirected regular output file.
+root="$(cd "$fixtures/../../.." && pwd -P)"
+string_runtime="$root/src/main/cpp/oreslang/runtime/NativeStringRegion.c"
+test -f "$string_runtime" || { echo "missing pinned native String runtime" >&2; exit 2; }
 timeout 40s "$compiler" --target=host "$fixtures/xor-order-once.atto" >"$order_ir"
 test -s "$order_ir" || { echo "missing XOR order IR" >&2; exit 1; }
 printf '1\n2\n' >"$tmp/xor-order.expected"
 for opt in 0 2; do
   binary="$tmp/xor-order-O$opt"
-  timeout 40s "$clang" "-O$opt" -x ir "$order_ir" -o "$binary"
+  timeout 40s "$clang" "-O$opt" -x ir "$order_ir" -x c -std=c11 \
+    -I "$root/src/main/cpp" "$string_runtime" -pthread -o "$binary"
   status=0
-  timeout 20s "$binary" >"$tmp/xor-order-O$opt.stdout" 2>"$tmp/xor-order-O$opt.stderr" || status=$?
+  timeout 20s "$binary" 2>"$tmp/xor-order-O$opt.stderr" |
+    cat >"$tmp/xor-order-O$opt.stdout" || status=$?
   if [[ "$status" -ne 42 ]] || ! cmp -s "$tmp/xor-order.expected" "$tmp/xor-order-O$opt.stdout"; then
     echo "XOR operand exactly-once left-to-right proof failed at O$opt: status=$status" >&2
     cat "$tmp/xor-order-O$opt.stdout" >&2
