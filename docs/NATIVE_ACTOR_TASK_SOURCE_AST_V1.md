@@ -281,3 +281,24 @@ confirmed Clang 17's `-fsanitize=address,undefined` binaries at O0 and
 O2 both expose `__asan_init` and execute successfully. **This smoke
 check is NOT an executed Atto compiler or native actor test.** The
 approved exact-tree CI run is still needed before any backend claims.
+
+## Physical child retirement before parent Future READY
+
+The compiler-linked hybrid native actor fixture now has a second host
+barrier, signaled **only** from `NativeActorSchedulerOptions.after_wake`
+after `ores_native_actor_task_after_wake(child, ticket)` succeeds.
+The producer source body runs in the authenticated child WAKE, sets
+the compiler frame to READY, and calls trusted `finish(child)`. That
+in-callback signal is **not** a physical DONE receipt. The host must
+observe the separate `child_physically_returned` barrier and verify
+`ores_native_actor_task_physically_done(child)` before it is allowed to
+publish the parent's Future READY outcome. Only then can the parent
+WAKE consume and retire the generated continuation frame.
+
+The regular host-only native fixture still independently exercises
+early completion escrow while a callback remains on-stack, STOP
+during SUSPENDING, duplicate Future completion denial, and structured
+scope retirement. This ordering distinction prevents conflating
+logical `finish` with physical callback retirement in the hybrid
+compiled-producer test. It still does **not** make the parent
+`await` compiler-generated.
