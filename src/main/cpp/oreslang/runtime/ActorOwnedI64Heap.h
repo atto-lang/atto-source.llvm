@@ -94,6 +94,16 @@ void ores_actor_i64_heap_release(OresActorI64Heap* heap, OresActorLoan loan);
  * remain mandatory before exposing this ABI to general guest programs.
  * Violations fail closed (process abort in this experimental host runtime).
  */
+/* Attempt exclusive access without a carrier-blocking wait or process abort
+ * on ordinary shared-reader/exclusive-writer contention (or loan-capacity
+ * saturation). Returns 1 and a valid token on success; returns 0 and a zero
+ * token on contention. Invalid actor identity, stale/forged slot credentials,
+ * immutable fields and nonce exhaustion remain fatal *host* invariants.
+ * This is not yet source-level checked borrowing, actor-local trapping, or a
+ * cross-actor shared-memory protocol. */
+int ores_actor_i64_heap_try_borrow_mut(OresActorI64Heap* heap,
+                                       OresActorTurn turn, OresActorSlot slot,
+                                       OresActorLoan* out);
 OresActorLoan ores_actor_i64_heap_borrow_mut(OresActorI64Heap* heap,
                                               OresActorTurn turn, OresActorSlot slot);
 int64_t ores_actor_i64_heap_loan_read_mut(OresActorI64Heap* heap,
