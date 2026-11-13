@@ -4767,6 +4767,24 @@ if(BUILD_TESTING)
     set_tests_properties(native_shared_immutable_payload_host PROPERTIES TIMEOUT 25)
 endif()
 
+# Connect immutable payload tickets to the REAL native actor scheduler DATA lane.
+# Host-only integration: no source .atto lowering and no five-backend parity claim.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-actor-shared-payload-bridge-test
+        tests/native_actor_shared_payload_scheduler_bridge_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-shared-payload-bridge-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-shared-payload-bridge-test PRIVATE cxx_std_20)
+    target_link_libraries(oreslang-native-actor-shared-payload-bridge-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-shared-payload-bridge-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_shared_payload_real_scheduler
+        COMMAND oreslang-native-actor-shared-payload-bridge-test)
+    set_tests_properties(native_actor_shared_payload_real_scheduler PROPERTIES TIMEOUT 30)
+endif()
+
 # Host-only actor-shared TCP/HTTP pool over real loopback sockets (POSIX).
 # NOT compiled .atto guest networking.
 if(BUILD_TESTING AND UNIX)
