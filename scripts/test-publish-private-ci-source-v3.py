@@ -942,6 +942,83 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             digest, hashlib.sha256(v3.canonical_bytes(rows)).hexdigest()
         )
 
+    def test_source_tree_1822_and_bounded_2048_files_admitted(self):
+        # Synthetic metadata and blobs only; NO private source or API writes.
+        # Current compiler PR contains 1,822 blobs, so the previous 1,024
+        # limit denied it even though size/tree-entry limits were satisfied.
+        self.assertEqual(v3.MAX_FILES, 2048)
+        self.assertEqual(v3.MAX_TREE_ENTRIES, 4096)
+        self.assertEqual(v3.MAX_TOTAL, 40 * 1024 * 1024)
+        for count in (1822, v3.MAX_FILES):
+            with self.subTest(blobs=count):
+                requests = []
+                def api(route, method="GET", payload=None):
+                    requests.append(route)
+                    if route == f"repos/{v3.SOURCE_REPO}/pulls/669":
+                        return {
+                            "number": 669, "state": "open",
+                            "head": {
+                                "sha": "9" * 40,
+                                "repo": {"full_name": v3.SOURCE_REPO},
+                            }, "base": {"ref": "main"},
+                        }
+                    if route == f"repos/{v3.SOURCE_REPO}/git/commits/" + "9" * 40:
+                        return {"sha": "9" * 40, "tree": {"sha": SOURCE_TREE}}
+                    if route == f"repos/{v3.SOURCE_REPO}/git/trees/{SOURCE_TREE}?recursive=1":
+                        return {
+                            "sha": SOURCE_TREE, "truncated": False,
+                            "tree": [
+                                {"path": f"src/file-{i:05d}.atto",
+                                 "type": "blob", "mode": "100644",
+                                 "sha": BLOB, "size": len(DATA)}
+                                for i in range(count)
+                            ],
+                        }
+                    if route == f"repos/{v3.SOURCE_REPO}/git/blobs/{BLOB}":
+                        return {
+                            "sha": BLOB, "encoding": "base64",
+                            "content": base64.b64encode(DATA).decode("ascii"),
+                        }
+                    raise AssertionError(route)
+                with patch.object(v3, "gh_api", side_effect=api):
+                    tree, files, rows, digest = v3.exact_source_tree(669, "9" * 40)
+                self.assertEqual(tree, SOURCE_TREE)
+                self.assertEqual(len(files), count)
+                self.assertEqual(len(rows), count)
+                self.assertEqual(
+                    sum("/git/blobs/" in route for route in requests), count)
+                self.assertEqual(
+                    digest, hashlib.sha256(v3.canonical_bytes(rows)).hexdigest())
+
+    def test_source_tree_2049_files_denied_before_fetching_any_blob(self):
+        seen = []
+        def api(route, method="GET", payload=None):
+            seen.append(route)
+            if route.endswith("/pulls/669"):
+                return {
+                    "number": 669, "state": "open",
+                    "head": {
+                        "sha": "9" * 40,
+                        "repo": {"full_name": v3.SOURCE_REPO},
+                    }, "base": {"ref": "main"},
+                }
+            if "/git/commits/" in route:
+                return {"sha": "9" * 40, "tree": {"sha": SOURCE_TREE}}
+            if "/git/trees/" in route:
+                return {
+                    "sha": SOURCE_TREE, "truncated": False,
+                    "tree": [
+                        {"path": f"src/file-{i:05d}.atto", "type": "blob",
+                         "mode": "100644", "sha": BLOB, "size": len(DATA)}
+                        for i in range(v3.MAX_FILES + 1)
+                    ],
+                }
+            raise AssertionError(route)
+        with patch.object(v3, "gh_api", side_effect=api):
+            with self.assertRaisesRegex(v3.Denied, "bounded capacity"):
+                v3.exact_source_tree(669, "9" * 40)
+        self.assertFalse(any("/git/blobs/" in route for route in seen))
+
     def test_source_tree_rejects_oversized_declared_blob_before_blob_read(self):
         seen = []
         def api(route, method="GET", payload=None):
