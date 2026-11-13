@@ -731,6 +731,15 @@ public:
         bool wrapped_module = false;
         if (token_.text == "import")
             fail("native contract imports require a validated cross-unit linker");
+        // An external mtd receive/init is an actor runtime-only entrypoint,
+        // not a free function, class method or native host export. Native
+        // declaration linker / actor-state MIR must verify its source unit
+        // before any LLVM IR is emitted. Explicit denial keeps parity tests
+        // honest until that implementation exists.
+        if (token_.text == "external" && peek_next().text == "mtd")
+            fail("DECLARED_ACTOR_CODEGEN_UNSUPPORTED: external runtime-only "
+                 "actor entrypoint needs manifest-verified receiver, state "
+                 "loan and mailbox MIR");
         while (token_.text == "define" || token_.text == "declare" ||
                 (token_.text == "pub" &&
                  (peek_next().text == "define" || peek_next().text == "declare"))) {
