@@ -126,3 +126,49 @@ ctest --test-dir build -R '^native_actor_(suspends_|task_.*compiled_producer)' -
 
 The source-private CI carrier review is tracked by #1750 and must be updated
 for this branch's new immutable commit/tree before any cross-org transfer.
+
+## 2026-11-13 continuation-body follow-up
+
+The producer-only IR mode now emits **two** source-derived callable functions,
+not just one:
+
+```c
+int32_t atto_actor_task_i64_producer_probe(
+    int64_t copied_incoming, int64_t* result_out);
+int32_t atto_actor_task_i64_resume_probe(
+    int64_t awaited_result, int64_t* resumed_result_out);
+```
+
+The second body is emitted **only after the semantic checker proves** the
+actor handler's post-`await` return is exactly its bound `let int answer`.
+It copies the awaited `i64` result into a host-validated output pointer and
+returns a failure status for null output; it never allocates, traps, or
+unwinds guest exception state. Both functions are real LLVM compiler output
+from the validated `.atto` AST.
+
+The hybrid native TASK/WAKE test now follows this precise order for its
+compiler-linked variant:
+
+1. Authenticated actor DATA callback copies the original `41` input to
+   bounded persistent scalar storage and starts the host-managed parent Task.
+2. Parent WAKE registers a child and suspends; the guest callback returns.
+3. Child WAKE calls the **generated producer body** on that copied DATA input,
+   preserving the result for its owning parent; child physically settles.
+4. A trusted host producer publishes the parent's Future readiness only
+   **after** the child completion. Parent WAKE then calls the **generated
+   post-await return body** with the child's result. No blocking or foreign
+   Task execution happens on the actor carrier.
+5. Existing host tests continue covering early completion escrow, STOP,
+   generation-fenced late wake and physical resource retirement separately.
+
+This is an important source-code-on-actor proof, **not source-generated
+scheduling**: the C harness still creates and connects the parent/child Task
+records, performs the `suspend` call, publishes readiness, and calls
+`finish`. A real LLVM-compiled Atto actor program must do those actions via
+generated frame continuations before full guest parity can be claimed.
+
+The integration CMake harness compiles the generated LLVM IR **separately to
+an object** at O0/O2, then links that object with the C native scheduler
+fixture. This prevents C-language-only compile flags being applied to LLVM IR.
+All four new executable compiler test registrations still require **actual
+nonzero-step CI execution** and are NOT_EXECUTED at the time of authoring.
