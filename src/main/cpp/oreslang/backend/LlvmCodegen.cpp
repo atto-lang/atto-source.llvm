@@ -2980,8 +2980,6 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 actorHeap, currentDomain, currentEpoch,
                 llvm::ConstantInt::get(i64, i), slot}, field.name + ".read.status");
             check_actor_field(status, field.name + ".read");
-            llvm::Value* value = builder.CreateLoad(i64, slot);
-            builder.CreateStore(value, slot);
             values.emplace(field.name, slot);
         }
         // The compiler owns these three-word stack tokens. Source locals
