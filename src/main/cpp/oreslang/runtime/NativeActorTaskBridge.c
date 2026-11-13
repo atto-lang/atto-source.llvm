@@ -133,7 +133,9 @@ int ores_native_actor_task_suspend(OresNativeActorTask* t) {
         ok = next_wake(t, &wake);
         if (ok) {
             t->ticket = wake;
-            t->phase = ORES_ACTOR_TASK_SUSPENDED;
+            /* The guest callback is still on-stack; its physical turn has
+             * not yet returned to the scheduler's trusted after_wake hook. */
+            t->phase = ORES_ACTOR_TASK_SUSPENDING;
         }
     }
     pthread_mutex_unlock(&t->mutex);
@@ -149,7 +151,7 @@ int ores_native_actor_task_publish(
     pthread_mutex_lock(&t->mutex);
     int ok = generation == t->task_generation
         && t->phase == ORES_ACTOR_TASK_SUSPENDED
-        && !t->cancellation_requested;
+        && !t->in_wake && !t->cancellation_requested;
     if (ok) {
         /* The producer commits only a scheduler wake. It has no guest carrier
          * claim and cannot perform Task.resume or touch sealed actor state. */
@@ -197,8 +199,15 @@ int ores_native_actor_task_after_wake(
     if (ok) {
         t->in_wake = 0;
         t->active_ticket = (OresNativeWakeTicket){0};
-        if (t->phase == ORES_ACTOR_TASK_FINISH_PENDING)
+        if (t->phase == ORES_ACTOR_TASK_SUSPENDING
+                && !t->cancellation_requested) {
+            /* Only the authenticated post-WAKE callback can release the
+             * preceding physical turn and expose this Future to producers.
+             * A logically requested await is not a carrier-exit receipt. */
+            t->phase = ORES_ACTOR_TASK_SUSPENDED;
+        } else if (t->phase == ORES_ACTOR_TASK_FINISH_PENDING) {
             ok = retire_locked(t);
+        }
     }
     pthread_mutex_unlock(&t->mutex);
     return ok;
@@ -210,7 +219,8 @@ int ores_native_actor_task_cancel(OresNativeActorTask* t) {
         && t->phase != ORES_ACTOR_TASK_NEW && !t->cancellation_requested;
     if (ok) {
         t->cancellation_requested = 1;
-        if (t->phase == ORES_ACTOR_TASK_SUSPENDED) {
+        if (t->phase == ORES_ACTOR_TASK_SUSPENDING
+                || t->phase == ORES_ACTOR_TASK_SUSPENDED) {
             if (ores_native_actor_scheduler_abort_transferred_wake(
                     t->scheduler, t->ticket)) {
                 if (t->in_wake)
