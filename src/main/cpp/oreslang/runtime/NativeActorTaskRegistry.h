@@ -47,6 +47,13 @@ int ores_native_actor_task_registry_start(
 int ores_native_actor_task_registry_stop(
     OresNativeActorTaskRegistry* registry);
 
+/* Structured cancellation: revoke an exact registered parent AND every
+ * registered descendant, even when parent result is already terminal.
+ * Registry lock serializes cancellation against concurrent child admission.
+ * Does not seal the whole actor or park a carrier. */
+int ores_native_actor_task_registry_cancel(
+    OresNativeActorTaskRegistry* registry, OresNativeActorTask* parent);
+
 /* Physical TaskHandle.get_done proxy. Parent DONE requires its own after-WAKE
  * retirement plus every tracked descendant's physical retirement; successful
  * completion of the parent's scalar result alone is insufficient. */
