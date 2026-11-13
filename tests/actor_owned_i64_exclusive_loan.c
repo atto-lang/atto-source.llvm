@@ -241,6 +241,73 @@ static void host_fault_turn_retirement(void) {
     puts("HOST_ONLY_EXCLUSIVE_LOAN_FAULT_RETIREMENT_PASS");
 }
 
+/* Checked field reads and writes are the operations now emitted by the
+ * real LLVM source-actor compiler, unlike the legacy fatal field ABI. */
+static void checked_source_field_status(void) {
+    OresActorI64Heap* a = ores_actor_i64_heap_open(501, 1, 4);
+    OresActorI64Heap* sibling = ores_actor_i64_heap_open(502, 1, 4);
+    OresActorTurn ta = ores_actor_i64_heap_enter(a, 501, 1);
+    OresActorTurn ts = ores_actor_i64_heap_enter(sibling, 502, 1);
+    ores_actor_i64_heap_field_init_mutable(a, ta.domain, ta.epoch, 0, 8);
+    ores_actor_i64_heap_field_init_mutable(sibling, ts.domain, ts.epoch, 0, 17);
+    ores_actor_i64_heap_field_init(a, ta.domain, ta.epoch, 1, 9);
+    int64_t value = 99;
+    REQUIRE(ores_actor_i64_heap_try_field_read(
+                a, ta.domain, ta.epoch, 0, &value)
+            == ORES_ACTOR_LOAN_OK && value == 8);
+    REQUIRE(ores_actor_i64_heap_try_field_write(
+                a, ta.domain, ta.epoch, 0, 10)
+            == ORES_ACTOR_LOAN_OK);
+    REQUIRE(ores_actor_i64_heap_try_field_write(
+                a, ta.domain, ta.epoch, 1, 999)
+            == ORES_ACTOR_LOAN_BAD_HANDLE);
+    value = 99;
+    REQUIRE(ores_actor_i64_heap_try_field_read(
+                a, ta.domain, ta.epoch, UINT64_MAX, &value)
+            == ORES_ACTOR_LOAN_BAD_HANDLE && value == 0);
+    value = 99;
+    REQUIRE(ores_actor_i64_heap_try_field_read(
+                a, ta.domain, ta.epoch + 1, 0, &value)
+            == ORES_ACTOR_LOAN_BAD_TURN && value == 0);
+    REQUIRE(ores_actor_i64_heap_try_field_write(
+                a, ts.domain, ta.epoch, 0, 999)
+            == ORES_ACTOR_LOAN_BAD_TURN);
+    OresActorSlot slot = {ta.domain, 0, 1};
+    OresActorLoan reader = ores_actor_i64_heap_borrow(a, ta, slot);
+    REQUIRE(ores_actor_i64_heap_try_field_write(
+                a, ta.domain, ta.epoch, 0, 999)
+            == ORES_ACTOR_LOAN_BAD_HANDLE);
+    ores_actor_i64_heap_release(a, reader);
+    OresActorLoan writer = ores_actor_i64_heap_borrow_mut(a, ta, slot);
+    value = 99;
+    REQUIRE(ores_actor_i64_heap_try_field_read(
+                a, ta.domain, ta.epoch, 0, &value)
+            == ORES_ACTOR_LOAN_BAD_HANDLE && value == 0);
+    ores_actor_i64_heap_release(a, writer);
+    value = 99;
+    REQUIRE(ores_actor_i64_heap_try_field_read(
+                a, ta.domain, ta.epoch, 0, &value)
+            == ORES_ACTOR_LOAN_OK && value == 10);
+    value = 99;
+    REQUIRE(ores_actor_i64_heap_try_field_read(
+                sibling, ts.domain, ts.epoch, 0, &value)
+            == ORES_ACTOR_LOAN_OK && value == 17);
+    ores_actor_i64_heap_leave(a, ta);
+    ores_actor_i64_heap_retire(a);
+    value = 99;
+    REQUIRE(ores_actor_i64_heap_try_field_read(
+                a, ta.domain, ta.epoch, 0, &value)
+            == ORES_ACTOR_LOAN_RETIRED && value == 0);
+    REQUIRE(ores_actor_i64_heap_try_destroy(a) == 1);
+    REQUIRE(ores_actor_i64_heap_try_field_write(
+                sibling, ts.domain, ts.epoch, 0, 19)
+            == ORES_ACTOR_LOAN_OK);
+    ores_actor_i64_heap_leave(sibling, ts);
+    ores_actor_i64_heap_retire(sibling);
+    REQUIRE(ores_actor_i64_heap_try_destroy(sibling) == 1);
+    puts("HOST_ONLY_CHECKED_ACTOR_FIELD_STATUS_PASS");
+}
+
 static void negative(unsigned case_number) {
     OresActorI64Heap* a = ores_actor_i64_heap_open(201, 1, 8);
     OresActorTurn ta = ores_actor_i64_heap_enter(a, 201, 1);
@@ -335,6 +402,7 @@ int main(void) {
     positive();
     checked_loan_status_positive();
     host_fault_turn_retirement();
+    checked_source_field_status();
     for (unsigned test = 1; test <= 16; ++test) {
         pid_t child = fork();
         REQUIRE(child >= 0);
