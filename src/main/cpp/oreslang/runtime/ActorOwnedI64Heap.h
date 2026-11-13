@@ -80,10 +80,27 @@ void ores_actor_i64_heap_scoped_drop(OresActorI64Heap* heap,
 /* Shared read loans survive turns/await. They forbid slot writes and drops,
  * plus physical heap release, until the last loan is released. A loan cannot
  * itself dereference memory outside an admitted turn. Exclusive mutable
- * loans are deliberately NOT exposed by this experimental scalar ABI. */
+ * loans are exposed only through a separate turn-local, compiler-owned ABI. */
 OresActorLoan ores_actor_i64_heap_borrow(OresActorI64Heap* heap,
                                           OresActorTurn turn, OresActorSlot slot);
 void ores_actor_i64_heap_release(OresActorI64Heap* heap, OresActorLoan loan);
+/* Experimental exclusive mutable loan, for compiler/scheduler use ONLY.
+ * No raw pointer crosses this boundary, and these are not cross-actor shared
+ * memory leases. Exactly one writer, zero readers; multiple shared readers
+ * are allowed only with zero writers. An immutable actor field cannot be
+ * mutably borrowed. A mutable loan is bound to the current actor turn:
+ * release it before actor_leave / suspension; no mutable loan crosses await.
+ * Source-level borrow checking, VM generation fencing and cancellation
+ * remain mandatory before exposing this ABI to general guest programs.
+ * Violations fail closed (process abort in this experimental host runtime).
+ */
+OresActorLoan ores_actor_i64_heap_borrow_mut(OresActorI64Heap* heap,
+                                              OresActorTurn turn, OresActorSlot slot);
+int64_t ores_actor_i64_heap_loan_read_mut(OresActorI64Heap* heap,
+                                           OresActorTurn turn, OresActorLoan loan);
+void ores_actor_i64_heap_loan_write(OresActorI64Heap* heap,
+                                    OresActorTurn turn, OresActorLoan loan,
+                                    int64_t value);
 /* Compiler-emitted, serial actor field ABI. Only admitted turns may access
  * fixed-layout owned fields. Field initialization is single-use. */
 void ores_actor_i64_heap_field_init(OresActorI64Heap* heap,
