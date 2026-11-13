@@ -71,3 +71,34 @@ not an approved exact-head CI run and cannot justify merging without review.
    UBSan and exact-head approved CI.
 
 This commit contains **no source-level Bytes actor execution**.
+
+## Physical DATA-turn binding (source-unintegrated)
+
+`NativeActorBytesSchedulerBinding.h` is an additional **trusted
+native scheduler** adapter. It binds an inbox at actor admission to the
+exact `OresNativeActorRef` (scheduler domain, actor slot and generation)
+and rejects a mismatch to the inbox's slot+1/incarnation identity.
+
+`ores_native_actor_bytes_receive_current_data` calls the existing
+`ores_native_actor_scheduler_current_data_mail_sequence()` physical
+turn gate before touching the inbox. This refuses access from an external
+thread, a foreign actor even if it shares a worker pool, a stale actor
+generation, CONTROL callbacks, WAKE callbacks and nonrunning carriers.
+
+The `native_actor_bytes_physical_data_turn_host_only` CTest uses the
+actual `NativeActorScheduler.c` with two independent actors and genuine
+worker callbacks. Its source is checked in but this new test **has not yet
+executed in GitHub Actions** because the source org cannot schedule
+jobs. It is not a compiler-generated Atto actor and remains a separate
+admission gate from the 467 locally executed inbox assertions.
+
+**Critical atomicity gap:** the test preload of a byte inbox followed by
+`ores_native_actor_scheduler_try_send` is a **two-step** operation. A
+failed scheduling admission could strand a byte frame, and a concurrent
+callback could otherwise run before publication. This adapter therefore
+does not provide a safe Kafka ingress API. Genuine source-level
+`ActorMail<Bytes>` requires one scheduler transaction that reserves the
+byte credits, publishes the exact payload slot, and admits the
+corresponding DATA turn atomically—or proves a fail-closed rollback/abort
+protocol with no lost wakeups or false acknowledgments. Do not use this
+two-step test mechanism for production.
