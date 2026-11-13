@@ -1,0 +1,89 @@
+name: Implicit self lookup exact-head native LLVM compiler guest
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/implicit-self-lookup-native.yml
+      - src/main/cpp/oreslang/frontend/MethodResolver.cpp
+      - src/main/cpp/oreslang/frontend/MethodResolver.hpp
+      - tests/native_class_methods.py
+      - tests/fixtures/implicit-self/**
+      - CMakeLists.txt
+      - docs/IMPLICIT_SELF_LOOKUP_V1.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: implicit-self-llvm-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compiled-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact contributor PR head, no persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify immutable source commit and clean tree
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          printf 'IMPLICIT_SELF_SOURCE_COMMIT=%s\n' "$EXPECTED_HEAD"
+          printf 'IMPLICIT_SELF_SOURCE_TREE=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+
+      - name: Set up native compiler toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang llvm-dev python3
+          rustc --version
+          clang --version
+
+      - name: Verify test harness syntax, build the actual native compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tests/native_class_methods.py
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --parallel 2
+          test -x build/oreslang-llvmc
+
+      - name: Execute release and sanitizer CTests for real Atto LLVM guests
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -N \
+            -R '^native_source_class_methods_(release|sanitizer)$' \
+            | tee build/implicit-self-test-inventory.txt
+          grep -Eq 'Total Tests: 2$' build/implicit-self-test-inventory.txt
+          ctest --test-dir build -V --output-on-failure \
+            -R '^native_source_class_methods_(release|sanitizer)$' --timeout 240 \
+            | tee build/implicit-self-execution.log
+          grep -Fq '100% tests passed, 0 tests failed out of 2' build/implicit-self-execution.log
+          # The test harness emits PASS only after running each compiled
+          # native guest at both O0 and O2. Count both real modes.
+          test "$(grep -c 'PASS native class methods:' build/implicit-self-execution.log)" = 2
+          test "$(grep -Fc "levels=['O0', 'O2']" build/implicit-self-execution.log)" = 2
+          grep -Fq 'sanitized=False' build/implicit-self-execution.log
+          grep -Fq 'sanitized=True' build/implicit-self-execution.log
+          echo 'IMPLICIT_SELF_NATIVE_COMPILED_GUEST_EXECUTED=PASS'
+
+      - name: Record exact source identity and assigned runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "SOURCE_HEAD=$(git rev-parse HEAD)"
+          echo "SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+          echo "RUN_ID=$GITHUB_RUN_ID RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT RUNNER_NAME=$RUNNER_NAME"
