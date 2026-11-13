@@ -92,16 +92,51 @@ executed in GitHub Actions** because the source org cannot schedule
 jobs. It is not a compiler-generated Atto actor and remains a separate
 admission gate from the 467 locally executed inbox assertions.
 
-**Critical atomicity gap:** the test preload of a byte inbox followed by
-`ores_native_actor_scheduler_try_send` is a **two-step** operation. A
-failed scheduling admission could strand a byte frame, and a concurrent
-callback could otherwise run before publication. This adapter therefore
-does not provide a safe Kafka ingress API. Genuine source-level
-`ActorMail<Bytes>` requires one scheduler transaction that reserves the
-byte credits, publishes the exact payload slot, and admits the
-corresponding DATA turn atomically—or proves a fail-closed rollback/abort
-protocol with no lost wakeups or false acknowledgments. Do not use this
-two-step test mechanism for production.
+## Atomic payload+DATA scheduler admission (host-only, unexecuted)
+
+The trusted native scheduler now exposes
+`ores_native_actor_scheduler_try_send_committed`. Under its existing
+scheduler mutex, it validates exact live incarnation, bounded mailbox
+credits and worker availability **before** invoking the bounded,
+nonallocating payload commit callback. That callback copies the bytes into
+the recipient's private preallocated slab tagged with the next
+scheduler-minted DATA-mail ordinal. Only after it commits does the
+scheduler enqueue the corresponding DATA turn, before releasing the
+mutex. There are no fallible steps after payload commit. A callback
+returning rejection leaves the slab unchanged and enqueues no DATA;
+it is never interpreted as an ACK or durable commit.
+
+`ores_native_actor_bytes_try_send_atomic` is the only reviewed binding
+entrypoint for this protocol. The native receive path authenticates the
+physical DATA turn and exact source-mail ordinal before dequeuing the
+associated Bytes slot. A stale, duplicate, foreign, unsequenced or
+mismatched ordinal cannot consume a sequenced payload. The trusted
+inbox maintains a monotonically increasing sequence high-water mark;
+a failed send does not consume a mail ordinal.
+
+The scheduler mutex is already used in this runtime; bounded copying
+under that mutex can increase contention and needs direct throughput
+and worst-case latency characterization. The payload slab uses a
+**nonparking try-lock**, returning an immediate retryable admission
+failure rather than waiting on another actor or an I/O operation.
+Lock order is scheduler -> payload, never the reverse.
+
+`tests/native_actor_bytes_scheduler_turn_test.c` now checks two physical
+actor carriers, foreign-turn denial, rejected overlength Bytes with no
+stray payload, and matching sequence consumption. The inbox unit test
+adds wrong-ordinal, replay, zero-length and legacy cross-lane negative
+cases. These changes are source-authored and **NOT_EXECUTED** on
+approved exact-head CI as of this checkpoint.
+
+**Still not production:** this trusted-host API is not Atto source
+`ActorMail<Bytes>` lowering; old host APIs remain exposed and must not
+be mixed into the new binding. Binding lifetime, STOP and cancellation
+must be owned by OresVM so the inbox is physically retired only after
+all producer calls, callbacks and queued envelopes are quiescent.
+No source-compiled Kafka/RMQ/NATS/Redis network or storage integration,
+shared mutable borrow lease, NativeAOT parity, or AOT benchmark is proven.
+Use only reviewed native binding code until the compiler exposes a
+typed, unforgeable guest capability.
 
 ## Concurrent ingress stress (local host evidence, not source guest)
 
