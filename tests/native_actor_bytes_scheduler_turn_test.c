@@ -208,12 +208,12 @@ int main(void) {
     Context stopped = {0};
     stopped.scheduler = ores_native_actor_scheduler_open(
         1, 2, 1, on_data, &stopped);
-    check(stopped.scheduler);
+    check(stopped.scheduler != NULL);
     OresNativeActorRef stopped_ref =
         ores_native_actor_scheduler_spawn(stopped.scheduler, 0);
     OresNativeActorBytesInbox* stopped_inbox =
         ores_native_actor_bytes_open(1, stopped_ref.generation, 2, 64, 128);
-    check(stopped_inbox);
+    check(stopped_inbox != NULL);
     atomic_int rejected_bind_calls = 0;
     check(!ores_native_actor_scheduler_bind_bytes_only(
         stopped.scheduler, stopped_ref, reject_initial_bind,
