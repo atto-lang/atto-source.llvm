@@ -68,6 +68,10 @@ int ores_native_actor_task_registry_unregister(
     OresNativeActorTaskRegistry* registry, OresNativeActorTask* task);
 size_t ores_native_actor_task_registry_count(
     OresNativeActorTaskRegistry* registry);
+/* Closing is only allowed after registry_stop sealed Task admission,
+ * every physical child retired, and all ledger entries were removed.
+ * Caller must additionally join foreign producer callbacks before freeing
+ * Task backing memory or concurrent registry callers. */
 int ores_native_actor_task_registry_close(
     OresNativeActorTaskRegistry* registry);
 
