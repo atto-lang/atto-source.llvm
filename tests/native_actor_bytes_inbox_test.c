@@ -125,6 +125,57 @@ int main(void) {
     free(full); free(copied);
     check(ores_native_actor_bytes_try_retire(large,lref)==ORES_ACTOR_BYTES_OK);
     check(ores_native_actor_bytes_try_destroy(large,lref)==ORES_ACTOR_BYTES_OK);
+    /* Scheduler ordinal binds each payload to precisely one DATA turn.
+     * An unsequenced consumer, skipped/wrong DATA ordinal, repeated or
+     * nonmonotonic producer ticket cannot remove or publish its bytes. */
+    OresNativeActorBytesInbox* sequenced =
+        ores_native_actor_bytes_open(1000, 77, 2, 64, 128);
+    check(sequenced != NULL);
+    OresNativeActorBytesRef sref = ores_native_actor_bytes_ref(sequenced);
+    unsigned char ordered[4] = {0, 255, 42, 10};
+    check(ores_native_actor_bytes_try_send_sequenced(
+        sequenced, sref, ordered, 4, 0) == ORES_ACTOR_BYTES_DENIED);
+    check(ores_native_actor_bytes_try_send_sequenced(
+        sequenced, sref, ordered, 4, 7) == ORES_ACTOR_BYTES_OK);
+    check(ores_native_actor_bytes_try_send_sequenced(
+        sequenced, sref, ordered, 4, 7) == ORES_ACTOR_BYTES_DENIED);
+    check(ores_native_actor_bytes_try_send_sequenced(
+        sequenced, sref, ordered, 4, 6) == ORES_ACTOR_BYTES_DENIED);
+    count = used = 0;
+    check(ores_native_actor_bytes_observe(sequenced,sref,&count,&used)
+          == ORES_ACTOR_BYTES_OK);
+    check(count == 1 && used == 4);
+    memset(out, 0xab, sizeof(out));
+    actual = SIZE_MAX;
+    check(ores_native_actor_bytes_try_receive(
+        sequenced, sref, out, sizeof(out), &actual)
+        == ORES_ACTOR_BYTES_DENIED);
+    check(ores_native_actor_bytes_try_receive_sequenced(
+        sequenced, sref, 8, out, sizeof(out), &actual)
+        == ORES_ACTOR_BYTES_DENIED);
+    check(actual == SIZE_MAX && out[0] == 0xab);
+    check(ores_native_actor_bytes_try_receive_sequenced(
+        sequenced, sref, 7, out, 3, &actual)
+        == ORES_ACTOR_BYTES_SMALL);
+    check(actual == 4 && out[0] == 0xab);
+    check(ores_native_actor_bytes_try_receive_sequenced(
+        sequenced, sref, 7, out, sizeof(out), &actual)
+        == ORES_ACTOR_BYTES_OK);
+    check(actual == 4 && memcmp(out, ordered, 4) == 0);
+    check(ores_native_actor_bytes_all_zero_for_test(sequenced));
+    check(ores_native_actor_bytes_try_send_sequenced(
+        sequenced, sref, NULL, 0, 8) == ORES_ACTOR_BYTES_OK);
+    check(ores_native_actor_bytes_try_receive_sequenced(
+        sequenced, sref, 8, NULL, 0, &actual)
+        == ORES_ACTOR_BYTES_OK);
+    check(actual == 0);
+    check(ores_native_actor_bytes_try_send_sequenced(
+        sequenced, sref, ordered, 4, 8) == ORES_ACTOR_BYTES_DENIED);
+    check(ores_native_actor_bytes_try_retire(sequenced, sref)
+        == ORES_ACTOR_BYTES_OK);
+    check(ores_native_actor_bytes_all_zero_for_test(sequenced));
+    check(ores_native_actor_bytes_try_destroy(sequenced, sref)
+        == ORES_ACTOR_BYTES_OK);
     printf("NATIVE_ACTOR_BYTES_INBOX_HOST_ONLY_PASS assertions=%u actor_private_slabs=2 copied_bytes=1 quota=1 fifo=1 incarnation=1 zeroized=1 nonparking=1\n",assertions);
     return 0;
 }
