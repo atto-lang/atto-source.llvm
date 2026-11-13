@@ -132,4 +132,38 @@ int main() {
     auto pending = retiring.try_receive();
     assert(pending && pending->acknowledge_released() && retiring.retire());
     assert(late->release());
+
+    // Two concurrent producers, one consumer: all mailbox/data-lane
+    // transfers are bounded, fully acknowledged, and tenant/generation fenced.
+    NativeFixedBufferPool parallel_pool(16, 32);
+    NativeFixedBufferMailbox parallel_mailbox(8, K(200));
+    std::atomic<int> acknowledged{0};
+    auto producer = [&](int id) {
+        for (int i = 0; i < 3000; ++i) {
+            std::optional<NativeFixedBufferPool::Lease> lease;
+            while (!(lease = parallel_pool.try_acquire(K(static_cast<std::uint64_t>(id)))))
+                std::this_thread::yield();
+            assert(lease->with_mutable_bytes(K(static_cast<std::uint64_t>(id)),
+                [id](auto bytes) { bytes[0] = static_cast<std::uint8_t>(id); }));
+            while (!parallel_mailbox.try_offer(parallel_pool, *lease,
+                                               K(static_cast<std::uint64_t>(id))))
+                std::this_thread::yield();
+            assert(!lease->release());
+        }
+    };
+    std::thread p1(producer, 101), p2(producer, 102);
+    std::thread consumer([&] {
+        while (acknowledged.load() < 6000) {
+            auto delivery = parallel_mailbox.try_receive();
+            if (!delivery) { std::this_thread::yield(); continue; }
+            assert(delivery->lease().with_read_only_bytes(K(200), [](auto bytes) {
+                assert(bytes[0] == 101 || bytes[0] == 102);
+            }));
+            assert(delivery->acknowledge_released());
+            acknowledged.fetch_add(1);
+        }
+    });
+    p1.join(); p2.join(); consumer.join();
+    assert(acknowledged == 6000 && parallel_pool.in_use() == 0);
+    assert(parallel_mailbox.charged() == 0 && parallel_mailbox.retire());
 }
