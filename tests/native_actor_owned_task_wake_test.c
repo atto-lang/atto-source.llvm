@@ -11,6 +11,8 @@
  * child WAKE. Await state-machine lowering remains a separate milestone. */
 extern int32_t atto_actor_task_i64_producer_probe(
     int64_t copied_incoming, int64_t* result_out);
+extern int32_t atto_actor_task_i64_resume_probe(
+    int64_t awaited_result, int64_t* resumed_result_out);
 #ifndef ATTO_ACTOR_TASK_PRODUCER_EXPECTED
 #error "compiled producer integration requires an exact expected value"
 #endif
@@ -36,6 +38,7 @@ typedef struct {
     atomic_int parent_turns, child_turns, control_turns, errors;
 #ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
     atomic_int_fast64_t copied_incoming; /* authentic DATA payload */
+    atomic_int_fast64_t compiled_task_value; /* child WAKE result */
 #endif
 } Fixture;
 
@@ -116,6 +119,18 @@ static void on_wake(void* opaque, size_t actor,
                 CHECK(pthread_cond_wait(&f->cv, &f->mutex) == 0);
             CHECK(pthread_mutex_unlock(&f->mutex) == 0);
         } else if (turn == 1) {
+#ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
+            if (f->mode == 1) {
+                int64_t resumed_value = INT64_C(-1);
+                const int64_t awaited_value = atomic_load_explicit(
+                    &f->compiled_task_value, memory_order_acquire);
+                if (atto_actor_task_i64_resume_probe(
+                        awaited_value, &resumed_value) != 0 ||
+                        resumed_value !=
+                            (int64_t)ATTO_ACTOR_TASK_PRODUCER_EXPECTED)
+                    atomic_fetch_add(&f->errors, 1);
+            }
+#endif
             if (!ores_native_actor_task_finish(&f->parent))
                 atomic_fetch_add(&f->errors, 1);
             CHECK(pthread_mutex_lock(&f->mutex) == 0);
@@ -145,8 +160,12 @@ static void on_wake(void* opaque, size_t actor,
                         &f->copied_incoming, memory_order_acquire),
                     &compiled_result) != 0 ||
                     compiled_result !=
-                        (int64_t)ATTO_ACTOR_TASK_PRODUCER_EXPECTED)
+                        (int64_t)ATTO_ACTOR_TASK_PRODUCER_EXPECTED) {
                 atomic_fetch_add(&f->errors, 1);
+            } else {
+                atomic_store_explicit(
+                    &f->compiled_task_value, compiled_result, memory_order_release);
+            }
         }
 #endif
         if (f->mode == 3) {
@@ -257,16 +276,23 @@ int main(void) {
     CHECK(!ores_native_actor_scheduler_is_current_carrier(f.scheduler));
     CHECK(!ores_native_actor_task_physically_done(&f.parent));
     CHECK(!ores_native_actor_task_publish(&f.parent, 9999, ORES_NATIVE_WAKE_READY));
-    /* A fast Future completion is accepted exactly once into escrow, but
-     * MUST NOT dispatch guest while the suspending callback is still on-stack.
-     * The trusted post-WAKE callback flushes it after the physical claim
-     * unwinds. A second producer loses the one-winner race. */
+    /* The default native fixture exercises a Future that completes while
+     * its parent's guest callback remains on-stack. In compiler-producer
+     * mode the parent Future is completed only AFTER the child computed
+     * its source result on a real TASK WAKE, never from an invented scalar. */
+#ifndef ATTO_ACTOR_TASK_PRODUCER_PROBE
     CHECK(ores_native_actor_task_publish(&f.parent, 1001, ORES_NATIVE_WAKE_READY));
     CHECK(!ores_native_actor_task_publish(&f.parent, 1001, ORES_NATIVE_WAKE_READY));
+#endif
     CHECK(atomic_load(&f.parent_turns) == 1);
     CHECK(!ores_native_actor_task_physically_done(&f.parent));
     signal_host(&f, &f.allow_suspend_guest_exit);
     wait_host(&f, &f.suspension_physically_returned);
+#ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
+    wait_host(&f, &f.child_done);
+    CHECK(ores_native_actor_task_publish(&f.parent, 1001, ORES_NATIVE_WAKE_READY));
+    CHECK(!ores_native_actor_task_publish(&f.parent, 1001, ORES_NATIVE_WAKE_READY));
+#endif
     CHECK(!ores_native_actor_scheduler_is_current_carrier(f.scheduler));
     /* Completion was already escrowed: replay after physical exit is
      * forbidden, and the child/parent resume must drain exactly once. */
