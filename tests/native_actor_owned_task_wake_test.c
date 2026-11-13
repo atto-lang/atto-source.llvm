@@ -17,7 +17,8 @@ typedef struct {
     pthread_mutex_t mutex;
     pthread_cond_t cv;
     int mode; /* 1=nest+external completion, 2=STOP while suspended */
-    int suspended, child_done, parent_done, allow_parent_wake_exit;
+    int suspended, suspension_physically_returned, allow_suspend_guest_exit;
+    int child_done, parent_done, allow_parent_wake_exit;
     atomic_int parent_turns, child_turns, control_turns, errors;
 } Fixture;
 
@@ -67,6 +68,12 @@ static void on_wake(void* opaque, size_t actor,
             if (!ores_native_actor_task_suspend(&f->parent))
                 atomic_fetch_add(&f->errors, 1);
             signal_host(f, &f->suspended);
+            /* Test-only barrier: prove a Future producer cannot resume while
+             * the original guest callback still owns the actor lease. */
+            CHECK(pthread_mutex_lock(&f->mutex) == 0);
+            while (!f->allow_suspend_guest_exit)
+                CHECK(pthread_cond_wait(&f->cv, &f->mutex) == 0);
+            CHECK(pthread_mutex_unlock(&f->mutex) == 0);
         } else if (turn == 1) {
             if (!ores_native_actor_task_finish(&f->parent))
                 atomic_fetch_add(&f->errors, 1);
@@ -105,8 +112,14 @@ static void after_wake(void* opaque, size_t actor,
     }
     OresNativeActorTask* record = wake.continuation_slot == 1
         ? &f->parent : wake.continuation_slot == 2 ? &f->child : NULL;
-    if (!record || !ores_native_actor_task_after_wake(record, wake))
+    if (!record || !ores_native_actor_task_after_wake(record, wake)) {
         atomic_fetch_add(&f->errors, 1);
+    } else if (wake.continuation_slot == 1
+            && atomic_load(&f->parent_turns) == 1) {
+        /* A true scheduler-issued physical-turn return, not a user-visible
+         * logical await signal, makes the next WAKE publishable. */
+        signal_host(f, &f->suspension_physically_returned);
+    }
 }
 static void open_fixture(Fixture* f, int mode) {
     f->mode = mode;
@@ -147,9 +160,16 @@ int main(void) {
     open_fixture(&f, 1);
     CHECK(ores_native_actor_scheduler_send(f.scheduler, f.actor, 1));
     wait_host(&f, &f.suspended);
-    wait_host(&f, &f.child_done);
-    CHECK(!ores_native_actor_scheduler_is_current_carrier(f->scheduler));
+    CHECK(!ores_native_actor_scheduler_is_current_carrier(f.scheduler));
+    CHECK(!ores_native_actor_task_physically_done(&f.parent));
     CHECK(!ores_native_actor_task_publish(&f.parent, 9999, ORES_NATIVE_WAKE_READY));
+    /* Even a valid producer generation must fail before after-WAKE physical
+     * retirement. Do not confuse logical suspend with callback exit. */
+    CHECK(!ores_native_actor_task_publish(&f.parent, 1001, ORES_NATIVE_WAKE_READY));
+    signal_host(&f, &f.allow_suspend_guest_exit);
+    wait_host(&f, &f.suspension_physically_returned);
+    wait_host(&f, &f.child_done);
+    CHECK(!ores_native_actor_scheduler_is_current_carrier(f.scheduler));
     CHECK(ores_native_actor_task_publish(
         &f.parent, 1001, ORES_NATIVE_WAKE_READY));
     CHECK(!ores_native_actor_scheduler_is_current_carrier(f->scheduler));
@@ -186,7 +206,14 @@ int main(void) {
     wait_host(&stopped, &stopped.suspended);
     CHECK(atomic_load(&stopped.parent_turns) == 1);
     CHECK(!ores_native_actor_task_physically_done(&stopped.parent));
+    CHECK(!ores_native_actor_task_publish(
+        &stopped.parent, 1001, ORES_NATIVE_WAKE_READY));
+    /* STOP during SUSPENDING revokes the transferred wake, but cannot
+     * retire the record while the first guest callback is still on-stack. */
     CHECK(ores_native_actor_task_stop_actor(&stopped.parent));
+    CHECK(!ores_native_actor_task_physically_done(&stopped.parent));
+    CHECK(!ores_native_actor_scheduler_poll_done(stopped.scheduler, stopped.actor));
+    signal_host(&stopped, &stopped.allow_suspend_guest_exit);
     CHECK(ores_native_actor_scheduler_wait_done(stopped.scheduler, stopped.actor));
     CHECK(ores_native_actor_task_physically_done(&stopped.parent));
     CHECK(!ores_native_actor_task_publish(
