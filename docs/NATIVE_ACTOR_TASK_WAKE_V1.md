@@ -119,3 +119,48 @@ export this branch to an unapproved carrier as a workaround.
 Related safety precursor: `oreslang-source.llvm` PR #1715 rejects actor
 Task syntax from the legacy synthetic pool. Both changes are necessary but
 insufficient for compiled native guest actor-task parity.
+
+## 2026-11-13 safety hardening — physical-return handshake and early-completion escrow
+
+Source actor Tasks now distinguish `RUNNING` -> **`SUSPENDING`** ->
+`SUSPENDED` -> `QUEUED`/resume. A guest's `task_suspend` call reserves
+a generation-checked wake credit but leaves `in_wake=1`. The only physical
+suspension acknowledgement is `after_wake`, invoked by the native scheduler
+**after its exact execution claim has unwound**, with no scheduler lock held
+and the actor lane still pinned. The external Future producer never executes
+guest code or obtains that physical after-WAKE authority.
+
+A Future may complete while the original guest callback is still on-stack.
+Dropping that outcome would strand `await` unless the producer retried.
+Therefore the bridge accepts **one early READY/CANCELLED/FAILED outcome** into
+a fixed-size per-Task escrow under the record mutex. A second competing
+completion is rejected. The escrow is **not** a runnable WAKE: only the
+post-WAKE callback flushes the outcome to the actor's existing bounded
+scheduler queue. If STOP wins while the callback is on-stack, cancellation
+clears the escrow, revokes the transferred wake, and leaves the resource loan
+pinned until physical callback return. Failure to release/abort a wake
+quarantines its loan instead of forging DONE.
+
+An outcome arriving *before Future subscription / task_suspend registration*
+is not captured by this bridge. Compiler-generated `await` must atomically
+register the Future subscription or inspect already-settled readiness under
+the Future's own producer protocol; an unregistered producer cannot blindly
+discard a completion. The bridge's `OresNativeActorTask*` is a trusted-host
+opaque record, not a guest pointer or public cancellation capability.
+
+The native host integration test deliberately holds the first guest WAKE
+callback before its physical return, attempts a wrong-generation completion,
+accepts one valid completion into escrow, rejects duplicate completion, then
+releases the callback and checks exactly one later actor-owned resume. A
+second scenario races STOP with escrow and proves no guest resurrection and
+no premature physical DONE. A separate compiler-negative pair guarantees that
+a synchronous source actor cannot lower `task { }` to the legacy foreign
+Task pool and cannot use `await` without `suspends fnc/mtd` and genuine
+actor-owned continuation lowering.
+
+**Execution limits:** native/LLVM CTest and actual compiler guest runs on this
+new head still require a runner with positive recorded steps. Static source
+and blob integrity checks do not establish C compiler or guest success.
+The protected private-source export policy does not yet authorize a
+PR-specific alternate-organization carrier plan for #1734; approval is
+tracked in issue #1737. No private source was exported.
