@@ -141,6 +141,24 @@ typedef int (*OresNativeActorPayloadCommitFn)(
 OresNativeSendStatus ores_native_actor_scheduler_try_send_committed(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
     uint64_t payload, OresNativeActorPayloadCommitFn commit, void* context);
+/* Scheduler-serialized internal Bytes dequeue for the current physical
+ * DATA turn. Authenticates the scheduler-minted mail sequence and actor
+ * incarnation before executing a strictly bounded, nonallocating native
+ * slab read callback under the scheduler mutex. Producers use scheduler ->
+ * inbox lock order; the receiver must use the SAME order, otherwise a
+ * concurrent producer's nonparking slab try-lock could cause a spurious
+ * BUSY after DATA was already delivered to the callback.
+ *
+ * The callback must NOT call a scheduler API, park, allocate, perform I/O
+ * or execute guest code. Only the trusted runtime binding may supply it.
+ * Returns the callback status verbatim, or 0 (DENIED) for invalid authority.
+ * Source-level suspended receives remain a separate compiler milestone.
+ */
+typedef int (*OresNativeActorPayloadReadFn)(void* context, uint64_t sequence);
+int ores_native_actor_scheduler_read_current_bytes(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
+    OresNativeActorPayloadReadFn read_payload, void* context);
+
 
 /* For a Bytes-only mailbox, ordinary scalar try_send, send and submit
  * fail without consuming credits, ordinals or DATA turns; even legacy index
