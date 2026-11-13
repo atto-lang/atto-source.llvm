@@ -414,8 +414,9 @@ static OresActorLoanStatus checked_mutable_loan_status(
 OresActorLoanStatus ores_actor_i64_heap_try_loan_read_mut(
         OresActorI64Heap* heap, OresActorTurn turn,
         OresActorLoan loan, int64_t* out_value) {
-    if (!heap || !out_value) return ORES_ACTOR_LOAN_BAD_HANDLE;
+    if (!out_value) return ORES_ACTOR_LOAN_BAD_HANDLE;
     *out_value = 0;
+    if (!heap) return ORES_ACTOR_LOAN_BAD_HANDLE;
     if (atomic_flag_test_and_set_explicit(&heap->mutex, memory_order_acquire))
         return ORES_ACTOR_LOAN_BUSY;
     ActorSlot* slot = NULL;
