@@ -29,12 +29,42 @@ static inline int ores_native_actor_bytes_bind_scheduler(
     return 1;
 }
 
+/* Scheduler -> inbox is the ONLY permitted lock ordering. This
+ * immediate borrowed source is copied to the target's private slab during
+ * the scheduler's one atomic payload-plus-DATA admission transaction. */
+typedef struct {
+    const OresNativeActorBytesSchedulerBinding* binding;
+    const void* bytes;
+    size_t length;
+} OresNativeActorBytesCommitContext;
+static inline int ores_native_actor_bytes_commit_payload(
+    void* opaque, uint64_t sequence) {
+    const OresNativeActorBytesCommitContext* ctx =
+        (const OresNativeActorBytesCommitContext*)opaque;
+    return ores_native_actor_bytes_try_send_sequenced(
+        ctx->binding->inbox, ctx->binding->storage,
+        ctx->bytes, ctx->length, sequence) == ORES_ACTOR_BYTES_OK;
+}
+/* Trusted native scheduler admission ONLY, not user-callable source ABI.
+ * Legacy inbox.try_send + scheduler.try_send is NOT an atomic substitute.
+ * No DATA message or owned payload is admitted on a rejected result. */
+static inline OresNativeSendStatus ores_native_actor_bytes_try_send_atomic(
+    const OresNativeActorBytesSchedulerBinding* binding,
+    uint64_t payload, const void* bytes, size_t length) {
+    if (!binding || !binding->scheduler || !binding->inbox ||
+        !binding->storage.nonce || (length && !bytes))
+        return ORES_NATIVE_SEND_INVALID_REF;
+    OresNativeActorBytesCommitContext commit = {binding, bytes, length};
+    return ores_native_actor_scheduler_try_send_committed(
+        binding->scheduler, binding->actor, payload,
+        ores_native_actor_bytes_commit_payload, &commit);
+}
+
 /* The native scheduler proves that the calling thread currently owns THIS
  * actor's running DATA turn. An equal actor ID on another carrier, CONTROL
  * callback, WAKE, external caller or stale ActorRef cannot pass.
- * This is still a separate byte queue and is NOT atomic with scheduler
- * DATA admission: callers must NOT use send+try_send as a Kafka broker
- * without a unified admission transaction or rollback/reconciliation. */
+ * Binding.try_send_atomic publishes private Bytes and DATA together,
+ * but source-level ActorMail<Bytes> is still unsupported. */
 static inline int ores_native_actor_bytes_receive_current_data(
     const OresNativeActorBytesSchedulerBinding* binding,
     void* output, size_t capacity, size_t* required_length) {
@@ -42,7 +72,8 @@ static inline int ores_native_actor_bytes_receive_current_data(
     if (!binding || !ores_native_actor_scheduler_current_data_mail_sequence(
             binding->scheduler, binding->actor, &sequence) || !sequence)
         return ORES_ACTOR_BYTES_DENIED;
-    return ores_native_actor_bytes_try_receive(
-        binding->inbox, binding->storage, output, capacity, required_length);
+    return ores_native_actor_bytes_try_receive_sequenced(
+        binding->inbox, binding->storage, sequence,
+        output, capacity, required_length);
 }
 #endif
