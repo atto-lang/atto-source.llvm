@@ -166,6 +166,13 @@ if(BUILD_TESTING)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_bytes_map_source_negative.cmake")
     set_tests_properties(native_actor_bytes_map_typed_source_fail_closed
         PROPERTIES TIMEOUT 30)
+    add_test(NAME native_actor_bytes_map_scalar_atto_baseline
+        COMMAND "${CMAKE_COMMAND}"
+            "-DORE_ACTOR_LLVM_CLI=$<TARGET_FILE:oreslang-llvmc>"
+            "-DORE_ACTOR_SCALAR_ATTO=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-actor-redis-scalar-baseline.atto"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_bytes_map_source_baseline.cmake")
+    set_tests_properties(native_actor_bytes_map_scalar_atto_baseline
+        PROPERTIES TIMEOUT 40)
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
     add_executable(oreslang-native-sum-payload-admission-test
