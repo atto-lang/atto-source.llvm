@@ -21,6 +21,8 @@ def main():
     p.add_argument('--compiler',required=True)
     p.add_argument('--clang',required=True)
     p.add_argument('--sanitize',action='store_true')
+    p.add_argument('--opt-levels', nargs='+', choices=('O0', 'O1', 'O2'), default=('O0', 'O2'),
+                   help='Native Clang optimization levels; default verifies both O0 and O2')
     p.add_argument('--java-command',nargs='+')
     a=p.parse_args()
     positives=[
@@ -123,11 +125,19 @@ def main():
         ('implicit-shadowed-parameter',
          (implicit_self / 'shadowed-parameter.atto').read_text(), {},
          'unqualified method call is shadowed'),
+        ('implicit-scoped-shadow-in-branch',
+         (implicit_self / 'scoped-shadow-in-branch.atto').read_text(), {},
+         'unqualified method call is shadowed'),
         ('implicit-sealed-actor-not-ready',
          (implicit_self / 'sealed-actor-not-ready.atto').read_text(), {},
          'native actor state { ... } requires sealed handle_state lowering'),
     ])
+    # This must be a real compiler/linker/guest suite, not source-only matching.
+    # Normalize and deduplicate optimization levels before invoking any tools.
+    levels=tuple(dict.fromkeys(a.opt_levels))
+    assert levels, 'at least one Clang optimization mode must execute'
     passed=compared=0
+    linked_and_executed=0
     with tempfile.TemporaryDirectory(prefix='ores-native-method-') as temporary:
         root=Path(temporary)
         for name,files in positives:
@@ -136,13 +146,27 @@ def main():
             source=directory/('main.atto' if 'main.atto' in files else 'main.ores')
             result=run([a.compiler,str(source)])
             if result.returncode:raise AssertionError((name,result.stderr))
+            if not result.stdout.strip():
+                raise AssertionError(('empty compiler output', name, result.stderr))
             (directory/'main.ll').write_text(result.stdout)
-            command=[a.clang,'-O1',str(directory/'main.ll'),'-o',str(directory/'main')]
-            if a.sanitize:command[1:1]=['-fsanitize=address,undefined','-fno-omit-frame-pointer']
-            linked=run(command)
-            if linked.returncode:raise AssertionError((name,linked.stderr))
-            ran=run([str(directory/'main')])
-            if ran.returncode!=42:raise AssertionError((name,ran.returncode,ran.stderr))
+            for level in levels:
+                executable=directory/('main-'+level+('-san' if a.sanitize else ''))
+                command=[a.clang,'-'+level,str(directory/'main.ll'),'-o',str(executable)]
+                if a.sanitize:
+                    command[1:1]=['-fsanitize=address,undefined','-fno-omit-frame-pointer']
+                linked=run(command)
+                if linked.returncode:
+                    raise AssertionError(('clang link',name,level,linked.returncode,linked.stderr))
+                # ASan/UBSan must be fatal; do not count a sanitizer report
+                # followed by an apparent successful exit as an execution pass.
+                guest_env=os.environ.copy()
+                if a.sanitize:
+                    guest_env['ASAN_OPTIONS']='detect_leaks=1:halt_on_error=1:abort_on_error=1'
+                    guest_env['UBSAN_OPTIONS']='halt_on_error=1:abort_on_error=1'
+                ran=run([str(executable)],env=guest_env)
+                if ran.returncode!=42 or ('AddressSanitizer' in ran.stderr or 'runtime error:' in ran.stderr):
+                    raise AssertionError(('native guest',name,level,ran.returncode,ran.stderr))
+                linked_and_executed+=1
             if a.java_command and name not in java_unsupported:
                 reference=run([*a.java_command,str(source)])
                 if reference.returncode!=42:raise AssertionError(('Java differential',name,reference.returncode,reference.stderr))
@@ -157,6 +181,9 @@ def main():
             if not result.returncode or result.stdout or diagnostic not in result.stderr:
                 raise AssertionError((name,diagnostic,result.returncode,result.stdout[:80],result.stderr))
             passed+=1
-    print(f'PASS native class methods: {passed} cases, Java differential={compared}, sanitized={a.sanitize}; qualified imported construction is native-only (current Java runtime rejects it)')
+    expected_native=len(positives)*len(levels)
+    if linked_and_executed!=expected_native or not passed or not negatives:
+        raise AssertionError(('incomplete native execution',linked_and_executed,expected_native,passed))
+    print(f'PASS native class methods: {passed} cases, {linked_and_executed} linked/executed native guests, levels={list(levels)}, Java differential={compared}, sanitized={a.sanitize}; qualified imported construction is native-only (current Java runtime rejects it)')
 
 if __name__=='__main__':main()
