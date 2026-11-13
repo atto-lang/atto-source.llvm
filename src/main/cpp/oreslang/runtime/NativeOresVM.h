@@ -93,6 +93,41 @@ int ores_native_vm_has_hard_security_boundary(
 /* Number of physically started carriers, zero until first admitted work. */
 size_t ores_native_vm_started_carriers(
     OresNativeVM* vm, enum OresNativeVMDomain domain);
+/* Opt-in trusted-runtime physical resource ownership. Registration,
+ * sends and cleanup belong to the VM; source code cannot supply callbacks.
+ * Bind runs synchronously while holding master -> scheduler locks, before
+ * the actor's first user DATA. It must not reenter VM or invoke guest code.
+ * On success the VM owns 'resource'; on failure ownership stays with caller.
+ * Cleanup runs once, ONLY after the exact actor's scheduler DONE; return 1
+ * only after all storage has been scrubbed and freed. External raw-pointer
+ * users must be forbidden by the runtime binding.
+ *
+ * This generic callback interface avoids linking the Bytes implementation
+ * into the 20+ existing native VM/actor test binaries. */
+typedef int (*OresNativeVMOwnedBindFn)(
+    OresNativeActorScheduler*, OresNativeActorRef, void* resource);
+typedef int (*OresNativeVMOwnedCleanupFn)(void* resource);
+typedef int (*OresNativeVMOwnedCallFn)(void* resource, void* context);
+int ores_native_vm_attach_owned(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor,
+    void* resource, OresNativeVMOwnedBindFn bind,
+    OresNativeVMOwnedCleanupFn cleanup);
+/* Return 1 if callback invoked, 0 on missing/stale/retired identity, -1
+ * if master lifecycle lock is busy. Caller must inspect *result for the
+ * operation's own admission status (0 may mean ACCEPTED for send).
+ * Never parks on the VM master lock; callback must not reenter the VM.
+ * Native scheduler locking remains independently subject to its profile. */
+int ores_native_vm_try_call_owned(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor,
+    OresNativeVMOwnedCallFn call, void* context, int* result);
+/* Nonparking physical-turn-only callback. It checks the SAME actor's
+ * scheduler-issued DATA sequence before accessing its resource pointer.
+ * Memory reclamation cannot race an authenticated active actor callback:
+ * the VM cleans only after the scheduler's physical DONE barrier. */
+int ores_native_vm_current_data_call_owned(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor,
+    OresNativeVMOwnedCallFn call, void* context, int* result);
+
 OresNativeActorRef ores_native_vm_spawn(
     OresNativeVM* vm, enum OresNativeVMDomain domain, size_t actor_slot);
 /* Trusted host-only immutable parentage. Child and supervisor must be distinct
