@@ -265,6 +265,15 @@ int ores_native_actor_task_physically_done(OresNativeActorTask* t) {
     pthread_mutex_unlock(&t->mutex);
     return done;
 }
+int ores_native_actor_task_is_current_running(OresNativeActorTask* t) {
+    if (!t || !t->initialized) return 0;
+    pthread_mutex_lock(&t->mutex);
+    int ok = t->phase == ORES_ACTOR_TASK_RUNNING && t->in_wake
+        && ores_native_actor_scheduler_is_current_ready_wake(
+            t->scheduler, t->active_ticket);
+    pthread_mutex_unlock(&t->mutex);
+    return ok;
+}
 int ores_native_actor_task_close(OresNativeActorTask* t) {
     if (!t || !t->initialized) return 0;
     pthread_mutex_lock(&t->mutex);
