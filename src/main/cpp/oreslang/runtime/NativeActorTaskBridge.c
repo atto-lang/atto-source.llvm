@@ -205,7 +205,13 @@ int ores_native_actor_task_after_wake(
              * preceding physical turn and expose this Future to producers.
              * A logically requested await is not a carrier-exit receipt. */
             t->phase = ORES_ACTOR_TASK_SUSPENDED;
-        } else if (t->phase == ORES_ACTOR_TASK_FINISH_PENDING) {
+        } else if (t->phase == ORES_ACTOR_TASK_FINISH_PENDING
+                || (t->phase == ORES_ACTOR_TASK_RUNNING
+                    && t->cancellation_requested)) {
+            /* Cancellation can race an executing guest callback. Even when
+             * its caller never invoked finish(), after_wake proves that
+             * callback physically exited, so its resource loan can retire.
+             * It is unsafe to retire on cancel() itself while guest runs. */
             ok = retire_locked(t);
         }
     }
