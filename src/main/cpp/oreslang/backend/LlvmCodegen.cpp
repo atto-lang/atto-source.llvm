@@ -848,6 +848,35 @@ std::string emit_native_actor_task_i64_producer_ir(const Program& source) {
     b.CreateStore(value, output);
     b.CreateRet(llvm::ConstantInt::get(i32, 0));
 
+    // The source handler's only post-await action is "return answer".
+    // Emit that verified continuation BODY as a second function. An actor
+    // scheduler must still authenticate and dispatch it after await; this
+    // helper does not register, schedule or resume a Task by itself.
+    if (!actor.on_message.result ||
+            actor.on_message.result->kind != Expression::Kind::Variable ||
+            actor.on_message.result->name != task.awaited_result_name)
+        throw std::runtime_error("actor Task resume result provenance invalid");
+    auto* resume = llvm::Function::Create(abi,
+        llvm::GlobalValue::ExternalLinkage,
+        "atto_actor_task_i64_resume_probe", module);
+    auto resume_args = resume->arg_begin();
+    llvm::Value* awaited = &*resume_args++;
+    awaited->setName("awaited_i64");
+    llvm::Value* resumed_out = &*resume_args++;
+    resumed_out->setName("resumed_result_out");
+    auto* resume_entry = llvm::BasicBlock::Create(context, "entry", resume);
+    auto* resume_ok = llvm::BasicBlock::Create(context, "resume.valid", resume);
+    auto* resume_denied = llvm::BasicBlock::Create(context, "resume.null", resume);
+    llvm::IRBuilder<> rb(resume_entry);
+    rb.CreateCondBr(rb.CreateICmpEQ(
+        resumed_out, llvm::Constant::getNullValue(resumed_out->getType())),
+        resume_denied, resume_ok);
+    rb.SetInsertPoint(resume_denied);
+    rb.CreateRet(llvm::ConstantInt::get(i32, 2));
+    rb.SetInsertPoint(resume_ok);
+    rb.CreateStore(awaited, resumed_out);
+    rb.CreateRet(llvm::ConstantInt::get(i32, 0));
+
     std::string diagnostics;
     llvm::raw_string_ostream errors(diagnostics);
     if (llvm::verifyModule(module, &errors)) {
