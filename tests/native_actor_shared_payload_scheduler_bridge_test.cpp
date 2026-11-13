@@ -166,6 +166,13 @@ static void exercise(bool sealed) {
     check(ores_native_actor_scheduler_try_send_receipted(
         run.scheduler, run.source, 123, nullptr) ==
         ORES_NATIVE_SEND_INVALID_REF);
+    OresNativeActorRef forged = run.source;
+    ++forged.generation;
+    trigger_sequence = 99;
+    check(ores_native_actor_scheduler_try_send_receipted(
+        run.scheduler, forged, 123, &trigger_sequence) ==
+        ORES_NATIVE_SEND_INVALID_REF);
+    check(trigger_sequence == 0);
     check(ores_native_actor_scheduler_try_send_receipted(
         run.scheduler, run.source, 123, &trigger_sequence) ==
         ORES_NATIVE_SEND_ACCEPTED);
