@@ -13,7 +13,7 @@ Only a direct unqualified call in a genuine lexical instance-method body is elig
 5. Reuse the explicit member-call lowering for private-member checks and compiler-owned `Borrow`/`BorrowMut` loans. No bound-method value, dynamic string lookup, actor-state spoofing or method capability is created.
 6. Before any native method receives compiler-owned receiver authority, validate a **bidirectional** exact class declaration ⇄ lowered function link: nominal owner, qualified member name, value arity, public/private visibility, receiver mutability, unique lowered body and presence of every declared slot. A matching variable named `self` is not sufficient evidence of authorized method ownership.
 
-Structured `ScopedLocal` declarations become visible *after* their initializer, until their lexical block exits. Conditional sibling branches and index/foreach loop-local declarations must not shadow calls outside those scopes. Ordinary function-level parameters and locals remain reserved for their function.
+Structured `ScopedLocal` declarations become visible **after** their initializer and stay live for subsequent statements **within the same enclosing block**. Each conditional/dispatch arm has an independently snapshotted owner, array and shadow environment; no declaration survives into sibling arms or the parent continuation. Index/foreach binders are visible only inside their loop condition/step/body and are revoked after the loop. A scalar binder must hide any previously nominal class/array binding with the same name. Ordinary function-level parameters and locals remain reserved for their function.
 
 ## Executable regression contracts
 
@@ -22,6 +22,9 @@ Structured `ScopedLocal` declarations become visible *after* their initializer, 
 - `family-over-free`: method wins over an exact-arity free function (exit code 42);
 - `wrong-arity-no-free-fallback`: method family exists but arity is wrong (compile error, no IR);
 - `scoped-shadow-does-not-leak`: nested branch-local name does not poison a following implicit self call (exit code 42);
+- `sibling-branch-shadow`: branch-local name in `then` never shadows the corresponding `else` call (exit code 42);
+- `index-binder-does-not-leak`: `for (let int read = ...)` shadows only its own loop, not a subsequent method call (exit code 42);
+- `scoped-shadow-in-branch`, `nested-branch-shadow`, `index-binder-shadows-in-loop`: live lexical scalar binders defeat the method-family lookup and require explicit `self.read()` (negative compiler cases, no IR);
 - `shadowed-parameter`: still rejected;
 - `sealed-actor-not-ready`: still denied until verified sealed state, critical loan and actor runtime lowering.
 
