@@ -12,7 +12,7 @@
 typedef struct {
     OresNativeActorScheduler* scheduler;
     OresNativeActorRef actor;
-    OresNativeActorTask parent, child;
+    OresNativeActorTask parent, child, control_probe;
     OresNativeWakeTicket finishing_parent_wake;
     pthread_mutex_t mutex;
     pthread_cond_t cv;
@@ -45,7 +45,7 @@ static void on_control(void* opaque, size_t actor, uint64_t message) {
     Fixture* f = (Fixture*)opaque;
     if (actor != 0 || message != 99
             || ores_native_actor_scheduler_can_start_task(f->scheduler, f->actor)
-            || ores_native_actor_task_start(&f->parent))
+            || ores_native_actor_task_start(&f->control_probe))
         atomic_fetch_add(&f->errors, 1);
     atomic_fetch_add(&f->control_turns, 1);
 }
@@ -127,11 +127,14 @@ static void open_fixture(Fixture* f, int mode) {
         &f->parent, f->scheduler, f->actor, 1, 1001, 77));
     CHECK(ores_native_actor_task_init(
         &f->child, f->scheduler, f->actor, 2, 1002, 77));
+    CHECK(ores_native_actor_task_init(
+        &f->control_probe, f->scheduler, f->actor, 3, 1003, 77));
     /* A producer without an authenticated actor lease cannot start a Task. */
     CHECK(!ores_native_actor_task_start(&f->parent));
 }
 static void close_fixture(Fixture* f) {
     CHECK(!atomic_load(&f->errors));
+    CHECK(ores_native_actor_task_close(&f->control_probe));
     CHECK(ores_native_actor_task_close(&f->child));
     CHECK(ores_native_actor_task_close(&f->parent));
     ores_native_actor_scheduler_retire(f->scheduler);
