@@ -70,10 +70,17 @@ static void on_wake(void* opaque, size_t actor,
             return; /* STOP/cancellation does not run guest code */
         int turn = atomic_fetch_add(&f->parent_turns, 1);
         if (turn == 0) {
-            if (f->mode != 2
-                    && !ores_native_actor_task_registry_start(
-                        &f->registry, &f->child, &f->parent))
-                atomic_fetch_add(&f->errors, 1);
+            if (f->mode != 2) {
+                /* A raw child pointer cannot invent parent identity.
+                 * Parent must already be tracked and executing this WAKE. */
+                if (ores_native_actor_task_registry_start(
+                        &f->registry, &f->child, &f->control_probe)
+                        || !ores_native_actor_task_registry_start(
+                            &f->registry, &f->child, &f->parent)
+                        || ores_native_actor_task_registry_start(
+                            &f->registry, &f->child, &f->parent))
+                    atomic_fetch_add(&f->errors, 1);
+            }
             if (!ores_native_actor_task_suspend(&f->parent))
                 atomic_fetch_add(&f->errors, 1);
             signal_host(f, &f->suspended);
@@ -160,8 +167,17 @@ static void open_fixture(Fixture* f, int mode) {
         &f->child, f->scheduler, f->actor, 2, 1002, 77));
     CHECK(ores_native_actor_task_init(
         &f->control_probe, f->scheduler, f->actor, 3, 1003, 77));
+    OresNativeActorTaskRegistry invalid = {0};
+    OresNativeActorTaskEntry scratch[1] = {0};
+    OresNativeActorRef stale = f->actor;
+    ++stale.generation;
+    CHECK(!ores_native_actor_task_registry_init(
+        &invalid, f->scheduler, stale, scratch, 1));
+    CHECK(!ores_native_actor_task_registry_init(
+        &invalid, f->scheduler, f->actor, scratch, 9));
     CHECK(ores_native_actor_task_registry_init(
         &f->registry, f->scheduler, f->actor, f->tracked, 3));
+    CHECK(!ores_native_actor_task_registry_close(&f->registry));
     /* A producer without an authenticated actor lease cannot start a Task. */
     CHECK(!ores_native_actor_task_start(&f->parent));
     CHECK(!ores_native_actor_task_registry_start(
@@ -261,6 +277,7 @@ int main(void) {
     /* STOP during SUSPENDING revokes the transferred wake, but cannot
      * retire the record while the first guest callback is still on-stack. */
     CHECK(ores_native_actor_task_registry_stop(&stopped.registry));
+    CHECK(!ores_native_actor_task_registry_stop(&stopped.registry));
     CHECK(!ores_native_actor_task_physically_done(&stopped.parent));
     CHECK(!ores_native_actor_scheduler_poll_done(stopped.scheduler, stopped.actor));
     signal_host(&stopped, &stopped.allow_suspend_guest_exit);
