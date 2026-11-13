@@ -1945,6 +1945,35 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_actor_suspends_mtd_typed_ast_codegen_gate
         native-actor-task-i64-mtd-gate.atto
         --diagnostic "native actor Task<int> requires compiler-owned continuation frame and actor TASK/WAKE ABI lowering")
+    # Actual LLVM-generated producer arithmetic, compiled and run at O0/O2.
+    # This opt-in probe never initializes a source actor or compiles await;
+    # positive TASK/WAKE guest conformance remains a separate release gate.
+    foreach(actor_task_probe IN ITEMS fnc mtd)
+        if(actor_task_probe STREQUAL "fnc")
+            set(actor_task_probe_fixture native-actor-task-i64-typed-gate.atto)
+            set(actor_task_probe_expected 42)
+        else()
+            set(actor_task_probe_fixture native-actor-task-i64-mtd-gate.atto)
+            set(actor_task_probe_expected 83)
+        endif()
+        if(ORE_CLANG)
+            add_test(NAME native_actor_task_${actor_task_probe}_compiled_producer_ir_o0_o2
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DSOURCE_COMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                    "-DCLANG=${ORE_CLANG}"
+                    "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/${actor_task_probe_fixture}"
+                    "-DHARNESS=${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_task_i64_producer_probe_harness.c"
+                    "-DEXPECTED=${actor_task_probe_expected}"
+                    "-DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/actor-task-producer-${actor_task_probe}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_task_i64_producer_e2e.cmake")
+        else()
+            add_test(NAME native_actor_task_${actor_task_probe}_compiled_producer_ir_o0_o2
+                COMMAND "${CMAKE_COMMAND}" -E false)
+        endif()
+        set_tests_properties(
+            native_actor_task_${actor_task_probe}_compiled_producer_ir_o0_o2
+            PROPERTIES TIMEOUT 120)
+    endforeach()
     oreslang_contract_test(native_actor_suspends_field_capture_denied
         native-actor-task-field-capture-reject.atto
         --diagnostic "native actor Task<int> capture must be a copied incoming int only")
