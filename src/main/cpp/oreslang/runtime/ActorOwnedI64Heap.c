@@ -311,9 +311,13 @@ OresActorLoan ores_actor_i64_heap_borrow(OresActorI64Heap* heap,
 int ores_actor_i64_heap_try_borrow_mut(OresActorI64Heap* heap,
                                         OresActorTurn turn, OresActorSlot slot,
                                         OresActorLoan* out) {
-    if (!out) rejected();
+    if (!out || !heap) rejected();
     *out = (OresActorLoan){0, 0, 0, 0};
-    lock_heap(heap);
+    /* One atomic lock attempt only. A scheduling carrier must not spin
+     * waiting for a competing release or turn; its caller must retry only
+     * after yielding via the actor scheduler, not in a busy loop. */
+    if (atomic_flag_test_and_set_explicit(&heap->mutex, memory_order_acquire))
+        return 0;
     require_turn(heap, turn);
     ActorSlot* s = checked_slot(heap, slot);
     if (s->fixed_field && !s->field_mutable) rejected();
