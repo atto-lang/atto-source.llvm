@@ -128,8 +128,16 @@ static void exercise(bool sealed) {
     check(bridge.try_send_from(run.source, invalid) ==
           SendStatus::invalid_sender);
     check(bridge.queued_slots() == 0);
-    check(ores_native_actor_scheduler_try_send(run.scheduler, run.source, 123)
-          == ORES_NATIVE_SEND_ACCEPTED);
+    // Receipt is minted only on successful native DATA admission. It cannot
+    // be supplied by the guest and is not a handler-completion receipt.
+    std::uint64_t trigger_sequence = 0;
+    check(ores_native_actor_scheduler_try_send_receipted(
+        run.scheduler, run.source, 123, nullptr) ==
+        ORES_NATIVE_SEND_INVALID_REF);
+    check(ores_native_actor_scheduler_try_send_receipted(
+        run.scheduler, run.source, 123, &trigger_sequence) ==
+        ORES_NATIVE_SEND_ACCEPTED);
+    check(trigger_sequence == 1);
     const auto deadline = std::chrono::steady_clock::now() + 5s;
     while (!run.source_done.load(std::memory_order_acquire) &&
            std::chrono::steady_clock::now() < deadline)
