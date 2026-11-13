@@ -72,7 +72,8 @@ def main():
     # Java reference can run these through the existing differential harness.
     implicit_self = Path(__file__).resolve().parent / 'fixtures' / 'implicit-self'
     for case in ('private-helper', 'arity', 'mut-receiver',
-                 'family-over-free', 'scoped-shadow-does-not-leak'):
+                 'family-over-free', 'scoped-shadow-does-not-leak',
+                 'sibling-branch-shadow', 'index-binder-does-not-leak'):
         positives.append(('implicit-' + case, {
             'main.atto': (implicit_self / (case + '.atto')).read_text()
         }))
@@ -127,6 +128,12 @@ def main():
          'unqualified method call is shadowed'),
         ('implicit-scoped-shadow-in-branch',
          (implicit_self / 'scoped-shadow-in-branch.atto').read_text(), {},
+         'unqualified method call is shadowed'),
+        ('implicit-nested-branch-shadow',
+         (implicit_self / 'nested-branch-shadow.atto').read_text(), {},
+         'unqualified method call is shadowed'),
+        ('implicit-index-binder-shadows-in-loop',
+         (implicit_self / 'index-binder-shadows-in-loop.atto').read_text(), {},
          'unqualified method call is shadowed'),
         ('implicit-sealed-actor-not-ready',
          (implicit_self / 'sealed-actor-not-ready.atto').read_text(), {},
