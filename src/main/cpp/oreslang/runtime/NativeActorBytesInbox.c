@@ -14,6 +14,8 @@ struct OresNativeActorBytesInbox {
     size_t capacity, max_payload, budget;
     size_t first, next, queued, used;
     size_t* lengths;
+    uint64_t* mail_sequences; /* 0 means unsequenced legacy trusted-host mail */
+    uint64_t last_mail_sequence; /* monotonic, never reuse across ring wrap */
     unsigned char* slab;
     int retired;
 };
@@ -51,14 +53,15 @@ OresNativeActorBytesInbox* ores_native_actor_bytes_open(
     if (!b) return NULL;
     b->slab = (unsigned char*)calloc(slots, max_message_bytes);
     b->lengths = (size_t*)calloc(slots, sizeof(size_t));
-    if (!b->slab || !b->lengths) {
-        free(b->lengths); free(b->slab); free(b);
+    b->mail_sequences = (uint64_t*)calloc(slots, sizeof(uint64_t));
+    if (!b->slab || !b->lengths || !b->mail_sequences) {
+        free(b->mail_sequences); free(b->lengths); free(b->slab); free(b);
         return NULL;
     }
     uint64_t nonce = atomic_fetch_add_explicit(&next_nonce, 1, memory_order_relaxed);
     if (!nonce || nonce == UINT64_MAX) {
         scrub(b->slab, slots * max_message_bytes);
-        free(b->lengths); free(b->slab); free(b);
+        free(b->mail_sequences); free(b->lengths); free(b->slab); free(b);
         return NULL;
     }
     atomic_flag_clear(&b->busy);
@@ -77,18 +80,24 @@ OresNativeActorBytesRef ores_native_actor_bytes_ref(
     return b ? b->owner : nil;
 }
 
-int ores_native_actor_bytes_try_send(OresNativeActorBytesInbox* b,
-    OresNativeActorBytesRef target, const void* bytes, size_t length) {
+/* 0 selects the legacy unsequenced trusted-host interface. A committed
+ * sequence comes only from the scheduler's source-mail admission ordinal. */
+static int send_internal(OresNativeActorBytesInbox* b,
+    OresNativeActorBytesRef target, const void* bytes, size_t length,
+    uint64_t sequence) {
     if (!b || !same(b, target) || length > b->max_payload ||
         (length && !bytes)) return ORES_ACTOR_BYTES_DENIED;
     if (!acquire(b)) return ORES_ACTOR_BYTES_BUSY;
     int result = ORES_ACTOR_BYTES_DENIED;
     if (!b->retired && b->queued < b->capacity &&
-        length <= b->budget - b->used) {
+        length <= b->budget - b->used &&
+        (!sequence || sequence > b->last_mail_sequence)) {
         size_t index = b->next;
         unsigned char* target_slot = b->slab + index * b->max_payload;
         if (length) memmove(target_slot, bytes, length);
         b->lengths[index] = length;
+        b->mail_sequences[index] = sequence;
+        if (sequence) b->last_mail_sequence = sequence;
         b->next = index + 1 == b->capacity ? 0 : index + 1;
         b->queued++;
         b->used += length;
@@ -97,33 +106,61 @@ int ores_native_actor_bytes_try_send(OresNativeActorBytesInbox* b,
     release(b);
     return result;
 }
-
-int ores_native_actor_bytes_try_receive(OresNativeActorBytesInbox* b,
-    OresNativeActorBytesRef receiver, void* output, size_t capacity,
-    size_t* required_length) {
-    if (!b || !same(b, receiver) || !required_length) return ORES_ACTOR_BYTES_DENIED;
+int ores_native_actor_bytes_try_send(OresNativeActorBytesInbox* b,
+    OresNativeActorBytesRef target, const void* bytes, size_t length) {
+    return send_internal(b, target, bytes, length, 0);
+}
+int ores_native_actor_bytes_try_send_sequenced(OresNativeActorBytesInbox* b,
+    OresNativeActorBytesRef target, const void* bytes, size_t length,
+    uint64_t source_mail_sequence) {
+    if (!source_mail_sequence) return ORES_ACTOR_BYTES_DENIED;
+    return send_internal(b, target, bytes, length, source_mail_sequence);
+}
+static int receive_internal(OresNativeActorBytesInbox* b,
+    OresNativeActorBytesRef receiver, uint64_t sequence,
+    void* output, size_t capacity, size_t* required_length) {
+    if (!b || !same(b, receiver) || !required_length)
+        return ORES_ACTOR_BYTES_DENIED;
     if (!acquire(b)) return ORES_ACTOR_BYTES_BUSY;
     int result = ORES_ACTOR_BYTES_DENIED;
     if (!b->retired && b->queued) {
         size_t index = b->first;
-        size_t n = b->lengths[index];
-        *required_length = n;
-        if (n > capacity || (n && !output)) {
-            result = ORES_ACTOR_BYTES_SMALL;
-        } else {
-            unsigned char* source = b->slab + index * b->max_payload;
-            if (n) memmove(output, source, n);
-            /* Scrub the FULL capacity of each consumed slot, not just n. */
-            scrub(source, b->max_payload);
-            b->lengths[index] = 0;
-            b->first = index + 1 == b->capacity ? 0 : index + 1;
-            b->queued--;
-            b->used -= n;
-            result = ORES_ACTOR_BYTES_OK;
+        /* A legacy receiver cannot discard a sequenced message. A DATA
+         * receiver cannot consume any other DATA ordinal, including a
+         * legacy message. Denial leaves credits and destination unchanged. */
+        if (b->mail_sequences[index] == sequence) {
+            size_t n = b->lengths[index];
+            *required_length = n;
+            if (n > capacity || (n && !output)) {
+                result = ORES_ACTOR_BYTES_SMALL;
+            } else {
+                unsigned char* source = b->slab + index * b->max_payload;
+                if (n) memmove(output, source, n);
+                /* Scrub the FULL physical slot on each successful dequeue. */
+                scrub(source, b->max_payload);
+                b->lengths[index] = 0;
+                b->mail_sequences[index] = 0;
+                b->first = index + 1 == b->capacity ? 0 : index + 1;
+                b->queued--;
+                b->used -= n;
+                result = ORES_ACTOR_BYTES_OK;
+            }
         }
     }
     release(b);
     return result;
+}
+int ores_native_actor_bytes_try_receive(OresNativeActorBytesInbox* b,
+    OresNativeActorBytesRef receiver, void* output, size_t capacity,
+    size_t* required_length) {
+    return receive_internal(b, receiver, 0, output, capacity, required_length);
+}
+int ores_native_actor_bytes_try_receive_sequenced(OresNativeActorBytesInbox* b,
+    OresNativeActorBytesRef receiver, uint64_t source_mail_sequence,
+    void* output, size_t capacity, size_t* required_length) {
+    if (!source_mail_sequence) return ORES_ACTOR_BYTES_DENIED;
+    return receive_internal(b, receiver, source_mail_sequence,
+                            output, capacity, required_length);
 }
 
 int ores_native_actor_bytes_try_retire(OresNativeActorBytesInbox* b,
@@ -135,6 +172,7 @@ int ores_native_actor_bytes_try_retire(OresNativeActorBytesInbox* b,
         b->retired = 1;
         scrub(b->slab, b->capacity * b->max_payload);
         memset(b->lengths, 0, b->capacity * sizeof(size_t));
+        scrub(b->mail_sequences, b->capacity * sizeof(uint64_t));
         b->queued = 0;
         b->used = 0;
         b->first = 0;
@@ -157,7 +195,9 @@ int ores_native_actor_bytes_try_destroy(OresNativeActorBytesInbox* b,
      * enter after this point, not just an empty queue. */
     scrub(b->slab, b->capacity * b->max_payload);
     scrub(b->lengths, b->capacity * sizeof(size_t));
+    scrub(b->mail_sequences, b->capacity * sizeof(uint64_t));
     scrub(&b->owner, sizeof(b->owner));
+    free(b->mail_sequences);
     free(b->lengths);
     free(b->slab);
     free(b);
