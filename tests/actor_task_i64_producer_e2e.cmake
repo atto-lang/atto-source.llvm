@@ -18,6 +18,7 @@ if(NOT compiler_result STREQUAL "0")
 endif()
 file(READ "${ir}" emitted)
 if(NOT emitted MATCHES "define i32 @atto_actor_task_i64_producer_probe"
+        OR NOT emitted MATCHES "define i32 @atto_actor_task_i64_resume_probe"
         OR NOT emitted MATCHES "llvm\\.s(add|sub|mul)\\.with\\.overflow\\.i64")
     message(FATAL_ERROR "missing checked compiler-generated Atto Task producer ABI")
 endif()
