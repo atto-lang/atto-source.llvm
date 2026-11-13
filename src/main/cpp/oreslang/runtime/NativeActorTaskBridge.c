@@ -149,9 +149,19 @@ int ores_native_actor_task_publish(
             && outcome != ORES_NATIVE_WAKE_FAILED))
         return 0;
     pthread_mutex_lock(&t->mutex);
-    int ok = generation == t->task_generation
-        && t->phase == ORES_ACTOR_TASK_SUSPENDED
-        && !t->in_wake && !t->cancellation_requested;
+    int ok = generation == t->task_generation && !t->cancellation_requested;
+    if (ok && t->phase == ORES_ACTOR_TASK_SUSPENDING && t->in_wake
+            && !t->pending_early_outcome) {
+        /* Accept a fast Future completion exactly once without publishing a
+         * runnable WAKE while this actor's original guest stack is on-stack.
+         * after_wake flushes the escrow after physical callback exit. */
+        t->early_outcome = outcome;
+        t->pending_early_outcome = 1;
+        pthread_mutex_unlock(&t->mutex);
+        return 1;
+    }
+    ok = ok && t->phase == ORES_ACTOR_TASK_SUSPENDED
+        && !t->in_wake && !t->pending_early_outcome;
     if (ok) {
         /* The producer commits only a scheduler wake. It has no guest carrier
          * claim and cannot perform Task.resume or touch sealed actor state. */
@@ -204,7 +214,26 @@ int ores_native_actor_task_after_wake(
             /* Only the authenticated post-WAKE callback can release the
              * preceding physical turn and expose this Future to producers.
              * A logically requested await is not a carrier-exit receipt. */
-            t->phase = ORES_ACTOR_TASK_SUSPENDED;
+            if (t->pending_early_outcome) {
+                const OresNativeWakeOutcome outcome = t->early_outcome;
+                t->pending_early_outcome = 0;
+                /* Do not execute guest inline: this only admits another
+                 * scheduler-owned WAKE after the old physical claim exited. */
+                const OresNativeWakePublishStatus published =
+                    ores_native_actor_scheduler_publish_wake(
+                        t->scheduler, t->ticket, outcome);
+                if (published == ORES_NATIVE_WAKE_PUBLISHED) {
+                    t->phase = ORES_ACTOR_TASK_QUEUED;
+                } else if (published == ORES_NATIVE_WAKE_PRODUCER_RETIRED
+                        || ores_native_actor_scheduler_abort_transferred_wake(
+                            t->scheduler, t->ticket)) {
+                    ok = retire_locked(t);
+                } else {
+                    ok = 0; /* preserve actor resource loan: quarantine */
+                }
+            } else {
+                t->phase = ORES_ACTOR_TASK_SUSPENDED;
+            }
         } else if (t->phase == ORES_ACTOR_TASK_FINISH_PENDING
                 || (t->phase == ORES_ACTOR_TASK_RUNNING
                     && t->cancellation_requested)) {
@@ -225,6 +254,9 @@ int ores_native_actor_task_cancel(OresNativeActorTask* t) {
         && t->phase != ORES_ACTOR_TASK_NEW && !t->cancellation_requested;
     if (ok) {
         t->cancellation_requested = 1;
+        /* A STOP winner must drop any pre-exit Future outcome without ever
+         * converting it into a runnable guest continuation. */
+        t->pending_early_outcome = 0;
         if (t->phase == ORES_ACTOR_TASK_SUSPENDING
                 || t->phase == ORES_ACTOR_TASK_SUSPENDED) {
             if (ores_native_actor_scheduler_abort_transferred_wake(
