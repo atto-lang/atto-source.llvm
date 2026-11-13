@@ -132,7 +132,11 @@ int main(void) {
         ores_native_actor_bytes_open(1000, 77, 2, 64, 128);
     check(sequenced != NULL);
     OresNativeActorBytesRef sref = ores_native_actor_bytes_ref(sequenced);
+    check(ores_native_actor_bytes_bind_sequenced(sequenced, sref));
+    check(!ores_native_actor_bytes_bind_sequenced(sequenced, sref));
     unsigned char ordered[4] = {0, 255, 42, 10};
+    check(ores_native_actor_bytes_try_send(
+        sequenced, sref, ordered, 4) == ORES_ACTOR_BYTES_DENIED);
     check(ores_native_actor_bytes_try_send_sequenced(
         sequenced, sref, ordered, 4, 0) == ORES_ACTOR_BYTES_DENIED);
     check(ores_native_actor_bytes_try_send_sequenced(
