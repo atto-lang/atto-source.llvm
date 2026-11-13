@@ -102,3 +102,23 @@ byte credits, publishes the exact payload slot, and admits the
 corresponding DATA turn atomically—or proves a fail-closed rollback/abort
 protocol with no lost wakeups or false acknowledgments. Do not use this
 two-step test mechanism for production.
+
+## Concurrent ingress stress (local host evidence, not source guest)
+
+`tests/native_actor_bytes_contention_test.c` creates four native
+producer pthreads and one host test consumer against the same 128-slot
+actor inbox. It verifies all **1,024** fixed binary messages arrive
+exactly once, preserves each producer's 256-message FIFO prefix,
+retains byte credits under full/contended admission and physically
+scrubs all 128 slots before retirement. The harness's
+`sched_yield()` calls occur **only on host test producers/consumer**,
+not inside the inbox or a guest actor; real Atto suspended senders
+must park through their actor scheduler, not loop on `BUSY`.
+
+Local Clang O0, Clang O2 and Clang ASan/UBSan all passed the stress
+test, and its exact Git blob is
+`0f90e746019d7b8183bddc56adf02a4ae3adbe26`.
+GCC/Clang O0/O2 and sanitizer stress runs are now registered in the
+standalone source-pinned script; an exact-head source CI outcome has
+not been obtained. This test does not establish atomic OresVM
+DATA-plus-byte publication or native TCP/durability behavior.
