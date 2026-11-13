@@ -159,7 +159,9 @@ int ores_native_actor_task_registry_close(
         OresNativeActorTaskRegistry* r) {
     if (!r || !r->initialized) return 0;
     pthread_mutex_lock(&r->mutex);
-    int ok = r->count == 0;
+    /* Closing an unsealed actor registry could silently disable automatic
+     * Task tracking while the actor is still accepting guest calls. */
+    int ok = r->sealed && r->count == 0;
     if (ok) r->initialized = 0;
     pthread_mutex_unlock(&r->mutex);
     if (ok && pthread_mutex_destroy(&r->mutex) != 0) return 0;
