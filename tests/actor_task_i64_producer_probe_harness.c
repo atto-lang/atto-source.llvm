@@ -9,6 +9,8 @@
 
 extern int32_t atto_actor_task_i64_producer_probe(
     int64_t copied_incoming, int64_t* result_out);
+extern int32_t atto_actor_task_i64_resume_probe(
+    int64_t awaited_result, int64_t* resumed_result_out);
 
 int main(int argc, char** argv) {
     if (argc != 2) return 10;
@@ -18,6 +20,10 @@ int main(int argc, char** argv) {
     int64_t result = INT64_C(987654321);
     if (atto_actor_task_i64_producer_probe(INT64_C(41), &result) != 0 ||
             result != (int64_t)expected) return 12;
+    int64_t resumed = INT64_C(-7);
+    if (atto_actor_task_i64_resume_probe(result, &resumed) != 0 ||
+            resumed != (int64_t)expected) return 15;
+    if (atto_actor_task_i64_resume_probe(result, NULL) != 2) return 16;
     /* No native trap or wraparound on signed overflow. Rejected output must
      * remain untouched, preserving the caller's committed actor state. */
     result = INT64_C(987654321);
