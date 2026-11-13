@@ -37,6 +37,7 @@ for compiler in gcc clang; do
     timeout --kill-after=2s 45s "$work/actor-owned-$compiler" \
        >"$work/$compiler.stdout" 2>"$work/$compiler.stderr"
     grep -Fqx 'HOST_ONLY_EXCLUSIVE_LOAN_CONTENTION_PASS' "$work/$compiler.stdout"
+    grep -Fqx 'HOST_ONLY_EXCLUSIVE_LOAN_TYPED_FAULT_PASS' "$work/$compiler.stdout"
     grep -Fqx 'HOST_ONLY_EXCLUSIVE_LOAN_QUOTA_RECOVERY_PASS' "$work/$compiler.stdout"
     grep -Fqx 'HOST_ONLY_EXCLUSIVE_LOAN_POSITIVE_PASS' "$work/$compiler.stdout"
     grep -Fqx 'HOST_ONLY_EXCLUSIVE_LOAN_SUITE_PASS positives=1 abort_negatives=16' "$work/$compiler.stdout"
