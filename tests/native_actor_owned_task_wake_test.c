@@ -34,6 +34,9 @@ typedef struct {
     int child_done, child_suspended, parent_done, parent_physically_returned;
     int allow_parent_wake_exit;
     atomic_int parent_turns, child_turns, control_turns, errors;
+#ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
+    atomic_int_fast64_t copied_incoming; /* authentic DATA payload */
+#endif
 } Fixture;
 
 static void signal_host(Fixture* f, int* field) {
@@ -50,12 +53,24 @@ static void wait_host(Fixture* f, int* field) {
 }
 static void on_data(void* opaque, size_t actor, uint64_t message) {
     Fixture* f = (Fixture*)opaque;
-    if (actor != 0 || message != 1
+    const uint64_t expected_message =
+#ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
+        f->mode == 1 ? UINT64_C(41) : UINT64_C(1);
+#else
+        UINT64_C(1);
+#endif
+    if (actor != 0 || message != expected_message
             || !ores_native_actor_scheduler_is_current_actor(f->scheduler, f->actor)
             || !ores_native_actor_scheduler_can_start_task(f->scheduler, f->actor)
             || !ores_native_actor_task_registry_start(
                 &f->registry, &f->parent, NULL))
         atomic_fetch_add(&f->errors, 1);
+#ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
+    /* The source Task's only permitted capture is a COPIED DATA i64,
+     * not a borrowed pointer into this callback's native stack. */
+    atomic_store_explicit(
+        &f->copied_incoming, (int64_t)message, memory_order_release);
+#endif
 }
 static void on_control(void* opaque, size_t actor, uint64_t message) {
     Fixture* f = (Fixture*)opaque;
@@ -126,7 +141,9 @@ static void on_wake(void* opaque, size_t actor,
         if (f->mode == 1) {
             int64_t compiled_result = INT64_C(-1);
             if (atto_actor_task_i64_producer_probe(
-                    INT64_C(41), &compiled_result) != 0 ||
+                    atomic_load_explicit(
+                        &f->copied_incoming, memory_order_acquire),
+                    &compiled_result) != 0 ||
                     compiled_result !=
                         (int64_t)ATTO_ACTOR_TASK_PRODUCER_EXPECTED)
                 atomic_fetch_add(&f->errors, 1);
@@ -231,7 +248,11 @@ static void close_fixture(Fixture* f) {
 int main(void) {
     Fixture f = {0};
     open_fixture(&f, 1);
+#ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
+    CHECK(ores_native_actor_scheduler_send(f.scheduler, f.actor, 41));
+#else
     CHECK(ores_native_actor_scheduler_send(f.scheduler, f.actor, 1));
+#endif
     wait_host(&f, &f.suspended);
     CHECK(!ores_native_actor_scheduler_is_current_carrier(f.scheduler));
     CHECK(!ores_native_actor_task_physically_done(&f.parent));
