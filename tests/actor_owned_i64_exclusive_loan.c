@@ -25,10 +25,22 @@ static void positive(void) {
     OresActorLoan shared1 = ores_actor_i64_heap_borrow(a, ta, sa);
     OresActorLoan shared2 = ores_actor_i64_heap_borrow(a, ta, sa);
     REQUIRE(ores_actor_i64_heap_read(a, ta, sa) == 10);
+    OresActorLoan refused = {1, 2, 3, 4};
+    REQUIRE(ores_actor_i64_heap_try_borrow_mut(a, ta, sa, &refused) == 0);
+    REQUIRE(refused.domain == 0 && refused.nonce == 0
+            && refused.index == 0 && refused.generation == 0);
+    // A rejected writer never corrupts the existing shared readers.
+    REQUIRE(ores_actor_i64_heap_read(a, ta, sa) == 10);
     ores_actor_i64_heap_release(a, shared1);
     ores_actor_i64_heap_release(a, shared2);
-    OresActorLoan write_a = ores_actor_i64_heap_borrow_mut(a, ta, sa);
-    OresActorLoan write_b = ores_actor_i64_heap_borrow_mut(b, tb, sb);
+    OresActorLoan write_a;
+    REQUIRE(ores_actor_i64_heap_try_borrow_mut(a, ta, sa, &write_a) == 1);
+    REQUIRE(write_a.domain == ta.domain && write_a.nonce != 0);
+    REQUIRE(ores_actor_i64_heap_try_borrow_mut(a, ta, sa, &refused) == 0);
+    REQUIRE(refused.domain == 0 && refused.nonce == 0);
+    // Actor B's private heap can still admit its own writer immediately.
+    OresActorLoan write_b;
+    REQUIRE(ores_actor_i64_heap_try_borrow_mut(b, tb, sb, &write_b) == 1);
     REQUIRE(ores_actor_i64_heap_loan_read_mut(a, ta, write_a) == 10);
     REQUIRE(ores_actor_i64_heap_loan_read_mut(b, tb, write_b) == 90);
     ores_actor_i64_heap_loan_write(a, ta, write_a, 42);
@@ -37,6 +49,10 @@ static void positive(void) {
     REQUIRE(ores_actor_i64_heap_loan_read_mut(b, tb, write_b) == 91);
     ores_actor_i64_heap_release(a, write_a);
     ores_actor_i64_heap_release(b, write_b);
+    // Contention did not poison actor A or strand the writer count.
+    OresActorLoan again;
+    REQUIRE(ores_actor_i64_heap_try_borrow_mut(a, ta, sa, &again) == 1);
+    ores_actor_i64_heap_release(a, again);
     REQUIRE(ores_actor_i64_heap_read(a, ta, sa) == 42);
     REQUIRE(ores_actor_i64_heap_read(b, tb, sb) == 91);
 
@@ -65,6 +81,7 @@ static void positive(void) {
     ores_actor_i64_heap_retire(b);
     REQUIRE(ores_actor_i64_heap_try_destroy(a) == 1);
     REQUIRE(ores_actor_i64_heap_try_destroy(b) == 1);
+    puts("HOST_ONLY_EXCLUSIVE_LOAN_CONTENTION_PASS");
     puts("HOST_ONLY_EXCLUSIVE_LOAN_POSITIVE_PASS");
 }
 
