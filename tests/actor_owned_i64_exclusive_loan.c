@@ -65,6 +65,28 @@ static void positive(void) {
     ores_actor_i64_heap_release(a, field_loan);
     REQUIRE(ores_actor_i64_heap_field_read(a, ta.domain, ta.epoch, 2) == 99);
 
+    // Saturate the 64-entry per-heap loan table with shared readers on sa.
+    // A writer on a DIFFERENT slot must reject immediately due to quota,
+    // without damaging existing read loans or poisoning the owning actor.
+    OresActorSlot idle_slot = ores_actor_i64_heap_new(a, ta, 55);
+    OresActorLoan readers[64];
+    for (unsigned i = 0; i < 64; ++i)
+        readers[i] = ores_actor_i64_heap_borrow(a, ta, sa);
+    OresActorLoan at_capacity = {4, 3, 2, 1};
+    REQUIRE(ores_actor_i64_heap_try_borrow_mut(a, ta, idle_slot,
+                                                &at_capacity) == 0);
+    REQUIRE(at_capacity.domain == 0 && at_capacity.nonce == 0);
+    REQUIRE(ores_actor_i64_heap_read(a, ta, idle_slot) == 55);
+    REQUIRE(ores_actor_i64_heap_read(b, tb, sb) == 91);
+    for (unsigned i = 0; i < 64; ++i)
+        ores_actor_i64_heap_release(a, readers[i]);
+    REQUIRE(ores_actor_i64_heap_try_borrow_mut(a, ta, idle_slot,
+                                                &at_capacity) == 1);
+    ores_actor_i64_heap_loan_write(a, ta, at_capacity, 56);
+    ores_actor_i64_heap_release(a, at_capacity);
+    REQUIRE(ores_actor_i64_heap_read(a, ta, idle_slot) == 56);
+    puts("HOST_ONLY_EXCLUSIVE_LOAN_QUOTA_RECOVERY_PASS");
+
     // Shared read may span turns; direct mutation remains forbidden until release.
     OresActorLoan across_turn = ores_actor_i64_heap_borrow(a, ta, sa);
     ores_actor_i64_heap_leave(a, ta);
