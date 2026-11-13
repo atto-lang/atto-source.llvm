@@ -57,6 +57,12 @@ static void on_payload(void* raw, OresNativeActorRef target,
     });
     if (!run.seal && run.control.load() != 1)
         run.handler_errors.fetch_add(1); // CONTROL outranks queued DATA.
+    std::uint64_t observed_mail_sequence = 0;
+    if (!ores_native_actor_scheduler_current_data_mail_sequence(
+            run.scheduler, run.target, &observed_mail_sequence) ||
+        observed_mail_sequence !=
+            static_cast<std::uint64_t>(run.seen.load()) + 1)
+        run.handler_errors.fetch_add(1); // Exact FIFO receipt, not payload ID.
     run.seen.fetch_add(1);
 }
 
