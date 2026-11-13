@@ -1,9 +1,9 @@
 fnc lhs(): bool {
-  stdio.stdout.println("left");
+  stdio.stdout.println(1);
   return true;
 }
 fnc rhs(): bool {
-  stdio.stdout.println("right");
+  stdio.stdout.println(2);
   return false;
 }
 pub fnc main(): int {
