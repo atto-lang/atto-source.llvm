@@ -527,6 +527,28 @@ bool native_constructor_scalar_tree(const Expression& expr,
     return false;
 }
 
+/* Before async actor codegen exists, bound the source continuation frame to
+ * a pure i64 expression over ONE copied incoming scalar. It cannot capture
+ * an actor field, self, a borrow, a host handle, or a closure. This is a
+ * semantic AST admission rule, not permission to execute or block await. */
+bool native_actor_task_i64_capture_tree(const Expression& expr,
+                                        const std::string& incoming,
+                                        std::size_t depth = 1) {
+    require_expression_depth(depth, expr.offset);
+    using Kind = Expression::Kind;
+    if (expr.kind == Kind::Integer) return true;
+    if (expr.kind == Kind::Variable) return expr.name == incoming;
+    if (expr.kind == Kind::Negate)
+        return expr.left && native_actor_task_i64_capture_tree(
+            *expr.left, incoming, depth + 1);
+    if (expr.kind == Kind::Add || expr.kind == Kind::Subtract ||
+            expr.kind == Kind::Multiply)
+        return expr.left && expr.right &&
+            native_actor_task_i64_capture_tree(*expr.left, incoming, depth + 1) &&
+            native_actor_task_i64_capture_tree(*expr.right, incoming, depth + 1);
+    return false; // no calls, actor fields, raw loans, FFI or implicit conversions
+}
+
 std::unique_ptr<Expression> clone_native_expression(const Expression& source) {
     auto result = make_expression(source.kind, source.offset);
     result->integer = source.integer;
@@ -1510,9 +1532,12 @@ private:
         // Match the Java frontend's declaration spelling contract. The native
         // actor subset still lowers only on_message(int) and cannot admit
         // arbitrary methods, static fnc members or suspension frames.
-        if (token_.text == "suspend" || token_.text == "suspends") {
+        const bool is_suspending = accept("suspends");
+        if (is_suspending && (token_.text == "suspends" ||
+                token_.text == "critical"))
+            fail("native actor cannot combine suspends with another effect modifier");
+        if (token_.text == "suspend")
             fail("native suspends actor method requires continuation lowering");
-        }
         // Actor method modifiers have their own admission boundary. Do not
         // allow the fixed-int actor subset to parse these as method names or
         // quietly route a read declaration through the legacy write lane.
@@ -1523,7 +1548,8 @@ private:
             if (accept("method")) fail("static method is invalid; use static fnc");
             fail("native actor static fnc requires separate member lowering");
         }
-        if (!accept("fnc")) accept("method"); // optional method marker
+        if (!accept("fnc") && !(is_suspending && accept("mtd")))
+            accept("method"); // optional method marker
         if (at_unsupported_critical_mode()) {
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
@@ -1541,6 +1567,60 @@ private:
         require("{");
         actor_handler_active_ = true;
         struct HandlerScope { bool& flag; ~HandlerScope() { flag = false; } } handler_scope{actor_handler_active_};
+        if (is_suspending) {
+            /* First typed actor Task AST, not yet executable. Exactly one
+             * immutable i64 input capture and one lexical await are admitted
+             * for front-end validation; no actor state or pointer escapes.
+             * The LLVM emitter explicitly refuses this node pending a
+             * compiler-generated heap-owned continuation frame ABI. */
+            auto task = std::make_unique<ActorSuspendingTaskI64>();
+            task->offset = token_.offset;
+            require("let");
+            require("Task");
+            require("<");
+            require("int");
+            require(">");
+            task->task_name = identifier();
+            if (task->task_name == method.parameters.front().name ||
+                    names.count(task->task_name))
+                fail("native actor Task<int> binding shadows actor state or input");
+            require("=");
+            require("task");
+            require("{");
+            require("return");
+            task->producer_result = expression();
+            require(";");
+            require("}");
+            require(";");
+            task->captured_parameter = method.parameters.front().name;
+            if (!native_actor_task_i64_capture_tree(
+                    *task->producer_result, task->captured_parameter))
+                fail("native actor Task<int> capture must be a copied incoming int only");
+            require("let");
+            require("int");
+            task->awaited_result_name = identifier();
+            if (task->awaited_result_name == task->task_name ||
+                    task->awaited_result_name == task->captured_parameter ||
+                    names.count(task->awaited_result_name))
+                fail("native actor await result shadows an owner or input");
+            require("=");
+            require("await");
+            if (identifier() != task->task_name)
+                fail("native actor await must consume its exact Task<int> owner");
+            require(";");
+            require("return");
+            method.result = expression();
+            if (method.result->kind != Expression::Kind::Variable ||
+                    method.result->name != task->awaited_result_name)
+                fail("native actor suspended return must use its awaited int result");
+            require(";");
+            require("}");
+            actor.suspending_task = std::move(task);
+            actor.on_message = std::move(method);
+            if (braced) require("}");
+            else require("end");
+            return actor;
+        }
         // The first compiler-lowered per-message owned value slice is
         // deliberately synchronous and immutable. Handler temporaries are
         // allocated in the existing actor heap and dropped before returning;
@@ -5130,6 +5210,19 @@ private:
                 if (!mutables.count(write.field))
                     throw std::runtime_error("cannot assign immutable or unknown actor field '" + write.field + "'");
                 validate_expression(*write.expression, fields, functions);
+            }
+            if (actor.suspending_task) {
+                const auto& task = *actor.suspending_task;
+                if (!task.producer_result || task.captured_parameter != parameter ||
+                        !method.locals.empty() || !method.actor_field_writes.empty())
+                    throw std::runtime_error(
+                        "native actor Task<int> frame shape/provenance invalid");
+                /* The producer's only live name is the copied incoming i64,
+                 * never an actor field or another task's mutable scope. */
+                const std::unordered_set<std::string> capture{parameter};
+                validate_expression(*task.producer_result, capture, functions);
+                if (!fields.insert(task.awaited_result_name).second)
+                    throw std::runtime_error("native actor await result shadows live state");
             }
             validate_expression(*method.result, fields, functions);
             if (functions.count("oreslang_actor_" + actor.name + "_init") ||
