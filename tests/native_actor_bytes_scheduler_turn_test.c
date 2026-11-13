@@ -13,6 +13,11 @@ typedef struct {
     atomic_int completed;
 } Context;
 static void check(int ok) { if (!ok) abort(); }
+/* Implemented in another translation unit; callback identity must remain
+ * exactly the same as the binding TU's function pointer. */
+OresNativeSendStatus ores_native_actor_bytes_test_send_cross_tu(
+    const OresNativeActorBytesSchedulerBinding* binding,
+    uint64_t payload, const void* bytes, size_t length);
 static int unrelated_commit_calls;
 static int unrelated_commit(void* unused, uint64_t sequence) {
     (void)unused;
@@ -101,9 +106,12 @@ int main(void) {
         check(queued == 0 && used == 0);
         /* A valid atomic admission copies bytes, publishes the matching
          * ordinal and queues DATA before the worker can observe either. */
-        check(ores_native_actor_bytes_try_send_atomic(
-            &ctx.bindings[i], 900 + i, payload, sizeof(payload))
-            == ORES_NATIVE_SEND_ACCEPTED);
+        OresNativeSendStatus accepted = i == 0
+            ? ores_native_actor_bytes_try_send_atomic(
+                &ctx.bindings[i], 900 + i, payload, sizeof(payload))
+            : ores_native_actor_bytes_test_send_cross_tu(
+                &ctx.bindings[i], 900 + i, payload, sizeof(payload));
+        check(accepted == ORES_NATIVE_SEND_ACCEPTED);
     }
     struct timespec one_ms = {0, 1000000};
     for (unsigned i = 0; i < 3000 && atomic_load_explicit(
