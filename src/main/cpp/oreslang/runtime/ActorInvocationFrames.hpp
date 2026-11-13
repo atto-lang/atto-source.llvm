@@ -60,9 +60,11 @@ public:
         if (!validIdentity(t)) return Status::Stale;
         if (poisoned_) return Status::Poisoned;
         Slot& s=slots_[t.slot];
-        if (s.phase!=Phase::Free) return Status::Busy;
+        // After a slot is recycled, an old token remains stale even when the
+        // new incarnation is actively queued/running in the same slot.
         if (t.sequence<=s.last_sequence ||
             t.slot_generation<=s.last_slot_generation) return Status::Stale;
+        if (s.phase!=Phase::Free) return Status::Busy;
         s.owner=t;
         s.phase=Phase::Queued;
         s.depth=0;
