@@ -149,7 +149,7 @@ bool reserved(std::string_view name) {
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
-        "default", "eq", "neq", "and", "or", "xor", "Xor", "nb", "select", "readch", "writech",
+        "default", "eq", "neq", "and", "or", "xor", "AND", "OR", "XOR", "Xor", "nb", "select", "readch", "writech",
         "cb", "shared", "untrusted", "type", "types", "typeof",
         "interface", "trait", "struct", "impl", "abstract", "void", "Iterator", "AsyncIterator",
         "static", "pub", "private", "return", "defer", "throw", "raise",
@@ -3476,7 +3476,7 @@ private:
 
     std::unique_ptr<Expression> logical_or() {
         auto left = logical_xor();
-        while (token_.text == "||") {
+        while (token_.text == "||" || token_.text == "OR") {
             const auto offset = token_.offset;
             advance();
             auto expr = make_expression(Expression::Kind::LogicalOr, offset);
@@ -3489,14 +3489,23 @@ private:
 
     std::unique_ptr<Expression> logical_xor() {
         auto left = logical_and();
-        if (token_.text == "^^")
-            fail("'^^' is reserved and is not AttoLang source syntax; use Xor(a, b)");
+        // Canonical ^^/XOR eagerly evaluate both operands, once each,
+        // in source order. The typed LLVM backend already lowers LogicalXor
+        // through i1 and does not reinterpret it as integer bitwise XOR.
+        while (token_.text == "^^" || token_.text == "XOR") {
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::LogicalXor, offset);
+            expr->left = std::move(left);
+            expr->right = logical_and();
+            left = std::move(expr);
+        }
         return left;
     }
 
     std::unique_ptr<Expression> logical_and() {
         auto left = equality();
-        while (token_.text == "&&") {
+        while (token_.text == "&&" || token_.text == "AND") {
             const auto offset = token_.offset;
             advance();
             auto expr = make_expression(Expression::Kind::LogicalAnd, offset);

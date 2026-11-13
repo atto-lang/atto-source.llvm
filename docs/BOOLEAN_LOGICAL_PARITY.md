@@ -1,16 +1,22 @@
-# Logical word operators: native parity gate (2026-10-17)
+# Canonical Boolean source operators — native LLVM parity gate
 
-Java/GraalVM defines reserved, case-sensitive infix `and`, `or`, and `xor` as aliases for `&&`, `||`, and `^^`. All three require `bool`; only `and`/`or` short-circuit, while `xor` eagerly evaluates both operands. Each has the same precedence as its symbolic counterpart. Core Boolean intrinsics support `And(bool, bool, ...)`, `Or(bool, bool, ...)` with two or more scalar arguments; `Xor(bool, bool)` requires exactly two scalar arguments. The existing one-argument `Xor(Array<bool>)` parity reducer remains an explicitly distinct compatibility overload.
+The 2026-10-17 document claimed that the LLVM frontend had no typed Boolean lowering. That claim is **outdated**. The current compiler already has a checked `ScalarType::Bool`, typed logical-expression admission, LLVM `i1` comparisons/XOR and `&&`/`||` conditional branches with PHI results. See `docs/NATIVE_BOOL_TYPES.md` and `tests/native_bool_matrix.py`.
 
-The LLVM signed-i64 source frontend does **not** have typed bool lowering, full Boolean expressions, or BooleanOps intrinsics. Reserve `and`, `or`, and `xor` now to prevent them from being admitted as ordinary identifiers on native while Java treats them as operators. Do not accept source expressions containing these operators until LLVM supports Boolean IR, short-circuit CFG edges, effect/ownership sequencing, and scalar/intrinsic call dispatch.
+## Syntax candidate (PR: canonical Boolean infix parity)
 
-Parity exit criteria:
-1. Typed native Boolean constants and expressions are representable end to end.
-2. Mixed word/symbol spelling produces the same result and short-circuit behavior.
-3. `Xor` exactly-two-scalar-argument checks agree between compile-time and runtime; existing list reductions have the established identities and parity behavior.
-4. Native diagnostics reject invalid operands, extra args, and abandoned right-hand effects without falling back to signed-i64 semantics.
-5. Run the same exact-tree conformance fixtures for Java/Graal JIT, native-image/AOT and LLVM. Zero-step Actions failures are not test results.
+- Case-sensitive `&&` / `AND`: short-circuit AND.
+- Case-sensitive `^^` / `XOR`: eager Boolean XOR, evaluating both operands exactly once left to right.
+- Case-sensitive `||` / `OR`: short-circuit OR.
+- Precedence (tight to loose): comparisons/equality, AND, XOR, OR, ternary. Each infix level associates left-to-right.
+- Operands require the distinct checked `bool` type; integer truthiness and bool/int coercion are not admitted.
+- Uppercase words are reserved infix aliases. Lowercase legacy word operators are reserved but not silently enabled by this change.
+- `Xor(a,b)` stays a separate existing native scalar built-in with eager operand evaluation. Other named Boolean intrinsic overloads remain a separate parity task.
+- Single `^` (integer bitwise XOR) is distinct from `^^` and should follow its existing fail-closed/named Integer operation contract.
 
-Cross-reference: `ores-truffle-oreslang/oreslang-source.java/docs/BOOLEAN_LOGICAL_CONTRACT.md`.
+## Required executable proof
 
-This change is a **fail-closed parser hardening step**, not a claim that LLVM already executes this Boolean syntax.
+The `tests/native_bool_matrix.py` suite compiles real `.ores` source, verifies emitted LLVM IR, builds with Clang and executes the native guest executable. This PR extends it with six spellings over four truth-table rows, mixed precedence, short-circuit state mutation tests, eager XOR side effects, and type rejection of unreachable RHS operands.
+
+Real GitHub Actions failures before job steps do **not** count as executable verification. Do not mark LLVM as passed until an independent approved runner executes the **exact PR-head Git tree** with nonzero tests, including sanitizer configurations, and captures compiler/guest provenance.
+
+Java/Graal parity candidate: `ores-truffle-oreslang/oreslang-source.java#3019` (Java CI awaiting approved private carrier). Rust/Wasm parity evidence: `atto-lang/atto-source.rs#53`. Canonical language contract: `atto-lang/atto-spec#6`.

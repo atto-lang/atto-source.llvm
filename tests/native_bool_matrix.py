@@ -159,6 +159,92 @@ pub fnc main(): int {
 """, 42),
 }
 
+# Portable canonical logical spellings: all four truth-table rows,
+# both symbolic and uppercase infix aliases, with real clang guest execution.
+for label, spelling, operation in (
+        ("and-symbol", "&&", "and"), ("and-word", "AND", "and"),
+        ("xor-symbol", "^^", "xor"), ("xor-word", "XOR", "xor"),
+        ("or-symbol", "||", "or"), ("or-word", "OR", "or")):
+    for a in (False, True):
+        for b in (False, True):
+            want = (a and b) if operation == "and" else (
+                a or b if operation == "or" else a != b)
+            source = (
+                "pub fnc main(): int {\n"
+                f"  return ({str(a).lower()} {spelling} {str(b).lower()}) ? 42 : 7;\n"
+                "}\n"
+            )
+            POSITIVE[f"{label}-{int(a)}{int(b)}"] = (source, 42 if want else 7)
+
+POSITIVE.update({
+    "canonical-mixed-precedence": ("""
+pub fnc main(): int {
+  return false OR true && false XOR true ? 42 : 7;
+}
+""", 42),
+    "canonical-uppercase-mixed-symbolic": ("""
+pub fnc main(): int {
+  return true XOR true && false || false OR true ? 42 : 7;
+}
+""", 42),
+    "short-circuit-uppercase-and-skips-rhs": (PAIR + """
+fnc touch(borrow mut Pair p): bool {
+  p.first = 99;
+  return true;
+}
+fnc probe(borrow mut Pair p): bool {
+  return false AND touch(rt mut borrow p);
+}
+pub fnc main(): int {
+  let mut Pair p = new Pair();
+  probe(rt mut borrow p);
+  return p.first;
+}
+""", 1),
+    "short-circuit-uppercase-or-skips-rhs": (PAIR + """
+fnc touch(borrow mut Pair p): bool {
+  p.first = 99;
+  return false;
+}
+fnc probe(borrow mut Pair p): bool {
+  return true OR touch(rt mut borrow p);
+}
+pub fnc main(): int {
+  let mut Pair p = new Pair();
+  probe(rt mut borrow p);
+  return p.first;
+}
+""", 1),
+    "canonical-symbolic-xor-evaluates-rhs": (PAIR + """
+fnc touch(borrow mut Pair p): bool {
+  p.first = 42;
+  return true;
+}
+fnc probe(borrow mut Pair p): bool {
+  return false ^^ touch(rt mut borrow p);
+}
+pub fnc main(): int {
+  let mut Pair p = new Pair();
+  probe(rt mut borrow p);
+  return p.first;
+}
+""", 42),
+    "canonical-uppercase-xor-evaluates-rhs": (PAIR + """
+fnc touch(borrow mut Pair p): bool {
+  p.first = 42;
+  return true;
+}
+fnc probe(borrow mut Pair p): bool {
+  return false XOR touch(rt mut borrow p);
+}
+pub fnc main(): int {
+  let mut Pair p = new Pair();
+  probe(rt mut borrow p);
+  return p.first;
+}
+""", 42),
+})
+
 NEGATIVE = {
     "reject-int-ternary-condition": ("""
 pub fnc main(): int {
@@ -243,6 +329,35 @@ pub fnc main(): int {
 """, "ownership violation: short-circuit CFG predecessor ownership mismatch"),
 }
 
+
+# Static typing is enforced even when an RHS would be skipped at runtime;
+# neither symbolic nor uppercase forms may silently coerce integers.
+NEGATIVE.update({
+    "reject-logical-xor-int-rhs": ("""
+pub fnc main(): int {
+  const flag: bool = true ^^ 17;
+  return 0;
+}
+""", "logical operator requires bool"),
+    "reject-logical-xor-int-lhs": ("""
+pub fnc main(): int {
+  const flag: bool = 17 XOR false;
+  return 0;
+}
+""", "logical operator requires bool"),
+    "reject-logical-and-skipped-int": ("""
+pub fnc main(): int {
+  const flag: bool = false AND 17;
+  return 0;
+}
+""", "logical operator requires bool"),
+    "reject-logical-or-skipped-int": ("""
+pub fnc main(): int {
+  const flag: bool = true OR 17;
+  return 0;
+}
+""", "logical operator requires bool"),
+})
 
 def execute(cmd):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=75)
