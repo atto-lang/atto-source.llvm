@@ -1926,6 +1926,15 @@ if(BUILD_TESTING)
         --ir "oreslang_source_actor_spawn")
     oreslang_contract_test(native_actor_suspending_method_gate source-actor-suspend-method-reject.ores
         --diagnostic "native suspends actor method requires continuation lowering")
+    # First actor task/await compiler contract: the native Task host bridge
+    # exists, but source lowering must never substitute a foreign executor,
+    # blocking await, or a synchronous actor-field write for a continuation.
+    oreslang_contract_test(native_actor_task_requires_continuation
+        source-actor-task-continuation-reject.ores
+        --diagnostic "native actor task body requires compiler-owned continuation lowering")
+    oreslang_contract_test(native_actor_await_requires_suspends_continuation
+        source-actor-await-without-suspends-reject.ores
+        --diagnostic "native actor await requires suspends fnc/mtd and compiler-owned continuation lowering")
     oreslang_contract_test(native_actor_final_group_field_gate source-actor-final-group-field-reject.ores
         --diagnostic "native final actor fields require typed field initialization and ownership lowering")
     # Host-only ActorGroup substrate: source actor spawn/await fail closed.
