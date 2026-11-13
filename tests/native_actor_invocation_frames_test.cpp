@@ -181,5 +181,54 @@ int main() {
     require(bad.retire_after_guest_exit(bt,true)==FS::Ok,
             "poisoned owner can still physically cleanup");
 
+    // Two independently constructed runtime/ledger instances can mint
+    // identical actor/generation, slot, sequence and per-slot frame nonce.
+    // Those numeric fields alone must never grant access to the other arena.
+    Ledger oldLedger(902,6), replacementLedger(902,6);
+    Frames oldFrames(902,6), replacementFrames(902,6);
+    Ledger::Token oldMail{},replacementMail{};
+    require(oldLedger.admit(Ledger::Kind::Mail,oldMail)==LS::Ok &&
+            replacementLedger.admit(Ledger::Kind::Mail,replacementMail)==LS::Ok,
+            "two independent runtime instances admit a first mail");
+    require(oldMail.actor==replacementMail.actor &&
+            oldMail.generation==replacementMail.generation &&
+            oldMail.sequence==replacementMail.sequence &&
+            oldMail.slot_generation==replacementMail.slot_generation &&
+            oldMail.slot==replacementMail.slot,
+            "reconstructed ledger tokens collide without physical instance");
+    require(oldFrames.bind(oldMail)==FS::Ok &&
+            replacementFrames.bind(replacementMail)==FS::Ok,
+            "distinct frame stores admit their own ledger");
+    Ledger::Selection oldSelection{},replacementSelection{};
+    require(oldLedger.claim_under_lease(oldSelection)==LS::Ok &&
+            replacementLedger.claim_under_lease(replacementSelection)==LS::Ok,
+            "each isolated runtime claims its own first turn");
+    require(oldFrames.enter(oldMail)==FS::Ok &&
+            replacementFrames.enter(replacementMail)==FS::Ok,
+            "both separate runtimes have one running turn");
+    Frames::FrameRef oldRef{},replacementRef{};
+    require(oldFrames.push(oldMail,8,oldRef)==FS::Ok &&
+            replacementFrames.push(replacementMail,8,replacementRef)==FS::Ok,
+            "both arenas issue same-depth first frame");
+    require(oldRef.nonce==replacementRef.nonce &&
+            oldRef.depth==replacementRef.depth &&
+            oldRef.instance!=replacementRef.instance,
+            "equal slot and nonce cannot imply frame arena identity");
+    const std::uint8_t secret=37;
+    require(oldFrames.write(oldMail,oldRef,0,&secret,1)==FS::Ok,
+            "owner writes its own frame");
+    require(replacementFrames.read(replacementMail,oldRef,0,&zero,1)==FS::NoFrame &&
+            oldFrames.read(oldMail,replacementRef,0,&zero,1)==FS::NoFrame,
+            "cross-instance frame handle rejected despite matching token");
+    require(oldFrames.pop(oldMail,oldRef)==FS::Ok &&
+            replacementFrames.pop(replacementMail,replacementRef)==FS::Ok,
+            "each arena returns its own frame");
+    require(oldFrames.retire_after_guest_exit(oldMail)==FS::Ok &&
+            replacementFrames.retire_after_guest_exit(replacementMail)==FS::Ok,
+            "both independent runtime frame stores retire");
+    require(oldLedger.finish_after_exit(oldMail)==LS::Ok &&
+            replacementLedger.finish_after_exit(replacementMail)==LS::Ok,
+            "both independent ledgers finish physical turns");
+
     std::puts("ActorInvocationFrames: host-only assertions passed");
 }
