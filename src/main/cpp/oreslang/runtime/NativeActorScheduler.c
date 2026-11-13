@@ -608,7 +608,11 @@ static void* carrier(void* raw) {
          * No scheduler lock is held: that hook may release a resource. */
         if (kind == TURN_WAKE && s->wake_settled_callback) {
             unlock(s);
+            settling_scheduler = s;
+            settling_wake = wake_ticket;
             s->wake_settled_callback(s->context, i, wake_ticket);
+            settling_wake = (OresNativeWakeTicket){0};
+            settling_scheduler = NULL;
             lock(s);
             if (!lane->active || !lane->carrier_owner_valid
                     || !pthread_equal(lane->carrier_owner, pthread_self())
