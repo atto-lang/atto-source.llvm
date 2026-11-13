@@ -115,6 +115,20 @@ llvm_map_components_to_libnames(ORE_LLVM_LIBS core support)
 target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
+if(BUILD_TESTING AND UNIX)
+    # Host-only isolation/loan regression. This does not certify .atto
+    # guest borrowing, cross-actor shared memory or async continuations.
+    add_executable(oreslang-actor-i64-exclusive-loan-test
+        tests/actor_owned_i64_exclusive_loan.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    target_include_directories(oreslang-actor-i64-exclusive-loan-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-i64-exclusive-loan-test PRIVATE c_std_11)
+    add_test(NAME native_host_actor_i64_exclusive_loan
+        COMMAND oreslang-actor-i64-exclusive-loan-test)
+    set_tests_properties(native_host_actor_i64_exclusive_loan
+        PROPERTIES TIMEOUT 20)
+endif()
 if(BUILD_TESTING)
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
