@@ -57,12 +57,39 @@ inline void validate_native_sum_expression_shape(const Expression& e) {
     }
     if ((e.kind == K::ArrayCall || e.kind == K::SumAccess) && !e.left)
         throw std::runtime_error("native member access requires receiver");
+    if (e.kind == K::Call && !e.argument_names.empty() &&
+            e.argument_names.size() != e.arguments.size())
+        throw std::runtime_error("native call argument-name metadata arity mismatch");
     if (e.kind == K::Conditional) {
         if (!e.when_true || !e.when_false)
             throw std::runtime_error("native conditional has missing value branch");
         if ((e.condition && (e.condition_lhs || e.condition_rhs)) ||
             (!e.condition && (!e.condition_lhs || !e.condition_rhs)))
             throw std::runtime_error("native conditional requires exactly one complete condition");
+    }
+}
+// Internal compiler ASTs do not inherit the source parser's pointer/arity
+// guarantees. Check statement shapes before resolver or typechecker traversal.
+inline void validate_native_sum_statement_shape(const Statement& item) {
+    using K = Statement::Kind;
+    if ((item.kind == K::ForEach || item.kind == K::ForIndex ||
+         item.kind == K::ScopedLocal) && !item.branch_local)
+        throw std::runtime_error("native scoped/iteration statement requires local binding");
+    if (item.kind == K::ForEach && !item.expression)
+        throw std::runtime_error("native for-of statement requires source expression");
+    if (item.kind == K::ForIndex && (!item.branch_local->initializer ||
+         !item.condition || !item.loop_step))
+        throw std::runtime_error("native index loop requires initializer, condition and update");
+    if (item.kind == K::Conditional &&
+        ((item.condition && (item.condition_lhs || item.condition_rhs)) ||
+         (!item.condition && (!item.condition_lhs || !item.condition_rhs))))
+        throw std::runtime_error("native if statement requires exactly one complete condition");
+    if (item.kind == K::ArrayCommitFilled) {
+        if (!item.array_commit_length)
+            throw std::runtime_error("native array commit requires checked length");
+        for (const auto& value : item.array_commit_values)
+            if (!value)
+                throw std::runtime_error("native array commit has missing value");
     }
 }
 inline const NativeSumType& native_sum(const Program& program, const std::string& name) {
@@ -234,13 +261,7 @@ inline void resolve_native_sums(Program& program) {
         std::function<void(std::vector<Statement>&, Env&)> statements;
         statements = [&](std::vector<Statement>& items, Env& scope) {
             for (auto& item : items) {
-                // Compiler-created ASTs are not implicitly trusted. A
-                // malformed loop/scoped declaration must not crash this pass.
-                if ((item.kind == Statement::Kind::ForEach ||
-                     item.kind == Statement::Kind::ForIndex ||
-                     item.kind == Statement::Kind::ScopedLocal) &&
-                    !item.branch_local)
-                    throw std::runtime_error("native scoped/iteration statement requires local binding");
+                validate_native_sum_statement_shape(item);
                 if (item.branch_local && item.branch_local->initializer) expression(*item.branch_local->initializer, scope, item.branch_local->sum_type);
                 if (item.kind == Statement::Kind::ForEach || item.kind == Statement::Kind::ForIndex) {
                     if (item.expression) expression(*item.expression, scope, {});

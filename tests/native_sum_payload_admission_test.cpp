@@ -239,7 +239,65 @@ int main() {
                 "null sum member argument");
         }
 
-        std::cout << "native sum typed payload admission: PASS 42 assertions (host-only)\n";
+
+        // Adversarial internal AST metadata: bound the call name vector and
+        // reject missing statement children before either compiler pass uses them.
+        for (std::size_t names : {1u, 3u}) {
+            Program p = initial("Option<int>", "None");
+            auto call = scalar(Kind::Call);
+            call->name = "other";
+            call->arguments.push_back(scalar(Kind::Integer));
+            call->arguments.push_back(scalar(Kind::Integer));
+            call->argument_names.resize(names);
+            p.functions.front().locals.front().initializer = std::move(call);
+            require_rejection(std::move(p), "native call argument-name metadata arity mismatch",
+                "mismatched named call argument list");
+        }
+        {
+            Program p = initial("Option<int>", "None");
+            Statement st; st.kind = Statement::Kind::ForEach;
+            st.branch_local = std::make_unique<LocalBinding>();
+            st.branch_local->name = "item";
+            p.functions.front().statements.push_back(std::move(st));
+            require_rejection(std::move(p), "native for-of statement requires source expression",
+                "missing for-of source");
+        }
+        for (int missing = 0; missing < 3; ++missing) {
+            Program p = initial("Option<int>", "None");
+            Statement st; st.kind = Statement::Kind::ForIndex;
+            st.branch_local = std::make_unique<LocalBinding>();
+            st.branch_local->name = "i";
+            if (missing != 0) st.branch_local->initializer = scalar(Kind::Integer);
+            if (missing != 1) st.condition = scalar(Kind::Boolean);
+            if (missing != 2) st.loop_step = scalar(Kind::Integer);
+            p.functions.front().statements.push_back(std::move(st));
+            require_rejection(std::move(p),
+                "native index loop requires initializer, condition and update",
+                "index loop missing required child");
+        }
+        for (bool ambiguous : {false, true}) {
+            Program p = initial("Option<int>", "None");
+            Statement st; st.kind = Statement::Kind::Conditional;
+            st.condition_lhs = scalar(Kind::Integer);
+            if (ambiguous) st.condition = scalar(Kind::Boolean);
+            p.functions.front().statements.push_back(std::move(st));
+            require_rejection(std::move(p),
+                "native if statement requires exactly one complete condition",
+                "incomplete or ambiguous if predicate");
+        }
+        for (bool missingLength : {true, false}) {
+            Program p = initial("Option<int>", "None");
+            Statement st; st.kind = Statement::Kind::ArrayCommitFilled;
+            if (!missingLength) st.array_commit_length = scalar(Kind::Integer);
+            st.array_commit_values.push_back(missingLength ? scalar(Kind::Integer) : nullptr);
+            p.functions.front().statements.push_back(std::move(st));
+            require_rejection(std::move(p),
+                missingLength ? "native array commit requires checked length" :
+                "native array commit has missing value",
+                "array commit missing mandatory child");
+        }
+
+        std::cout << "native sum typed payload admission: PASS 52 assertions (host-only)\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "native sum typed payload admission: " << e.what() << '\n';

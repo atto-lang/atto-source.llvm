@@ -274,11 +274,7 @@ void validate_native_scalar_types(const Program& program) {
         std::function<void(const std::vector<Statement>&, Locals&)> statements;
         statements = [&](const std::vector<Statement>& items, Locals& scope) {
             for (const auto& item : items) {
-                if ((item.kind == Statement::Kind::ForEach ||
-                     item.kind == Statement::Kind::ForIndex ||
-                     item.kind == Statement::Kind::ScopedLocal) &&
-                    !item.branch_local)
-                    throw std::runtime_error("native scoped/iteration statement requires local binding");
+                validate_native_sum_statement_shape(item);
                 if (item.kind == Statement::Kind::ForIndex) {
                     require(expression(*item.branch_local->initializer, scope), scalar(false), item.offset, "index initializer requires int");
                     Locals body = scope; body.emplace(item.branch_local->name, scalar(false));
