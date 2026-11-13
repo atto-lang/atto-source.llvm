@@ -377,13 +377,26 @@ struct Function {
     std::string return_sum;
 };
 
+/* One bounded source actor Task<int> shape, deliberately separate from
+ * legacy main-owned SourceTaskI64Binding. No host pool or untyped pointer
+ * may be inferred from a successfully parsed node. The LLVM emitter must
+ * fail closed until its actor-owned continuation frame lowering is present. */
+struct ActorSuspendingTaskI64 {
+    std::string task_name;
+    std::string captured_parameter;
+    std::unique_ptr<Expression> producer_result;
+    std::string awaited_result_name;
+    std::size_t offset = 0;
+};
+
 /** Frozen scheduler tier, distinct from ActorGroup-wide parallelism. */
 enum class MaxActorThreads : std::uint8_t { LOW = 1, MEDIUM = 2, HIGH = 3 };
 
 struct ActorDecl {
     std::string name;
     std::vector<LocalBinding> fields; // bounded, actor-confined integer slots
-    Function on_message; // exactly one synchronous pub on_message(int): int
+    Function on_message; // legacy synchronous handler; task AST is separately gated
+    std::unique_ptr<ActorSuspendingTaskI64> suspending_task;
     std::size_t offset = 0;
     MaxActorThreads max_actor_threads = MaxActorThreads::LOW;
 };
