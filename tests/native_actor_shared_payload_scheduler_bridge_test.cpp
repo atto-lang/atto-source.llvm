@@ -150,6 +150,20 @@ static void exercise(bool sealed) {
         std::this_thread::yield();
     check(run.source_done.load(std::memory_order_acquire));
     check(run.source_ok.load());
+    if (sealed) {
+        // Only one carrier exists, so no target callback can run before A's
+        // STOP_SEALED, and all 100 accepted tickets stay pinned until DONE.
+        check(bridge.queued_slots() == 100);
+        check(bridge.queued_charged_bytes() == 100 * mib);
+    } else {
+        // Wait for actual target delivery rather than treating scheduler
+        // shutdown itself as evidence that all 100 callbacks executed.
+        const auto delivery_deadline = std::chrono::steady_clock::now() + 5s;
+        while ((run.seen.load() != 100 || run.control.load() != 1) &&
+               std::chrono::steady_clock::now() < delivery_deadline)
+            std::this_thread::yield();
+        check(run.seen.load() == 100 && run.control.load() == 1);
+    }
     ores_native_actor_scheduler_retire(run.scheduler);
     check(ores_native_actor_scheduler_drain(run.scheduler));
     check(ores_native_actor_scheduler_poll_done(run.scheduler, run.target));
