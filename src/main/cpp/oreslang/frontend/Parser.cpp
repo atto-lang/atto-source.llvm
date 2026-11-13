@@ -5180,6 +5180,26 @@ private:
                     throw std::runtime_error("cannot assign immutable or unknown actor field '" + write.field + "'");
                 validate_expression(*write.expression, fields, functions);
             }
+            // Staging the syntax is NOT sufficient to admit a producer.
+            // Re-check its typed, capture-free ownership at the semantic
+            // boundary, independently of the parser's lexical shape guard.
+            if (!method.actor_task_await_name.empty()) {
+                if (method.source_tasks.size() != 1 ||
+                        !method.source_tasks.front().awaited ||
+                        !method.source_tasks.front().result ||
+                        method.source_tasks.front().name !=
+                            method.actor_task_await_name ||
+                        !native_capture_free_task_tree(
+                            *method.source_tasks.front().result))
+                    throw std::runtime_error(
+                        "ATTO_TASK_E_ACTOR_CAPTURE: invalid actor task provenance or capture");
+                const std::unordered_map<std::string, ScalarType> no_captures;
+                if (validate_scalar_expression(
+                        *method.source_tasks.front().result,
+                        no_captures, functions) != ScalarType::I64)
+                    throw std::runtime_error(
+                        "ATTO_TASK_E_ACTOR_TASK_TYPE: Task<int> producer must return int");
+            }
             validate_expression(*method.result, fields, functions);
             if (functions.count("oreslang_actor_" + actor.name + "_init") ||
                     functions.count("oreslang_actor_" + actor.name + "_on_message"))
