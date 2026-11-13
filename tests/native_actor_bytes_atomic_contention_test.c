@@ -24,7 +24,7 @@ typedef struct { Session* session; unsigned producer; } Producer;
 
 #define check(condition) do { \
     if (!(condition)) { \
-        fprintf(stderr, "NATIVE_BYTES_ATOMIC_CONTENTION_FAIL line=%d expr=%s\\n", \
+        fprintf(stderr, "NATIVE_BYTES_ATOMIC_CONTENTION_FAIL line=%d expr=%s\n", \
                 __LINE__, #condition); \
         abort(); \
     } \
