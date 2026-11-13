@@ -1935,6 +1935,28 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_actor_await_requires_suspends_continuation
         source-actor-await-without-suspends-reject.ores
         --diagnostic "native actor await requires suspends fnc/mtd and compiler-owned continuation lowering")
+    # Typed, copied-i64-capture-only source AST: these cases exercise the
+    # real frontend/semantic validator, while successful shapes MUST be denied
+    # by LLVM codegen pending actor-owned continuation/WAKE frame lowering.
+    # These are negative compiler tests, NOT executable guest parity.
+    oreslang_contract_test(native_actor_suspends_i64_typed_ast_codegen_gate
+        native-actor-task-i64-typed-gate.atto
+        --diagnostic "native actor Task<int> requires compiler-owned continuation frame and actor TASK/WAKE ABI lowering")
+    oreslang_contract_test(native_actor_suspends_field_capture_denied
+        native-actor-task-field-capture-reject.atto
+        --diagnostic "native actor Task<int> capture must be a copied incoming int only")
+    oreslang_contract_test(native_actor_suspends_ffi_capture_denied
+        native-actor-task-ffi-capture-reject.atto
+        --diagnostic "native actor Task<int> capture must be a copied incoming int only")
+    oreslang_contract_test(native_actor_suspends_wrong_await_owner_denied
+        native-actor-task-wrong-await-reject.atto
+        --diagnostic "native actor await must consume its exact Task<int> owner")
+    oreslang_contract_test(native_actor_suspends_wrong_return_denied
+        native-actor-task-wrong-return-reject.atto
+        --diagnostic "native actor suspended return must use its awaited int result")
+    oreslang_contract_test(native_actor_suspends_mixed_critical_denied
+        native-actor-task-mixed-effect-reject.atto
+        --diagnostic "native actor cannot combine suspends with another effect modifier")
     oreslang_contract_test(native_actor_final_group_field_gate source-actor-final-group-field-reject.ores
         --diagnostic "native final actor fields require typed field initialization and ownership lowering")
     # Host-only ActorGroup substrate: source actor spawn/await fail closed.
