@@ -375,6 +375,80 @@ static ActorSlot* checked_exclusive_loan(OresActorI64Heap* heap,
     return NULL;
 }
 
+/* Supervisor-visible status lane. Unlike the legacy fatal ABI, invalid
+ * loan handles and turn epochs return a typed result: a compiler can emit a
+ * fault branch without longjmp, exceptions or executing another actor's data.
+ * This never accepts a freed heap pointer: actor/supervisor lifetime pinning
+ * must still fence callbacks before heap destruction.
+ *
+ * A contended short heap lock is returned to the scheduler, not spun on.
+ * Neither a malformed credential nor an unsuccessful operation changes any
+ * slot contents, loan table or trace entries. */
+static OresActorLoanStatus checked_mutable_loan_status(
+        OresActorI64Heap* heap, OresActorTurn turn,
+        OresActorLoan loan, ActorSlot** out_slot) {
+    if (heap->retiring) return ORES_ACTOR_LOAN_RETIRED;
+    if (!heap->turn_active || turn.domain != heap->domain
+        || turn.epoch != heap->turn_epoch)
+        return ORES_ACTOR_LOAN_BAD_TURN;
+    if (loan.domain != heap->domain || loan.nonce == 0
+        || loan.index >= heap->capacity || !heap->active_exclusive_loans)
+        return ORES_ACTOR_LOAN_BAD_HANDLE;
+    for (unsigned i = 0; i < MAX_LOANS; ++i) {
+        const ActorLoanEntry* entry = &heap->loan_entries[i];
+        if (entry->nonce != loan.nonce) continue;
+        if (!entry->exclusive || entry->index != loan.index
+            || entry->generation != loan.generation
+            || entry->turn_epoch != turn.epoch)
+            return ORES_ACTOR_LOAN_BAD_HANDLE;
+        ActorSlot* slot = &heap->slots[loan.index];
+        if (!slot->live || slot->generation != loan.generation
+            || !slot->writer_active || slot->loans != 0)
+            return ORES_ACTOR_LOAN_BAD_HANDLE;
+        *out_slot = slot;
+        return ORES_ACTOR_LOAN_OK;
+    }
+    return ORES_ACTOR_LOAN_BAD_HANDLE;
+}
+
+OresActorLoanStatus ores_actor_i64_heap_try_loan_read_mut(
+        OresActorI64Heap* heap, OresActorTurn turn,
+        OresActorLoan loan, int64_t* out_value) {
+    if (!heap || !out_value) return ORES_ACTOR_LOAN_BAD_HANDLE;
+    *out_value = 0;
+    if (atomic_flag_test_and_set_explicit(&heap->mutex, memory_order_acquire))
+        return ORES_ACTOR_LOAN_BUSY;
+    ActorSlot* slot = NULL;
+    OresActorLoanStatus status = checked_mutable_loan_status(
+        heap, turn, loan, &slot);
+    if (status == ORES_ACTOR_LOAN_OK) {
+        *out_value = slot->value;
+        record_access(heap, turn, loan.index, loan.generation,
+                      ORES_ACTOR_HEAP_ACCESS_READ);
+    }
+    unlock_heap(heap);
+    return status;
+}
+
+OresActorLoanStatus ores_actor_i64_heap_try_loan_write(
+        OresActorI64Heap* heap, OresActorTurn turn,
+        OresActorLoan loan, int64_t value) {
+    if (!heap) return ORES_ACTOR_LOAN_BAD_HANDLE;
+    if (atomic_flag_test_and_set_explicit(&heap->mutex, memory_order_acquire))
+        return ORES_ACTOR_LOAN_BUSY;
+    ActorSlot* slot = NULL;
+    OresActorLoanStatus status = checked_mutable_loan_status(
+        heap, turn, loan, &slot);
+    if (status == ORES_ACTOR_LOAN_OK) {
+        slot->value = value;
+        record_access(heap, turn, loan.index, loan.generation,
+                      slot->fixed_field ? ORES_ACTOR_HEAP_ACCESS_FIELD_WRITE
+                                        : ORES_ACTOR_HEAP_ACCESS_WRITE);
+    }
+    unlock_heap(heap);
+    return status;
+}
+
 int64_t ores_actor_i64_heap_loan_read_mut(OresActorI64Heap* heap,
                                             OresActorTurn turn, OresActorLoan loan) {
     lock_heap(heap);
