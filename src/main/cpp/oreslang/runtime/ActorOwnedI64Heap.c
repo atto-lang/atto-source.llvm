@@ -304,15 +304,25 @@ OresActorLoan ores_actor_i64_heap_borrow(OresActorI64Heap* heap,
     return result;
 }
 /* Trusted compiler/scheduler ABI; no naked pointer or guest-visible token. */
-OresActorLoan ores_actor_i64_heap_borrow_mut(OresActorI64Heap* heap,
-                                               OresActorTurn turn, OresActorSlot slot) {
+/* Conflicting read/write loans are routine contention, not corrupted actor
+ * state. The compiler/scheduler can suspend or reject admission on false.
+ * Invalid actor turns, stale/forged slots and exhausted monotone nonce
+ * space remain hard invariant failures in this trusted-host prototype. */
+int ores_actor_i64_heap_try_borrow_mut(OresActorI64Heap* heap,
+                                        OresActorTurn turn, OresActorSlot slot,
+                                        OresActorLoan* out) {
+    if (!out) rejected();
+    *out = (OresActorLoan){0, 0, 0, 0};
     lock_heap(heap);
     require_turn(heap, turn);
     ActorSlot* s = checked_slot(heap, slot);
+    if (s->fixed_field && !s->field_mutable) rejected();
     if (s->loans != 0 || s->writer_active
-        || (s->fixed_field && !s->field_mutable)
-        || heap->active_loans >= MAX_LOANS
-        || heap->next_loan_nonce == UINT64_MAX) rejected();
+        || heap->active_loans >= MAX_LOANS) {
+        unlock_heap(heap);
+        return 0;
+    }
+    if (heap->next_loan_nonce == UINT64_MAX) rejected();
     unsigned found = MAX_LOANS;
     for (unsigned i = 0; i < MAX_LOANS; ++i) {
         if (heap->loan_entries[i].nonce == 0) { found = i; break; }
@@ -327,8 +337,16 @@ OresActorLoan ores_actor_i64_heap_borrow_mut(OresActorI64Heap* heap,
     s->writer_active = 1;
     ++heap->active_exclusive_loans;
     ++heap->active_loans;
-    OresActorLoan result = {heap->domain, nonce, slot.index, slot.generation};
+    *out = (OresActorLoan){heap->domain, nonce, slot.index, slot.generation};
     unlock_heap(heap);
+    return 1;
+}
+OresActorLoan ores_actor_i64_heap_borrow_mut(OresActorI64Heap* heap,
+                                               OresActorTurn turn, OresActorSlot slot) {
+    OresActorLoan result;
+    /* Legacy hard admission: callers requiring recoverable contention must
+     * use try_borrow_mut instead; never claim this is actor-local trapping. */
+    if (!ores_actor_i64_heap_try_borrow_mut(heap, turn, slot, &result)) rejected();
     return result;
 }
 
