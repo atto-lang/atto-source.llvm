@@ -236,7 +236,7 @@ int main(void) {
     CHECK(ores_native_actor_scheduler_publish_control(f.scheduler, f.actor, 99));
     CHECK(ores_native_actor_scheduler_drain(f.scheduler));
     CHECK(atomic_load(&f.control_turns) == 1);
-    CHECK(ores_native_actor_scheduler_stop(f.scheduler, f.actor));
+    CHECK(ores_native_actor_task_registry_stop(&f.registry));
     CHECK(ores_native_actor_scheduler_wait_done(f.scheduler, f.actor));
     close_fixture(&f);
 
