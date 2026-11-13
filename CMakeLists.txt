@@ -5693,3 +5693,48 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_bytes_source_unsupported_no_ir
         PROPERTIES TIMEOUT 30)
 endif()
+
+# Four concurrent trusted producers and one consumer. The host harness may
+# yield between BUSY/FULL try-admissions; guest actor lanes must NOT spin.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-actor-bytes-contention-test
+        tests/native_actor_bytes_contention_test.c
+        src/main/cpp/oreslang/runtime/NativeActorBytesInbox.c)
+    target_include_directories(oreslang-native-actor-bytes-contention-test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-bytes-contention-test
+        PRIVATE Threads::Threads)
+    target_compile_features(oreslang-native-actor-bytes-contention-test
+        PRIVATE c_std_11)
+    target_compile_definitions(oreslang-native-actor-bytes-contention-test
+        PRIVATE ORESLANG_ACTOR_BYTES_TESTING=1)
+    target_compile_options(oreslang-native-actor-bytes-contention-test
+        PRIVATE $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_actor_bytes_contention_host_only
+        COMMAND oreslang-native-actor-bytes-contention-test)
+    set_tests_properties(native_actor_bytes_contention_host_only
+        PROPERTIES TIMEOUT 30)
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        add_executable(oreslang-native-actor-bytes-contention-asan-test
+            tests/native_actor_bytes_contention_test.c
+            src/main/cpp/oreslang/runtime/NativeActorBytesInbox.c)
+        target_include_directories(oreslang-native-actor-bytes-contention-asan-test
+            PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-actor-bytes-contention-asan-test
+            PRIVATE Threads::Threads)
+        target_compile_features(oreslang-native-actor-bytes-contention-asan-test
+            PRIVATE c_std_11)
+        target_compile_definitions(oreslang-native-actor-bytes-contention-asan-test
+            PRIVATE ORESLANG_ACTOR_BYTES_TESTING=1)
+        target_compile_options(oreslang-native-actor-bytes-contention-asan-test
+            PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG -O1 -g
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(oreslang-native-actor-bytes-contention-asan-test
+            PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+        add_test(NAME native_actor_bytes_contention_asan_ubsan
+            COMMAND oreslang-native-actor-bytes-contention-asan-test)
+        set_tests_properties(native_actor_bytes_contention_asan_ubsan
+            PROPERTIES TIMEOUT 30)
+    endif()
+endif()
