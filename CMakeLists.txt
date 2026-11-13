@@ -157,6 +157,15 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-bytes-map-test)
     set_tests_properties(native_actor_owned_bytes_map_host_only
         PROPERTIES TIMEOUT 60)
+    # Only the full compiler build can check that still-unsupported guest
+    # typed Map<Bytes,Bytes> actor source fails before any LLVM IR emission.
+    add_test(NAME native_actor_bytes_map_typed_source_fail_closed
+        COMMAND "${CMAKE_COMMAND}"
+            "-DORE_BYTES_MAP_COMPILER=$<TARGET_FILE:oreslang-llvmc>"
+            "-DORE_BYTES_MAP_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-actor-bytes-map-target.atto"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_bytes_map_source_negative.cmake")
+    set_tests_properties(native_actor_bytes_map_typed_source_fail_closed
+        PROPERTIES TIMEOUT 30)
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
     add_executable(oreslang-native-sum-payload-admission-test
