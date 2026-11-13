@@ -5621,3 +5621,21 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-oresvm-resource-retirement-test)
     set_tests_properties(native_oresvm_actor_resource_retirement PROPERTIES TIMEOUT 30)
 endif()
+
+
+# Allocation-free bounded pool primitive, host-only (NOT compiled .atto guest).
+# Keep separate from native guest compiler/actor parity CI claims.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-fixed-buffer-pool-test
+        tests/native_fixed_buffer_pool_test.cpp)
+    target_include_directories(oreslang-native-fixed-buffer-pool-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-fixed-buffer-pool-test PRIVATE Threads::Threads)
+    target_compile_features(oreslang-native-fixed-buffer-pool-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-fixed-buffer-pool-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_fixed_buffer_pool_host_only
+        COMMAND oreslang-native-fixed-buffer-pool-test)
+    set_tests_properties(native_fixed_buffer_pool_host_only PROPERTIES TIMEOUT 30)
+endif()
