@@ -96,10 +96,31 @@ typedef enum {
     ORES_NATIVE_SEND_TERMINATED = 2,
     ORES_NATIVE_SEND_MAILBOX_FULL = 3,
     ORES_NATIVE_SEND_RESOURCE_EXHAUSTED = 4,
-    ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE = 5
+    ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE = 5,
+    /* Scalar DATA cannot enter a Bytes-only mailbox, nor committed Bytes
+     * enter an unbound scalar mailbox. CONTROL and WAKE are separate lanes. */
+    ORES_NATIVE_SEND_WRONG_MAIL_KIND = 6
 } OresNativeSendStatus;
 OresNativeSendStatus ores_native_actor_scheduler_try_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
+/* Permanently select a Bytes-only DATA lane before its first user DATA
+ * admission. Under the scheduler's mutex, validate an exact live actor
+ * incarnation, no active/queued user work, and that no earlier user DATA
+ * ever entered this incarnation. Then call `bind` EXACTLY ONCE to activate
+ * the private inbox's sequence-only mode. A rejected callback leaves the
+ * scheduler lane scalar; successful binding leaves it permanently Bytes-only.
+ *
+ * Bind callback must be immediate, bounded, nonblocking and nonreentrant,
+ * using try-lock only. The scheduler lock is always acquired before the
+ * actor-private inbox lock. No guest code or FFI may supply this callback.
+ * A fail-closed bind can be retried from a trusted host before any mail.
+ * This API does NOT create guest ActorMail<Bytes> source lowering.
+ */
+typedef int (*OresNativeActorMailboxBindFn)(void* context);
+int ores_native_actor_scheduler_bind_bytes_only(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
+    OresNativeActorMailboxBindFn bind, void* context);
+
 /* Trusted, atomic payload-plus-DATA admission. Called ONLY after the exact
  * actor incarnation, scheduler mailbox credits and worker availability have
  * been checked under the scheduler mutex. The callback publishes a
@@ -121,6 +142,9 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send_committed(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
     uint64_t payload, OresNativeActorPayloadCommitFn commit, void* context);
 
+/* For a Bytes-only mailbox, ordinary scalar try_send, send and submit
+ * fail without consuming credits, ordinals or DATA turns; even legacy index
+ * submit is checked under the same scheduler mutex. */
 /* Compatibility API: 1 iff accepted, 0 otherwise. Prefer typed try_send. */
 int ores_native_actor_scheduler_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
