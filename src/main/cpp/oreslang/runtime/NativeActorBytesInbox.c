@@ -18,6 +18,7 @@ struct OresNativeActorBytesInbox {
     uint64_t last_mail_sequence; /* monotonic, never reuse across ring wrap */
     unsigned char* slab;
     int retired;
+    int sequenced_only; /* forbids mixing legacy host DATA with scheduler DATA */
 };
 static _Atomic uint64_t next_nonce = 1;
 
@@ -80,6 +81,17 @@ OresNativeActorBytesRef ores_native_actor_bytes_ref(
     return b ? b->owner : nil;
 }
 
+int ores_native_actor_bytes_bind_sequenced(
+    OresNativeActorBytesInbox* b, OresNativeActorBytesRef owner) {
+    if (!b || !same(b, owner)) return 0;
+    if (!acquire(b)) return 0;
+    const int ok = !b->retired && !b->sequenced_only && !b->queued &&
+        !b->used && !b->last_mail_sequence;
+    if (ok) b->sequenced_only = 1;
+    release(b);
+    return ok;
+}
+
 /* 0 selects the legacy unsequenced trusted-host interface. A committed
  * sequence comes only from the scheduler's source-mail admission ordinal. */
 static int send_internal(OresNativeActorBytesInbox* b,
@@ -91,7 +103,9 @@ static int send_internal(OresNativeActorBytesInbox* b,
     int result = ORES_ACTOR_BYTES_DENIED;
     if (!b->retired && b->queued < b->capacity &&
         length <= b->budget - b->used &&
-        (!sequence || sequence > b->last_mail_sequence)) {
+        ((sequence && b->sequenced_only &&
+          sequence > b->last_mail_sequence) ||
+         (!sequence && !b->sequenced_only))) {
         size_t index = b->next;
         unsigned char* target_slot = b->slab + index * b->max_payload;
         if (length) memmove(target_slot, bytes, length);
@@ -123,7 +137,9 @@ static int receive_internal(OresNativeActorBytesInbox* b,
         return ORES_ACTOR_BYTES_DENIED;
     if (!acquire(b)) return ORES_ACTOR_BYTES_BUSY;
     int result = ORES_ACTOR_BYTES_DENIED;
-    if (!b->retired && b->queued) {
+    if (!b->retired && b->queued &&
+        ((sequence && b->sequenced_only) ||
+         (!sequence && !b->sequenced_only))) {
         size_t index = b->first;
         /* A legacy receiver cannot discard a sequenced message. A DATA
          * receiver cannot consume any other DATA ordinal, including a
