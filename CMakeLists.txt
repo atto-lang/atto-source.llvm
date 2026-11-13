@@ -171,7 +171,8 @@ if(BUILD_TESTING)
     # has NO AST/IR/actor execution authority. Node only materializes the
     # already-sha-pinned canonical fixture and is not a guest interpreter.
     find_program(ORE_COUNTER_NODE NAMES node nodejs)
-    if(ORE_COUNTER_NODE)
+    # The symlink-negative source-set test requires POSIX symlink semantics.
+    if(ORE_COUNTER_NODE AND UNIX)
         add_test(NAME native_actor_counter_source_set_integrity_only
             COMMAND "${CMAKE_COMMAND}"
                 "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
