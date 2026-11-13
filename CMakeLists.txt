@@ -1973,6 +1973,28 @@ if(BUILD_TESTING)
         set_tests_properties(
             native_actor_task_${actor_task_probe}_compiled_producer_ir_o0_o2
             PROPERTIES TIMEOUT 120)
+        # Hybrid integration: LLVM-generated Atto task *producer* is executed
+        # inside an authenticated native actor child WAKE. The parent await
+        # remains a C host fixture, NOT compiler-generated suspension.
+        if(ORE_CLANG)
+            add_test(NAME native_actor_task_${actor_task_probe}_compiled_producer_actor_wake_o0_o2
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DSOURCE_COMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                    "-DCLANG=${ORE_CLANG}"
+                    "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/${actor_task_probe_fixture}"
+                    "-DHARNESS=${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_task_i64_producer_probe_harness.c"
+                    "-DEXPECTED=${actor_task_probe_expected}"
+                    "-DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/actor-task-producer-native-wake-${actor_task_probe}"
+                    "-DSOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+                    "-DTEST_BRIDGE=1"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_task_i64_producer_e2e.cmake")
+        else()
+            add_test(NAME native_actor_task_${actor_task_probe}_compiled_producer_actor_wake_o0_o2
+                COMMAND "${CMAKE_COMMAND}" -E false)
+        endif()
+        set_tests_properties(
+            native_actor_task_${actor_task_probe}_compiled_producer_actor_wake_o0_o2
+            PROPERTIES TIMEOUT 180)
     endforeach()
     oreslang_contract_test(native_actor_suspends_field_capture_denied
         native-actor-task-field-capture-reject.atto
