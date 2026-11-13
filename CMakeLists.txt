@@ -153,6 +153,25 @@ if(BUILD_TESTING)
             PROPERTIES TIMEOUT 90)
     endif()
 
+    # Authenticated manifest + all seven materialized .atto sources must pass
+    # through the actual compiler binary. Explicit verification-only mode
+    # has NO AST/IR/actor execution authority. Node only materializes the
+    # already-sha-pinned canonical fixture and is not a guest interpreter.
+    find_program(ORE_COUNTER_NODE NAMES node nodejs)
+    if(ORE_COUNTER_NODE)
+        add_test(NAME native_actor_counter_source_set_integrity_only
+            COMMAND "${CMAKE_COMMAND}"
+                "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                "-DNODE=${ORE_COUNTER_NODE}"
+                "-DTOOL=${CMAKE_CURRENT_SOURCE_DIR}/tools/actor-counter-parity.mjs"
+                "-DMANIFEST=${CMAKE_CURRENT_SOURCE_DIR}/contracts/actor-counter-identical-source-v1/actor-source-set.v1"
+                "-DEXPECTED_SHA=e4fd0afea3d21e6fed54f9943abbf0851550e028"
+                "-DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/actor-source-set-admission"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/native_actor_source_set_integrity_only.cmake")
+        set_tests_properties(native_actor_counter_source_set_integrity_only
+            PROPERTIES TIMEOUT 60)
+    endif()
+
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
     add_executable(oreslang-native-sum-payload-admission-test
