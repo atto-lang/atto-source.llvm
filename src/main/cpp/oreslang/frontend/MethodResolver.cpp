@@ -146,8 +146,24 @@ void resolve_native_methods(Program& program) {
             if (!expr->argument_names.empty()) expr->argument_names.insert(expr->argument_names.begin(), "");
             expr->arguments.insert(expr->arguments.begin(), std::move(loan));
         };
-        std::function<void(Statement&)> statement = [&](Statement& stmt) {
+        // Structured arms carry their own lexical environments. A ScopedLocal
+        // declaration remains active for subsequent statements in *that* arm;
+        // it must not leak to the sibling arm or to its parent continuation.
+        // Snapshot before visiting the arm, not after inserting its locals.
+        std::function<void(Statement&)> statement;
+        std::function<void(std::vector<Statement>&)> scoped_statements;
+        scoped_statements = [&](std::vector<Statement>& body) {
+            const auto outer_owners = owners;
+            const auto outer_shadowed = shadowed;
+            const auto outer_arrays = arrays;
+            for (auto& child : body) statement(child);
+            owners = outer_owners;
+            shadowed = outer_shadowed;
+            arrays = outer_arrays;
+        };
+        statement = [&](Statement& stmt) {
             if (stmt.kind == Statement::Kind::ForEach) {
+                if (!stmt.branch_local) throw std::runtime_error("native foreach missing compiler-owned iterator");
                 auto& iterator = *stmt.branch_local;
                 const auto& source = *stmt.expression;
                 if (source.kind == Expression::Kind::Variable && arrays.count(source.name)) {
@@ -165,48 +181,61 @@ void resolve_native_methods(Program& program) {
                 } else throw std::runtime_error("native for-of requires a named lexical array or class array field");
                 iterator.record_view = !iterator.class_name.empty();
                 expression(stmt.expression.get());
-                const auto saved = owners;
-                const auto saved_shadowed = shadowed;
+                const auto outer_owners = owners;
+                const auto outer_shadowed = shadowed;
+                const auto outer_arrays = arrays;
                 shadowed.insert(iterator.name);
-                if (!iterator.class_name.empty()) owners.emplace(iterator.name, iterator.class_name);
-                for (auto& child : stmt.then_statements) statement(child);
-                owners = saved;
-                shadowed = saved_shadowed;
+                if (!iterator.class_name.empty()) owners.insert_or_assign(iterator.name, iterator.class_name);
+                else owners.erase(iterator.name);
+                arrays.erase(iterator.name);
+                scoped_statements(stmt.then_statements);
+                owners = outer_owners;
+                shadowed = outer_shadowed;
+                arrays = outer_arrays;
                 return;
             }
-            if (stmt.kind == Statement::Kind::ForIndex && stmt.branch_local) {
-                // Its initializer runs outside the new scope; condition, step
-                // and body run with the loop binder in scope.
+            if (stmt.kind == Statement::Kind::ForIndex) {
+                if (!stmt.branch_local) throw std::runtime_error("native index loop missing compiler-owned binder");
+                // Its initializer runs in the outer scope; condition, step
+                // and body see the binder, but following statements do not.
                 expression(stmt.branch_local->initializer.get());
-                const auto saved_shadowed = shadowed;
-                const auto saved = owners;
+                const auto outer_owners = owners;
+                const auto outer_shadowed = shadowed;
+                const auto outer_arrays = arrays;
                 shadowed.insert(stmt.branch_local->name);
+                owners.erase(stmt.branch_local->name);
+                arrays.erase(stmt.branch_local->name);
                 expression(stmt.condition.get());
                 expression(stmt.loop_step.get());
-                for (auto& child : stmt.then_statements) statement(child);
-                owners = saved;
-                shadowed = saved_shadowed;
+                scoped_statements(stmt.then_statements);
+                owners = outer_owners;
+                shadowed = outer_shadowed;
+                arrays = outer_arrays;
                 return;
             }
             expression(stmt.expression.get()); expression(stmt.condition.get()); expression(stmt.condition_lhs.get()); expression(stmt.condition_rhs.get());
             expression(stmt.loop_step.get());
             expression(stmt.array_commit_length.get());
             for (auto& item : stmt.array_commit_values) expression(item.get());
-            if (stmt.branch_local) {
-                expression(stmt.branch_local->initializer.get());
-                if (!stmt.branch_local->class_name.empty())
-                    owners.emplace(stmt.branch_local->name, stmt.branch_local->class_name);
-                if (stmt.kind == Statement::Kind::ScopedLocal)
-                    shadowed.insert(stmt.branch_local->name);
+            if (stmt.kind == Statement::Kind::ScopedLocal) {
+                if (!stmt.branch_local)
+                    throw std::runtime_error("native scoped local missing compiler-owned binding");
+                auto& local = *stmt.branch_local;
+                // Its initializer executes before the new name is in scope.
+                expression(local.initializer.get());
+                shadowed.insert(local.name);
+                if (local.class_name.empty()) owners.erase(local.name);
+                else owners.insert_or_assign(local.name, local.class_name);
+                if (local.int_array) arrays.insert_or_assign(local.name, &local);
+                else arrays.erase(local.name);
+                return;
             }
-            const auto saved = owners;
-            const auto saved_shadowed = shadowed;
-            for (auto& arm : stmt.then_statements) statement(arm);
-            owners = saved;
-            shadowed = saved_shadowed;
-            for (auto& arm : stmt.else_statements) statement(arm);
-            owners = saved;
-            shadowed = saved_shadowed;
+            if (stmt.branch_local)
+                throw std::runtime_error("unsupported native statement with compiler-owned branch binding");
+            // Both arms start from the same outer state. Any nested local in
+            // the first arm is revoked before checking the second arm.
+            scoped_statements(stmt.then_statements);
+            scoped_statements(stmt.else_statements);
         };
         for (auto& local : fn.locals) {
             expression(local.initializer.get());
