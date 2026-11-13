@@ -12,9 +12,13 @@ extern "C" {
  *
  * This staging API intentionally does not lower guest task syntax, compile
  * capture environments, or implement structured TaskScope/async defer.
- * The host MUST use task_cancel() (or task_stop_actor()) before actor STOP if
- * a Task can be suspended on an unfulfilled foreign Future. Otherwise the
- * actor's physical DONE remains fenced by its retained resource loan.
+ * For source actors, the compiler/host MUST use NativeActorTaskRegistry:
+ * registry_start admits every Task and registry_stop atomically seals and
+ * revokes all registered descendants before actor STOP. Bare trusted-host
+ * tasks outside a registry still require explicit task_cancel() before STOP.
+ * An unrevoked suspended Task retains its actor's physical DONE resource
+ * loan indefinitely; this is a deliberate fail-closed quarantine, not a
+ * reason to manufacture Task completion.
  */
 typedef enum {
     ORES_ACTOR_TASK_NEW = 0,
