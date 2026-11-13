@@ -814,6 +814,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     if (!source.imports.empty())
         throw std::runtime_error("unresolved native module imports cannot reach LLVM emission");
     for (const auto& actor : source.actors) {
+        // The frontend can stage one typed, capture-free actor Task and its
+        // explicit 'return await' edge, but a synchronous on_message ABI
+        // cannot suspend. Never emit its placeholder scalar result or route
+        // it through the top-level synthetic Task<int> pool: that would
+        // silently execute guest work outside the owning actor domain.
+        if (!actor.on_message.actor_task_await_name.empty() ||
+                !actor.on_message.source_tasks.empty())
+            throw std::runtime_error(
+                "ATTO_TASK_E_ACTOR_LOWERING_PENDING: actor-owned task/await requires compiler-generated continuation frames on the native TASK/WAKE scheduler");
         if (actor.max_actor_threads != MaxActorThreads::LOW) {
             throw std::runtime_error("parallel actor LLVM lowering requires compiler-proven per-turn actor state isolation");
         }
