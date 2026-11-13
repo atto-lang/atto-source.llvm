@@ -1673,6 +1673,28 @@ int ores_native_actor_scheduler_current_data_mail_sequence(
     return 1;
 }
 
+/* The current carrier's DATA ordinal is authenticated first, outside the
+ * scheduler mutex. The guest turn cannot finish or change physical identity
+ * while synchronously invoking this trusted runtime read. Holding the same
+ * scheduler mutex used by the Bytes commit prevents simultaneous producer
+ * slab writes from causing an unhandleable transient BUSY on the DATA lane.
+ * Never call guest code or blocking I/O inside read_payload. */
+int ores_native_actor_scheduler_read_current_bytes(
+        OresNativeActorScheduler* s, OresNativeActorRef actor,
+        OresNativeActorPayloadReadFn read_payload, void* context) {
+    if (!s || !read_payload) return 0;
+    uint64_t sequence = 0;
+    if (!ores_native_actor_scheduler_current_data_mail_sequence(
+            s, actor, &sequence) || !sequence) return 0;
+    lock(s);
+    const int allowed = matching(s, actor) &&
+        s->actors[actor.actor_slot].bytes_only_mailbox &&
+        executing == s && executing_data_mail_sequence == sequence;
+    const int result = allowed ? read_payload(context, sequence) : 0;
+    unlock(s);
+    return result;
+}
+
 int ores_native_actor_scheduler_current_execution_context(
         OresNativeActorScheduler* s, OresNativeExecutionContext* out) {
     if (!s || !out || executing != s || !executing_context.id.runtime_domain
