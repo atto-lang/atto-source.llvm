@@ -1,6 +1,9 @@
 #include "oreslang/runtime/SharedImmutablePayload.hpp"
 #include <array>
 #include <atomic>
+#if defined(NDEBUG)
+#undef NDEBUG // Keep the native verification oracle active in Release builds.
+#endif
 #include <cassert>
 #include <cstdint>
 #include <limits>
