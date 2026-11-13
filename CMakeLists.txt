@@ -5747,6 +5747,29 @@ if(BUILD_TESTING AND UNIX)
     endif()
 endif()
 
+# Deterministic DATA abandonment: the trusted test host reserves the
+# physical-turn gate before enqueue, then STOP seals two queued Bytes frames.
+# No actor carrier is blocked; STOP terminal counts and slab refund are checked.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-actor-bytes-stop-abandon-test
+        tests/native_actor_bytes_stop_abandon_test.c
+        src/main/cpp/oreslang/runtime/NativeActorBytesInbox.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-bytes-stop-abandon-test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-bytes-stop-abandon-test
+        PRIVATE Threads::Threads)
+    target_compile_features(oreslang-native-actor-bytes-stop-abandon-test
+        PRIVATE c_std_11)
+    target_compile_options(oreslang-native-actor-bytes-stop-abandon-test
+        PRIVATE $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_actor_bytes_stop_abandon_host_only
+        COMMAND oreslang-native-actor-bytes-stop-abandon-test)
+    set_tests_properties(native_actor_bytes_stop_abandon_host_only
+        PROPERTIES TIMEOUT 30)
+endif()
+
 # Real frontend negative: until source Bytes is lowered, reject the guest
 # completely and emit zero LLVM IR rather than calling a host-only C model.
 if(BUILD_TESTING)
