@@ -108,5 +108,46 @@ class ReviewOnlyCapacityTest(unittest.TestCase):
         self.assertEqual(calls, ["repos/%s/pulls/1747" % v3.SOURCE_REPO])
 
 
+    def test_truncated_github_tree_is_denied_before_any_blob_read(self):
+        api, calls = synthetic_api(1829)
+        def truncated(route, method="GET", payload=None):
+            response = api(route, method=method, payload=payload)
+            if "/git/trees/" in route:
+                return dict(response, truncated=True)
+            return response
+        with patch.object(v3, "gh_api", side_effect=truncated):
+            with self.assertRaisesRegex(v3.Denied, "tree incomplete"):
+                v3.exact_source_tree(1747, HEAD)
+        self.assertFalse(any("/git/blobs/" in path for path in calls))
+
+    def test_symlink_mode_is_denied_before_any_blob_read(self):
+        api, calls = synthetic_api(1829)
+        def symlink(route, method="GET", payload=None):
+            response = api(route, method=method, payload=payload)
+            if "/git/trees/" in route:
+                tree = dict(response)
+                tree["tree"] = [dict(response["tree"][0], mode="120000")] + response["tree"][1:]
+                return tree
+            return response
+        with patch.object(v3, "gh_api", side_effect=symlink):
+            with self.assertRaisesRegex(v3.Denied, "symlink"):
+                v3.exact_source_tree(1747, HEAD)
+        self.assertFalse(any("/git/blobs/" in path for path in calls))
+
+    def test_oversize_file_denied_before_any_blob_read(self):
+        api, calls = synthetic_api(1829)
+        def oversized(route, method="GET", payload=None):
+            response = api(route, method=method, payload=payload)
+            if "/git/trees/" in route:
+                tree = dict(response)
+                tree["tree"] = [dict(response["tree"][0], size=v3.MAX_FILE+1)] + response["tree"][1:]
+                return tree
+            return response
+        with patch.object(v3, "gh_api", side_effect=oversized):
+            with self.assertRaisesRegex(v3.Denied, "file exceeds"):
+                v3.exact_source_tree(1747, HEAD)
+        self.assertFalse(any("/git/blobs/" in path for path in calls))
+
+
 if __name__ == "__main__":
     unittest.main()
