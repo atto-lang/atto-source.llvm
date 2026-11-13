@@ -56,6 +56,35 @@ int main() {
     assert(received->read_byte(0) == 42); // Receiver outlives mailbox.
     assert(!inbox.try_receive());
     assert(inbox.try_close()); // Idempotent shutdown.
+    auto closed_probe = inbox.try_receive_result();
+    assert(closed_probe.status == SharedPayloadInbox::ReceiveStatus::closed);
+    assert(!closed_probe.descriptor);
+
+    // Repeated ring wrap must preserve FIFO, bounded credits and
+    // distinction between EMPTY and CLOSED without further slot allocation.
+    SharedPayloadInbox ring(3, mib * 3);
+    for (int round = 0; round < 512; ++round) {
+        auto empty_probe = ring.try_receive_result();
+        assert(empty_probe.status == SharedPayloadInbox::ReceiveStatus::empty);
+        assert(!empty_probe.descriptor);
+        assert(ring.try_send(root) == Result::admitted);
+        assert(ring.try_send(*slice) == Result::admitted);
+        auto first = ring.try_receive_result();
+        assert(first.status == SharedPayloadInbox::ReceiveStatus::received);
+        assert(first.descriptor && first.descriptor->size() == mib);
+        assert(ring.try_send(root) == Result::admitted);
+        auto second = ring.try_receive_result();
+        assert(second.status == SharedPayloadInbox::ReceiveStatus::received);
+        assert(second.descriptor && second.descriptor->size() == 99);
+        auto third = ring.try_receive_result();
+        assert(third.status == SharedPayloadInbox::ReceiveStatus::received);
+        assert(third.descriptor && third.descriptor->size() == mib);
+        assert(ring.queued() == 0 && ring.charged_bytes() == 0);
+    }
+    assert(ring.try_close());
+    assert(ring.try_receive_result().status == SharedPayloadInbox::ReceiveStatus::closed);
+    assert(ring.try_send(*slice) == Result::closed);
+
     SharedPayloadInbox limited(10, mib - 1);
     assert(limited.try_send(*slice) == Result::full); // Small slice retains 1 MiB.
     assert(limited.queued() == 0 && limited.charged_bytes() == 0);
