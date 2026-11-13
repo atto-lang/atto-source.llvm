@@ -86,15 +86,32 @@ static inline OresNativeSendStatus ores_native_actor_bytes_try_send_atomic(
  * callback, WAKE, external caller or stale ActorRef cannot pass.
  * Binding.try_send_atomic publishes private Bytes and DATA together,
  * but source-level ActorMail<Bytes> is still unsupported. */
+/* The callback runs only in the native scheduler's DATA-bound critical
+ * section. This is NOT a guest callback and cannot reenter its scheduler. */
+typedef struct {
+    const OresNativeActorBytesSchedulerBinding* binding;
+    void* output;
+    size_t capacity;
+    size_t* required_length;
+} OresNativeActorBytesReadContext;
+static inline int ores_native_actor_bytes_read_payload(
+    void* opaque, uint64_t sequence) {
+    const OresNativeActorBytesReadContext* ctx =
+        (const OresNativeActorBytesReadContext*)opaque;
+    return ores_native_actor_bytes_try_receive_sequenced(
+        ctx->binding->inbox, ctx->binding->storage, sequence,
+        ctx->output, ctx->capacity, ctx->required_length);
+}
 static inline int ores_native_actor_bytes_receive_current_data(
     const OresNativeActorBytesSchedulerBinding* binding,
     void* output, size_t capacity, size_t* required_length) {
-    uint64_t sequence = 0;
-    if (!binding || !ores_native_actor_scheduler_current_data_mail_sequence(
-            binding->scheduler, binding->actor, &sequence) || !sequence)
-        return ORES_ACTOR_BYTES_DENIED;
-    return ores_native_actor_bytes_try_receive_sequenced(
-        binding->inbox, binding->storage, sequence,
-        output, capacity, required_length);
+    if (!binding || !binding->scheduler || !binding->inbox ||
+        !required_length) return ORES_ACTOR_BYTES_DENIED;
+    OresNativeActorBytesReadContext read_context = {
+        binding, output, capacity, required_length
+    };
+    return ores_native_actor_scheduler_read_current_bytes(
+        binding->scheduler, binding->actor,
+        ores_native_actor_bytes_read_payload, &read_context);
 }
 #endif
