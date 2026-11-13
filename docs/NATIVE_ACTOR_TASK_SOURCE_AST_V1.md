@@ -250,3 +250,34 @@ harnesses are committed, but full `oreslang-llvmc` and linked
 native test executions on this PR head are **NOT_EXECUTED** until
 separately approved private CI source transfer. No full guest `await`
 backend parity is claimed.
+
+## Sanitizer execution guard for the staged compiler test suite
+
+The CTest cases for native O0/O2 producer-only and hybrid actor-WAKE
+tests run a secondary CMake driver invoking Clang. This driver does
+**not** inherit the parent build's `CMAKE_C_FLAGS` automatically.
+A sanitizer-configured build previously risked executing uninstrumented
+secondary binaries.
+
+The source CMake registration now passes explicit `SANITIZE=ON` when
+its C compiler flags include `-fsanitize=address,undefined`.
+The secondary driver then forwards ASan/UBSan flags, disables UBSan
+recovery, preserves frame pointers, and requires `__asan_init` in both
+generated-producer and hybrid native executables before executing them.
+Missing `nm`/instrumentation is a hard test failure, never a false
+sanitizer PASS.
+
+The same generated LLVM IR is compiled to separate O0 and O2 objects,
+then linked to the native C harness with identical sanitizer options.
+This covers the compiled producer and continuation-frame helper,
+including the source-derived post-`await` return body; for the hybrid
+test, it additionally instruments the host C task bridge and scheduler.
+LLVM's front-end specific UBSan instrumentation still requires compiler
+emission where applicable; the Clang flag and ASan symbol checks do not
+prove comprehensive guest language UBSan coverage.
+
+A source-free local toolchain smoke test using a synthetic C canary
+confirmed Clang 17's `-fsanitize=address,undefined` binaries at O0 and
+O2 both expose `__asan_init` and execute successfully. **This smoke
+check is NOT an executed Atto compiler or native actor test.** The
+approved exact-tree CI run is still needed before any backend claims.
