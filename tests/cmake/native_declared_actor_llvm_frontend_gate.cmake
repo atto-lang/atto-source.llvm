@@ -1,7 +1,7 @@
 # Exact-source native AOT smoke and deliberately unsupported actor source.
 # LLVM IR is written only for the supported scalar guest, never for an
 # unverified declaration-only actor. No Java runtime or Python is used.
-foreach(required COMPILER CLANG POSITIVE NEGATIVE BAD_NONLITERAL BAD_MULTIFUNCTION SOURCE_DIR OUTPUT_DIR)
+foreach(required COMPILER CLANG POSITIVE NEGATIVE BAD_NONLITERAL BAD_MULTIFUNCTION SOURCE_DIR RECEIVE OUTPUT_DIR)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     message(FATAL_ERROR "missing mandatory ${required}")
   endif()
@@ -74,6 +74,22 @@ foreach(source IN ITEMS "${BAD_NONLITERAL}" "${BAD_MULTIFUNCTION}")
     message(FATAL_ERROR "missing explicit unsupported-namespace diagnostic: ${diagnostics}")
   endif()
 endforeach()
+
+# Canonical explicit external receive is a privileged actor runtime hook;
+# neither a native free function nor an unverified host C entrypoint. It must
+# reject at the precise declared-actor gate with NO LLVM IR output.
+execute_process(
+  COMMAND "${COMPILER}" "${RECEIVE}"
+  RESULT_VARIABLE denied_receive
+  OUTPUT_VARIABLE leaked_receive_ir
+  ERROR_VARIABLE receive_diagnostic
+)
+if("${denied_receive}" STREQUAL "0" OR NOT leaked_receive_ir STREQUAL "")
+  message(FATAL_ERROR "unverified external actor receive escaped native codegen gate")
+endif()
+if(NOT receive_diagnostic MATCHES "DECLARED_ACTOR_CODEGEN_UNSUPPORTED")
+  message(FATAL_ERROR "missing typed external actor receive rejection: ${receive_diagnostic}")
+endif()
 
 # Every constituent is a separate same-namespace source unit. Until
 # compiler-owned manifest/linking exists none may accidentally compile alone
