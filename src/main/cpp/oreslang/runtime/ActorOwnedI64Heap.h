@@ -128,6 +128,17 @@ OresActorLoanStatus ores_actor_i64_heap_try_loan_read_mut(
 OresActorLoanStatus ores_actor_i64_heap_try_loan_write(
     OresActorI64Heap* heap, OresActorTurn turn, OresActorLoan loan,
     int64_t value);
+/* Supervisor-only terminal transition after a failed guest turn.
+ * Requires its authenticated, current turn. Returns BUSY on contended heap
+ * mutex, BAD_TURN for stale generation/epoch, RETIRED if already fenced.
+ * On OK, revokes this turn's exclusive loans, retires the heap and ends the
+ * turn; no subsequent turn may enter. Shared reader loans remain live and
+ * must be separately released before physical heap destruction.
+ * No guest may invoke this directly. This is NOT an actor-local trap on its
+ * own: generated guest code and supervisor delivery must use these statuses
+ * and fence all asynchronous callbacks before attempting reclamation. */
+OresActorLoanStatus ores_actor_i64_heap_fault_turn(
+    OresActorI64Heap* heap, OresActorTurn turn);
 int64_t ores_actor_i64_heap_loan_read_mut(OresActorI64Heap* heap,
                                            OresActorTurn turn, OresActorLoan loan);
 void ores_actor_i64_heap_loan_write(OresActorI64Heap* heap,
