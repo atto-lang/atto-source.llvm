@@ -153,6 +153,19 @@ if(BUILD_TESTING)
             PROPERTIES TIMEOUT 90)
     endif()
 
+    # Pure host C++17 hashing/path admission unit. It can run without LLVM
+    # emission and is NEVER a source-language actor execution receipt.
+    add_executable(oreslang-actor-source-set-admission-unit
+        tests/native_actor_source_set_integrity_unit_test.cpp)
+    target_include_directories(oreslang-actor-source-set-admission-unit PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-source-set-admission-unit PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_actor_source_set_git_blob_and_paths_host_only
+        COMMAND oreslang-actor-source-set-admission-unit)
+    set_tests_properties(native_actor_source_set_git_blob_and_paths_host_only
+        PROPERTIES TIMEOUT 15)
+
     # Authenticated manifest + all seven materialized .atto sources must pass
     # through the actual compiler binary. Explicit verification-only mode
     # has NO AST/IR/actor execution authority. Node only materializes the
