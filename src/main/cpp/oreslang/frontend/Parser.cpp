@@ -651,6 +651,35 @@ bool native_reserved_io_callable_name(std::string_view name) {
         " at byte " + std::to_string(offset));
 }
 
+/*
+ * Staged flat-namespace runtime slice. No runtime identifiers, function calls,
+ * mutable locals or actor authorities may be smuggled through a literal tree.
+ * The normal typed checker and LLVM signed-overflow intrinsics still run.
+ */
+bool namespace_literal_i64_arithmetic(const Expression& expr, std::size_t depth = 1) {
+    if (depth > 64 || !expr.name.empty() || !expr.arguments.empty() ||
+            !expr.argument_names.empty() || !expr.type_arguments.empty() ||
+            expr.type_arguments_present || expr.condition || expr.condition_lhs ||
+            expr.condition_rhs || expr.when_true || expr.when_false)
+        return false;
+    using K = Expression::Kind;
+    switch (expr.kind) {
+        case K::Integer:
+            return !expr.left && !expr.right;
+        case K::Negate:
+            return expr.left && !expr.right &&
+                   namespace_literal_i64_arithmetic(*expr.left, depth + 1);
+        case K::Add:
+        case K::Subtract:
+        case K::Multiply:
+            return expr.left && expr.right &&
+                   namespace_literal_i64_arithmetic(*expr.left, depth + 1) &&
+                   namespace_literal_i64_arithmetic(*expr.right, depth + 1);
+        default:
+            return false;
+    }
+}
+
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
@@ -951,10 +980,10 @@ public:
                  !program.actors.empty() || !program.contracts.empty() ||
                  !program.cooperative_loops.empty() || !program.generators.empty())) {
             // First real native namespace execution slice: exactly one
-            // standalone, pure, zero-arg scalar main returning a literal.
+            // standalone, pure, zero-arg scalar main returning checked literal arithmetic.
             // No imports, namespace cross-file linking, actors, closures or
             // source FFI can acquire identity/dispatch authority here.
-            const bool literal_main = program.imports.empty()
+            const bool checked_scalar_main = program.imports.empty()
                     && program.functions.size() == 1
                     && program.classes.empty() && program.actors.empty()
                     && program.contracts.empty() && program.conforms.empty()
@@ -968,7 +997,7 @@ public:
                     && !program.functions.front().async_source_i64
                     && !program.functions.front().has_declared_effects
                     && program.functions.front().result
-                    && program.functions.front().result->kind == Expression::Kind::Integer
+                    && namespace_literal_i64_arithmetic(*program.functions.front().result)
                     && program.functions.front().result->arguments.empty()
                     && program.functions.front().locals.empty()
                     && program.functions.front().statements.empty()
@@ -980,8 +1009,8 @@ public:
                     && program.functions.front().future_pipelines.empty()
                     && program.functions.front().actor_field_writes.empty()
                     && !program.functions.front().caught_throw_value;
-            if (!literal_main)
-                fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: only standalone literal-i64 main is native-lowered; multi-file actor namespaces remain gated");
+            if (!checked_scalar_main)
+                fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: only standalone checked literal-arithmetic i64 main is native-lowered; multi-file actor namespaces remain gated");
         }
         compile_type_constraint_descriptors(program);
         lower_extension_calls(program);

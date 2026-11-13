@@ -1,7 +1,7 @@
 # Exact-source native AOT smoke and deliberately unsupported actor source.
 # LLVM IR is written only for the supported scalar guest, never for an
 # unverified declaration-only actor. No Java runtime or Python is used.
-foreach(required COMPILER CLANG POSITIVE NEGATIVE BAD_NONLITERAL BAD_MULTIFUNCTION SOURCE_DIR RECEIVE OUTPUT_DIR)
+foreach(required COMPILER CLANG POSITIVE ARITHMETIC NEGATIVE BAD_NONLITERAL BAD_MULTIFUNCTION SOURCE_DIR RECEIVE OUTPUT_DIR)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     message(FATAL_ERROR "missing mandatory ${required}")
   endif()
@@ -42,6 +42,44 @@ execute_process(
 if(NOT "${exit_code}" STREQUAL "42")
   message(FATAL_ERROR "LLVM native guest must exit 42; got ${exit_code}, stderr=${stderr}")
 endif()
+
+# Actual source -> LLVM IR -> Clang O0/O2 -> native executable, not a host
+# evaluator. Preserve the backend's signed overflow intrinsics.
+execute_process(
+  COMMAND "${COMPILER}" "${ARITHMETIC}"
+  RESULT_VARIABLE arithmetic_compiled
+  OUTPUT_VARIABLE arithmetic_ir
+  ERROR_VARIABLE arithmetic_diagnostics
+)
+if(NOT "${arithmetic_compiled}" STREQUAL "0")
+  message(FATAL_ERROR "checked namespaced arithmetic source compilation failed: ${arithmetic_diagnostics}")
+endif()
+foreach(op IN ITEMS sadd ssub smul)
+  if(NOT arithmetic_ir MATCHES "llvm\\.${op}\\.with\\.overflow")
+    message(FATAL_ERROR "missing checked signed arithmetic lowering for ${op}")
+  endif()
+endforeach()
+foreach(opt IN ITEMS O0 O2)
+  set(arithmetic_ll "${OUTPUT_DIR}/use-namespace-arithmetic-${opt}.ll")
+  set(arithmetic_bin "${OUTPUT_DIR}/use-namespace-arithmetic-${opt}")
+  file(WRITE "${arithmetic_ll}" "${arithmetic_ir}")
+  execute_process(
+    COMMAND "${CLANG}" "-${opt}" -x ir "${arithmetic_ll}" -o "${arithmetic_bin}"
+    RESULT_VARIABLE arithmetic_linked
+    ERROR_VARIABLE arithmetic_link_diagnostics
+  )
+  if(NOT "${arithmetic_linked}" STREQUAL "0")
+    message(FATAL_ERROR "namespaced arithmetic AOT failed at ${opt}: ${arithmetic_link_diagnostics}")
+  endif()
+  execute_process(
+    COMMAND "${arithmetic_bin}"
+    RESULT_VARIABLE arithmetic_exit
+    ERROR_VARIABLE arithmetic_runtime_diagnostics
+  )
+  if(NOT "${arithmetic_exit}" STREQUAL "42")
+    message(FATAL_ERROR "namespaced arithmetic must exit 42 at ${opt}: got ${arithmetic_exit}; ${arithmetic_runtime_diagnostics}")
+  endif()
+endforeach()
 
 execute_process(
   COMMAND "${COMPILER}" "${NEGATIVE}"
@@ -116,5 +154,5 @@ foreach(unit actor contract state increment get_count)
     message(FATAL_ERROR "nominal actor missing fail-closed diagnostic: ${diagnostics}")
   endif()
 endforeach()
-message(STATUS "LLVM use namespace real scalar AOT PASS (exit 42); all five unlowered actor units rejected")
+message(STATUS "LLVM namespace literal and checked arithmetic AOT PASS (exit 42 O0/O2); all five unlowered actor units rejected")
 

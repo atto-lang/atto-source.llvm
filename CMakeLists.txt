@@ -141,6 +141,7 @@ if(BUILD_TESTING)
                 "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
                 "-DCLANG=${ORE_DECLARED_ACTOR_CLANG}"
                 "-DPOSITIVE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/use-namespace-llvm-scalar-main.atto"
+                "-DARITHMETIC=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/use-namespace-scalar-arithmetic.atto"
                 "-DNEGATIVE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/declared-actor-use-namespace-reject.atto"
                 "-DBAD_NONLITERAL=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/use-namespace-nonliteral-reject.atto"
                 "-DBAD_MULTIFUNCTION=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/use-namespace-multifunction-reject.atto"
