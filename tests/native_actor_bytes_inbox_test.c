@@ -98,6 +98,33 @@ int main(void) {
     check(ores_native_actor_bytes_try_destroy(recycled,new_ref)==ORES_ACTOR_BYTES_OK);
     check(ores_native_actor_bytes_try_retire(b,other)==ORES_ACTOR_BYTES_OK);
     check(ores_native_actor_bytes_try_destroy(b,other)==ORES_ACTOR_BYTES_OK);
+    /* Maximum physical budget, binary fidelity and full 128-slot pressure. */
+    OresNativeActorBytesInbox* large =
+        ores_native_actor_bytes_open(900, 6, 128, 65536, 128u * 65536u);
+    check(large != NULL);
+    OresNativeActorBytesRef lref = ores_native_actor_bytes_ref(large);
+    unsigned char* full = (unsigned char*)malloc(65536);
+    unsigned char* copied = (unsigned char*)malloc(65536);
+    check(full && copied);
+    for (size_t i = 0; i < 65536; ++i) full[i] = (unsigned char)(i * 31u);
+    for (size_t i = 0; i < 128; ++i)
+        check(ores_native_actor_bytes_try_send(
+            large, lref, full, 65536)==ORES_ACTOR_BYTES_OK);
+    check(ores_native_actor_bytes_try_send(
+        large, lref, full, 65536)==ORES_ACTOR_BYTES_DENIED);
+    check(ores_native_actor_bytes_observe(
+        large, lref, &count, &used)==ORES_ACTOR_BYTES_OK);
+    check(count==128 && used==128u * 65536u);
+    for (size_t i = 0; i < 128; ++i) {
+        actual=0;
+        check(ores_native_actor_bytes_try_receive(
+            large, lref, copied, 65536, &actual)==ORES_ACTOR_BYTES_OK);
+        check(actual==65536 && memcmp(copied,full,65536)==0);
+    }
+    check(ores_native_actor_bytes_all_zero_for_test(large));
+    free(full); free(copied);
+    check(ores_native_actor_bytes_try_retire(large,lref)==ORES_ACTOR_BYTES_OK);
+    check(ores_native_actor_bytes_try_destroy(large,lref)==ORES_ACTOR_BYTES_OK);
     printf("NATIVE_ACTOR_BYTES_INBOX_HOST_ONLY_PASS assertions=%u actor_private_slabs=2 copied_bytes=1 quota=1 fifo=1 incarnation=1 zeroized=1 nonparking=1\n",assertions);
     return 0;
 }
