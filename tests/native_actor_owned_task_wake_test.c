@@ -13,6 +13,14 @@ extern int32_t atto_actor_task_i64_producer_probe(
     int64_t copied_incoming, int64_t* result_out);
 extern int32_t atto_actor_task_i64_resume_probe(
     int64_t awaited_result, int64_t* resumed_result_out);
+extern int32_t atto_actor_task_i64_frame_init_probe(
+    int64_t words[6], uint64_t actor_generation,
+    uint64_t task_generation, int64_t copied_incoming);
+extern int32_t atto_actor_task_i64_frame_step_probe(
+    int64_t words[6], uint64_t actor_generation, uint64_t task_generation);
+extern int32_t atto_actor_task_i64_frame_resume_probe(
+    int64_t words[6], uint64_t actor_generation,
+    uint64_t task_generation, int64_t* result_out);
 #ifndef ATTO_ACTOR_TASK_PRODUCER_EXPECTED
 #error "compiled producer integration requires an exact expected value"
 #endif
@@ -39,6 +47,9 @@ typedef struct {
 #ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
     atomic_int_fast64_t copied_incoming; /* authentic DATA payload */
     atomic_int_fast64_t compiled_task_value; /* child WAKE result */
+    /* Staged compiler-generated frame in persistent fixture storage.
+     * Production must allocate it in the owning actor heap/arena. */
+    int64_t compiled_task_frame[6];
 #endif
 } Fixture;
 
@@ -73,6 +84,11 @@ static void on_data(void* opaque, size_t actor, uint64_t message) {
      * not a borrowed pointer into this callback's native stack. */
     atomic_store_explicit(
         &f->copied_incoming, (int64_t)message, memory_order_release);
+    if (f->mode == 1 &&
+            atto_actor_task_i64_frame_init_probe(
+                f->compiled_task_frame, (uint64_t)f->actor.generation,
+                f->child.task_generation, (int64_t)message) != 0)
+        atomic_fetch_add(&f->errors, 1);
 #endif
 }
 static void on_control(void* opaque, size_t actor, uint64_t message) {
@@ -124,10 +140,16 @@ static void on_wake(void* opaque, size_t actor,
                 int64_t resumed_value = INT64_C(-1);
                 const int64_t awaited_value = atomic_load_explicit(
                     &f->compiled_task_value, memory_order_acquire);
-                if (atto_actor_task_i64_resume_probe(
-                        awaited_value, &resumed_value) != 0 ||
+                if (f->compiled_task_frame[4] != 2 ||
+                        f->compiled_task_frame[3] != awaited_value ||
+                        atto_actor_task_i64_frame_resume_probe(
+                            f->compiled_task_frame,
+                            (uint64_t)f->actor.generation,
+                            f->child.task_generation,
+                            &resumed_value) != 0 ||
                         resumed_value !=
-                            (int64_t)ATTO_ACTOR_TASK_PRODUCER_EXPECTED)
+                            (int64_t)ATTO_ACTOR_TASK_PRODUCER_EXPECTED ||
+                        f->compiled_task_frame[4] != 3)
                     atomic_fetch_add(&f->errors, 1);
             }
 #endif
@@ -155,16 +177,22 @@ static void on_wake(void* opaque, size_t actor,
 #ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
         if (f->mode == 1) {
             int64_t compiled_result = INT64_C(-1);
-            if (atto_actor_task_i64_producer_probe(
+            if (f->compiled_task_frame[2] !=
                     atomic_load_explicit(
-                        &f->copied_incoming, memory_order_acquire),
-                    &compiled_result) != 0 ||
-                    compiled_result !=
+                        &f->copied_incoming, memory_order_acquire) ||
+                    atto_actor_task_i64_frame_step_probe(
+                        f->compiled_task_frame,
+                        (uint64_t)f->actor.generation,
+                        f->child.task_generation) != 0 ||
+                    f->compiled_task_frame[4] != 2 ||
+                    f->compiled_task_frame[3] !=
                         (int64_t)ATTO_ACTOR_TASK_PRODUCER_EXPECTED) {
                 atomic_fetch_add(&f->errors, 1);
             } else {
+                compiled_result = f->compiled_task_frame[3];
                 atomic_store_explicit(
-                    &f->compiled_task_value, compiled_result, memory_order_release);
+                    &f->compiled_task_value, compiled_result,
+                    memory_order_release);
             }
         }
 #endif
@@ -290,6 +318,9 @@ int main(void) {
     wait_host(&f, &f.suspension_physically_returned);
 #ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
     wait_host(&f, &f.child_done);
+    CHECK(f.compiled_task_frame[4] == 2);
+    CHECK(f.compiled_task_frame[3] ==
+          (int64_t)ATTO_ACTOR_TASK_PRODUCER_EXPECTED);
     CHECK(ores_native_actor_task_publish(&f.parent, 1001, ORES_NATIVE_WAKE_READY));
     CHECK(!ores_native_actor_task_publish(&f.parent, 1001, ORES_NATIVE_WAKE_READY));
 #endif
@@ -324,6 +355,14 @@ int main(void) {
     CHECK(ores_native_actor_task_registry_count(&f.registry) == 2);
     CHECK(atomic_load(&f.parent_turns) == 2);
     CHECK(atomic_load(&f.child_turns) == 1);
+#ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
+    CHECK(f.compiled_task_frame[4] == 3);
+    int64_t ignored = INT64_C(-91);
+    CHECK(atto_actor_task_i64_frame_resume_probe(
+        f.compiled_task_frame, (uint64_t)f.actor.generation,
+        f.child.task_generation, &ignored) == 4);
+    CHECK(ignored == -91); /* stale parent WAKE cannot execute twice */
+#endif
     CHECK(ores_native_actor_scheduler_publish_control(f.scheduler, f.actor, 99));
     CHECK(ores_native_actor_scheduler_drain(f.scheduler));
     CHECK(atomic_load(&f.control_turns) == 1);
