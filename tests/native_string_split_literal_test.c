@@ -102,6 +102,21 @@ int main(void) {
     owner = oreslang_int_array_new(arrays);
     CHECK(ores_string_split_literal_fill(flood, dot, arrays, owner) == ORES_NATIVE_ARRAY_LIMIT);
     oreslang_int_array_drop(arrays, owner);
+    #ifdef ORESLANG_NATIVE_TEST_ALLOC_FAILURE
+    // Fail the first array-growth allocation AFTER the lexical owner has
+    // already been created. The split may stage a String view, but must
+    // publish zero array items and return typed NO_MEMORY so the compiler's
+    // resource-failure epilogue can destroy the owner.
+    owner = oreslang_int_array_new(arrays);
+    const int64_t injected = ores_string_literal("a.b", 3);
+    oreslang_int_array_test_fail_after(0);
+    CHECK(ores_string_split_literal_fill(injected, dot, arrays, owner)
+        == ORES_NATIVE_ARRAY_NO_MEMORY);
+    CHECK(oreslang_int_array_length(arrays, owner) == 0);
+    oreslang_int_array_test_fail_after(-1);
+    oreslang_int_array_drop(arrays, owner);
+    #endif
+
     owner = oreslang_int_array_new(arrays);
     const int64_t empty_separator = ores_string_literal("", 0);
     CHECK(ores_string_split_literal_fill(source, empty_separator, arrays, owner)

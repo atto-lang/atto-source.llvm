@@ -15,6 +15,10 @@
 #include <string.h>
 
 enum { MAX_LITERAL_SPLIT_TOKENS = 1024, MAX_LITERAL_DELIMITER_BYTES = 64 };
+// LLVM codegen currently emits the bridge return ABI as i32. Never let a
+// compiler flag or target ABI silently change the C status width.
+_Static_assert(sizeof(OresNativeIntArrayStatus) == sizeof(int32_t),
+    "native String split status must preserve LLVM i32 ABI");
 
 OresNativeIntArrayStatus ores_string_split_literal_fill(
     int64_t source, int64_t delimiter, OresNativeIntArrayRegion *region,

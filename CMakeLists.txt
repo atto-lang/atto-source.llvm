@@ -147,6 +147,54 @@ if(BUILD_TESTING)
     add_test(NAME native_string_split_literal_binary_unit
         COMMAND oreslang-native-string-split-literal-test)
     set_tests_properties(native_string_split_literal_binary_unit PROPERTIES TIMEOUT 20)
+
+    # Compile the same real split bridge against a deterministic array
+    # allocator fault injector. This is a physical C ABI test, not a
+    # synthetic host-language reference algorithm.
+    add_executable(oreslang-native-string-split-fault-test
+        tests/native_string_split_literal_test.c
+        src/main/cpp/oreslang/runtime/NativeStringSplitRegion.c
+        src/main/cpp/oreslang/runtime/NativeStringRegion.c
+        src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c)
+    target_include_directories(oreslang-native-string-split-fault-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_definitions(oreslang-native-string-split-fault-test PRIVATE
+        ORESLANG_NATIVE_TEST_ALLOC_FAILURE=1)
+    target_link_libraries(oreslang-native-string-split-fault-test PRIVATE pthread)
+    target_compile_options(oreslang-native-string-split-fault-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_string_split_literal_allocation_fault_injection
+        COMMAND oreslang-native-string-split-fault-test)
+    set_tests_properties(native_string_split_literal_allocation_fault_injection
+        PROPERTIES TIMEOUT 25)
+
+    # Sanitizers instrument the actual C runtime objects, not only the
+    # Atto guest IR. Keep this an executable, unskipped CTest on the
+    # Linux Clang/GCC runner matrix; fail explicitly on ASan/UBSan defects.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
+            CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        add_executable(oreslang-native-string-split-sanitized-test
+            tests/native_string_split_literal_test.c
+            src/main/cpp/oreslang/runtime/NativeStringSplitRegion.c
+            src/main/cpp/oreslang/runtime/NativeStringRegion.c
+            src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c)
+        target_include_directories(oreslang-native-string-split-sanitized-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_definitions(oreslang-native-string-split-sanitized-test PRIVATE
+            ORESLANG_NATIVE_TEST_ALLOC_FAILURE=1)
+        target_compile_options(oreslang-native-string-split-sanitized-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG
+            -fsanitize=address,undefined -fno-omit-frame-pointer
+            -fno-sanitize-recover=all)
+        target_link_options(oreslang-native-string-split-sanitized-test PRIVATE
+            -fsanitize=address,undefined -fno-sanitize-recover=all)
+        target_link_libraries(oreslang-native-string-split-sanitized-test PRIVATE pthread)
+        add_test(NAME native_string_split_literal_asan_ubsan
+            COMMAND oreslang-native-string-split-sanitized-test)
+        set_tests_properties(native_string_split_literal_asan_ubsan PROPERTIES
+            TIMEOUT 30
+            ENVIRONMENT "ASAN_OPTIONS=detect_leaks=1:abort_on_error=1;UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1")
+    endif()
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
     add_executable(oreslang-native-sum-payload-admission-test
