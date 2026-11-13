@@ -5621,3 +5621,41 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-oresvm-resource-retirement-test)
     set_tests_properties(native_oresvm_actor_resource_retirement PROPERTIES TIMEOUT 30)
 endif()
+
+# Host-only trusted runtime slice: preallocated actor-private Bytes mailbox.
+# This is NOT source ActorMail<Bytes> lowering or an executed Kafka guest.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-actor-bytes-inbox-test
+        tests/native_actor_bytes_inbox_test.c
+        src/main/cpp/oreslang/runtime/NativeActorBytesInbox.c)
+    target_include_directories(oreslang-native-actor-bytes-inbox-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-bytes-inbox-test PRIVATE c_std_11)
+    target_compile_definitions(oreslang-native-actor-bytes-inbox-test
+        PRIVATE ORESLANG_ACTOR_BYTES_TESTING=1)
+    target_compile_options(oreslang-native-actor-bytes-inbox-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_actor_bytes_inbox_host_only
+        COMMAND oreslang-native-actor-bytes-inbox-test)
+    set_tests_properties(native_actor_bytes_inbox_host_only PROPERTIES TIMEOUT 20)
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+        add_executable(oreslang-native-actor-bytes-inbox-sanitizer-test
+            tests/native_actor_bytes_inbox_test.c
+            src/main/cpp/oreslang/runtime/NativeActorBytesInbox.c)
+        target_include_directories(oreslang-native-actor-bytes-inbox-sanitizer-test
+            PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features(oreslang-native-actor-bytes-inbox-sanitizer-test
+            PRIVATE c_std_11)
+        target_compile_definitions(oreslang-native-actor-bytes-inbox-sanitizer-test
+            PRIVATE ORESLANG_ACTOR_BYTES_TESTING=1)
+        target_compile_options(oreslang-native-actor-bytes-inbox-sanitizer-test
+            PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG -O1
+            -g -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(oreslang-native-actor-bytes-inbox-sanitizer-test
+            PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+        add_test(NAME native_actor_bytes_inbox_asan_ubsan
+            COMMAND oreslang-native-actor-bytes-inbox-sanitizer-test)
+        set_tests_properties(native_actor_bytes_inbox_asan_ubsan
+            PROPERTIES TIMEOUT 30)
+    endif()
+endif()
