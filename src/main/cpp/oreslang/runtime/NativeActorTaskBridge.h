@@ -43,6 +43,11 @@ typedef struct {
     int resource_loan;
     int in_wake; /* remains true until scheduler's AFTER-WAKE hook */
     int cancellation_requested;
+    /* At most one Future producer outcome may arrive while SUSPENDING.
+     * It is held in this record, never published as a WAKE until the
+     * authenticated after-WAKE physical-turn exit acknowledgement. */
+    int pending_early_outcome;
+    OresNativeWakeOutcome early_outcome;
 } OresNativeActorTask;
 
 /* Initialized at host actor creation: task slot/generation/code generation
@@ -67,9 +72,12 @@ int ores_native_actor_task_claim_wake(
  * trusted scheduler after_wake callback may transition to SUSPENDED after
  * the original guest callback exits and its execution claim is released. */
 int ores_native_actor_task_suspend(OresNativeActorTask* task);
-/* Foreign Future producer: MAY publish READY/CANCELLED/FAILED, but never runs
- * guest code. The scheduler then runs on_wake on the actor worker pool.
- * task_generation prevents a stale producer from waking a reused record. */
+/* Foreign Future producer: MAY submit one READY/CANCELLED/FAILED outcome,
+ * but never runs guest code. An outcome arriving during SUSPENDING is
+ * escrowed and published only after the scheduler's post-WAKE physical
+ * callback-return acknowledgement; duplicates are rejected. The scheduler
+ * then runs on_wake on the owning actor pool. task_generation fences stale
+ * producers from waking a reused record. */
 int ores_native_actor_task_publish(
     OresNativeActorTask* task, uint64_t task_generation,
     OresNativeWakeOutcome outcome);
