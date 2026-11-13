@@ -1,0 +1,15 @@
+// Same typed source Task/await boundary through canonical suspends mtd.
+define actor Worker as {
+  let total: int = 0;
+  pub suspends mtd on_message(int incoming): int {
+    let Task<int> child = task { return incoming * 2 + 1; };
+    let int answer = await child;
+    return answer;
+  }
+}
+pub fnc main(): int {
+  const worker = spawn Worker();
+  worker.send(21);
+  stop worker;
+  return 43;
+}
