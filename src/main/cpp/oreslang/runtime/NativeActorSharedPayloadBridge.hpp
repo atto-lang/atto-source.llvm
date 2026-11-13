@@ -65,8 +65,12 @@ public:
     SendStatus try_send_from(
             OresNativeActorRef source, const SharedImmutablePayload& payload) {
         if (!payload.valid()) return SendStatus::invalid_payload;
+        std::uint64_t source_mail = 0;
         if (!scheduler_ || !ores_native_actor_scheduler_is_current_actor(
-                scheduler_, source)) return SendStatus::invalid_sender;
+                scheduler_, source) ||
+            !ores_native_actor_scheduler_current_data_mail_sequence(
+                scheduler_, source, &source_mail) || !source_mail)
+            return SendStatus::invalid_sender;
         std::unique_lock guard(mu_, std::try_to_lock);
         if (!guard.owns_lock()) return SendStatus::busy;
         if (closed_) return SendStatus::closed;
