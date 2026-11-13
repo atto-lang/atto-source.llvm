@@ -21,6 +21,17 @@ static void on_data(void* opaque, size_t actor_index, uint64_t payload) {
     unsigned char bytes[8] = {0};
     size_t length = 0;
     /* The same OS carrier cannot impersonate a different actor's turn. */
+    uint64_t active_sequence = 0;
+    check(ores_native_actor_scheduler_current_data_mail_sequence(
+        ctx->scheduler, ctx->bindings[actor_index].actor, &active_sequence));
+    check(active_sequence == 1);
+    /* A mismatched source-mail ordinal cannot consume or overwrite bytes. */
+    length = SIZE_MAX;
+    check(ores_native_actor_bytes_try_receive_sequenced(
+        ctx->bindings[actor_index].inbox,
+        ctx->bindings[actor_index].storage, active_sequence + 1,
+        bytes, sizeof(bytes), &length) == ORES_ACTOR_BYTES_DENIED);
+    check(length == SIZE_MAX);
     check(ores_native_actor_bytes_receive_current_data(
         &ctx->bindings[1 - actor_index], bytes, sizeof(bytes), &length)
         == ORES_ACTOR_BYTES_DENIED);
@@ -54,15 +65,22 @@ int main(void) {
         &ctx.bindings[1], out, sizeof(out), &length) == ORES_ACTOR_BYTES_DENIED);
     for (size_t i = 0; i < 2; ++i) {
         unsigned char payload[4] = {(unsigned char)(70 + i), 0, 255, 10};
-        check(ores_native_actor_bytes_try_send(
-            inbox[i], ctx.bindings[i].storage, payload, sizeof(payload))
+        size_t queued = SIZE_MAX, used = SIZE_MAX;
+        /* This failure occurs AFTER scheduler credit preflight, but BEFORE
+         * source-mail enqueue. No stray Bytes message or DATA ordinal. */
+        check(ores_native_actor_bytes_try_send_atomic(
+            &ctx.bindings[i], 900 + i, payload, 65)
+            == ORES_NATIVE_SEND_RESOURCE_EXHAUSTED);
+        check(ores_native_actor_bytes_observe(
+            inbox[i], ctx.bindings[i].storage, &queued, &used)
             == ORES_ACTOR_BYTES_OK);
+        check(queued == 0 && used == 0);
+        /* A valid atomic admission copies bytes, publishes the matching
+         * ordinal and queues DATA before the worker can observe either. */
+        check(ores_native_actor_bytes_try_send_atomic(
+            &ctx.bindings[i], 900 + i, payload, sizeof(payload))
+            == ORES_NATIVE_SEND_ACCEPTED);
     }
-    /* Preloaded byte queues are NOT a unified scheduler admission contract.
-     * This harness only tests physical turn authorization and private data. */
-    for (size_t i = 0; i < 2; ++i)
-        check(ores_native_actor_scheduler_try_send(
-            ctx.scheduler, actors[i], 900 + i) == ORES_NATIVE_SEND_ACCEPTED);
     struct timespec one_ms = {0, 1000000};
     for (unsigned i = 0; i < 3000 && atomic_load_explicit(
             &ctx.completed, memory_order_acquire) != 2; ++i)
@@ -79,6 +97,6 @@ int main(void) {
     ores_native_actor_scheduler_retire(ctx.scheduler);
     check(ores_native_actor_scheduler_drain(ctx.scheduler));
     check(ores_native_actor_scheduler_try_destroy(ctx.scheduler));
-    puts("NATIVE_ACTOR_BYTES_PHYSICAL_TURN_HOST_ONLY_PASS actors=2 current_data=2 foreign=DENIED external=DENIED");
+    puts("NATIVE_ACTOR_BYTES_PHYSICAL_TURN_HOST_ONLY_PASS actors=2 current_data=2 foreign=DENIED external=DENIED atomic_admission=2 rejected_without_stray_data=2 sequence_fenced=2");
     return 0;
 }
