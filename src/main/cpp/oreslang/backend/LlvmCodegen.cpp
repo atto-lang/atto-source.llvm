@@ -751,6 +751,117 @@ llvm::Value* lower(const Expression& expr,
 
 } // namespace
 
+// IR-only compiler probe for the first *source* actor Task expression.
+// This emits real checked LLVM arithmetic from the admitted Atto AST, but it
+// deliberately has no actor/await entrypoint or host Task executor. Positive
+// guest parity requires the separate scheduler-owned frame/WAKE integration.
+std::string emit_native_actor_task_i64_producer_ir(const Program& source) {
+    if (source.actors.size() != 1 || !source.actors.front().suspending_task ||
+            !source.imports.empty() || !source.classes.empty() ||
+            !source.generators.empty() || !source.cooperative_loops.empty() ||
+            !source.sum_types.empty() ||
+            std::any_of(source.functions.begin(), source.functions.end(),
+                [](const Function& fn) { return fn.name != "main"; }))
+        throw std::runtime_error(
+            "actor Task producer IR probe requires one validated scalar actor "
+            "and no additional guest definitions");
+
+    const ActorDecl& actor = source.actors.front();
+    const auto& task = *actor.suspending_task;
+    if (!task.producer_result || actor.on_message.parameters.size() != 1 ||
+            task.captured_parameter != actor.on_message.parameters.front().name)
+        throw std::runtime_error("actor Task producer capture provenance invalid");
+
+    llvm::LLVMContext context;
+    llvm::Module module("atto.actor.task.producer.ir.only", context);
+    auto* i32 = llvm::Type::getInt32Ty(context);
+    auto* i64 = llvm::Type::getInt64Ty(context);
+    auto* out_ptr = native_pointer_type(context, i64);
+    auto* abi = llvm::FunctionType::get(i32, {i64, out_ptr}, false);
+    auto* producer = llvm::Function::Create(abi,
+        llvm::GlobalValue::ExternalLinkage,
+        "atto_actor_task_i64_producer_probe", module);
+    auto args = producer->arg_begin();
+    llvm::Value* captured = &*args++;
+    captured->setName("captured_i64");
+    llvm::Value* output = &*args++;
+    output->setName("result_out");
+
+    auto* entry = llvm::BasicBlock::Create(context, "entry", producer);
+    auto* compute = llvm::BasicBlock::Create(context, "compute", producer);
+    auto* null_output = llvm::BasicBlock::Create(context, "null.output", producer);
+    auto* overflow = llvm::BasicBlock::Create(context, "arithmetic.overflow", producer);
+    llvm::IRBuilder<> b(entry);
+    b.CreateCondBr(b.CreateICmpEQ(
+        output, llvm::Constant::getNullValue(output->getType())),
+        null_output, compute);
+    b.SetInsertPoint(null_output);
+    b.CreateRet(llvm::ConstantInt::get(i32, 2));
+    b.SetInsertPoint(overflow);
+    b.CreateRet(llvm::ConstantInt::get(i32, 1));
+    b.SetInsertPoint(compute);
+
+    // These are the same exact expression shapes checked by the actor
+    // parser: one immutable copied i64, literals, negation, add/sub/mul.
+    // Overflow is a recoverable status; never emit llvm.trap that would
+    // crash all actors sharing a native OresVM process.
+    const auto emit = [&](const auto& self, const Expression& expr,
+                          std::size_t depth) -> llvm::Value* {
+        if (depth > 64)
+            throw std::runtime_error("actor Task producer IR depth limit exceeded");
+        using K = Expression::Kind;
+        if (expr.kind == K::Integer)
+            return llvm::ConstantInt::getSigned(i64, expr.integer);
+        if (expr.kind == K::Variable) {
+            if (expr.name != task.captured_parameter)
+                throw std::runtime_error("actor Task producer captured a foreign name");
+            return captured;
+        }
+        const bool negation = expr.kind == K::Negate;
+        if (!expr.left || (!negation && !expr.right) ||
+                (!negation && expr.kind != K::Add &&
+                 expr.kind != K::Subtract && expr.kind != K::Multiply))
+            throw std::runtime_error("actor Task producer contains an unsafe expression");
+        llvm::Value* lhs = negation
+            ? static_cast<llvm::Value*>(llvm::ConstantInt::get(i64, 0))
+            : self(self, *expr.left, depth + 1);
+        llvm::Value* rhs = negation
+            ? self(self, *expr.left, depth + 1)
+            : self(self, *expr.right, depth + 1);
+        const auto operation = (negation || expr.kind == K::Subtract)
+            ? llvm::Intrinsic::ssub_with_overflow
+            : expr.kind == K::Multiply
+                ? llvm::Intrinsic::smul_with_overflow
+                : llvm::Intrinsic::sadd_with_overflow;
+        auto* checked = llvm::Intrinsic::getDeclaration(
+            &module, operation, {i64});
+        auto* pair = b.CreateCall(checked, {lhs, rhs}, "task.checked");
+        auto* value = b.CreateExtractValue(pair, {0}, "task.value");
+        auto* failed = b.CreateExtractValue(pair, {1}, "task.overflow");
+        auto* next = llvm::BasicBlock::Create(
+            context, "task.arithmetic.ok", producer);
+        b.CreateCondBr(failed, overflow, next);
+        b.SetInsertPoint(next);
+        return value;
+    };
+    llvm::Value* value = emit(emit, *task.producer_result, 1);
+    b.CreateStore(value, output);
+    b.CreateRet(llvm::ConstantInt::get(i32, 0));
+
+    std::string diagnostics;
+    llvm::raw_string_ostream errors(diagnostics);
+    if (llvm::verifyModule(module, &errors)) {
+        errors.flush();
+        throw std::runtime_error(
+            "invalid actor Task producer LLVM IR: " + diagnostics);
+    }
+    std::string result;
+    llvm::raw_string_ostream output_stream(result);
+    module.print(output_stream, nullptr);
+    output_stream.flush();
+    return result;
+}
+
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool cortex_m_target,
                                   bool bounded_allocator_provider,
