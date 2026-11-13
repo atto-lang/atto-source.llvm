@@ -56,6 +56,12 @@ When the full `oreslang-llvmc` is available, the production compiler gate
 canonical pending `tests/fixtures/native-actor-bytes-map-target.atto` is
 **rejected before IR**. A negative compiler gate is NOT guest execution.
 
+## Executed provenance (November 13, 2026)
+
+- [C++ native Bytes-map host run 43520109877](https://github.com/akrion-sim/akrion-sim-e2e/actions/runs/43520109877): four Git blobs matched, GCC/Clang O1 and O2 12/12 native executions plus Clang ASan+UBSan 1/1. The tests execute the real generic C++ runtime substrate, **not** a compiled Bytes/Map guest.
+- [Production LLVM source compiler run 43521079675](https://github.com/akrion-sim/akrion-sim-e2e/actions/runs/43521079675): 78 selected source blobs SHA-matched the current LLVM compiler baseline; built `oreslang-llvmc`; compiled the scalar-actor .atto source to IR; linked it against the native C scheduler/heap and executed it with exit 43. The new typed-actor `native-actor-bytes-map-target.atto` failed closed with a sealed-state diagnostic and no partial IR. **Typed Bytes/Map/ActorMail remains unimplemented.**
+- Source-org Actions may have zero-step runner failures; these private-carrier receipts are from separately executed workflows. Neither run certifies complete actor memory safety, real Redis TCP, durable async I/O, .NET NativeAOT or Java/Graal backend parity.
+
 ## Required compiler/native guest follow-up
 
 1. Make `Bytes` a distinct, ownership-checked type in AST, type checker and
