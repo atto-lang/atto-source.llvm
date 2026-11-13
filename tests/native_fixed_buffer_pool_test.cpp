@@ -45,16 +45,21 @@ int main() {
         s[0] = 42;
     }));
     assert(!first->with_mutable_bytes(22, [](auto){}));
-    assert(!first->transfer(22, 33));
-    assert(first->transfer(11, 22));
+    assert(!pool.try_prepare_transfer(*first, 22));  // wrong sender retains original
+    auto pending = pool.try_prepare_transfer(*first, 11);
+    assert(pending);
+    assert(!first->release()); // moved-from sender cannot release escrow
     assert(!first->with_read_only_bytes(11, [](auto){}));
-    assert(first->with_read_only_bytes(22, [&](std::span<const std::uint8_t> s) {
+    assert(!pending->commit(0)); // invalid receiver keeps escrow intact
+    auto receiver = pending->commit(22);
+    assert(receiver && !pending->abort());
+    assert(receiver->with_read_only_bytes(22, [&](std::span<const std::uint8_t> s) {
         after = reinterpret_cast<std::uintptr_t>(s.data());
         assert(s[0] == 42);
     }));
     assert(before == after && before != 0);  // no payload copy on transfer
-    auto moved = std::move(*first);
-    assert(!first->release());
+    auto moved = std::move(*receiver);
+    assert(!receiver->release());
     assert(moved.release() && !moved.release());
     assert(second->release() && pool.in_use() == 0);
     auto clean = pool.try_acquire(44);
@@ -66,12 +71,50 @@ int main() {
         auto a = pool.try_acquire(100);
         assert(a);
         assert(a->with_mutable_bytes(100, [](auto s) { s[0] = 99; }));
-        assert(a->transfer(100, 200));
-        assert(a->with_read_only_bytes(200, [](auto s) { assert(s[0] == 99); }));
-        assert(a->release());
+        auto pending = pool.try_prepare_transfer(*a, 100);
+        assert(pending && !a->release());
+        auto delivered = pending->commit(200);
+        assert(delivered);
+        assert(delivered->with_read_only_bytes(200, [](auto s) { assert(s[0] == 99); }));
+        assert(delivered->release());
     }
     assert(allocations.load(std::memory_order_relaxed) == warmup_allocs);
     assert(pool.in_use() == 0);
+
+    // A failed mailbox offer explicitly aborts escrow and restores the
+    // original owner without copying payload or consuming another slot.
+    auto original = pool.try_acquire(300);
+    assert(original);
+    auto abortable = pool.try_prepare_transfer(*original, 300);
+    assert(abortable && !original->release());
+    auto restored = abortable->abort();
+    assert(restored && !abortable->commit(400));
+    assert(restored->with_mutable_bytes(300, [](auto s) { s[0] = 23; }));
+    assert(restored->release());
+
+    // Abandoned/cancelled pending handoff must scrub+return its slot, rather
+    // than leaving an escrow stranded or exposing it to the old sender.
+    auto abandoned = pool.try_acquire(301);
+    assert(abandoned);
+    {
+        auto transfer = pool.try_prepare_transfer(*abandoned, 301);
+        assert(transfer && !abandoned->release());
+    }
+    assert(pool.in_use() == 0);
+
+    // Pool retirement rejects commitment but allows explicit rollback and
+    // teardown, including when the prepared handoff outlives its pool.
+    {
+        NativeFixedBufferPool retiring(1, 8);
+        auto value = retiring.try_acquire(7);
+        assert(value);
+        auto transfer = retiring.try_prepare_transfer(*value, 7);
+        assert(transfer);
+        retiring.retire();
+        assert(!transfer->commit(8));
+        auto rolled_back = transfer->abort();
+        assert(rolled_back && rolled_back->release());
+    }
 
     auto survivor = pool.try_acquire(5);
     assert(survivor);
