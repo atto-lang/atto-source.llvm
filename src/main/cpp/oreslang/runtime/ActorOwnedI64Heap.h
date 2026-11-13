@@ -149,6 +149,16 @@ void ores_actor_i64_heap_loan_write(OresActorI64Heap* heap,
 void ores_actor_i64_heap_field_init(OresActorI64Heap* heap,
                                     uint64_t domain, uint64_t epoch,
                                     uint64_t index, int64_t initial);
+/* Failure-aware compiler field ABI: field reads/writes report the same
+ * typed status as exclusive loans. Does not abort on stale turn, retired
+ * heap, field bounds/ownership denial or heap-lock contention. Failed reads
+ * zero *out_value; failed writes never modify field contents. */
+OresActorLoanStatus ores_actor_i64_heap_try_field_read(
+    OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
+    uint64_t index, int64_t* out_value);
+OresActorLoanStatus ores_actor_i64_heap_try_field_write(
+    OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
+    uint64_t index, int64_t value);
 int64_t ores_actor_i64_heap_field_read(OresActorI64Heap* heap,
                                        uint64_t domain, uint64_t epoch,
                                        uint64_t index);
