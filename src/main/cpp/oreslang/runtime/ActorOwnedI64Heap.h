@@ -106,6 +106,28 @@ int ores_actor_i64_heap_try_borrow_mut(OresActorI64Heap* heap,
                                        OresActorLoan* out);
 OresActorLoan ores_actor_i64_heap_borrow_mut(OresActorI64Heap* heap,
                                               OresActorTurn turn, OresActorSlot slot);
+/* Typed host ABI for compiler-lowered actor fault reporting.
+ * Unlike the older fatal loan_* calls, BAD_TURN/BAD_HANDLE/RETIRED return
+ * without mutating slot state or aborting the whole native process.
+ * BUSY is one failed heap lock attempt; the actor scheduler decides whether
+ * to retry after yielding. A failed read clears *out_value.
+ * Only a live, supervisor-pinned heap pointer is valid (this does not
+ * recover a dangling heap pointer or replace a source borrow checker).
+ * Return values must be checked by generated code and routed to actor-local
+ * terminal failure handling; ignoring a status is NOT safe. */
+typedef enum {
+    ORES_ACTOR_LOAN_OK = 0,
+    ORES_ACTOR_LOAN_BUSY = 1,
+    ORES_ACTOR_LOAN_BAD_TURN = 2,
+    ORES_ACTOR_LOAN_BAD_HANDLE = 3,
+    ORES_ACTOR_LOAN_RETIRED = 4
+} OresActorLoanStatus;
+OresActorLoanStatus ores_actor_i64_heap_try_loan_read_mut(
+    OresActorI64Heap* heap, OresActorTurn turn, OresActorLoan loan,
+    int64_t* out_value);
+OresActorLoanStatus ores_actor_i64_heap_try_loan_write(
+    OresActorI64Heap* heap, OresActorTurn turn, OresActorLoan loan,
+    int64_t value);
 int64_t ores_actor_i64_heap_loan_read_mut(OresActorI64Heap* heap,
                                            OresActorTurn turn, OresActorLoan loan);
 void ores_actor_i64_heap_loan_write(OresActorI64Heap* heap,
