@@ -19,10 +19,10 @@ namespace oreslang::runtime {
 class NativeFixedBufferMailbox final {
     using Lease = NativeFixedBufferPool::Lease;
     struct State {
-        explicit State(std::size_t slots, std::uint64_t receiver)
+        explicit State(std::size_t slots, BufferActorIdentity receiver)
             : target_actor(receiver), ring(slots) {}
         std::mutex mutex;
-        const std::uint64_t target_actor;
+        const BufferActorIdentity target_actor;
         std::vector<std::optional<Lease>> ring;
         std::size_t head = 0, tail = 0, queued = 0, charged = 0;
         bool retired = false;
@@ -58,8 +58,8 @@ public:
         std::optional<Lease> owned_;
     };
 
-    NativeFixedBufferMailbox(std::size_t slots, std::uint64_t target_actor) {
-        if (slots == 0 || target_actor == 0 || slots > (1u << 20))
+    NativeFixedBufferMailbox(std::size_t slots, BufferActorIdentity target_actor) {
+        if (slots == 0 || !target_actor || slots > (1u << 20))
             throw std::invalid_argument("invalid native buffer mailbox size/target");
         state_ = std::make_shared<State>(slots, target_actor);
     }
@@ -72,9 +72,11 @@ public:
     // Slot reservation and transfer commit occur under the same queue lock,
     // so no receiver may observe a partially published lease.
     bool try_offer(NativeFixedBufferPool& pool, Lease& sender,
-                   std::uint64_t source_actor) noexcept {
+                   BufferActorIdentity source_actor) noexcept {
         std::lock_guard<std::mutex> lock(state_->mutex);
-        if (state_->retired || state_->charged == state_->ring.size()) return false;
+        if (state_->retired || state_->charged == state_->ring.size() ||
+            !source_actor || source_actor.tenant_id != state_->target_actor.tenant_id)
+            return false;
         auto prepared = pool.try_prepare_transfer(sender, source_actor);
         if (!prepared) return false;
         auto delivered = prepared->commit(state_->target_actor);
