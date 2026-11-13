@@ -27,11 +27,6 @@ static inline int ores_native_actor_bytes_bind_once(void* opaque) {
     return bind && ores_native_actor_bytes_bind_sequenced(
         bind->inbox, bind->owner);
 }
-/* The definition follows the bind routine; its identity is registered
- * with the real scheduler to reject foreign commit callbacks. */
-static inline int ores_native_actor_bytes_commit_payload(
-    void* opaque, uint64_t sequence);
-
 static inline int ores_native_actor_bytes_bind_scheduler(
     OresNativeActorBytesSchedulerBinding* out,
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
@@ -54,22 +49,10 @@ static inline int ores_native_actor_bytes_bind_scheduler(
     return 1;
 }
 
-/* Scheduler -> inbox is the ONLY permitted lock ordering. This
- * immediate borrowed source is copied to the target's private slab during
- * the scheduler's one atomic payload-plus-DATA admission transaction. */
-typedef struct {
-    const OresNativeActorBytesSchedulerBinding* binding;
-    const void* bytes;
-    size_t length;
-} OresNativeActorBytesCommitContext;
-static inline int ores_native_actor_bytes_commit_payload(
-    void* opaque, uint64_t sequence) {
-    const OresNativeActorBytesCommitContext* ctx =
-        (const OresNativeActorBytesCommitContext*)opaque;
-    return ores_native_actor_bytes_try_send_sequenced(
-        ctx->binding->inbox, ctx->binding->storage,
-        ctx->bytes, ctx->length, sequence) == ORES_ACTOR_BYTES_OK;
-}
+/* Scheduler -> inbox is the ONLY permitted lock ordering. The
+ * immediate borrowed source is copied into the destination's own slab.
+ * The callback's single external definition is in NativeActorBytesInbox.c
+ * so the scheduler sees the same identity from every translation unit. */
 /* Trusted native scheduler admission ONLY, not user-callable source ABI.
  * Legacy inbox.try_send + scheduler.try_send is NOT an atomic substitute.
  * No DATA message or owned payload is admitted on a rejected result. */
@@ -79,7 +62,9 @@ static inline OresNativeSendStatus ores_native_actor_bytes_try_send_atomic(
     if (!binding || !binding->scheduler || !binding->inbox ||
         !binding->storage.nonce || (length && !bytes))
         return ORES_NATIVE_SEND_INVALID_REF;
-    OresNativeActorBytesCommitContext commit = {binding, bytes, length};
+    OresNativeActorBytesCommitContext commit = {
+        binding->inbox, binding->storage, bytes, length
+    };
     return ores_native_actor_scheduler_try_send_committed(
         binding->scheduler, binding->actor, payload,
         ores_native_actor_bytes_commit_payload, &commit);
