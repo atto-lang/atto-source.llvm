@@ -80,6 +80,27 @@ for opt in 0 2; do
 done
 echo "ATTO_LOGICAL_SHORT_CIRCUIT_RUNTIME_O0_O2_PASS"
 
+# Observable side-effects provide a stronger ordering proof than pure
+# boolean truth tables: the two skipped rhs() calls must emit nothing,
+# followed by exactly one left and one right emission from ^^.
+order_ir="$tmp/xor-order-once.ll"
+timeout 40s "$compiler" --target=host "$fixtures/xor-order-once.atto" >"$order_ir"
+test -s "$order_ir" || { echo "missing XOR order IR" >&2; exit 1; }
+printf 'left\\nright\\n' >"$tmp/xor-order.expected"
+for opt in 0 2; do
+  binary="$tmp/xor-order-O$opt"
+  timeout 40s "$clang" "-O$opt" -x ir "$order_ir" -o "$binary"
+  status=0
+  timeout 20s "$binary" >"$tmp/xor-order-O$opt.stdout" 2>"$tmp/xor-order-O$opt.stderr" || status=$?
+  if [[ "$status" -ne 42 ]] || ! cmp -s "$tmp/xor-order.expected" "$tmp/xor-order-O$opt.stdout"; then
+    echo "XOR operand exactly-once left-to-right proof failed at O$opt: status=$status" >&2
+    cat "$tmp/xor-order-O$opt.stdout" >&2
+    cat "$tmp/xor-order-O$opt.stderr" >&2
+    exit 1
+  fi
+done
+echo "ATTO_LOGICAL_XOR_LEFT_RIGHT_EXACT_ONCE_O0_O2_PASS"
+
 # XOR always visits RHS, whereas AND/OR visit RHS only when needed.
 # llvm.trap is emitted by checked Integer.rem with zero divisor.
 for name in xor-eager-trap and-reached-rhs-trap or-reached-rhs-trap; do

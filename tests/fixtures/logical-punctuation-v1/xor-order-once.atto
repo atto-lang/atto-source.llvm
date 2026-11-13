@@ -1,0 +1,14 @@
+fnc lhs(): bool {
+  stdio.stdout.println("left");
+  return true;
+}
+fnc rhs(): bool {
+  stdio.stdout.println("right");
+  return false;
+}
+pub fnc main(): int {
+  bool skipped_and = false && rhs();
+  bool skipped_or = true || rhs();
+  bool eager_xor = lhs() ^^ rhs();
+  return (!skipped_and && skipped_or && eager_xor) ? 42 : 7;
+}
