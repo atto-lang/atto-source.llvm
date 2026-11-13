@@ -23,6 +23,9 @@ static inline int ores_native_actor_bytes_bind_scheduler(
     OresNativeActorBytesRef storage = ores_native_actor_bytes_ref(inbox);
     if (storage.actor_id != actor.actor_slot + 1u ||
         storage.incarnation != actor.generation || !storage.nonce) return 0;
+    /* A pristine actor-private inbox becomes permanently sequence-bound.
+     * Legacy scalar host writers cannot inject orphan DATA into this lane. */
+    if (!ores_native_actor_bytes_bind_sequenced(inbox, storage)) return 0;
     *out = (OresNativeActorBytesSchedulerBinding){
         scheduler, actor, inbox, storage
     };
