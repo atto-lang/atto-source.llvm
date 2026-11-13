@@ -54,3 +54,75 @@ ctest --test-dir build -R '^native_actor_suspends_' --output-on-failure
 5. Run actual compiler-generated `.atto` guest executables with GCC/Clang under O0/O2, ASan/UBSan, compare against the Java reference, obtain independent review and merge.
 
 Host-level bridge tests, AST admission, or syntactic fixtures alone must never count as positive AttoLang backend parity.
+
+## 2026-11-13 follow-up: actual checked producer LLVM IR (still no compiled await)
+
+The compiler now provides the **explicitly experimental** CLI mode:
+
+```sh
+oreslang-llvmc --emit-actor-task-producer-ir-only tests/fixtures/native-actor-task-i64-typed-gate.atto
+```
+
+This first parses and validates the real `.atto` source, then invokes
+`emit_native_actor_task_i64_producer_ir` on its `ActorSuspendingTaskI64`
+node. It emits a native-callable LLVM function with the temporary probe ABI:
+
+```c
+/* status: 0=success, 1=signed i64 overflow, 2=null out */
+int32_t atto_actor_task_i64_producer_probe(
+    int64_t copied_incoming, int64_t* result_out);
+```
+
+The helper compiles exact source integer literals, one copied immutable input,
+negation, addition, subtraction and multiplication to checked LLVM intrinsics
+(`llvm.sadd/ssub/smul.with.overflow.i64`), with a zero-write failure path.
+It never emits `llvm.trap` or `SourceTaskRuntime` calls and does not own or
+allocate a future, Task, actor or additional thread.
+
+The probe mode is restricted to host targets, exactly one validated actor Task
+body, and no additional guest definitions except `main`. It refuses
+other compiler modes/profiles that would imply a runtime/target certification.
+**Normal `oreslang-llvmc fixture.atto` remains deliberately rejected** at
+the actor continuation emission gate; the probe is not an alternative
+guest-facing syntax or complete source compilation.
+
+New **executable compiler-test definitions** (not yet executed on this head):
+
+- `native_actor_task_fnc_compiled_producer_ir_o0_o2`
+- `native_actor_task_mtd_compiled_producer_ir_o0_o2`
+
+Each invokes the actual compiler on the `.atto` fixture, checks the emitted
+IR for checked arithmetic and the absence of actor/pool/trap fallbacks, then
+uses Clang to build and execute at both O0 and O2. The native harness checks
+`41 -> 42` for `suspends fnc`, `41 -> 83` for `suspends mtd`, status 1
+on `INT64_MAX` with unchanged output, and status 2 on a null result pointer.
+
+Hybrid **compiled Atto producer on authentic native child-WAKE** tests:
+
+- `native_actor_task_fnc_compiled_producer_actor_wake_o0_o2`
+- `native_actor_task_mtd_compiled_producer_actor_wake_o0_o2`
+
+These compile/link the real generated producer into
+`native_actor_owned_task_wake_test.c`. The test's actor DATA turn copies its
+actual 41 message input; the existing native task registry admits a child,
+whose authenticated WAKE executes the compiled Atto arithmetic. The
+host-owned parent callback still creates the child, calls `suspend`, and
+receives early Future completion into the two-phase escrow. STOP and physical
+quiescence tests remain host-authored.
+
+**Crucial evidence distinction:** These hybrid tests would prove generated
+Atto producer code can execute on the native actor's actual WAKE lane, but
+they DO NOT prove that the Atto compiler generated task admission, lexical
+Future subscriptions, `await` suspension/resumption, or actor-owned
+continuation frame allocation. No emitted guest actor `await` exists yet.
+Do not count either the producer-only or hybrid tests as full AttoLang guest
+Task/await backend parity, even if their CI runs eventually pass.
+
+To run the target suite once a runner executes actual jobs:
+
+```sh
+ctest --test-dir build -R '^native_actor_(suspends_|task_.*compiled_producer)' --output-on-failure
+```
+
+The source-private CI carrier review is tracked by #1750 and must be updated
+for this branch's new immutable commit/tree before any cross-org transfer.
