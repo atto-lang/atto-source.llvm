@@ -44,5 +44,36 @@ foreach(opt IN ITEMS O0 O2)
         message(FATAL_ERROR
             "compiler-generated Task producer failed native ${opt} execution: ${native_result} ${native_errors}")
     endif()
+    if(TEST_BRIDGE)
+        if(NOT DEFINED SOURCE_ROOT OR "${SOURCE_ROOT}" STREQUAL "")
+            message(FATAL_ERROR "compiled Task/WAKE bridge probe requires SOURCE_ROOT")
+        endif()
+        set(bridge "${OUTPUT_DIR}/atto-producer-native-wake-${opt}")
+        execute_process(
+            COMMAND "${CLANG}" "-${opt}" -std=c11 -Wall -Wextra -Wpedantic -Werror
+                -UNDEBUG -pthread
+                "-I${SOURCE_ROOT}/src/main/cpp"
+                -DATTO_ACTOR_TASK_PRODUCER_PROBE=1
+                "-DATTO_ACTOR_TASK_PRODUCER_EXPECTED=${EXPECTED}"
+                -x c
+                "${SOURCE_ROOT}/tests/native_actor_owned_task_wake_test.c"
+                "${SOURCE_ROOT}/src/main/cpp/oreslang/runtime/NativeActorTaskBridge.c"
+                "${SOURCE_ROOT}/src/main/cpp/oreslang/runtime/NativeActorTaskRegistry.c"
+                "${SOURCE_ROOT}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+                -x ir "${ir}" -o "${bridge}"
+            ERROR_VARIABLE bridge_errors RESULT_VARIABLE bridge_compile_result
+            TIMEOUT 60)
+        if(NOT bridge_compile_result STREQUAL "0")
+            message(FATAL_ERROR "compiled Atto producer + native actor WAKE link failed: ${bridge_compile_result} ${bridge_errors}")
+        endif()
+        execute_process(
+            COMMAND "${bridge}"
+            RESULT_VARIABLE bridge_result OUTPUT_VARIABLE bridge_output
+            ERROR_VARIABLE bridge_run_errors TIMEOUT 35)
+        if(NOT bridge_result STREQUAL "0"
+                OR NOT bridge_output MATCHES "NATIVE_ACTOR_OWNED_TASK_WAKE_PASS")
+            message(FATAL_ERROR "compiled Atto producer native actor WAKE failed ${opt}: ${bridge_result} ${bridge_run_errors}")
+        endif()
+    endif()
 endforeach()
 message(STATUS "ATTO_TASK_I64_PRODUCER_IR_ONLY_O0_O2_PASS; NOT actor await parity")
