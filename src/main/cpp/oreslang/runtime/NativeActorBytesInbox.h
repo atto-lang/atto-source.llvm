@@ -34,6 +34,12 @@ OresNativeActorBytesInbox* ores_native_actor_bytes_open(
     size_t max_message_bytes, size_t byte_budget);
 OresNativeActorBytesRef ores_native_actor_bytes_ref(
     const OresNativeActorBytesInbox* inbox);
+/* Irreversible pre-admission mode transition, only for a pristine inbox
+ * matching the exact actor incarnation. Once bound, legacy unsequenced
+ * send/receive fail closed; all user DATA must use a scheduler ordinal.
+ * Binding itself is not authorization to invent scheduler mail sequences. */
+int ores_native_actor_bytes_bind_sequenced(OresNativeActorBytesInbox* inbox,
+    OresNativeActorBytesRef owner);
 
 /* Admission means copied into the TARGET actor's preallocated storage,
  * never that guest code consumed the message. No actor carrier waits. */
