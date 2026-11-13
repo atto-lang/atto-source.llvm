@@ -9,6 +9,7 @@ on:
       - 'contracts/actor-counter-identical-source-v1/**'
       - 'tests/cmake/native_actor_source_set_integrity_only.cmake'
       - 'tools/actor-counter-parity.mjs'
+      - 'tests/native_actor_source_set_integrity_unit_test.cpp'
       - 'CMakeLists.txt'
       - '.github/workflows/llvm-actor-source-set-integrity-only.yml'
   workflow_dispatch:
@@ -55,7 +56,7 @@ jobs:
           cmake -S . -B build-source-set -G Ninja \
             -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
             -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
-          cmake --build build-source-set --parallel 2 --target oreslang-llvmc
+          cmake --build build-source-set --parallel 2 --target oreslang-llvmc oreslang-actor-source-set-admission-unit
       - name: Require and execute compiler-backed CTest
         shell: bash
         run: |
@@ -63,7 +64,16 @@ jobs:
           ctest --test-dir build-source-set -N \
             -R '^native_actor_counter_source_set_integrity_only$' \
             | grep -q 'native_actor_counter_source_set_integrity_only'
+          ctest --test-dir build-source-set -N \
+            -R '^native_actor_source_set_git_blob_and_paths_host_only
+          echo 'RECEIPT LLVM_ACTOR_SOURCE_SET_INTEGRITY_ONLY=EXECUTED'
+          echo 'RECEIPT GUEST_ACTOR_EXECUTED=NO'
+ \
+            | grep -q 'native_actor_source_set_git_blob_and_paths_host_only'
           ctest --test-dir build-source-set --output-on-failure --no-tests=error \
-            -R '^native_actor_counter_source_set_integrity_only$'
+            -R '^(native_actor_counter_source_set_integrity_only|native_actor_source_set_git_blob_and_paths_host_only)
+          echo 'RECEIPT LLVM_ACTOR_SOURCE_SET_INTEGRITY_ONLY=EXECUTED'
+          echo 'RECEIPT GUEST_ACTOR_EXECUTED=NO'
+
           echo 'RECEIPT LLVM_ACTOR_SOURCE_SET_INTEGRITY_ONLY=EXECUTED'
           echo 'RECEIPT GUEST_ACTOR_EXECUTED=NO'
