@@ -117,6 +117,21 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
  */
 typedef int (*OresNativeActorPayloadCommitFn)(
     void* context, uint64_t admitted_sequence);
+/* Bootstrap-only exclusive DATA lane. An actor bound to a payload commit
+ * function may be sent DATA only through that exact function: scalar
+ * try_send, send and submit cannot inject unpaired ordinals.
+ * The trusted bind callback runs with the scheduler lock and MUST be a
+ * bounded, nonwaiting, allocation-free, single-shot state transition:
+ * success means the payload inbox is irrevocably sequence-bound; failure
+ * must leave it unchanged. It MUST NOT call scheduler APIs.
+ * All preflight (actor identity, clean lane, worker absence) precedes
+ * the bind callback; marking the lane is infallible after success.
+ * No untrusted .atto guest can supply these native host callbacks. */
+typedef int (*OresNativeActorPayloadBindFn)(void* context);
+int ores_native_actor_scheduler_bind_payload_only(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
+    OresNativeActorPayloadCommitFn admitted_commit,
+    OresNativeActorPayloadBindFn bind_once, void* context);
 OresNativeSendStatus ores_native_actor_scheduler_try_send_committed(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
     uint64_t payload, OresNativeActorPayloadCommitFn commit, void* context);

@@ -138,6 +138,39 @@ shared mutable borrow lease, NativeAOT parity, or AOT benchmark is proven.
 Use only reviewed native binding code until the compiler exposes a
 typed, unforgeable guest capability.
 
+## Exclusive scheduler DATA lane (draft, not yet executed)
+
+`ores_native_actor_bytes_bind_scheduler` now calls the actual
+`ores_native_actor_scheduler_bind_payload_only` bootstrap transition.
+The scheduler checks the exact ActorRef, pristine lane and absence of any
+started carrier **before** calling the inbox's nonwaiting sequence-bind.
+Both transitions are serialized under the scheduler mutex and there is no
+fallible scheduler step after a successful inbox bind. If the bind callback
+fails, neither the scheduler's lane mode nor the inbox's mode changes.
+The bind callback and payload commit callback are trusted host-only; neither
+may reenter the scheduler, park, allocate or invoke guest code.
+
+Once bound, only `ores_native_actor_bytes_commit_payload` can admit DATA on
+that actor lane. The scheduler denies scalar `try_send`, compatibility
+`send`, slot-indexed `submit`, and a different native commit function.
+This closes the loophole where a legacy scheduler message could take a mail
+ordinal without a matching Bytes entry. Unbound lanes retain their previous
+scalar behavior. The scheduler stores no inbox pointer and cannot directly
+retire it; the owning VM must hold both objects and fence all callers.
+
+The physical scheduler-turn host test adds negative cases for every bypass,
+repeat binding and foreign callback identity before verifying sequence 1,
+exactly one admitted/processed message per actor and zero orphan payloads.
+CTest also registers its ASan/UBSan variant. **No exact-HEAD executed native
+host or compiled .atto guest proof is claimed for this integration.**
+
+Known limitations: scheduler locking may park a **trusted external sender**;
+this interface is not yet a nonparking actor-guest send path. Stopping a
+scheduler lane does not itself scrub the external Bytes store; the VM must
+wait for physical STOP/DONE and pending external operations to quiesce, then
+retire/zeroize the inbox. No shared-memory zero-copy descriptor integration,
+source ActorMail<Bytes> lowering, NativeAOT or five-backend parity is claimed.
+
 ## Concurrent ingress stress (local host evidence, not source guest)
 
 `tests/native_actor_bytes_contention_test.c` creates four native

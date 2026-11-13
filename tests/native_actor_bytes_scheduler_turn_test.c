@@ -13,6 +13,13 @@ typedef struct {
     atomic_int completed;
 } Context;
 static void check(int ok) { if (!ok) abort(); }
+static int unrelated_commit_calls;
+static int unrelated_commit(void* unused, uint64_t sequence) {
+    (void)unused;
+    (void)sequence;
+    ++unrelated_commit_calls;
+    return 1;
+}
 
 /* Genuine existing native scheduler worker callback, not manual main call. */
 static void on_data(void* opaque, size_t actor_index, uint64_t payload) {
@@ -56,7 +63,24 @@ int main(void) {
         check(inbox[i] != NULL);
         check(ores_native_actor_bytes_bind_scheduler(
             &ctx.bindings[i], ctx.scheduler, actors[i], inbox[i]));
+        /* Binding cannot be repeated, and any legacy scheduler DATA entry
+         * would consume an ordinal without publishing its Bytes payload. */
+        OresNativeActorBytesSchedulerBinding repeated = {0};
+        check(!ores_native_actor_bytes_bind_scheduler(
+            &repeated, ctx.scheduler, actors[i], inbox[i]));
+        check(ores_native_actor_scheduler_try_send(
+            ctx.scheduler, actors[i], 900 + i)
+            == ORES_NATIVE_SEND_INVALID_REF);
+        check(!ores_native_actor_scheduler_send(
+            ctx.scheduler, actors[i], 900 + i));
+        check(!ores_native_actor_scheduler_submit(ctx.scheduler, i, 900 + i));
+        /* Committed-only means the one registered Bytes commit identity;
+         * another host callback must not create orphan scheduler DATA. */
+        check(ores_native_actor_scheduler_try_send_committed(
+            ctx.scheduler, actors[i], 900 + i,
+            unrelated_commit, NULL) == ORES_NATIVE_SEND_INVALID_REF);
     }
+    check(unrelated_commit_calls == 0);
     /* Receiver authority cannot be exercised from test's external thread. */
     unsigned char out[8] = {0}; size_t length = 0;
     check(ores_native_actor_bytes_receive_current_data(
@@ -110,6 +134,6 @@ int main(void) {
     ores_native_actor_scheduler_retire(ctx.scheduler);
     check(ores_native_actor_scheduler_drain(ctx.scheduler));
     check(ores_native_actor_scheduler_try_destroy(ctx.scheduler));
-    puts("NATIVE_ACTOR_BYTES_PHYSICAL_TURN_HOST_ONLY_PASS actors=2 current_data=2 foreign=DENIED external=DENIED atomic_admission=2 rejected_without_stray_data=2 sequence_fenced=2");
+    puts("NATIVE_ACTOR_BYTES_PHYSICAL_TURN_HOST_ONLY_PASS actors=2 current_data=2 foreign=DENIED external=DENIED atomic_admission=2 rejected_without_stray_data=2 sequence_fenced=2 exclusive_payload_lanes=2 legacy_scalar_denied=6 foreign_commit_denied=2");
     return 0;
 }

@@ -55,6 +55,8 @@ typedef struct {
     OresNativeActorTerminalFailure failure;
     unsigned control_is_failure;
     unsigned spawned, retired;
+    unsigned payload_only; /* forbids unpaired scheduler DATA admission */
+    OresNativeActorPayloadCommitFn payload_commit; /* exact trusted binding */
     uint64_t generation;
     uint64_t resource_loans; /* exact-incarnation external physical resources */
     uint64_t accepted_user_messages;
@@ -961,6 +963,8 @@ static int enqueue_with_commit_locked(
         OresNativeActorPayloadCommitFn commit, void* context) {
     if (s->retired || i >= s->actor_count
         || !s->actors[i].spawned || s->actors[i].retired
+        || (s->actors[i].payload_only
+            && commit != s->actors[i].payload_commit)
         || s->actors[i].accepted_user_messages == UINT64_MAX
         || s->actors[i].queued + s->actors[i].active >= s->per_actor_capacity
         || s->accepted >= UINT64_MAX - s->reserved_wakes
@@ -1047,6 +1051,38 @@ OresNativeActorRef ores_native_actor_scheduler_spawn(
     unlock(s);
     return ref;
 }
+/* The real scheduler owns the exclusive DATA lane mode. Binding the inbox
+ * by itself cannot prevent legacy try_send/submit from consuming source-mail
+ * ordinals; this scheduler preflight and state change fence that bypass.
+ * Runtime bootstrap must ensure the inbox outlives the bound scheduler and
+ * its external callers; the scheduler never stores the inbox pointer. */
+int ores_native_actor_scheduler_bind_payload_only(
+        OresNativeActorScheduler* s, OresNativeActorRef actor,
+        OresNativeActorPayloadCommitFn admitted_commit,
+        OresNativeActorPayloadBindFn bind_once, void* context) {
+    if (!s || !admitted_commit || !bind_once || executing == s) return 0;
+    lock(s);
+    int ok = !s->retired && matching(s, actor) && !s->started_workers;
+    if (ok) {
+        ActorLane* lane = &s->actors[actor.actor_slot];
+        ok = !lane->retired && !lane->payload_only
+            && !lane->queued && !lane->active && !lane->has_control
+            && !lane->wake_live && !lane->resource_loans
+            && !lane->accepted_user_messages;
+        if (ok) {
+            /* Called only after ALL scheduler preflight checks. The binding
+             * callback is trusted and its successful transition cannot be
+             * rolled back; storing the scheduler mode below cannot fail. */
+            ok = bind_once(context);
+            if (ok) {
+                lane->payload_commit = admitted_commit;
+                lane->payload_only = 1;
+            }
+        }
+    }
+    unlock(s);
+    return ok;
+}
 OresNativeSendStatus ores_native_actor_scheduler_try_send_committed(
     OresNativeActorScheduler* s, OresNativeActorRef actor, uint64_t payload,
     OresNativeActorPayloadCommitFn commit, void* context) {
@@ -1061,6 +1097,11 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send_committed(
         ActorLane* lane = &s->actors[actor.actor_slot];
         if (s->retired || lane->retired) {
             status = ORES_NATIVE_SEND_TERMINATED;
+        } else if (lane->payload_only
+                && lane->payload_commit != commit) {
+            /* A custom trusted callback cannot inject a mismatched DATA
+             * ordinal into an actor-owned Bytes-only scheduler lane. */
+            status = ORES_NATIVE_SEND_INVALID_REF;
         } else if (lane->accepted_user_messages == UINT64_MAX
                 || lane->queued + lane->active >= s->per_actor_capacity) {
             status = ORES_NATIVE_SEND_MAILBOX_FULL;
@@ -1089,7 +1130,7 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send_committed(
 }
 OresNativeSendStatus ores_native_actor_scheduler_try_send(
         OresNativeActorScheduler* s, OresNativeActorRef actor, uint64_t payload) {
-    /* Existing scalar admission stays independent of Bytes publication. */
+    /* Scalar DATA is forbidden for any payload-only actor lane. */
     if (!s) return ORES_NATIVE_SEND_INVALID_REF;
     lock(s);
     OresNativeSendStatus status;
@@ -1100,6 +1141,8 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
         ActorLane* lane = &s->actors[actor.actor_slot];
         if (s->retired || lane->retired) {
             status = ORES_NATIVE_SEND_TERMINATED;
+        } else if (lane->payload_only) {
+            status = ORES_NATIVE_SEND_INVALID_REF;
         } else if (lane->accepted_user_messages == UINT64_MAX
                 || lane->queued + lane->active >= s->per_actor_capacity) {
             status = ORES_NATIVE_SEND_MAILBOX_FULL;

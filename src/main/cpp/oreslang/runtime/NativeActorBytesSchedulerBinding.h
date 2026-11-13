@@ -14,6 +14,24 @@ typedef struct {
     OresNativeActorBytesRef storage;
 } OresNativeActorBytesSchedulerBinding;
 
+/* Compiled into the trusted runtime only. Binding is bootstrap-only and
+ * cannot be partially published: the scheduler's lock excludes legacy DATA
+ * while it makes an irrevocable (fail-closed) sequenced inbox transition. */
+typedef struct {
+    OresNativeActorBytesInbox* inbox;
+    OresNativeActorBytesRef owner;
+} OresNativeActorBytesBindContext;
+static inline int ores_native_actor_bytes_bind_once(void* opaque) {
+    OresNativeActorBytesBindContext* bind =
+        (OresNativeActorBytesBindContext*)opaque;
+    return bind && ores_native_actor_bytes_bind_sequenced(
+        bind->inbox, bind->owner);
+}
+/* The definition follows the bind routine; its identity is registered
+ * with the real scheduler to reject foreign commit callbacks. */
+static inline int ores_native_actor_bytes_commit_payload(
+    void* opaque, uint64_t sequence);
+
 static inline int ores_native_actor_bytes_bind_scheduler(
     OresNativeActorBytesSchedulerBinding* out,
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
@@ -23,9 +41,13 @@ static inline int ores_native_actor_bytes_bind_scheduler(
     OresNativeActorBytesRef storage = ores_native_actor_bytes_ref(inbox);
     if (storage.actor_id != actor.actor_slot + 1u ||
         storage.incarnation != actor.generation || !storage.nonce) return 0;
-    /* A pristine actor-private inbox becomes permanently sequence-bound.
-     * Legacy scalar host writers cannot inject orphan DATA into this lane. */
-    if (!ores_native_actor_bytes_bind_sequenced(inbox, storage)) return 0;
+    /* Both halves are established under the scheduler lock: prior DATA
+     * admissions or worker start reject the bind BEFORE touching storage.
+     * The two-state transition then has no fallible scheduler step. */
+    OresNativeActorBytesBindContext bind = {inbox, storage};
+    if (!ores_native_actor_scheduler_bind_payload_only(
+            scheduler, actor, ores_native_actor_bytes_commit_payload,
+            ores_native_actor_bytes_bind_once, &bind)) return 0;
     *out = (OresNativeActorBytesSchedulerBinding){
         scheduler, actor, inbox, storage
     };
