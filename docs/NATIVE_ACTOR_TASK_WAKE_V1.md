@@ -32,10 +32,42 @@ occur on normal task start/await/resume paths after host initialization.
 The scheduler's existing eight WAKE tickets per actor bound outstanding
 continuation admission.
 
+## Bounded actor-owned task registry
+
+`NativeActorTaskRegistry.{h,c}` adds a preallocated, fixed-capacity ledger
+for the exact native actor incarnation. The current maximum is eight tracked
+Task records per actor (the existing preallocated WAKE credit budget), with
+explicit unregister required before recycling capacity. Every source Task
+must be started through `ores_native_actor_task_registry_start`, which
+serializes registration and Task admission against `registry_stop` under
+one ledger lock; the scheduler's own retain/WAKE transfer gate independently
+arbitrates with external STOP under its scheduler lock.
+
+A nested child must name a currently tracked parent, and that parent must
+be executing an authenticated READY WAKE on this actor's physical worker.
+A raw Task pointer or foreign thread is insufficient. The registry stores
+parent-child edges and provides
+`ores_native_actor_task_registry_scope_done(parent)`, which stays false
+while ANY registered descendant still has an incomplete physical post-WAKE
+retirement receipt, even after the parent's own result has become terminal.
+`registry_cancel(parent)` revokes all descendants under the same ledger
+lock that serializes new child admission.
+
+The host's standard STOP hook must call `registry_stop`, which seals the
+ledger before canceling every registered Task and calling the exact native
+scheduler's STOP. `registry_close` fails until the ledger is empty, STOP is
+sealed, and the scheduler reports that actor's physical terminal state.
+No guest code may bypass this registry and start through the legacy
+trusted-host TaskBridge directly. The compiler must eventually enforce that
+use of the registry for all actor source Task codegen paths.
+
 ## Explicit lifecycle boundary
 
-This bridge is not a complete actor TaskScope. The host must cancel live
-suspended Tasks before calling `ores_native_actor_scheduler_stop_sealed`.
+This bridge is not a complete actor TaskScope. The **new registry supplies
+an automatic STOP hook for all registered Tasks**, replacing manual per-task
+cancellation when hosts use `registry_stop`. Bare trusted-host Tasks outside
+that registry still require manual cancellation before calling raw
+`ores_native_actor_scheduler_stop_sealed`.
 The host also owns the lifecycle of each external Future subscriber/publisher:
 it must revoke and physically join all callbacks that could still touch a
 Task record **before** `ores_native_actor_task_close` or freeing that record.
@@ -65,8 +97,14 @@ the compiler and supervisor have matching release gates.
 - the exact actor physical turn and no CONTROL task admission;
 - a deliberately held final guest WAKE demonstrating that physical DONE
   stays false until the callback exits and the trusted post-WAKE hook runs;
-- actor STOP while suspended, cancelled transferred wake, no guest resurrection
-  from late foreign completion, and actor `wait_done` physical fencing.
+- nested parent/child ledger admission, bounded registry closure, and
+  CONTROL-plane task admission rejection;
+- actor STOP while suspended, automatic cancellation of all registered Tasks,
+  cancelled transferred wake and late foreign completion rejection;
+- parent physical completion before a suspended child, rejecting parent
+  `scope_done` until the child retires, even when the parent's own result
+  is terminal; transitive cancellation of that child;
+- physical actor `wait_done` fencing before registry destruction.
 
 Run CTest `native_actor_owned_task_wake_host_v1` on an exact source checkout,
 or the isolated GitHub Actions source branch workflow
