@@ -877,6 +877,220 @@ std::string emit_native_actor_task_i64_producer_ir(const Program& source) {
     rb.CreateStore(awaited, resumed_out);
     rb.CreateRet(llvm::ConstantInt::get(i32, 0));
 
+    // Compiled continuation-frame ABI, still available only in this explicit
+    // IR-only probe. The trusted actor arena must allocate six zeroed i64
+    // words and keep them alive through the scheduler's physical after-WAKE
+    // acknowledgement. Nothing in this helper schedules work or grants a
+    // carrier lease. Task generation and actor incarnation are host-supplied,
+    // never selected by guest source.
+    //
+    // word[0] actor generation; [1] Task generation; [2] copied capture;
+    // [3] producer result; [4] phase (0=NEW,1=QUEUED,2=READY,3=RETIRED,
+    // 4=FAILED); [5] ABI marker. Status 0=OK, 1=checked overflow,
+    // 2=null argument, 3=wrong owner/epoch, 4=wrong phase/replay.
+    const auto frame_word = [&](llvm::IRBuilder<>& builder,
+                                llvm::Value* storage,
+                                unsigned slot) -> llvm::Value* {
+        return builder.CreateInBoundsGEP(
+            i64, storage, llvm::ConstantInt::get(i64, slot));
+    };
+    auto* zero64 = llvm::ConstantInt::get(i64, 0);
+    auto* marker = llvm::ConstantInt::get(i64, 0x4154544f5441534bULL);
+    const auto status = [&](unsigned code) -> llvm::ConstantInt* {
+        return llvm::ConstantInt::get(i32, code);
+    };
+    auto* frame_init_abi = llvm::FunctionType::get(
+        i32, {out_ptr, i64, i64, i64}, false);
+    auto* frame_init = llvm::Function::Create(
+        frame_init_abi, llvm::GlobalValue::ExternalLinkage,
+        "atto_actor_task_i64_frame_init_probe", module);
+    auto init_args = frame_init->arg_begin();
+    llvm::Value* init_frame = &*init_args++;
+    llvm::Value* init_epoch = &*init_args++;
+    llvm::Value* init_task = &*init_args++;
+    llvm::Value* init_capture = &*init_args++;
+    llvm::IRBuilder<> ib(
+        llvm::BasicBlock::Create(context, "entry", frame_init));
+    auto* init_owner = llvm::BasicBlock::Create(
+        context, "owner.valid", frame_init);
+    auto* init_phase = llvm::BasicBlock::Create(
+        context, "phase.valid", frame_init);
+    auto* init_write = llvm::BasicBlock::Create(
+        context, "frame.initialize", frame_init);
+    auto* init_null = llvm::BasicBlock::Create(
+        context, "null", frame_init);
+    auto* init_bad_owner = llvm::BasicBlock::Create(
+        context, "invalid.owner", frame_init);
+    auto* init_replay = llvm::BasicBlock::Create(
+        context, "reinitialized", frame_init);
+    ib.CreateCondBr(ib.CreateICmpEQ(
+        init_frame, llvm::Constant::getNullValue(init_frame->getType())),
+        init_null, init_owner);
+    ib.SetInsertPoint(init_null);
+    ib.CreateRet(status(2));
+    ib.SetInsertPoint(init_owner);
+    ib.CreateCondBr(ib.CreateOr(
+        ib.CreateICmpEQ(init_epoch, zero64),
+        ib.CreateICmpEQ(init_task, zero64)), init_bad_owner, init_phase);
+    ib.SetInsertPoint(init_bad_owner);
+    ib.CreateRet(status(3));
+    ib.SetInsertPoint(init_phase);
+    ib.CreateCondBr(ib.CreateOr(
+        ib.CreateICmpNE(ib.CreateLoad(
+            i64, frame_word(ib, init_frame, 4)), zero64),
+        ib.CreateICmpNE(ib.CreateLoad(
+            i64, frame_word(ib, init_frame, 5)), zero64)),
+        init_replay, init_write);
+    ib.SetInsertPoint(init_replay);
+    ib.CreateRet(status(4));
+    ib.SetInsertPoint(init_write);
+    ib.CreateStore(init_epoch, frame_word(ib, init_frame, 0));
+    ib.CreateStore(init_task, frame_word(ib, init_frame, 1));
+    ib.CreateStore(init_capture, frame_word(ib, init_frame, 2));
+    ib.CreateStore(zero64, frame_word(ib, init_frame, 3));
+    ib.CreateStore(llvm::ConstantInt::get(i64, 1),
+                   frame_word(ib, init_frame, 4));
+    ib.CreateStore(marker, frame_word(ib, init_frame, 5));
+    ib.CreateRet(status(0));
+
+    auto* frame_step_abi = llvm::FunctionType::get(
+        i32, {out_ptr, i64, i64}, false);
+    auto* frame_step = llvm::Function::Create(
+        frame_step_abi, llvm::GlobalValue::ExternalLinkage,
+        "atto_actor_task_i64_frame_step_probe", module);
+    auto step_args = frame_step->arg_begin();
+    llvm::Value* step_frame = &*step_args++;
+    llvm::Value* step_epoch = &*step_args++;
+    llvm::Value* step_task = &*step_args++;
+    llvm::IRBuilder<> sb(
+        llvm::BasicBlock::Create(context, "entry", frame_step));
+    auto* step_auth = llvm::BasicBlock::Create(
+        context, "authenticate", frame_step);
+    auto* step_phase = llvm::BasicBlock::Create(
+        context, "phase", frame_step);
+    auto* step_run = llvm::BasicBlock::Create(
+        context, "produce", frame_step);
+    auto* step_done = llvm::BasicBlock::Create(
+        context, "ready", frame_step);
+    auto* step_failed = llvm::BasicBlock::Create(
+        context, "failed", frame_step);
+    auto* step_null = llvm::BasicBlock::Create(
+        context, "null", frame_step);
+    auto* step_bad_owner = llvm::BasicBlock::Create(
+        context, "wrong.owner", frame_step);
+    auto* step_replay = llvm::BasicBlock::Create(
+        context, "wrong.phase", frame_step);
+    sb.CreateCondBr(sb.CreateICmpEQ(
+        step_frame, llvm::Constant::getNullValue(step_frame->getType())),
+        step_null, step_auth);
+    sb.SetInsertPoint(step_null);
+    sb.CreateRet(status(2));
+    sb.SetInsertPoint(step_auth);
+    llvm::Value* identity_valid = sb.CreateAnd(
+        sb.CreateAnd(
+            sb.CreateICmpEQ(sb.CreateLoad(
+                i64, frame_word(sb, step_frame, 0)), step_epoch),
+            sb.CreateICmpEQ(sb.CreateLoad(
+                i64, frame_word(sb, step_frame, 1)), step_task)),
+        sb.CreateICmpEQ(sb.CreateLoad(
+            i64, frame_word(sb, step_frame, 5)), marker));
+    sb.CreateCondBr(identity_valid, step_phase, step_bad_owner);
+    sb.SetInsertPoint(step_bad_owner);
+    sb.CreateRet(status(3));
+    sb.SetInsertPoint(step_phase);
+    sb.CreateCondBr(sb.CreateICmpEQ(
+        sb.CreateLoad(i64, frame_word(sb, step_frame, 4)),
+        llvm::ConstantInt::get(i64, 1)), step_run, step_replay);
+    sb.SetInsertPoint(step_replay);
+    sb.CreateRet(status(4));
+    sb.SetInsertPoint(step_run);
+    llvm::Value* producer_status = sb.CreateCall(
+        producer, {
+            sb.CreateLoad(i64, frame_word(sb, step_frame, 2)),
+            frame_word(sb, step_frame, 3)
+        }, "source.task.producer.status");
+    sb.CreateCondBr(
+        sb.CreateICmpEQ(producer_status, status(0)),
+        step_done, step_failed);
+    sb.SetInsertPoint(step_failed);
+    sb.CreateStore(llvm::ConstantInt::get(i64, 4),
+                   frame_word(sb, step_frame, 4));
+    sb.CreateRet(producer_status);
+    sb.SetInsertPoint(step_done);
+    sb.CreateStore(llvm::ConstantInt::get(i64, 2),
+                   frame_word(sb, step_frame, 4));
+    sb.CreateRet(status(0));
+
+    auto* frame_resume_abi = llvm::FunctionType::get(
+        i32, {out_ptr, i64, i64, out_ptr}, false);
+    auto* frame_resume = llvm::Function::Create(
+        frame_resume_abi, llvm::GlobalValue::ExternalLinkage,
+        "atto_actor_task_i64_frame_resume_probe", module);
+    auto frame_resume_args = frame_resume->arg_begin();
+    llvm::Value* resume_frame = &*frame_resume_args++;
+    llvm::Value* resume_epoch = &*frame_resume_args++;
+    llvm::Value* resume_task = &*frame_resume_args++;
+    llvm::Value* frame_output = &*frame_resume_args++;
+    llvm::IRBuilder<> fb(
+        llvm::BasicBlock::Create(context, "entry", frame_resume));
+    auto* resume_auth = llvm::BasicBlock::Create(
+        context, "authenticate", frame_resume);
+    auto* resume_phase = llvm::BasicBlock::Create(
+        context, "phase", frame_resume);
+    auto* resume_run = llvm::BasicBlock::Create(
+        context, "invoke.continuation", frame_resume);
+    auto* resume_done = llvm::BasicBlock::Create(
+        context, "retire", frame_resume);
+    auto* resume_failed = llvm::BasicBlock::Create(
+        context, "continuation.failed", frame_resume);
+    auto* resume_null = llvm::BasicBlock::Create(
+        context, "null", frame_resume);
+    auto* resume_bad_owner = llvm::BasicBlock::Create(
+        context, "wrong.owner", frame_resume);
+    auto* resume_replay = llvm::BasicBlock::Create(
+        context, "wrong.phase", frame_resume);
+    fb.CreateCondBr(fb.CreateOr(
+        fb.CreateICmpEQ(resume_frame,
+            llvm::Constant::getNullValue(resume_frame->getType())),
+        fb.CreateICmpEQ(frame_output,
+            llvm::Constant::getNullValue(frame_output->getType()))),
+        resume_null, resume_auth);
+    fb.SetInsertPoint(resume_null);
+    fb.CreateRet(status(2));
+    fb.SetInsertPoint(resume_auth);
+    llvm::Value* resume_identity_valid = fb.CreateAnd(
+        fb.CreateAnd(
+            fb.CreateICmpEQ(fb.CreateLoad(
+                i64, frame_word(fb, resume_frame, 0)), resume_epoch),
+            fb.CreateICmpEQ(fb.CreateLoad(
+                i64, frame_word(fb, resume_frame, 1)), resume_task)),
+        fb.CreateICmpEQ(fb.CreateLoad(
+            i64, frame_word(fb, resume_frame, 5)), marker));
+    fb.CreateCondBr(resume_identity_valid, resume_phase, resume_bad_owner);
+    fb.SetInsertPoint(resume_bad_owner);
+    fb.CreateRet(status(3));
+    fb.SetInsertPoint(resume_phase);
+    fb.CreateCondBr(fb.CreateICmpEQ(
+        fb.CreateLoad(i64, frame_word(fb, resume_frame, 4)),
+        llvm::ConstantInt::get(i64, 2)), resume_run, resume_replay);
+    fb.SetInsertPoint(resume_replay);
+    fb.CreateRet(status(4));
+    fb.SetInsertPoint(resume_run);
+    llvm::Value* continuation_status = fb.CreateCall(
+        resume, {
+            fb.CreateLoad(i64, frame_word(fb, resume_frame, 3)),
+            frame_output
+        }, "source.await.return.status");
+    fb.CreateCondBr(
+        fb.CreateICmpEQ(continuation_status, status(0)),
+        resume_done, resume_failed);
+    fb.SetInsertPoint(resume_failed);
+    fb.CreateRet(continuation_status);
+    fb.SetInsertPoint(resume_done);
+    fb.CreateStore(llvm::ConstantInt::get(i64, 3),
+                   frame_word(fb, resume_frame, 4));
+    fb.CreateRet(status(0));
+
     std::string diagnostics;
     llvm::raw_string_ostream errors(diagnostics);
     if (llvm::verifyModule(module, &errors)) {
