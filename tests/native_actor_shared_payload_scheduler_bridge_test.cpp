@@ -34,6 +34,7 @@ struct Run {
     std::atomic<unsigned> seen{0};
     std::atomic<unsigned> control{0};
     std::atomic<unsigned> handler_errors{0};
+    std::atomic<unsigned> cross_mail_denied{0};
     explicit Run(bool sealed, std::size_t mib)
         : bytes(mib, 0x5a), seal(sealed) {
         original_address = bytes.data();
@@ -61,7 +62,7 @@ static void on_payload(void* raw, OresNativeActorRef target,
     if (!ores_native_actor_scheduler_current_data_mail_sequence(
             run.scheduler, run.target, &observed_mail_sequence) ||
         observed_mail_sequence !=
-            static_cast<std::uint64_t>(run.seen.load()) + 1)
+            static_cast<std::uint64_t>(run.seen.load()) + 2)
         run.handler_errors.fetch_add(1); // Exact FIFO receipt, not payload ID.
     run.seen.fetch_add(1);
 }
@@ -77,6 +78,22 @@ static void on_control(void* raw, std::size_t actor_slot, std::uint64_t value) {
 static void on_message(void* raw, std::size_t actor_slot, std::uint64_t value) {
     auto& run = *static_cast<Run*>(raw);
     if (actor_slot == run.target.actor_slot) {
+        std::uint64_t ordinal = 0;
+        if (!ores_native_actor_scheduler_current_data_mail_sequence(
+                run.scheduler, run.target, &ordinal)) {
+            run.handler_errors.fetch_add(1);
+            return;
+        }
+        if (ordinal == 1) {
+            // Deliberately injected valid-looking ticket for descriptor #1
+            // was admitted as DATA mail #1; its real owner is DATA mail #2.
+            // A generation-only check would wrongly grant this descriptor.
+            if (run.bridge->dispatch_data(actor_slot, value))
+                run.handler_errors.fetch_add(1);
+            else
+                run.cross_mail_denied.fetch_add(1);
+            return;
+        }
         if (!run.bridge->dispatch_data(actor_slot, value))
             run.handler_errors.fetch_add(1);
         // The same current actor lane must NOT be able to redeem a
@@ -91,8 +108,17 @@ static void on_message(void* raw, std::size_t actor_slot, std::uint64_t value) {
         run.source_done.store(true);
         return;
     }
+    // Native malicious-host regression: enqueue a guessed first descriptor
+    // ticket in DATA mail #1 BEFORE bridge publication. The actual first
+    // descriptor will be stamped with DATA mail #2. A generation-only
+    // implementation would leak the still-valid backing to the wrong mail.
+    constexpr std::uint64_t cross_mail_ticket = (std::uint64_t(1) << 32) | 128;
+    if (ores_native_actor_scheduler_try_send(
+            run.scheduler, run.target, cross_mail_ticket)
+        != ORES_NATIVE_SEND_ACCEPTED)
+        run.source_ok.store(false);
     // The 1 MiB vector is moved into immutable backing while A owns its turn.
-    // The real scheduler sends only opaque descriptor tickets to actor B.
+    // Legitimate descriptor sends use only the real scheduler DATA admission.
     auto published = SharedImmutablePayload::publish(std::move(run.bytes));
     for (unsigned i = 0; i < 100; ++i) {
         if (run.bridge->try_send_from(run.source, published) !=
@@ -171,7 +197,8 @@ static void exercise(bool sealed) {
     check(bridge.close_after_done());
     check(bridge.queued_slots() == 0);
     check(bridge.queued_charged_bytes() == 0);
-    check(bridge.rejected_dispatch() == (sealed ? 0u : 100u));
+    check(bridge.rejected_dispatch() == (sealed ? 0u : 101u));
+    check(run.cross_mail_denied.load() == (sealed ? 0u : 1u));
     check(bridge.handler_failures() == 0);
     check(run.handler_errors.load() == 0);
     check(bridge.delivered() == (sealed ? 0u : 100u));
@@ -180,9 +207,9 @@ static void exercise(bool sealed) {
     OresNativeActorTerminalState terminal{};
     check(ores_native_actor_scheduler_terminal_state(
         run.scheduler, run.target, &terminal));
-    check(terminal.accepted_user_messages == 100);
-    check(terminal.processed_user_messages == (sealed ? 0u : 100u));
-    check(terminal.abandoned_user_messages == (sealed ? 100u : 0u));
+    check(terminal.accepted_user_messages == 101);
+    check(terminal.processed_user_messages == (sealed ? 0u : 101u));
+    check(terminal.abandoned_user_messages == (sealed ? 101u : 0u));
     check(ores_native_actor_scheduler_try_destroy(run.scheduler));
 }
 
