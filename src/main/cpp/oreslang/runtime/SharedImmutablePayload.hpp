@@ -16,7 +16,9 @@ namespace oreslang::runtime {
 
 // Trusted native actor-transport substrate, not a guest-visible pointer ABI.
 // Publication moves an exclusively owned allocation; readers hold immutable,
-// ref-counted descriptors. A slice retains (and is charged for) the WHOLE slab.
+// ref-counted descriptors. The trusted caller MUST NOT keep mutable aliases to
+// the moved allocation; only source-level ownership checking can prove that.
+// A slice retains (and is charged for) the WHOLE slab.
 class SharedImmutablePayload final {
     struct Backing final {
         explicit Backing(std::vector<std::uint8_t>&& input)
