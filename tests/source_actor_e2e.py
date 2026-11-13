@@ -17,6 +17,7 @@ ATTO_SOURCE_BLOBS = {
     "atto-actor-two-owned-states.atto": "8753cc15201ebfd647ca6d23e7f4a16c87569f5e",
     "atto-actor-send-after-graceful-negative.atto": "51a4e16cabdac03376456d5df00220927d18012f",
     "atto-actor-double-graceful-negative.atto": "93ccd0429b845f8dedab40794eba8f1f8c2794e7",
+    "atto-actor-graceful-and-done-negative.atto": "0cd84c952ee97305dc63fab0f338b243480989c5",
     "atto-actor-send-after-stop-negative.atto": "d9bb93cf379422e149961622e0ea9b810e02e945",
     "atto-actor-borrow-send-negative.atto": "b1d4dedad1b570dfa8ac2ca93c024c2752097d15",
 }
@@ -184,12 +185,14 @@ def main():
         "atto-actor-borrow-send-negative.atto": "borrowed reference may only be passed",
         "atto-actor-send-after-graceful-negative.atto": "actor message sent after stop",
         "atto-actor-double-graceful-negative.atto": "invalid or repeated actor stop",
+        "atto-actor-graceful-and-done-negative.atto":
+            "native graceful_stop with await get_done requires separate continuation lowering",
     }
     if args.atto_only:
         positives = [case for case in positives if case[0] in ATTO_SOURCE_BLOBS]
         negatives = {name: diag for name, diag in negatives.items()
                      if name in ATTO_SOURCE_BLOBS}
-        assert len(positives) == 1 and len(negatives) == 4
+        assert len(positives) == 1 and len(negatives) == 5
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
             name.startswith("source-actor-scoped-owned-")
