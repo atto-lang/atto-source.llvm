@@ -5660,6 +5660,60 @@ if(BUILD_TESTING)
     endif()
 endif()
 
+# Shared immutable descriptor native reference model and real scheduler
+# DATA-turn host adapter. Neither target certifies source .atto zero-copy.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-shared-immutable-payload-test
+        tests/native_shared_immutable_payload_test.cpp)
+    target_include_directories(oreslang-native-shared-immutable-payload-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-shared-immutable-payload-test PRIVATE cxx_std_20)
+    target_link_libraries(oreslang-native-shared-immutable-payload-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-shared-immutable-payload-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_shared_immutable_payload_host
+        COMMAND oreslang-native-shared-immutable-payload-test)
+    set_tests_properties(native_shared_immutable_payload_host PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-native-shared-payload-scheduler-test
+        tests/native_shared_payload_scheduler_turn_test.cpp
+        src/main/cpp/oreslang/runtime/NativeSharedPayloadSchedulerBinding.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-shared-payload-scheduler-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-shared-payload-scheduler-test PRIVATE
+        c_std_11 cxx_std_20)
+    target_link_libraries(oreslang-native-shared-payload-scheduler-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-shared-payload-scheduler-test PRIVATE
+        $<$<OR:$<C_COMPILER_ID:GNU,Clang>,$<CXX_COMPILER_ID:GNU,Clang>>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_shared_payload_atomic_scheduler_host_only
+        COMMAND oreslang-native-shared-payload-scheduler-test)
+    set_tests_properties(native_shared_payload_atomic_scheduler_host_only
+        PROPERTIES TIMEOUT 30)
+
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        add_executable(oreslang-native-shared-payload-scheduler-asan-test
+            tests/native_shared_payload_scheduler_turn_test.cpp
+            src/main/cpp/oreslang/runtime/NativeSharedPayloadSchedulerBinding.cpp
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+        target_include_directories(oreslang-native-shared-payload-scheduler-asan-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features(oreslang-native-shared-payload-scheduler-asan-test PRIVATE
+            c_std_11 cxx_std_20)
+        target_link_libraries(oreslang-native-shared-payload-scheduler-asan-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-native-shared-payload-scheduler-asan-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG -O1 -g
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(oreslang-native-shared-payload-scheduler-asan-test PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        add_test(NAME native_shared_payload_atomic_scheduler_asan_ubsan
+            COMMAND oreslang-native-shared-payload-scheduler-asan-test)
+        set_tests_properties(native_shared_payload_atomic_scheduler_asan_ubsan
+            PROPERTIES TIMEOUT 40)
+    endif()
+endif()
+
 # Real scheduler-host callback binding: authenticate the exact actor's DATA
 # turn before dequeuing its private byte slab; no guest Bytes lowering yet.
 if(BUILD_TESTING AND UNIX)
