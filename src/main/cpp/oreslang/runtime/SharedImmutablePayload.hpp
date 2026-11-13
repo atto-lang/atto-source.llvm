@@ -66,6 +66,8 @@ public:
     // borrowed view. Host callbacks must not capture/store the span elsewhere.
     // Async I/O must retain a descriptor until its physical completion.
     template<class Fn>
+        requires std::is_void_v<std::invoke_result_t<Fn,
+                               std::span<const std::uint8_t>>>
     void with_read_only_span(Fn&& fn) const {
         static_assert(std::is_void_v<std::invoke_result_t<Fn,
                            std::span<const std::uint8_t>>>,
