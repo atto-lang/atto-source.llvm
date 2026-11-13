@@ -2,7 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <deque>
+#include <type_traits>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -62,15 +62,18 @@ public:
         return backing_->bytes[offset_ + i];
     }
 
-    // Trusted host I/O only: callback must NOT store the borrowed span or pass
-    // it to an asynchronous syscall without separately retaining a descriptor.
-    // No raw address is ever placed in a guest mailbox.
+    // Trusted host I/O only: callback is synchronous and cannot return a
+    // borrowed view. Host callbacks must not capture/store the span elsewhere.
+    // Async I/O must retain a descriptor until its physical completion.
     template<class Fn>
-    decltype(auto) with_read_only_span(Fn&& fn) const {
+    void with_read_only_span(Fn&& fn) const {
+        static_assert(std::is_void_v<std::invoke_result_t<Fn,
+                           std::span<const std::uint8_t>>>,
+                      "read-only payload callbacks must return void; borrowed views cannot escape");
         if (!backing_) throw std::logic_error("invalid shared payload");
         const auto* bytes = backing_->bytes.data();
         if (offset_ != 0) bytes += offset_;
-        return std::forward<Fn>(fn)(std::span<const std::uint8_t>(bytes, length_));
+        std::forward<Fn>(fn)(std::span<const std::uint8_t>(bytes, length_));
     }
 
     // Host-only verification of pointer identity (not serialized/guest-visible).
@@ -85,8 +88,17 @@ public:
 class SharedPayloadInbox final {
 public:
     enum class SendResult { admitted, busy, full, closed, invalid };
+    enum class ReceiveStatus { received, busy, empty, closed };
+    struct ReceiveResult final {
+        ReceiveStatus status;
+        std::optional<SharedImmutablePayload> descriptor;
+    };
+
+    // Allocate slot metadata at construction, NEVER on the send path.
+    // Actual payload backing is published separately before admission.
     SharedPayloadInbox(std::size_t max_messages, std::size_t max_charged_bytes)
-        : max_messages_(max_messages), max_bytes_(max_charged_bytes) {
+        : ring_(max_messages), max_messages_(max_messages),
+          max_bytes_(max_charged_bytes) {
         if (!max_messages_) throw std::invalid_argument("zero mailbox slots");
     }
     SharedPayloadInbox(const SharedPayloadInbox&) = delete;
@@ -98,27 +110,48 @@ public:
         if (!lock.owns_lock()) return SendResult::busy;
         if (closed_) return SendResult::closed;
         const auto charge = descriptor.charged_bytes();
-        if (queue_.size() >= max_messages_ || charge > max_bytes_ - charged_)
+        if (queued_ >= max_messages_ || charge > max_bytes_ - charged_)
             return SendResult::full;
-        queue_.push_back(descriptor); // May throw; no credits committed yet.
+        // Ring slot is empty by construction or after a prior dequeue.
+        // Copying a shared descriptor does not allocate or copy payload bytes.
+        static_assert(std::is_nothrow_copy_constructible_v<SharedImmutablePayload>);
+        ring_[tail_].emplace(descriptor);
+        tail_ = tail_ + 1 == max_messages_ ? 0 : tail_ + 1;
+        ++queued_;
         charged_ += charge;
         return SendResult::admitted;
     }
 
-    std::optional<SharedImmutablePayload> try_receive() {
+    ReceiveResult try_receive_result() {
         std::unique_lock lock(mu_, std::try_to_lock);
-        if (!lock.owns_lock() || queue_.empty()) return std::nullopt;
-        SharedImmutablePayload item = std::move(queue_.front());
+        if (!lock.owns_lock()) return {ReceiveStatus::busy, std::nullopt};
+        if (!queued_)
+            return {closed_ ? ReceiveStatus::closed : ReceiveStatus::empty,
+                    std::nullopt};
+        auto item = std::move(*ring_[head_]);
+        ring_[head_].reset();
+        head_ = head_ + 1 == max_messages_ ? 0 : head_ + 1;
+        --queued_;
         charged_ -= item.charged_bytes();
-        queue_.pop_front();
-        return item;
+        return {ReceiveStatus::received, std::move(item)};
+    }
+
+    // Compatibility accessor. Schedulers must use try_receive_result() so
+    // BUSY, EMPTY and CLOSED never become indistinguishable wakeup states.
+    std::optional<SharedImmutablePayload> try_receive() {
+        return std::move(try_receive_result().descriptor);
     }
 
     bool try_close() {
         std::unique_lock lock(mu_, std::try_to_lock);
         if (!lock.owns_lock()) return false;
         closed_ = true;
-        queue_.clear(); // Releases queued handles, never an active receiver.
+        // External STOP/quiescence is required. Final reference release may
+        // reclaim backing memory and is not a hard real-time actor operation.
+        for (auto& entry : ring_) entry.reset();
+        head_ = 0;
+        tail_ = 0;
+        queued_ = 0;
         charged_ = 0;
         return true;
     }
@@ -131,13 +164,16 @@ public:
     }
     std::size_t queued() const {
         std::lock_guard lock(mu_);
-        return queue_.size();
+        return queued_;
     }
 private:
     mutable std::mutex mu_;
-    std::deque<SharedImmutablePayload> queue_;
+    std::vector<std::optional<SharedImmutablePayload>> ring_;
     const std::size_t max_messages_;
     const std::size_t max_bytes_;
+    std::size_t head_ = 0;
+    std::size_t tail_ = 0;
+    std::size_t queued_ = 0;
     std::size_t charged_ = 0;
     bool closed_ = false;
 };
