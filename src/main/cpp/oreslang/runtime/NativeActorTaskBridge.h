@@ -20,10 +20,12 @@ typedef enum {
     ORES_ACTOR_TASK_NEW = 0,
     ORES_ACTOR_TASK_QUEUED = 1,
     ORES_ACTOR_TASK_RUNNING = 2,
-    ORES_ACTOR_TASK_SUSPENDED = 3,
-    ORES_ACTOR_TASK_CANCEL_QUEUED = 4,
-    ORES_ACTOR_TASK_FINISH_PENDING = 5,
-    ORES_ACTOR_TASK_RETIRED = 6
+    /* Requested await, but the physical guest WAKE callback still owns the lane. */
+    ORES_ACTOR_TASK_SUSPENDING = 3,
+    ORES_ACTOR_TASK_SUSPENDED = 4,
+    ORES_ACTOR_TASK_CANCEL_QUEUED = 5,
+    ORES_ACTOR_TASK_FINISH_PENDING = 6,
+    ORES_ACTOR_TASK_RETIRED = 7
 } OresNativeActorTaskPhase;
 
 typedef struct {
@@ -59,9 +61,11 @@ int ores_native_actor_task_start(OresNativeActorTask* task);
  * wake physically retires its record without executing guest code. */
 int ores_native_actor_task_claim_wake(
     OresNativeActorTask* task, OresNativeWakeTicket ticket);
-/* After a claimed guest turn returns AWAIT, reserve and transfer one future
- * WAKE credit without parking its actor carrier. Only a successful suspend
- * permits external-producer completion to publish. */
+/* While a claimed guest turn is still executing, reserve/transfer one future
+ * WAKE credit without parking the actor carrier. This enters SUSPENDING,
+ * which is NOT physically suspended: producers cannot publish yet. Only the
+ * trusted scheduler after_wake callback may transition to SUSPENDED after
+ * the original guest callback exits and its execution claim is released. */
 int ores_native_actor_task_suspend(OresNativeActorTask* task);
 /* Foreign Future producer: MAY publish READY/CANCELLED/FAILED, but never runs
  * guest code. The scheduler then runs on_wake on the actor worker pool.
@@ -75,7 +79,9 @@ int ores_native_actor_task_publish(
 int ores_native_actor_task_finish(OresNativeActorTask* task);
 /* Must be wired to OresNativeActorSchedulerOptions.after_wake. Executes with
  * guest context ALREADY CLEARED, no scheduler lock held, and lane physically
- * pinned. The last guest frame has exited before this acknowledgement. */
+ * pinned. The last guest frame has exited before this acknowledgement.
+ * Converts SUSPENDING -> SUSPENDED or retires FINISH_PENDING; a canceled or
+ * still-running callback never fabricates physical retirement. */
 int ores_native_actor_task_after_wake(
     OresNativeActorTask* task, OresNativeWakeTicket ticket);
 /* Cancellation is nonparking: suspended transferred wake is aborted, queued
