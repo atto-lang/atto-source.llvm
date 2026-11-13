@@ -74,6 +74,33 @@ int ores_native_actor_task_registry_stop(OresNativeActorTaskRegistry* r) {
     pthread_mutex_unlock(&r->mutex);
     return stopped;
 }
+int ores_native_actor_task_registry_cancel(
+        OresNativeActorTaskRegistry* r, OresNativeActorTask* anchor) {
+    if (!r || !r->initialized || !anchor) return 0;
+    pthread_mutex_lock(&r->mutex);
+    int found = lookup(r, anchor) < r->count;
+    if (found) {
+        /* Snapshot not needed: child admission is serialized under this
+         * same lock, including parent execution and STOP. Cancel every
+         * registered transitive child even if its parent result is terminal.
+         * A foreign Future producer cannot execute the canceled guest. */
+        for (size_t i = 0; i < r->count; ++i) {
+            OresNativeActorTask* cursor = r->entries[i].task;
+            size_t depth = 0;
+            while (cursor && depth++ <= r->count) {
+                if (cursor == anchor) {
+                    (void)ores_native_actor_task_cancel(r->entries[i].task);
+                    break;
+                }
+                size_t parent = lookup(r, cursor);
+                if (parent == r->count) break;
+                cursor = r->entries[parent].parent;
+            }
+        }
+    }
+    pthread_mutex_unlock(&r->mutex);
+    return found;
+}
 int ores_native_actor_task_registry_scope_done(
         OresNativeActorTaskRegistry* r, OresNativeActorTask* anchor) {
     if (!r || !r->initialized || !anchor) return 0;
