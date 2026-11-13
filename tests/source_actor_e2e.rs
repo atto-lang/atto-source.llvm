@@ -7,7 +7,7 @@
 //! No mock IR, compiler substitutions, guest execution fallback, or PASS on skip.
 use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
