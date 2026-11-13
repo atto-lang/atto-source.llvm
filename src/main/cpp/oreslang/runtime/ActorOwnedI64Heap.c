@@ -595,6 +595,7 @@ OresActorLoanStatus ores_actor_i64_heap_fault_turn(
         if (!entry->nonce || entry->index >= heap->capacity
             || entry->turn_epoch != turn.epoch
             || !heap->slots[entry->index].live
+            || heap->slots[entry->index].generation != entry->generation
             || !heap->slots[entry->index].writer_active
             || heap->slots[entry->index].loans != 0
             || heap->active_exclusive_loans == 0
