@@ -39,6 +39,14 @@ OresNativeActorBytesRef ores_native_actor_bytes_ref(
  * never that guest code consumed the message. No actor carrier waits. */
 int ores_native_actor_bytes_try_send(OresNativeActorBytesInbox* inbox,
     OresNativeActorBytesRef target, const void* bytes, size_t length);
+/* Sequenced admission for scheduler transaction ONLY. A positive,
+ * scheduler-minted ordinal tags the exact DATA turn, never an untrusted guest
+ * field. A repeated/out-of-order ordinal is refused without changing inbox
+ * state. This function itself does not enqueue a scheduler DATA message;
+ * invoke it only through the trusted scheduler commit callback. */
+int ores_native_actor_bytes_try_send_sequenced(OresNativeActorBytesInbox* inbox,
+    OresNativeActorBytesRef target, const void* bytes, size_t length,
+    uint64_t source_mail_sequence);
 /* Only a trusted runtime actor turn may call this. A source-level receiver
  * capability/borrow checker is still required; the ref alone is not proof
  * of a physical actor turn. On SMALL, required_length is set and no read
@@ -46,6 +54,13 @@ int ores_native_actor_bytes_try_send(OresNativeActorBytesInbox* inbox,
 int ores_native_actor_bytes_try_receive(OresNativeActorBytesInbox* inbox,
     OresNativeActorBytesRef receiver, void* output, size_t capacity,
     size_t* required_length);
+/* Only the authenticated physical DATA-mail with matching ordinal may
+ * dequeue its sequenced payload. Mismatch, including legacy unsequenced
+ * frames, does not dequeue or mutate output. This call is trusted-host-only;
+ * the scheduler binding must certify physical current-turn authority. */
+int ores_native_actor_bytes_try_receive_sequenced(OresNativeActorBytesInbox* inbox,
+    OresNativeActorBytesRef receiver, uint64_t source_mail_sequence,
+    void* output, size_t capacity, size_t* required_length);
 /* Atomically closes admission, abandons pending messages and zeroizes every
  * slot. Caller must retry BUSY from CONTROL, not spin/park an actor thread. */
 int ores_native_actor_bytes_try_retire(OresNativeActorBytesInbox* inbox,
