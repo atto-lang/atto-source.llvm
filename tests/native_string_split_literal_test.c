@@ -28,6 +28,13 @@ int main(void) {
     CHECK(token_equals(arrays, owner, 1, "", 0));
     CHECK(token_equals(arrays, owner, 2, "created", 7));
     CHECK(token_equals(arrays, owner, 3, "", 0));
+    // Reject accidental repeated fill of the same owner without even
+    // appending one extra view or changing the published four tokens.
+    CHECK(ores_string_split_literal_fill(source, dot, arrays, owner)
+        == ORES_NATIVE_ARRAY_LIMIT);
+    CHECK(oreslang_int_array_length(arrays, owner) == 4);
+    CHECK(token_equals(arrays, owner, 0, "orders", 6));
+    CHECK(token_equals(arrays, owner, 3, "", 0));
     oreslang_int_array_drop(arrays, owner);
 
     owner = oreslang_int_array_new(arrays);
@@ -50,11 +57,39 @@ int main(void) {
     CHECK(token_equals(arrays, owner, 1, embedded + 4, 3));
     oreslang_int_array_drop(arrays, owner);
 
+    // Multi-byte delimiter containing embedded NUL must be a byte span,
+    // not a zero-terminated C string or a UTF-8 sentinel.
+    owner = oreslang_int_array_new(arrays);
+    const char nul_source[] = {'a','b','\0','c','d','\0','c','e'};
+    const char nul_separator[] = {'\0','c'};
+    const int64_t nul_input = ores_string_literal(nul_source, sizeof nul_source);
+    const int64_t nul_sep = ores_string_literal(nul_separator, sizeof nul_separator);
+    CHECK(ores_string_split_literal_fill(nul_input, nul_sep, arrays, owner)
+        == ORES_NATIVE_ARRAY_OK);
+    CHECK(oreslang_int_array_length(arrays, owner) == 3);
+    CHECK(token_equals(arrays, owner, 0, "ab", 2));
+    CHECK(token_equals(arrays, owner, 1, "d", 1));
+    CHECK(token_equals(arrays, owner, 2, "e", 1));
+    oreslang_int_array_drop(arrays, owner);
+
     owner = oreslang_int_array_new(arrays);
     const int64_t empty = ores_string_literal("", 0);
     CHECK(ores_string_split_literal_fill(empty, dot, arrays, owner) == ORES_NATIVE_ARRAY_OK);
     CHECK(oreslang_int_array_length(arrays, owner) == 1);
     CHECK(token_equals(arrays, owner, 0, "", 0));
+    oreslang_int_array_drop(arrays, owner);
+
+    // Exactly 1024 tokens are accepted; the 1025th fails closed.
+    char exact[2047];
+    for (size_t i = 0; i < sizeof exact; ++i)
+        exact[i] = (i & 1u) ? '.' : 'x';
+    owner = oreslang_int_array_new(arrays);
+    const int64_t at_cap = ores_string_literal(exact, sizeof exact);
+    CHECK(ores_string_split_literal_fill(at_cap, dot, arrays, owner)
+        == ORES_NATIVE_ARRAY_OK);
+    CHECK(oreslang_int_array_length(arrays, owner) == 1024);
+    CHECK(token_equals(arrays, owner, 0, "x", 1));
+    CHECK(token_equals(arrays, owner, 1023, "x", 1));
     oreslang_int_array_drop(arrays, owner);
 
     /* Limit path must not commit a deliverable owner. The caller is

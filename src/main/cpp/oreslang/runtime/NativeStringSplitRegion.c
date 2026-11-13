@@ -19,6 +19,13 @@ enum { MAX_LITERAL_SPLIT_TOKENS = 1024, MAX_LITERAL_DELIMITER_BYTES = 64 };
 OresNativeIntArrayStatus ores_string_split_literal_fill(
     int64_t source, int64_t delimiter, OresNativeIntArrayRegion *region,
     uint64_t destination) {
+    // The destination is a freshly created, exclusively owned EMPTY
+    // array. Validate its native handle and emptiness before looking up
+    // Strings or publishing any new views. A stale/cross-region handle
+    // aborts through the existing array ownership boundary; a valid
+    // nonempty owner is rejected unchanged rather than being appended to.
+    if (oreslang_int_array_length(region, destination) != 0)
+        return ORES_NATIVE_ARRAY_LIMIT;
     const char *bytes = NULL, *separator = NULL;
     uint64_t size = 0, sep_size = 0;
     if (ores_string_region_borrow_span(source, &bytes, &size) ||
