@@ -1948,6 +1948,13 @@ if(BUILD_TESTING)
     # Actual LLVM-generated producer arithmetic, compiled and run at O0/O2.
     # This opt-in probe never initializes a source actor or compiles await;
     # positive TASK/WAKE guest conformance remains a separate release gate.
+    # CTest uses an out-of-process CMake driver to invoke Clang. It does NOT
+    # inherit CMAKE_C_FLAGS implicitly: propagate the deliberate ASan/UBSan
+    # setting or a sanitizer-configured build would secretly run bare probes.
+    set(ORE_TASK_PROBE_SANITIZE OFF)
+    if(CMAKE_C_FLAGS MATCHES "(^|[ ;])-fsanitize=address,undefined([ ;]|$)")
+        set(ORE_TASK_PROBE_SANITIZE ON)
+    endif()
     foreach(actor_task_probe IN ITEMS fnc mtd)
         if(actor_task_probe STREQUAL "fnc")
             set(actor_task_probe_fixture native-actor-task-i64-typed-gate.atto)
@@ -1964,6 +1971,7 @@ if(BUILD_TESTING)
                     "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/${actor_task_probe_fixture}"
                     "-DHARNESS=${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_task_i64_producer_probe_harness.c"
                     "-DEXPECTED=${actor_task_probe_expected}"
+                    "-DSANITIZE=${ORE_TASK_PROBE_SANITIZE}"
                     "-DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/actor-task-producer-${actor_task_probe}"
                     -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_task_i64_producer_e2e.cmake")
         else()
@@ -1984,6 +1992,7 @@ if(BUILD_TESTING)
                     "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/${actor_task_probe_fixture}"
                     "-DHARNESS=${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_task_i64_producer_probe_harness.c"
                     "-DEXPECTED=${actor_task_probe_expected}"
+                    "-DSANITIZE=${ORE_TASK_PROBE_SANITIZE}"
                     "-DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/actor-task-producer-native-wake-${actor_task_probe}"
                     "-DSOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
                     "-DTEST_BRIDGE=1"
