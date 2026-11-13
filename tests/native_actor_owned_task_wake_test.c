@@ -244,6 +244,8 @@ int main(void) {
     CHECK(!ores_native_actor_task_after_wake(
         &f.parent, forged_completion));
     CHECK(!ores_native_actor_task_physically_done(&f.parent));
+    CHECK(!ores_native_actor_task_registry_scope_done(
+        &f.registry, &f.parent));
     signal_host(&f, &f.allow_parent_wake_exit);
     /* Only the scheduler's post-WAKE retirement hook can complete getDone.
      * An in-callback signal alone would be an insufficient physical proof. */
@@ -279,6 +281,8 @@ int main(void) {
     CHECK(ores_native_actor_task_registry_stop(&stopped.registry));
     CHECK(!ores_native_actor_task_registry_stop(&stopped.registry));
     CHECK(!ores_native_actor_task_physically_done(&stopped.parent));
+    CHECK(!ores_native_actor_task_registry_scope_done(
+        &stopped.registry, &stopped.parent));
     CHECK(!ores_native_actor_scheduler_poll_done(stopped.scheduler, stopped.actor));
     signal_host(&stopped, &stopped.allow_suspend_guest_exit);
     CHECK(ores_native_actor_scheduler_wait_done(stopped.scheduler, stopped.actor));
