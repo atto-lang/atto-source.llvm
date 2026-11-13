@@ -192,6 +192,55 @@ static void checked_loan_status_positive(void) {
     puts("HOST_ONLY_EXCLUSIVE_LOAN_TYPED_FAULT_PASS");
 }
 
+/* A supervisor can retire only the failed actor's active turn. Outstanding
+ * read-only loans keep its heap pinned; sibling private heaps remain writable.
+ * This does NOT verify generated guest exception/fault delivery. */
+static void host_fault_turn_retirement(void) {
+    OresActorI64Heap* failed = ores_actor_i64_heap_open(401, 7, 8);
+    OresActorI64Heap* sibling = ores_actor_i64_heap_open(402, 8, 8);
+    OresActorTurn tf = ores_actor_i64_heap_enter(failed, 401, 7);
+    OresActorTurn ts = ores_actor_i64_heap_enter(sibling, 402, 8);
+    OresActorSlot sf = ores_actor_i64_heap_new(failed, tf, 12);
+    OresActorSlot read_slot = ores_actor_i64_heap_new(failed, tf, 77);
+    OresActorSlot ss = ores_actor_i64_heap_new(sibling, ts, 88);
+    OresActorLoan writer;
+    REQUIRE(ores_actor_i64_heap_try_borrow_mut(failed, tf, sf, &writer) == 1);
+    OresActorLoan reader = ores_actor_i64_heap_borrow(failed, tf, read_slot);
+    REQUIRE(ores_actor_i64_heap_fault_turn(
+                failed, (OresActorTurn){tf.domain, tf.epoch + 1})
+            == ORES_ACTOR_LOAN_BAD_TURN);
+    int64_t out = 1000;
+    REQUIRE(ores_actor_i64_heap_try_loan_read_mut(failed, tf, writer, &out)
+            == ORES_ACTOR_LOAN_OK && out == 12);
+    REQUIRE(ores_actor_i64_heap_fault_turn(failed, tf)
+            == ORES_ACTOR_LOAN_OK);
+    out = 1000;
+    REQUIRE(ores_actor_i64_heap_try_loan_read_mut(failed, tf, writer, &out)
+            == ORES_ACTOR_LOAN_RETIRED && out == 0);
+    REQUIRE(ores_actor_i64_heap_try_loan_write(failed, tf, writer, 999)
+            == ORES_ACTOR_LOAN_RETIRED);
+    REQUIRE(ores_actor_i64_heap_fault_turn(failed, tf)
+            == ORES_ACTOR_LOAN_RETIRED);
+    REQUIRE(ores_actor_i64_heap_try_destroy(failed) == 0);
+    /* The shared loan is not invalidated by the supervisor's fault path.
+     * Its caller must release after a separately enforced generation fence. */
+    ores_actor_i64_heap_release(failed, reader);
+    REQUIRE(ores_actor_i64_heap_try_destroy(failed) == 1);
+    OresActorLoan sibling_writer;
+    REQUIRE(ores_actor_i64_heap_try_borrow_mut(sibling, ts, ss,
+                                                &sibling_writer) == 1);
+    REQUIRE(ores_actor_i64_heap_try_loan_write(sibling, ts,
+                                                sibling_writer, 89)
+            == ORES_ACTOR_LOAN_OK);
+    REQUIRE(ores_actor_i64_heap_loan_read_mut(sibling, ts,
+                                               sibling_writer) == 89);
+    ores_actor_i64_heap_release(sibling, sibling_writer);
+    ores_actor_i64_heap_leave(sibling, ts);
+    ores_actor_i64_heap_retire(sibling);
+    REQUIRE(ores_actor_i64_heap_try_destroy(sibling) == 1);
+    puts("HOST_ONLY_EXCLUSIVE_LOAN_FAULT_RETIREMENT_PASS");
+}
+
 static void negative(unsigned case_number) {
     OresActorI64Heap* a = ores_actor_i64_heap_open(201, 1, 8);
     OresActorTurn ta = ores_actor_i64_heap_enter(a, 201, 1);
@@ -285,6 +334,7 @@ int main(void) {
     REQUIRE(setrlimit(RLIMIT_CORE, &core) == 0);
     positive();
     checked_loan_status_positive();
+    host_fault_turn_retirement();
     for (unsigned test = 1; test <= 16; ++test) {
         pid_t child = fork();
         REQUIRE(child >= 0);
