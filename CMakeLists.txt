@@ -5659,3 +5659,25 @@ if(BUILD_TESTING)
             PROPERTIES TIMEOUT 30)
     endif()
 endif()
+
+# Real scheduler-host callback binding: authenticate the exact actor's DATA
+# turn before dequeuing its private byte slab; no guest Bytes lowering yet.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-actor-bytes-scheduler-turn-test
+        tests/native_actor_bytes_scheduler_turn_test.c
+        src/main/cpp/oreslang/runtime/NativeActorBytesInbox.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-bytes-scheduler-turn-test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-bytes-scheduler-turn-test
+        PRIVATE Threads::Threads)
+    target_compile_features(oreslang-native-actor-bytes-scheduler-turn-test
+        PRIVATE c_std_11)
+    target_compile_options(oreslang-native-actor-bytes-scheduler-turn-test
+        PRIVATE $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_actor_bytes_physical_data_turn_host_only
+        COMMAND oreslang-native-actor-bytes-scheduler-turn-test)
+    set_tests_properties(native_actor_bytes_physical_data_turn_host_only
+        PROPERTIES TIMEOUT 30)
+endif()
