@@ -5680,6 +5680,27 @@ if(BUILD_TESTING AND UNIX)
         COMMAND oreslang-native-actor-bytes-scheduler-turn-test)
     set_tests_properties(native_actor_bytes_physical_data_turn_host_only
         PROPERTIES TIMEOUT 30)
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        add_executable(oreslang-native-actor-bytes-atomic-asan-test
+            tests/native_actor_bytes_scheduler_turn_test.c
+            src/main/cpp/oreslang/runtime/NativeActorBytesInbox.c
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+        target_include_directories(oreslang-native-actor-bytes-atomic-asan-test
+            PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-actor-bytes-atomic-asan-test
+            PRIVATE Threads::Threads)
+        target_compile_features(oreslang-native-actor-bytes-atomic-asan-test
+            PRIVATE c_std_11)
+        target_compile_options(oreslang-native-actor-bytes-atomic-asan-test
+            PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG
+            -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(oreslang-native-actor-bytes-atomic-asan-test
+            PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+        add_test(NAME native_actor_bytes_atomic_admission_asan_ubsan
+            COMMAND oreslang-native-actor-bytes-atomic-asan-test)
+        set_tests_properties(native_actor_bytes_atomic_admission_asan_ubsan
+            PROPERTIES TIMEOUT 30)
+    endif()
 endif()
 
 # Real frontend negative: until source Bytes is lowered, reject the guest
