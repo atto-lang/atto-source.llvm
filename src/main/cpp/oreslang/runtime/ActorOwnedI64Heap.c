@@ -15,7 +15,8 @@
 typedef struct {
     int64_t value;
     uint64_t generation;
-    uint32_t loans;
+    uint32_t loans; /* shared readers only */
+    unsigned char writer_active;
     unsigned char live;
     unsigned char field_mutable;
     unsigned char fixed_field;
@@ -25,6 +26,8 @@ typedef struct {
     uint64_t nonce;
     uint64_t index;
     uint64_t generation;
+    uint64_t turn_epoch; /* exclusive loans are turn-local */
+    unsigned char exclusive;
 } ActorLoanEntry;
 
 struct OresActorI64Heap {
@@ -38,6 +41,7 @@ struct OresActorI64Heap {
     int turn_active;
     int retiring;
     uint32_t active_loans;
+    uint32_t active_exclusive_loans;
     ActorLoanEntry loan_entries[MAX_LOANS];
     /* Optional, host-owned bounded forensic log. No hot-path allocation. */
     OresActorHeapAccessEvent* trace;
@@ -187,6 +191,9 @@ void ores_actor_i64_heap_leave(OresActorI64Heap* heap, OresActorTurn turn) {
     lock_heap(heap);
     if (!heap->turn_active || turn.domain != heap->domain
             || turn.epoch != heap->turn_epoch) rejected();
+    /* Mutable references must be released before a carrier or actor turn
+     * can suspend; shared read loans may survive the turn. */
+    if (heap->active_exclusive_loans != 0) rejected();
     heap->turn_active = 0;
     unlock_heap(heap);
 }
@@ -200,6 +207,7 @@ OresActorSlot ores_actor_i64_heap_new(OresActorI64Heap* heap,
             s->value = value;
             s->field_mutable = 0;
             s->fixed_field = 0;
+            s->writer_active = 0;
             s->live = 1;
             OresActorSlot id = {heap->domain, i, s->generation};
             record_access(heap, turn, i, s->generation, ORES_ACTOR_HEAP_ACCESS_ALLOC);
@@ -215,7 +223,9 @@ int64_t ores_actor_i64_heap_read(OresActorI64Heap* heap,
                                    OresActorTurn turn, OresActorSlot slot) {
     lock_heap(heap);
     require_turn(heap, turn);
-    const int64_t value = checked_slot(heap, slot)->value;
+    ActorSlot* target = checked_slot(heap, slot);
+    if (target->writer_active) rejected(); /* only loan token may read */
+    const int64_t value = target->value;
     record_access(heap, turn, slot.index, slot.generation, ORES_ACTOR_HEAP_ACCESS_READ);
     unlock_heap(heap);
     return value;
@@ -229,7 +239,7 @@ void ores_actor_i64_heap_write(OresActorI64Heap* heap,
     /* A suspended shared read loan still freezes the referent: a new actor
      * turn is not permission to mutate it. Mutable loans need a separate
      * exclusive API and source-level alias proof. */
-    if (target->fixed_field || target->loans != 0) rejected();
+    if (target->fixed_field || target->loans != 0 || target->writer_active) rejected();
     target->value = value;
     record_access(heap, turn, slot.index, slot.generation, ORES_ACTOR_HEAP_ACCESS_WRITE);
     unlock_heap(heap);
@@ -239,7 +249,8 @@ void ores_actor_i64_heap_drop(OresActorI64Heap* heap,
     lock_heap(heap);
     require_turn(heap, turn);
     ActorSlot* s = checked_slot(heap, slot);
-    if (s->fixed_field || s->loans != 0 || s->generation == UINT64_MAX) rejected();
+    if (s->fixed_field || s->loans != 0 || s->writer_active
+        || s->generation == UINT64_MAX) rejected();
     s->value = 0;
     s->live = 0;
     record_access(heap, turn, slot.index, slot.generation, ORES_ACTOR_HEAP_ACCESS_DROP);
@@ -272,7 +283,8 @@ OresActorLoan ores_actor_i64_heap_borrow(OresActorI64Heap* heap,
     lock_heap(heap);
     require_turn(heap, turn);
     ActorSlot* s = checked_slot(heap, slot);
-    if (s->loans == UINT32_MAX || heap->active_loans >= MAX_LOANS
+    if (s->writer_active || s->loans == UINT32_MAX
+        || heap->active_loans >= MAX_LOANS
         || heap->next_loan_nonce == UINT64_MAX) rejected();
     unsigned found = MAX_LOANS;
     for (unsigned i = 0; i < MAX_LOANS; ++i) {
@@ -283,12 +295,86 @@ OresActorLoan ores_actor_i64_heap_borrow(OresActorI64Heap* heap,
     heap->loan_entries[found].nonce = nonce;
     heap->loan_entries[found].index = slot.index;
     heap->loan_entries[found].generation = slot.generation;
+    heap->loan_entries[found].exclusive = 0;
+    heap->loan_entries[found].turn_epoch = 0;
     ++heap->active_loans;
     ++s->loans;
     OresActorLoan result = {heap->domain, nonce, slot.index, slot.generation};
     unlock_heap(heap);
     return result;
 }
+/* Trusted compiler/scheduler ABI; no naked pointer or guest-visible token. */
+OresActorLoan ores_actor_i64_heap_borrow_mut(OresActorI64Heap* heap,
+                                               OresActorTurn turn, OresActorSlot slot) {
+    lock_heap(heap);
+    require_turn(heap, turn);
+    ActorSlot* s = checked_slot(heap, slot);
+    if (s->loans != 0 || s->writer_active
+        || (s->fixed_field && !s->field_mutable)
+        || heap->active_loans >= MAX_LOANS
+        || heap->next_loan_nonce == UINT64_MAX) rejected();
+    unsigned found = MAX_LOANS;
+    for (unsigned i = 0; i < MAX_LOANS; ++i) {
+        if (heap->loan_entries[i].nonce == 0) { found = i; break; }
+    }
+    if (found == MAX_LOANS) rejected();
+    const uint64_t nonce = heap->next_loan_nonce++;
+    heap->loan_entries[found].nonce = nonce;
+    heap->loan_entries[found].index = slot.index;
+    heap->loan_entries[found].generation = slot.generation;
+    heap->loan_entries[found].turn_epoch = turn.epoch;
+    heap->loan_entries[found].exclusive = 1;
+    s->writer_active = 1;
+    ++heap->active_exclusive_loans;
+    ++heap->active_loans;
+    OresActorLoan result = {heap->domain, nonce, slot.index, slot.generation};
+    unlock_heap(heap);
+    return result;
+}
+
+static ActorSlot* checked_exclusive_loan(OresActorI64Heap* heap,
+                                       OresActorTurn turn, OresActorLoan loan) {
+    if (loan.domain != heap->domain || loan.nonce == 0
+        || loan.index >= heap->capacity || heap->active_exclusive_loans == 0)
+        rejected();
+    for (unsigned i = 0; i < MAX_LOANS; ++i) {
+        const ActorLoanEntry* entry = &heap->loan_entries[i];
+        if (entry->nonce != loan.nonce) continue;
+        if (!entry->exclusive || entry->index != loan.index
+            || entry->generation != loan.generation
+            || entry->turn_epoch != turn.epoch) rejected();
+        ActorSlot* s = checked_slot(heap, (OresActorSlot) {
+            loan.domain, loan.index, loan.generation
+        });
+        if (!s->writer_active || s->loans != 0) rejected();
+        return s;
+    }
+    rejected();
+    return NULL;
+}
+
+int64_t ores_actor_i64_heap_loan_read_mut(OresActorI64Heap* heap,
+                                            OresActorTurn turn, OresActorLoan loan) {
+    lock_heap(heap);
+    require_turn(heap, turn);
+    ActorSlot* s = checked_exclusive_loan(heap, turn, loan);
+    const int64_t value = s->value;
+    record_access(heap, turn, loan.index, loan.generation, ORES_ACTOR_HEAP_ACCESS_READ);
+    unlock_heap(heap);
+    return value;
+}
+void ores_actor_i64_heap_loan_write(OresActorI64Heap* heap, OresActorTurn turn,
+                                    OresActorLoan loan, int64_t value) {
+    lock_heap(heap);
+    require_turn(heap, turn);
+    ActorSlot* s = checked_exclusive_loan(heap, turn, loan);
+    s->value = value;
+    record_access(heap, turn, loan.index, loan.generation,
+                  s->fixed_field ? ORES_ACTOR_HEAP_ACCESS_FIELD_WRITE
+                                 : ORES_ACTOR_HEAP_ACCESS_WRITE);
+    unlock_heap(heap);
+}
+
 void ores_actor_i64_heap_release(OresActorI64Heap* heap, OresActorLoan loan) {
     lock_heap(heap);
     if (loan.domain != heap->domain || loan.nonce == 0 || !heap->active_loans)
@@ -299,9 +385,17 @@ void ores_actor_i64_heap_release(OresActorI64Heap* heap, OresActorLoan loan) {
         if (entry->index != loan.index || entry->generation != loan.generation
             || loan.index >= heap->capacity) rejected();
         ActorSlot* s = &heap->slots[loan.index];
-        if (!s->live || s->generation != loan.generation || !s->loans)
-            rejected();
-        --s->loans;
+        if (!s->live || s->generation != loan.generation) rejected();
+        if (entry->exclusive) {
+            if (!heap->turn_active || entry->turn_epoch != heap->turn_epoch
+                || !s->writer_active || s->loans != 0
+                || heap->active_exclusive_loans == 0) rejected();
+            s->writer_active = 0;
+            --heap->active_exclusive_loans;
+        } else {
+            if (s->writer_active || s->loans == 0) rejected();
+            --s->loans;
+        }
         --heap->active_loans;
         memset(entry, 0, sizeof(*entry));
         unlock_heap(heap);
@@ -352,7 +446,8 @@ void ores_actor_i64_heap_field_write(OresActorI64Heap* heap,
     require_turn(heap, turn);
     if (index >= heap->capacity) rejected();
     ActorSlot* field = &heap->slots[index];
-    if (!field->live || !field->fixed_field || !field->field_mutable || field->loans != 0) rejected();
+    if (!field->live || !field->fixed_field || !field->field_mutable || field->loans != 0
+        || field->writer_active) rejected();
     field->value = value;
     record_access(heap, turn, index, field->generation, ORES_ACTOR_HEAP_ACCESS_FIELD_WRITE);
     unlock_heap(heap);
@@ -366,6 +461,7 @@ int64_t ores_actor_i64_heap_field_read(OresActorI64Heap* heap,
     require_turn(heap, turn);
     if (index >= heap->capacity || !heap->slots[index].live
         || !heap->slots[index].fixed_field) rejected();
+    if (heap->slots[index].writer_active) rejected();
     const int64_t value = heap->slots[index].value;
     record_access(heap, turn, index, heap->slots[index].generation,
                   ORES_ACTOR_HEAP_ACCESS_FIELD_READ);
