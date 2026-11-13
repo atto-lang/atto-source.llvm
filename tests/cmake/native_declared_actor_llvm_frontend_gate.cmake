@@ -96,8 +96,8 @@ endif()
 if(NOT forbidden_ir STREQUAL "")
   message(FATAL_ERROR "LLVM leaked partial IR for an unsupported actor")
 endif()
-# The first namespace runtime slice must remain narrow; ordinary calls,
-# arithmetic and multiple functions still need checked namespace lowering.
+# The namespace runtime slice remains narrow: literal-only signed arithmetic
+# is allowed, but runtime locals, calls, and multiple functions stay gated.
 foreach(source IN ITEMS "${BAD_NONLITERAL}" "${BAD_MULTIFUNCTION}")
   execute_process(
     COMMAND "${COMPILER}" "${source}"
