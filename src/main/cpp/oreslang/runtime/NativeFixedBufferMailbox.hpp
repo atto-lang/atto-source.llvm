@@ -37,7 +37,10 @@ public:
         Delivery& operator=(Delivery&&) = delete;
         ~Delivery() = default;
 
-        Lease& lease() { return *owned_; }
+        Lease& lease() {
+            if (!owned_ || !state_) throw std::logic_error("stale buffer delivery");
+            return *owned_;
+        }
         bool acknowledge_released() noexcept {
             if (!owned_ || !state_ || !owned_->release()) return false;
             owned_.reset();
