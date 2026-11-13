@@ -93,10 +93,12 @@ public:
             (std::uint64_t(entry.generation) << 32) | std::uint64_t(index + 1);
         // Scheduler's own lock linearizes admission against STOP.
         // The callback may start, but cannot take mu_ until credits commit.
-        const auto status = ores_native_actor_scheduler_try_send(
-            scheduler_, target_, ticket);
+        std::uint64_t admitted_mail_sequence = 0;
+        const auto status = ores_native_actor_scheduler_try_send_receipted(
+            scheduler_, target_, ticket, &admitted_mail_sequence);
         if (status != ORES_NATIVE_SEND_ACCEPTED) {
             entry.descriptor.reset();
+            entry.mail_sequence = 0;
             free_[available_++] = static_cast<std::uint32_t>(index);
             if (status == ORES_NATIVE_SEND_MAILBOX_FULL ||
                 status == ORES_NATIVE_SEND_RESOURCE_EXHAUSTED)
@@ -107,14 +109,20 @@ public:
                 return SendStatus::invalid_target;
             return SendStatus::scheduler_rejected;
         }
+        if (!admitted_mail_sequence) std::abort();
+        entry.mail_sequence = admitted_mail_sequence;
         charged_ += charge;
         return SendStatus::admitted;
     }
 
     // Call only from the real scheduler's target DATA handler.
     bool dispatch_data(size_t actor_slot, std::uint64_t ticket) noexcept {
+        std::uint64_t current_mail_sequence = 0;
         if (!scheduler_ || actor_slot != target_.actor_slot ||
-            !ores_native_actor_scheduler_is_current_actor(scheduler_, target_)) {
+            !ores_native_actor_scheduler_is_current_actor(scheduler_, target_) ||
+            !ores_native_actor_scheduler_current_data_mail_sequence(
+                scheduler_, target_, &current_mail_sequence) ||
+            !current_mail_sequence) {
             rejected_dispatch_.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
@@ -129,12 +137,14 @@ public:
             }
             const auto index = static_cast<std::size_t>(low - 1);
             auto& entry = slots_[index];
-            if (entry.generation != generation || !entry.descriptor) {
+            if (entry.generation != generation || !entry.descriptor ||
+                entry.mail_sequence != current_mail_sequence) {
                 rejected_dispatch_.fetch_add(1, std::memory_order_relaxed);
                 return false;
             }
             received.emplace(std::move(*entry.descriptor));
             entry.descriptor.reset();
+            entry.mail_sequence = 0;
             charged_ -= received->charged_bytes();
             free_[available_++] = static_cast<std::uint32_t>(index);
         }
@@ -158,7 +168,10 @@ public:
         std::lock_guard guard(mu_);
         if (finished_.load(std::memory_order_relaxed)) return true;
         closed_ = true;
-        for (auto& entry : slots_) entry.descriptor.reset();
+        for (auto& entry : slots_) {
+            entry.descriptor.reset();
+            entry.mail_sequence = 0;
+        }
         charged_ = 0;
         available_ = 0;
         finished_.store(true, std::memory_order_release);
@@ -189,6 +202,7 @@ public:
 private:
     struct Slot {
         std::uint32_t generation = 0;
+        std::uint64_t mail_sequence = 0;
         std::optional<SharedImmutablePayload> descriptor;
     };
     mutable std::mutex mu_;
