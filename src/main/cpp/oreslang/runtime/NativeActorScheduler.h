@@ -242,6 +242,12 @@ OresNativeWakePublishStatus ores_native_actor_scheduler_publish_wake(
     OresNativeWakeOutcome outcome);
 int ores_native_actor_scheduler_is_current_wake(
     OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket);
+/* Non-forgeable post-WAKE physical-retirement receipt: TRUE only inside the
+ * scheduler's own after_wake callback for this exact issued ticket, after
+ * guest execution/claim exited. Merely possessing a ticket cannot make an
+ * external Future producer retire a task's physical lifetime. */
+int ores_native_actor_scheduler_is_after_wake(
+    OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket);
 /* Exact scheduler-issued WAKE ticket, READY outcome, current physical
  * producer claim and RUNNING phase are all required. CANCELLED/FAILED wakes
  * and STOPPING cleanup return 0. Does not confer request identity by itself:
