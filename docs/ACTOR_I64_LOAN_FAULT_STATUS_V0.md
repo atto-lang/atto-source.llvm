@@ -55,14 +55,30 @@ fence all timers, mailbox work, FFI callbacks and continuations before
 calling it. A fault in actor A does not authorize canceling or reclaiming
 actor B's heap.
 
-**Critical limitation:** existing source actor `on_message` callbacks
-are `int64_t` returning and `SourceActorBootstrap.c` currently assumes
-the callback returns successfully, then calls `heap_leave` and accounts
-the DATA message as processed. Compiler lowering does not yet emit the
-checked status branches or supervisor-fault delivery. The runtime's
-legacy fatal APIs still call `abort()` for trusted-host invariant
-violations. Therefore these helpers do **NOT** certify actor-local
-recovery from arbitrary guest faults, stack overflow or use-after-free.
+**Compiler/bootstrap integration added in this draft:** `LlvmCodegen.cpp`
+now emits the `oreslang_source_actor_spawn_checked` registration, checked
+field-read/write calls and explicit LLVM fault/success branches in native
+actor handlers. `SourceActorBootstrap.c` implements the opt-in
+`OresSourceActorCheckedMessage` ABI, preserves legacy `int64_t` callbacks,
+and on a typed nonzero status attempts supervisor-only heap fault retirement
+and seals the affected actor's DATA mailbox. It publishes atomic
+`successful_messages`, `failed_messages` and `fault_status` observations.
+The scheduler's `processed_user_messages` still means *physically executed
+callback turns* (including one failed callback), **not successful messages**;
+the success/failure counters split those outcomes.
+
+**Critical remaining limitations:** the callback is not yet registered
+through `ores_native_vm_spawn_supervised` and does not publish a
+generation-fenced `OresNativeActorTerminalFailure` to the root CONTROL
+supervisor. A checked `BUSY` result is currently terminal rather than a
+scheduler-yield/retry continuation. If supervisor fault retirement itself
+returns `BUSY`, the trusted bootstrap still aborts; the checked ABI does not
+protect against invalid native pointers, arbitrary C faults, actor stack
+overflow, unchecked constructor/scoped-local runtime calls or general
+`suspends`/async frame faults. The new native guest regression therefore
+proves only successfully executed checked handler calls, and the host C fault
+fixture proves only the bootstrap fault path. Neither constitutes complete
+actor-local guest failure containment or native broker certification.
 
 ## Tests and evidence
 
@@ -80,14 +96,16 @@ a runner actually executes; source-org zero-step GitHub Actions are
 
 ## Remaining P0 integration before guest certification
 
-- Emit checked loan calls and explicit branch-on-status in the real
-  `oreslang-llvmc` Atto compiler. Borrow, mutable state, and `await`
-  suspension rules must be enforced at compile time.
-- Have the source-actor trampoline distinguish successful DATA completion
-  from an actor fault. Route a generation-fenced typed failure through
-  the existing supervised native VM CONTROL mechanism; seal the failed
-  actor's mailbox without clearing sibling lanes or treating the failed
-  DATA message as successfully processed.
+- Generalize the current **checked actor-field** codegen to checked
+  scoped-owner allocation/drop, constructors and all guest-reachable
+  ownership operations; enforce compile-time borrowing and no mutable loan
+  across `await` before IR emission.
+- Extend the now-failure-aware source-actor trampoline to register immutable
+  parentage, publish a generation-fenced terminal fault through the existing
+  supervised native VM CONTROL mechanism, and distinguish failed DATA turns
+  in scheduler terminal accounting (not merely the source-actor counters).
+  Implement nonblocking scheduler retry for `BUSY` without losing the
+  current suspended guest frame.
 - Prove deterministic quiescence of continuation frames, shared readers,
   async completions and actor-owned heaps before physical destruction.
   A failure in the current turn cannot reclaim memory another carrier
