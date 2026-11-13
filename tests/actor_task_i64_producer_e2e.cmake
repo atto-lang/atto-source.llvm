@@ -27,10 +27,17 @@ if(emitted MATCHES "llvm\\.trap" OR emitted MATCHES "oreslang_source_actor_"
     message(FATAL_ERROR "producer-only IR illegally includes a host actor/Task fallback")
 endif()
 foreach(opt IN ITEMS O0 O2)
+    set(object "${OUTPUT_DIR}/atto-producer-${opt}.o")
     set(binary "${OUTPUT_DIR}/atto-producer-${opt}")
     execute_process(
-        COMMAND "${CLANG}" "-${opt}" -x ir "${ir}"
-                -x c "${HARNESS}" -o "${binary}"
+        COMMAND "${CLANG}" "-${opt}" -c -x ir "${ir}" -o "${object}"
+        ERROR_VARIABLE ir_errors RESULT_VARIABLE ir_result)
+    if(NOT ir_result STREQUAL "0")
+        message(FATAL_ERROR "Clang ${opt} Task LLVM IR object generation failed: ${ir_errors}")
+    endif()
+    execute_process(
+        COMMAND "${CLANG}" "-${opt}" -std=c11 -Wall -Wextra -Wpedantic -Werror
+            "${HARNESS}" "${object}" -o "${binary}"
         ERROR_VARIABLE clang_errors RESULT_VARIABLE clang_result)
     if(NOT clang_result STREQUAL "0")
         message(FATAL_ERROR "Clang ${opt} native Task probe failed: ${clang_errors}")
@@ -56,12 +63,11 @@ foreach(opt IN ITEMS O0 O2)
                 "-I${SOURCE_ROOT}/src/main/cpp"
                 -DATTO_ACTOR_TASK_PRODUCER_PROBE=1
                 "-DATTO_ACTOR_TASK_PRODUCER_EXPECTED=${EXPECTED}"
-                -x c
                 "${SOURCE_ROOT}/tests/native_actor_owned_task_wake_test.c"
                 "${SOURCE_ROOT}/src/main/cpp/oreslang/runtime/NativeActorTaskBridge.c"
                 "${SOURCE_ROOT}/src/main/cpp/oreslang/runtime/NativeActorTaskRegistry.c"
                 "${SOURCE_ROOT}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
-                -x ir "${ir}" -o "${bridge}"
+                "${object}" -o "${bridge}"
             ERROR_VARIABLE bridge_errors RESULT_VARIABLE bridge_compile_result
             TIMEOUT 60)
         if(NOT bridge_compile_result STREQUAL "0")
