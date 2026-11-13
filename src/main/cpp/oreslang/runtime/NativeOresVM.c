@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <stdatomic.h>
 
 typedef struct {
     OresNativeActorRef child;
@@ -12,9 +13,19 @@ typedef struct {
     int host_finalized;
 } OresVMSupervisorRegistration;
 
+/* One VM-private resource slot for each existing actor slot. Registration
+ * publishes the pointer exactly once before its first DATA. Reclamation is
+ * delayed until scheduler DONE. Only trusted runtime callbacks see it. */
+typedef struct {
+    OresNativeActorRef actor;
+    _Atomic(void*) resource;
+    OresNativeVMOwnedCleanupFn cleanup;
+} OresVMOwnedSlot;
+
 struct OresNativeVM {
     OresNativeActorScheduler* schedulers[ORES_NATIVE_VM_DOMAIN_COUNT];
     OresVMSupervisorRegistration* supervisors[ORES_NATIVE_VM_DOMAIN_COUNT];
+    OresVMOwnedSlot* owned[ORES_NATIVE_VM_DOMAIN_COUNT];
     size_t actor_slots[ORES_NATIVE_VM_DOMAIN_COUNT];
     int typed_failure_enabled[ORES_NATIVE_VM_DOMAIN_COUNT];
     size_t workers[ORES_NATIVE_VM_DOMAIN_COUNT];
@@ -80,6 +91,9 @@ static OresNativeVM* open_vm_internal(
         vm->supervisors[i] = (OresVMSupervisorRegistration*)calloc(
             p->actor_slots, sizeof(*vm->supervisors[i]));
         if (!vm->supervisors[i]) goto failed;
+        vm->owned[i] = (OresVMOwnedSlot*)calloc(p->actor_slots,
+            sizeof(*vm->owned[i]));
+        if (!vm->owned[i]) goto failed;
         vm->actor_slots[i] = p->actor_slots;
         vm->typed_failure_enabled[i] = p->on_failure != NULL;
         vm->workers[i] = workers;
@@ -99,6 +113,8 @@ failed:
     if (pthread_mutex_destroy(&vm->control_lock) != 0) abort();
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         free(vm->supervisors[i]);
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
+        free(vm->owned[i]);
     free(vm);
     return NULL;
 }
@@ -300,6 +316,9 @@ OresNativeActorRef ores_native_vm_supervisor_of(
 
 /* Explicit trusted-host completion receipt after external finalizers run.
  * Scheduler DONE is necessary but cannot prove host-owned cleanup itself. */
+static int owned_cleanup_after_done_locked(
+    OresNativeVM*, enum OresNativeVMDomain, OresNativeActorRef);
+
 int ores_native_vm_confirm_supervised_finalized(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef child) {
     if (!vm || !valid_domain(domain)) return 0;
@@ -311,7 +330,8 @@ int ores_native_vm_confirm_supervised_finalized(
         if (same_actor(entry->child, child) && !entry->host_finalized
             && !entry->terminal_published
             && ores_native_actor_scheduler_poll_done(
-                vm->schedulers[domain], child)) {
+                vm->schedulers[domain], child)
+            && owned_cleanup_after_done_locked(vm, domain, child)) {
             entry->host_finalized = 1;
             accepted = 1;
         }
@@ -482,10 +502,109 @@ size_t ores_native_vm_actor_outstanding_wake_loans(
         : 0;
 }
 
+/* This master-lock-only cleanup is VM-owned, not a test-harness manual
+ * try_retire. It never frees storage before physical scheduler DONE, which
+ * already includes active carrier callbacks, wakes and resource loans.
+ * External submitters must use VM admission, which shares this master lock.
+ * Failed cleanup leaves ownership installed for a later retry. */
+static int owned_cleanup_after_done_locked(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor) {
+    if (actor.actor_slot >= vm->actor_slots[domain]) return 0;
+    OresVMOwnedSlot* slot = &vm->owned[domain][actor.actor_slot];
+    void* resource = atomic_load_explicit(&slot->resource, memory_order_acquire);
+    if (!resource) return 1;
+    if (!same_actor(slot->actor, actor) || !slot->cleanup
+        || !ores_native_actor_scheduler_poll_done(vm->schedulers[domain], actor))
+        return 0;
+    if (!slot->cleanup(resource)) return 0;
+    atomic_store_explicit(&slot->resource, NULL, memory_order_release);
+    slot->actor = (OresNativeActorRef){0, 0, 0};
+    slot->cleanup = NULL;
+    return 1;
+}
+
+/* Attach and bind are one master -> scheduler -> private-slab transaction.
+ * No actor DATA has yet been admitted; a stopped or stale actor fails. */
+int ores_native_vm_attach_owned(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor,
+    void* resource, OresNativeVMOwnedBindFn bind,
+    OresNativeVMOwnedCleanupFn cleanup) {
+    if (!vm || !valid_domain(domain) || !resource || !bind || !cleanup)
+        return 0;
+    control_lock(vm);
+    int ok = !vm->control_retired && !vm->nio_bootstrap_in_progress
+        && actor.actor_slot < vm->actor_slots[domain];
+    if (ok) {
+        OresVMOwnedSlot* slot = &vm->owned[domain][actor.actor_slot];
+        ok = !atomic_load_explicit(&slot->resource, memory_order_acquire)
+            && ores_native_actor_scheduler_poll_ready(
+                vm->schedulers[domain], actor)
+            && bind(vm->schedulers[domain], actor, resource);
+        if (ok) {
+            slot->actor = actor;
+            slot->cleanup = cleanup;
+            atomic_store_explicit(&slot->resource, resource,
+                                  memory_order_release);
+        }
+    }
+    control_unlock(vm);
+    return ok;
+}
+
+/* Nonparking VM master admission. The callback is trusted and must not
+ * recurse into this VM; its native scheduler/Bytes path is a single atomic
+ * DATA-plus-payload transaction. -1 is RETRY, not success. */
+int ores_native_vm_try_call_owned(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor,
+    OresNativeVMOwnedCallFn call, void* context, int* result) {
+    if (!vm || !valid_domain(domain) || !call || !result) return 0;
+    const int lock_result = pthread_mutex_trylock(&vm->control_lock);
+    if (lock_result == EBUSY) return -1;
+    if (lock_result != 0) abort();
+    int ok = !vm->control_retired && actor.actor_slot < vm->actor_slots[domain];
+    if (ok) {
+        OresVMOwnedSlot* slot = &vm->owned[domain][actor.actor_slot];
+        void* resource = atomic_load_explicit(&slot->resource,
+                                              memory_order_acquire);
+        ok = resource && same_actor(slot->actor, actor);
+        if (ok) *result = call(resource, context);
+    }
+    control_unlock(vm);
+    return ok;
+}
+
+/* No VM mutex is taken on a physical carrier. Reclamation cannot race:
+ * a validated running DATA turn excludes scheduler DONE. Slot publication
+ * precedes admission under the master->scheduler ordering. */
+int ores_native_vm_current_data_call_owned(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor,
+    OresNativeVMOwnedCallFn call, void* context, int* result) {
+    uint64_t sequence = 0;
+    if (!vm || !valid_domain(domain) || !call || !result
+        || actor.actor_slot >= vm->actor_slots[domain]
+        || !ores_native_actor_scheduler_current_data_mail_sequence(
+            vm->schedulers[domain], actor, &sequence) || !sequence)
+        return 0;
+    OresVMOwnedSlot* slot = &vm->owned[domain][actor.actor_slot];
+    void* resource = atomic_load_explicit(&slot->resource,
+                                          memory_order_acquire);
+    if (!resource || !same_actor(slot->actor, actor)) return 0;
+    *result = call(resource, context);
+    return 1;
+}
+
 int ores_native_vm_poll_done(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef ref) {
-    return vm && valid_domain(domain)
-        && ores_native_actor_scheduler_poll_done(vm->schedulers[domain], ref);
+    if (!vm || !valid_domain(domain)) return 0;
+    /* Never park a carrier on the VM master lock. A busy poll may retry. */
+    const int locked = pthread_mutex_trylock(&vm->control_lock);
+    if (locked == EBUSY) return 0;
+    if (locked != 0) abort();
+    int done = ores_native_actor_scheduler_poll_done(
+        vm->schedulers[domain], ref);
+    if (done) done = owned_cleanup_after_done_locked(vm, domain, ref);
+    control_unlock(vm);
+    return done;
 }
 int ores_native_vm_actor_terminal_state(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
@@ -496,8 +615,14 @@ int ores_native_vm_actor_terminal_state(
 }
 int ores_native_vm_wait_done(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef ref) {
-    return vm && valid_domain(domain)
-        && ores_native_actor_scheduler_wait_done(vm->schedulers[domain], ref);
+    if (!vm || !valid_domain(domain) ||
+        !ores_native_actor_scheduler_wait_done(vm->schedulers[domain], ref))
+        return 0;
+    /* External caller only; no VM lock is held during scheduler wait. */
+    control_lock(vm);
+    int done = owned_cleanup_after_done_locked(vm, domain, ref);
+    control_unlock(vm);
+    return done;
 }
 
 int ores_native_vm_publish_control(
@@ -768,14 +893,38 @@ int ores_native_vm_close(OresNativeVM* vm) {
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         if (!ores_native_actor_scheduler_drain(vm->schedulers[i])) return 0;
 
+    /* Every remaining VM-owned actor-private resource is automatically
+     * retired after the scheduler's final DONE barrier. This also covers
+     * PANIC/raise terminal paths and VM-wide shutdown with no host wait_done
+     * call. Failure is retryable, never silent or an unsafe physical free. */
+    control_lock(vm);
+    int owned_clean = 1;
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
+        for (size_t slot = 0; slot < vm->actor_slots[i]; ++slot) {
+            OresVMOwnedSlot* owner = &vm->owned[i][slot];
+            void* resource = atomic_load_explicit(&owner->resource,
+                                                  memory_order_acquire);
+            if (resource && !owned_cleanup_after_done_locked(
+                    vm, (enum OresNativeVMDomain)i, owner->actor)) {
+                owned_clean = 0;
+                break;
+            }
+        }
+        if (!owned_clean) break;
+    }
+    control_unlock(vm);
+    if (!owned_clean) return 0;
+
     /* Caller-owned API/producer fence is required before memory reclamation. */
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         if (!ores_native_actor_scheduler_try_destroy(vm->schedulers[i])) abort();
     if (pthread_cond_destroy(&vm->control_ready) != 0) abort();
     if (pthread_cond_destroy(&vm->nio_idle) != 0) abort();
     if (pthread_mutex_destroy(&vm->control_lock) != 0) abort();
-    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
         free(vm->supervisors[i]);
+        free(vm->owned[i]);
+    }
     free(vm);
     return 1;
 }
