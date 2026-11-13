@@ -149,7 +149,7 @@ int main() {
     for (int t = 0; t < 8; ++t) {
         threads.emplace_back([&concurrent, &completed, t] {
             for (int i = 0; i < 4000; ++i) {
-                auto lease = concurrent.try_acquire(static_cast<std::uint64_t>(t + 1));
+                auto lease = concurrent.try_acquire(K(static_cast<std::uint64_t>(t + 1)));
                 if (!lease) { std::this_thread::yield(); continue; }
                 assert(lease->with_mutable_bytes(K(static_cast<std::uint64_t>(t + 1)), [](auto s) { s[0] = 1; }));
                 assert(lease->release());
