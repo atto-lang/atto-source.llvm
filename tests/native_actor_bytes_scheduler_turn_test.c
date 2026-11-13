@@ -57,6 +57,23 @@ int main(void) {
         check(ores_native_actor_bytes_bind_scheduler(
             &ctx.bindings[i], ctx.scheduler, actors[i], inbox[i]));
     }
+    /* All scalar DATA entrypoints, including the legacy index-only
+     * compatibility submit, must reject a bound Bytes-only actor. Rejecting
+     * one send cannot mint a sequence or strand private inbox bytes. */
+    for (size_t i = 0; i < 2; ++i) {
+        check(ores_native_actor_scheduler_try_send(
+            ctx.scheduler, actors[i], 0xbad)
+            == ORES_NATIVE_SEND_WRONG_MAIL_KIND);
+        check(!ores_native_actor_scheduler_send(
+            ctx.scheduler, actors[i], 0xbad));
+        check(!ores_native_actor_scheduler_submit(
+            ctx.scheduler, i, 0xbad));
+        size_t pending = SIZE_MAX, used = SIZE_MAX;
+        check(ores_native_actor_bytes_observe(
+            inbox[i], ctx.bindings[i].storage, &pending, &used)
+            == ORES_ACTOR_BYTES_OK);
+        check(pending == 0 && used == 0);
+    }
     /* Receiver authority cannot be exercised from test's external thread. */
     unsigned char out[8] = {0}; size_t length = 0;
     check(ores_native_actor_bytes_receive_current_data(
@@ -110,6 +127,6 @@ int main(void) {
     ores_native_actor_scheduler_retire(ctx.scheduler);
     check(ores_native_actor_scheduler_drain(ctx.scheduler));
     check(ores_native_actor_scheduler_try_destroy(ctx.scheduler));
-    puts("NATIVE_ACTOR_BYTES_PHYSICAL_TURN_HOST_ONLY_PASS actors=2 current_data=2 foreign=DENIED external=DENIED atomic_admission=2 rejected_without_stray_data=2 sequence_fenced=2");
+    puts("NATIVE_ACTOR_BYTES_PHYSICAL_TURN_HOST_ONLY_PASS actors=2 current_data=2 foreign=DENIED external=DENIED atomic_admission=2 rejected_without_stray_data=2 sequence_fenced=2 mixed_scalar=DENIED");
     return 0;
 }
