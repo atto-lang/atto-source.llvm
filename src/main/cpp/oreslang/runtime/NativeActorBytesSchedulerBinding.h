@@ -14,6 +14,20 @@ typedef struct {
     OresNativeActorBytesRef storage;
 } OresNativeActorBytesSchedulerBinding;
 
+/* Private inbox and DATA mailbox kind must be bound in ONE transaction;
+ * a failed bind cannot leave the scheduler marked Bytes-only while the slab
+ * remains legacy, or vice versa. The callback only attempts an atomic_flag
+ * try-lock on a pristine, generation-fenced inbox. */
+typedef struct {
+    OresNativeActorBytesInbox* inbox;
+    OresNativeActorBytesRef storage;
+} OresNativeActorBytesBindContext;
+static inline int ores_native_actor_bytes_bind_commit(void* opaque) {
+    OresNativeActorBytesBindContext* context =
+        (OresNativeActorBytesBindContext*)opaque;
+    return ores_native_actor_bytes_bind_sequenced(
+        context->inbox, context->storage);
+}
 static inline int ores_native_actor_bytes_bind_scheduler(
     OresNativeActorBytesSchedulerBinding* out,
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
@@ -23,9 +37,13 @@ static inline int ores_native_actor_bytes_bind_scheduler(
     OresNativeActorBytesRef storage = ores_native_actor_bytes_ref(inbox);
     if (storage.actor_id != actor.actor_slot + 1u ||
         storage.incarnation != actor.generation || !storage.nonce) return 0;
-    /* A pristine actor-private inbox becomes permanently sequence-bound.
-     * Legacy scalar host writers cannot inject orphan DATA into this lane. */
-    if (!ores_native_actor_bytes_bind_sequenced(inbox, storage)) return 0;
+    /* Lock order is scheduler -> inbox; no scalar admission or STOP may
+     * interleave with binding. A rejected callback leaves both types
+     * unchanged. No user/guest code can invoke the trusted commit. */
+    OresNativeActorBytesBindContext context = {inbox, storage};
+    if (!ores_native_actor_scheduler_bind_bytes_only(
+            scheduler, actor, ores_native_actor_bytes_bind_commit, &context))
+        return 0;
     *out = (OresNativeActorBytesSchedulerBinding){
         scheduler, actor, inbox, storage
     };
