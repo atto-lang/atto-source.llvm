@@ -2096,6 +2096,28 @@ if(BUILD_TESTING)
         set_tests_properties(source_actor_compiled_native_asan_ubsan PROPERTIES TIMEOUT 180)
     endif()
 
+    # No Python: actual .atto -> LLVM IR -> Clang native binary at O0 and O2.
+    # Strictly separate this compiled positive guest test from the host-only
+    # fault-injection callback test and yet-unimplemented supervisor delivery.
+    find_program(ORE_CHECKED_ACTOR_RUSTC NAMES rustc)
+    if(ORE_CLANG AND ORE_CHECKED_ACTOR_RUSTC)
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/oreslang-source-actor-checked-e2e"
+            COMMAND "${ORE_CHECKED_ACTOR_RUSTC}" --edition=2021 -O -D warnings
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_actor_checked_guest_e2e.rs"
+                -o "${CMAKE_CURRENT_BINARY_DIR}/oreslang-source-actor-checked-e2e"
+            DEPENDS tests/source_actor_checked_guest_e2e.rs VERBATIM)
+        add_custom_target(oreslang-source-actor-checked-e2e-build ALL
+            DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-source-actor-checked-e2e")
+        add_test(NAME source_actor_checked_compiled_atto_o0_o2
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-source-actor-checked-e2e"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --root "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(source_actor_checked_compiled_atto_o0_o2
+            PROPERTIES TIMEOUT 240)
+    endif()
+
     # Run both direct await and typed Future<void> source through real
     # Clang-linked actor runtime, including independent release/sanitizer
     # physical lifecycle receipts. No new Python test drivers.
