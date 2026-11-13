@@ -106,6 +106,16 @@ mutex. There are no fallible steps after payload commit. A callback
 returning rejection leaves the slab unchanged and enqueues no DATA;
 it is never interpreted as an ACK or durable commit.
 
+The scheduler additionally enforces an irreversible **DATA mailbox kind**:
+`ores_native_actor_scheduler_bind_bytes_only` atomically binds the actor's
+pristine scheduler lane and the private inbox's sequenced mode while holding
+the scheduler mutex. On failed bind, neither side changes mode; an actor
+that has ever admitted scalar DATA cannot be retyped. A Bytes actor rejects
+`try_send`, `send`, and legacy numeric `submit` without minting a DATA
+ordinal or spending a mailbox credit. Conversely, an unbound scalar actor
+rejects `try_send_committed` without invoking its payload callback.
+CONTROL and WAKE stay distinct and unaffected.
+
 `ores_native_actor_bytes_try_send_atomic` is the only reviewed binding
 entrypoint for this protocol. The native receive path authenticates the
 physical DATA turn and exact source-mail ordinal before dequeuing the
@@ -121,17 +131,23 @@ and worst-case latency characterization. The payload slab uses a
 failure rather than waiting on another actor or an I/O operation.
 Lock order is scheduler -> payload, never the reverse.
 
-`tests/native_actor_bytes_scheduler_turn_test.c` now checks two physical
-actor carriers, foreign-turn denial, rejected overlength Bytes with no
-stray payload, and matching sequence consumption. The inbox unit test
+`tests/native_actor_bytes_scheduler_turn_test.c` now covers two physical
+Bytes carriers, foreign-turn denial, rejected overlength Bytes with no
+stray payload, matching sequence consumption, scalar/send/legacy-index
+mixed-type denial, a separate unaffected scalar actor, failed and repeated
+binding, STOP-sealed admission refusal and terminal accounting. The inbox unit test
 adds wrong-ordinal, replay, zero-length and legacy cross-lane negative
 cases. These changes are source-authored and **NOT_EXECUTED** on
 approved exact-head CI as of this checkpoint.
 
 **Still not production:** this trusted-host API is not Atto source
-`ActorMail<Bytes>` lowering; old host APIs remain exposed and must not
-be mixed into the new binding. Binding lifetime, STOP and cancellation
-must be owned by OresVM so the inbox is physically retired only after
+`ActorMail<Bytes>` lowering; old host APIs remain exported for unbound
+scalar actors and may not be invoked on a bound Bytes-only actor.
+A trusted native caller can still invoke raw inbox functions or supply
+its own commit callback, so a compiler-owned typed capability boundary
+is required before exposing any of this to guest code. Binding lifetime,
+STOP and cancellation must be owned by OresVM so the inbox is physically
+retired only after
 all producer calls, callbacks and queued envelopes are quiescent.
 No source-compiled Kafka/RMQ/NATS/Redis network or storage integration,
 shared mutable borrow lease, NativeAOT parity, or AOT benchmark is proven.
