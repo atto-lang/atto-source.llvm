@@ -2,6 +2,7 @@
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/ActorSourceSetAdmission.hpp"
+#include "oreslang/frontend/ActorDeclaredHeaderAdmission.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ModuleLoader.hpp"
 #include "oreslang/frontend/LibraryProfile.hpp"
@@ -210,6 +211,7 @@ int main(int argc, char** argv) {
     bool rt_report_seen = false;
     bool constraint_descriptors_only = false;
     bool verify_actor_source_set_only = false;
+    bool verify_actor_headers_only = false;
     bool expected_source_set_seen = false;
     std::string expected_source_set_sha;
     std::string rt_entry = "main/0";
@@ -287,6 +289,12 @@ int main(int argc, char** argv) {
                 return 2;
             }
             verify_actor_source_set_only = true;
+        } else if (arg == "--verify-actor-headers-only") {
+            if (verify_actor_headers_only) {
+                std::cerr << "duplicate actor header verification option\n";
+                return 2;
+            }
+            verify_actor_headers_only = true;
         } else if (arg.rfind("--expected-source-set-git-sha=", 0) == 0) {
             if (expected_source_set_seen) {
                 std::cerr << "duplicate trusted source-set SHA option\n";
@@ -347,8 +355,10 @@ int main(int argc, char** argv) {
     // Source-set integrity is an independent read-only admission: it never
     // calls the actor parser, emits IR, or grants a mailbox/critical capability.
     // The expected Git SHA must come from an independently trusted CI plan.
-    if (verify_actor_source_set_only || expected_source_set_seen) {
-        if (!verify_actor_source_set_only || !expected_source_set_seen ||
+    if (verify_actor_source_set_only || verify_actor_headers_only ||
+        expected_source_set_seen) {
+        if (verify_actor_source_set_only == verify_actor_headers_only ||
+            !expected_source_set_seen ||
             path == nullptr || target_seen || profile_seen || library_profile_seen ||
             allocator_provider_seen || rt_check_only || rt_entry_seen || rt_report_seen ||
             constraint_descriptors_only || tree_shake || !tree_shake_roots.empty() ||
@@ -357,13 +367,26 @@ int main(int argc, char** argv) {
             return 2;
         }
         try {
-            const auto receipt = oreslang::frontend::verify_actor_source_set_only(
+            const auto verified = oreslang::frontend::load_verified_actor_source_set(
                 path, expected_source_set_sha);
-            std::cout << "ACTOR_SOURCE_SET_INTEGRITY_ONLY"
-                      << " units=" << receipt.unit_count
-                      << " namespace=" << receipt.name_space
-                      << " actor=" << receipt.actor
-                      << " NO_AST_NO_IR_NO_GUEST\n";
+            const auto& receipt = verified.receipt();
+            if (verify_actor_headers_only) {
+                const auto headers = oreslang::frontend::verify_actor_declared_headers_only(
+                    verified);
+                std::cout << "ACTOR_SOURCE_HEADERS_ONLY"
+                          << " units=" << receipt.unit_count
+                          << " namespace=" << headers.name_space
+                          << " actor=" << headers.actor
+                          << " contract=" << headers.contract
+                          << " field=" << headers.state_field
+                          << " NO_BODY_TYPECHECK_NO_IR_NO_GUEST\n";
+            } else {
+                std::cout << "ACTOR_SOURCE_SET_INTEGRITY_ONLY"
+                          << " units=" << receipt.unit_count
+                          << " namespace=" << receipt.name_space
+                          << " actor=" << receipt.actor
+                          << " NO_AST_NO_IR_NO_GUEST\n";
+            }
             return 0;
         } catch (const std::exception& error) {
             print_safe_diagnostic(std::cerr, error.what(), 512);
