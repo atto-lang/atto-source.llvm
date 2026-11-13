@@ -21,6 +21,10 @@ retired in `task_finish`: the scheduler's trusted `after_wake` hook runs
 **after the guest callback and its physical execution claim unwind** while
 the actor lane is still pinned. Only that hook may acknowledge the physical
 retirement receipt; a pending callback cannot manufacture `get_done()`.
+A copied WAKE ticket is **not** a physical-retirement capability: the hook
+is authenticated against the scheduler's post-dispatch thread-local receipt.
+An external Future producer passing the genuine ticket directly to
+`ores_native_actor_task_after_wake` must be rejected.
 
 The record is one-shot and requires host-owned, nonzero actor/slot/task/code
 generations. Stale foreign producer generations are rejected. No allocations
@@ -32,6 +36,12 @@ continuation admission.
 
 This bridge is not a complete actor TaskScope. The host must cancel live
 suspended Tasks before calling `ores_native_actor_scheduler_stop_sealed`.
+The host also owns the lifecycle of each external Future subscriber/publisher:
+it must revoke and physically join all callbacks that could still touch a
+Task record **before** `ores_native_actor_task_close` or freeing that record.
+The host-only bridge cannot make an unregistered raw C pointer or a foreign
+producer's task argument lifetime-safe. This is a prerequisite for compiler
+integration and not yet an automatic `TaskHandle.get_done()` scope join.
 `ores_native_actor_task_stop_actor` provides that ordering for a single
 Task record. For an actor with several live Tasks, the host/compiler must
 first cancel **all** tracked records and then stop the actor. The actor's
