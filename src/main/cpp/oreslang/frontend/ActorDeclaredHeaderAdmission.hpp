@@ -18,7 +18,9 @@ public:
         std::size_t i = 0;
         while (i < source.size()) {
             const auto c = static_cast<unsigned char>(source[i]);
-            if (c <= 32) { ++i; continue; }
+            if (c == ' ' || c == '\t' || c == '\n' || c == '\r' ||
+                c == '\v' || c == '\f') { ++i; continue; }
+            if (c < 32 || c == 127) reject("control byte in header");
             if (c == '/' && i + 1 < source.size() && source[i + 1] == '/') {
                 i += 2;
                 while (i < source.size() && source[i] != '\n') ++i;
@@ -39,7 +41,7 @@ public:
                     if (source[i++] == '"') { closed = true; break; }
                 }
                 if (!closed) reject("unterminated string literal");
-                tokens_.emplace_back(source.substr(start, i - start));
+                push(source.substr(start, i - start));
                 continue;
             }
             if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
@@ -52,14 +54,11 @@ public:
                         break;
                     ++i;
                 }
-                tokens_.emplace_back(source.substr(start, i - start));
+                push(source.substr(start, i - start));
                 continue;
             }
-            if (c == 127) reject("control byte in source");
-            tokens_.emplace_back(source.substr(i, 1));
+            push(source.substr(i, 1));
             ++i;
-            if (tokens_.size() > 32768u)
-                reject("header lexer token budget exceeded");
         }
     }
 
@@ -106,6 +105,11 @@ public:
     }
     bool at_end() const noexcept { return index_ == tokens_.size(); }
 private:
+    void push(std::string_view token) {
+        if (tokens_.size() >= 32768u)
+            reject("header lexer token budget exceeded");
+        tokens_.emplace_back(token);
+    }
     [[noreturn]] static void reject(const char* reason) {
         throw std::runtime_error(std::string("ACTOR_DECL_HEADER_REJECT: ") + reason);
     }
