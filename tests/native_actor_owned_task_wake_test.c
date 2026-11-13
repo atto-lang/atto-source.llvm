@@ -5,6 +5,16 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
+#ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
+/* Linked from real oreslang-llvmc --emit-actor-task-producer-ir-only IR.
+ * The actual guest *producer* runs inside the native actor's authenticated
+ * child WAKE. Await state-machine lowering remains a separate milestone. */
+extern int32_t atto_actor_task_i64_producer_probe(
+    int64_t copied_incoming, int64_t* result_out);
+#ifndef ATTO_ACTOR_TASK_PRODUCER_EXPECTED
+#error "compiled producer integration requires an exact expected value"
+#endif
+#endif
 #define CHECK(c) do { if (!(c)) { \
     fprintf(stderr, "ACTOR_TASK_WAKE_FAIL %s:%d: %s\\n", __FILE__, __LINE__, #c); \
     abort(); \
@@ -112,6 +122,16 @@ static void on_wake(void* opaque, size_t actor,
         }
         if (!ores_native_actor_scheduler_is_current_actor(f->scheduler, f->actor))
             atomic_fetch_add(&f->errors, 1);
+#ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
+        if (f->mode == 1) {
+            int64_t compiled_result = INT64_C(-1);
+            if (atto_actor_task_i64_producer_probe(
+                    INT64_C(41), &compiled_result) != 0 ||
+                    compiled_result !=
+                        (int64_t)ATTO_ACTOR_TASK_PRODUCER_EXPECTED)
+                atomic_fetch_add(&f->errors, 1);
+        }
+#endif
         if (f->mode == 3) {
             if (!ores_native_actor_task_suspend(&f->child))
                 atomic_fetch_add(&f->errors, 1);
