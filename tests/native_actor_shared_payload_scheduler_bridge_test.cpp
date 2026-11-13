@@ -73,6 +73,10 @@ static void on_message(void* raw, std::size_t actor_slot, std::uint64_t value) {
     if (actor_slot == run.target.actor_slot) {
         if (!run.bridge->dispatch_data(actor_slot, value))
             run.handler_errors.fetch_add(1);
+        // The same current actor lane must NOT be able to redeem a
+        // consumed descriptor ticket twice.
+        if (run.bridge->dispatch_data(actor_slot, value))
+            run.handler_errors.fetch_add(1);
         return;
     }
     if (actor_slot != run.source.actor_slot || value != 123 ||
@@ -139,7 +143,7 @@ static void exercise(bool sealed) {
     check(bridge.close_after_done());
     check(bridge.queued_slots() == 0);
     check(bridge.queued_charged_bytes() == 0);
-    check(bridge.rejected_dispatch() == 0);
+    check(bridge.rejected_dispatch() == (sealed ? 0u : 100u));
     check(bridge.handler_failures() == 0);
     check(run.handler_errors.load() == 0);
     check(bridge.delivered() == (sealed ? 0u : 100u));
