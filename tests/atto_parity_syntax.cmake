@@ -87,7 +87,7 @@ reject_case(end_scalar_compact_missing_delimiter
   "native compact end-delimited callable requires '::'")
 reject_case(end_scalar_reject_unlowered_if
   "fnc add_one(int x) -> int :: if x > 0 then return x + 1; fi end\nfnc main(): int { return add_one(41); }\n"
-  "expected return")
+  "expected 'return'")
 reject_case(end_scalar_reject_missing_end
   "fnc add_one(int x) -> int :: return x + 1;\n"
   "native end-delimited callable")
