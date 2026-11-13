@@ -1113,8 +1113,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
 
     // Only generated source actors resolve this native scheduler/heap ABI.
     // No actor imports appear in ordinary scalar/class compilation.
-    llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
-    llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceRequestStop,
+    llvm::FunctionCallee fieldInit, fieldInitMutable, fieldReadChecked, fieldWriteChecked;
+    llvm::FunctionCallee sourceSpawnChecked, sourceSend, sourceStop, sourceRequestStop,
         sourceAwaitReady, sourceAwaitDone;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
@@ -1124,17 +1124,24 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             llvm::FunctionType::get(voidTy, {native_ptr, i64, i64, i64, i64}, false));
         fieldInitMutable = module.getOrInsertFunction("ores_actor_i64_heap_field_init_mutable",
             llvm::FunctionType::get(voidTy, {native_ptr, i64, i64, i64, i64}, false));
-        fieldRead = module.getOrInsertFunction("ores_actor_i64_heap_field_read",
-            llvm::FunctionType::get(i64, {native_ptr, i64, i64, i64}, false));
-        fieldWrite = module.getOrInsertFunction("ores_actor_i64_heap_field_write",
-            llvm::FunctionType::get(voidTy, {native_ptr, i64, i64, i64, i64}, false));
+        // A checked source handler returns i32 fault status and stores its
+        // i64 result to an out-slot only on successful execution.
+        fieldReadChecked = module.getOrInsertFunction(
+            "ores_actor_i64_heap_try_field_read",
+            llvm::FunctionType::get(i32,
+                {native_ptr, i64, i64, i64, native_ptr}, false));
+        fieldWriteChecked = module.getOrInsertFunction(
+            "ores_actor_i64_heap_try_field_write",
+            llvm::FunctionType::get(i32,
+                {native_ptr, i64, i64, i64, i64}, false));
         actorScopedNew = module.getOrInsertFunction("ores_actor_i64_heap_scoped_new",
             llvm::FunctionType::get(voidTy,
                 {native_ptr, i64, i64, i64, native_ptr}, false));
         actorScopedDrop = module.getOrInsertFunction("ores_actor_i64_heap_scoped_drop",
             llvm::FunctionType::get(voidTy,
                 {native_ptr, i64, i64, native_ptr}, false));
-        sourceSpawn = module.getOrInsertFunction("oreslang_source_actor_spawn",
+        sourceSpawnChecked = module.getOrInsertFunction(
+            "oreslang_source_actor_spawn_checked",
             llvm::FunctionType::get(native_ptr, {native_ptr, native_ptr, i64}, false));
         sourceSend = module.getOrInsertFunction("oreslang_source_actor_send",
             llvm::FunctionType::get(voidTy, {native_ptr, i64}, false));
@@ -1155,8 +1162,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 llvm::FunctionType::get(voidTy, {native_ptr, i64, i64}, false),
                 llvm::Function::ExternalLinkage, prefix + "init", module));
             actorHandlers.emplace(actor.name, llvm::Function::Create(
-                llvm::FunctionType::get(i64, {native_ptr, i64, i64, i64}, false),
-                llvm::Function::ExternalLinkage, prefix + "on_message", module));
+                llvm::FunctionType::get(i32,
+                    {native_ptr, i64, i64, i64, native_ptr}, false),
+                llvm::Function::ExternalLinkage, prefix + "on_message_checked", module));
         }
     }
     std::unordered_map<std::string, llvm::Function*> declarations;
@@ -1379,7 +1387,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 native_ptr);
             const auto actor = std::find_if(source.actors.begin(), source.actors.end(),
                 [&](const ActorDecl& a) { return a.name == spawn.actor_type; });
-            llvm::Value* ref = builder.CreateCall(sourceSpawn, {ctor, handler,
+            llvm::Value* ref = builder.CreateCall(sourceSpawnChecked, {ctor, handler,
                 llvm::ConstantInt::get(i64,
                     actor->fields.size() + actor->on_message.locals.size())},
                 spawn.name + ".actor.ref");
@@ -2943,17 +2951,36 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         llvm::Value* currentDomain = &*args++;
         llvm::Value* currentEpoch = &*args++;
         llvm::Value* incoming = &*args++;
+        llvm::Value* resultOutput = &*args++;
         std::unordered_map<std::string, llvm::Value*> values, emptyFields;
+
+        // The bootstrap distinguishes this typed fault from a successful
+        // returned i64 value. Never execute another guest instruction on a
+        // failed actor-owned field access or implicitly mark DATA successful.
+        auto check_actor_field = [&](llvm::Value* status,
+                                     const std::string& operation) {
+            llvm::BasicBlock* ok = llvm::BasicBlock::Create(
+                context, operation + ".ok", handler);
+            llvm::BasicBlock* fault = llvm::BasicBlock::Create(
+                context, operation + ".fault", handler);
+            builder.CreateCondBr(builder.CreateICmpEQ(
+                status, llvm::ConstantInt::get(i32, 0)), ok, fault);
+            llvm::IRBuilder<> bad(fault);
+            bad.CreateRet(status);
+            builder.SetInsertPoint(ok);
+        };
         const std::string param = actor.on_message.parameters[0].name;
         llvm::Value* pslot = builder.CreateAlloca(i64, nullptr, param + ".slot");
         builder.CreateStore(incoming, pslot);
         values.emplace(param, pslot);
         for (std::size_t i=0; i<actor.fields.size(); ++i) {
             const auto& field = actor.fields[i];
-            llvm::Value* value = builder.CreateCall(fieldRead, {
-                actorHeap, currentDomain, currentEpoch, llvm::ConstantInt::get(i64,i)},
-                field.name + ".read");
             llvm::Value* slot = builder.CreateAlloca(i64, nullptr, field.name + ".slot");
+            llvm::Value* status = builder.CreateCall(fieldReadChecked, {
+                actorHeap, currentDomain, currentEpoch,
+                llvm::ConstantInt::get(i64, i), slot}, field.name + ".read.status");
+            check_actor_field(status, field.name + ".read");
+            llvm::Value* value = builder.CreateLoad(i64, slot);
             builder.CreateStore(value, slot);
             values.emplace(field.name, slot);
         }
@@ -2984,8 +3011,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 throw std::runtime_error("invalid actor field write lowering");
             llvm::Value* value = lower(*write.expression, builder, i64, values, emptyFields, declarations);
             const std::size_t index = std::distance(actor.fields.begin(), field);
-            builder.CreateCall(fieldWrite, {actorHeap, currentDomain, currentEpoch,
-                llvm::ConstantInt::get(i64, index), value});
+            llvm::Value* status = builder.CreateCall(fieldWriteChecked, {
+                actorHeap, currentDomain, currentEpoch,
+                llvm::ConstantInt::get(i64, index), value},
+                write.field + ".write.status");
+            check_actor_field(status, write.field + ".write");
             builder.CreateStore(value, values.at(write.field));
         }
         llvm::Value* result = lower(*actor.on_message.result, builder, i64, values,
@@ -2996,7 +3026,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
              it != actor_owned_tokens.rend(); ++it)
             builder.CreateCall(actorScopedDrop,
                 {actorHeap, currentDomain, currentEpoch, *it});
-        builder.CreateRet(result);
+        builder.CreateStore(result, resultOutput);
+        builder.CreateRet(llvm::ConstantInt::get(i32, 0));
     }
 
     // Compiler-generated Wasm guest actor v0. One module instance belongs
