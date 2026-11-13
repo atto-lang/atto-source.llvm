@@ -13,6 +13,7 @@ typedef struct {
     OresNativeActorScheduler* scheduler;
     OresNativeActorRef actor;
     OresNativeActorTask parent, child;
+    OresNativeWakeTicket finishing_parent_wake;
     pthread_mutex_t mutex;
     pthread_cond_t cv;
     int mode; /* 1=nest+external completion, 2=STOP while suspended */
@@ -69,6 +70,9 @@ static void on_wake(void* opaque, size_t actor,
         } else if (turn == 1) {
             if (!ores_native_actor_task_finish(&f->parent))
                 atomic_fetch_add(&f->errors, 1);
+            CHECK(pthread_mutex_lock(&f->mutex) == 0);
+            f->finishing_parent_wake = wake;
+            CHECK(pthread_mutex_unlock(&f->mutex) == 0);
             signal_host(f, &f->parent_done);
             /* Host-only deterministic barrier: prove task physical DONE is
              * NOT visible while the final guest WAKE is still on-stack.
@@ -93,7 +97,9 @@ static void on_wake(void* opaque, size_t actor,
 static void after_wake(void* opaque, size_t actor,
         OresNativeWakeTicket wake) {
     Fixture* f = (Fixture*)opaque;
-    if (actor != 0 || ores_native_actor_scheduler_is_current_carrier(f->scheduler)) {
+    if (actor != 0
+            || ores_native_actor_scheduler_is_current_carrier(f->scheduler)
+            || !ores_native_actor_scheduler_is_after_wake(f->scheduler, wake)) {
         atomic_fetch_add(&f->errors, 1);
         return;
     }
@@ -145,6 +151,16 @@ int main(void) {
         &f.parent, 1001, ORES_NATIVE_WAKE_READY));
     CHECK(!ores_native_actor_scheduler_is_current_carrier(f->scheduler));
     wait_host(&f, &f.parent_done);
+    OresNativeWakeTicket forged_completion;
+    CHECK(pthread_mutex_lock(&f.mutex) == 0);
+    forged_completion = f.finishing_parent_wake;
+    CHECK(pthread_mutex_unlock(&f.mutex) == 0);
+    /* Holding the genuine issued ticket must NOT let a host/Future thread
+     * forge after-WAKE physical retirement while guest is still on-stack. */
+    CHECK(!ores_native_actor_scheduler_is_after_wake(
+        f.scheduler, forged_completion));
+    CHECK(!ores_native_actor_task_after_wake(
+        &f.parent, forged_completion));
     CHECK(!ores_native_actor_task_physically_done(&f.parent));
     signal_host(&f, &f.allow_parent_wake_exit);
     /* Only the scheduler's post-WAKE retirement hook can complete getDone.
