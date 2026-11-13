@@ -136,6 +136,8 @@ static _Thread_local OresNativeExecutionContext executing_context;
 static _Thread_local OresNativeWakeTicket executing_wake;
 static _Thread_local OresNativeWakeOutcome executing_wake_outcome;
 static _Thread_local int executing_wake_valid;
+static _Thread_local OresNativeActorScheduler* settling_scheduler;
+static _Thread_local OresNativeWakeTicket settling_wake;
 static _Thread_local int executing_turn_kind = -1;
 static _Thread_local int carrier_identity;
 static _Atomic(uint64_t) next_scheduler_domain = 1;
