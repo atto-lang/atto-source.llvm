@@ -22,9 +22,13 @@ typedef struct {
 } Session;
 typedef struct { Session* session; unsigned producer; } Producer;
 
-static void check(int ok) {
-    if (!ok) { fputs("NATIVE_BYTES_ATOMIC_CONTENTION_FAIL\n", stderr); abort(); }
-}
+#define check(condition) do { \
+    if (!(condition)) { \
+        fprintf(stderr, "NATIVE_BYTES_ATOMIC_CONTENTION_FAIL line=%d expr=%s\\n", \
+                __LINE__, #condition); \
+        abort(); \
+    } \
+} while (0)
 static void on_data(void* opaque, size_t index, uint64_t token) {
     Session* s = (Session*)opaque;
     check(index == 0);
