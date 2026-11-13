@@ -1934,6 +1934,27 @@ if(BUILD_TESTING)
         --ir "oreslang_source_actor_spawn")
     oreslang_contract_test(native_actor_suspending_method_gate source-actor-suspend-method-reject.ores
         --diagnostic "native suspends actor method requires continuation lowering")
+    # Compiler-staged actor Task/await AST. Every staged positive *must* be
+    # rejected by codegen until the actor-owned continuation frame exists.
+    # These are semantic negative acceptance gates, NOT guest execution.
+    oreslang_contract_test(native_actor_task_await_staged_no_ir
+        source-actor-task-await-staged.atto
+        --diagnostic "ATTO_TASK_E_ACTOR_LOWERING_PENDING")
+    oreslang_contract_test(native_actor_task_await_method_staged_no_ir
+        source-actor-task-await-method-staged.atto
+        --diagnostic "ATTO_TASK_E_ACTOR_LOWERING_PENDING")
+    oreslang_contract_test(native_actor_task_await_capture_reject
+        source-actor-task-await-capture-reject.atto
+        --diagnostic "ATTO_TASK_E_ACTOR_CAPTURE")
+    oreslang_contract_test(native_actor_task_await_nonsuspends_reject
+        source-actor-task-await-nonsuspends-reject.atto
+        --diagnostic "ATTO_TASK_E_SUSPENDS_REQUIRED")
+    oreslang_contract_test(native_actor_task_await_wrong_owner_reject
+        source-actor-task-await-wrong-owner-reject.atto
+        --diagnostic "ATTO_TASK_E_ACTOR_TASK_AWAIT")
+    oreslang_contract_test(native_actor_task_await_missing_child_reject
+        source-actor-task-await-missing-child-reject.atto
+        --diagnostic "ATTO_TASK_E_ACTOR_TASK_SHAPE")
     oreslang_contract_test(native_actor_final_group_field_gate source-actor-final-group-field-reject.ores
         --diagnostic "native final actor fields require typed field initialization and ownership lowering")
     # Host-only ActorGroup substrate: source actor spawn/await fail closed.
