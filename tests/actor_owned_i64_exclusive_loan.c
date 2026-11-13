@@ -155,6 +155,9 @@ static void checked_loan_status_positive(void) {
             == ORES_ACTOR_LOAN_BAD_HANDLE);
     REQUIRE(ores_actor_i64_heap_try_loan_write(NULL, ta, owner, 98)
             == ORES_ACTOR_LOAN_BAD_HANDLE);
+    value = 999;
+    REQUIRE(ores_actor_i64_heap_try_loan_read_mut(NULL, ta, owner, &value)
+            == ORES_ACTOR_LOAN_BAD_HANDLE && value == 0);
 
     OresActorSlot second = ores_actor_i64_heap_new(a, ta, 5);
     OresActorLoan shared = ores_actor_i64_heap_borrow(a, ta, second);
