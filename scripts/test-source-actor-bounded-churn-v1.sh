@@ -55,11 +55,19 @@ for opt in 0 2; do
   awk '
     /^actor[.]churn[.]scoped[.]body:/ { body=1; next }
     body && /^[[:alnum:]_.]+:/ { exit }
-    body && /[[:space:]]call[[:space:]]/ && /@oreslang_source_actor_spawn[[:space:]]*[(]/ { spawn=1 }
-    body && /[[:space:]]call[[:space:]]/ && /@oreslang_source_actor_stop[[:space:]]*[(]/ { stop=1 }
-    END { exit(spawn && stop ? 0 : 1) }
+    body && /[[:space:]]call[[:space:]]/ && /@oreslang_source_actor_spawn[[:space:]]*[(]/ {
+      if (stage != 0) bad=1; stage=1
+    }
+    body && /[[:space:]]call[[:space:]]/ &&
+      /@oreslang_source_actor_wait_ready_blocking[[:space:]]*[(]/ {
+      if (stage != 1) bad=1; stage=2
+    }
+    body && /[[:space:]]call[[:space:]]/ && /@oreslang_source_actor_stop[[:space:]]*[(]/ {
+      if (stage != 2) bad=1; stage=3
+    }
+    END { exit (stage == 3 && !bad ? 0 : 1) }
   ' "$work/source-$opt.ll" || {
-    echo "SOURCE_ACTOR_CHURN_MISSING_ACTOR_CALLS|O$opt" >&2; exit 1;
+    echo "SOURCE_ACTOR_CHURN_MISSING_ORDERED_READY_BARRIER|O$opt" >&2; exit 1;
   }
   artifact="$work/source-actor-guest-$opt"
   timeout 120s "$root/scripts/compile-aot.sh" "$root/$source_rel" "$artifact" >"$work/build-$opt.log"
