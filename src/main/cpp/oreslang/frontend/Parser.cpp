@@ -2445,6 +2445,8 @@ private:
                 binding.name = identifier();
                 require("=");
                 if (accept("await")) {
+                    if (mode == "const")
+                        fail("E_NON_CONST_INITIALIZER: await is not compile-time constant");
                     if (binding.scalar_type != ScalarType::I64)
                         fail("native scalar await requires an int result binding");
                     if (!value.locals.empty())
