@@ -49,6 +49,16 @@ if(ATTO_SOURCE_IDS_HOST_ONLY)
   endif()
   add_test(NAME static_guest_log_ring_host_only
     COMMAND atto_static_log_ring_v1_host_test)
+  add_executable(atto_static_log_model_v1_host_test
+    tests/native_static_log_model_v1_test.c
+    src/main/cpp/oreslang/runtime/NativeTelemetrySpan.c)
+  target_include_directories(atto_static_log_model_v1_host_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  set_target_properties(atto_static_log_model_v1_host_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  target_compile_options(atto_static_log_model_v1_host_test PRIVATE
+    $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+  add_test(NAME static_log_50k_model_host_only COMMAND atto_static_log_model_v1_host_test)
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(Threads REQUIRED)
     add_executable(atto_static_log_carriers_v1_host_test
@@ -306,6 +316,18 @@ if(BUILD_TESTING)
     add_test(NAME native_literal_guest_log_ring_runtime
         COMMAND oreslang-native-static-log-ring-test)
     set_tests_properties(native_literal_guest_log_ring_runtime PROPERTIES TIMEOUT 20)
+    add_executable(oreslang-native-static-log-model-test
+        tests/native_static_log_model_v1_test.c
+        src/main/cpp/oreslang/runtime/NativeTelemetrySpan.c)
+    target_include_directories(oreslang-native-static-log-model-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-static-log-model-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(oreslang-native-static-log-model-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_literal_log_50k_model_runtime
+        COMMAND oreslang-native-static-log-model-test)
+    set_tests_properties(native_literal_log_50k_model_runtime PROPERTIES TIMEOUT 20)
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_executable(oreslang-native-static-log-carriers-test
