@@ -3167,7 +3167,7 @@ private:
                     fail("bounded actor churn increment must be exactly one");
                 require(";");
                 if (braced) require("}");
-                else require("end");
+                else if (!accept("done")) require("end");
                 if (loop->initial < 0 || loop->upper_bound < loop->initial ||
                         loop->upper_bound > 1024)
                     fail("bounded actor churn count must be within 0..1024");
