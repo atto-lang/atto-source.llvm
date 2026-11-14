@@ -240,7 +240,8 @@ for item in \
     'negative-duplicate-snapshot|production inverted main admits only one detached snapshot' \
     'negative-snapshot-oob|outside current length' \
     'negative-snapshot-class-alias|native inverted class requires typed one-level SoA ownership' \
-    'negative-snapshot-field-mutation|production inverted operation must target the local owner'; do
+    'negative-snapshot-field-mutation|production inverted operation must target the local owner' \
+    'negative-snapshot-wrong-binding|production inverted return must read the local owner or detached snapshot'; do
     name="${item%%|*}"; diagnostic="${item#*|}"
     if "$compiler" "$fixtures/$name.atto" > "$tmp/unsafe.ll" 2> "$tmp/error.txt"; then
         echo "FAIL: production compiler admitted unsafe snapshot $name" >&2
@@ -268,4 +269,4 @@ for option in --profile=native-hard-rt --target=wasm32 \
         exit 1
     fi
 done
-printf 'PASS: production .atto -> typed MIR -> no-GC-screened IR, 14 native exit-42 (O0/O2), 4 bounds signals, 10 source rejects, 5 mode rejects, known-GC denied (linked/FFI audit still unproven)\n'
+printf 'PASS: production .atto -> typed MIR -> no-GC-screened IR, 14 native exit-42 (O0/O2), 4 bounds signals, 11 source rejects, 5 mode rejects, known-GC denied (linked/FFI audit still unproven)\n'
