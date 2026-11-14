@@ -16,6 +16,8 @@ work="$(mktemp -d)"; trap 'rm -rf -- "$work"' EXIT
 sources=(
   tests/fixtures/source-actor-checked-id-v1/single.atto
   tests/fixtures/source-actor-checked-id-v1/five.atto
+  tests/fixtures/source-actor-checked-id-v1/await-ready.atto
+  tests/fixtures/source-actor-checked-id-v1/await-done.atto
   tests/fixtures/source-actor-checked-id-v1/escape.atto
 )
 check_source() {
@@ -32,7 +34,7 @@ auditor="$(realpath -e "$ORES_NO_GC_IR_AUDIT")"
 [[ -x "$compiler" && -x "$auditor" ]] || exit 69
 for opt in 0 2; do
   export ORESLANG_LLVM_AOT_OPT_LEVEL="$opt"
-  for variant in single five; do
+  for variant in single five await-ready await-done; do
     rel="tests/fixtures/source-actor-checked-id-v1/$variant.atto"
     timeout 120s "$compiler" --target=host "$root/$rel" >"$work/program.ll" 2>"$work/compiler.err" || {
       cat "$work/compiler.err" >&2
@@ -41,13 +43,22 @@ for opt in 0 2; do
     }
     [[ -s "$work/program.ll" && ! -s "$work/compiler.err" ]] || exit 1
     "$auditor" "$work/program.ll" >"$work/gc.log"
-    for api in spawn_id send_id stop_id; do
+    case "$variant" in
+      single|five) checked_apis=(spawn_id send_id stop_id) ;;
+      await-ready) checked_apis=(spawn_id send_id stop_id await_ready_id) ;;
+      await-done) checked_apis=(spawn_id request_stop_id await_done_id) ;;
+      *) echo "unreviewed guest variant: $variant" >&2; exit 78 ;;
+    esac
+    for api in "${checked_apis[@]}"; do
       if ! grep -Eq "[[:space:]]call[[:space:]].*@oreslang_source_actor_$api[(]" "$work/program.ll"; then
         echo "SOURCE_ACTOR_CHECKED_GUEST_MISSING_TYPED_CALL|O$opt|case=$variant|api=$api" >&2
         exit 1
       fi
     done
-    if grep -Eq '[[:space:]]call[[:space:]].*@oreslang_source_actor_(spawn|send|stop)[(]' "$work/program.ll"; then
+    # Reject *any* generated legacy malloc-address runtime invocation,
+    # including the legacy Future entry points: a checked callback must
+    # always take a 64-bit actor identity, never a void* ActorRef.
+    if grep -Eq '[[:space:]]call[[:space:]].*@oreslang_source_actor_(spawn|send|stop|request_stop|await_ready|await_done)[(]' "$work/program.ll"; then
       echo "SOURCE_ACTOR_CHECKED_GUEST_LEGACY_PTR_CALL|O$opt|case=$variant" >&2
       exit 1
     fi
@@ -78,4 +89,4 @@ for opt in 0 2; do
   fi
   check_source || { echo "SOURCE_ACTOR_CHECKED_GUEST_SOURCE_DRIFT" >&2; exit 78; }
 done
-echo "SOURCE_ACTOR_CHECKED_GUEST_MATRIX_EXECUTED|head=$EXPECTED_HEAD|O0_O2=1|native_runs=16|compiled_cases=4|negative_rejections=2|await_legacy=NOT_MIGRATED|linked_zero_gc=NOT_CERTIFIED"
+echo "SOURCE_ACTOR_CHECKED_GUEST_MATRIX_EXECUTED|head=$EXPECTED_HEAD|O0_O2=1|native_runs=32|compiled_cases=8|negative_rejections=2|ready_done_id_callbacks=2_PER_OPT|legacy_pointer_calls=0|linked_zero_gc=NOT_CERTIFIED"
