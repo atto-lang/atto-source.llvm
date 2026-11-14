@@ -279,6 +279,17 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
+        // AttoLang's contiguous !eq alias is a single inequality token.
+        // Normalize it to the same static 'neq' operator used by the native
+        // equality CFG; never consume a prefix of an identifier (!equal).
+        // This lexer has already skipped comments and quoted source.
+        if (source_.substr(at_, 3) == "!eq") {
+            const auto end = at_ + 3;
+            if (end == source_.size() || !identifier_part(source_[end])) {
+                at_ = end;
+                return {Kind::Identifier, "neq", start};
+            }
+        }
         // AttoLang's contiguous !eq inequality alias is a single token.
         // The identifier boundary matters: "!equation" is NOT "!eq" + "uation".
         // This is syntax-only normalization into the existing native NotEqual
@@ -685,6 +696,8 @@ public:
         Program program;
         while (token_.text == "import") {
             advance();
+            if (token_.text == "namespace")
+                fail("native import namespace requires a verified manifest package index and per-provider linker");
             if (token_.text == "contract")
                 fail("native contract imports require a validated cross-unit linker");
             if (accept("fnc")) {
