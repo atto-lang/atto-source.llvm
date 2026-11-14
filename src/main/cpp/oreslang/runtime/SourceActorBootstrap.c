@@ -154,6 +154,14 @@ uint64_t oreslang_source_actor_test_address_reuses(void) {
     group_unlock();
     return count;
 }
+
+void oreslang_source_actor_test_advance_next_actor_id(uint64_t candidate) {
+    group_lock();
+    ensure(!group.vm && group.live == 0 &&
+        candidate != 0 && candidate >= next_actor_id);
+    next_actor_id = candidate;
+    group_unlock();
+}
 #endif
 
 static void ensure(int condition) { if (!condition) abort(); }
@@ -659,6 +667,10 @@ void* oreslang_source_actor_spawn(
     instance->magic = SOURCE_ACTOR_MAGIC;
     /* Fail closed on exhaustion: never wrap/reissue an old actor ID.
      * Atomics are unnecessary because only group.mutex admits spawn. */
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    if (next_actor_id == 0 || next_actor_id == UINT64_MAX)
+        fputs("SOURCE_ACTOR_CHECKED_ID_EXHAUSTED\n", stderr);
+#endif
     ensure(next_actor_id != 0 && next_actor_id < UINT64_MAX);
     instance->id = next_actor_id++;
     instance->constructor = constructor;
