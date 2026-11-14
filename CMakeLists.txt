@@ -5,6 +5,26 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Host-only native failure observer regression; no LLVM SDK or guest compiler.
+option(ATTO_FAILURE_OBSERVER_HOST_ONLY
+  "Build the actor failure observer preallocated-ring host test only" OFF)
+if(ATTO_FAILURE_OBSERVER_HOST_ONLY)
+  include(CTest)
+  find_package(Threads REQUIRED)
+  add_executable(oreslang-native-actor-failure-observer-host-test
+    tests/actor_reliability_fault_observer_test.cpp)
+  target_include_directories(oreslang-native-actor-failure-observer-host-test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_features(oreslang-native-actor-failure-observer-host-test PRIVATE cxx_std_17)
+  target_compile_options(oreslang-native-actor-failure-observer-host-test PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+  target_link_libraries(oreslang-native-actor-failure-observer-host-test PRIVATE Threads::Threads)
+  add_test(NAME native_actor_failure_observer_ring_host_only
+    COMMAND oreslang-native-actor-failure-observer-host-test)
+  set_tests_properties(native_actor_failure_observer_ring_host_only PROPERTIES TIMEOUT 20)
+  return()
+endif()
+
 # Standalone host access-grant regression (no LLVM toolchain or guest proof).
 option(ATTO_ACTOR_ACCESS_HOST_ONLY
   "Build only the checked actor allocation authority host test" OFF)
@@ -168,6 +188,17 @@ include(CTest)
 if(BUILD_TESTING)
     # AOT trace policy gate; this does not compile a source-level Atto trace.
     find_package(Threads REQUIRED)
+    add_executable(oreslang-native-actor-failure-observer-host-test
+        tests/actor_reliability_fault_observer_test.cpp)
+    target_include_directories(oreslang-native-actor-failure-observer-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-failure-observer-host-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-actor-failure-observer-host-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-actor-failure-observer-host-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_failure_observer_ring_host_only
+        COMMAND oreslang-native-actor-failure-observer-host-test)
+    set_tests_properties(native_actor_failure_observer_ring_host_only PROPERTIES TIMEOUT 20)
     add_executable(oreslang-native-trace-probe-policy-test
         tests/native_trace_probe_policy_test.cpp)
     target_include_directories(oreslang-native-trace-probe-policy-test PRIVATE
