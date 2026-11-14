@@ -419,8 +419,19 @@ int main(int argc, char** argv) {
                       << " source_messages=4 guest_executed=false\n";
             return 0;
         } catch (const std::exception& e) {
+            // Source diagnostics must not leak full private CI filesystem
+            // paths, even on non-LLVM frontend admission failures.
+            std::string diagnostic(e.what());
+            const std::string source_root(path);
+            if (!source_root.empty()) {
+                std::size_t found = 0;
+                while ((found = diagnostic.find(source_root, found)) != std::string::npos) {
+                    diagnostic.replace(found, source_root.size(), "<source>");
+                    found += sizeof("<source>") - 1;
+                }
+            }
             std::cerr << "oreslang-llvmc Counter v2 source rejected: ";
-            print_safe_diagnostic(std::cerr, e.what(), 384);
+            print_safe_diagnostic(std::cerr, diagnostic, 384);
             std::cerr << "\n";
             return 1;
         }

@@ -12,6 +12,7 @@
 #include <limits>
 #include <set>
 #include <stdexcept>
+#include <system_error>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -178,8 +179,10 @@ private:
 inline std::string source_file(const std::filesystem::path& root,
                                std::string_view unit) {
     const auto path = root / "src" / "counter" / std::string(unit);
-    const auto status = std::filesystem::symlink_status(path);
-    if (!std::filesystem::is_regular_file(status) || std::filesystem::is_symlink(status))
+    std::error_code status_error;
+    const auto status = std::filesystem::symlink_status(path, status_error);
+    if (status_error || !std::filesystem::is_regular_file(status) ||
+        std::filesystem::is_symlink(status))
         throw std::runtime_error("Counter v2 source must be real regular file");
     const auto native = path.string();
     auto text = read_regular_source(native.c_str(), 65536,
@@ -192,13 +195,17 @@ inline std::string source_file(const std::filesystem::path& root,
 
 inline VerifiedPlan verify(const std::filesystem::path& root) {
     for (const auto& dir : {root, root / "src", root / "src" / "counter"}) {
-        const auto stat = std::filesystem::symlink_status(dir);
-        if (!std::filesystem::is_directory(stat) || std::filesystem::is_symlink(stat))
+        std::error_code status_error;
+        const auto stat = std::filesystem::symlink_status(dir, status_error);
+        if (status_error || !std::filesystem::is_directory(stat) ||
+            std::filesystem::is_symlink(stat))
             throw std::runtime_error("Counter v2 source directory must be real");
     }
     const auto manifest = root / ".atto.pkg.toml";
-    const auto status = std::filesystem::symlink_status(manifest);
-    if (!std::filesystem::is_regular_file(status) || std::filesystem::is_symlink(status))
+    std::error_code status_error;
+    const auto status = std::filesystem::symlink_status(manifest, status_error);
+    if (status_error || !std::filesystem::is_regular_file(status) ||
+        std::filesystem::is_symlink(status))
         throw std::runtime_error("Counter v2 package manifest must be real");
     const auto manifest_path = manifest.string();
     const auto config = read_regular_source(manifest_path.c_str(), 65536,
