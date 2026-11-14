@@ -8,7 +8,7 @@
 
 namespace oreslang {
 namespace {
-enum class Kind { Int, Bool, String, Class, Array, Sum, Void };
+enum class Kind { Int, Bool, String, Class, Array, Sum, Void, AtomicI64 };
 struct Type {
     Kind kind = Kind::Int;
     std::string name;
@@ -39,6 +39,11 @@ Type result_type(const Function& fn) {
         ? scalar(fn.return_type) : Type{Kind::Class, fn.return_class};
 }
 Type local_type(const LocalBinding& local) {
+    if (local.native_atomic_i64) {
+        if (local.initializer || local.heap_owned || !local.class_name.empty())
+            throw std::runtime_error("malformed non-Copy Atomic<int> owner");
+        return {Kind::AtomicI64, {}};
+    }
     if (!local.sum_type.empty()) return {Kind::Sum, local.sum_type};
     if (local.int_array && local.array_element_type != ScalarType::I64 &&
             local.array_element_type != ScalarType::String)
@@ -161,6 +166,23 @@ void validate_native_scalar_types(const Program& program) {
                 require(expression(*e.left, locals), scalar(false), e.offset, "arithmetic requires int");
                 require(expression(*e.right, locals), scalar(false), e.offset, "arithmetic requires int");
                 return scalar(false);
+            case E::NativeAtomicCall: {
+                if (!e.left || e.left->kind != E::Variable)
+                    fail(e.offset, "Atomic operation receiver must be a named owner");
+                require(expression(*e.left, locals), {Kind::AtomicI64, {}},
+                        e.offset, "Atomic<int> requires a non-Copy compiler-owned local");
+                const auto arguments = e.name == "load" ? 0u : e.name == "fetch_add" ? 1u : 99u;
+                if (arguments == 99u || e.arguments.size() != arguments)
+                    fail(e.offset, "unsupported Atomic<int> member/arity");
+                for (const auto& arg : e.arguments)
+                    require(expression(*arg, locals), scalar(false), e.offset, "atomic operand requires int");
+                const auto& order = e.atomic_order;
+                const bool load_ok = order == "relaxed" || order == "acquire" || order == "seq_cst";
+                const bool rmw_ok = load_ok || order == "release" || order == "acq_rel";
+                if (!(e.name == "load" ? load_ok : rmw_ok))
+                    fail(e.offset, "invalid Atomic<int> memory order");
+                return scalar(false);
+            }
             case E::ArrayCall: {
                 const auto owner = expression(*e.left, locals);
                 if (owner.kind != Kind::Array) fail(e.offset, "array receiver");
