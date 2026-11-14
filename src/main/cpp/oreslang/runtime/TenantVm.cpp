@@ -202,6 +202,9 @@ struct Carrier {
     std::uint8_t* stack_guard_low = nullptr;
     // A second guard, moved to wherever this turn's stack quota ends. Only this thread changes it.
     std::uintptr_t quota_guard_low = 0;
+    // A partial unprotect failure leaves unknown extra PROT_NONE pages on this stack.
+    // Never execute another guest on this carrier: keep the process and other carriers alive.
+    bool quota_guard_quarantined = false;
     std::uintptr_t stack_floor = 0; // lowest address this turn may use: the top of whichever guard applies
     void* signal_stack = nullptr;
 
@@ -741,6 +744,10 @@ struct TenantVmHost::Core {
     // Only this carrier thread changes the guard; signal handlers observe it during guest code.
     bool place_stack_guard(Carrier* c, std::uintptr_t entry, std::uint32_t quota) {
         const auto carrier_floor = reinterpret_cast<std::uintptr_t>(c->stack_guard_low) + kCarrierGuardBytes;
+        if (c->quota_guard_quarantined) {
+            stack_quota_misses.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
         std::uintptr_t wanted = 0;
         if (quota) {
             const auto page = page_size();
@@ -767,11 +774,11 @@ struct TenantVmHost::Core {
         }
         if (previous) {
             const auto previous_end = previous + kCarrierGuardBytes;
-            const auto restore = [](std::uintptr_t start, std::uintptr_t end) {
-                // A failed restore leaves an inconsistent carrier mapping. Aborting the host is
-                // preferable to executing another tenant with unknown effective guard coverage.
-                if (end > start && mprotect(reinterpret_cast<void*>(start), end - start, PROT_READ | PROT_WRITE) != 0)
-                    std::abort();
+            bool restore_failed = false;
+            const auto restore = [&](std::uintptr_t start, std::uintptr_t end) {
+                if (end > start &&
+                    mprotect(reinterpret_cast<void*>(start), end - start, PROT_READ | PROT_WRITE) != 0)
+                    restore_failed = true;
             };
             if (!wanted) {
                 restore(previous, previous_end);
@@ -779,6 +786,17 @@ struct TenantVmHost::Core {
                 if (previous < wanted) restore(previous, std::min(previous_end, wanted));
                 const auto wanted_end = wanted + kCarrierGuardBytes;
                 if (previous_end > wanted_end) restore(std::max(previous, wanted_end), previous_end);
+            }
+            if (restore_failed) {
+                // Either one or both guards can still contain protected old-only pages. Do not
+                // abort the host, but also never run another tenant turn on this carrier stack.
+                // Other carriers/VMs remain available; the mapping is discarded on host teardown.
+                c->quota_guard_quarantined = true;
+                c->quota_guard_low = wanted;
+                c->stack_floor = std::max(carrier_floor,
+                    std::max(previous_end, wanted ? wanted + kCarrierGuardBytes : carrier_floor));
+                stack_quota_misses.fetch_add(1, std::memory_order_relaxed);
+                return false;
             }
         }
         c->quota_guard_low = wanted;
