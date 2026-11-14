@@ -782,6 +782,12 @@ public:
                 program.contracts.push_back(contract());
                 continue;
             }
+            // HTTP transport actors are not generic mailbox actors. A
+            // negative compiler result is required until request/message
+            // lifetime admission and physical carrier shutdown are lowered.
+            if ((token_.text == "http" && peek_next().text == "actor") ||
+                (token_.text == "serial" && peek_next().text == "http"))
+                fail("HTTP_ACTOR_BACKEND_UNSUPPORTED: native HTTP actor requires bounded request/message admission and physical shutdown lowering");
             if (exported && token_.text != "class") fail("native public module wrapper is not supported in the i64 subset");
             if (accept("serial")) {
                 require("actor");
@@ -908,6 +914,11 @@ public:
                     fail("NATIVE_SUPERVISOR_UNSUPPORTED: source supervisor requires immutable typed Failure and compiler-owned CONTROL lowering");
                 if (token_.text == "model")
                     fail("MODEL_BACKEND_UNSUPPORTED: native model graph requires verified operation provenance, configuration and codegen parity");
+                // Keep the same fail-closed HTTP actor gate inside modules,
+                // including pub/define and define/pub visibility order.
+                if ((token_.text == "http" && peek_next().text == "actor") ||
+                    (token_.text == "serial" && peek_next().text == "http"))
+                    fail("HTTP_ACTOR_BACKEND_UNSUPPORTED: native HTTP actor requires bounded request/message admission and physical shutdown lowering");
                 if (public_class && token_.text != "class") fail("native pub define currently supports only class declarations");
                 if (accept("serial")) {
                     require("actor");
