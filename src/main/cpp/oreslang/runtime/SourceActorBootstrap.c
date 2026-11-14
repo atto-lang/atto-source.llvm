@@ -971,8 +971,12 @@ void oreslang_source_actor_request_stop(void* opaque) {
 }
 
 void oreslang_source_actor_join_done(void* opaque) {
-    SourceActor* instance = (SourceActor*)opaque;
-    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
+    /* Stabilize the trusted host ref and its owning VM before accessing
+     * SourceActor fields. A separately retired/freed ref must fail stop
+     * rather than be dereferenced before its slot membership is checked. */
+    group_lock();
+    SourceActor* instance = find_live_source_actor_locked(opaque);
+    ensure(instance != NULL);
     ensure(atomic_load_explicit(
         &instance->stop_requested, memory_order_acquire) == 1);
 
@@ -985,19 +989,23 @@ void oreslang_source_actor_join_done(void* opaque) {
         memory_order_acquire));
 
     /*
-     * This is trusted outer-host glue, never a carrier turn. Do not block a
-     * source actor carrier while waiting for the actor's physical terminal ACK.
+     * This is trusted outer-host glue, never a carrier turn. Do not block
+     * any of the VM's four actor domains while physical DONE is pending.
+     * The group's mutex pins the captured vm/ref until the join is admitted.
      */
+    OresNativeVM* vm = group.vm;
     OresNativeExecutionContext carrier = {0};
-    ensure(!ores_native_vm_current_execution_context(
-        group.vm, ORES_NATIVE_VM_MAIN, &carrier));
-
+    for (int domain = 0; domain < ORES_NATIVE_VM_DOMAIN_COUNT; ++domain)
+        ensure(!ores_native_vm_current_execution_context(
+            vm, (enum OresNativeVMDomain)domain, &carrier));
     const size_t slot = (size_t)instance->ref.actor_slot;
+    const OresNativeActorRef target = instance->ref;
+    group_unlock();
     ensure(ores_native_vm_wait_done(
-        group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
+        vm, ORES_NATIVE_VM_MAIN, target));
 
     group_lock();
-    ensure(group.vm && slot < group.next_slot
+    ensure(group.vm == vm && slot < group.next_slot
         && group.actors[slot] == instance);
     const int startup_state = atomic_load_explicit(
         &instance->startup_state, memory_order_acquire);
