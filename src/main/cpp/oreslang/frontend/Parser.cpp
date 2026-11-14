@@ -1983,6 +1983,12 @@ private:
         Function method = function(owner, exported);
         external_class_receiver_active_ = prior_active;
         external_class_receiver_mutable_ = prior_mutable;
+        const std::string name = method.name.substr(owner.size() + 1);
+        // A declaration outside the nominal class is never an alternate
+        // constructor or actor/lifecycle authority.
+        if (name == "new" || name == "constructor" ||
+            name == "init" || name == "on_start")
+            fail("NATIVE_MTD_RESERVED_MEMBER: external receiver methods cannot be constructors, factories or lifecycle hooks");
         ClassMethod signature;
         signature.name = method.name.substr(owner.size() + 1);
         signature.arity = native_source_value_arity(method.parameters.size(), true);
