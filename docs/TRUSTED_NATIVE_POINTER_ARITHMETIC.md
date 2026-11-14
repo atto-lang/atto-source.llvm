@@ -138,7 +138,7 @@ Related historical pointer-design branches Java #1021/#1022 must not be used as 
 
 ## Actor trust downgrade and lifetime fencing (2026-11-14 proposal)
 
-The host-only `NativeRegionRegistry::fence_actor(runtime, actor, epoch)` API
+The host-only, runtime-authority-private `NativeRegionRegistry::fence_actor(ActorHeapIdentity)` API
 provides a supervisor-initiated, incarnation-specific kill fence. This is a
 host security primitive, **not** an AttoLang `unsafe`/pointer feature:
 
@@ -153,8 +153,11 @@ host security primitive, **not** an AttoLang `unsafe`/pointer feature:
   deferred: the operation raises, the raw FFI address remains leased until
   callback exit, and the supervisor must retry the fence afterward. No partial
   cleanup may be reported as successful.
-- The method uses the registry's identity authority, not an untrusted source
-  string or a guest-supplied `Trust::Trusted` enum. **Production integration
+- The method is callable only by `NativeRegionRuntimeAuthority` and the
+  compile-time-enabled native registry test shim; an ordinary host client
+  cannot fence arbitrary actor identities. The method uses the registry's
+  identity authority, not an untrusted source string or a guest-supplied
+  `Trust::Trusted` enum. **Production integration
   must call this fence on trust downgrade, actor death, supervisor restart and
   loss of native permission.** That integration is not yet demonstrated.
 - The implementation maintains fenced-incarnation tombstones for the lifetime
