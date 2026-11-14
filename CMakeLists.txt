@@ -5,6 +5,36 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Fast source-local retirement integration without LLVM SDK, Rust or guest
+# frontend. Uses the SAME production native heap and retirement test as the
+# full CTest suite. Does not authorize any cross-organization source mirroring
+# and does not prove compiled guest .atto/AOT behavior.
+option(ATTO_ACTOR_RETIREMENT_HOST_ONLY
+  "Build only the real native actor retirement / receive-fence host test" OFF)
+if(ATTO_ACTOR_RETIREMENT_HOST_ONLY)
+  include(CTest)
+  if(NOT BUILD_TESTING)
+    message(FATAL_ERROR "Native actor retirement gate requires BUILD_TESTING=ON")
+  endif()
+  find_package(Threads REQUIRED)
+  add_executable(atto_actor_retirement_host_test
+    tests/native_actor_retirement_barrier_test.cpp
+    src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+  target_include_directories(atto_actor_retirement_host_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_features(atto_actor_retirement_host_test PRIVATE
+    c_std_11 cxx_std_17)
+  target_compile_options(atto_actor_retirement_host_test PRIVATE
+    -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+  target_compile_definitions(atto_actor_retirement_host_test PRIVATE
+    ORESLANG_NATIVE_SOURCE_CLEANUP_TEST_PEER=1)
+  target_link_libraries(atto_actor_retirement_host_test PRIVATE Threads::Threads)
+  add_test(NAME native_actor_done_resource_quiescence
+    COMMAND atto_actor_retirement_host_test)
+  set_tests_properties(native_actor_done_resource_quiescence PROPERTIES TIMEOUT 30)
+  return()
+endif()
+
 # Host-only C++17 .oresi v1 preflight with no LLVM SDK dependency.
 # Tests metadata admission, not the compiler, guest or native linker.
 option(ORESLANG_ORESI_HOST_ONLY
