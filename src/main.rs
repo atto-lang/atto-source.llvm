@@ -1,7 +1,7 @@
 //! AOT lowering for a closed, scalar Atto subset: checked typed frontend -> LLVM IR.
 //! Unsupported guest constructs are explicit errors, never silently stubbed.
 use std::fmt::Write as _;
-use std::io::Write as IoWrite;
+use std::io::{Read as IoRead, Write as IoWrite};
 use std::process::{Command, Stdio};
 
 use atto_compiler::ast::{BinOp, Type};
@@ -402,6 +402,34 @@ impl Drop for OutputStage {
     }
 }
 
+// A zero-exit wrapper is not enough to prove clang wrote a valid native
+// artifact: validate the admitted Linux/x86-64 ELF output before publication.
+fn validate_native_artifact(path: &std::path::Path) -> Result<(), String> {
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| format!("E_CLANG_ARTIFACT: {e}"))?;
+    let mut header = [0u8; 20];
+    file.read_exact(&mut header)
+        .map_err(|e| format!("E_CLANG_ARTIFACT: incomplete ELF header: {e}"))?;
+    if header[..4] != [0x7f, b'E', b'L', b'F']
+        || header[4] != 2   // ELFCLASS64
+        || header[5] != 1   // little endian
+        || header[18..20] != [62, 0]  // EM_X86_64
+    {
+        return Err("E_CLANG_ARTIFACT: expected Linux x86-64 ELF64 output".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if file.metadata()
+            .map_err(|e| format!("E_CLANG_ARTIFACT: {e}"))?
+            .permissions().mode() & 0o111 == 0
+        {
+            return Err("E_CLANG_ARTIFACT: generated ELF is not executable".into());
+        }
+    }
+    Ok(())
+}
+
 fn cli() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (src, out, emit_only) = match args.as_slice() {
@@ -446,6 +474,7 @@ fn cli() -> Result<(), String> {
     if !status.success() {
         return Err(format!("E_CLANG: compilation failed ({status})"));
     }
+    validate_native_artifact(&staged.temp)?;
     staged.publish()
 }
 
