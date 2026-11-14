@@ -5942,6 +5942,7 @@ if(BUILD_TESTING)
     add_test(NAME native_fixed_buffer_pool_host_only
         COMMAND oreslang-native-fixed-buffer-pool-test)
     set_tests_properties(native_fixed_buffer_pool_host_only PROPERTIES TIMEOUT 30)
+endif()
 
 
 # Separate host-only atomically published buffer-lease mailbox data lane.
@@ -5959,6 +5960,7 @@ if(BUILD_TESTING)
     add_test(NAME native_fixed_buffer_mailbox_host_only
         COMMAND oreslang-native-fixed-buffer-mailbox-test)
     set_tests_properties(native_fixed_buffer_mailbox_host_only PROPERTIES TIMEOUT 30)
+endif()
 
 
 # Physical actor resource registry loan/handoff bridge for pooled messages.
@@ -5976,3 +5978,4 @@ if(BUILD_TESTING)
     add_test(NAME native_fixed_buffer_registry_mailbox_host_only
         COMMAND oreslang-native-fixed-buffer-registry-mailbox-test)
     set_tests_properties(native_fixed_buffer_registry_mailbox_host_only PROPERTIES TIMEOUT 30)
+endif()
