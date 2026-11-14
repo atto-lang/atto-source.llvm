@@ -5,6 +5,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 auditor="${ORES_LINK_AUDITOR:-$root/scripts/audit-aot-linked-image.sh}"
 clang="${CLANG:-clang}"
 command -v "$clang" >/dev/null || { echo 'clang required' >&2; exit 69; }
+for tool in objcopy readelf; do command -v "$tool" >/dev/null || { echo "$tool required" >&2; exit 69; }; done
 [[ -f "$auditor" ]] || { echo 'linked-image auditor missing' >&2; exit 69; }
 work="$(mktemp -d)"; trap 'rm -rf -- "$work"' EXIT
 cat >"$work/clean.c" <<'C'
@@ -42,12 +43,22 @@ C
 "$clang" -O0 "$work/collector2.c" -o "$work/collector2"
 "$clang" -O0 "$work/loader.c" -ldl -o "$work/loader"
 "$clang" -O0 -s "$work/clean.c" -o "$work/stripped"
+# GNU readelf may return exit 0 while reporting a malformed .symtab. A fake
+# section must never satisfy the complete symbol evidence requirement.
+printf 'not a symbol table' >"$work/fake-symbol-data"
+objcopy --add-section .symtab="$work/fake-symbol-data" "$work/stripped" "$work/spoofed-symtab"
+readelf -W --symbols "$work/spoofed-symtab" >"$work/spoofed-readelf.stdout" 2>"$work/spoofed-readelf.stderr" || true
+[[ -s "$work/spoofed-readelf.stderr" ]] || {
+  echo 'spoofed ELF no longer emits readelf diagnostics; update negative oracle' >&2
+  exit 1
+}
+
 "$clang" -O0 "$work/clean.c" -Wl,-rpath,"$work" -o "$work/runpath"
 "$clang" -fPIC -shared "$work/foreign.c" -o "$work/libforeign.so"
 "$clang" "$work/foreign_main.c" -L"$work" -lforeign -o "$work/foreign"
 bash "$auditor" "$work/clean" >/dev/null
 bash "$auditor" "$work/data" >/dev/null
-for disallowed in collector collector2 stripped runpath foreign loader; do
+for disallowed in collector collector2 stripped runpath foreign loader spoofed-symtab; do
   if bash "$auditor" "$work/$disallowed" >"$work/result.log" 2>&1; then
     echo "FAIL: unsafe/unverifiable binary admitted: $disallowed" >&2
     exit 1
@@ -56,4 +67,4 @@ for disallowed in collector collector2 stripped runpath foreign loader; do
     cat "$work/result.log" >&2; echo "FAIL: missing rejection receipt: $disallowed" >&2; exit 1;
   }
 done
-printf 'LINKED_AOT_GC_SCREEN_TESTS_PASS|positive=2|negative=6|guest_executed=NO\n'
+printf 'LINKED_AOT_GC_SCREEN_TESTS_PASS|positive=2|negative=7|guest_executed=NO\n'
