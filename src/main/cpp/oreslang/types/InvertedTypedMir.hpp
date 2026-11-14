@@ -77,6 +77,14 @@ class Module final {
             } else if (op.column != layout_.columns()) {
                 throw std::logic_error("inverted MIR non-field column marker invalid");
             }
+            // An external MIR record must not hide an unused/forged row
+            // coordinate in a field-wide loan or owner close. These
+            // operations carry no row and are always emitted with index 0.
+            // Reject rather than silently discarding noncanonical metadata.
+            if ((op.kind == OpKind::BorrowRead || op.kind == OpKind::BorrowWrite ||
+                    op.kind == OpKind::ReleaseRead || op.kind == OpKind::ReleaseWrite ||
+                    op.kind == OpKind::Close) && op.index != 0)
+                throw std::logic_error("inverted MIR non-row instruction has forged row index");
             bool any_loan = false;
             for (std::size_t c = 0; c < readers.size(); ++c)
                 any_loan |= readers[c] != 0 || writers[c];
