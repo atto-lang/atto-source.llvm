@@ -198,6 +198,15 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # This runs the actual native Atto scalar parser + LLVM function IR
+    # emitter. It proves checked routine metadata only, NOT an inserted
+    # guest runtime site, linked AOT binary, JIT, or OTel export.
+    add_test(NAME native_source_routine_id_compiler_ir
+        COMMAND oreslang-llvmc --selftest-source-routine-ir)
+    set_tests_properties(native_source_routine_id_compiler_ir PROPERTIES
+        PASS_REGULAR_EXPRESSION "LLVM_SOURCE_ID_COMPILER_IR_METADATA_PASS"
+        TIMEOUT 30)
+
     # AOT trace policy gate; this does not compile a source-level Atto trace.
     find_package(Threads REQUIRED)
     add_executable(oreslang-native-trace-probe-policy-test
