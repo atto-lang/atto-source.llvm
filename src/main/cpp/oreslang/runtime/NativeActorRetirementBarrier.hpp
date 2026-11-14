@@ -152,16 +152,12 @@ public:
           finalizer_(std::move(finalizer)), quarantine_(quarantine),
           cleanup_(std::move(cleanup)), receives_(std::move(receives)) {
         if (!resources_) throw std::invalid_argument("actor registry required");
-        // The runtime ID is explicitly bound by the coordinator that created
-        // the registry. An unbound registry is NOT safe to use as evidence for
-        // physical DONE: equal actor/generation numbers can occur in distinct
-        // runtimes, where a foreign finalizer would otherwise be accepted.
-        const auto runtime = resources_->bound_runtime_id();
-        if (runtime == 0)
-            throw std::invalid_argument("actor registry missing bound runtime ID");
-        if (!finalizer_.belongs_to(
-                    runtime, resources_->actor_id(), resources_->incarnation()))
-            throw std::invalid_argument("actor finalizer/registry runtime-incarnation mismatch");
+        // The registry MUST be bound to its issuing NativeActorRef by the
+        // trusted coordinator. Numeric (runtime, actor, generation) tuples
+        // are reusable, so a presented finalizer cannot authenticate its
+        // own resource owner. Compare the exact underlying lifetime ticket.
+        if (!resources_->matches_finalizer(finalizer_))
+            throw std::invalid_argument("actor finalizer/registry opaque owner mismatch");
         if (cleanup_ && !cleanup_->belongs_to(resources_->actor_id(),
                                               resources_->incarnation()))
             throw std::invalid_argument("source cleanup receipt actor/incarnation mismatch");
