@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define SOURCE_ACTOR_MAGIC UINT64_C(0x4f52455353504157)
 #define SOURCE_GROUP_SLOTS 64u
@@ -80,7 +81,8 @@ typedef struct {
  * active group, not one pool per actor.
  */
 static SourceActorGroup group = { .mutex = PTHREAD_MUTEX_INITIALIZER };
-static _Atomic uint64_t next_actor_id = 4100;
+/* Protected by group.mutex. Never wraps or resets across VM group reopen. */
+static uint64_t next_actor_id = UINT64_C(4100);
 static _Thread_local OresNativeExecutionHandle current_source_execution;
 
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
@@ -88,6 +90,11 @@ static atomic_int test_hold_initialization;
 static atomic_int test_initialization_entered;
 static atomic_int test_hold_readiness_publication;
 static atomic_int test_readiness_publication_entered;
+/* Deterministic pointer-address reuse is test-only. Normal source execution
+ * physically frees every SourceActor allocation after verified DONE. */
+static int test_force_address_reuse;
+static SourceActor* test_recycled_actor;
+static uint64_t test_address_reuses;
 
 void oreslang_source_actor_test_hold_initialization(int hold) {
     if (hold) {
@@ -122,6 +129,23 @@ int oreslang_source_actor_test_readiness_publication_entered(void) {
     return atomic_load_explicit(
         &test_readiness_publication_entered, memory_order_acquire);
 }
+
+void oreslang_source_actor_test_force_address_reuse(int enabled) {
+    group_lock();
+    test_force_address_reuse = !!enabled;
+    if (!enabled && test_recycled_actor) {
+        free(test_recycled_actor);
+        test_recycled_actor = NULL;
+    }
+    group_unlock();
+}
+
+uint64_t oreslang_source_actor_test_address_reuses(void) {
+    group_lock();
+    const uint64_t count = test_address_reuses;
+    group_unlock();
+    return count;
+}
 #endif
 
 static void ensure(int condition) { if (!condition) abort(); }
@@ -144,11 +168,40 @@ static SourceActor* lookup(size_t index) {
     return actor;
 }
 
+/* All checked by-value identity consumers resolve under group.mutex.
+ * Never convert an ID into a pointer, or let malloc address reuse confer
+ * authority on an expired incarnation. The process-wide counter does not
+ * reset when the source VM group closes, so scheduler slot generations and
+ * allocator address collisions are irrelevant to this lookup. */
+static SourceActor* lookup_actor_id_locked(OresSourceActorId id) {
+    if (id == 0 || !group.vm) return NULL;
+    for (size_t slot = 0; slot < group.next_slot; ++slot) {
+        SourceActor* actor = group.actors[slot];
+        if (actor && actor->id == id) {
+            ensure(actor->magic == SOURCE_ACTOR_MAGIC
+                && actor->ref.actor_slot == slot);
+            return actor;
+        }
+    }
+    return NULL;
+}
+
+
 int oreslang_source_actor_ready_status(void* opaque) {
     SourceActor* instance = (SourceActor*)opaque;
     if (!instance || instance->magic != SOURCE_ACTOR_MAGIC) return -1;
     return atomic_load_explicit(
         &instance->startup_state, memory_order_acquire);
+}
+
+int oreslang_source_actor_ready_status_id(OresSourceActorId id) {
+    group_lock();
+    SourceActor* actor = lookup_actor_id_locked(id);
+    const int status = actor
+        ? atomic_load_explicit(&actor->startup_state, memory_order_acquire)
+        : -1;
+    group_unlock();
+    return status;
 }
 
 typedef struct {
@@ -562,12 +615,22 @@ void* oreslang_source_actor_spawn(
 
     ensure(group.next_slot < SOURCE_GROUP_ROOT_SLOT);
     const size_t slot = group.next_slot++;
-    SourceActor* instance = (SourceActor*)calloc(1, sizeof(*instance));
+    SourceActor* instance = NULL;
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    if (test_force_address_reuse && test_recycled_actor) {
+        instance = test_recycled_actor;
+        test_recycled_actor = NULL;
+        memset(instance, 0, sizeof(*instance));
+        ++test_address_reuses;
+    }
+#endif
+    if (!instance) instance = (SourceActor*)calloc(1, sizeof(*instance));
     ensure(instance != NULL);
     instance->magic = SOURCE_ACTOR_MAGIC;
-    instance->id =
-        atomic_fetch_add_explicit(&next_actor_id, 1, memory_order_relaxed);
-    ensure(instance->id != 0 && instance->id != UINT64_MAX);
+    /* Fail closed on exhaustion: never wrap/reissue an old actor ID.
+     * Atomics are unnecessary because only group.mutex admits spawn. */
+    ensure(next_actor_id != 0 && next_actor_id < UINT64_MAX);
+    instance->id = next_actor_id++;
     instance->constructor = constructor;
     instance->on_message = on_message;
 
@@ -599,6 +662,40 @@ void* oreslang_source_actor_spawn(
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref, 0));
     group_unlock();
     return instance;
+}
+
+/* Checked identity is a minted value, not an encoded host pointer. The
+ * returning caller cannot race with another actor's stop before it knows
+ * the new identity, and group.mutex validates its live allocation. */
+OresSourceActorId oreslang_source_actor_spawn_id(
+        OresSourceActorInit constructor,
+        OresSourceActorMessage on_message,
+        uint64_t fields) {
+    SourceActor* actor = (SourceActor*)oreslang_source_actor_spawn(
+        constructor, on_message, fields);
+    group_lock();
+    ensure(actor && actor->magic == SOURCE_ACTOR_MAGIC);
+    const OresSourceActorId identity = actor->id;
+    ensure(lookup_actor_id_locked(identity) == actor);
+    group_unlock();
+    return identity;
+}
+
+int oreslang_source_actor_try_send_id(
+        OresSourceActorId identity, int64_t payload) {
+    group_lock();
+    SourceActor* actor = lookup_actor_id_locked(identity);
+    const int accepted = actor && actor->on_message &&
+        ores_native_vm_try_send(
+            group.vm, ORES_NATIVE_VM_MAIN, actor->ref, (uint64_t)payload)
+            == ORES_NATIVE_SEND_ACCEPTED;
+    group_unlock();
+    return accepted;
+}
+
+void oreslang_source_actor_send_id(
+        OresSourceActorId identity, int64_t payload) {
+    ensure(oreslang_source_actor_try_send_id(identity, payload));
 }
 
 void oreslang_source_actor_send(void* opaque, int64_t payload) {
