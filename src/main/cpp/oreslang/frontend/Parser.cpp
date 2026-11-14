@@ -702,7 +702,8 @@ public:
             // fail-closed here; in that mode they are parsed into metadata and
             // still rejected for compilation below.
             if (token_.text == "namespace" && !verified_namespace_metadata_only_)
-                fail("native import namespace requires a verified manifest package index and per-provider linker");
+                fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native import namespace requires a verified "
+                     "manifest package index and per-provider linker");
             if (token_.text == "contract")
                 fail("native contract imports require a validated cross-unit linker");
             if (accept("namespace")) {
