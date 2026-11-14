@@ -29,6 +29,8 @@ static_assert(!std::is_copy_constructible_v<Store>);
 static_assert(!std::is_aggregate_v<Store::Handle>);
 static_assert(!std::is_default_constructible_v<Store::Handle>);
 static_assert(!std::is_constructible_v<Store::Handle, std::uint64_t, std::size_t, std::uint64_t>);
+static_assert(!std::is_default_constructible_v<Store::LayoutGuard>);
+static_assert(!std::is_aggregate_v<Store::LayoutGuard>);
 static void check(bool ok) { if (!ok) throw std::runtime_error("inverted columns assertion"); }
 template<class E, class F> static void expect(F f) {
     bool caught = false;
@@ -53,6 +55,59 @@ int main() {
     check(saved_middle.slot() == h1.slot() && saved_middle.generation() == h1.generation());
     check(a.read_index<0>(0) == 1.5f);
     check(a.read_index<1>(1) == 200);
+
+    // Structural epoch is a checked, unforgeable guard for compiler/JIT
+    // specializations, not an unchecked physical row pointer. Validation
+    // and the field operation happen under the same storage lock.
+    {
+        Store guarded;
+        auto first = guarded.push(2.5f, 5, true);
+        auto initial = guarded.capture_layout_guard();
+        check(guarded.read_index_guarded<0>(initial, 0) == 2.5f);
+        guarded.write_index_guarded<0>(initial, 0, 7.5f);
+        check(guarded.get<0>(first) == 7.5f);
+        expect<std::logic_error>([&] {
+            (void)a.read_index_guarded<0>(initial, 0);
+        });
+        expect<std::logic_error>([&] {
+            a.write_index_guarded<0>(initial, 0, 99.0f);
+        });
+        {
+            auto borrowed = guarded.borrow_read<0>();
+            check(guarded.read_index_guarded<0>(initial, 0) == 7.5f);
+            expect<std::logic_error>([&] {
+                guarded.write_index_guarded<0>(initial, 0, 99.0f);
+            });
+        }
+        guarded.reserve(32);
+        expect<std::logic_error>([&] {
+            (void)guarded.read_index_guarded<0>(initial, 0);
+        });
+        expect<std::logic_error>([&] {
+            guarded.write_index_guarded<0>(initial, 0, 99.0f);
+        });
+        check(guarded.get<0>(first) == 7.5f); // failure has no side effects
+        auto after_reserve = guarded.capture_layout_guard();
+        check(after_reserve.epoch() > initial.epoch());
+        guarded.set<0>(first, 8.5f); // value updates do not change layout
+        check(guarded.read_index_guarded<0>(after_reserve, 0) == 8.5f);
+        auto second = guarded.push(3.5f, 8, false);
+        expect<std::logic_error>([&] {
+            (void)guarded.read_index_guarded<0>(after_reserve, 0);
+        });
+        auto after_push = guarded.capture_layout_guard();
+        guarded.erase_swap(first);
+        expect<std::logic_error>([&] {
+            (void)guarded.read_index_guarded<0>(after_push, 0);
+        });
+        auto after_erase = guarded.capture_layout_guard();
+        check(guarded.read_index_guarded<0>(after_erase, 0) == 3.5f);
+        check(guarded.get<0>(second) == 3.5f);
+        expect<std::out_of_range>([&] { (void)guarded.get<0>(first); });
+        expect<std::out_of_range>([&] {
+            (void)guarded.read_index_guarded<0>(after_erase, 1);
+        });
+    }
 
     std::vector<int> lowering_order;
     int receiver_evals = 0, index_evals = 0, value_evals = 0;
