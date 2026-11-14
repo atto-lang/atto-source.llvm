@@ -16,6 +16,9 @@ substitute.
   a trusted runtime/scheduler context and enforce that identity before access.
 - The issuer is unique per owner instance, including when the same actor ID
   and memory address are reused; a stale handle cannot pass an ABA reuse check.
+  The issuer counter is **shared across different capacity/schema template
+  instantiations** rather than accidentally restarting at 1 for each type;
+  invalid actor IDs are rejected before consuming a new issuer.
 - Dense physical row movement on swap-delete does **not** change the identity
   of surviving rows. Deleted slots increment generation before reuse.
 - Generation exhaustion retires a slot permanently rather than wrapping.
@@ -66,6 +69,11 @@ Executed locally: GCC/Clang `-O0`/`-O2` and GCC ASan/UBSan/TSan
 the fixed regression and model-based differential for each compiler and
 sanitizer matrix entry; workflow runs must have real executed job steps to
 claim independent CI success.
+
+After the shared-issuer hardening, I recompiled and executed both exact
+C++ files locally: GCC/Clang `-O0/-O2` plus GCC ASan/UBSan/TSan,
+**14 passing executions** (seven configurations per test). The source
+header blob is `66b8e2eaa4d9d3307df0a5fef7286b7c5c8dd5dd`.
 
 This receipt covers a test-only oracle. It is not `oreslang-llvmc` AOT testing.
 The source-owned GitHub workflow will provide separately pinned source-tree,
