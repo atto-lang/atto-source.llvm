@@ -67,3 +67,62 @@ or actual binary code-version retirement.
 6. Reuse OTel semantic event formats and actor/continuation trace context from common contracts, but do not import Graal, .NET, Forge or Rust compiler code.
 
 References: [source identity specification #62](https://github.com/ores-truffle-oreslang/attolang-language-spec.md/pull/62), [common native instrumentation #279](https://github.com/ores-truffle-oreslang/oreslang-common-source/pull/279).
+
+## Literal-only compiled `log.info` slice (2026-11-14 draft)
+
+The native LLVM frontend now recognizes `log.info("fixed literal");`
+both inside an existing `using telemetry.span("name") as span {...}` and
+in straight-line scalar function statements. Dynamic expressions, multiline
+or control-character payloads, messages over 96 bytes, duplicate identical
+literals in one function and unmatched manifest site rows fail closed.
+
+`CheckedLogSiteV1` is an opt-in compiler input that must exactly match the
+native parsed (function selector, literal) inventory. It binds a stored
+128-bit `rid_` and distinct 128-bit `sid_` for each callsite; for this
+first v1 slice, reusing the same message string twice in one function is
+intentionally unsupported rather than ambiguously re-keying. The IR emitter
+lowers each verified statement to a **real guest LLVM call instruction**
+for `ores_native_telemetry_log_info` and attaches metadata on that instruction
+with both static IDs. The four fixed 64-bit ID lanes are emitted as constants,
+not allocated per execution.
+
+The C11 backend runtime extends the existing native lexical span scope with a
+32-entry **thread-/carrier-local**, allocation-free event ring. It copies
+only the static IDs, at most 96 literal bytes, and the current native scope
+token. The disabled path is an immediate no-op; the full ring drops events.
+A same-carrier host drain erases retired events. This scope token is **not**
+a W3C trace/span ID and is not yet safe across suspension or actor-carrier
+migration. LLVM codegen therefore rejects async, actors, task/future and
+Wasm/Cortex-M inputs in this mode.
+
+Two reviewed fixtures are under `examples/telemetry/log-info-verified.atto`
+and `examples/telemetry/log-info-ids.json`. The compiler currently requires
+the opt-in C++ checked-site vector; the normal CLI **does not yet load this
+manifest**. A new compiler selftest
+`oreslang-llvmc --selftest-native-log-info-ir` parses real .atto syntax,
+checks two compiled callsite IDs, and rejects missing, wrong-kind, duplicated,
+stale and foreign site identities. It is registered under CTest name
+`native_guest_log_info_verified_llvm_ir`.
+
+**Executed native-runtime tests:** exact Git blob
+`1bb720b06bc897df0d36399f8a143a94edf626db` (C runtime),
+`ca5bedbf00fb2542729c3296f8d401bf47847cba` (header),
+and `c572530721719a07ddfaf26eb4bee2401ead121a` (C regression test)
+were independently reconstructed, SHA-verified, compiled and executed locally
+using GCC -O2 and Clang -O1 with ASan+UBSan, -Werror and -UNDEBUG. Both emitted
+`LLVM_STATIC_LOG_RING_HOST_PASS`. These are **HOST NATIVE RUNTIME tests**,
+not executed LLVM guest compiler tests. The compiler IR selftest, linked
+guest object, real OTel IDs and hard-RT proof remain **UNEXECUTED**.
+
+After an LLVM SDK/authorized runner is available:
+
+~~~sh
+cmake -S . -B build-llvm -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-llvm --parallel --target oreslang-llvmc oreslang-native-static-log-ring-test
+ctest --test-dir build-llvm -R 'native_(guest_log_info_verified_llvm_ir|literal_guest_log_ring_runtime)' --output-on-failure
+~~~
+
+The ordinary compiler CLI, source registry loading, separate artifact SHA
+attestation, native executable linking and actor-aware OTel context are the
+next required gates. No complete backend parity claim is made.
+
