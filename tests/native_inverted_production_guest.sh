@@ -256,8 +256,8 @@ done
 
 # Unsupported runtime/target/analysis options must fail closed before any
 # LLVM IR bytes escape. Do not grant Wasm, hard-RT or allocator claims.
-for option in --profile=native-hard-rt --target=wasm32 \
-              --constraint-descriptors --tree-shake \
+for option in --profile=native-hard-rt --target=wasm32 --target=host \
+              --isolate-entry=main --constraint-descriptors --tree-shake \
               --allocator-provider=bounded-arena; do
     if "$compiler" "$option" "$fixtures/positive-column-get.atto" \
         >"$tmp/unsafe.ll" 2>"$tmp/error.txt"; then
@@ -269,4 +269,4 @@ for option in --profile=native-hard-rt --target=wasm32 \
         exit 1
     fi
 done
-printf 'PASS: production .atto -> typed MIR -> no-GC-screened IR, 14 native exit-42 (O0/O2), 4 bounds signals, 11 source rejects, 5 mode rejects, known-GC denied (linked/FFI audit still unproven)\n'
+printf 'PASS: production .atto -> typed MIR -> no-GC-screened IR, 14 native exit-42 (O0/O2), 4 bounds signals, 11 source rejects, 7 mode rejects, known-GC denied (linked/FFI audit still unproven)\n'
