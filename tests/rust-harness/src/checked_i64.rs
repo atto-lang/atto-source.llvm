@@ -101,6 +101,16 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
             Some(42),
         ),
         (
+            "stdlib-math-catch-comma-tail",
+            source_root.join("tests/fixtures/numeric-v1/math-module-catch-comma-tail.atto"),
+            Some(47),
+        ),
+        (
+            "stdlib-math-catch-comma-two-locals",
+            source_root.join("tests/fixtures/numeric-v1/math-module-catch-comma-two-locals.atto"),
+            Some(42),
+        ),
+        (
             "native-tail-if-implicit",
             source_root.join("tests/fixtures/numeric-v1/native-tail-if-implicit.atto"),
             Some(42),
@@ -249,6 +259,11 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
             "host-error-type",
             "tests/fixtures/numeric-v1/math-module-unsupported-error-type.ores",
             "native ErrorSlot type test supports only ArithmeticOverflowError or Error",
+        ),
+        (
+            "duplicate-catch-local",
+            "tests/fixtures/numeric-v1/math-module-catch-duplicate-local.atto",
+            "native ErrorSlot catch local shadows error binding or previous local",
         ),
         (
             "opaque-error-binding",

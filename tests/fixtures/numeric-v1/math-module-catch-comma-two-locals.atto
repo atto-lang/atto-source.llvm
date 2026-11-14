@@ -1,0 +1,16 @@
+import module Math from "../../../stdlib/math";
+
+pub fnc main(): int {
+  try {
+    return Math.neg((-9223372036854775807 - 1));
+  } catch (err) {
+    if err is type ArithmeticOverflowError then
+      let int left = 5,
+      let int right = left + 2,
+      left * 7 + right
+    else
+      1
+    fi
+  } finally {
+  }
+}
