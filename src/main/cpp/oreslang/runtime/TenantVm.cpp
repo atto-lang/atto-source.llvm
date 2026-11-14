@@ -478,7 +478,15 @@ struct TenantVmHost::Core {
         stack_t alt{};
         alt.ss_sp = c->signal_stack;
         alt.ss_size = kSignalStackBytes;
-        if (sigaltstack(&alt, nullptr) != 0) std::abort();
+        if (sigaltstack(&alt, nullptr) != 0) {
+            // This can fail on a replacement worker even when its mmap succeeded.
+            // Never abort the process or run a guest without an alternate fault stack.
+            // The watchdog joins and replaces this carrier just like a failed quota guard.
+            c->quota_guard_quarantined = true;
+            unavailable_carriers.fetch_add(1, std::memory_order_acq_rel);
+            c->retire_requested.store(true, std::memory_order_release);
+            return;
+        }
         for (;;) {
             // Work usually arrives within a few turns' time, and going to sleep costs both this
             // carrier and whoever has to wake it a system call. So look for a moment first.
