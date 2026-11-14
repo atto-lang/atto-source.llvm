@@ -152,6 +152,8 @@ public:
           finalizer_(std::move(finalizer)), quarantine_(quarantine),
           cleanup_(std::move(cleanup)), receives_(std::move(receives)) {
         if (!resources_) throw std::invalid_argument("actor registry required");
+        if (!finalizer_.belongs_to(resources_->actor_id(), resources_->incarnation()))
+            throw std::invalid_argument("actor finalizer/registry incarnation mismatch");
         if (cleanup_ && !cleanup_->belongs_to(resources_->actor_id(),
                                               resources_->incarnation()))
             throw std::invalid_argument("source cleanup receipt actor/incarnation mismatch");
