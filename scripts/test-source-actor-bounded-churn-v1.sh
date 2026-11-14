@@ -89,18 +89,18 @@ for opt in 0 2; do
   # completions and 128 physical VM/heap shutdowns at each optimization level.
   rt="$root/src/main/cpp/oreslang/runtime"
   instrumented="$work/actor-churn-evidence-$opt"
-  "$CLANG" "-O$opt" -g -fno-omit-frame-pointer \\
-    -fsanitize=address,undefined \\
-    -x ir "$work/source-$opt.ll" -x c -std=c11 \\
-    -DORESLANG_SOURCE_ACTOR_TESTING -I "$root/src/main/cpp" \\
-    "$rt/ActorOwnedI64Heap.c" "$rt/NativeActorScheduler.c" \\
-    "$rt/NativeOresVM.c" "$rt/NativeActorFuture.c" \\
-    "$rt/SourceActorBootstrap.c" "$rt/NativeExecutionContextStore.c" \\
-    "$rt/NativeContinuationStore.c" "$rt/NativeAwaitTraceBridge.c" \\
+  "$CLANG" "-O$opt" -g -fno-omit-frame-pointer \
+    -fsanitize=address,undefined \
+    -x ir "$work/source-$opt.ll" -x c -std=c11 \
+    -DORESLANG_SOURCE_ACTOR_TESTING -I "$root/src/main/cpp" \
+    "$rt/ActorOwnedI64Heap.c" "$rt/NativeActorScheduler.c" \
+    "$rt/NativeOresVM.c" "$rt/NativeActorFuture.c" \
+    "$rt/SourceActorBootstrap.c" "$rt/NativeExecutionContextStore.c" \
+    "$rt/NativeContinuationStore.c" "$rt/NativeAwaitTraceBridge.c" \
     "$rt/NativeLogicalTrace.c" -pthread -o "$instrumented"
   rc=0
-  ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \\
-    timeout 120s "$instrumented" >"$work/evidence-out-$opt" \\
+  ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+    timeout 120s "$instrumented" >"$work/evidence-out-$opt" \
     2>"$work/evidence-err-$opt" || rc=$?
   if [[ "$rc" != 128 || -s "$work/evidence-out-$opt" ]]; then
     echo "SOURCE_ACTOR_CHURN_SANITIZED_EXECUTION_FAIL|O$opt|exit=$rc" >&2
@@ -129,7 +129,7 @@ for opt in 0 2; do
     cat "$work/evidence-err-$opt" >&2
     exit 1
   }
-  printf 'SOURCE_ACTOR_CHURN_REAL_CONSTRUCTORS|O%s|ready=128|physically_joined=128|sanitizers=ASAN_UBSAN|guest=EXECUTED|zero_gc_certified=NO\\n' "$opt"
+  printf 'SOURCE_ACTOR_CHURN_REAL_CONSTRUCTORS|O%s|ready=128|physically_joined=128|sanitizers=ASAN_UBSAN|guest=EXECUTED|zero_gc_certified=NO\n' "$opt"
   # Additional accepted forms: canonical while/do/done and zero-trip
   # actor churn. The latter must exit without constructing any actor.
   expected_statuses=(7 0)
