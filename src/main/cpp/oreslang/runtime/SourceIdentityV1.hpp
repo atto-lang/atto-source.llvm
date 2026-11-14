@@ -10,8 +10,11 @@ namespace oreslang::telemetry {
 
 enum class SourceKind { Routine, Site };
 struct SourceId {
+  SourceKind kind = SourceKind::Routine;
   std::array<std::uint8_t, 16> bytes{};
-  bool operator==(const SourceId &other) const noexcept { return bytes == other.bytes; }
+  bool operator==(const SourceId &other) const noexcept {
+    return kind == other.kind && bytes == other.bytes;
+  }
 };
 struct StaticSite {
   SourceId routine_id;
@@ -32,6 +35,7 @@ inline bool parse_source_id(std::string_view value, SourceKind kind,
   const std::string_view prefix = kind == SourceKind::Routine ? "rid_" : "sid_";
   if (value.size() != 36 || value.substr(0, 4) != prefix) return false;
   SourceId candidate{};
+  candidate.kind = kind;
   bool nonzero = false;
   for (std::size_t i = 0; i < 16; ++i) {
     const int hi = lower_hex(value[4 + i * 2]);
@@ -53,7 +57,10 @@ inline bool validate_static_sites(const StaticSite *sites,
   if (count > 4096 || (sites == nullptr && count != 0)) return false;
   const SourceId zero{};
   for (std::size_t i = 0; i < count; ++i) {
-    if (sites[i].routine_id == zero || sites[i].site_id == zero) return false;
+    if (sites[i].routine_id.bytes == zero.bytes ||
+        sites[i].site_id.bytes == zero.bytes ||
+        sites[i].routine_id.kind != SourceKind::Routine ||
+        sites[i].site_id.kind != SourceKind::Site) return false;
     for (std::size_t j = 0; j < i; ++j) {
       if (sites[i].site_id == sites[j].site_id ||
           sites[i].descriptor_index == sites[j].descriptor_index) return false;
