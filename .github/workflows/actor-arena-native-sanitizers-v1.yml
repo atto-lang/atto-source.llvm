@@ -159,7 +159,7 @@ jobs:
           command -v /usr/bin/clang++
           bash -n scripts/test-source-actor-heap-carrier-v1.sh
           bash scripts/test-source-actor-heap-carrier-v1.sh | tee "$RUNNER_TEMP/compiler-heap-carrier-receipts.txt"
-          grep -Fqx 'SOURCE_ACTOR_HEAP_CARRIER_HOST_MATRIX_PASS|levels=O0_O2|negative_each=12|cross_carrier_stolen_token=REJECTED|migration_between_turns=ALLOWED|guest=NOT_EXECUTED' "$RUNNER_TEMP/compiler-heap-carrier-receipts.txt"
+          grep -Fqx 'SOURCE_ACTOR_HEAP_CARRIER_HOST_MATRIX_PASS|levels=O0_O2|negative_each=12|cross_carrier_stolen_token=REJECTED|migration_between_turns=ALLOWED|pre_free_scrubbed=YES|guest=NOT_EXECUTED' "$RUNNER_TEMP/compiler-heap-carrier-receipts.txt"
           test "$(grep -c '^SOURCE_ACTOR_HEAP_CARRIER_HOST_PASS|' "$RUNNER_TEMP/compiler-heap-carrier-receipts.txt")" = 2
       - name: Retain compiler backend host receipts
         if: always()
