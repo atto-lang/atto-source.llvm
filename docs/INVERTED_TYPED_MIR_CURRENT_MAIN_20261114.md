@@ -22,6 +22,16 @@ The older draft [LLVM #1403](https://github.com/ores-truffle-oreslang/oreslang-s
 
 The older smoke constructs a typed `Program` in C++, and **cannot** qualify as source execution. The new compiler parser/driver path is separately wired; its actual compilation and guest results must be reported from executed exact-source Actions, not inferred from host-model tests. A compiler-slice build is **not** a full source Git-tree build. No general `inverted class`, JIT/deopt, actor-owned heap, whole-binary no-GC, or cross-backend parity is certified by this restricted first step.
 
+## Executed real source-to-native evidence (2026-11-14)
+
+A temporary **private alternate runner** with available Actions capacity compiled the actual `oreslang-llvmc` from 41 exact SHA-verified production compiler/source files and a standalone CMake harness, using LLVM 18. The source-org Actions runs failed at runner admission; they were not counted as test evidence.
+
+- [Initial guest build and execution #43644552899](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/43644552899) — SUCCESS. Default source compiler parsed canonical `.atto` fixtures, emitted real LLVM IR and produced native exit `42` for swap/reuse and a native SIGILL/SIGTRAP for the removed dense index at both `-O0` and `-O2`.
+- [Expanded exact-source guest regression #43644824348](https://github.com/zed-pkg-test/oreslang-private-pr-validation-20261012/actions/runs/43644824348) — SUCCESS. Ran source-owned `tests/native_inverted_source_guest_hardening.sh`, with ten exact negative diagnostics and both optimization levels.
+- The two `.atto` canonical fixture blobs match the Java source contract byte-for-byte; the private carrier checked all included source Git blob IDs with `git hash-object` **before** compilation.
+
+**Qualification boundary:** The carrier uses a **compiler source slice**, not the source repo's whole 2,135-entry tree. This is genuine narrow `.atto` source-to-LLVM native execution, but **not full repository CMake/CTest**, broader guest language conformance, inverted classes, actor-owned heap or row-handle identity, JIT specialization, or whole-process zero-GC certification. The source exact-head Actions workflow is staged for full-tree validation when source org minutes/runners are available. Full-tree verification is NOT_EXECUTED.
+
 ## Repro and gates
 
 Run `bash tests/native_inverted_mir_codegen_smoke.sh` in a provisioned Linux compiler environment. The script uses GCC + Clang, compiler warnings as errors, Clang ASan+UBSan, checks the resulting IR, and verifies **actual** exit 42 at -O0 and -O2. It uses neither Python nor runtime GitHub secrets.
