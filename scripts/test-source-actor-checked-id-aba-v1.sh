@@ -99,6 +99,20 @@ for opt in 0 2; do
       exit 1
     fi
   done
+  # The next mint after UINT64_MAX-1 must abort rather than wrap and
+  # revive an old identity. This is a real source runtime invocation.
+  rc=0
+  ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+    timeout 45s "$bin" exhaust >"$work/exhaust.out" 2>"$work/exhaust.err" || rc=$?
+  if [[ "$rc" != 134 || -s "$work/exhaust.out" ]] ||
+     ! grep -Fqx "SOURCE_ACTOR_CHECKED_ID_EXHAUSTED" "$work/exhaust.err"; then
+    echo "SOURCE_ACTOR_CHECKED_ID_COUNTER_WRAPPED|O$opt|exit=$rc" >&2
+    cat "$work/exhaust.out" "$work/exhaust.err" >&2
+    exit 1
+  fi
+  if grep -Eq 'ERROR: AddressSanitizer|runtime error:|UndefinedBehaviorSanitizer|LeakSanitizer|SOURCE_ACTOR_CHECKED_ID_INVARIANT_FAILED' "$work/exhaust.err"; then
+    cat "$work/exhaust.err" >&2; exit 1
+  fi
   # Typed root CONTROL ready/done continuation proof using real native VM,
   # not synthetic actor callbacks. Every callback must carry the originally
   # minted ID across suspension and the next forced allocation-address reuse.
@@ -149,4 +163,4 @@ for opt in 0 2; do
   printf 'SOURCE_ACTOR_CHECKED_ID_NATIVE_PASS|head=%s|O%s|actors=128|same_address_reuses=127|negative=3|asan_ubsan=EXECUTED|native_sha256=%s|atto_guest=NO\n' \
     "$EXPECTED_HEAD" "$opt" "$(sha256sum "$bin" | cut -d' ' -f1)"
 done
-echo "SOURCE_ACTOR_CHECKED_ID_NATIVE_MATRIX_PASS|head=$EXPECTED_HEAD|levels=O0_O2|real_actors=288|forced_address_reuses=284|death_tests=6|checked_control_resumes=64|native_processes=10|checked_id=64_BIT_VALUE|legacy_pointer_ABA=OPEN|async_await=EXECUTED"
+echo "SOURCE_ACTOR_CHECKED_ID_NATIVE_MATRIX_PASS|head=$EXPECTED_HEAD|levels=O0_O2|real_actors=288|forced_address_reuses=284|death_tests=8|overflow_rejections=2|checked_control_resumes=64|native_processes=12|checked_id=64_BIT_VALUE|legacy_pointer_ABA=OPEN|async_await=EXECUTED"
