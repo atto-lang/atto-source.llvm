@@ -66,10 +66,27 @@ At Clang O0 **and** O2 with ASan/UBSan:
   exact test-only rejection marker and no sanitizer errors;
 - real heap destruction and VM group teardown must produce 128 physical
   lifecycle receipts per level, not synthetic test-main success strings.
+- the test-only monotonic ID hook advances the counter to
+  `UINT64_MAX - 1`, exercises one last valid identity, then requires the
+  next spawn to SIGABRT with an explicit `SOURCE_ACTOR_CHECKED_ID_EXHAUSTED`
+  diagnostic. Counter overflow/reuse is never accepted.
+- `tests/source_actor_checked_identity_await_v1.c` exercises **16 real
+  root CONTROL READY/DONE pairs per optimization level**, with 15 forced
+  exact allocation-address reuses. Each callback must receive the exact
+  previously minted integer ID. A DONE callback must reject sends/stops
+  against the already sealed actor. Physical reclamation occurs only
+  after the checked continuation finishes.
+
+The source-host matrix thus requires **288 real actor lifetimes, 284 forced
+address reuses, 64 checked CONTROL continuation resumes, eight fail-stop
+negative executions and two ID-exhaustion rejections**, across O0/O2.
+These are acceptance requirements, not reported execution results.
 
 `tests/fixtures/source-actor-checked-id-v1/` adds `.atto` guest
 fixtures for single-actor send/stop, five actors, checked get_ready
-continuation, checked get_done continuation, and negative ActorRef escape.
+continuation, checked get_done continuation, negative ActorRef escape,
+and a negative spoofed trusted actor runtime symbol. Both compiler
+negatives must be rejected at O0 and O2 (four rejections total).
 The exact-head O0/O2 compiler suite requires actual LLVM calls to the
 checked-ID runtime symbols, rejects all legacy pointer ABI callsites,
 screens emitted IR for known GC constructs, compiles native ELF, and
