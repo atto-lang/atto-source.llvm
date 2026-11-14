@@ -32,6 +32,7 @@ inline int lower_hex(char c) noexcept {
 // Out is unchanged on malformed input.
 inline bool parse_source_id(std::string_view value, SourceKind kind,
                             SourceId &out) noexcept {
+  if (kind != SourceKind::Routine && kind != SourceKind::Site) return false;
   const std::string_view prefix = kind == SourceKind::Routine ? "rid_" : "sid_";
   if (value.size() != 36 || value.substr(0, 4) != prefix) return false;
   SourceId candidate{};
