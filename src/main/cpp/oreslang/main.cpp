@@ -536,6 +536,28 @@ int main(int argc, char** argv) {
         // Program, before any executable LLVM IR or sidecar is emitted.
         if (sealed_scalar_aot) require_sealed_scalar_aot_graph(ast);
 
+        // A enabled telemetry scope currently calls CLOCK_MONOTONIC on a
+        // native carrier. It has not been subjected to a proven WCET/time
+        // budget; do not certify this as hard-real-time compatible merely
+        // because the compiler can emit native LLVM IR.
+        if (native_hard_rt_profile || rt_report_seen) {
+            std::function<bool(const oreslang::Statement&)> has_span =
+                [&](const oreslang::Statement& stmt) {
+                    return stmt.kind ==
+                            oreslang::Statement::Kind::UsingTelemetrySpan
+                        || std::any_of(stmt.then_statements.begin(),
+                            stmt.then_statements.end(), has_span)
+                        || std::any_of(stmt.else_statements.begin(),
+                            stmt.else_statements.end(), has_span);
+                };
+            for (const auto& fn : ast.functions)
+                if (std::any_of(fn.statements.begin(),
+                        fn.statements.end(), has_span))
+                    throw std::runtime_error(
+                        "native telemetry using lacks bounded WCET/probe"
+                        " budget proof for native-hard-rt profile");
+        }
+
         if (constraint_descriptors_only) {
             for (const auto& descriptor : ast.type_constraint_descriptors) {
                 std::cout << "descriptor\t"
