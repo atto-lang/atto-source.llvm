@@ -502,7 +502,45 @@ static void foreign_receive_fence_cannot_complete_another_actor() {
     ref.get_done().get();
 }
 
+// Concurrent host admission/STOP race for the new bounded invocation gate.
+// This is deliberately NOT a compiled .atto concurrent receive fixture.
+static void native_receive_stop_admission_race_is_linearizable() {
+    for (unsigned round = 0; round < 64; ++round) {
+        auto receives = std::make_shared<NativeActorReceiveFence>(91, round + 1, 2);
+        std::atomic<bool> start{false}, release{false};
+        std::atomic<unsigned> attempted{0}, accepted{0};
+        auto worker = [&] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            auto lease = receives->try_enter(91, round + 1);
+            if (lease) accepted.fetch_add(1, std::memory_order_release);
+            attempted.fetch_add(1, std::memory_order_release);
+            while (!release.load(std::memory_order_acquire))
+                std::this_thread::yield();
+        };
+        std::thread a(worker), b(worker);
+        start.store(true, std::memory_order_release);
+        // The winning STOP may race with either receive reservation.
+        receives->seal_stop(false);
+        while (attempted.load(std::memory_order_acquire) != 2)
+            std::this_thread::yield();
+        const auto count = accepted.load(std::memory_order_acquire);
+        const bool valid = count <= 2 && receives->active_receives() == count
+                && !receives->try_enter(91, round + 1)
+                && (count != 0 || receives->ready_for_reclamation())
+                && (count == 0 || !receives->ready_for_reclamation());
+        release.store(true, std::memory_order_release);
+        a.join();
+        b.join();
+        require(valid, "STOP race admitted wrong or unaccounted receive");
+        require(receives->active_receives() == 0
+                    && receives->ready_for_reclamation(),
+                "STOP race stranded receive lease or physical retirement");
+    }
+}
+
 int main() {
+    native_receive_stop_admission_race_is_linearizable();
     two_overlapping_receives_pin_actual_native_done_barrier();
     foreign_receive_fence_cannot_complete_another_actor();
     deferred_source_cleanup_physically_fences_actor_done();
