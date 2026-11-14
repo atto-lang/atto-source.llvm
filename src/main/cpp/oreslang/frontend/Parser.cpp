@@ -785,6 +785,8 @@ public:
                 if (exported) fail("duplicate pub modifier");
                 exported = true;
             }
+            if (token_.text == "inverted")
+                fail("DOP_INVERTED_BACKEND_UNSUPPORTED: native guest parser requires owned typed SoA lowering");
             // Java M0 admits compiler-only durable declarations. LLVM has no
             // typed history state, command-manifest or replay ABI yet.
             if (token_.text == "activity" || token_.text == "workflow")
@@ -928,6 +930,8 @@ public:
                     if (public_class) fail("duplicate pub modifier");
                     public_class = true;
                 }
+                if (token_.text == "inverted")
+                    fail("DOP_INVERTED_BACKEND_UNSUPPORTED: native guest parser requires owned typed SoA lowering");
                 // Java M0 admits compiler-only durable declarations. LLVM has no
                 // typed history state, command-manifest or replay ABI yet.
                 if (token_.text == "activity" || token_.text == "workflow")
@@ -6567,6 +6571,10 @@ Program parse_unresolved_program(std::string_view source, bool experimental_owne
 }
 
 void resolve_and_validate_program(Program& program) {
+    // Staged MIR descriptors are not yet accepted by the guest parser.
+    // Reject constructed Program objects before scalar codegen can drop them.
+    if (!program.inverted_structs.empty() || program.inverted_main)
+        throw std::runtime_error("DOP_INVERTED_BACKEND_UNSUPPORTED: source admission not connected to verified SoA lowering");
     if (!program.imports.empty())
         throw std::runtime_error("native imports require filesystem module resolution");
     resolve_native_methods(program);
