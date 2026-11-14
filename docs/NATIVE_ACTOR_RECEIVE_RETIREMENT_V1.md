@@ -73,3 +73,39 @@ stacks across await/select, include one lease per live invocation, enforce
 serial actors' single-live-invocation restriction, and handle all native
 resource pins before physically freeing the actor arena. Five-backend parity,
 full guest AOT and process-level zero GC remain unverified.
+
+
+## Source-local full native retirement target (no LLVM SDK required)
+
+The PR adds `ATTO_ACTOR_RETIREMENT_HOST_ONLY` to CMake. Unlike an isolated
+standalone receive-gate test, this option builds the **same production**
+`ActorOwnedI64Heap.c`, `NativeActorRetirementBarrier.hpp` and
+`native_actor_retirement_barrier_test.cpp` used by the full native test
+suite. It can be run from an approved local checkout without an LLVM SDK,
+Rust runner or cross-organization private Git transfer.
+
+```sh
+EXPECTED_HEAD="$(git rev-parse HEAD)" \
+  bash scripts/test-native-actor-retirement-host-v1.sh
+```
+
+The script fails on a source HEAD mismatch, builds with **both Clang and
+GCC**, enables ASan/UBSan with leak detection, and runs
+`native_actor_done_resource_quiescence` through CTest. It leaves no
+persistent source copies in another repository.
+
+The production integration test now also launches two real host threads,
+holding independently admitted receive invocation leases while the group
+stops. Releasing only one must keep native resource destruction and DONE
+pending. Releasing both permits one teardown; only its completion permits
+exactly one native closer and DONE. A separate capacity-one serial gate
+test prevents a second receive while the first logical invocation is
+suspended or physically active.
+
+**Evidence boundary:** The isolated exact-header sanitizer smoke executed
+locally on 2026-11-14: Clang and GCC each passed an additional **1,000**
+two-thread STOP/admission rounds against exact blob SHA
+`681442c854abc8acf8009f1ccf1467af5f8dff95`, verified with
+`git hash-object`. The new **production integration** CMake/CTest path
+has been authored but **not executed on the full source checkout**.
+No compiled `.atto` actor or full-AOT result is claimed.
