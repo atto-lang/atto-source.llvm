@@ -68,6 +68,7 @@ typedef struct {
 
 typedef struct {
     pthread_mutex_t mutex;
+    pthread_cond_t observer_drained;
     OresNativeVM* vm;
     OresNativeActorRef root_ref;
     OresNativeExecutionContextStore* executions;
@@ -84,7 +85,10 @@ typedef struct {
  * in a zero-argument top-level main. There is exactly one worker pool per
  * active group, not one pool per actor.
  */
-static SourceActorGroup group = { .mutex = PTHREAD_MUTEX_INITIALIZER };
+static SourceActorGroup group = {
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+    .observer_drained = PTHREAD_COND_INITIALIZER
+};
 /* Protected by group.mutex. Never wraps or resets across VM group reopen. */
 static uint64_t next_actor_id = UINT64_C(4100);
 static _Thread_local OresNativeExecutionHandle current_source_execution;
@@ -193,6 +197,7 @@ static SourceActor* lookup_actor_id_locked(OresSourceActorId id) {
 
 /* Checked await DONE reserves exclusive physical-join authority before
  * suspension. Native pointers remain internal, never guest-visible IDs. */
+static SourceActor* live_actor_pointer_locked(void* opaque);
 static void claim_actor_join_locked(SourceActor* actor);
 static void source_actor_join_claimed(
     SourceActor* instance, OresNativeVM* vm, OresNativeActorRef target);
@@ -793,6 +798,7 @@ static int source_actor_await_ready_common(
 
     ensure(group.pending_ready == &frame);
     group.pending_ready = NULL;
+    ensure(pthread_cond_broadcast(&group.observer_drained) == 0);
     const int outcome = frame.outcome;
     if (outcome == ORES_SOURCE_ACTOR_STARTUP_READY)
         *result_out = frame.result;
@@ -939,6 +945,7 @@ static int64_t source_actor_await_done_common(
 
     ensure(group.pending_done == &frame);
     group.pending_done = NULL;
+    ensure(pthread_cond_broadcast(&group.observer_drained) == 0);
     const int64_t result = frame.result;
 
     ores_native_actor_future_destroy(frame.done_future);
@@ -1087,6 +1094,12 @@ static void source_actor_join_claimed(
     group_lock();
     ensure(group.vm == vm && slot < group.next_slot
         && group.actors[slot] == instance && instance->ref.actor_slot == slot);
+    /* READY is an admitted logical observer on the root CONTROL lane.
+     * A physical DONE acknowledgement is not permission to free memory
+     * while that observer may still resume and inspect this actor. */
+    while ((group.pending_ready && group.pending_ready->actor == instance) ||
+           (group.pending_done && group.pending_done->actor == instance))
+        ensure(pthread_cond_wait(&group.observer_drained, &group.mutex) == 0);
     const int startup_state = atomic_load_explicit(
         &instance->startup_state, memory_order_acquire);
     ensure(startup_state == ORES_SOURCE_ACTOR_STARTUP_READY
