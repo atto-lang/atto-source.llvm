@@ -3032,7 +3032,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         const std::string param = actor.on_message.parameters[0].name;
         llvm::Value* pslot = builder.CreateAlloca(i64, nullptr, param + ".slot");
         guard_frame(builder.CreateCall(actorFrameStore, {incoming}), "actor.frame.store");
-        guard_frame(builder.CreateCall(actorFrameLoad, {pslot}), "actor.frame.load");
+        guard_frame(builder.CreateCall(actorFrameLoad,
+            {builder.CreatePointerCast(pslot, native_ptr)}), "actor.frame.load");
         values.emplace(param, pslot);
         for (std::size_t i=0; i<actor.fields.size(); ++i) {
             const auto& field = actor.fields[i];
