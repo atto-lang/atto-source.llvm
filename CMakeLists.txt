@@ -192,6 +192,24 @@ if(ATTO_ACTOR_LOGICAL_FRAMES_HOST_ONLY)
     add_test(NAME native_actor_frame_quota_typed_supervisor_control
         COMMAND atto-native-actor-frame-control-host-test)
     set_tests_properties(native_actor_frame_quota_typed_supervisor_control PROPERTIES TIMEOUT 30)
+    # Stronger host path: registered NativeOresVM child + owner finalization
+    # receipt must precede priority CONTROL, with rejected forgery/replay.
+    add_executable(atto-native-vm-supervised-quota-host-test
+        tests/native_actor_frame_quota_vm_supervised_test.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c)
+    target_include_directories(atto-native-vm-supervised-quota-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(atto-native-vm-supervised-quota-host-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(atto-native-vm-supervised-quota-host-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(atto-native-vm-supervised-quota-host-test PRIVATE Threads::Threads)
+    add_test(NAME native_vm_registered_actor_frame_quota_supervisor
+        COMMAND atto-native-vm-supervised-quota-host-test)
+    set_tests_properties(native_vm_registered_actor_frame_quota_supervisor PROPERTIES TIMEOUT 30)
     return()
 endif()
 
@@ -266,6 +284,22 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_frame_quota_typed_supervisor_e2e
         COMMAND oreslang-native-actor-frame-control-test)
     set_tests_properties(native_actor_frame_quota_typed_supervisor_e2e PROPERTIES TIMEOUT 30)
+    add_executable(oreslang-native-vm-supervised-quota-test
+        tests/native_actor_frame_quota_vm_supervised_test.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c)
+    target_include_directories(oreslang-native-vm-supervised-quota-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-vm-supervised-quota-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(oreslang-native-vm-supervised-quota-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-vm-supervised-quota-test PRIVATE Threads::Threads)
+    add_test(NAME native_vm_registered_actor_quota_failure_control
+        COMMAND oreslang-native-vm-supervised-quota-test)
+    set_tests_properties(native_vm_registered_actor_quota_failure_control PROPERTIES TIMEOUT 30)
 
     # AOT trace policy gate; this does not compile a source-level Atto trace.
     find_package(Threads REQUIRED)
