@@ -4165,6 +4165,15 @@ private:
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
 
+        // FAT_ARROW annotates the inline lambda's result type, but native
+        // closure frames and typed capture ownership are not lowered yet.
+        // Fail specifically here rather than allowing a logical-or token to
+        // masquerade as a value at the beginning of an expression.
+        if (token_.text == "||" && peek_next().text == "=>") {
+            fail("NATIVE_LAMBDA_CLOSURE_UNSUPPORTED: => Type -> lambda requires "
+                 "native closure and ownership lowering");
+        }
+
         // nb is a nonblocking channel/select modifier. It is never permission
         // for suspension inside an otherwise synchronous match/switch.
         if (token_.text == "nb") {
