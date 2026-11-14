@@ -63,9 +63,9 @@ int main() {
     CHECK(!native_match_bits(bits,
             std::array<NativePatternElement, 0>{}, true).matched);
 
-    CHECK(!NativePatternBitSpan{{nullptr, 1}, 0, 1}.valid());
-    CHECK(!NativePatternBitSpan{{flags.data(), 1}, 7, 2}.valid());
-    CHECK(!NativePatternBitSpan{{flags.data(), std::numeric_limits<std::size_t>::max()}, 0, 1}.valid());
+    CHECK((!NativePatternBitSpan{{nullptr, 1}, 0, 1}.valid()));
+    CHECK((!NativePatternBitSpan{{flags.data(), 1}, 7, 2}.valid()));
+    CHECK((!NativePatternBitSpan{{flags.data(), std::numeric_limits<std::size_t>::max()}, 0, 1}.valid()));
 
     // Network packet bytes: version=1, BE length=3, payload="abc", rest=0xff.
     const std::array<std::uint8_t, 7> packet{{1, 0, 3, 97, 98, 99, 255}};
