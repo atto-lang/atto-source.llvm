@@ -25,7 +25,7 @@ add_executable(tenant_vm_test tenant_vm_test.cpp "${ROOT}/src/main/cpp/oreslang/
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_sources(tenant_vm_test PRIVATE mprotect_fault_shim.cpp)
     target_compile_definitions(tenant_vm_test PRIVATE TENANT_VM_TEST_MPROTECT=1)
-    target_link_options(tenant_vm_test PRIVATE "LINKER:--wrap=mprotect")
+    target_link_options(tenant_vm_test PRIVATE "LINKER:--wrap=mprotect" "LINKER:--wrap=mmap")
 endif()
 target_link_libraries(tenant_vm_test PRIVATE tenant_vm_guests Threads::Threads)
 if(NOT TENANT_VM_SANITIZE AND NOT TENANT_VM_TSAN)
