@@ -6,8 +6,11 @@
 #include <cassert>
 #include <chrono>
 #include <cstdint>
+#include <exception>
+#include <functional>
 #include <future>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <thread>
 
@@ -712,7 +715,52 @@ static void serial_actor_receive_capacity_retains_suspended_identity() {
     require(serial->ready_for_reclamation(), "serial incarnation did not quiesce");
 }
 
+// The group-close retirement callback must seal DATA admission itself.
+// An additional explicit caller-side seal_stop would hide a gap where
+// the native resource registry was retired while new receive leases entered.
+static void abortive_group_stop_seals_receive_before_any_native_reclaim() {
+    NativeActorResourceQuarantine quarantine(1);
+    NativeActorGroup group(415, 1);
+    auto registry = std::make_shared<ActorResourceRegistry>(25, 2);
+    auto receives = std::make_shared<NativeActorReceiveFence>(25, 2, 2);
+    std::atomic<unsigned> released{0};
+    registry->register_resource(Kind::native_allocation, [&] {
+        released.fetch_add(1, std::memory_order_relaxed);
+    });
+    NativeActorRetirementBarrier* retiring = nullptr;
+    auto ref = group.adopt(415, 25, 2, [&] { retiring->retire(); });
+    NativeActorRetirementBarrier barrier(
+        registry, group.runtime_finalizer(ref), quarantine, {}, receives);
+    retiring = &barrier;
+    require(group.mark_ready(ref), "abortive actor ready");
+    auto first = receives->try_enter(25, 2);
+    require(first.has_value(), "abortive actor first receive");
+    group.close(); // callback's retire() must seal the gate as terminal.
+    require(!receives->try_enter(25, 2),
+            "abortive group STOP admitted DATA after retirement began");
+    require(!receives->try_begin_teardown(),
+            "abortive STOP allowed guest tear_down");
+    require(barrier.poll() == Poll::pending,
+            "abortive STOP ignored still-live receive");
+    require(ref.get_done().wait_for(std::chrono::milliseconds(0))
+                == std::future_status::timeout,
+            "abortive STOP settled DONE while guest receive was live");
+    require(released.load(std::memory_order_relaxed) == 0,
+            "abortive STOP freed live receiver memory");
+    first->release();
+    require(receives->ready_for_reclamation(),
+            "abortive STOP could not reclaim after receive exit");
+    require(barrier.poll() == Poll::completed,
+            "abortive STOP failed to finalize after physical quiescence");
+    require(released.load(std::memory_order_relaxed) == 1,
+            "abortive STOP released native resource more than once");
+    ref.get_done().get();
+    require(!receives->try_begin_teardown(),
+            "failed guest lifecycle teardown appeared after DONE");
+}
+
 int main() {
+    abortive_group_stop_seals_receive_before_any_native_reclaim();
     serial_actor_receive_capacity_retains_suspended_identity();
     concurrent_host_receivers_join_native_resource_retirement();
     invalid_receive_fence_construction_and_post_owner_release();
