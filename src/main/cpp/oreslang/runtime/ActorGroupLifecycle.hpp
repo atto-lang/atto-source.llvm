@@ -169,6 +169,9 @@ private:
         std::shared_future<void> done_future = done_promise.get_future().share();
         bool done_settled = false;
         std::atomic<bool> stop_issued{false};
+        // STOP request admission is NOT physical completion: the trusted
+        // callback may still hold actor arenas, I/O callbacks, or locks.
+        std::atomic<bool> stop_dispatch_finished{false};
         std::atomic<bool> physically_done{false};
         // True only after the group worker table was detached by close().
         std::atomic<bool> detached_from_group{false};
@@ -262,6 +265,8 @@ public:
         // receipts may still be charged, so this deliberately ignores loans.
         bool ready_for_actor_turn_quiescence() const noexcept {
             return ref_.ticket_->detached_from_group.load(std::memory_order_acquire)
+                && ref_.ticket_->stop_issued.load(std::memory_order_acquire)
+                && ref_.ticket_->stop_dispatch_finished.load(std::memory_order_acquire)
                 && !ref_.ticket_->logical_turn_active.load(std::memory_order_acquire)
                 && !ref_.ticket_->control_active.load(std::memory_order_acquire)
                 && !ref_.ticket_->control_reserved.load(std::memory_order_acquire);
@@ -683,6 +688,8 @@ private:
                 || it->second.ticket != ref.ticket_
                 || !ref.ticket_->detached_from_group.load(std::memory_order_acquire)
                 || ref.ticket_->physically_done.load(std::memory_order_acquire)
+                || !ref.ticket_->stop_issued.load(std::memory_order_acquire)
+                || !ref.ticket_->stop_dispatch_finished.load(std::memory_order_acquire)
                 || ref.ticket_->logical_turn_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_reserved.load(std::memory_order_acquire))
@@ -790,7 +797,11 @@ private:
         if (ref.ticket_->physically_done.load(std::memory_order_acquire)) return;
         if (ref.ticket_->stop_issued.exchange(true, std::memory_order_acq_rel))
             return;
+        // Publish physical completion even if a trusted stop callback
+        // throws. The retirement registry itself must still prove that
+        // resources actually quiesced; this flag is only callback lifetime.
         try { stop(); } catch (...) { /* do not strand sibling workers */ }
+        ref.ticket_->stop_dispatch_finished.store(true, std::memory_order_release);
     }
 
     static void request_stops(
