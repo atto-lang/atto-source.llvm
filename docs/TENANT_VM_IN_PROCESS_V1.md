@@ -68,6 +68,23 @@ The first startup on a fresh or replacement carrier must also register an altern
 stack before accepting turns. If `sigaltstack` fails, that carrier retires and is replaced
 through the same bounded watchdog recovery path; no process-wide `abort()` is permitted.
 
+**Signal ownership.** A carrier's `sigsetjmp` records its complete pre-guest signal mask
+on Linux and Darwin; `siglongjmp` restores that exact mask after a guest trap, rather
+than unblocking every fault-related signal and overriding another runtime's choices.
+The host refuses VM admission with `SignalHandlerLost` if any required fault handler
+*or the `SIGURG` watchdog interrupt handler* has been replaced. The Linux native
+regression blocks `SIGTRAP` before starting the worker, overflows an actor stack,
+and confirms that the inherited block is still present after guest recovery.
+
+**Remaining sanitizer caveat:** the GCC AddressSanitizer default-handler stress
+reproduced an intermittent process SIGSEGV even in a test that only starts a host
+and validates invalid restart parameters (without executing any guest turn).
+A 150-run sanitized executable negative control without constructing a host
+passed. This does not establish the root cause; host signal-handler ownership,
+carrier startup/teardown, and sanitizer interaction need additional verification
+before merging the PR. Tests that disable ASan's signal handler cannot satisfy
+the default-handler acceptance gate.
+
 Host calls run on the guest's stack, and a guest chooses how deep that is, so each host call checks for
 256 KiB of remaining stack before leaving guest mode. A shortage counts as out of carrier stack, like any other overflow. Carrier stacks must
 therefore be at least 512 KiB.
