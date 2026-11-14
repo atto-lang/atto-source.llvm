@@ -13,7 +13,7 @@
 namespace oreslang::frontend {
 
 // Source lowering is deliberately separate from general source admission.
-// Only a sealed, locally constructed, nullary enum with a complete match can
+// Only a sealed, locally constructed enum with nullary or one Copy-int payload field per case can
 // be encoded in the existing checked native i64 CFG. V2 also checks a single
 // internal static helper with nominal argument and return types at source
 // level. No payload, mutable symbol, actor mail, public enum parameter ABI,
@@ -305,15 +305,28 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
         [&](const Variant& v) { return v.name == ctor.second; });
     if (selected == variants.end())
         throw std::runtime_error("ADT v1 unknown nominal case constructor");
+    std::int64_t selected_payload = 0;
+    if (selected->int_field.empty()) {
+        if (r.current().value == "{")
+            throw std::runtime_error("ADT v4 nullary constructor rejects payload");
+    } else {
+        r.need("{");
+        r.need(selected->int_field);
+        r.need(":");
+        selected_payload = r.number();
+        if (!r.take("}"))
+            throw std::runtime_error("ADT v4 constructor requires exactly one checked int field");
+    }
     if (calls_helper) r.need(")");
     r.need(";");
     r.take("do"); r.need("match"); r.need(variable); r.need("over");
-    struct Arm { std::int64_t tag, result; };
+    const std::string payload_var = variable + "_case_payload";
+    struct Arm { std::int64_t tag; std::string result; };
     std::vector<Arm> arms;
     std::unordered_set<std::string> seen;
     while (r.take("on")) {
         const auto q = r.nominal_pattern(owner,
-            "ADT v1 match has foreign nominal owner");
+            "ADT v1 match has foreign nominal owner", true);
         if (!q.second.empty() &&
                 (q.second == variable ||
                 std::any_of(variants.begin(), variants.end(),
@@ -325,10 +338,28 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
             throw std::runtime_error("ADT v1 match has unknown case");
         if (!seen.insert(q.first).second)
             throw std::runtime_error("ADT v1 duplicate match arm");
+        if (!q.field.empty() && q.field != which->int_field)
+            throw std::runtime_error("ADT v4 pattern field is not declared on the nominal case");
         r.need("->"); r.need("{"); r.need("return");
-        const auto number = r.number();
+        std::string result;
+        if (r.current().identifier) {
+            // Explicit case narrowing is the *only* route to the private
+            // integer payload register; no guest raw-tag API is exposed.
+            const auto reference = r.name();
+            if (which->int_field.empty())
+                throw std::runtime_error("ADT v4 nullary case has no payload projection");
+            if (!q.second.empty() && reference == q.second) {
+                r.need(".");
+                r.need(which->int_field);
+            } else if (reference != q.field || q.field.empty()) {
+                throw std::runtime_error("ADT v4 unknown or unbound case field projection");
+            }
+            result = payload_var;
+        } else {
+            result = std::to_string(r.number());
+        }
         r.need(";"); r.need("}");
-        arms.push_back({which->tag, number});
+        arms.push_back({which->tag, std::move(result)});
     }
     r.need("end"); r.need("}");
     r.need("");
@@ -342,11 +373,14 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
         : std::to_string(selected->tag);
     std::string lowered = helper_lowered + "pub fnc main(): int {\n  val int " +
         variable + " = " + initial_value + ";\n";
+    if (has_int_payload)
+        lowered += "  val int " + payload_var + " = " +
+            std::to_string(selected_payload) + ";\n";
     for (std::size_t k = 0; k + 1 < arms.size(); ++k) {
         lowered += "  if " + variable + " == " + std::to_string(arms[k].tag) +
-            " then return " + std::to_string(arms[k].result) + "; fi\n";
+            " then return " + arms[k].result + "; fi\n";
     }
-    lowered += "  return " + std::to_string(arms.back().result) + ";\n}\n";
+    lowered += "  return " + arms.back().result + ";\n}\n";
     return lowered;
 }
 
