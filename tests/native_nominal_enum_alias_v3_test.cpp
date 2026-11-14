@@ -88,7 +88,7 @@ int main() {
         expect_rejected(changed(source, "Red,\n  Green,",
             "Red,\n  Red,"), "duplicate nominal case");
         expect_rejected(changed(source, "on Red as original",
-            "on Red { job_id } as original"), "pattern field is not declared on the nominal case");
+            "on Red { job_id } as original"), "helper cannot borrow payload-bearing nominal enums");
         expect_rejected(changed(source, "Red,\n  Green,",
             "Red { job_id: Bytes },\n  Green,"),
             "payload AOT admits only Copy int");
