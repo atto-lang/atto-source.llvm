@@ -468,7 +468,17 @@ struct TypeConstraintDescriptor {
     bool validation_required = true;
 };
 
+struct FileExport {
+    enum class Visibility { Public, Package };
+    enum class Kind { Inferred, Class, Fnc };
+    std::string name;
+    Visibility visibility = Visibility::Public;
+    Kind kind = Kind::Inferred;
+    std::size_t offset = 0;
+};
+
 struct Program {
+    std::vector<FileExport> exports;
     std::vector<ModuleImport> imports;
     std::vector<CooperativeScalarLoop> cooperative_loops;
     std::vector<ScalarGenerator> generators;
