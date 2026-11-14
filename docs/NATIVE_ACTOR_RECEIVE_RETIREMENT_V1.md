@@ -245,3 +245,31 @@ targets are still **NOT_EXECUTED** on a source checkout. Source Actions
 have not executed job steps. Isolated exact-source receive-gate smoke
 tests remain separately verified with sanitizers; they do not prove
 this new opaque owner-binding code passed CTest.
+
+## Adversarial exact receive-header smoke (2026-11-14)
+
+A fresh local test used the **byte-exact checked-in native receive gate**
+blob SHA `681442c854abc8acf8009f1ccf1467af5f8dff95`,
+verified with `git hash-object`. Independently compiled by
+Clang 17 and GCC 14 (`-std=c++17 -O1 -g -pthread -Wall -Wextra
+-Wpedantic -Werror -fsanitize=address,undefined`), both executions passed:
+4,096 simultaneously admitted move-only leases; rejection at
+capacity; rejection of a wrong incarnation without losing a receipt;
+cross-actor lease move assignment releasing the previous actor's pin;
+lease destruction after the gate factory was destroyed; a live
+teardown surviving terminal-downgrade; and 2,000 two-carrier
+STOP/admission races **per compiler** with zero leaked receipts.
+
+The production `native_actor_retirement_barrier_test.cpp` now also
+covers 4,096 admission capacity, lease moves and post-factory
+lifetime, and increased its integrated STOP stress rounds from
+64 to 256. This **new full production test is not yet executed**
+against the complete source repository. The standalone exact
+receive-gate smoke does not certify registry opaque-ticket binding,
+native arena CTest, compiled `.atto`, or full AOT.
+
+The host-only native CI script has been reconstructed from the exact
+GitHub blob `654f24ed6d5e9f9f6a06c452cc0959940608e2e0`
+and **passed `bash -n`**, with local `git hash-object` equal
+to the remote Git blob SHA. This is syntax verification only;
+the script's full native test commands remain not executed.
