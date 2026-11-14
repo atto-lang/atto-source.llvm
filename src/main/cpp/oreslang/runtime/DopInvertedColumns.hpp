@@ -136,6 +136,11 @@ class InvertedColumns {
         (std::get<I>(s.columns).reserve(n), ...);
     }
     template<std::size_t... I>
+    static bool columns_have_capacity(const State& s, std::size_t n,
+                                      std::index_sequence<I...>) {
+        return ((std::get<I>(s.columns).capacity() >= n) && ...);
+    }
+    template<std::size_t... I>
     static void append_columns(State& s, const std::tuple<Fields...>& values,
                                std::index_sequence<I...>) {
         // All allocation was completed by reserve_columns. Each copy is a
@@ -400,8 +405,13 @@ public:
         State& s = *state_;
         ensure_open(s);
         if (any_loans(s)) throw std::logic_error("cannot reserve borrowed inverted columns");
-        // Capacity changes may partially succeed before a later allocation
-        // fails. Invalidate first, including on failed and no-op reserves.
+        // A true no-op reserve never relocates metadata or columns and must
+        // preserve an issued layout guard, matching the Java backend.
+        if (s.row_slots.capacity() >= capacity && s.slots.capacity() >= capacity &&
+                columns_have_capacity(s, capacity, std::index_sequence_for<Fields...>{}))
+            return;
+        // A growth attempt can partially relocate earlier vectors before a
+        // later allocator fails. Invalidate *before* the first allocation.
         invalidate_layout(s);
         s.row_slots.reserve(capacity);
         s.slots.reserve(capacity);
