@@ -163,6 +163,43 @@ fi
 grep -q E_CLANG "$work/clang.log"
 cmp "$work/previous.exe" "$work/previous-baseline"
 
+# An adversarial compiler executable can falsely return 0. A blank or invalid
+# output must never be published over a previously valid artifact.
+cat > "$work/fakebin/clang" <<'SH'
+#!/bin/sh
+cat >/dev/null
+exit 0
+SH
+chmod +x "$work/fakebin/clang"
+if PATH="$work/fakebin:$PATH" target/release/atto-llvm "$work/alias-source.atto" -o "$work/previous.exe" >"$work/clang.log" 2>&1; then
+  echo "FAIL: fake successful clang published empty artifact" >&2; exit 1
+fi
+grep -q E_CLANG_ARTIFACT "$work/clang.log"
+cmp "$work/previous.exe" "$work/previous-baseline"
+
+cat > "$work/fakebin/clang" <<'SH'
+#!/bin/sh
+output=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then
+    shift
+    output="$1"
+    break
+  fi
+  shift
+done
+printf 'not-an-ELF-binary' > "$output"
+cat >/dev/null
+exit 0
+SH
+chmod +x "$work/fakebin/clang"
+if PATH="$work/fakebin:$PATH" target/release/atto-llvm "$work/alias-source.atto" -o "$work/previous.exe" >"$work/clang.log" 2>&1; then
+  echo "FAIL: fake successful clang published invalid artifact" >&2; exit 1
+fi
+grep -q E_CLANG_ARTIFACT "$work/clang.log"
+cmp "$work/previous.exe" "$work/previous-baseline"
+echo "PASS reject zero-exit compiler with missing or invalid ELF"
+
 # A successful publish must replace the old artifact atomically, whether
 # emitting LLVM IR or invoking clang. No staged temporary files may remain.
 target/release/atto-llvm "$work/alias-source.atto" -o "$work/previous.exe" --emit-llvm
