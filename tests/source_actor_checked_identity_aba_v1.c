@@ -99,6 +99,34 @@ static void expected_abort(const char* mode) {
     fputs("SOURCE_ACTOR_CHECKED_ID_STALE_ACCEPTED\n", stderr);
     exit(17);
 }
+/* Compatibility-only regression: once a void* source actor has been
+ * fully retired and unregistered, a subsequent host operation must not
+ * dereference its freed allocation. This specifically DOES NOT prove that
+ * the old pointer is safe after malloc gives that address to a new actor. */
+static int reject_fully_expired_legacy_pointer(const char* mode) {
+    void* actor = oreslang_source_actor_spawn(ctor, echo, 1);
+    check(actor != NULL);
+    while (oreslang_source_actor_ready_status(actor)
+           != ORES_SOURCE_ACTOR_STARTUP_READY)
+        sched_yield();
+    oreslang_source_actor_stop(actor);
+    check(oreslang_source_actor_ready_status(actor) == -1);
+    if (strcmp(mode, "legacy-status") == 0) {
+        puts("SOURCE_ACTOR_LEGACY_STALE_STATUS_REJECTED");
+        return 0;
+    }
+    if (strcmp(mode, "legacy-send") == 0)
+        oreslang_source_actor_send(actor, 5);
+    else if (strcmp(mode, "legacy-stop") == 0)
+        oreslang_source_actor_request_stop(actor);
+    else if (strcmp(mode, "legacy-join") == 0)
+        oreslang_source_actor_join_done(actor);
+    else
+        return 64;
+    fputs("SOURCE_ACTOR_LEGACY_STALE_DEREF_ACCEPTED\n", stderr);
+    return 22;
+}
+
 static void exhausted_ids_fail_closed(void) {
     oreslang_source_actor_test_advance_next_actor_id(UINT64_MAX - 1);
     const OresSourceActorId last = oreslang_source_actor_spawn_id(
@@ -123,6 +151,8 @@ int main(int argc, char** argv) {
         exhausted_ids_fail_closed();
         return 20;
     }
+    if (strncmp(argv[1], "legacy-", 7) == 0)
+        return reject_fully_expired_legacy_pointer(argv[1]);
     expected_abort(argv[1]);
     return 18;
 }
