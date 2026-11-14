@@ -55,6 +55,30 @@ scalar heap storage and requires every tracked byte to be zero at the
 `free` boundary. The wrapper is limited to direct linkage from the
 compiled runtime object, not other process allocations.
 
+The original scalar-heap lifecycle regression now also runs **100,000
+allocate/read/write/drop iterations on one long-lived native heap** while a
+fixed-layout mutable field remains alive through 1,000 actor turns. Every
+reused transient must have a monotonically increasing slot generation. At
+shutdown, retiring the heap during its last active turn cannot reclaim memory;
+even after that turn leaves, a shared loan held across turn boundaries must
+block destruction until a different trusted carrier releases the loan. The
+test checks two allocations are scrubbed before physical free (the existing
+lifecycle heap and the new long-lived churn heap).
+
+### Source actor churn compiler limitation
+
+The `.atto` `churn-128.atto` fixture remains a future **acceptance
+target**, not a supported guest case. Current LLVM codegen exposes its
+scalar `while` feature only when `source.actors.empty()`. Source actor
+references are lowered from statically enumerated `actor_spawns` into
+`actorRefs`, while `SourceActorBootstrap.c` allocates source actor
+slots sequentially up to `SOURCE_GROUP_ROOT_SLOT=63` per live group.
+Dynamic actor spawn inside a source `while` therefore requires compiler
+IR/HIR lowering and runtime lifecycle proof before the 128-actor test can
+legitimately pass. Do not replace the fixture with a constant stdout marker,
+synthetic C actor construction, or silently skipped CI step to claim guest
+parity.
+
 These are **new test requirements, not executed test results**. Source
 GitHub Actions still reports failure with `steps=null`, and no
 complete local private-source checkout has been tested. This is not
