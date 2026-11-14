@@ -100,9 +100,9 @@ jobs:
           bash -n scripts/test-source-actor-checked-id-guest-v1.sh
           bash scripts/test-source-actor-checked-id-guest-v1.sh |
             tee "$RUNNER_TEMP/source-actor-checked-id-guest.txt"
-          grep -Fqx "SOURCE_ACTOR_CHECKED_GUEST_MATRIX_EXECUTED|head=$EXPECTED_HEAD|O0_O2=1|native_runs=16|compiled_cases=4|negative_rejections=2|await_legacy=NOT_MIGRATED|linked_zero_gc=NOT_CERTIFIED" \
+          grep -Fqx "SOURCE_ACTOR_CHECKED_GUEST_MATRIX_EXECUTED|head=$EXPECTED_HEAD|O0_O2=1|native_runs=32|compiled_cases=8|negative_rejections=2|ready_done_id_callbacks=2_PER_OPT|legacy_pointer_calls=0|linked_zero_gc=NOT_CERTIFIED" \
             "$RUNNER_TEMP/source-actor-checked-id-guest.txt"
-          test "$(grep -c '^SOURCE_ACTOR_CHECKED_GUEST_EXECUTED|' "$RUNNER_TEMP/source-actor-checked-id-guest.txt")" = 4
+          test "$(grep -c '^SOURCE_ACTOR_CHECKED_GUEST_EXECUTED|' "$RUNNER_TEMP/source-actor-checked-id-guest.txt")" = 8
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
