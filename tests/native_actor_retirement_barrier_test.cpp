@@ -601,6 +601,9 @@ static void concurrent_host_receivers_join_native_resource_retirement() {
 
     NativeActorRetirementBarrier* retiring = nullptr;
     auto ref = group.adopt(414, 23, 4, [&] {
+        // Seal before ANY arena/IO retirement work. retire(true) repeats
+        // the seal as a fail-closed last defense before registry retirement.
+        retiring->seal_stop(true);
         ores_actor_i64_heap_retire(heap);
         retiring->retire(true);
     });
