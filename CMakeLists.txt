@@ -22,6 +22,19 @@ if(ATTO_FAILURE_OBSERVER_HOST_ONLY)
   add_test(NAME native_actor_failure_observer_ring_host_only
     COMMAND oreslang-native-actor-failure-observer-host-test)
   set_tests_properties(native_actor_failure_observer_ring_host_only PROPERTIES TIMEOUT 20)
+  # Run the supervisor CONTROL restart/STOP test on toolchain-only hosts too.
+  # This test exercises native runtime headers, not compiled Atto guest code.
+  add_executable(oreslang-native-supervisor-control-host-test
+    tests/supervisor_control_turn_test.cpp)
+  target_include_directories(oreslang-native-supervisor-control-host-test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_features(oreslang-native-supervisor-control-host-test PRIVATE cxx_std_17)
+  target_compile_options(oreslang-native-supervisor-control-host-test PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+  target_link_libraries(oreslang-native-supervisor-control-host-test PRIVATE Threads::Threads)
+  add_test(NAME native_supervisor_control_host_only
+    COMMAND oreslang-native-supervisor-control-host-test)
+  set_tests_properties(native_supervisor_control_host_only PROPERTIES TIMEOUT 20)
   return()
 endif()
 
@@ -199,6 +212,17 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_failure_observer_ring_host_only
         COMMAND oreslang-native-actor-failure-observer-host-test)
     set_tests_properties(native_actor_failure_observer_ring_host_only PROPERTIES TIMEOUT 20)
+    add_executable(oreslang-native-supervisor-control-host-test
+        tests/supervisor_control_turn_test.cpp)
+    target_include_directories(oreslang-native-supervisor-control-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-supervisor-control-host-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-supervisor-control-host-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-supervisor-control-host-test PRIVATE Threads::Threads)
+    add_test(NAME native_supervisor_control_host_only
+        COMMAND oreslang-native-supervisor-control-host-test)
+    set_tests_properties(native_supervisor_control_host_only PROPERTIES TIMEOUT 20)
     add_executable(oreslang-native-trace-probe-policy-test
         tests/native_trace_probe_policy_test.cpp)
     target_include_directories(oreslang-native-trace-probe-policy-test PRIVATE
