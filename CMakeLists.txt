@@ -3699,6 +3699,23 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-arena-test)
     set_tests_properties(native_actor_arena_persistent_scratch PROPERTIES TIMEOUT 25)
 
+    # Security regression: reject actor-private/control-buffer overlap and
+    # overflowing host spans before any memcpy. POSIX fork oracle verifies abort.
+    if(UNIX)
+        add_executable(oreslang-actor-arena-host-buffer-boundary-test
+            tests/actor_arena_host_buffer_boundary_test.c
+            src/main/cpp/oreslang/runtime/ActorArena.c)
+        target_include_directories(oreslang-actor-arena-host-buffer-boundary-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        set_target_properties(oreslang-actor-arena-host-buffer-boundary-test PROPERTIES
+            C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+        target_compile_options(oreslang-actor-arena-host-buffer-boundary-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME native_actor_arena_host_buffer_boundary
+            COMMAND oreslang-actor-arena-host-buffer-boundary-test)
+        set_tests_properties(native_actor_arena_host_buffer_boundary PROPERTIES TIMEOUT 20)
+    endif()
+
     # Trusted host-only shared-region capability and read/write lease prototype.
     add_executable(oreslang-native-shared-domain-arena-test
         tests/native_shared_domain_arena_test.cpp)
