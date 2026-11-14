@@ -72,4 +72,34 @@ jobs:
         run: |
           set -euo pipefail
           bash tests/native_inverted_source_guest_hardening.sh /tmp/atto-inverted-full/oreslang-llvmc clang-18 contracts/dop-inverted-v1
+          bash tests/native_inverted_source_randomized.sh /tmp/atto-inverted-full/oreslang-llvmc clang-18
           echo 'REAL_SOURCE_GUEST_FULL_TREE_EXECUTED'
+
+  full-repository-ctest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Validate complete source Git commit and tree
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          test -z "$(git status --porcelain)"
+          echo "FULL_CTEST_COMMIT=$EXPECTED"
+          echo "FULL_CTEST_TREE=$(git rev-parse HEAD^{tree})"
+      - name: Build complete LLVM project and run full CTest suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends cmake ninja-build clang-18 llvm-18-dev
+          cmake -S . -B /tmp/atto-inverted-ctest -G Ninja -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
+          cmake --build /tmp/atto-inverted-ctest --parallel 2
+          ctest --test-dir /tmp/atto-inverted-ctest --output-on-failure --parallel 2
+          echo 'FULL_LLVM_CMAKE_AND_CTEST_EXECUTED'
