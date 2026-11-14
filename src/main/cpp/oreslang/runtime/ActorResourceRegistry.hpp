@@ -1,5 +1,7 @@
 #pragma once
 
+#include "oreslang/runtime/ActorGroupLifecycle.hpp"
+
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -7,6 +9,7 @@
 #include <limits>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <exception>
 #include <stdexcept>
 #include <string>
@@ -82,24 +85,37 @@ public:
     std::uint64_t incarnation() const noexcept { return incarnation_; }
 
     /**
-     * Trusted coordinator binds this physical registry to its original
-     * runtime before constructing a native retirement barrier. Actor ID and
-     * generation alone are not globally unique across independent runtimes.
-     * Binding is irreversible even after the actor has retired; never infer
-     * the runtime identity from a finalizer presented by a foreign caller.
+     * One-shot owner binding to the actual opaque actor ticket. Neither
+     * (actor_id, generation) nor (runtime, actor_id, generation) is a lifetime
+     * capability: a runtime may eventually reuse all of those numbers.
+     *
+     * The trusted actor coordinator, NEVER a presented finalizer, must bind
+     * this registry after adopting the new actor and before constructing
+     * its resource-retirement barrier.
      */
-    void bind_runtime_id(std::uint64_t runtime) {
-        if (runtime == 0) throw std::invalid_argument("actor runtime ID must be nonzero");
+    void bind_owner(const NativeActorRef& owner) {
+        if (owner.actor_id() != actor_id_
+                || owner.generation() != incarnation_)
+            throw std::invalid_argument("actor resource registry owner identity mismatch");
         std::lock_guard<std::mutex> guard(mutex_);
         require_live();
-        if (bound_runtime_id_ != 0)
-            throw std::logic_error("actor resource registry runtime already bound");
-        bound_runtime_id_ = runtime;
+        if (owner_ref_)
+            throw std::logic_error("actor resource registry owner already bound");
+        owner_ref_.emplace(owner);
     }
 
-    std::uint64_t bound_runtime_id() const {
+    /** The opaque shared ticket must match, not only its numeric tuple.
+     * No finalizer is permitted to mint its own registry ownership.
+     */
+    bool matches_finalizer(
+            const NativeActorGroup::RuntimeFinalizer& finalizer) const {
         std::lock_guard<std::mutex> guard(mutex_);
-        return bound_runtime_id_;
+        return owner_ref_ && finalizer.matches(*owner_ref_);
+    }
+
+    bool has_bound_owner() const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        return owner_ref_.has_value();
     }
 
     // Host-only registration. Callbacks must be trusted, idempotent close or
@@ -311,7 +327,7 @@ private:
     const std::size_t capacity_;
     const std::uint64_t registry_domain_;
     mutable std::mutex mutex_;
-    std::uint64_t bound_runtime_id_ = 0;
+    std::optional<NativeActorRef> owner_ref_;
     Phase phase_ = Phase::live;
     std::uint64_t next_token_ = 0;
     std::vector<Entry> entries_;
