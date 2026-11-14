@@ -178,13 +178,13 @@ def main():
             guest = run([args.compiler, *flags, str(fixtures / name)])
             assert guest.returncode == 0, (name, guest.stderr)
             assert guest.stdout.startswith("; ModuleID"), name
-            assert "oreslang_source_actor_spawn" in guest.stdout, name
-            assert "oreslang_source_actor_stop" in guest.stdout, name
+            assert "call i64 @oreslang_source_actor_spawn_id(" in guest.stdout, name
+            assert "oreslang_source_actor_stop_id" in guest.stdout, name
             if name not in {
                 "source-actor-spawn-stop.ores",
                 "source-actor-await-done.ores",
             }:
-                assert "oreslang_source_actor_send" in guest.stdout, name
+                assert "call void @oreslang_source_actor_send_id(" in guest.stdout, name
             if name in {
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
@@ -202,24 +202,37 @@ def main():
             if name in {"source-actor-await-ready.ores",
                         "source-actor-await-worker.ores",
                         "source-actor-future-void-ready.ores"}:
-                assert "oreslang_source_actor_await_ready" in guest.stdout, name
+                assert "oreslang_source_actor_await_ready_id" in guest.stdout, name
                 assert "ready_continuation" in guest.stdout, name
                 # A runtime declaration or source text alone is not an await:
                 # require exactly one generated call to the CONTROL bridge.
                 calls = [line for line in guest.stdout.splitlines()
-                         if "call i64 @oreslang_source_actor_await_ready(" in line]
+                         if "call i64 @oreslang_source_actor_await_ready_id(" in line]
                 assert len(calls) == 1, (name, "expected one guest await", calls)
             if name == "source-actor-await-done.ores":
-                assert "oreslang_source_actor_request_stop" in guest.stdout, name
-                assert "oreslang_source_actor_await_done" in guest.stdout, name
+                assert "oreslang_source_actor_request_stop_id" in guest.stdout, name
+                assert "call i64 @oreslang_source_actor_await_done_id(" in guest.stdout, name
                 assert "done_continuation" in guest.stdout, name
-                assert "call void @oreslang_source_actor_request_stop" in guest.stdout, name
+                assert "call void @oreslang_source_actor_request_stop_id(" in guest.stdout, name
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
-                first_stop = guest.stdout.find("call void @oreslang_source_actor_stop")
-                final_send = guest.stdout.rfind("call void @oreslang_source_actor_send")
+                first_stop = guest.stdout.find("call void @oreslang_source_actor_stop_id(")
+                final_send = guest.stdout.rfind("call void @oreslang_source_actor_send_id(")
                 assert 0 <= first_stop < final_send, (name, "source actor effects reordered")
+            # Actor identity is now a by-value 64-bit incarnation ID,
+            # never a malloc pointer. Unused declarations do not count:
+            # real generated callsites MUST target the checked ABI.
+            forbidden = (
+                "call ptr @oreslang_source_actor_spawn(",
+                "call void @oreslang_source_actor_stop(",
+                "call void @oreslang_source_actor_send(",
+                "call void @oreslang_source_actor_request_stop(",
+                "call i64 @oreslang_source_actor_await_ready(",
+                "call i64 @oreslang_source_actor_await_done(",
+            )
+            assert not any(x in guest.stdout for x in forbidden), (
+                name, "legacy source actor pointer runtime callsite detected")
             ll = pathlib.Path(temp, name + ".ll")
             ll.write_text(guest.stdout)
             exe = pathlib.Path(temp, name + ".guest")
