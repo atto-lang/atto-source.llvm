@@ -29,11 +29,14 @@ The LLVM frontend admits one nonnegative int counter, an upper bound
 read the counter exactly; the actor ref never becomes a scalar value.
 
 The compiler emits a **real conditional LLVM CFG**, with calls to
-`oreslang_source_actor_spawn` and `oreslang_source_actor_stop` in the
-loop body. `stop` is the existing trusted host request + physical join:
+`oreslang_source_actor_spawn`,
+`oreslang_source_actor_wait_ready_blocking`, and
+`oreslang_source_actor_stop` in that order in the loop body. `stop` is the existing trusted host request + physical join:
 each actor's scheduler/heap must reach terminal quiescence before control
-returns to the next loop iteration. Sequential 128 actor incarnations do
-not require 128 concurrently resident actor slots. The existing runtime
+returns to the next loop iteration. Sequential 128 constructor-ready actor incarnations do
+not require 128 concurrently resident actor slots. The trusted-main-only
+readiness barrier uses a condition variable and **must not be called from an
+actor carrier**. It is not a substitute for nonblocking Future/get_ready. The existing runtime
 reopens its group once the last actor is synchronously stopped.
 
 ## Deliberate, fail-closed exclusions
@@ -63,9 +66,10 @@ at both optimization levels.
   (native exit status 128, no stdout/stderr).
 - It also compiles and executes the canonical `do/done` 7-actor guest
   (exit 7), and zero-trip variant (exit 0).
-- Five negative `.atto` fixtures are required to be compiler-rejected
+- Six negative `.atto` fixtures are required to be compiler-rejected
   with no emitted IR: missing stop, double stop, count exceeding the
-  bound, async suspension, and stopping a foreign reference.
+  bound, async suspension, stopping a foreign reference, and a forged
+  trusted-runtime readiness ABI symbol.
 - Successful results produce only `SOURCE_ACTOR_BOUNDED_CHURN_*`
   receipts with `async_guest=NOT_EXECUTED` and
   `zero_gc_certified=NO`. O0/O2 compilation, native execution and
