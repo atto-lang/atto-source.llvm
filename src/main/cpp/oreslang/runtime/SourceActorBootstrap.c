@@ -1081,6 +1081,17 @@ void oreslang_source_actor_join_done(void* opaque) {
         == terminal.accepted_user_messages);
     ensure(terminal.processed_user_messages
         == atomic_load_explicit(&instance->processed, memory_order_acquire));
+    /* Actor-origin failures still count as physically returned DATA callbacks
+     * at the scheduler layer, but NEVER as successful guest messages. */
+    const uint64_t successful = atomic_load_explicit(
+        &instance->successful, memory_order_acquire);
+    const uint64_t failed = atomic_load_explicit(
+        &instance->failed, memory_order_acquire);
+    const uint64_t failure_code = atomic_load_explicit(
+        &instance->failure_code, memory_order_acquire);
+    ensure(successful <= terminal.processed_user_messages
+        && failed == terminal.processed_user_messages - successful);
+    ensure(failure_code == 0 || failed > 0);
     ensure(terminal.abandoned_control_messages == 0);
 
     /*
@@ -1091,9 +1102,33 @@ void oreslang_source_actor_join_done(void* opaque) {
     ensure(ores_actor_i64_heap_try_destroy(instance->heap));
     /* Physical STOP acknowledgement gates both heap and logical-frame free. */
     ensure(ores_logical_frames_v1_close(instance->logical_frames));
+
+    /* The VM requires a trusted resource-finalization receipt *after* the
+     * physical actor DONE and both actor-owned allocations are gone. Only
+     * the registered parent can consume this typed failure/STOPPED notice.
+     * Once acknowledged, a duplicate is rejected by the VM. */
+    ensure(ores_native_vm_confirm_supervised_finalized(
+        group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
+    OresNativeActorTerminalFailure notice = {
+        .kind = failure_code ? ORES_NATIVE_CONTROL_PANIC : ORES_NATIVE_CONTROL_STOPPED,
+        .child = instance->ref,
+        .failure_code = failure_code,
+        .correlation = instance->id
+    };
+    /* The reserved parent CONTROL slot is bounded. Publication can fail
+     * transiently if occupied; do not lose the notice. We are the external
+     * host, never a carrier turn. Release group mutex while waiting, because
+     * root CONTROL callbacks may need it to finish. No per-retry allocation. */
+    group_unlock();
+    while (!ores_native_vm_publish_supervised_failure(
+            group.vm, ORES_NATIVE_VM_MAIN, notice))
+        sched_yield();
+    group_lock();
+    ensure(group.vm && slot < group.next_slot
+        && group.actors[slot] == instance);
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
     fprintf(stderr,
-        "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=%d released=1 ready=%d accepted=%llu processed=%llu abandoned=%llu last=%lld\n",
+        "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=%d released=1 ready=%d accepted=%llu processed=%llu abandoned=%llu last=%lld successful=%llu failed=%llu failure_code=%llu\n",
         atomic_load_explicit(
             &instance->constructor_started, memory_order_acquire),
         startup_state == ORES_SOURCE_ACTOR_STARTUP_READY,
@@ -1101,7 +1136,10 @@ void oreslang_source_actor_join_done(void* opaque) {
         (unsigned long long)terminal.processed_user_messages,
         (unsigned long long)terminal.abandoned_user_messages,
         (long long)atomic_load_explicit(
-            &instance->last_result, memory_order_relaxed));
+            &instance->last_result, memory_order_relaxed),
+        (unsigned long long)successful,
+        (unsigned long long)failed,
+        (unsigned long long)failure_code);
 #endif
     group.actors[slot] = NULL;
     instance->magic = 0;
