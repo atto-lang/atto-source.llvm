@@ -201,6 +201,34 @@ static void reject_actor_carrier(void) {
     exit(10);
 }
 
+/* A fully joined actor has been freed and removed from the current group.
+ * A non-reused stale address must never be dereferenced by the host API.
+ * This is NOT an allocator-address ABA test: after a fresh actor reuses the
+ * same address, only a minted generation handle can distinguish identity. */
+static int reject_expired_source_actor(const char* operation) {
+    void* expired = oreslang_source_actor_spawn(initialize, on_message, 1);
+    check(expired != NULL);
+    oreslang_source_actor_wait_ready_blocking(expired);
+    oreslang_source_actor_stop(expired);
+    if (strcmp(operation, "stale-status") == 0) {
+        check(oreslang_source_actor_ready_status(expired) == -1);
+        puts("SOURCE_ACTOR_STALE_STATUS_REJECTED");
+        return 0;
+    }
+    if (strcmp(operation, "stale-stop") == 0)
+        oreslang_source_actor_request_stop(expired);
+    else if (strcmp(operation, "stale-join") == 0)
+        oreslang_source_actor_join_done(expired);
+    else if (strcmp(operation, "stale-send") == 0)
+        oreslang_source_actor_send(expired, 17);
+    else
+        return 64;
+    /* All three mutating entrypoints must abort after their membership
+     * check, BEFORE any access to invalid SourceActor memory. */
+    fputs("UNEXPECTED_EXPIRED_ACTOR_HANDLE_ACCEPTED\n", stderr);
+    return 13;
+}
+
 int main(int argc, char** argv) {
     check(argc == 2);
     if (strcmp(argv[1], "positive") == 0) {
@@ -219,5 +247,7 @@ int main(int argc, char** argv) {
         reject_actor_carrier();
         return 12;
     }
+    if (strncmp(argv[1], "stale-", 6) == 0)
+        return reject_expired_source_actor(argv[1]);
     return 64;
 }
