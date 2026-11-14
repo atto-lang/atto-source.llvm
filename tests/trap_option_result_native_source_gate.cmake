@@ -18,6 +18,23 @@ if(NOT "${good_status}" STREQUAL "0" OR NOT good_ir MATCHES "define [^\n]*@")
     message(FATAL_ERROR "positive compiler control failed: ${good_error}")
 endif()
 
+# Exact Java/Graal guest fixture. LLVM may reject it until real native
+# tagged payload, ownership-safe throw and caller-side Option lowering exist.
+if(NOT EXISTS "${ORES_TRAP_SHARED_SOURCE}")
+    message(FATAL_ERROR "shared AttoLang trap fixture is missing")
+endif()
+execute_process(
+    COMMAND "${ORES_TRAP_LLVM_CLI}" "${ORES_TRAP_SHARED_SOURCE}"
+    RESULT_VARIABLE target_status OUTPUT_VARIABLE target_ir
+    ERROR_VARIABLE target_error TIMEOUT 15)
+if("${target_status}" STREQUAL "0")
+    message(FATAL_ERROR "LLVM admitted shared trap guest without parity proof")
+endif()
+if(target_error STREQUAL "" OR
+        target_ir MATCHES "define [^\n]*@" OR target_ir MATCHES "target triple")
+    message(FATAL_ERROR "shared trap guest failed to reject safely")
+endif()
+
 set(bad_sources
     "pub fnc main():int { return trap 7; }"
     "fnc checked():int { return 7; } pub fnc main():int { return trap checked(); }"
