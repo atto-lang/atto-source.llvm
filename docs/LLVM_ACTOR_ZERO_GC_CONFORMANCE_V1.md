@@ -8,8 +8,8 @@ and process-wide zero-GC claims distinct.
 
 | Gate | What it uses | What passing would establish | Does not establish |
 | --- | --- | --- | --- |
-| `scripts/test-actor-arena-lifecycle-v1.sh` | Real `src/main/cpp/oreslang/runtime/ActorArena.c`, Clang O0/O2, ASan+UBSan | 8,193 authenticated actor turns, two separate native arenas, persistent slot survival, per-turn scratch zeroing, allocation/drop reuse, foreign and stale handle SIGABRT, loan-delayed destruction, surviving sibling | Atto source lowering, guest allocator calls, zero GC across FFI, scheduler or full process |
-| `scripts/test-actor-arena-guest-churn-v1.sh` | Actual `oreslang-llvmc --target=host` lowering of `.atto`, Rust IR GC screen, `compile-aot.sh`, real O0/O2 ELF execution | 128 actor incarnations per native program (four runs at O0 and O2), sealed state reset, one response per incarnation, joining all actors; direct sealed-state access rejected with **no IR** | Independent actual allocation ledger, lack of leaks, suspension retention, process-wide zero-GC |
+| `scripts/test-actor-arena-lifecycle-v1.sh` | Real `src/main/cpp/oreslang/runtime/ActorArena.c`, Clang O0/O2, ASan+UBSan | 8,193 authenticated actor turns, two separate native arenas, persistent slot survival, per-turn scratch zeroing, allocation/drop reuse, foreign and stale handle SIGABRT, loan-delayed destruction, surviving sibling, direct native allocator calls intercepted during actor turns, and 10 successful startup calloc calls paired with 10 physical frees | Atto source lowering, guest allocator calls, zero GC across FFI, scheduler or full process |
+| `scripts/test-actor-arena-guest-churn-v1.sh` | Actual `oreslang-llvmc --target=host` lowering of `.atto`, Rust IR GC screen, `compile-aot.sh`, real O0/O2 ELF execution | 128 actor incarnations per native program (four runs at O0 and O2), sealed state reset, one response per incarnation, joining all actors; source actor ABI call sites actually present in generated IR (constant-output success strings are insufficient); direct sealed-state access rejected with **no IR** | Independent actual allocation ledger, lack of leaks, suspension retention, process-wide zero-GC |
 | `scripts/audit_no_gc_ir.rs`, `scripts/audit-aot-linked-image.sh` from security PR #1780 | IR and linked ELF screens | Known LLVM tracing-GC constructs and known collector/loader links screened | Transitive allocator tracing, dynamically loaded code, out-of-process services, all shared dependencies |
 
 The new `.atto` program uses the same actor declarations,
@@ -19,7 +19,11 @@ present in `tests/fixtures/actor-state-e2e-v1/positive.atto`.
 It is a **compiler acceptance candidate**; do not claim the frontend
 currently supports the complete source shape without an actual executed run.
 Neither C/C++ host emulation nor a generated shell marker may substitute for
-a native Atto executable.
+a native Atto executable. Native allocator interception covers direct
+`malloc`/`calloc`/`realloc`/`free` linkage from the compiled C test and
+production ActorArena objects; it is not an entire process allocator trace.
+The compiler-backed fixture additionally insists on generated calls to
+the actor ABI to reject a constant-output-only executable.
 
 ## Release criteria still unproven
 
