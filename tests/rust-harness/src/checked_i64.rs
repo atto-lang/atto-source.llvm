@@ -19,6 +19,9 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         ("lazy-and", "pub fnc main():int{return (false && (9223372036854775807+1>0)) ? 0 : 42;}", 42),
         ("lazy-or", "pub fnc main():int{return (true || (9223372036854775807+1>0)) ? 42 : 0;}", 42),
         ("dynamic", "fnc add(int a,int b):int{return a+b;} pub fnc main():int{return add(40,2);}", 42),
+        ("atto-braced-if-return", "pub fnc main():int{if true{return 42;}else{return 1;}}", 42),
+        ("atto-braced-if-elif", "pub fnc main():int{if false{return 1;}elif true{return 42;}else{return 0;}}", 42),
+        ("atto-braced-nested-keyword", "pub fnc main():int{if true{if true then return 42; else return 1; fi}else{return 0;}}", 42),
     ];
     let negatives = [
         ("add", "pub fnc main():int{return 9223372036854775807+1;}", "llvm.sadd.with.overflow.i64"),
@@ -34,7 +37,8 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
     for optimization in ["-O1", "-O2"] {
         for (name, source, expected, intrinsic) in positives.iter().map(|(n,s,e)| (*n,*s,Some(*e),None))
             .chain(negatives.iter().map(|(n,s,i)| (*n,*s,None,Some(*i)))) {
-            let input = temp.path.join(format!("{name}.ores"));
+            let extension = if name.starts_with("atto-") { "atto" } else { "ores" };
+            let input = temp.path.join(format!("{name}.{extension}"));
             let ir = temp.path.join(format!("{name}.ll"));
             let binary = temp.path.join(format!("{name}-{}", &optimization[1..]));
             fs::write(&input, source).map_err(|e| e.to_string())?;

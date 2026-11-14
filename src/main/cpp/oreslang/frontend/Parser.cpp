@@ -2842,14 +2842,16 @@ private:
                 if (token_.text == "if" && !finally_scope) {
                     advance(); statement.kind = Statement::Kind::Conditional;
                     statement.condition = expression();
-                    if (accept_keyword_if_header()) {
+                    const bool then_form = accept_keyword_if_header();
+                    if (then_form) {
                         statement.then_statements = branch_arm(false, true);
                         if (accept("else")) statement.else_statements = branch_arm(false, true);
+                        require("fi");
                     } else {
                         require("{"); statement.then_statements = branch_arm(false, false); require("}");
                         if (accept("else")) { require("{"); statement.else_statements = branch_arm(false, false); require("}"); }
                     }
-                    require("fi"); actions.push_back(std::move(statement)); continue;
+                    actions.push_back(std::move(statement)); continue;
                 }
                 if (finally_scope && (token_.text == "return" ||
                         token_.text == "break" || token_.text == "continue"))
@@ -3338,11 +3340,10 @@ private:
                         fail("native protected try return requires nonthrowing scalar/field read");
                     require(";");
                     if (!then_form) require("}");
-                    // Java accepts `if c then return a; else ...; fi`. In the structured
-                    // then-form an else arm is an ordinary conditional branch; other
-                    // guarded-return contexts have no else lowering and say so.
+                    // Both braced and then/fi arms can contain an explicit
+                    // return. The brace grammar closes with '}', never fi.
                     const bool full_conditional =
-                        then_form && value.return_class.empty() && !terminal_try_finally;
+                        value.return_class.empty() && !terminal_try_finally;
                     if (!full_conditional && token_.text == "else")
                         fail("native guarded return cannot take an else branch in this context");
                     if (full_conditional) {
@@ -3353,11 +3354,15 @@ private:
                         conditional.condition = std::move(guard.condition);
                         Statement terminal; terminal.kind = Statement::Kind::Return; terminal.offset = offset;
                         terminal.expression = std::move(guard.result); conditional.then_statements.push_back(std::move(terminal));
-                        if (accept("else")) conditional.else_statements = branch_arm(false, then_form);
-                        require("fi");
+                        if (accept("else")) {
+                            if (!then_form) require("{");
+                            conditional.else_statements = branch_arm(false, then_form);
+                            if (!then_form) require("}");
+                        }
+                        if (then_form) require("fi");
                         value.statements.push_back(std::move(conditional));
                     } else {
-                        require("fi");
+                        if (then_form) require("fi");
                         value.early_returns.push_back(std::move(guard));
                         return_guards_started = true;
                     }
@@ -3378,8 +3383,8 @@ private:
                         if (!then_form) require("{");
                         conditional.else_statements = branch_arm(false, then_form);
                         if (!then_form) require("}");
-                    } else if (!then_form) require("else");
-                    require("fi");
+                    }
+                    if (then_form) require("fi");
                     value.statements.push_back(std::move(conditional));
                 }
                 continue;
