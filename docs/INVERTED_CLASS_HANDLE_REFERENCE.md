@@ -10,6 +10,10 @@ substitute.
 
 - A handle has a private issuer, actor identity, 32-bit slot, and 32-bit
   generation. The user cannot publicly construct a forged numeric handle.
+  This **does not authenticate the caller's current actor**: a trusted C++
+  host caller holding the owner reference and valid handle can access it from
+  another thread. Real guest compilation must obtain the acting actor from
+  a trusted runtime/scheduler context and enforce that identity before access.
 - The issuer is unique per owner instance, including when the same actor ID
   and memory address are reused; a stale handle cannot pass an ABA reuse check.
 - Dense physical row movement on swap-delete does **not** change the identity
@@ -47,6 +51,21 @@ The two committed C++ files were compiled and run using GCC/Clang with
 - GCC `-O0`: passed
 - Clang `-O1 -fsanitize=address`: passed
 - Clang `-O1 -fsanitize=undefined`: passed
+
+### Model-based differential hardening
+
+`tests/inverted_class_handle_fuzz_test.cpp` executes 50,000 deterministic
+insertions, checked receiver updates, swap-deletes, snapshots, recycled-slot
+lookups and stale-handle denials against an independent value/identity model.
+All live handles are rechecked after each operation, and every retired handle
+is denied at the end. The exact committed test source was verified with
+`git hash-object` as `43faa90947efce5fdc47501ff679661070c9f8ff`.
+
+Executed locally: GCC/Clang `-O0`/`-O2` and GCC ASan/UBSan/TSan
+(7 executions), all passing. The GitHub Actions workflow now requires both
+the fixed regression and model-based differential for each compiler and
+sanitizer matrix entry; workflow runs must have real executed job steps to
+claim independent CI success.
 
 This receipt covers a test-only oracle. It is not `oreslang-llvmc` AOT testing.
 The source-owned GitHub workflow will provide separately pinned source-tree,
