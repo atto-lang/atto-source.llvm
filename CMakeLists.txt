@@ -1422,10 +1422,12 @@ if(BUILD_TESTING)
     file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/flags2env-client-abi-status.ores" FLAGS2ENV_CLIENT_ABI_SHA256)
     if(NOT FLAGS2ENV_CLIENT_ABI_SHA256 STREQUAL "9add46476c703374f76dd1a0a5827fbad0eb69ff703f4f3cf302604a6f506750")
         message(FATAL_ERROR "flags2env client ABI fixture bytes drifted")
+    endif()
 
     # Exact flags2env Oreslang client ABI scalar fixture. This is real
     # Oreslang source -> LLVM IR -> native executable execution; it proves
     # only the shared numeric host-status contract, not String/FFI support.
+    if(ORE_CLANG)
         oreslang_contract_test(flags2env_client_abi_status_native
             flags2env-client-abi-status.ores
             --run 42 --clang "${ORE_CLANG}")
@@ -1433,6 +1435,7 @@ if(BUILD_TESTING)
             PROPERTIES TIMEOUT 90)
     else()
         message(FATAL_ERROR "flags2env client ABI status parity requires Clang")
+    endif()
 
     # A Python -O/PYTHONOPTIMIZE run must never turn failed compiler
     # admission/IR checks into a green CTest. Uses only fake compilers;
