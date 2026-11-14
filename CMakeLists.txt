@@ -139,6 +139,30 @@ elseif(NOT ORES_MANAGED_REF_MODE STREQUAL "compressed32")
 endif()
 message(STATUS "Oreslang managed reference mode: ${ORES_MANAGED_REF_MODE}")
 
+
+# Tiny dependency-free C11 actor logical-frame ABI test entrypoint.
+# This runs the *real native host primitive*, not guest .atto/AOT lowering.
+option(ATTO_ACTOR_LOGICAL_FRAMES_HOST_ONLY
+    "Build actor-owned logical-frame native host regression without LLVM" OFF)
+if(ATTO_ACTOR_LOGICAL_FRAMES_HOST_ONLY)
+    include(CTest)
+    find_package(Threads REQUIRED)
+    add_executable(atto-native-actor-logical-frames-host-test
+    tests/native_actor_logical_frames_v1_test.c
+    src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c)
+    target_include_directories(atto-native-actor-logical-frames-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(atto-native-actor-logical-frames-host-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(atto-native-actor-logical-frames-host-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(atto-native-actor-logical-frames-host-test PRIVATE Threads::Threads)
+    add_test(NAME actor_logical_frames_v1_native_host
+        COMMAND atto-native-actor-logical-frames-host-test)
+    set_tests_properties(actor_logical_frames_v1_native_host PROPERTIES TIMEOUT 20)
+    return()
+endif()
+
 find_package(LLVM CONFIG REQUIRED)
 if(LLVM_VERSION_MAJOR LESS 14)
     message(FATAL_ERROR "Oreslang requires LLVM 14 or newer; found ${LLVM_PACKAGE_VERSION}")
@@ -166,6 +190,23 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+
+    # The same production C11 preallocated logical-frame ABI is tested in the
+    # full LLVM build, but this is host-runtime proof, not guest compiler output.
+    add_executable(oreslang-native-actor-logical-frames-v1-test
+    tests/native_actor_logical_frames_v1_test.c
+    src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c)
+    target_include_directories(oreslang-native-actor-logical-frames-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-actor-logical-frames-v1-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(oreslang-native-actor-logical-frames-v1-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-actor-logical-frames-v1-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_logical_frames_v1
+        COMMAND oreslang-native-actor-logical-frames-v1-test)
+    set_tests_properties(native_actor_logical_frames_v1 PROPERTIES TIMEOUT 20)
+
     # AOT trace policy gate; this does not compile a source-level Atto trace.
     find_package(Threads REQUIRED)
     add_executable(oreslang-native-trace-probe-policy-test
