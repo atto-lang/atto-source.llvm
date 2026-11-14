@@ -2494,7 +2494,15 @@ private:
                     binding.new_class = true;
                     }
                 }
-            } else if (accept("let")) {
+            } else if (token_.text == "let" &&
+                    // `let name = expr` / `let name: T = expr` is a mutable scalar
+                    // binding (Java accepts inferred let); the scalar path below
+                    // infers it from the initializer. Typed forms stay here.
+                    ![&] { Lexer look = lexer_; const auto name = look.next();
+                        const auto after = look.next();
+                        return name.kind == Kind::Identifier && name.text != "mut" &&
+                            (after.text == "=" || after.text == ":"); }() &&
+                    accept("let")) {
                 // Preserve the Java/Graal distinction between immutable
                 // let Class and exclusively borrowable let mut Class.
                 binding.owner_mutable = accept("mut");

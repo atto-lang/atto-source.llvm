@@ -13,8 +13,8 @@ pub fn run_cases(compiler: &Path, clang: &Path, fixture_root: &Path) -> Result<(
         ("47-grouped-cast-multiply.ores", "9ebc3f7bc230557fe2f2639172883bb2f4589464"),
         ("48-readonly-local-cast.ores", "87d0773504e0d22fc3cf1ee76755b36a2fc415c6"),
         ("49-const-typed-identity.ores", "bff7c6070008c5c6a8b3316e8a289f93d3f8c5b3"),
-        ("50-runtime-const-helper.ores", "25f2d66fee55390c0a8fadc892ffaa83681f963b"),
-        ("51-type-first-helper.ores", "25f789b94fce07a0a419dd04e95f4a6a11734612"),
+        ("50-runtime-const-helper.ores", "825767ec1ac57816591c7337ce5d499e64f85b66"),
+        ("51-type-first-helper.ores", "2037906871e51c020153b21f47b59d741c717666"),
     ];
     for (filename, expected_blob) in cases {
         let source = fixture_root.join(filename);
@@ -67,10 +67,10 @@ pub fn run_cases(compiler: &Path, clang: &Path, fixture_root: &Path) -> Result<(
     }
 
     let negative_fixtures = [
-        ("52-type-first-reassign.ores", "18a35160524ba7c92ccd011495f935d8523a8e75", None),
-        ("53-type-first-type-mismatch.ores", "2b1e2fcf0c388200217951de36f5a22df4fcd059", Some("requires int, got bool")),
-        ("54-type-first-self-reference.ores", "081dc150d7a39cbf20b930bdbba1bd23e91bdf4d", None),
-        ("55-type-first-missing-initializer.ores", "de8d59c0f5a97dcdbec6d957cc60462d184e28ac", None),
+        ("52-type-first-reassign.ores", "1211ca68540a2d0d5a00c8e0251bd53df48553dd", None),
+        ("53-type-first-type-mismatch.ores", "083ee4f3d6557f0d33d232d099a98e483a064eab", Some("requires int, got bool")),
+        ("54-type-first-self-reference.ores", "7ab647ca316e1f4586495c02d63d9ebcd780206d", None),
+        ("55-type-first-missing-initializer.ores", "47306c46bd9d1914cc46467d23c8b5b89060f1d1", None),
     ];
     for (filename, expected_blob, diagnostic) in negative_fixtures {
         let source = fixture_root.join(filename);

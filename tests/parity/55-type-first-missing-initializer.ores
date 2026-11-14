@@ -1,1 +1,1 @@
-pub fnc main():int{int x;return 0;}\n
+pub fnc main():int{int x;return 0;}

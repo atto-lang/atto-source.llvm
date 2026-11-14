@@ -62,18 +62,18 @@ def main():
         ('five-backend-expression-identity', 'pub fnc main():int{return (7 as int)+35;}'),
         ('five-backend-chained-identity', 'pub fnc main():int{return (7 as int as int)+35;}'),
         ('inferred-reference', 'pub fnc main():int{const a=7;const b=a as int;return b+35;}'),
-        ('inferred-boolean', 'pub fnc main():int{const yes=true; if(yes){return 42;}fi return 0;}'),
-        ('cast-boolean', 'pub fnc main():int{const yes=true as bool; if(yes){return 42;}fi return 0;}'),
-        ('comparison-cast', 'pub fnc main():int{const yes=(7 eq 7) as bool;if(yes){return 42;}fi return 0;}'),
+        ('inferred-boolean', 'pub fnc main():int{const yes=true; if yes then return 42; fi return 0;}'),
+        ('cast-boolean', 'pub fnc main():int{const yes=true as bool; if yes then return 42; fi return 0;}'),
+        ('comparison-cast', 'pub fnc main():int{const yes=(7 eq 7) as bool;if yes then return 42; fi return 0;}'),
         ('conditional-inference', 'pub fnc main():int{const x=(true?7:8);return x+35;}'),
         ('conditional-cast', 'pub fnc main():int{const x=(true?7:8) as int;return x+35;}'),
         ('call-inference', 'fnc seven():int{return 7;}pub fnc main():int{const x=seven();return x+35;}'),
         ('call-cast', 'fnc seven():int{return 7;}pub fnc main():int{const x=seven() as int;return x+35;}'),
-        ('branch-inference', 'pub fnc main():int{if(true){const x=7 as int;return x+35;}fi return 0;}'),
-        ('branch-type-first-immutable', 'pub fnc main():int{if(true){int x=7;return x+35;}fi return 0;}'),
-        ('branch-type-first-bool', 'pub fnc main():int{if(true){bool ready=true;if(ready){return 42;}fi}fi return 0;}'),
+        ('branch-inference', 'pub fnc main():int{if true then const x=7 as int;return x+35; fi return 0;}'),
+        ('branch-type-first-immutable', 'pub fnc main():int{if true then int x=7;return x+35; fi return 0;}'),
+        ('branch-type-first-bool', 'pub fnc main():int{if true then bool ready=true;if ready then return 42; fi fi return 0;}'),
         ('scalar-alias-cast', 'declare type Code=int;pub fnc main():int{const x=7 as Code;return x+35;}'),
-        ('scalar-alias-bool-cast', 'declare type Flag=bool;pub fnc main():int{const yes=true as Flag;if(yes){return 42;}fi return 0;}'),
+        ('scalar-alias-bool-cast', 'declare type Flag=bool;pub fnc main():int{const yes=true as Flag;if yes then return 42; fi return 0;}'),
         ('mutable-inferred-scalar', 'pub fnc main():int{let x=7 as int;x=42;return x;}'),
         ('chain-cast', 'pub fnc main():int{const x=7 as int as int;return x+35;}'),
         ('bool-chain-cast', 'pub fnc main():int{const x=true as bool as bool;if(x){return 42;}fi return 0;}'),
@@ -134,7 +134,7 @@ def main():
     ]
     negative.extend([
         ('type-first-immutable-reassign', 'pub fnc main():int{int x=7;x=8;return x;}'),
-        ('branch-type-first-immutable-reassign', 'pub fnc main():int{if(true){int x=7;x=8;return x;}fi return 0;}'),
+        ('branch-type-first-immutable-reassign', 'pub fnc main():int{if true then int x=7;x=8;return x; fi return 0;}'),
         ('type-first-int-rejects-bool', 'pub fnc main():int{int x=true;return 0;}'),
         ('type-first-bool-rejects-int', 'pub fnc main():int{bool x=7;return 0;}'),
         ('cast-int-to-bool', 'pub fnc main():int{const x=7 as bool;return 0;}'),
@@ -198,6 +198,10 @@ def main():
         'class-field-write': "argument 'value' requires bool, got int",
         'field-into-int': 'native function return requires int, got bool',
         'array-bool': 'native Array<int> arguments require int, got bool',
+        # Checked identity casts fail closed with the cast-specific diagnostic.
+        'five-backend-int-to-bool': 'impossible native cast: int as bool',
+        'five-backend-bool-to-int': 'impossible native cast: bool as int',
+        'five-backend-cast-overflow': 'integer literal overflows signed 64-bit result',
     }
     ownership_diagnostics.update(scalar_diagnostics)
     ownership_diagnostics.update({
