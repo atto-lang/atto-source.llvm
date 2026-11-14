@@ -94,7 +94,40 @@ static void readiness_observer_cannot_delay_native_stop_dispatch() {
     check(doneRejected, "failed startup did not propagate into DONE");
 }
 
+
+static void live_group_done_waits_for_physical_stop_callback() {
+    NativeActorGroup group(9603, 1);
+    std::promise<void> entered, release;
+    auto enteredFuture = entered.get_future();
+    auto unblock = release.get_future().share();
+    std::atomic<unsigned> calls{0};
+    auto actor = group.adopt(9603, 73, 1, [&] {
+        calls.fetch_add(1, std::memory_order_release);
+        entered.set_value();
+        unblock.wait();
+    });
+    check(group.mark_ready(actor), "live group STOP actor ready");
+    std::thread stopping([&] { group.stop_workers(); });
+    const bool running = enteredFuture.wait_for(2s) == std::future_status::ready;
+    // The legacy live-group API must be no more permissive than a detached
+    // RuntimeFinalizer when the trusted STOP callback is still accessing
+    // actor resources. Even successful completion would be premature.
+    const bool finishedEarly = group.finalized(actor);
+    const bool doneEarly = actor.get_done().wait_for(0ms) == std::future_status::ready;
+    release.set_value();
+    stopping.join();
+    check(running, "live-group physical stop callback did not enter");
+    check(!finishedEarly && !doneEarly,
+          "group.finalized acknowledged DONE before physical STOP completion");
+    check(calls.load(std::memory_order_acquire) == 1,
+          "live-group STOP executed more than once");
+    check(group.finalized(actor), "live group failed to finalize after STOP exit");
+    actor.get_done().get();
+    group.close();
+}
+
 int main() {
+    live_group_done_waits_for_physical_stop_callback();
     concurrent_close_cannot_ack_stop_before_callback_unwinds();
     readiness_observer_cannot_delay_native_stop_dispatch();
     {
