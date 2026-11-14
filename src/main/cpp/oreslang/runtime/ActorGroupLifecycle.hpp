@@ -258,6 +258,14 @@ public:
             return ref_ == ref && ref_.ticket_ == ref.ticket_;
         }
 
+        /** Prevent a foreign actor/incarnation's finalization capability
+         * from being attached to another actor's physical resource registry.
+         * The ref's opaque ticket remains the final runtime authority.
+         */
+        bool belongs_to(std::uint64_t actor, std::uint64_t incarnation) const noexcept {
+            return ref_.actor_id() == actor && ref_.generation() == incarnation;
+        }
+
         // Phase 1: safe to retire queued messages after STOP. Their owned
         // receipts may still be charged, so this deliberately ignores loans.
         bool ready_for_actor_turn_quiescence() const noexcept {
