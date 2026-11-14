@@ -1,8 +1,9 @@
 # Main-based LLVM inverted i64 production extraction (draft)
 
 ## Scope and provenance
-Source branch: `parity/inverted-production-main-i64-20261104`.
-Base commit: `040058c1750a049be43949c41f61a87d028e6ddc`.
+Reconciliation branch: `reconcile/inverted-production-main-20261114` ([draft PR #1812](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1812)).
+Current-main base commit: `3667b0255269ca30de381077435253f1b40be28f`.
+Historical source: PR #1403; only its feature blobs were forward-ported onto the current compiler.
 Related work: LLVM #1213 (diverged integration), #1385 (separate host dense-index substrate), conformance #249.
 
 This source path admits exactly one `define inverted struct` with two i64
@@ -17,7 +18,9 @@ length and positive live-row metadata; invalid reads trap; final close revokes
 and volatile-scrubs columns and markers. Guest code never obtains
 owner-issued handles or raw host spans. Source-level loans, dynamic
 expressions, non-i64 scalars, nested types, actors, await, imports, hard-RT,
-Wasm and Native AOT are unsupported and must fail closed.
+Wasm, non-host NativeAOT targets, and the actor/hard-RT profiles are unsupported
+and must fail closed. The supported narrow output is **host-native Clang AOT**
+from verified local MIR, not general cross-target NativeAOT.
 
 The `InvertedColumns` checked-handle host reference is **not** the storage
 implementation for this bounded guest path. In particular the guest's
@@ -31,7 +34,8 @@ nonzero executed workflow steps:
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 cmake --build build --parallel 2 --target \
   oreslang-llvmc oreslang-inverted-production-mir-test \
-  oreslang-native-inverted-struct-ast-test
+  oreslang-native-inverted-struct-ast-test \
+  oreslang-no-gc-ir-audit-build
 ctest --test-dir build -R \
   'native_inverted_(production_source_to_native|struct_schema_ast)|inverted_production_source_mir_cpp17' \
   --output-on-failure
@@ -39,8 +43,9 @@ cmake --build build --parallel 2
 ctest --test-dir build --output-on-failure -j 2
 ```
 
-The native guest test compiles three `.atto` positives into LLVM IR and
-executes each at Clang O0 and O2 expecting exit 42. The out-of-bounds guest
+The native guest test compiles four local `.atto` positives plus one
+canonical DOP fixture into LLVM IR, then executes each at Clang O0 and O2
+expecting exit 42 (ten native guest executions). The out-of-bounds guest
 must terminate from a real SIGILL/SIGTRAP at both optimization levels.
 Five source-admission negatives and seven unsupported compiler-mode negatives
 must fail before writing any LLVM IR. Then run GCC/Clang sanitizer builds
