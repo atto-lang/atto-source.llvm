@@ -36,6 +36,9 @@ int main() {
     assert(parsed_site.kind == SourceKind::Site);
     assert(!parse_source_id(site, SourceKind::Routine, out));
     assert(!parse_source_id(valid, SourceKind::Site, out));
+    auto retained = out;
+    assert(!parse_source_id(site, static_cast<SourceKind>(99), out));
+    assert(out == retained);
   }
   std::cout << "LLVM_SOURCE_ID_FUZZ_HOST_PASS:2000\n";
 }
