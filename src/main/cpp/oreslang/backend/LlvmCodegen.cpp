@@ -5,6 +5,7 @@
 #include "oreslang/frontend/NativeScalarSpecialization.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 #include "oreslang/runtime/OresIsolateAbi.h"
+#include "oreslang/runtime/SourceIdentityV1.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -25,6 +26,7 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
@@ -754,7 +756,37 @@ llvm::Value* lower(const Expression& expr,
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool cortex_m_target,
                                   bool bounded_allocator_provider,
-                                  const std::string& isolate_entry) {
+                                  const std::string& isolate_entry,
+                                  const std::vector<CheckedSourceRoutineV1>& checked_routines) {
+    // Every compiler retains its own frontend and source map. This optional
+    // LLVM-owned admission binds reviewed static IDs to the native typed
+    // source function selector; no source ID is synthesized at runtime.
+    // The caller must already have checked the registry's source-unit/build
+    // provenance. No guest log-site or dynamic instrumentation is implied.
+    std::unordered_map<std::string, std::string> routine_source_ids;
+    if (!checked_routines.empty()) {
+        if (checked_routines.size() != source.functions.size() ||
+            !source.actors.empty() || !source.generators.empty() ||
+            !source.classes.empty()) {
+            throw std::runtime_error("checked routine source IDs require exact scalar function coverage");
+        }
+        for (const auto& id : checked_routines) {
+            telemetry::SourceId parsed{};
+            if (!telemetry::parse_source_id(id.routine_id,
+                                            telemetry::SourceKind::Routine, parsed)) {
+                throw std::runtime_error("malformed native checked routine source ID");
+            }
+            if (!routine_source_ids.emplace(
+                    native_function_slot(id.symbol, id.arity), id.routine_id).second) {
+                throw std::runtime_error("duplicate checked native routine source selector");
+            }
+        }
+        for (const auto& fn : source.functions) {
+            if (!routine_source_ids.count(native_function_slot(fn.name, fn.parameters.size()))) {
+                throw std::runtime_error("checked source routine registry missing a native callable");
+            }
+        }
+    }
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
@@ -1316,6 +1348,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         // target even when our source-function symbol set is collision-free.
         if (declaration->getName().str() != symbol)
             throw std::runtime_error("native AOT direct dispatch linker symbol collision");
+        // Compiler-emitted metadata for the exact native callable. Native IR
+        // metadata is NOT a runtime probe and may not survive object emission:
+        // the authenticated artifact sidecar remains a separate future gate.
+        if (auto id = routine_source_ids.find(
+                native_function_slot(fn.name, fn.parameters.size()));
+                id != routine_source_ids.end()) {
+            declaration->setMetadata(
+                "atto.source.routine_id.v1",
+                llvm::MDNode::get(context, {llvm::MDString::get(context, id->second)}));
+        }
         if (specialization != nullptr) {
             const auto selector = native_function_slot(fn.name, fn.parameters.size());
             if (!frozen_scalar_callees.emplace(selector, declaration).second ||
