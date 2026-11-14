@@ -27,9 +27,20 @@ is performed by these primitives.
 ## UniqueBox<T>
 
 - A move-only deterministic owner; copy is disabled at C++ compile time.
-- Adopts a valid pointer, trusted `noexcept` destructor, nonzero owning
-  allocation domain and nonzero generation. There is **no implicit allocation**
-  and no raw pointer escape API.
+- Adoption now **consumes a single-use `UniqueAllocationTicket<T>`** rather
+  than accepting an unrestricted raw pointer. A ticket stores the trusted
+  `noexcept` destructor, nonzero owning domain and nonzero generation.
+  Concurrent attempts to consume the *same* ticket permit only one winner.
+  An unconsumed/rejected ticket remains the unique owner and deterministically
+  drops its resource on ticket destruction. No implicit allocation or raw
+  pointer escape API exists.
+- **Trusted allocator invariant:** only the allocator may mint tickets, and it
+  must mint **at most one ticket per live physical allocation/generation**.
+  This native helper cannot prevent a faulty trusted host from intentionally
+  creating *different* tickets for the same pointer. The source-language
+  compiler and FFI boundary must not expose ticket minting to guest code.
+- Ticket lifetime cannot race with ticket adoption. The compiler/runtime
+  must prove this lifetime and exclusive source ownership separately.
 - `get_checked(domain,generation)` denies stale generations and foreign
   domains, but does not replace a compiler borrow proof.
 - Move invalidates the source. Move-assignment destroys the old destination
@@ -52,9 +63,12 @@ quiescence. Do not infer `Arc` safety from `AtomicScalar` alone.
 
 ## Proofs and unfinished work
 
-Native exact-blob proof: the two C++ source blobs were SHA checked inside a
-separate private Actions carrier before optimized compilation and ASan/UBSan
+Native exact-blob proof: seven C++ source/test blobs were SHA-checked inside
+an independent private Actions carrier before optimized compilation, ASan/UBSan
 and TSan execution, with 10 concurrent lanes and 400,000 total atomic increments.
+The ticket-adoption regression also exercises 16 racing native attempts to
+consume one allocation ticket, reentrant drop, and ownership cleanup after
+rejected/invalid adoption.
 The test includes memory-order rejection, weak-CAS retries, release/acquire
 publication, after-move invalidation, generation/domain denial, and exactly-once
 drop. The separate actor scheduler and AOT guest compiler were **not** exercised.
@@ -66,6 +80,7 @@ Next gates before guest support:
    Java/Graal, Rust, .NET Native AOT, Wasm, and independent Forge contracts.
 3. Actor method concurrency, allocator lifetime pinning, cancellation/STOP,
    user-supplied bad casts and FFI boundaries, cross-actor relocation or denial.
-4. Additional target architectures, actor scheduler integration and exact-SHA
+4. Allocator-issued ticket provenance, additional target architectures,
+   actor scheduler integration and exact-SHA
    native guest execution. The focused native C++ test passed TSan, but that
    is **not** a guest scheduler race proof or hard-real-time certification.
