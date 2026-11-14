@@ -1128,6 +1128,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             "ores_native_telemetry_span_end",
             llvm::FunctionType::get(llvm::Type::getVoidTy(context), {i64}, false));
     }
+    llvm::FunctionCallee telemetryLog;
+    if (!checked_sites.empty()) {
+        telemetryLog = module.getOrInsertFunction(
+            "ores_native_telemetry_log_info",
+            llvm::FunctionType::get(i32, {i64, i64, i64, i64, native_ptr, i64}, false));
+    }
     const bool has_source_tasks = std::any_of(
         source.functions.begin(), source.functions.end(),
         [](const Function& fn) {
@@ -2054,6 +2060,43 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                         storage, field_storage, declarations, &region_moves);
                     builder.CreateStore(updated, field_storage.at(target));
                 }
+            } else if (effect.kind == Statement::Kind::TelemetryLogInfo) {
+                // The compiler IR call is a real AOT guest callsite. Runtime
+                // copies only source-controlled IDs and the bounded literal
+                // into its carrier-local ring, never a guest object/handle.
+                const auto key = log_key(fn.name, fn.parameters.size(),
+                                         effect.telemetry_operation);
+                auto found = native_log_sites.find(key);
+                if (found == native_log_sites.end() || !telemetryLog.getCallee())
+                    throw std::runtime_error("unverified native guest telemetry log site");
+                telemetry::SourceId rid{}, sid{};
+                if (!telemetry::parse_source_id(
+                        found->second.routine_id, telemetry::SourceKind::Routine, rid) ||
+                    !telemetry::parse_source_id(
+                        found->second.site_id, telemetry::SourceKind::Site, sid))
+                    throw std::runtime_error("corrupt checked native log source descriptor");
+                auto lane = [](const telemetry::SourceId& id, std::size_t begin) {
+                    std::uint64_t result = 0;
+                    for (std::size_t k = begin; k < begin + 8; ++k)
+                        result = (result << 8) | id.bytes[k];
+                    return result;
+                };
+                auto* literal = builder.CreateGlobalStringPtr(
+                    effect.telemetry_operation, "atto.telemetry.log.literal");
+                auto* siteCall = builder.CreateCall(telemetryLog, {
+                    llvm::ConstantInt::get(i64, lane(rid, 0)),
+                    llvm::ConstantInt::get(i64, lane(rid, 8)),
+                    llvm::ConstantInt::get(i64, lane(sid, 0)),
+                    llvm::ConstantInt::get(i64, lane(sid, 8)),
+                    literal,
+                    llvm::ConstantInt::get(i64, effect.telemetry_operation.size())
+                }, "atto.telemetry.log.receipt");
+                siteCall->setMetadata("atto.source.site_id.v1",
+                    llvm::MDNode::get(context, {
+                        llvm::MDString::get(context, found->second.site_id)}));
+                siteCall->setMetadata("atto.source.routine_id.v1",
+                    llvm::MDNode::get(context, {
+                        llvm::MDString::get(context, found->second.routine_id)}));
             } else if (effect.kind == Statement::Kind::Call) {
                 lower(*effect.expression, builder, i64, storage, field_storage, declarations, &region_moves);
             } else {
