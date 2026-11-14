@@ -1,0 +1,62 @@
+name: scoped-local-storage-host-v1
+on:
+  pull_request:
+    paths:
+      - "src/main/cpp/oreslang/runtime/ScopedLocalStorageV1.hpp"
+      - "src/main/cpp/oreslang/runtime/RequestContextLocalV1.hpp"
+      - "src/main/cpp/oreslang/runtime/NativeRequestMailGateV1.hpp"
+      - "src/main/cpp/oreslang/runtime/NativeRequestDataMailGateV1.hpp"
+      - "src/main/cpp/oreslang/runtime/NativeRequestWakeGateV1.hpp"
+      - "src/main/cpp/oreslang/runtime/NativeActorScheduler.h"
+      - "src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+      - "src/main/cpp/oreslang/runtime/TaskCancellation.hpp"
+      - "tests/native_scoped_local_storage_v1_test.cpp"
+      - "tests/native_scoped_request_parity_v1_test.cpp"
+      - "tests/native_request_mail_gate_v1_test.cpp"
+      - "tests/native_original_data_mail_sequence_v1_test.c"
+      - "tests/native_data_mail_stop_v1_test.c"
+      - "tests/native_request_data_mail_gate_v1_test.cpp"
+      - "tests/native_request_wake_origin_v1_test.cpp"
+      - "src/main/cpp/oreslang/runtime/NativeActorLocalGateV1.hpp"
+      - "src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h"
+      - "tests/native_actor_local_gate_v1_test.cpp"
+      - "tests/native_execution_authority_test.c"
+      - "scripts/test-scoped-locals-v1.sh"
+      - ".github/workflows/scoped-local-storage-v1.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-host-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ORES_SCOPED_LOCAL_REQUIRE_FULL_MATRIX: "1"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: fail closed unless testing the immutable PR head
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$EXPECTED_HEAD"
+          echo "NATIVE_SCOPED_LOCAL_EXACT_HEAD=$actual"
+          echo "NATIVE_SCOPED_LOCAL_EXACT_TREE=$(git rev-parse HEAD^{tree})"
+      - name: gcc and clang host-only tests
+        run: |
+          bash -n scripts/test-scoped-locals-v1.sh
+          bash scripts/test-scoped-locals-v1.sh
+      - name: gcc and clang ASan UBSan host-only tests
+        env:
+          ORES_SCOPED_LOCAL_RUN_SANITIZERS: "1"
+        run: bash scripts/test-scoped-locals-v1.sh
+      - name: gcc ThreadSanitizer native request origin race tests
+        env:
+          ORES_SCOPED_LOCAL_RUN_TSAN: "1"
+        run: bash scripts/test-scoped-locals-v1.sh

@@ -1,0 +1,39 @@
+name: AttoLang native typed physical-layout host tests (NON-GUEST)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/types/DopPhysicalLayoutV1.hpp'
+      - 'src/main/cpp/oreslang/runtime/DopHeterogeneousLayout.hpp'
+      - 'tests/dop_physical_layout_v1_test.cpp'
+      - '.github/workflows/dop-physical-layout-v1.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  llvm-physical-plan-host:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: ['g++', 'clang++']
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Compile checked typed native address plan with sanitizers
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          CXX: ${{ matrix.compiler }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --verify HEAD)" = "$EXPECTED_HEAD"
+          "$CXX" -std=c++20 -O1 -g -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp tests/dop_physical_layout_v1_test.cpp \
+            -o "$RUNNER_TEMP/dop_physical_layout_v1"
+          timeout 30s "$RUNNER_TEMP/dop_physical_layout_v1"
+          echo 'DOP_LLVM_PHYSICAL_HOST_ONLY_PASS, ATTO_AOT_GUEST_NOT_EXECUTED'

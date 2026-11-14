@@ -1,0 +1,43 @@
+name: HPC finance LLVM risk host-contract verification
+on:
+  pull_request:
+    paths:
+      - 'tests/hpc_finance_risk_host_contract_test.cpp'
+      - 'contracts/v1/hpc-finance/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/hpc-finance-risk-host.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  hpc-finance-host-only:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify immutable source, root tree and shared risk fixture
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git diff --quiet
+          test -z "$(git ls-files --others --exclude-standard)"
+          test "$(git hash-object contracts/v1/hpc-finance/risk-gate-v1.tsv)" = cec489c1f7603617797340dd1b4a71cc85acfebd
+          test "$(git hash-object contracts/v1/hpc-finance/guest-manifest.json)" = 062cff056919708b2cc9e6f9a6f4cb6ec00661e8
+          printf 'LLVM_HPC_HOST_SOURCE_TREE=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+      - name: Compile and execute strict C++17 host oracle plus mutation cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            tests/hpc_finance_risk_host_contract_test.cpp -o /tmp/hpc-finance-risk-host
+          /tmp/hpc-finance-risk-host contracts/v1/hpc-finance/risk-gate-v1.tsv |
+            tee /tmp/hpc-finance-risk-host.log
+          grep -Fxq 'HPC_FINANCE_HOST_ONLY=PASS 23-fixture 180-cross-product 4-mutations' /tmp/hpc-finance-risk-host.log
+      - name: Retain honest evidence classification
+        run: echo 'LLVM_HPC_EVIDENCE=HOST_ONLY_NOT_COMPILED_ORESLANG'

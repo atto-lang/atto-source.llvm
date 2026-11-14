@@ -17,6 +17,23 @@ enum class AsyncIoTerminal : std::uint8_t {
     pending, success, failure, cancelled, timed_out, closed
 };
 
+// Completion values may arrive from FFI/serialized host paths. Unknown enum
+// discriminants cannot become a terminal ACK permitting a guest continuation
+// to resume or an actor-owned frame to be reclaimed.
+constexpr bool valid_async_io_terminal(AsyncIoTerminal value) noexcept {
+    switch (value) {
+        case AsyncIoTerminal::success:
+        case AsyncIoTerminal::failure:
+        case AsyncIoTerminal::cancelled:
+        case AsyncIoTerminal::timed_out:
+        case AsyncIoTerminal::closed:
+            return true;
+        case AsyncIoTerminal::pending:
+            return false;
+    }
+    return false;
+}
+
 // Allocation-free, one-CAS terminal arbitration for an already-admitted I/O
 // operation. Does not submit I/O, create async frames, own buffers or wake actors.
 class AsyncIoCompletionGate final {
@@ -24,7 +41,7 @@ public:
     explicit AsyncIoCompletionGate(AsyncIoTicket ticket) noexcept : ticket_(ticket) {}
 
     bool finish(AsyncIoTicket ticket, AsyncIoTerminal outcome) noexcept {
-        if (!valid(ticket) || outcome == AsyncIoTerminal::pending) return false;
+        if (!valid(ticket) || !valid_async_io_terminal(outcome)) return false;
         AsyncIoTerminal expected = AsyncIoTerminal::pending;
         return terminal_.compare_exchange_strong(expected, outcome,
                 std::memory_order_acq_rel, std::memory_order_acquire);
