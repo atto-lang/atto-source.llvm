@@ -32,6 +32,10 @@ typedef struct {
     atomic_int constructor_started;
     atomic_int stop_requested;
     atomic_int join_started;
+    /* Protected exclusively by group.mutex: the READY observer pins the
+     * SourceActor allocation while pthread_cond_wait releases that mutex.
+     * An external physical join must drain it before freeing this actor. */
+    size_t ready_waiters;
     atomic_uint_fast64_t processed;
     atomic_int_fast64_t last_result;
 } SourceActor;
@@ -851,12 +855,18 @@ int oreslang_source_actor_snapshot_current_trace(
  */
 void oreslang_source_actor_wait_ready_blocking(void* opaque) {
     SourceActor* instance = (SourceActor*)opaque;
-    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
     group_lock();
-    const size_t slot = (size_t)instance->ref.actor_slot;
+    /* A stale pointer cannot be dereferenced until it has been matched to
+     * a live actor slot under the group lock. Guest code cannot manufacture
+     * this opaque trusted-main ref; this still is not a general FFI handle. */
+    size_t slot = 0;
+    while (slot < group.next_slot && group.actors[slot] != instance)
+        ++slot;
     OresNativeVM* vm = group.vm;
-    ensure(vm && slot < group.next_slot
+    ensure(instance != NULL && vm && slot < group.next_slot
         && group.actors[slot] == instance
+        && instance->magic == SOURCE_ACTOR_MAGIC
+        && (size_t)instance->ref.actor_slot == slot
         && group.pending_ready == NULL && group.pending_done == NULL
         && !atomic_load_explicit(&instance->stop_requested, memory_order_acquire));
     OresNativeExecutionContext carrier = {0};
@@ -872,6 +882,8 @@ void oreslang_source_actor_wait_ready_blocking(void* opaque) {
 #endif
         ensure(!on_carrier);
     }
+    ensure(instance->ready_waiters == 0);
+    instance->ready_waiters = 1;
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
     atomic_store_explicit(
         &test_ready_waiter_blocked, 0, memory_order_release);
@@ -880,10 +892,19 @@ void oreslang_source_actor_wait_ready_blocking(void* opaque) {
         const int status = atomic_load_explicit(
             &instance->startup_state, memory_order_acquire);
         if (status == ORES_SOURCE_ACTOR_STARTUP_READY) break;
+        if (status == ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY) {
+            /* Revoke the waiter's lifetime pin and wake any trusted host
+             * physical join *before* failing stop. Otherwise a concurrent
+             * join could free SourceActor while this waiter still reads it. */
+            ensure(instance->ready_waiters == 1);
+            instance->ready_waiters = 0;
+            ensure(pthread_cond_broadcast(&group.startup_changed) == 0);
+            group_unlock();
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
-        if (status == ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY)
             fputs("SOURCE_ACTOR_READY_BARRIER_CANCELLED\n", stderr);
 #endif
+            abort();
+        }
         ensure(status == ORES_SOURCE_ACTOR_STARTUP_PENDING
             || status == ORES_SOURCE_ACTOR_STARTUP_INITIALIZING);
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
@@ -900,6 +921,9 @@ void oreslang_source_actor_wait_ready_blocking(void* opaque) {
         &instance->constructor_started, memory_order_acquire) == 1);
     ensure(atomic_load_explicit(
         &instance->initialized, memory_order_acquire) == 1);
+    ensure(instance->ready_waiters == 1);
+    instance->ready_waiters = 0;
+    ensure(pthread_cond_broadcast(&group.startup_changed) == 0);
     group_unlock();
 }
 
@@ -981,6 +1005,13 @@ void oreslang_source_actor_join_done(void* opaque) {
     ensure(terminal.processed_user_messages
         == atomic_load_explicit(&instance->processed, memory_order_acquire));
     ensure(terminal.abandoned_control_messages == 0);
+
+    /* Even a physically stopped actor may have a trusted-main READY
+     * observer asleep on the startup CV. Keep the SourceActor and heap alive
+     * until it revokes its borrowed observation capability. Cancellation
+     * observers fail stop after revocation; successful observers complete. */
+    while (instance->ready_waiters != 0)
+        ensure(pthread_cond_wait(&group.startup_changed, &group.mutex) == 0);
 
     /*
      * get_done parity requires physical quiescence, not a logical stop bit.
