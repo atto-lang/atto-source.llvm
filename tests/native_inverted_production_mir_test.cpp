@@ -92,6 +92,25 @@ int main() {
     INVERTED_REQUIRE(ir.find("define i32 @main()") != std::string::npos);
     INVERTED_REQUIRE(ir.find("icmp ult i64") != std::string::npos);
     INVERTED_REQUIRE(ir.find("store volatile i1 false, ptr %alive") != std::string::npos);
+    // A forged external MIR sequence that simply omits Close must fail
+    // independently of emitter checks: no owner may leak past normal exit.
+    {
+        auto forged = ops;
+        forged.pop_back();
+        reject([&]{ (void)Module::verify_external(
+                compiled.mir.layout(), compiled.mir.capacity(), forged); },
+                "requires terminal close");
+    }
+    // This must also hold on the normal HIR->MIR lowering path, not only
+    // for external/deserialized instructions.
+    {
+        using oreslang::dop::hir::LinearPlan;
+        LinearPlan unclosed(compiled.mir.layout(), compiled.mir.capacity());
+        unclosed.push(2);
+        unclosed.read_runtime_checked(0, "x");
+        reject([&]{ (void)Module::lower(unclosed); },
+                "requires terminal close");
+    }
     // The external MIR admission boundary must reject forged metadata even
     // when its current emitter would ignore it (loans/close have no row).
     {
