@@ -4,6 +4,16 @@ on:
     paths:
       - 'src/main/cpp/oreslang/runtime/NativeAtomicBoxV1.hpp'
       - 'src/main/cpp/oreslang/runtime/NativeBoxArenaV1.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorBoxRegionV1.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorHeapIdentity.hpp'
+      - 'tests/actor_box_region_v1_test.cpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'src/main/cpp/oreslang/types/OwnershipChecker.cpp'
+      - 'src/main/cpp/oreslang/types/NativeScalarTypes.cpp'
+      - 'tests/atto_atomic_main_v1.sh'
+      - 'tests/atto-atomic-main-v1/**'
       - 'tests/native_atomic_box_v1_test.cpp'
       - 'src/main/cpp/oreslang/types/NativeBoxCompilerAdmissionV1.hpp'
       - 'tests/native_box_compiler_admission_v1_test.cpp'
@@ -22,6 +32,16 @@ on:
     paths:
       - 'src/main/cpp/oreslang/runtime/NativeAtomicBoxV1.hpp'
       - 'src/main/cpp/oreslang/runtime/NativeBoxArenaV1.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorBoxRegionV1.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorHeapIdentity.hpp'
+      - 'tests/actor_box_region_v1_test.cpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'src/main/cpp/oreslang/types/OwnershipChecker.cpp'
+      - 'src/main/cpp/oreslang/types/NativeScalarTypes.cpp'
+      - 'tests/atto_atomic_main_v1.sh'
+      - 'tests/atto-atomic-main-v1/**'
       - 'tests/native_atomic_box_v1_test.cpp'
       - 'src/main/cpp/oreslang/types/NativeBoxCompilerAdmissionV1.hpp'
       - 'tests/native_box_compiler_admission_v1_test.cpp'
@@ -52,6 +72,8 @@ jobs:
           /tmp/atto-native-trait-budget
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -Isrc/main/cpp tests/native_box_compiler_admission_v1_test.cpp -o /tmp/atto-box-compiler-admission
           /tmp/atto-box-compiler-admission
+          g++ -std=c++20 -O2 -pthread -Wall -Wextra -Werror -Isrc/main/cpp tests/actor_box_region_v1_test.cpp -o /tmp/atto-actor-box-region
+          /tmp/atto-actor-box-region
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -Isrc/main/cpp tests/ownership_auto_traits_dop_test.cpp -o /tmp/atto-original-auto-trait-dop
           /tmp/atto-original-auto-trait-dop
       - name: Address and undefined behavior sanitizers
@@ -74,3 +96,20 @@ jobs:
         run: |
           set -euo pipefail
           bash tests/atto_atomic_aot_v1.sh
+  main-compiler-atomic-aot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install native LLVM build requirements
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm-dev clang cmake
+      - name: Compile the real Atto LLVM main compiler and execute Atomic guest AOT fixtures
+        run: |
+          set -euo pipefail
+          cmake -S . -B /tmp/atto-main-aot-build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+          cmake --build /tmp/atto-main-aot-build --target oreslang-llvmc -j2
+          bash tests/atto_atomic_main_v1.sh /tmp/atto-main-aot-build/oreslang-llvmc
