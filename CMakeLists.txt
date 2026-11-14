@@ -175,6 +175,19 @@ if(BUILD_TESTING)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/trap_option_result_native_source_gate.cmake")
     set_tests_properties(native_trap_result_option_fail_closed PROPERTIES TIMEOUT 90)
 
+    # Native phase-one proof: actual compiler -> audited LLVM IR -> Clang
+    # O0/O2 executable -> real exit 42. Never count this as Result/throw parity.
+    add_test(NAME native_trap_int_aot_guest_O0_O2
+        COMMAND "${CMAKE_COMMAND}"
+            "-DORES_TRAP_LLVM_CLI=$<TARGET_FILE:oreslang-llvmc>"
+            "-DORES_TRAP_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/trap-int-native42.atto"
+            "-DORES_TRAP_AOT_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh"
+            "-DORES_TRAP_AUDITOR=${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit"
+            "-DORES_TRAP_CLANG=clang"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/trap_int_native_aot_execution.cmake")
+    set_tests_properties(native_trap_int_aot_guest_O0_O2 PROPERTIES TIMEOUT 300)
+
+
     # Trusted-host capability admission only; NOT source-level/hostile-native parity.
     find_package(Threads REQUIRED)
     add_executable(oreslang-native-tenant-domain-host-test
