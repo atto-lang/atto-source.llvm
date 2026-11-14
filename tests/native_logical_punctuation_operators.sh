@@ -17,7 +17,23 @@ for executable in "$compiler" "$clang"; do
     exit 2
   fi
 done
-command -v timeout >/dev/null || { echo "timeout command is required" >&2; exit 2; }
+# Portable wall-clock limits: GNU timeout, Homebrew gtimeout, or a perl alarm
+# fallback (macOS has no timeout(1)). Exit codes mirror GNU timeout: 124 on
+# expiry, 128+signal when the child dies by a signal.
+if ! command -v timeout >/dev/null; then
+  if command -v gtimeout >/dev/null; then
+    timeout() { gtimeout "$@"; }
+  else
+    timeout() {
+      local secs="${1%s}"; shift
+      perl -e 'my $t = shift; my $pid = fork(); die "fork: $!" unless defined $pid;
+               if (!$pid) { exec @ARGV; exit 127 }
+               $SIG{ALRM} = sub { kill "KILL", $pid; waitpid($pid, 0); exit 124 };
+               alarm $t; waitpid($pid, 0); my $s = $?;
+               exit(($s & 127) ? 128 + ($s & 127) : ($s >> 8))' "$secs" "$@"
+    }
+  fi
+fi
 ir="$tmp/positive.ll"
 if ! timeout 40s "$compiler" --target=host "$fixtures/scalar-parity.atto" > "$ir"; then
   echo "native compiler rejected positive .atto source" >&2
