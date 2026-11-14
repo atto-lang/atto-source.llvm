@@ -46,14 +46,14 @@ cmake --build build --parallel 2
 ctest --test-dir build --output-on-failure -j 2
 ```
 
-The native guest test compiles five local `.atto` positives plus one
+The native guest test compiles six local `.atto` positives plus one
 canonical DOP fixture into LLVM IR and executes each at Clang O0 and O2
-expecting exit 42 (12 native guest receipts). The detached snapshot fixture
+expecting exit 42 (14 native guest receipts). The detached snapshot fixture
 captures a two-field struct, mutates and swap-deletes the original row,
 then returns the **old captured value**. Two out-of-bounds guests must
 terminate from a real SIGILL/SIGTRAP at both optimization levels.
-Nine source-admission negatives (including unbound, duplicate, out-of-bounds
-and class-as-value snapshots) and five unsupported compiler-mode negatives
+Ten source-admission negatives (including unbound, duplicate, out-of-bounds,
+class-as-value snapshots and attempted mutation of a detached value) and five unsupported compiler-mode negatives
 must fail before writing any LLVM IR. Then run GCC/Clang sanitizer builds
 (ASan and UBSan), compare against the exact-main baseline, and obtain
 independent review.
