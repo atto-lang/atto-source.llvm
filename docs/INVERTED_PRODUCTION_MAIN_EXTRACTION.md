@@ -58,7 +58,7 @@ then returns the **old captured value**. Two out-of-bounds guests must
 terminate from a real SIGILL/SIGTRAP at both optimization levels.
 Eleven source-admission negatives (including unbound, mismatched binding,
 duplicate, out-of-bounds,
-class-as-value snapshots and attempted mutation of a detached value) and five unsupported compiler-mode negatives
+class-as-value snapshots and attempted mutation of a detached value) and seven unsupported compiler-mode negatives
 must fail before writing any LLVM IR. Then run GCC/Clang sanitizer builds
 (ASan and UBSan), compare against the exact-main baseline, and obtain
 independent review.
@@ -67,3 +67,10 @@ Current receipt: **SOURCE_COMMITTED**. Production exact-head full
 compiler, CTest, native guest, sanitizers and five-backend parity:
 **NOT_EXECUTED**. GitHub pre-step failure is not a test failure.
 No cross-organization private-source mirror was performed.
+
+## Current-main command admission reconciliation
+
+Current main additionally exposes `--isolate-entry` and explicitly records
+`--target=host`. Neither is a supported modifier for this restricted
+inverted-owner native `main`: both must be rejected **before IR output**.
+The native guest harness includes negative tests for both options.
