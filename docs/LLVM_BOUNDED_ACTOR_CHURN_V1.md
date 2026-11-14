@@ -84,6 +84,50 @@ at both optimization levels.
   `zero_gc_certified=NO`. O0/O2 compilation, native execution and
   compiler-negative rejections must all succeed.
 
+## Production-runtime READY concurrency regression matrix
+
+A separate **host ABI** test, not the `.atto` guest, now exercises the actual
+`SourceActorBootstrap.c` and its real VM/actor heap under Clang O0/O2
+ASan+UBSan. Its exact-head runner is
+`scripts/test-source-actor-ready-barrier-v1.sh`, with cases in
+`tests/source_actor_ready_barrier_races_v1.c`.
+
+For each optimization level it requires:
+
+- 16 real actor constructors held before initialization and 16 held after
+  constructor execution but before READY publication, with a trusted host
+  thread confirmed to have entered the actual condition-variable wait.
+  Wakeup must occur without a lost signal, and all 32 actors must physically
+  terminate after successful READY.
+- Eight additional actor lifetimes where READY was already published before
+  the host wait begins. Those calls must take the nonblocking fast path.
+- A real stop-before-READY cancellation **after** a host waiter has entered
+  its wait. The waiter must wake and fail stop with SIGABRT and a test-only
+  `SOURCE_ACTOR_READY_BARRIER_CANCELLED` marker; returning READY, hanging,
+  or an unrelated sanitizer crash is not an acceptable pass.
+- A real source actor message callback attempting the host-only READY barrier
+  from a VM actor carrier. The call must fail stop with SIGABRT and a
+  `SOURCE_ACTOR_READY_BARRIER_CARRIER_DENIED` test marker, never park that
+  carrier. The guard checks *all four native VM domains*.
+- Test-only markers are compiled only with
+  `ORESLANG_SOURCE_ACTOR_TESTING`; regular source guest builds do not print
+  them or expose the waiter-observation hook.
+
+Successful exact-head results would thus require **80 actual constructors and
+physical joins**, **64 observed CV waits**, **16 READY fast paths**, and
+**four explicit fail-stop negative executions** over O0/O2. These are
+**test requirements, not recorded test results**: source organization Actions
+currently fails prior to executing steps. Host ABI success remains distinct
+from compiler-generated `.atto` execution and whole-process zero-GC proof.
+
+The source feature branch was synchronized with LLVM main commit
+`3667b0255269ca30de381077435253f1b40be28f` using merge commit
+`4cc1fbc33c07ccda9a0a677e2c46c5b4e35f68ed`. The merged tree retained
+all 17 preexisting feature files and every unrelated upstream file. The
+overlapping `Parser.cpp` received the exact upstream lexer/import additions
+without losing actor-loop checks. Later feature changes remain on top of that
+merge.
+
 ## Next work before promotion
 
 1. Restore source GitHub Actions runner admission (#159): no-executed-step
