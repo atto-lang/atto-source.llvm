@@ -166,6 +166,13 @@ if(BUILD_TESTING)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/hpc_finance_float_negative_test.cmake")
     set_tests_properties(hpc_finance_source_float_region_fail_closed
         PROPERTIES TIMEOUT 40)
+    # Real compiler gate: currently unsupported native trap/Result effects must
+    # not emit LLVM IR. Do not count rejection as semantic parity.
+    add_test(NAME native_trap_result_option_fail_closed
+        COMMAND "${CMAKE_COMMAND}"
+            "-DORES_TRAP_LLVM_CLI=$<TARGET_FILE:oreslang-llvmc>"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/trap_option_result_native_source_gate.cmake")
+    set_tests_properties(native_trap_result_option_fail_closed PROPERTIES TIMEOUT 90)
 
     # Trusted-host capability admission only; NOT source-level/hostile-native parity.
     find_package(Threads REQUIRED)
