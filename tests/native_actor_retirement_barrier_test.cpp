@@ -40,6 +40,7 @@ static void successful_heap_retirement() {
     NativeActorResourceQuarantine quarantine(2);
     NativeActorGroup group(301, 1);
     auto registry = std::make_shared<ActorResourceRegistry>(7, 3);
+    registry->bind_runtime_id(301);
 
     OresActorI64Heap* heap = ores_actor_i64_heap_open(7, 3, 4);
     require(heap != nullptr, "heap admission");
@@ -85,6 +86,7 @@ static void failed_ffi_revocation_is_quarantined() {
         retained = sentinel;
         NativeActorGroup group(302, 2);
         auto registry = std::make_shared<ActorResourceRegistry>(8, 1);
+        registry->bind_runtime_id(302);
         registry->register_resource(Kind::native_allocation, [sentinel] { });
         registry->register_resource(Kind::ffi_callback, [] {
             throw std::runtime_error("could not revoke callback");
@@ -117,7 +119,9 @@ static void quarantine_saturation_does_not_settle_done() {
     NativeActorResourceQuarantine quarantine(1);
     NativeActorGroup group(303, 2);
     auto first = std::make_shared<ActorResourceRegistry>(9, 1);
+    first->bind_runtime_id(303);
     auto second = std::make_shared<ActorResourceRegistry>(10, 1);
+    second->bind_runtime_id(303);
     first->register_resource(Kind::ffi_callback, [] { throw std::runtime_error("first"); });
     second->register_resource(Kind::ffi_callback, [] { throw std::runtime_error("second"); });
     NativeActorRetirementBarrier* b1 = nullptr;
@@ -171,6 +175,7 @@ static void physical_reclamation_waits_for_admitted_actor_turn() {
     NativeActorResourceQuarantine quarantine(1);
     NativeActorGroup group(305, 1);
     auto registry = std::make_shared<ActorResourceRegistry>(12, 1);
+    registry->bind_runtime_id(305);
     std::atomic<int> freed{0};
     registry->register_resource(Kind::native_allocation, [&] { ++freed; });
     NativeActorRetirementBarrier* barrier = nullptr;
@@ -206,6 +211,7 @@ static void done_waits_for_group_detachment() {
     NativeActorResourceQuarantine quarantine(1);
     NativeActorGroup group(304, 1);
     auto registry = std::make_shared<ActorResourceRegistry>(11, 1);
+    registry->bind_runtime_id(304);
     NativeActorRetirementBarrier* barrier = nullptr;
     auto ref = group.adopt(304, 11, 1, [&] { barrier->retire(); });
     NativeActorRetirementBarrier owned(registry, group.runtime_finalizer(ref), quarantine);
@@ -226,6 +232,7 @@ static void foreign_registry_cannot_release_live_heap_callback() {
     NativeActorResourceQuarantine quarantine(1);
     NativeActorGroup group(306, 1);
     auto registry = std::make_shared<ActorResourceRegistry>(7, 3);
+    registry->bind_runtime_id(306);
     ActorResourceRegistry foreign(7, 3);
     auto* heap = ores_actor_i64_heap_open(7, 3, 1);
     int freed = 0;
@@ -269,6 +276,7 @@ static void foreign_release_races_with_retirement_and_last_callback() {
         NativeActorResourceQuarantine quarantine(1);
         NativeActorGroup group(307, 1);
         auto registry = std::make_shared<ActorResourceRegistry>(7, 3);
+        registry->bind_runtime_id(307);
         ActorResourceRegistry foreign(7, 3);
         auto* heap = ores_actor_i64_heap_open(7, 3, 1);
         std::atomic<int> freed{0};
@@ -348,6 +356,7 @@ static void deferred_source_cleanup_physically_fences_actor_done() {
     NativeActorResourceQuarantine quarantine(1);
     NativeActorGroup group(410, 1);
     auto registry = std::make_shared<ActorResourceRegistry>(17, 1);
+    registry->bind_runtime_id(410);
     auto receipt = std::make_shared<NativeSourceCleanupGate>(
             NativeSourceCleanupTicket{17, 1, 99});
     const NativeSourceCleanupTicket ticket{17, 1, 99};
@@ -399,6 +408,7 @@ static void failed_source_cleanup_keeps_actor_arena_retained() {
     NativeActorResourceQuarantine quarantine(1);
     NativeActorGroup group(411, 1);
     auto registry = std::make_shared<ActorResourceRegistry>(18, 1);
+    registry->bind_runtime_id(411);
     auto receipt = std::make_shared<NativeSourceCleanupGate>(
             NativeSourceCleanupTicket{18, 1, 102});
     const NativeSourceCleanupTicket ticket{18, 1, 102};
@@ -425,6 +435,7 @@ static void two_overlapping_receives_pin_actual_native_done_barrier() {
     NativeActorResourceQuarantine quarantine(1);
     NativeActorGroup group(412, 1);
     auto registry = std::make_shared<ActorResourceRegistry>(19, 1);
+    registry->bind_runtime_id(412);
     auto receives = std::make_shared<NativeActorReceiveFence>(19, 1, 2);
     std::atomic<int> physical_frees{0};
     registry->register_resource(Kind::native_allocation, [&] {
@@ -480,6 +491,7 @@ static void two_overlapping_receives_pin_actual_native_done_barrier() {
 static void foreign_finalizer_cannot_acknowledge_another_actor_registry() {
     NativeActorResourceQuarantine quarantine(1);
     auto registry = std::make_shared<ActorResourceRegistry>(52, 7);
+    registry->bind_runtime_id(420);
 
     NativeActorGroup otherActorGroup(418, 1);
     auto otherActor = otherActorGroup.adopt(418, 53, 7, [] {});
@@ -525,6 +537,7 @@ static void foreign_receive_fence_cannot_complete_another_actor() {
     NativeActorResourceQuarantine quarantine(1);
     NativeActorGroup group(413, 1);
     auto registry = std::make_shared<ActorResourceRegistry>(20, 5);
+    registry->bind_runtime_id(413);
     auto foreign = std::make_shared<NativeActorReceiveFence>(20, 6, 1);
     NativeActorRetirementBarrier* barrier = nullptr;
     auto ref = group.adopt(413, 20, 5, [&] { barrier->retire(); });
@@ -624,6 +637,7 @@ static void concurrent_host_receivers_join_native_resource_retirement() {
     NativeActorResourceQuarantine quarantine(1);
     NativeActorGroup group(414, 1);
     auto registry = std::make_shared<ActorResourceRegistry>(23, 4);
+    registry->bind_runtime_id(414);
     auto receives = std::make_shared<NativeActorReceiveFence>(23, 4, 2);
     // Allocate an actual actor-owned native heap, not only a mock closer.
     // The scalar ABI remains serial; the concurrent threads below hold
@@ -771,6 +785,7 @@ static void abortive_group_stop_seals_receive_before_any_native_reclaim() {
     NativeActorResourceQuarantine quarantine(1);
     NativeActorGroup group(415, 1);
     auto registry = std::make_shared<ActorResourceRegistry>(25, 2);
+    registry->bind_runtime_id(415);
     auto receives = std::make_shared<NativeActorReceiveFence>(25, 2, 2);
     std::atomic<unsigned> released{0};
     registry->register_resource(Kind::native_allocation, [&] {
