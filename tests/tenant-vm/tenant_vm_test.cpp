@@ -1743,6 +1743,58 @@ void permanently_failed_carrier_leaves_other_tenants_runnable() {
     CHECK(host.snapshot(large.handle).phase == Phase::Running);
     CHECK_EQ(host.stats().unavailable_carriers, std::uint32_t{1});
 }
+// OOM recovery is a worst-case path. With no worker left, the watchdog must
+// fail dozens of VMs and settle *every* previously admitted message without
+// creating a temporary vector of the registry or a new mailbox-draining deque.
+void all_carriers_lost_settles_many_admitted_tenant_calls() {
+    HostLimits limits;
+    limits.carriers = 1;
+    TenantVmHost host(limits);
+    auto small = host.open(stack_spec("many-exhaust-small", 512 << 10));
+    auto large = host.open(stack_spec("many-exhaust-large", 4 << 20));
+    REQUIRE_OK(small);
+    REQUIRE_OK(large);
+    auto a = host.spawn_actor(small.handle, KIND_RESTARTABLE);
+    auto b = host.spawn_actor(large.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(a);
+    REQUIRE_OK(b);
+    CHECK_STATUS(host.call(a.actor, words({RESTART_ADD, 7})).get().status, Status::Ok);
+    tenant_vm_test_fail_next_carrier_allocations(3);
+    tenant_vm_test_fail_next_guard_restore();
+    const TurnResult failed = host.call(b.actor, words({RESTART_ADD, 1})).get();
+    CHECK_STATUS(failed.status, Status::ActorRestarted);
+    constexpr int kVms = 32;
+    std::vector<VmHandle> handles;
+    std::vector<std::future<TurnResult>> pending;
+    handles.reserve(kVms);
+    pending.reserve(kVms);
+    for (int i = 0; i < kVms; ++i) {
+        auto vm = host.open(stack_spec("many-exhaust-" + std::to_string(i), 512 << 10));
+        REQUIRE_OK(vm);
+        auto actor = host.spawn_actor(vm.handle, KIND_RESTARTABLE);
+        REQUIRE_OK(actor);
+        handles.push_back(vm.handle);
+        pending.push_back(host.call(actor.actor, words({RESTART_ADD, 1})));
+    }
+    for (auto& result : pending) {
+        CHECK(result.wait_for(Ms(5000)) == std::future_status::ready);
+        if (result.wait_for(Ms(0)) == std::future_status::ready)
+            CHECK_STATUS(result.get().status, Status::TenantFailed);
+    }
+    CHECK_EQ(host.stats().carrier_replacement_failures, std::uint64_t{3});
+    CHECK_EQ(host.stats().unavailable_carriers, std::uint32_t{1});
+    for (const auto& handle : handles) {
+        const VmTerminal done = host.wait_closed(handle);
+        CHECK(done.phase == Phase::Failed);
+        CHECK_REASON(done.reason, FailReason::HostClosed);
+    }
+    CHECK_REASON(host.wait_closed(small.handle).reason, FailReason::HostClosed);
+    CHECK_REASON(host.wait_closed(large.handle).reason, FailReason::HostClosed);
+    CHECK_EQ(host.stats().queued_bytes, std::uint64_t{0});
+    CHECK_EQ(host.stats().live_vms, std::size_t{0});
+    CHECK_STATUS(host.open(stack_spec("many-exhaust-too-late", 512 << 10)).status, Status::HostClosed);
+}
+
 #endif
 
 // A quota must leave room for host calls, and fit in the carrier's stack with its guard.
@@ -1901,6 +1953,7 @@ const Case cases[] = {
     {"alternate_signal_stack_failure_retire_and_recover", alternate_signal_stack_failure_retire_and_recover},
     {"shutdown_during_carrier_recovery_finishes_all_accepted_mail", shutdown_during_carrier_recovery_finishes_all_accepted_mail},
     {"permanently_failed_carrier_leaves_other_tenants_runnable", permanently_failed_carrier_leaves_other_tenants_runnable},
+    {"all_carriers_lost_settles_many_admitted_tenant_calls", all_carriers_lost_settles_many_admitted_tenant_calls},
 #endif
     {"concurrent_tenants_keep_independent_stacks_and_actor_state", concurrent_tenants_keep_independent_stacks_and_actor_state},
     {"stack_quota_limits_are_checked", stack_quota_limits_are_checked},
