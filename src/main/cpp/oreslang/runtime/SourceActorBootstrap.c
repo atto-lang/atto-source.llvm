@@ -1250,6 +1250,10 @@ void oreslang_source_actor_stop_id(OresSourceActorId identity) {
 void oreslang_source_actor_join_done(void* opaque) {
     group_lock();
     SourceActor* actor = live_actor_pointer_locked(opaque);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    if (!actor)
+        fputs("SOURCE_ACTOR_LEGACY_STALE_POINTER_DENIED\n", stderr);
+#endif
     claim_actor_join_locked(actor);
     OresNativeVM* vm = group.vm;
     const OresNativeActorRef target = actor->ref;
