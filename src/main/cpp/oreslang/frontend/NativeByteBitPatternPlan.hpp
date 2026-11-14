@@ -136,7 +136,9 @@ public:
         : source_(source), valid_(source.valid()
                 && source.size <= std::numeric_limits<std::size_t>::max() / 8) {}
 
-    // Every typed segment must consume 1..64 bits; a zero-width segment\n    // cannot manufacture a successful field or hide an invalid schema.\n    bool take_bits(unsigned width, std::uint64_t& value) noexcept {
+    // Every typed segment must consume 1..64 bits; a zero-width segment
+    // cannot manufacture a successful field or hide an invalid schema.
+    bool take_bits(unsigned width, std::uint64_t& value) noexcept {
         if (!valid_ || width == 0 || width > 64 || width > available_bits()) return false;
         std::uint64_t next = 0;
         for (unsigned i = 0; i < width; ++i) {
