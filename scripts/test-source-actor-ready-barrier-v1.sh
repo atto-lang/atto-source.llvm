@@ -106,8 +106,46 @@ for opt in 0 2; do
       exit 1
     fi
   done
+  # A stale host pointer after a physical join must be rejected without
+  # dereferencing freed SourceActor bytes. This does NOT prove stale-address
+  # generation safety if a later actor is allocated at that same address.
+  ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+    timeout 45s "$bin" stale-status >"$work/stale-status.out" 2>"$work/stale-status.err" || {
+      cat "$work/stale-status.out" "$work/stale-status.err" >&2
+      echo "SOURCE_ACTOR_STALE_STATUS_NOT_REJECTED|O$opt" >&2
+      exit 1
+    }
+  printf '%s\n' "SOURCE_ACTOR_STALE_STATUS_REJECTED" >"$work/stale-status.expected"
+  cmp -s "$work/stale-status.expected" "$work/stale-status.out" ||
+    { cat "$work/stale-status.out" >&2; exit 1; }
+  grep -Fqx "SOURCE_ACTOR_STALE_POINTER_DENIED" "$work/stale-status.err" || {
+    cat "$work/stale-status.err" >&2
+    exit 1
+  }
+  if grep -Eq 'ERROR: AddressSanitizer|runtime error:|UndefinedBehaviorSanitizer|LeakSanitizer' "$work/stale-status.err"; then
+    cat "$work/stale-status.err" >&2
+    exit 1
+  fi
+
+  for mode in stale-stop stale-join stale-send; do
+    rc=0
+    ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+      timeout 45s "$bin" "$mode" >"$work/$mode.out" 2>"$work/$mode.err" || rc=$?
+    if [[ "$rc" != 134 || -s "$work/$mode.out" ]] ||
+       ! grep -Fqx "SOURCE_ACTOR_STALE_POINTER_DENIED" "$work/$mode.err"; then
+      echo "SOURCE_ACTOR_STALE_POINTER_NOT_DENIED|O$opt|mode=$mode|exit=$rc" >&2
+      cat "$work/$mode.out" "$work/$mode.err" >&2
+      exit 1
+    fi
+    if grep -Eq 'ERROR: AddressSanitizer|runtime error:|UndefinedBehaviorSanitizer|LeakSanitizer|SOURCE_ACTOR_READY_RACE_INVARIANT_FAILED' "$work/$mode.err"; then
+      echo "SOURCE_ACTOR_STALE_POINTER_UNEXPECTED_SANITIZER_FAILURE|O$opt|mode=$mode" >&2
+      cat "$work/$mode.err" >&2
+      exit 1
+    fi
+  done
+
   check_source || { echo "SOURCE_ACTOR_READY_BARRIER_SOURCE_DRIFT" >&2; exit 78; }
-  printf 'SOURCE_ACTOR_READY_BARRIER_NATIVE_PASS|head=%s|O%s|constructors=40|cv_waits=32|fast_ready=8|physical_joins=40|cancel_pending=SIGABRT|cancel_publishing=SIGABRT|carrier=SIGABRT|sanitizers=ASAN_UBSAN|atto_guest=NO|zero_gc_certified=NO\n' \
+  printf 'SOURCE_ACTOR_READY_BARRIER_NATIVE_PASS|head=%s|O%s|constructors=40|cv_waits=32|fast_ready=8|physical_joins=40|cancel_pending=SIGABRT|cancel_publishing=SIGABRT|carrier=SIGABRT|stale_status=REJECTED|stale_stop=SIGABRT|stale_join=SIGABRT|stale_send=SIGABRT|sanitizers=ASAN_UBSAN|atto_guest=NO|zero_gc_certified=NO\n' \
     "$EXPECTED_HEAD" "$opt"
 done
-echo "SOURCE_ACTOR_READY_BARRIER_NATIVE_MATRIX_PASS|head=$EXPECTED_HEAD|levels=O0_O2|native_execs=8|real_ctors=80|real_joins=80|cv_waits=64|fast_paths=16|death_tests=6|guest=NOT_EXECUTED"
+echo "SOURCE_ACTOR_READY_BARRIER_NATIVE_MATRIX_PASS|head=$EXPECTED_HEAD|levels=O0_O2|native_execs=16|real_ctors=80|real_joins=80|cv_waits=64|fast_paths=16|death_tests=12|stale_status_rejections=2|guest=NOT_EXECUTED"
