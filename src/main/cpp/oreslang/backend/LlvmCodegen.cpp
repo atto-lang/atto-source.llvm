@@ -785,6 +785,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool cortex_m_target,
                                   bool bounded_allocator_provider,
                                   const std::string& isolate_entry) {
+    // This first local Atomic<int> slice is proven for native hosted
+    // 64-bit AOT only. Do not emit Wasm/Cortex-M/i64 atomic fallback calls,
+    // or reinterpret atomic owner memory in a VM isolate.
+    for (const auto& fn : source.functions)
+        for (const auto& local : fn.locals)
+            if (local.native_atomic_i64 &&
+                    (wasm32_target || cortex_m_target || !isolate_entry.empty() ||
+                     sizeof(void*) != 8))
+                throw std::runtime_error(
+                    "ATTO_ATOMIC_MAIN_V1_REJECT: unsupported target or isolate ABI");
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
