@@ -19,6 +19,8 @@ int main() {
   assert(!parse_source_id("rid_d5f8e146ba97430dac6bf17430477e2a_extra", SourceKind::Routine, routine));
   const StaticSite ok[] = {{routine, site, 17}};
   assert(validate_static_sites(ok, 1));
+  const StaticSite reversed[] = {{site, routine, 17}};
+  assert(!validate_static_sites(reversed, 1));
   assert(validate_static_sites(nullptr, 0));
   assert(!validate_static_sites(nullptr, 1));
   const StaticSite dup[] = {{routine, site, 1}, {routine, site, 2}};
