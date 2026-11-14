@@ -38,7 +38,8 @@ for opt in 0 2; do
     -c "$rt" -o "$work/heap-$opt.o"
   "$clangxx" -std=c++17 "-O${opt}" -g -Wall -Wextra -fno-omit-frame-pointer \
     -fsanitize=address,undefined -pthread -I "$root/src/main/cpp" \
-    "$test_cpp" "$work/heap-$opt.o" -o "$work/native-$opt"
+    "$test_cpp" "$work/heap-$opt.o" \
+    -Wl,--wrap=calloc -Wl,--wrap=free -o "$work/native-$opt"
   ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
     timeout --signal=TERM 90s "$work/native-$opt" >"$work/stdout-$opt" 2>"$work/stderr-$opt" || {
       cat "$work/stdout-$opt" "$work/stderr-$opt" >&2
@@ -51,10 +52,10 @@ for opt in 0 2; do
     exit 1
   }
   check_source || { echo 'SOURCE_ACTOR_HEAP_SOURCE_DRIFT' >&2; exit 78; }
-  printf 'SOURCE_ACTOR_HEAP_CARRIER_HOST_PASS|head=%s|tree=%s|O%s|negative=12|sanitizers=ASAN_UBSAN|runtime_blob=%s|test_blob=%s|binary_sha256=%s|atto_guest=NO\n' \
+  printf 'SOURCE_ACTOR_HEAP_CARRIER_HOST_PASS|head=%s|tree=%s|O%s|negative=12|pre_free_scrubbed=YES|sanitizers=ASAN_UBSAN|runtime_blob=%s|test_blob=%s|binary_sha256=%s|atto_guest=NO\n' \
     "$EXPECTED_HEAD" "$tree" "$opt" \
     "$(git -C "$root" rev-parse 'HEAD:src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c')" \
     "$(git -C "$root" rev-parse 'HEAD:tests/actor_owned_heap_lifecycle_test.cpp')" \
     "$(sha256sum "$work/native-$opt" | cut -d' ' -f1)"
 done
-echo 'SOURCE_ACTOR_HEAP_CARRIER_HOST_MATRIX_PASS|levels=O0_O2|negative_each=12|cross_carrier_stolen_token=REJECTED|migration_between_turns=ALLOWED|guest=NOT_EXECUTED'
+echo 'SOURCE_ACTOR_HEAP_CARRIER_HOST_MATRIX_PASS|levels=O0_O2|negative_each=12|cross_carrier_stolen_token=REJECTED|migration_between_turns=ALLOWED|pre_free_scrubbed=YES|guest=NOT_EXECUTED'
