@@ -2,6 +2,8 @@
 #include <cassert>
 #include <iostream>
 #include <string>
+#include <fstream>
+#include <iterator>
 
 static const std::string kFixture = R"json({
   "schema": "atto.telemetry.source-ids.v1",
@@ -39,6 +41,19 @@ static std::string swap_one(std::string source, const std::string& old,
 }
 
 int main() {
+#ifdef ATTO_SOURCE_LOG_MANIFEST_FIXTURE
+    // Use the actual checked-in fixture as well as independent adversarial
+    // vectors. This catches drift between documentation and compiler intake.
+    std::ifstream actual_file(ATTO_SOURCE_LOG_MANIFEST_FIXTURE, std::ios::binary);
+    assert(actual_file.good());
+    const std::string actual_bytes(
+        (std::istreambuf_iterator<char>(actual_file)),
+        std::istreambuf_iterator<char>());
+    auto from_source = oreslang::parse_checked_source_log_manifest_v1(
+        actual_bytes, "examples/telemetry/log-info-verified.atto");
+    assert(from_source.routines.size() == 1);
+    assert(from_source.sites.size() == 2);
+#endif
     auto manifest = oreslang::parse_checked_source_log_manifest_v1(
         kFixture, "examples/telemetry/log-info-verified.atto");
     assert(manifest.source_unit == "examples/telemetry/log-info-verified.atto");
