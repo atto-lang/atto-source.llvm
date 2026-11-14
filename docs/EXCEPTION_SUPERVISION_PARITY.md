@@ -13,7 +13,7 @@ must fail closed instead of producing misleading native code.
 |---|---|---|---|---|
 | throw(E) | yes, typed | `None` | not needed | `on_throw` |
 | raise(E) | no | no | yes, explicit | `on_raise` |
-| panic(PanicInfo) | no | no | restricted recovery | `on_panic` |
+| panic(PanicInfo) | no | no | **never** | `on_panic` |
 | cancel | no | no | no | `on_cancel` |
 | fatal host failure | no | no | no | `on_host_failure` when containable |
 
@@ -65,11 +65,19 @@ a stronger failure. An ordinary cleanup throw may replace an ordinary return.
 Cleanup operations cannot extend a borrow past its lifetime or resume a dead
 actor.
 
-A `recover` is an explicit, restricted effect boundary, not an implicit
-`catch all`. The compiler must require recovery capability for panic and
-validate actor state restoration before resumption. No resumable panic is
-claimed in either backend yet. Host panics should not be translated to normal
-Oreslang `throw` automatically.
+A `recover()` is an explicit, restricted **same-logical-invocation** effect
+boundary, not an implicit `catch all`. A direct deferred `recover()` may
+consume an active ordinary `throw` or `raise` exactly once, subject to
+definite-return checking after unwind; it cannot jump back to the failing
+statement. It **cannot consume `panic`**, cancellation, process exit, or fatal
+host control. Indirect helper calls, detached tasks, sibling invocations,
+and supervisor callbacks cannot recover an originating actor's effect.
+A failed actor's `on_panic` is an independent supervisor CONTROL event on a
+new ExecutionContext: it may select stop/restart/escalate policy but cannot
+resurrect the child or unwind the child's stack. Never translate a host panic
+or native fatal failure into a normal Oreslang `throw`.
+This matches the Java `docs/EXCEPTION_EFFECT_ADMISSION.md` normative contract;
+no Java/LLVM source-language parity is claimed before executable guest tests.
 
 ## Typed supervisor protocol
 

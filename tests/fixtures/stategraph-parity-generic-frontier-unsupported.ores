@@ -1,0 +1,15 @@
+// Intentional NEGATIVE until the LLVM frontend supports full StateGraph
+// object arrays, higher-order callback fields and owned generic results.
+// A compiler must reject this entire source without emitting partial LLVM IR.
+define class GraphCallbackNode<T> as
+  pub val Fnc<T(T)> action;
+end
+
+define class GraphFrontier<T> as
+  pub val Array<GraphCallbackNode<T>> nodes;
+end
+
+pub fnc main(): int {
+  val GraphFrontier<int> graph = new GraphFrontier<int>();
+  return 42;
+}

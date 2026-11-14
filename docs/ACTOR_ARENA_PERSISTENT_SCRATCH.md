@@ -71,3 +71,21 @@ Native malloc/calloc/free occur at actor arena open/physical destroy rather
 than on the scalar allocation hot path. This is not proof that every LLVM
 compiler-emitted guest operation avoids malloc: full typed source lowering and
 whole-program allocation audits remain outstanding.
+
+## Host copy boundary hardening (November 2026)
+
+The trusted native `ActorArena.c` copy entrypoints for persistent slots and
+scratch allocations reject any **nonempty** external source or destination
+overlapping actor control state, metadata, free-slot tables, persistent slab
+or scratch backing. They also reject uintptr-overflow spans before `memcpy`,
+and retain no-op semantics for zero bytes. This prevents trusted host
+integration mistakes from converting a valid actor turn into private arena
+metadata corruption or overlapping-copy undefined behavior.
+
+This is not a security boundary against arbitrary unsafe host pointers, foreign
+FFI lifetime violations, concurrently freed external buffers or concurrent
+reclamation. The API still requires trusted calls, authenticated actor turns,
+and supervisor quiescence. The CTest
+`native_actor_arena_host_buffer_boundary` runs ten POSIX child-process
+negative cases that require SIGABRT and checks positive copies / zero-byte
+no-ops. Whole-program no-GC and hard-RT certification remain pending.
