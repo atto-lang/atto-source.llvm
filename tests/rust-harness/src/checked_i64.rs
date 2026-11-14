@@ -96,6 +96,11 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
             Some(42),
         ),
         (
+            "stdlib-math-typed-overflow-implicit-catch",
+            source_root.join("tests/fixtures/numeric-v1/math-module-typed-overflow-implicit.atto"),
+            Some(42),
+        ),
+        (
             "stdlib-math-error-root-catch",
             source_root.join("tests/fixtures/numeric-v1/math-module-error-root-catch.ores"),
             Some(42),

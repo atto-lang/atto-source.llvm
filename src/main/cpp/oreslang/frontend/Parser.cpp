@@ -3147,7 +3147,9 @@ private:
                     if (then_form) {
                         if (!accept("then")) require("do");
                     } else require("{");
-                    require("return");
+                    // The final expression of a typed catch arm is an
+                    // implicit callable return. Explicit 'return' is equivalent.
+                    accept("return");
                     if (token_.kind != Kind::Integer)
                         fail("native ErrorSlot type-match handler requires an integer literal");
                     value.caught_error_type_match_result = expression();
@@ -3155,18 +3157,20 @@ private:
                             value.caught_error_type_match_result->kind !=
                                 Expression::Kind::Integer)
                         fail("native ErrorSlot type-match handler requires an integer literal");
-                    require(";");
+                    if (!accept(";") && (!then_form || token_.text != "else"))
+                        fail("native ErrorSlot catch branch requires ';' or else delimiter");
                     if (!then_form) require("}");
                     require("else");
                     if (!then_form) require("{");
-                    require("return");
+                    accept("return");
                     if (token_.kind != Kind::Integer)
                         fail("native ErrorSlot type-mismatch handler requires an integer literal");
                     value.result = expression();
                     if (!value.result ||
                             value.result->kind != Expression::Kind::Integer)
                         fail("native ErrorSlot type-mismatch handler requires an integer literal");
-                    require(";");
+                    if (!accept(";") && (!then_form || token_.text != "fi"))
+                        fail("native ErrorSlot catch branch requires ';' or fi delimiter");
                     if (!then_form) require("}");
                     if (then_form) require("fi");
                 } else {
