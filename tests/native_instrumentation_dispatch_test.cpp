@@ -60,6 +60,7 @@ int main() {
     a.disable();
     assert(a.invoke(41) == 42 && b.invoke(41) == 42);
     const auto v3 = make_version(3,traced,true);
+    assert(a.publish(v3,InstrumentationMode::deep,true,true) == PublishResult::unsupported);
     assert(a.publish(v3,InstrumentationMode::on,true,true) == PublishResult::accepted);
     assert(a.invoke(41) == 141);
     a.disable();
