@@ -210,6 +210,32 @@ if(ATTO_ACTOR_LOGICAL_FRAMES_HOST_ONLY)
     add_test(NAME native_vm_registered_actor_frame_quota_supervisor
         COMMAND atto-native-vm-supervised-quota-host-test)
     set_tests_properties(native_vm_registered_actor_frame_quota_supervisor PROPERTIES TIMEOUT 30)
+
+    # Compiled native callback test at the actual source-actor bootstrap ABI.
+    # This is source-runtime proof, not LLVM-produced .atto guest proof.
+    add_executable(atto-native-source-actor-failure-host-test
+        tests/source_actor_failure_supervisor_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+    target_include_directories(atto-native-source-actor-failure-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(atto-native-source-actor-failure-host-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_definitions(atto-native-source-actor-failure-host-test PRIVATE ORESLANG_SOURCE_ACTOR_TESTING)
+    target_compile_options(atto-native-source-actor-failure-host-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(atto-native-source-actor-failure-host-test PRIVATE Threads::Threads)
+    add_test(NAME native_source_actor_failure_supervisor_host
+        COMMAND atto-native-source-actor-failure-host-test)
+    set_tests_properties(native_source_actor_failure_supervisor_host PROPERTIES TIMEOUT 30)
     return()
 endif()
 
@@ -301,6 +327,32 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-vm-supervised-quota-test)
     set_tests_properties(native_vm_registered_actor_quota_failure_control PROPERTIES TIMEOUT 30)
 
+
+    # Compiled native callback test at the actual source-actor bootstrap ABI.
+    # This is source-runtime proof, not LLVM-produced .atto guest proof.
+    add_executable(oreslang-native-source-actor-failure-test
+        tests/source_actor_failure_supervisor_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+    target_include_directories(oreslang-native-source-actor-failure-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-source-actor-failure-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_definitions(oreslang-native-source-actor-failure-test PRIVATE ORESLANG_SOURCE_ACTOR_TESTING)
+    target_compile_options(oreslang-native-source-actor-failure-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-source-actor-failure-test PRIVATE Threads::Threads)
+    add_test(NAME native_source_actor_failure_supervisor_bridge
+        COMMAND oreslang-native-source-actor-failure-test)
+    set_tests_properties(native_source_actor_failure_supervisor_bridge PROPERTIES TIMEOUT 30)
     # AOT trace policy gate; this does not compile a source-level Atto trace.
     find_package(Threads REQUIRED)
     add_executable(oreslang-native-trace-probe-policy-test
