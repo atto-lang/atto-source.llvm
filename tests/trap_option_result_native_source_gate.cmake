@@ -35,16 +35,15 @@ if(target_error STREQUAL "" OR
     message(FATAL_ERROR "shared trap guest failed to reject safely")
 endif()
 
-set(bad_sources
-    "pub fnc main():int { return trap 7; }"
-    "fnc checked():int { return 7; } pub fnc main():int { return trap checked(); }"
-    "trap fnc checked():int { return 7; } pub fnc main():int { return 7; }"
-    "pub fnc main():int { val Option<int> outcome = trap 7; return 7; }"
-    "pub fnc main():int { throw Error(\"ordinary\"); return 7; }"
-)
-set(n 0)
-foreach(source IN LISTS bad_sources)
-    math(EXPR n "${n} + 1")
+# Do not put semicolon-containing source text into a CMake list: foreach
+# would split each guest program at ';' and silently test broken fragments.
+set(case_1 [=[pub fnc main():int { return trap 7; }]=])
+set(case_2 [=[fnc checked():int { return 7; } pub fnc main():int { return trap checked(); }]=])
+set(case_3 [=[trap fnc checked():int { return 7; } pub fnc main():int { return 7; }]=])
+set(case_4 [=[pub fnc main():int { val Option<int> outcome = trap 7; return 7; }]=])
+set(case_5 [=[pub fnc main():int { throw Error("ordinary"); return 7; }]=])
+foreach(n RANGE 1 5)
+    set(source "${case_${n}}")
     set(path "${CMAKE_CURRENT_BINARY_DIR}/ores_trap_gate_reject_${n}.atto")
     file(WRITE "${path}" "${source}\n")
     execute_process(
