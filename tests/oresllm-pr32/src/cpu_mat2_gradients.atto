@@ -1,0 +1,70 @@
+// Bounded immutable 2x2 scalar matrix multiply with explicit reverse-mode VJPs.
+// AttoLang source candidate; guest compiler execution is pending.
+// This uses language 'float' arithmetic, not certified binary32, SIMD or a GPU kernel.
+// No foreign pointers, implicit storage copies or cross-actor heap sharing.
+define module cpu_mat2_gradients as
+  pub define class CpuMat2 as
+    pub val float m00;
+    pub val float m01;
+    pub val float m10;
+    pub val float m11;
+  end
+
+  // Input bound ensures finite results no larger than 131072 in magnitude
+  // for a single two-product output. Non-finite values fail the comparisons.
+  pub fnc cpu_mat2_valid_scalar(float x): bool {
+    return x >= -256.0 && x <= 256.0;
+  }
+
+  pub fnc cpu_mat2_valid(borrow CpuMat2 matrix): bool {
+    return cpu_mat2_valid_scalar(matrix.m00) &&
+      cpu_mat2_valid_scalar(matrix.m01) &&
+      cpu_mat2_valid_scalar(matrix.m10) &&
+      cpu_mat2_valid_scalar(matrix.m11);
+  }
+
+  // All inputs must pass admission before any output construction occurs.
+  // transpose_lhs and transpose_rhs are explicit; no implicit broadcasting.
+  pub fnc cpu_mat2_gemm_flags(
+      borrow CpuMat2 lhs, borrow CpuMat2 rhs,
+      bool transpose_lhs, bool transpose_rhs): Result<CpuMat2, String> {
+    if !cpu_mat2_valid(rt borrow lhs) || !cpu_mat2_valid(rt borrow rhs); do
+      return Err("CPU mat2 GEMM rejects nonfinite or out-of-range operands");
+    fi
+    let float a01 = lhs.m01;
+    let float a10 = lhs.m10;
+    let float b01 = rhs.m01;
+    let float b10 = rhs.m10;
+    if transpose_lhs; do
+      a01 = lhs.m10;
+      a10 = lhs.m01;
+    fi
+    if transpose_rhs; do
+      b01 = rhs.m10;
+      b10 = rhs.m01;
+    fi
+    return Ok(new CpuMat2(
+      lhs.m00 * rhs.m00 + a01 * b10,
+      lhs.m00 * b01 + a01 * rhs.m11,
+      a10 * rhs.m00 + lhs.m11 * b10,
+      a10 * b01 + lhs.m11 * rhs.m11
+    ));
+  }
+
+  pub fnc cpu_mat2_gemm(
+      borrow CpuMat2 lhs, borrow CpuMat2 rhs): Result<CpuMat2, String> {
+    return cpu_mat2_gemm_flags(rt borrow lhs, rt borrow rhs, false, false);
+  }
+
+  // For Y = A * B and upstream G = dL/dY:
+  // dL/dA = G * transpose(B), dL/dB = transpose(A) * G.
+  pub fnc cpu_mat2_grad_lhs(
+      borrow CpuMat2 upstream, borrow CpuMat2 rhs): Result<CpuMat2, String> {
+    return cpu_mat2_gemm_flags(rt borrow upstream, rt borrow rhs, false, true);
+  }
+
+  pub fnc cpu_mat2_grad_rhs(
+      borrow CpuMat2 lhs, borrow CpuMat2 upstream): Result<CpuMat2, String> {
+    return cpu_mat2_gemm_flags(rt borrow lhs, rt borrow upstream, true, false);
+  }
+end
