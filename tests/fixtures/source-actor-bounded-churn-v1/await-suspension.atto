@@ -1,0 +1,13 @@
+define actor Worker as {
+  const base: int = 40;
+  pub fnc on_message(int n): int { return base + n; }
+}
+pub fnc main(): int {
+  let iteration: int = 0;
+  while (iteration < 128) {
+    const worker = spawn Worker();
+    await worker.get_done();
+    iteration = iteration + 1;
+  }
+  return iteration;
+}
