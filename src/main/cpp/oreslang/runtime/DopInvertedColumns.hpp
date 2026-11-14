@@ -75,6 +75,9 @@ class InvertedColumns {
         std::array<bool, field_count> writers{};
         std::mutex mutex;
         std::uint64_t owner;
+        // Increment before structural operations, including potentially
+        // partial capacity changes on failed allocation. Never wrap.
+        std::uint64_t layout_epoch = 1;
         // Capability stays alive while any issued handle holds it; cannot be
         // reconstructed from predictable owner/slot/generation integers.
         std::shared_ptr<const unsigned char> issuer = std::make_shared<const unsigned char>(0);
@@ -90,6 +93,16 @@ class InvertedColumns {
         for (std::size_t i = 0; i < field_count; ++i)
             if (s.readers[i] || s.writers[i]) return true;
         return false;
+    }
+    static void invalidate_layout(State& s) {
+        if (s.layout_epoch == std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("inverted layout epoch exhausted");
+        ++s.layout_epoch;
+    }
+    static void require_layout_guard(const State& s, const auto& guard) {
+        ensure_open(s);
+        if (guard.issuer_.get() != s.issuer.get() || guard.epoch_ != s.layout_epoch)
+            throw std::logic_error("stale or foreign inverted layout guard");
     }
     static std::size_t resolve(const State& s, const auto& h) {
         ensure_open(s);
@@ -149,6 +162,19 @@ class InvertedColumns {
     }
 
 public:
+    // Compiler/JIT layout guard: storage identity + monotonic physical epoch.
+    // This is not a pointer, a row capability, a source-code generation guard,
+    // or permission to skip field-loan, bounds, or generation checks.
+    class LayoutGuard {
+        std::shared_ptr<const unsigned char> issuer_;
+        std::uint64_t epoch_;
+        LayoutGuard(std::shared_ptr<const unsigned char> issuer, std::uint64_t epoch)
+            : issuer_(std::move(issuer)), epoch_(epoch) {}
+        friend class InvertedColumns;
+    public:
+        std::uint64_t epoch() const noexcept { return epoch_; }
+    };
+
     class Handle {
         // Native host callers cannot mint row capabilities from public
         // numeric coordinates or mutate them to alias another live row.
@@ -276,6 +302,41 @@ public:
         return Handle{state_->issuer, state_->owner, slot_index, slot.generation};
     }
 
+    // Capture without exposing an interior address. The guard does not imply
+    // row-value immutability or cover the compiler's code-generation epoch.
+    LayoutGuard capture_layout_guard() const {
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        ensure_open(*state_);
+        return LayoutGuard{state_->issuer, state_->layout_epoch};
+    }
+
+    // Guard validation and the actual checked access happen under ONE lock.
+    // A separate validate-then-dereference sequence would race swap-delete,
+    // capacity growth, migration, and owner destruction.
+    template<std::size_t I>
+    auto read_index_guarded(const LayoutGuard& guard, std::int64_t row_index) const
+            -> std::tuple_element_t<I, std::tuple<Fields...>> {
+        static_assert(I < field_count);
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        require_layout_guard(*state_, guard);
+        const auto row = checked_dense_row(*state_, row_index);
+        if (state_->writers[I])
+            throw std::logic_error("column has a mutable loan");
+        return std::get<I>(state_->columns)[row];
+    }
+
+    template<std::size_t I>
+    void write_index_guarded(const LayoutGuard& guard, std::int64_t row_index,
+            std::tuple_element_t<I, std::tuple<Fields...>> value) {
+        static_assert(I < field_count);
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        require_layout_guard(*state_, guard);
+        const auto row = checked_dense_row(*state_, row_index);
+        if (state_->writers[I] || state_->readers[I])
+            throw std::logic_error("column has an outstanding loan");
+        std::get<I>(state_->columns)[row] = value;
+    }
+
     /**
      * Backend lowering target for an admitted a[i].field read. The row
      * capability is consumed internally and never becomes a guest value.
@@ -339,6 +400,9 @@ public:
         State& s = *state_;
         ensure_open(s);
         if (any_loans(s)) throw std::logic_error("cannot reserve borrowed inverted columns");
+        // Capacity changes may partially succeed before a later allocation
+        // fails. Invalidate first, including on failed and no-op reserves.
+        invalidate_layout(s);
         s.row_slots.reserve(capacity);
         s.slots.reserve(capacity);
         reserve_columns(s, capacity, std::index_sequence_for<Fields...>{});
@@ -351,6 +415,7 @@ public:
         const auto row = s.row_slots.size();
         if (row == std::numeric_limits<std::size_t>::max())
             throw std::overflow_error("inverted row count exhausted");
+        invalidate_layout(s);
         // Allocate everything before changing logical size. If allocation
         // throws, no row/slot/column sizes change.
         s.row_slots.reserve(row + 1);
@@ -374,6 +439,7 @@ public:
         State& s = *state_;
         const auto row = resolve(s, h);
         if (any_loans(s)) throw std::logic_error("cannot erase borrowed inverted columns");
+        invalidate_layout(s);
         const auto last = s.row_slots.size() - 1;
         const bool recycle = s.slots[h.slot_].generation != std::numeric_limits<std::uint64_t>::max();
         if (recycle) s.free_slots.reserve(s.free_slots.size() + 1);
