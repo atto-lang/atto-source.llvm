@@ -67,7 +67,10 @@ for opt in 0 2; do
     exit 1
   }
   awk '
-    /^SOURCE_ACTOR_VM_ROUTING_VERIFIED / { routing++; next }
+    /^SOURCE_ACTOR_VM_ROUTING_VERIFIED / {
+      if ($0 != "SOURCE_ACTOR_VM_ROUTING_VERIFIED domains=4 main=1 cold_carriers=0 root_slot=63") bad=1
+      routing++; next
+    }
     /^SOURCE_ACTOR_SPAWN_STOP_VERIFIED / {
       if ($0 !~ /constructor_on_worker=1 released=1 ready=1 accepted=1 /) bad=1
       stop++; next
@@ -169,7 +172,10 @@ for opt in 0 2; do
     cat "$work/await.out" >&2; exit 1;
   }
   awk '
-    /^SOURCE_ACTOR_VM_ROUTING_VERIFIED / { routing++; next }
+    /^SOURCE_ACTOR_VM_ROUTING_VERIFIED / {
+      if ($0 != "SOURCE_ACTOR_VM_ROUTING_VERIFIED domains=4 main=1 cold_carriers=0 root_slot=63") bad=1
+      routing++; next
+    }
     /^SOURCE_ACTOR_SPAWN_STOP_VERIFIED / {
       if ($0 !~ /constructor_on_worker=1 released=1 /) bad=1
       joined++; next
