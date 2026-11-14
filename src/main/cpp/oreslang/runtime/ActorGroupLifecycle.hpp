@@ -553,9 +553,12 @@ public:
                 }
             }
         }
+        // Physical STOP dispatch must not be held hostage by a readiness
+        // subscriber. A host callback may block forever: this cannot prevent
+        // requested actor shutdown from reaching any managed worker.
+        request_stops(stops);
         for (auto& rejection : rejections)
             notify(rejection.callbacks, rejection.ref.ticket_->result);
-        request_stops(stops);
     }
 
     /**
@@ -605,8 +608,13 @@ public:
                     // prevent the group from requesting actor shutdown.
                 }
             }
-            if (worker.phase != Phase::stopping)
-                dispatch_stop(worker.ref, worker.stop_request);
+            // A concurrent stop_workers() may have set Phase::stopping but
+            // not yet reached its out-of-lock dispatch (or may be blocked in
+            // another callback). Close must never skip such a STOP.
+            //
+            // stop_issued.exchange() is the sole physical exactly-once
+            // admission point, so racing dispatches are safe.
+            dispatch_stop(worker.ref, worker.stop_request);
         }
     }
 
