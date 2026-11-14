@@ -1,0 +1,21 @@
+define enum Alpha as
+    Ready = 1
+end
+define enum Beta as
+    Ready = 1
+end
+fnc a(Alpha x): int {
+    match x over
+        on Alpha.Ready -> { return 3; }
+    end
+}
+fnc b(Beta x): int {
+    match x over
+        on Beta.Ready -> { return 4; }
+    end
+}
+pub fnc main(): void {
+    stdio.println(a(Alpha.Ready()));
+    stdio.println(b(Beta.Ready()));
+    return;
+}
