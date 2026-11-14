@@ -5529,6 +5529,14 @@ private:
                         loop.worker.declared_type.argument != loop.worker.actor_type ||
                         actor_types.find(loop.worker.actor_type) == actor_types.end())
                     throw std::runtime_error("bounded actor churn requires a declared, uniquely owned scoped actor and counter");
+                const ActorDecl* actor_type = actor_types.at(loop.worker.actor_type);
+                if (!actor_type ||
+                        actor_type->fields.size() +
+                            actor_type->on_message.locals.size() == 0 ||
+                        actor_type->fields.size() +
+                            actor_type->on_message.locals.size() > 4096)
+                    throw std::runtime_error(
+                        "bounded actor churn requires a bounded nonempty actor heap layout");
             }
             for (const auto& spawn : fn.actor_spawns) {
                 const auto it = actor_types.find(spawn.actor_type);
