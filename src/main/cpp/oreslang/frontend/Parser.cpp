@@ -896,6 +896,7 @@ private:
                     // a column write or swap-delete must observe old cells.
                     require(".");
                     op.kind = InvertedSourceOperation::Kind::ReturnSnapshotRead;
+                    op.snapshot_binding = value_name;
                     op.field = identifier();
                 } else {
                     fail("production inverted return must read the local owner or detached snapshot");
@@ -916,6 +917,7 @@ private:
                     fail("production inverted snapshot requires the local owner");
                 require("."); require("snapshot"); require("(");
                 op.kind = InvertedSourceOperation::Kind::Snapshot;
+                op.snapshot_binding = name;
                 op.index = inverted_source_index();
                 require(")"); require(";");
                 result.snapshot_name = name;
