@@ -167,15 +167,22 @@ static SourceActor* lookup(size_t index) {
  * This is deliberately NOT a generation/ABA check: allocator address reuse
  * remains tracked separately until the ABI uses minted checked handles. */
 static SourceActor* find_live_source_actor_locked(void* opaque) {
-    if (!opaque || !group.vm) return NULL;
-    for (size_t slot = 0; slot < group.next_slot; ++slot) {
-        if (group.actors[slot] == opaque) {
-            SourceActor* actor = group.actors[slot];
-            ensure(actor && actor->magic == SOURCE_ACTOR_MAGIC
-                && (size_t)actor->ref.actor_slot == slot);
-            return actor;
+    if (!opaque) return NULL;
+    if (group.vm) {
+        for (size_t slot = 0; slot < group.next_slot; ++slot) {
+            if (group.actors[slot] == opaque) {
+                SourceActor* actor = group.actors[slot];
+                ensure(actor && actor->magic == SOURCE_ACTOR_MAGIC
+                    && (size_t)actor->ref.actor_slot == slot);
+                return actor;
+            }
         }
     }
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    /* Test-only marker: failure is a missing live membership, not a random
+     * segmentation fault from dereferencing freed SourceActor bytes. */
+    fputs("SOURCE_ACTOR_STALE_POINTER_DENIED\n", stderr);
+#endif
     return NULL;
 }
 
