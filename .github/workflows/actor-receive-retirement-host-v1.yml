@@ -26,13 +26,13 @@ permissions:
 
 jobs:
   native-host-retirement:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       # Same-repository read-only checkout only. No cross-organization
       # secrets, private code export, synthetic results, or fallback marker.
       - name: Checkout exact source head without persistent credentials
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
