@@ -4,11 +4,13 @@
 #include <cerrno>
 #include <cstddef>
 #include <sys/mman.h>
+#include <signal.h>
 
 namespace {
 std::atomic<bool> fail_install{false};
 std::atomic<bool> fail_restore{false};
 std::atomic<int> fail_carrier_allocations{0};
+std::atomic<bool> fail_signal_stack_registration{false};
 }
 
 extern "C" void tenant_vm_test_fail_next_guard_install() {
@@ -16,6 +18,18 @@ extern "C" void tenant_vm_test_fail_next_guard_install() {
 }
 extern "C" void tenant_vm_test_fail_next_guard_restore() {
     fail_restore.store(true, std::memory_order_release);
+}
+extern "C" void tenant_vm_test_fail_next_signal_stack_registration() {
+    fail_signal_stack_registration.store(true, std::memory_order_release);
+}
+extern "C" int __real_sigaltstack(const stack_t*, stack_t*);
+extern "C" int __wrap_sigaltstack(const stack_t* ss, stack_t* old_ss) {
+    if (ss && !(ss->ss_flags & SS_DISABLE) &&
+        fail_signal_stack_registration.exchange(false, std::memory_order_acq_rel)) {
+        errno = ENOMEM;
+        return -1;
+    }
+    return __real_sigaltstack(ss, old_ss);
 }
 extern "C" void tenant_vm_test_fail_next_carrier_allocations(int count) {
     fail_carrier_allocations.store(count, std::memory_order_release);
