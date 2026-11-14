@@ -86,9 +86,9 @@ for opt in 0 2; do
     exit 1
   }
 
-  for mode in cancel carrier; do
+  for mode in cancel-pending cancel-publishing carrier; do
     case "$mode" in
-      cancel) marker="SOURCE_ACTOR_READY_BARRIER_CANCELLED" ;;
+      cancel-pending|cancel-publishing) marker="SOURCE_ACTOR_READY_BARRIER_CANCELLED" ;;
       carrier) marker="SOURCE_ACTOR_READY_BARRIER_CARRIER_DENIED" ;;
     esac
     rc=0
@@ -107,7 +107,7 @@ for opt in 0 2; do
     fi
   done
   check_source || { echo "SOURCE_ACTOR_READY_BARRIER_SOURCE_DRIFT" >&2; exit 78; }
-  printf 'SOURCE_ACTOR_READY_BARRIER_NATIVE_PASS|head=%s|O%s|constructors=40|cv_waits=32|fast_ready=8|physical_joins=40|cancel=SIGABRT|carrier=SIGABRT|sanitizers=ASAN_UBSAN|atto_guest=NO|zero_gc_certified=NO\n' \
+  printf 'SOURCE_ACTOR_READY_BARRIER_NATIVE_PASS|head=%s|O%s|constructors=40|cv_waits=32|fast_ready=8|physical_joins=40|cancel_pending=SIGABRT|cancel_publishing=SIGABRT|carrier=SIGABRT|sanitizers=ASAN_UBSAN|atto_guest=NO|zero_gc_certified=NO\n' \
     "$EXPECTED_HEAD" "$opt"
 done
-echo "SOURCE_ACTOR_READY_BARRIER_NATIVE_MATRIX_PASS|head=$EXPECTED_HEAD|levels=O0_O2|native_execs=6|real_ctors=80|real_joins=80|cv_waits=64|fast_paths=16|death_tests=4|guest=NOT_EXECUTED"
+echo "SOURCE_ACTOR_READY_BARRIER_NATIVE_MATRIX_PASS|head=$EXPECTED_HEAD|levels=O0_O2|native_execs=8|real_ctors=80|real_joins=80|cv_waits=64|fast_paths=16|death_tests=6|guest=NOT_EXECUTED"
