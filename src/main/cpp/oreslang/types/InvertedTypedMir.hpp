@@ -149,6 +149,11 @@ class Module final {
                 default: throw std::logic_error("unknown inverted MIR instruction");
             }
         }
+        // Every admitted owner must have exactly one terminal close.
+        // Otherwise forged/deserialized MIR could bypass deterministic
+        // teardown entirely. "No operations after close" alone is not enough.
+        if (!closed)
+            throw std::logic_error("inverted MIR requires terminal close");
     }
 public:
     static Module lower(const LinearPlan& source) {
