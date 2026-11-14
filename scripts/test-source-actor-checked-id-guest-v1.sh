@@ -19,6 +19,7 @@ sources=(
   tests/fixtures/source-actor-checked-id-v1/await-ready.atto
   tests/fixtures/source-actor-checked-id-v1/await-done.atto
   tests/fixtures/source-actor-checked-id-v1/escape.atto
+  tests/fixtures/source-actor-checked-id-v1/abi-shadow.atto
 )
 check_source() {
   [[ "$(git -C "$root" rev-parse HEAD)" == "$EXPECTED_HEAD" ]] || return 1
@@ -77,16 +78,22 @@ for opt in 0 2; do
     printf 'SOURCE_ACTOR_CHECKED_GUEST_EXECUTED|head=%s|O%s|case=%s|runs=4|native_exit=43|legacy_pointer_calls=0|sha256=%s\n' \
       "$EXPECTED_HEAD" "$opt" "$variant" "$(sha256sum "$binary" | cut -d' ' -f1)"
   done
-  rc=0
-  timeout 30s "$compiler" --target=host \
-    "$root/tests/fixtures/source-actor-checked-id-v1/escape.atto" \
-    >"$work/negative.ll" 2>"$work/negative.err" || rc=$?
-  if [[ "$rc" == 0 || "$rc" == 124 || -s "$work/negative.ll" ]] ||
-       ! grep -Eiq 'ActorRef|actor.*ref|source actor|cannot.*return|expected.*int' "$work/negative.err"; then
-    echo "SOURCE_ACTOR_CHECKED_GUEST_REF_ESCAPE_ACCEPTED|O$opt|exit=$rc" >&2
-    cat "$work/negative.err" >&2
-    exit 1
-  fi
+  for negative in escape abi-shadow; do
+    case "$negative" in
+      escape) expected_error='ActorRef|actor.*ref|source actor|cannot.*return|expected.*int' ;;
+      abi-shadow) expected_error='reserved native checked source actor ABI symbol collision' ;;
+    esac
+    rc=0
+    timeout 30s "$compiler" --target=host \
+      "$root/tests/fixtures/source-actor-checked-id-v1/$negative.atto" \
+      >"$work/negative.ll" 2>"$work/negative.err" || rc=$?
+    if [[ "$rc" == 0 || "$rc" == 124 || -s "$work/negative.ll" ]] ||
+         ! grep -Eiq "$expected_error" "$work/negative.err"; then
+      echo "SOURCE_ACTOR_CHECKED_GUEST_INVALID_ACCEPTED|O$opt|fixture=$negative|exit=$rc" >&2
+      cat "$work/negative.err" >&2
+      exit 1
+    fi
+  done
   check_source || { echo "SOURCE_ACTOR_CHECKED_GUEST_SOURCE_DRIFT" >&2; exit 78; }
 done
-echo "SOURCE_ACTOR_CHECKED_GUEST_MATRIX_EXECUTED|head=$EXPECTED_HEAD|O0_O2=1|native_runs=32|compiled_cases=8|negative_rejections=2|ready_done_id_callbacks=2_PER_OPT|legacy_pointer_calls=0|linked_zero_gc=NOT_CERTIFIED"
+echo "SOURCE_ACTOR_CHECKED_GUEST_MATRIX_EXECUTED|head=$EXPECTED_HEAD|O0_O2=1|native_runs=32|compiled_cases=8|negative_rejections=4|ready_done_id_callbacks=2_PER_OPT|legacy_pointer_calls=0|linked_zero_gc=NOT_CERTIFIED"
