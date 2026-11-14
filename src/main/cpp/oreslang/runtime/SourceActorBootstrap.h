@@ -27,6 +27,32 @@ enum {
  * to a failed get_ready observer while get_done still completes normally. */
 int oreslang_source_actor_ready_status(void* actor);
 
+/* Runtime-only observation: distinguished physical callbacks from successful
+ * guest completions. A failed receiver must not be reported as a successful
+ * zero result. The scheduler's processed count still counts any DATA callback
+ * that physically returned (including a trapped failed receiver).
+ */
+enum { ORES_SOURCE_ACTOR_FAILURE_FRAME = 0xA7700001u };
+typedef struct {
+    uint64_t processed_callbacks;
+    uint64_t successful_messages;
+    uint64_t failed_messages;
+    uint64_t failure_code;
+    int64_t last_success_result;
+    int stop_requested;
+} OresSourceActorMessageReceipt;
+
+/* Caller must keep the opaque SourceActor ref alive through this call.
+ * These are trusted runtime diagnostics, not a guest-writable capability.
+ */
+int oreslang_source_actor_message_receipt(
+    void* actor, OresSourceActorMessageReceipt* out);
+
+/* Non-aborting status variant for trusted lowering/tests. A successful send
+ * admits work, but does not guarantee processing before a competing STOP. */
+int oreslang_source_actor_try_send(void* actor, int64_t payload);
+
+
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
 /* Deterministic startup-race proof hooks. They pause only the reserved
  * initialization CONTROL callback before it decides whether construction may
@@ -35,6 +61,9 @@ void oreslang_source_actor_test_hold_initialization(int hold);
 int oreslang_source_actor_test_initialization_entered(void);
 void oreslang_source_actor_test_hold_readiness_publication(int hold);
 int oreslang_source_actor_test_readiness_publication_entered(void);
+/* Atomic count of priority supervisor terminal notices processed on the
+ * root actor CONTROL lane; useful for exact once-delivery test receipts. */
+uint64_t oreslang_source_actor_test_terminal_notices(void);
 #endif
 
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
