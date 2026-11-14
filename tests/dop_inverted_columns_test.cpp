@@ -91,9 +91,21 @@ int main() {
         check(after_reserve.epoch() > initial.epoch());
         guarded.set<0>(first, 8.5f); // value updates do not change layout
         check(guarded.read_index_guarded<0>(after_reserve, 0) == 8.5f);
-        auto second = guarded.push(3.5f, 8, false);
+        // Even an allocation failure can partially change vector capacities.
+        // Guards therefore invalidate *before* the first reserve attempt.
+        bool failed_reserve = false;
+        try { guarded.reserve(std::numeric_limits<std::size_t>::max()); }
+        catch (const std::length_error&) { failed_reserve = true; }
+        catch (const std::bad_alloc&) { failed_reserve = true; }
+        check(failed_reserve && guarded.get<0>(first) == 8.5f);
         expect<std::logic_error>([&] {
             (void)guarded.read_index_guarded<0>(after_reserve, 0);
+        });
+        auto after_failed_reserve = guarded.capture_layout_guard();
+        check(after_failed_reserve.epoch() > after_reserve.epoch());
+        auto second = guarded.push(3.5f, 8, false);
+        expect<std::logic_error>([&] {
+            (void)guarded.read_index_guarded<0>(after_failed_reserve, 0);
         });
         auto after_push = guarded.capture_layout_guard();
         guarded.erase_swap(first);
