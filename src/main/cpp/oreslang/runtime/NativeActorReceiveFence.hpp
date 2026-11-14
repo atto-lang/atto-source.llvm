@@ -73,10 +73,7 @@ public:
 
     NativeActorReceiveFence(std::uint64_t actor, std::uint64_t incarnation,
                             std::size_t max_active)
-        : state_(std::make_shared<State>(actor, incarnation, max_active)) {
-        if (max_active == 0 || max_active > 4096)
-            throw std::invalid_argument("native actor receive limit out of range");
-    }
+        : state_(create_state(actor, incarnation, max_active)) {}
 
     NativeActorReceiveFence(const NativeActorReceiveFence&) = delete;
     NativeActorReceiveFence& operator=(const NativeActorReceiveFence&) = delete;
@@ -143,6 +140,18 @@ public:
     }
 
 private:
+    static std::shared_ptr<State> create_state(
+            std::uint64_t actor, std::uint64_t incarnation,
+            std::size_t max_active) {
+        // Registry and actor identities never use generation zero. Validate
+        // BEFORE allocating any host memory for an invalid guest lifecycle.
+        if (actor == 0 || incarnation == 0)
+            throw std::invalid_argument("native actor receive identity must be nonzero");
+        if (max_active == 0 || max_active > 4096)
+            throw std::invalid_argument("native actor receive limit out of range");
+        return std::make_shared<State>(actor, incarnation, max_active);
+    }
+
     std::shared_ptr<State> state_;
 };
 
