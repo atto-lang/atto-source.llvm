@@ -1,0 +1,15 @@
+// A guest may not impersonate the trusted constructor READY barrier.
+define actor Worker as {
+  const base: int = 40;
+  pub fnc on_message(int n): int { return base + n; }
+}
+pub fnc oreslang_source_actor_wait_ready_blocking(): int { return 0; }
+pub fnc main(): int {
+  let iteration: int = 0;
+  while (iteration < 1) {
+    const worker = spawn Worker();
+    stop worker;
+    iteration = iteration + 1;
+  }
+  return iteration;
+}
