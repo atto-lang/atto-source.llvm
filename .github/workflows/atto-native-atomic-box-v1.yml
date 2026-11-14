@@ -9,8 +9,6 @@ on:
       - 'tests/ownership_auto_traits_dop_test.cpp'
       - 'src/main/cpp/oreslang/types/DopLogicalAccess.hpp'
       - 'src/main/cpp/oreslang/runtime/DopLayout.hpp'
-      - 'src/main/cpp/oreslang/types/AutoTraitRules.hpp'
-      - 'tests/native_atomic_box_traits_bounds_test.cpp'
       - '.github/workflows/atto-native-atomic-box-v1.yml'
   pull_request:
     paths:
