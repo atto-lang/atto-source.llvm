@@ -8,7 +8,7 @@ root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 [[ "$(uname -s)" == Linux ]] || { echo 'Linux signal oracle required' >&2; exit 69; }
 clang="${CLANG:-clang}"
 clangxx="${CLANGXX:-clang++}"
-for tool in "$clang" "$clangxx" git sha256sum timeout; do
+for tool in "$clang" "$clangxx" git sha256sum timeout cmp; do
   command -v -- "$tool" >/dev/null || { echo "missing tool: $tool" >&2; exit 69; }
 done
 paths=(
@@ -46,11 +46,12 @@ for opt in 0 2; do
       echo "SOURCE_ACTOR_HEAP_CARRIER_FAIL|O$opt" >&2
       exit 1
     }
-  [[ ! -s "$work/stderr-$opt" && ! -s "$work/stdout-$opt" ]] || {
+  printf '%s\n' 'SOURCE_ACTOR_HEAP_HOST_LIFECYCLE_OK|churn=100000|churn_turns=1000|negative=12|scrubbed_heap_frees=2|atto_guest=NO' >"$work/expected-$opt"
+  if [[ -s "$work/stderr-$opt" ]] || ! cmp -s "$work/stdout-$opt" "$work/expected-$opt"; then
     cat "$work/stdout-$opt" "$work/stderr-$opt" >&2
-    echo 'unexpected output from compiler-heap lifecycle tests' >&2
+    echo 'source actor heap did not complete all lifecycle assertions' >&2
     exit 1
-  }
+  fi
   check_source || { echo 'SOURCE_ACTOR_HEAP_SOURCE_DRIFT' >&2; exit 78; }
   printf 'SOURCE_ACTOR_HEAP_CARRIER_HOST_PASS|head=%s|tree=%s|O%s|negative=12|pre_free_scrubbed=YES|sanitizers=ASAN_UBSAN|runtime_blob=%s|test_blob=%s|binary_sha256=%s|atto_guest=NO\n' \
     "$EXPECTED_HEAD" "$tree" "$opt" \
