@@ -1,4 +1,5 @@
 #include "oreslang/runtime/SourceActorBootstrap.h"
+#include "oreslang/runtime/NativeActorLogicalFramesV1.h"
 #include "oreslang/runtime/NativeOresVM.h"
 #include "oreslang/runtime/NativeAwaitTraceBridge.h"
 #include <pthread.h>
@@ -24,6 +25,8 @@ typedef struct {
     uint64_t magic;
     uint64_t id;
     OresActorI64Heap* heap;
+    OresNativeActorLogicalFramesV1* logical_frames;
+    atomic_int logical_frame_failed;
     OresNativeActorRef ref;
     OresSourceActorInit constructor;
     OresSourceActorMessage on_message;
@@ -82,6 +85,59 @@ typedef struct {
 static SourceActorGroup group = { .mutex = PTHREAD_MUTEX_INITIALIZER };
 static _Atomic uint64_t next_actor_id = 4100;
 static _Thread_local OresNativeExecutionHandle current_source_execution;
+
+/* Trusted compiler-generated, *synchronous* native actor-frame ABI.
+ * The physical worker token is never sent to the guest. Carrier and actor
+ * identity are checked by NativeActorLogicalFramesV1 on every operation.
+ * This first scalar source profile does not suspend or migrate in a handler.
+ */
+static _Thread_local SourceActor* frame_actor;
+static _Thread_local OresLogicalTurnV1 frame_turn;
+static _Thread_local OresLogicalFrameV1 frame_handle;
+static _Thread_local int frame_active;
+static _Thread_local int frame_faulted;
+
+static int reject_compiled_frame(void) {
+    frame_faulted = 1;
+    if (frame_actor)
+        atomic_store_explicit(&frame_actor->logical_frame_failed, 1, memory_order_release);
+    return 0;
+}
+
+/* One compiled scalar receiver frame (64-byte preallocated slot) per turn.
+ * These are not a guest FFI: they are emitted only by LLVM AOT actor handlers.
+ * Ref32/ActorRef never carry the private frame store or physical turn token.
+ */
+int oreslang_source_actor_frame_push(void) {
+    if (!frame_actor || frame_faulted || frame_active) return reject_compiled_frame();
+    if (!ores_logical_frames_v1_push(frame_actor->logical_frames,
+                                    frame_turn, &frame_handle))
+        return reject_compiled_frame();
+    frame_active = 1;
+    return 1;
+}
+int oreslang_source_actor_frame_store_i64(int64_t value) {
+    if (!frame_actor || !frame_active || frame_faulted ||
+        !ores_logical_frames_v1_write(frame_actor->logical_frames,
+                                     frame_handle, 0, &value, sizeof(value)))
+        return reject_compiled_frame();
+    return 1;
+}
+int oreslang_source_actor_frame_load_i64(int64_t* out) {
+    if (!frame_actor || !frame_active || frame_faulted || !out ||
+        !ores_logical_frames_v1_read(frame_actor->logical_frames,
+                                    frame_handle, 0, out, sizeof(*out)))
+        return reject_compiled_frame();
+    return 1;
+}
+int oreslang_source_actor_frame_pop(void) {
+    if (!frame_actor || !frame_active || frame_faulted ||
+        !ores_logical_frames_v1_pop(frame_actor->logical_frames, frame_handle))
+        return reject_compiled_frame();
+    frame_active = 0;
+    frame_handle = (OresLogicalFrameV1){0};
+    return 1;
+}
 
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
 static atomic_int test_hold_initialization;
@@ -489,13 +545,40 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
         &instance->initialized, memory_order_acquire) == 1);
     OresActorTurn turn =
         ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
-    const int64_t result = instance->on_message(
-        instance->heap, turn.domain, turn.epoch, (int64_t)payload);
+    OresLogicalTurnV1 logical = {0};
+    int64_t result = 0;
+    if (ores_logical_frames_v1_begin(instance->logical_frames, instance->id, 1, &logical)) {
+        /* Exclusive serial actor guest profile. Ordinary multi-turn actors
+         * require the future guarded-state/concurrent-heap lowering, not this
+         * serial-only heap ABI. Do not confuse C worker stack with this frame. */
+        frame_actor = instance;
+        frame_turn = logical;
+        frame_handle = (OresLogicalFrameV1){0};
+        frame_active = 0;
+        frame_faulted = 0;
+        if (!atomic_load_explicit(&instance->logical_frame_failed, memory_order_acquire))
+            result = instance->on_message(
+                instance->heap, turn.domain, turn.epoch, (int64_t)payload);
+        if (frame_faulted || frame_active) {
+            /* Fail closed on a miscompiled/over-quota handler. Preserve
+             * sibling actor execution; do not abort the entire native VM. */
+            atomic_store_explicit(&instance->logical_frame_failed, 1, memory_order_release);
+            (void)ores_logical_frames_v1_cancel(instance->logical_frames, logical);
+        } else if (!ores_logical_frames_v1_end(instance->logical_frames, logical)) {
+            atomic_store_explicit(&instance->logical_frame_failed, 1, memory_order_release);
+            (void)ores_logical_frames_v1_cancel(instance->logical_frames, logical);
+        }
+        frame_actor = NULL;
+        frame_turn = (OresLogicalTurnV1){0};
+        frame_handle = (OresLogicalFrameV1){0};
+        frame_active = 0;
+        frame_faulted = 0;
+    } else {
+        atomic_store_explicit(&instance->logical_frame_failed, 1, memory_order_release);
+    }
     ores_actor_i64_heap_leave(instance->heap, turn);
-    atomic_store_explicit(
-        &instance->last_result, result, memory_order_relaxed);
-    atomic_fetch_add_explicit(
-        &instance->processed, 1, memory_order_release);
+    atomic_store_explicit(&instance->last_result, result, memory_order_relaxed);
+    atomic_fetch_add_explicit(&instance->processed, 1, memory_order_release);
 }
 
 static void open_group_locked(void) {
@@ -584,8 +667,13 @@ void* oreslang_source_actor_spawn(
     atomic_init(&instance->join_started, 0);
     atomic_init(&instance->processed, 0);
     atomic_init(&instance->last_result, 0);
+    atomic_init(&instance->logical_frame_failed, 0);
 
     instance->heap = ores_actor_i64_heap_open(instance->id, 1, fields);
+    /* Current native i64 heap is serial. One preallocated turn lane, with
+     * reserved depth for future compiler-generated nested synchronous calls. */
+    instance->logical_frames = ores_logical_frames_v1_open(instance->id, 1, 1, 16, 64);
+    ensure(instance->logical_frames != NULL);
     group.actors[slot] = instance;
     instance->ref =
         ores_native_vm_spawn(group.vm, ORES_NATIVE_VM_MAIN, slot);
@@ -910,6 +998,8 @@ void oreslang_source_actor_join_done(void* opaque) {
      */
     ores_actor_i64_heap_retire(instance->heap);
     ensure(ores_actor_i64_heap_try_destroy(instance->heap));
+    /* Physical STOP acknowledgement gates both heap and logical-frame free. */
+    ensure(ores_logical_frames_v1_close(instance->logical_frames));
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
     fprintf(stderr,
         "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=%d released=1 ready=%d accepted=%llu processed=%llu abandoned=%llu last=%lld\n",
