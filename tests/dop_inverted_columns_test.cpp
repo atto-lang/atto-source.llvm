@@ -16,6 +16,15 @@ using Store = oreslang::dop::InvertedColumns<float, std::int64_t, bool>;
 static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, false>>().span()), std::span<const float>>);
 static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, true>>().span()), std::span<float>>);
 static_assert(!std::is_copy_constructible_v<Store::Loan<0, true>>);
+static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, false>>().read_at(0)), float>);
+static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, false>>().read_handle(std::declval<const Store::Handle&>())), float>);
+static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, true>>().size_checked()), std::size_t>);
+template<class T> concept HasCheckedWrite = requires(T& loan) { loan.write_at(0, 1.0f); };
+template<class T> concept HasHandleWrite = requires(T& loan, const Store::Handle& h) { loan.write_handle(h, 1.0f); };
+static_assert(!HasCheckedWrite<Store::Loan<0, false>>);
+static_assert(HasCheckedWrite<Store::Loan<0, true>>);
+static_assert(!HasHandleWrite<Store::Loan<0, false>>);
+static_assert(HasHandleWrite<Store::Loan<0, true>>);
 static_assert(!std::is_copy_constructible_v<Store>);
 static_assert(!std::is_aggregate_v<Store::Handle>);
 static_assert(!std::is_default_constructible_v<Store::Handle>);
@@ -31,7 +40,59 @@ int main() {
     auto h0 = a.push(1.5f, 100, true);
     auto h1 = a.push(2.5f, 200, false);
     auto h2 = a.push(3.5f, 300, true);
+    auto foreign_row = b.push(9.5f, 900, false);
     check(a.size() == 3 && a.get<0>(h2) == 3.5f && a.get<1>(h1) == 200);
+    expect<std::out_of_range>([&] { (void)a.index(-1); });
+    expect<std::out_of_range>([&] {
+        (void)a.index(static_cast<std::int64_t>(
+            std::numeric_limits<std::int32_t>::max()) + 1);
+    });
+    expect<std::out_of_range>([&] { (void)a.index(std::numeric_limits<std::int64_t>::min()); });
+    expect<std::out_of_range>([&] { (void)a.index(std::numeric_limits<std::int64_t>::max()); });
+    const auto saved_middle = a.index(1);
+    check(saved_middle.slot() == h1.slot() && saved_middle.generation() == h1.generation());
+    check(a.read_index<0>(0) == 1.5f);
+    check(a.read_index<1>(1) == 200);
+
+    std::vector<int> lowering_order;
+    int receiver_evals = 0, index_evals = 0, value_evals = 0;
+    const auto lowered_read = Store::lower_read<0>(
+        [&]() -> Store& {
+            ++receiver_evals;
+            lowering_order.push_back(1);
+            return a;
+        },
+        [&]() -> std::int64_t {
+            ++index_evals;
+            lowering_order.push_back(2);
+            return 1;
+        });
+    check(lowered_read == 2.5f);
+    check(receiver_evals == 1 && index_evals == 1);
+    check(lowering_order == std::vector<int>({1, 2}));
+
+    lowering_order.clear();
+    const auto lowered_write = Store::lower_write<0>(
+        [&]() -> float {
+            ++value_evals;
+            lowering_order.push_back(3);
+            return 9.5f;
+        },
+        [&]() -> Store& {
+            ++receiver_evals;
+            lowering_order.push_back(1);
+            return a;
+        },
+        [&]() -> std::int64_t {
+            ++index_evals;
+            lowering_order.push_back(2);
+            return 0;
+        });
+    check(lowered_write == 9.5f && a.read_index<0>(0) == 9.5f);
+    check(value_evals == 1 && receiver_evals == 2 && index_evals == 2);
+    check(lowering_order == std::vector<int>({3, 1, 2}));
+    // Restore the pre-existing fixture value so later legacy assertions remain independent.
+    a.write_index<0>(0, 1.5f);
     a.reserve(16);
     // Deterministic oversized reservation must fail without changing any
     // live row/handle identity or the lengths of individual columns.
@@ -49,11 +110,20 @@ int main() {
         auto r2 = a.borrow_read<0>();
         auto w = a.borrow_write<1>();
         check(r.span().size() == 3 && r.span()[1] == 2.5f);
-        w.span()[1] = 999;
+        check(r.size_checked() == 3 && r.read_at(1) == 2.5f);
+        check(r.read_handle(h1) == 2.5f);
+        expect<std::out_of_range>([&] { (void)r.read_at(3); });
+        expect<std::out_of_range>([&] { (void)r.read_handle(foreign_row); });
+        expect<std::out_of_range>([&] { w.write_at(100, 123); });
+        expect<std::out_of_range>([&] { w.write_handle(foreign_row, 123); });
+        w.write_handle(h1, 999);
+        check(w.read_handle(h1) == 999);
         check(r2.span()[0] == 1.5f);
         expect<std::logic_error>([&] { (void)a.borrow_write<0>(); });
         expect<std::logic_error>([&] { (void)a.borrow_read<1>(); });
         expect<std::logic_error>([&] { (void)a.get_row(h1); });
+        expect<std::logic_error>([&] { (void)a.read_index<1>(1); });
+        expect<std::logic_error>([&] { a.write_index<0>(0, 9.0f); });
         expect<std::logic_error>([&] { a.set_row(h0, 6.0f, 9, false); });
         expect<std::logic_error>([&] { a.reserve(100); });
         expect<std::logic_error>([&] { a.set<0>(h0, 4.0f); });
@@ -61,15 +131,32 @@ int main() {
         expect<std::logic_error>([&] { a.erase_swap(h0); });
     }
     check(a.get<1>(h1) == 999);
+    {
+        auto loan = a.borrow_read<0>();
+        check(loan.read_at(0) == 1.5f);
+        loan.release();
+        expect<std::logic_error>([&] { (void)loan.read_at(0); });
+        expect<std::logic_error>([&] { (void)loan.size_checked(); });
+    }
     check(a.get<2>(h0) && !a.get<2>(h1));
     { auto bools = a.borrow_read<2>();
       check(bools.span().size() == 3 && bools.span()[0] == 1 && bools.span()[1] == 0); }
     a.erase_swap(h1);
     check(a.size() == 2 && a.get<0>(h2) == 3.5f && a.get<1>(h2) == 300);
+    // Dense position changed by swap-delete, but the surviving logical
+    // generation-checked handle still identifies the same row.
+    const auto moved_dense = a.index(1);
+    check(moved_dense.slot() == h2.slot() && moved_dense.generation() == h2.generation());
+    check(a.read_index<0>(1) == 3.5f && a.read_index<1>(1) == 300);
     expect<std::out_of_range>([&] { (void)a.get<0>(h1); });
     auto reused = a.push(4.5f, 400, false);
     check(reused.slot() == h1.slot() && reused.generation() != h1.generation());
     expect<std::out_of_range>([&] { a.set<0>(h1, 1.0f); });
+    {
+        auto checked = a.borrow_read<0>();
+        expect<std::out_of_range>([&] { (void)checked.read_handle(h1); });
+        check(checked.read_handle(reused) == 4.5f);
+    }
     // Disjoint columns can be mutated concurrently without touching layout or identities.
     std::atomic<bool> start{false};
     std::thread t1([&] {
@@ -131,6 +218,8 @@ int main() {
         carried.emplace(owner->borrow_read<0>());
         owner.reset();
         expect<std::logic_error>([&] { (void)carried->span(); });
+        expect<std::logic_error>([&] { (void)carried->read_at(0); });
+        expect<std::logic_error>([&] { (void)carried->size_checked(); });
     }
     carried.reset();
     // Owner IDs are shared across distinct template instantiations.
