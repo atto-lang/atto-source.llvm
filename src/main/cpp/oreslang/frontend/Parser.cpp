@@ -5530,11 +5530,12 @@ private:
                         actor_types.find(loop.worker.actor_type) == actor_types.end())
                     throw std::runtime_error("bounded actor churn requires a declared, uniquely owned scoped actor and counter");
                 const ActorDecl* actor_type = actor_types.at(loop.worker.actor_type);
-                if (!actor_type ||
-                        actor_type->fields.size() +
-                            actor_type->on_message.locals.size() == 0 ||
-                        actor_type->fields.size() +
-                            actor_type->on_message.locals.size() > 4096)
+                if (!actor_type)
+                    throw std::runtime_error("bounded actor churn actor type is unavailable");
+                const std::size_t fields = actor_type->fields.size();
+                const std::size_t locals = actor_type->on_message.locals.size();
+                if ((fields == 0 && locals == 0) ||
+                        fields > 4096 || locals > 4096 - fields)
                     throw std::runtime_error(
                         "bounded actor churn requires a bounded nonempty actor heap layout");
             }
