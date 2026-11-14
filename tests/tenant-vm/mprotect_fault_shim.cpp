@@ -22,14 +22,15 @@ extern "C" void tenant_vm_test_fail_next_guard_restore() {
 extern "C" void tenant_vm_test_fail_next_signal_stack_registration() {
     fail_signal_stack_registration.store(true, std::memory_order_release);
 }
-extern "C" int __real_sigaltstack(const stack_t*, stack_t*);
-extern "C" int __wrap_sigaltstack(const stack_t* ss, stack_t* old_ss) {
+// Deliberately intercept only TenantVm.cpp's own carrier setup. A link-wide
+// --wrap=sigaltstack also hits libasan's startup hook and aborts the process.
+extern "C" int tenant_vm_test_carrier_sigaltstack(const stack_t* ss, stack_t* old_ss) {
     if (ss && !(ss->ss_flags & SS_DISABLE) &&
         fail_signal_stack_registration.exchange(false, std::memory_order_acq_rel)) {
         errno = ENOMEM;
         return -1;
     }
-    return __real_sigaltstack(ss, old_ss);
+    return sigaltstack(ss, old_ss);
 }
 extern "C" void tenant_vm_test_fail_next_carrier_allocations(int count) {
     fail_carrier_allocations.store(count, std::memory_order_release);
