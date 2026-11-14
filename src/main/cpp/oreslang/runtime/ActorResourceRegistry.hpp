@@ -81,6 +81,27 @@ public:
     std::uint64_t actor_id() const noexcept { return actor_id_; }
     std::uint64_t incarnation() const noexcept { return incarnation_; }
 
+    /**
+     * Trusted coordinator binds this physical registry to its original
+     * runtime before constructing a native retirement barrier. Actor ID and
+     * generation alone are not globally unique across independent runtimes.
+     * Binding is irreversible even after the actor has retired; never infer
+     * the runtime identity from a finalizer presented by a foreign caller.
+     */
+    void bind_runtime_id(std::uint64_t runtime) {
+        if (runtime == 0) throw std::invalid_argument("actor runtime ID must be nonzero");
+        std::lock_guard<std::mutex> guard(mutex_);
+        require_live();
+        if (bound_runtime_id_ != 0)
+            throw std::logic_error("actor resource registry runtime already bound");
+        bound_runtime_id_ = runtime;
+    }
+
+    std::uint64_t bound_runtime_id() const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        return bound_runtime_id_;
+    }
+
     // Host-only registration. Callbacks must be trusted, idempotent close or
     // revocation actions. Guest functions and blocking I/O are not admitted.
     void register_resource(Kind kind, std::function<void()> close) {
@@ -290,6 +311,7 @@ private:
     const std::size_t capacity_;
     const std::uint64_t registry_domain_;
     mutable std::mutex mutex_;
+    std::uint64_t bound_runtime_id_ = 0;
     Phase phase_ = Phase::live;
     std::uint64_t next_token_ = 0;
     std::vector<Entry> entries_;
