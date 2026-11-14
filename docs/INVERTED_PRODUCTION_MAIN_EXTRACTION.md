@@ -56,7 +56,8 @@ expecting exit 42 (14 native guest receipts). The detached snapshot fixture
 captures a two-field struct, mutates and swap-deletes the original row,
 then returns the **old captured value**. Two out-of-bounds guests must
 terminate from a real SIGILL/SIGTRAP at both optimization levels.
-Ten source-admission negatives (including unbound, duplicate, out-of-bounds,
+Eleven source-admission negatives (including unbound, mismatched binding,
+duplicate, out-of-bounds,
 class-as-value snapshots and attempted mutation of a detached value) and five unsupported compiler-mode negatives
 must fail before writing any LLVM IR. Then run GCC/Clang sanitizer builds
 (ASan and UBSan), compare against the exact-main baseline, and obtain
