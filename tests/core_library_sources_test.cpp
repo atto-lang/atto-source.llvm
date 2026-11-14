@@ -74,6 +74,11 @@ int main() {
 
     assert(find_core_library_source("ores.core") == nullptr);
     assert(find_core_library_source("ores.core/unknown") == nullptr);
+    // Staging identical .atto source is not an implicit LLVM registration:
+    // generic callbacks, Vector/List lowering, effects and owned returns must
+    // be compiler-verified before the import may become executable.
+    assert(find_core_library_source("ores.core/collections") == nullptr);
+    assert(find_compiler_library_source("ores.core/collections.atto") == nullptr);
     assert(find_core_library_source("ores.core/../numeric") == nullptr);
     assert(find_core_library_source("ores.core//numeric") == nullptr);
     assert(find_core_library_source("ores.core\\numeric") == nullptr);
