@@ -32,7 +32,7 @@ int oreslang_source_actor_ready_status(void* actor);
  * zero result. The scheduler's processed count still counts any DATA callback
  * that physically returned (including a trapped failed receiver).
  */
-enum { ORES_SOURCE_ACTOR_FAILURE_FRAME = 0xA7700001u };
+#define ORES_SOURCE_ACTOR_FAILURE_FRAME UINT64_C(0xA7700001)
 typedef struct {
     uint64_t processed_callbacks;
     uint64_t successful_messages;
