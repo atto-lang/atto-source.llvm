@@ -613,35 +613,53 @@ static void concurrent_host_receivers_join_native_resource_retirement() {
     }
 
     bool before = false, between = false, after = false;
-    if (arrived.load(std::memory_order_acquire) == 2) {
-        group.close();
-        receives->seal_stop(true);
-        before = receives->active_receives() == 2
-            && !receives->try_enter(23, 4)
-            && !receives->try_begin_teardown()
-            && barrier.poll() == Poll::pending
-            && freed.load(std::memory_order_relaxed) == 0
-            && ref.get_done().wait_for(std::chrono::milliseconds(0))
-                == std::future_status::timeout;
-        release_a.store(true, std::memory_order_release);
-        a.join();
-        between = receives->active_receives() == 1
-            && !receives->try_begin_teardown()
-            && barrier.poll() == Poll::pending
-            && freed.load(std::memory_order_relaxed) == 0;
-        release_b.store(true, std::memory_order_release);
-        b.join();
-        after = receives->active_receives() == 0
-            && receives->try_begin_teardown()
-            && barrier.poll() == Poll::pending
-            && freed.load(std::memory_order_relaxed) == 0;
-    } else {
-        release_a.store(true, std::memory_order_release);
-        release_b.store(true, std::memory_order_release);
-        a.join();
-        b.join();
+    const bool admitted_both = arrived.load(std::memory_order_acquire) == 2;
+    std::exception_ptr lifecycle_failure;
+    if (admitted_both) {
+        try {
+            group.close();
+            receives->seal_stop(true);
+            before = receives->active_receives() == 2
+                && !receives->try_enter(23, 4)
+                && !receives->try_begin_teardown()
+                && barrier.poll() == Poll::pending
+                && freed.load(std::memory_order_relaxed) == 0
+                && ref.get_done().wait_for(std::chrono::milliseconds(0))
+                    == std::future_status::timeout;
+        } catch (...) {
+            lifecycle_failure = std::current_exception();
+        }
     }
 
+    // Never throw before joining either worker. A failing native STOP or
+    // native closer must fail the test rather than calling std::terminate()
+    // when a still-joinable worker's destructor runs during stack unwind.
+    release_a.store(true, std::memory_order_release);
+    a.join();
+    if (admitted_both && !lifecycle_failure) {
+        try {
+            between = receives->active_receives() == 1
+                && !receives->try_begin_teardown()
+                && barrier.poll() == Poll::pending
+                && freed.load(std::memory_order_relaxed) == 0;
+        } catch (...) {
+            lifecycle_failure = std::current_exception();
+        }
+    }
+    release_b.store(true, std::memory_order_release);
+    b.join();
+    if (admitted_both && !lifecycle_failure) {
+        try {
+            after = receives->active_receives() == 0
+                && receives->try_begin_teardown()
+                && barrier.poll() == Poll::pending
+                && freed.load(std::memory_order_relaxed) == 0;
+        } catch (...) {
+            lifecycle_failure = std::current_exception();
+        }
+    }
+
+    if (lifecycle_failure) std::rethrow_exception(lifecycle_failure);
     if (failure_a) std::rethrow_exception(failure_a);
     if (failure_b) std::rethrow_exception(failure_b);
     require(before && between && after,
