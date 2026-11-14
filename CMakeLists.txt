@@ -57,6 +57,17 @@ if(ORESLANG_PROXY_SLAB_HOST_ONLY)
         set_tests_properties(${test_name} PROPERTIES TIMEOUT ${timeout_seconds})
     endfunction()
 
+    # AOT tracing policy is host-only, never an instrumented Atto guest.
+    oreslang_proxy_host_ctest(oreslang-native-trace-probe-policy-host-test
+        native_trace_probe_policy_host_only 20
+        tests/native_trace_probe_policy_test.cpp)
+    oreslang_proxy_host_ctest(oreslang-native-traceparent-v00-host-test
+        native_traceparent_v00_host_only 20
+        tests/native_traceparent_v00_test.cpp)
+    oreslang_proxy_host_ctest(oreslang-native-semantic-span-host-test
+        native_semantic_span_buffer_host_only 20
+        tests/native_semantic_span_buffer_test.cpp)
+
     oreslang_proxy_host_ctest(oreslang-native-proxy-request-slab-test
         native_proxy_request_slab_host_only 20
         tests/native_proxy_request_slab_test.cpp
@@ -139,6 +150,40 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # AOT trace policy gate; this does not compile a source-level Atto trace.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-trace-probe-policy-test
+        tests/native_trace_probe_policy_test.cpp)
+    target_include_directories(oreslang-native-trace-probe-policy-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-trace-probe-policy-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-trace-probe-policy-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-trace-probe-policy-test PRIVATE Threads::Threads)
+    add_test(NAME native_trace_probe_policy_host_only
+        COMMAND oreslang-native-trace-probe-policy-test)
+    set_tests_properties(native_trace_probe_policy_host_only PROPERTIES TIMEOUT 20)
+    add_executable(oreslang-native-traceparent-v00-test
+        tests/native_traceparent_v00_test.cpp)
+    target_include_directories(oreslang-native-traceparent-v00-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-traceparent-v00-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-traceparent-v00-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_traceparent_v00_host_only
+        COMMAND oreslang-native-traceparent-v00-test)
+    set_tests_properties(native_traceparent_v00_host_only PROPERTIES TIMEOUT 20)
+    add_executable(oreslang-native-semantic-span-buffer-test
+        tests/native_semantic_span_buffer_test.cpp)
+    target_include_directories(oreslang-native-semantic-span-buffer-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-semantic-span-buffer-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-semantic-span-buffer-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-semantic-span-buffer-test PRIVATE Threads::Threads)
+    add_test(NAME native_semantic_span_buffer_host_only
+        COMMAND oreslang-native-semantic-span-buffer-test)
+    set_tests_properties(native_semantic_span_buffer_host_only PROPERTIES TIMEOUT 20)
     # C11 dormant telemetry hook lifecycle, bounded per-carrier stack,
     # disabled-mode behavior and runtime switch. Independent from guest proof.
     add_executable(oreslang-native-telemetry-span-runtime-test
@@ -4823,6 +4868,17 @@ if(BUILD_TESTING)
   set_tests_properties(value_boundary_admission PROPERTIES TIMEOUT 60)
 endif()
 
+# HOST-ONLY Option<T> recursive flatten substrate. Source-language admission,
+# Future<T> scheduler integration, and guest execution remain independent gates.
+if(BUILD_TESTING)
+  add_executable(oreslang_wrapper_flatten_option_host tests/wrapper_flatten_option_host_test.cpp)
+  target_include_directories(oreslang_wrapper_flatten_option_host PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime")
+  target_compile_options(oreslang_wrapper_flatten_option_host PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+  add_test(NAME llvm_wrapper_option_host_conformance COMMAND oreslang_wrapper_flatten_option_host)
+  set_tests_properties(llvm_wrapper_option_host_conformance PROPERTIES TIMEOUT 20)
+endif()
+
 # HOST-ONLY token bucket arithmetic and concurrent reservation prototype.
 # Does NOT enforce guest sends or prove native UNTRUSTED isolation.
 if(BUILD_TESTING)
@@ -5747,6 +5803,17 @@ if(BUILD_TESTING)
     add_test(NAME native_select_continuation_generation_fence
         COMMAND oreslang-native-select-continuation-fence-test)
     set_tests_properties(native_select_continuation_generation_fence PROPERTIES TIMEOUT 30)
+endif()
+
+# Compile-time namespace/lifecycle admission parity with Java #2263.
+if(BUILD_TESTING)
+    add_test(NAME native_namespace_lifecycle_fail_closed
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+            "-DCLANG=${ORE_SOURCE_I64_CLANG}"
+            "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/namespace-parity"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/namespace_lifecycle_parity.cmake")
+    set_tests_properties(native_namespace_lifecycle_fail_closed PROPERTIES TIMEOUT 60)
 endif()
 
 
