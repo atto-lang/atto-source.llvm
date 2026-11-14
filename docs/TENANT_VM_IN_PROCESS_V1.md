@@ -260,6 +260,32 @@ not break it, and a stage that ends is not replaced.
   turn, so that `send` can report admission, and that is not done.
 - A failed actor reports through the VM's counters and the failed call. There is no supervisor to tell yet.
 
+## Hot upgrade
+
+`TenantVmHost::upgrade(vm, module, owner)` (C: `ores_vm_c_upgrade_guest`) replaces a running VM's guest
+code and keeps its actors' state. It is also how an instrumented (tracing) build of the same code goes
+in and comes out again, under the governed-instrumentation contract.
+
+- **Layout must match.** Every kind the VM already has keeps its state, heap, scratch, instance and stored
+  sizes and its flags; new kinds may be appended. Anything else is `IncompatibleCode`, and nothing changes.
+- **At a turn boundary.** Idle actors switch at once. An actor in a turn finishes it on the old code and
+  switches when it ends. Each actor holds its code version, so a library is released when the last
+  actor or turn using it lets go.
+- **Instance memory is cleared at the switch.** Lowered code keeps Wasm globals and function tables
+  there, and a table entry pointing into old code must never be called once that code can be unmapped.
+  Region, heap and stored state are kept, so the new code resumes from stored state as after a restart.
+- **Not checked:** what the code means. Two programs with the same layout are accepted, so whoever picks
+  the artifact must pick a version of the same program. Like `open`, this checks layout, not provenance.
+
+Evidence (macOS 26 arm64, local): `counter.atto` v1 to v2 and back in a running VM, both actors keeping
+state across both switches and each library released once unused (`atto_hot_upgrade_keeps_actor_state`);
+an in-flight turn finishing on the old code, which stays mapped until it ends; 200 upgrades under four
+threads of calls, every turn on exactly one version, all superseded code released; refusal of layout,
+flag and kind-count changes and of foreign, quiescing and retired VMs. Clean under ASan+UBSan and TSan.
+
+Found on the way: checked `*` in `.atto` does not lower into a VM yet. It needs `__multi3` from compiler-rt,
+which the libc-free guest link does not provide.
+
 ## Backends
 
 | Backend | Guest code | Boundary | Status |

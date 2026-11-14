@@ -367,6 +367,58 @@ void atto_actor_state_is_private_and_durable() {
     std::printf("  1000 durable turns; state private per actor, tenant and program\n");
 }
 
+// Hot upgrade of real compiled AttoLang: counter.atto v1 to v2 and back, in a running VM. Actor state
+// crosses through the adapter's resume path (instance cleared, fields restored from stored state),
+// and each library is released once no actor runs it.
+void atto_hot_upgrade_keeps_actor_state() {
+    std::weak_ptr<const void> v1_alive, v2_alive;
+    TenantVmHost host;
+    VmOpenResult vm;
+    VmActor a, b;
+    {
+        const LoadedGuest v1 = load("atto_counter");
+        if (!v1.module) return;
+        v1_alive = v1.owner;
+        vm = host.open(spec("upgrade", v1));
+    }
+    REQUIRE_OK(vm);
+    auto sa = host.spawn_actor(vm.handle, 0);
+    auto sb = host.spawn_actor(vm.handle, 0);
+    REQUIRE_OK(sa);
+    REQUIRE_OK(sb);
+    a = sa.actor;
+    b = sb.actor;
+    CHECK(word(host.call(a, one(10)).get().payload) == 10);
+    CHECK(word(host.call(a, one(5)).get().payload) == 15);
+    CHECK(word(host.call(b, one(7)).get().payload) == 7);
+    {
+        const LoadedGuest v2 = load("atto_counter_v2");
+        if (!v2.module) return;
+        v2_alive = v2.owner;
+        auto up = host.upgrade(vm.handle, v2.module, v2.owner);
+        CHECK_STATUS(up.status, Status::Ok);
+        CHECK(up.code_version == 2);
+    }
+    CHECK(v1_alive.expired()); // no actor runs v1 any more
+    CHECK(word(host.call(a, one(1)).get().payload) == 15 + 1 + 1000); // v2 code, v1 state
+    CHECK(word(host.call(b, one(1)).get().payload) == 7 + 1 + 1000);
+    auto fresh = host.spawn_actor(vm.handle, 0);
+    REQUIRE_OK(fresh);
+    CHECK(word(host.call(fresh.actor, one(1)).get().payload) == 1001); // initializer of v2
+    {
+        const LoadedGuest back = load("atto_counter");
+        if (!back.module) return;
+        CHECK_STATUS(host.upgrade(vm.handle, back.module, back.owner).status, Status::Ok);
+    }
+    CHECK(v2_alive.expired());
+    CHECK(word(host.call(a, one(1)).get().payload) == 1016 + 1); // v1 again, state kept throughout
+    const VmSnapshot s = host.snapshot(vm.handle);
+    CHECK(s.code_version == 3);
+    CHECK(s.actor_restarts == 0);
+    CHECK(s.phase == Phase::Running);
+    std::printf("  counter.atto v1 -> v2 -> v1 in a running VM; actor state kept, old libraries released\n");
+}
+
 // A trap in source restarts that actor from its last finished turn. Everything else carries on.
 void atto_failed_actor_restarts_from_stored_state() {
     const LoadedGuest counter = load("atto_counter");
@@ -855,6 +907,7 @@ const Case cases[] = {
     {"loader_admits_only_exact_bytes", loader_admits_only_exact_bytes},
 #if defined(TENANT_VM_HAVE_ATTO)
     {"atto_actor_state_is_private_and_durable", atto_actor_state_is_private_and_durable},
+    {"atto_hot_upgrade_keeps_actor_state", atto_hot_upgrade_keeps_actor_state},
     {"atto_failed_actor_restarts_from_stored_state", atto_failed_actor_restarts_from_stored_state},
     {"atto_without_bounds_checks_no_restart", atto_without_bounds_checks_no_restart},
     {"atto_runaway_source_ends_only_its_turn", atto_runaway_source_ends_only_its_turn},
