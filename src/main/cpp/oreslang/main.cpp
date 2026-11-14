@@ -968,16 +968,22 @@ int main(int argc, char** argv) {
                             oreslang::CoreLog::EventId::CompileFailed, 1);
         std::cerr << "oreslang-llvmc: ";
         std::string diagnostic = error.what();
-        if (path != nullptr && *path != '\0') {
-            const std::string source_path(path);
-            // Full host paths are private CI metadata, not error context.
-            // Replace exact input-path occurrences before rendering.
+        // Both source paths and the new manifest path may contain private CI
+        // workspace metadata. Redact the full manifest path first, including
+        // errors from the regular-file/identity-bound admission reader.
+        const auto redact = [&](std::string_view secret, std::string_view replacement) {
+            if (secret.empty()) return;
             std::size_t found = 0;
-            while ((found = diagnostic.find(source_path, found)) != std::string::npos) {
-                diagnostic.replace(found, source_path.size(), "<source>");
-                found += sizeof("<source>") - 1;
+            const std::string substitute(replacement);
+            while ((found = diagnostic.find(secret, found)) != std::string::npos) {
+                diagnostic.replace(found, secret.size(), substitute);
+                found += substitute.size();
             }
-        }
+        };
+        if (source_log_manifest_seen)
+            redact(source_log_manifest_path, "<source-log-manifest>");
+        if (path != nullptr)
+            redact(path, "<source>");
         print_safe_diagnostic(std::cerr, diagnostic, 2048);
         if (path != nullptr) {
             std::string_view source_name(path);
