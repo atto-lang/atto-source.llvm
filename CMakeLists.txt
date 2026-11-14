@@ -42,6 +42,7 @@ if(ORESLANG_ORESI_HOST_ONLY)
     set_tests_properties(native_oresi_v1_import_preflight_host_only
         PROPERTIES TIMEOUT 20)
     return()
+endif()
 
 # Isolated native host test entrypoint: no LLVM development package, Rust
 # harness, guest frontend or network access is required to verify the real
