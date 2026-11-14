@@ -1,0 +1,13 @@
+// Pure guest projection of literal NATS subject-token admission.
+fnc token_accept(bool nonempty, bool dotted, bool whitespace,
+                 bool control, bool wildcard): bool {
+  return nonempty && !dotted && !whitespace && !control && !wildcard;
+}
+pub fnc main(): int {
+  return token_accept(true, false, false, false, false) &&
+    !token_accept(false, false, false, false, false) &&
+    !token_accept(true, true, false, false, false) &&
+    !token_accept(true, false, true, false, false) &&
+    !token_accept(true, false, false, true, false) &&
+    !token_accept(true, false, false, false, true) ? 0 : 1;
+}
