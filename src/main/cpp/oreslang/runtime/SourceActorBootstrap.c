@@ -94,6 +94,8 @@ static atomic_int test_hold_initialization;
 static atomic_int test_initialization_entered;
 static atomic_int test_hold_readiness_publication;
 static atomic_int test_readiness_publication_entered;
+/* Test-only observation of an actual CV wait (not just thread launch). */
+static atomic_int test_ready_waiter_blocked;
 
 void oreslang_source_actor_test_hold_initialization(int hold) {
     if (hold) {
@@ -127,6 +129,11 @@ void oreslang_source_actor_test_hold_readiness_publication(int hold) {
 int oreslang_source_actor_test_readiness_publication_entered(void) {
     return atomic_load_explicit(
         &test_readiness_publication_entered, memory_order_acquire);
+}
+
+int oreslang_source_actor_test_ready_waiter_blocked(void) {
+    return atomic_load_explicit(
+        &test_ready_waiter_blocked, memory_order_acquire);
 }
 #endif
 
@@ -853,18 +860,31 @@ void oreslang_source_actor_wait_ready_blocking(void* opaque) {
         && group.pending_ready == NULL && group.pending_done == NULL
         && !atomic_load_explicit(&instance->stop_requested, memory_order_acquire));
     OresNativeExecutionContext carrier = {0};
-    /* Keep the VM identity stable under the group lock while checking that
-     * the caller is not an actor carrier. A concurrent teardown cannot
-     * swap group.vm between this check and the admission wait below. */
-    ensure(!ores_native_vm_current_execution_context(
-        vm, ORES_NATIVE_VM_MAIN, &carrier));
+    /* Pin the VM identity under group mutex. Never park an actor carrier
+     * from ANY VM domain, not merely MAIN: other domains share the same
+     * native worker scheduling infrastructure. */
+    for (int domain = 0; domain < ORES_NATIVE_VM_DOMAIN_COUNT; ++domain)
+        ensure(!ores_native_vm_current_execution_context(
+            vm, (enum OresNativeVMDomain)domain, &carrier));
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    atomic_store_explicit(
+        &test_ready_waiter_blocked, 0, memory_order_release);
+#endif
     for (;;) {
         const int status = atomic_load_explicit(
             &instance->startup_state, memory_order_acquire);
         if (status == ORES_SOURCE_ACTOR_STARTUP_READY) break;
         ensure(status == ORES_SOURCE_ACTOR_STARTUP_PENDING
             || status == ORES_SOURCE_ACTOR_STARTUP_INITIALIZING);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+        atomic_store_explicit(
+            &test_ready_waiter_blocked, 1, memory_order_release);
+#endif
         ensure(pthread_cond_wait(&group.startup_changed, &group.mutex) == 0);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+        atomic_store_explicit(
+            &test_ready_waiter_blocked, 0, memory_order_release);
+#endif
     }
     ensure(atomic_load_explicit(
         &instance->constructor_started, memory_order_acquire) == 1);
