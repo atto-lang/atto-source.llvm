@@ -41,6 +41,17 @@ for case in tests/fixtures/1*.atto; do
 done
 test "$total" = "1255"
 
+# Exercise the CLI's direct -o native-executable path, not merely emitted IR.
+target/release/atto-llvm tests/fixtures/167-quic-varint-rfc9000.atto -o "$work/direct-native.exe"
+readelf -h "$work/direct-native.exe" | grep -q 'Class:[[:space:]]*ELF64'
+set +e
+timeout 15s "$work/direct-native.exe"
+direct_status=$?
+set -e
+test "$direct_status" = "42"
+echo "PASS direct atto-llvm -> clang -> ELF executable"
+
+
 cat > "$work/unknown.atto" <<'ATTO'
 pub fnc main(): int { return missing_symbol; }
 ATTO
@@ -73,6 +84,22 @@ if [[ "$overflow_status" == 0 || "$overflow_status" == 42 || "$overflow_status" 
   echo "FAIL: i64 overflow did not trap (status=$overflow_status)" >&2; exit 1
 fi
 echo "PASS checked native overflow traps with status=$overflow_status"
+
+# Negative arithmetic bounds must trap; never wrap like C unsigned math.
+for expr in '(-9223372036854775807 - 2)' '(9223372036854775807 * 2)' '(-(-9223372036854775807 - 1))'; do
+  printf 'pub fnc main(): int { return %s; }\n' "$expr" > "$work/overflow.atto"
+  target/release/atto-llvm "$work/overflow.atto" -o "$work/overflow.exe"
+  set +e
+  (ulimit -c 0; timeout 10s "$work/overflow.exe") >/dev/null 2>&1
+  overflow_status=$?
+  set -e
+  if [[ "$overflow_status" == 0 || "$overflow_status" == 42 || "$overflow_status" == 124 ]]; then
+    echo "FAIL: checked arithmetic unexpectedly continued for $expr" >&2
+    exit 1
+  fi
+done
+echo "PASS checked native sub/mul/neg overflow traps"
+
 
 # Recompile two guests with both sanitizers. These are pure scalar workloads:
 # absence of errors does not validate future actors, heaps, TLS, QUIC or network I/O.
