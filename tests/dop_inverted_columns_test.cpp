@@ -89,6 +89,11 @@ int main() {
         check(guarded.get<0>(first) == 7.5f); // failure has no side effects
         auto after_reserve = guarded.capture_layout_guard();
         check(after_reserve.epoch() > initial.epoch());
+        // A redundant reserve must not invalidate a guard: no pointer,
+        // column, slot, or row metadata is relocated.
+        guarded.reserve(32);
+        check(guarded.capture_layout_guard().epoch() == after_reserve.epoch());
+        check(guarded.read_index_guarded<0>(after_reserve, 0) == 7.5f);
         guarded.set<0>(first, 8.5f); // value updates do not change layout
         check(guarded.read_index_guarded<0>(after_reserve, 0) == 8.5f);
         // Even an allocation failure can partially change vector capacities.
