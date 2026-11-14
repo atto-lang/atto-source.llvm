@@ -52,12 +52,12 @@ jobs:
             test "$status" -eq 11 || { echo "Expected guest exit 11, got $status"; exit 1; }
             echo "ATTO_NOMINAL_ALIAS_GUEST_O${opt}_EXIT=11"
           done
-      - name: Reject payload variants before emitting IR
+      - name: Reject owned/Bytes payload variants before emitting IR
         run: |
           set -euo pipefail
-          printf '%s\n' 'define enum WorkerMsg { Run { job_id: int }, Stop }' > build/unsupported-payload.atto
+          printf '%s\n' 'define enum WorkerMsg { Run { job_id: Bytes }, Stop }' > build/unsupported-payload.atto
           if build/oreslang-llvmc --experimental-nominal-enum-v1 build/unsupported-payload.atto > build/rejected.ll 2> build/rejected.log; then
             echo 'ERROR: unsupported payload variant compiled'; exit 1
           fi
           test ! -s build/rejected.ll
-          grep -q 'payload-bearing enums require checked payload AOT lowering' build/rejected.log
+          grep -q 'payload AOT admits only Copy int' build/rejected.log
