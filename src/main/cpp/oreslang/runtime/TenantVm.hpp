@@ -181,7 +181,7 @@ struct HostStats {
     std::uint64_t kills_delivered = 0;
     std::uint64_t wild_accesses = 0;  // nonzero means a compiler-path bug, see HostLimits
     std::uint64_t queued_bytes = 0;
-    std::uint64_t stack_quota_misses = 0; // turns run without their stack quota, because the guard could not move
+    std::uint64_t stack_quota_misses = 0; // rejected turns: the requested stack guard could not be installed
     std::uint64_t actor_restarts = 0;
 };
 
