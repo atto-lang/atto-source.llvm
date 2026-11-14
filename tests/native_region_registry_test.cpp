@@ -195,6 +195,12 @@ int main() {
         callbackActor, 92, 1, &callbackBacking, sizeof(callbackBacking),
         TrustedPointerWindow::Mode::ReadWrite);
     auto callbackPointer = registry.at<std::uint32_t>(callbackGrant, callbackActor);
+    std::uint32_t secondCallbackBacking = 505;
+    const auto secondCallbackGrant = issue(NativeRegionRegistry::Trust::Trusted,
+        callbackActor, 94, 1, &secondCallbackBacking, sizeof(secondCallbackBacking),
+        TrustedPointerWindow::Mode::ReadOnly);
+    auto secondCallbackPointer = registry.at<std::uint32_t>(
+        secondCallbackGrant, callbackActor);
     bool deferredFence = false;
     const auto callbackStatus = callbackPointer.with_ffi_address(callbackActor,
         [&](std::uint32_t* raw) {
@@ -207,7 +213,11 @@ int main() {
     if (callbackStatus != 7 || !deferredFence)
         throw std::runtime_error("self-fence did not defer correctly");
     reject([&] { (void)callbackPointer.load(callbackActor); });
+    // A deferred self-fence must still synchronously revoke every *other*
+    // cursor belonging to that actor, not abort after the first callback.
+    reject([&] { (void)secondCallbackPointer.load(callbackActor); });
     reject([&] { (void)registry.at<std::uint32_t>(callbackGrant, callbackActor); });
+    reject([&] { (void)registry.at<std::uint32_t>(secondCallbackGrant, callbackActor); });
     registry.fence_actor(callbackActor); // Retire after callback quiescence.
     reject([&] { (void)issue(NativeRegionRegistry::Trust::Trusted,
         callbackActor, 93, 1, &callbackBacking, sizeof(callbackBacking),
