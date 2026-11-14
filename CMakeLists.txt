@@ -49,6 +49,21 @@ if(ATTO_SOURCE_IDS_HOST_ONLY)
   endif()
   add_test(NAME static_guest_log_ring_host_only
     COMMAND atto_static_log_ring_v1_host_test)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Threads REQUIRED)
+    add_executable(atto_static_log_carriers_v1_host_test
+      tests/native_static_log_carriers_v1_test.c
+      src/main/cpp/oreslang/runtime/NativeTelemetrySpan.c)
+    target_include_directories(atto_static_log_carriers_v1_host_test PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(atto_static_log_carriers_v1_host_test PRIVATE Threads::Threads)
+    set_target_properties(atto_static_log_carriers_v1_host_test PROPERTIES
+      C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(atto_static_log_carriers_v1_host_test PRIVATE
+      -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME static_log_eight_carriers_host_only
+      COMMAND atto_static_log_carriers_v1_host_test)
+  endif()
   return()
 endif()
 
@@ -291,6 +306,23 @@ if(BUILD_TESTING)
     add_test(NAME native_literal_guest_log_ring_runtime
         COMMAND oreslang-native-static-log-ring-test)
     set_tests_properties(native_literal_guest_log_ring_runtime PROPERTIES TIMEOUT 20)
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(oreslang-native-static-log-carriers-test
+            tests/native_static_log_carriers_v1_test.c
+            src/main/cpp/oreslang/runtime/NativeTelemetrySpan.c)
+        target_include_directories(oreslang-native-static-log-carriers-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-static-log-carriers-test PRIVATE Threads::Threads)
+        set_target_properties(oreslang-native-static-log-carriers-test PROPERTIES
+            C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+        target_compile_options(oreslang-native-static-log-carriers-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_literal_guest_log_eight_carriers_runtime
+            COMMAND oreslang-native-static-log-carriers-test)
+        set_tests_properties(native_literal_guest_log_eight_carriers_runtime
+            PROPERTIES TIMEOUT 20)
+    endif()
 
     # Real POSIX carrier isolation: compare unique span IDs across pthreads,
     # then prove the wrong-carrier close receives SIGABRT in a forked child.
