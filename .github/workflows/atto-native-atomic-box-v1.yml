@@ -1,0 +1,29 @@
+name: Atto native Atomic and Box v1
+on:
+  push:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/NativeAtomicBoxV1.hpp'
+      - 'tests/native_atomic_box_v1_test.cpp'
+      - '.github/workflows/atto-native-atomic-box-v1.yml'
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/NativeAtomicBoxV1.hpp'
+      - 'tests/native_atomic_box_v1_test.cpp'
+      - '.github/workflows/atto-native-atomic-box-v1.yml'
+permissions:
+  contents: read
+jobs:
+  lock-free-native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and run optimized native ownership/atomic contract
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -O2 -pthread -Wall -Wextra -Werror -Isrc/main/cpp tests/native_atomic_box_v1_test.cpp -o /tmp/atto-native-atomic-box
+          /tmp/atto-native-atomic-box
+      - name: Address and undefined behavior sanitizers
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -O1 -g -pthread -fno-omit-frame-pointer -fsanitize=address,undefined -Wall -Wextra -Werror -Isrc/main/cpp tests/native_atomic_box_v1_test.cpp -o /tmp/atto-native-atomic-box-sanitized
+          /tmp/atto-native-atomic-box-sanitized
