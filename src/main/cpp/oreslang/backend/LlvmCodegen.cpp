@@ -329,6 +329,36 @@ llvm::Value* lower(const Expression& expr,
             }
             return builder.CreateLoad(i64, field_storage.at(native_place_key(expr)),
                                       expr.left->name + "." + expr.name + ".read");
+        case Expression::Kind::NativeAtomicCall: {
+            if (!expr.left || expr.left->kind != Expression::Kind::Variable ||
+                    (expr.name != "load" && expr.name != "fetch_add") ||
+                    expr.arguments.size() != (expr.name == "load" ? 0u : 1u))
+                throw std::runtime_error("ATTO_ATOMIC_MAIN_V1_REJECT: invalid atomic lowering authority");
+            const auto found = storage.find(expr.left->name);
+            if (found == storage.end())
+                throw std::runtime_error("ATTO_ATOMIC_MAIN_V1_REJECT: unknown atomic storage");
+            const auto& name = expr.atomic_order;
+            const auto order = name == "relaxed" ? llvm::AtomicOrdering::Monotonic :
+                    name == "acquire" ? llvm::AtomicOrdering::Acquire :
+                    name == "release" ? llvm::AtomicOrdering::Release :
+                    name == "acq_rel" ? llvm::AtomicOrdering::AcquireRelease :
+                    name == "seq_cst" ? llvm::AtomicOrdering::SequentiallyConsistent :
+                    llvm::AtomicOrdering::NotAtomic;
+            if (order == llvm::AtomicOrdering::NotAtomic ||
+                    (expr.name == "load" && !(name == "relaxed" ||
+                        name == "acquire" || name == "seq_cst")))
+                throw std::runtime_error("ATTO_ATOMIC_MAIN_V1_REJECT: invalid LLVM memory ordering");
+            if (expr.name == "load") {
+                auto* inst = builder.CreateLoad(i64, found->second, "atto.atomic.i64.load");
+                inst->setAlignment(llvm::Align(8));
+                inst->setAtomic(order);
+                return inst;
+            }
+            auto* delta = lower(*expr.arguments.front(), builder, i64, storage,
+                                field_storage, functions, moves);
+            return builder.CreateAtomicRMW(llvm::AtomicRMWInst::Add,
+                found->second, delta, llvm::MaybeAlign(8), order);
+        }
         case Expression::Kind::ArrayCall: {
             if (!expr.left)
                 throw std::runtime_error("native Array<int> call has no owned receiver");
@@ -1625,6 +1655,22 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         }
 
         for (const auto& binding : fn.locals) {
+            if (binding.native_atomic_i64) {
+                if (binding.initializer || binding.heap_owned || binding.new_class ||
+                        binding.move_class || binding.assignable)
+                    throw std::runtime_error("ATTO_ATOMIC_MAIN_V1_REJECT: malformed local lowering");
+                auto* slot = builder.CreateAlloca(i64, nullptr, binding.name + ".atomic.owner");
+                native_lifetime_start(builder, slot, 8);
+                auto* inst = builder.CreateStore(
+                    llvm::ConstantInt::get(i64,
+                        static_cast<std::uint64_t>(binding.native_atomic_initial)),
+                    slot);
+                inst->setAlignment(llvm::Align(8));
+                inst->setAtomic(llvm::AtomicOrdering::SequentiallyConsistent);
+                storage.emplace(binding.name, slot);
+                lexical_slots.push_back({binding.name, slot, false, 8});
+                continue;
+            }
             if (binding.int_array) {
                 llvm::Value* handle = new_checked_array(binding.name);
                 llvm::Value* slot = builder.CreateAlloca(i64, nullptr,
