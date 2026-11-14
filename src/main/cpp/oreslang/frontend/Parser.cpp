@@ -4511,6 +4511,12 @@ private:
         if (!accept(text)) fail("expected '" + std::string(text) + "'");
     }
 
+    // Canonical callable signatures accept `: T` or `-> T` (same rule as main's
+    // arrow_return_type handling for named functions).
+    void require_return_separator() {
+        if (!accept(":")) require("->");
+    }
+
     void array_element(LocalBinding& binding) {
         if (accept("String") || accept("string")) binding.array_element_type = ScalarType::String;
         else if (!accept("int")) binding.array_record_class = type_identifier();
