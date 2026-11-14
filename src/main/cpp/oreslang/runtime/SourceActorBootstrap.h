@@ -40,6 +40,50 @@ int oreslang_source_actor_test_readiness_publication_entered(void);
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
                                   OresSourceActorMessage on_message,
                                   uint64_t fields);
+
+/*
+ * Checked source actor identity v1: the nonzero uint64 is an opaque
+ * compiler-owned actor-incarnation ID, never an address cast to an integer.
+ * IDs are process-monotonic and never reused, including across group reopen
+ * and scheduler slot/allocation address reuse. Exhaustion fails closed before
+ * wrapping. This is a trusted compiler/native ABI, NOT a cryptographic bearer
+ * capability or an FFI/untrusted actor interface.
+ *
+ * All checked operations resolve ID -> live SourceActor under group.mutex.
+ * get_ready/get_done Future continuation migration requires a separate typed
+ * continuation ABI; DO NOT cast a legacy void* callback to an ID callback.
+ * The legacy pointer functions above and below remain compatibility-only
+ * and are not protected from allocation-address ABA.
+ */
+typedef uint64_t OresSourceActorId;
+
+OresSourceActorId oreslang_source_actor_spawn_id(
+    OresSourceActorInit initializer,
+    OresSourceActorMessage on_message,
+    uint64_t fields);
+int oreslang_source_actor_ready_status_id(OresSourceActorId actor);
+/* Returns 1 on admitted message, 0 for invalid/revoked/closed/full.
+ * The compiler can use the fail-stop variant until Result lowering exists. */
+int oreslang_source_actor_try_send_id(
+    OresSourceActorId actor, int64_t payload);
+void oreslang_source_actor_send_id(
+    OresSourceActorId actor, int64_t payload);
+/* Returns 1 on first stop admission, 0 for invalid/revoked/already-stopped. */
+int oreslang_source_actor_try_request_stop_id(OresSourceActorId actor);
+void oreslang_source_actor_request_stop_id(OresSourceActorId actor);
+/* Checked top-level physical join must never run on a native actor carrier.
+ * This consumes the ID's lifetime: all subsequent operations fail closed. */
+void oreslang_source_actor_join_done_id(OresSourceActorId actor);
+void oreslang_source_actor_stop_id(OresSourceActorId actor);
+
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+/* Deterministic ABA fixture only: hold one *retired* SourceActor allocation
+ * and hand that exact address to the next spawn. The production runtime must
+ * never retain a tombstone just to make stale handles appear safe. */
+void oreslang_source_actor_test_force_address_reuse(int enabled);
+uint64_t oreslang_source_actor_test_address_reuses(void);
+#endif
+
 /* Nonblocking bounded one-way send. Overload currently fails closed with a
  * host error; a typed guest overload result still needs compiler lowering.
  */
