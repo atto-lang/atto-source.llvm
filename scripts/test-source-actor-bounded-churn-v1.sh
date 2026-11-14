@@ -12,6 +12,10 @@ for tool in git timeout cmp readelf sha256sum grep awk; do
   command -v "$tool" >/dev/null || { echo "missing $tool" >&2; exit 69; }
 done
 source_rel="tests/fixtures/source-actor-bounded-churn-v1/positive.atto"
+more_positive_rels=(
+  "tests/fixtures/source-actor-bounded-churn-v1/positive-do-done.atto"
+  "tests/fixtures/source-actor-bounded-churn-v1/positive-zero.atto"
+)
 negative_rels=(
   "tests/fixtures/source-actor-bounded-churn-v1/missing-stop.atto"
   "tests/fixtures/source-actor-bounded-churn-v1/double-stop.atto"
@@ -22,7 +26,7 @@ negative_rels=(
 check_snapshot() {
   [[ "$(git -C "$root" rev-parse HEAD)" == "$EXPECTED_HEAD" ]] || return 1
   [[ -z "$(git -C "$root" status --porcelain --untracked-files=all)" ]] || return 1
-  for rel in "$source_rel" "${negative_rels[@]}"; do
+  for rel in "$source_rel" "${more_positive_rels[@]}" "${negative_rels[@]}"; do
     [[ -f "$root/$rel" && ! -L "$root/$rel" ]] || return 1
     [[ "$(git -C "$root" ls-files --stage -- "$rel")" =~ ^100644[[:space:]] ]] || return 1
     test "$(git -C "$root" rev-parse "HEAD:$rel")" = "$(git -C "$root" hash-object --no-filters "$root/$rel")" || return 1
@@ -70,6 +74,31 @@ for opt in 0 2; do
       exit 1
     fi
   done
+  # Additional accepted forms: canonical while/do/done and zero-trip
+  # actor churn. The latter must exit without constructing any actor.
+  expected_statuses=(7 0)
+  for index in 0 1; do
+    rel="${more_positive_rels[index]}"
+    desired="${expected_statuses[index]}"
+    timeout 120s "$compiler" --target=host "$root/$rel" >"$work/variant.ll" 2>"$work/variant.err" || {
+      cat "$work/variant.err" >&2
+      echo "SOURCE_ACTOR_CHURN_VARIANT_NOT_COMPILED|O$opt|file=$rel" >&2
+      exit 1
+    }
+    [[ -s "$work/variant.ll" && ! -s "$work/variant.err" ]] || exit 1
+    "$auditor" "$work/variant.ll" >"$work/variant-audit.log"
+    grep -Eq '^actor\\.churn\\.scoped\\.body:' "$work/variant.ll" || exit 1
+    variant_native="$work/variant-$opt-$index"
+    timeout 120s "$root/scripts/compile-aot.sh" "$root/$rel" "$variant_native" >/dev/null
+    [[ -x "$variant_native" && ! -L "$variant_native" ]] || exit 1
+    rc=0
+    timeout 45s "$variant_native" >"$work/variant.out" 2>"$work/variant.stderr" || rc=$?
+    if [[ "$rc" != "$desired" || -s "$work/variant.out" || -s "$work/variant.stderr" ]]; then
+      echo "SOURCE_ACTOR_CHURN_VARIANT_FAIL|O$opt|file=$rel|exit=$rc|expected=$desired" >&2
+      cat "$work/variant.out" "$work/variant.stderr" >&2
+      exit 1
+    fi
+  done
   for rel in "${negative_rels[@]}"; do
     negative="$root/$rel"
     rc=0
@@ -87,4 +116,4 @@ for opt in 0 2; do
     "$(sha256sum "$compiler" | cut -d' ' -f1)" \
     "$(sha256sum "$artifact" | cut -d' ' -f1)"
 done
-echo "SOURCE_ACTOR_BOUNDED_CHURN_MATRIX_EXECUTED|head=$EXPECTED_HEAD|levels=O0_O2|native_executions=8|negative_compiler_rejections=10|async_guest=NOT_EXECUTED|zero_gc_certified=NO"
+echo "SOURCE_ACTOR_BOUNDED_CHURN_MATRIX_EXECUTED|head=$EXPECTED_HEAD|levels=O0_O2|native_executions=12|positive_variants=3|negative_compiler_rejections=10|async_guest=NOT_EXECUTED|zero_gc_certified=NO"
