@@ -1146,13 +1146,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // Only generated source actors resolve this native scheduler/heap ABI.
     // No actor imports appear in ordinary scalar/class compilation.
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
+    // All compiler-generated source actor references are non-address
+    // 64-bit incarnation IDs, including root CONTROL await callbacks.
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceRequestStop,
         sourceAwaitReady, sourceAwaitDone;
-    // ID is a by-value i64 minted by the trusted runtime, NOT an address.
-    // Existing Future continuation callbacks still use the legacy void*
-    // protocol; they are not silently cast to an integer-actor callback.
-    llvm::FunctionCallee sourceSpawnId, sourceSendId, sourceStopId,
-        sourceRequestStopId;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
     if (!source.actors.empty() && !wasm32_target) {
@@ -1171,33 +1168,21 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         actorScopedDrop = module.getOrInsertFunction("ores_actor_i64_heap_scoped_drop",
             llvm::FunctionType::get(voidTy,
                 {native_ptr, i64, i64, native_ptr}, false));
-        sourceSpawn = module.getOrInsertFunction("oreslang_source_actor_spawn",
-            llvm::FunctionType::get(native_ptr, {native_ptr, native_ptr, i64}, false));
-        sourceSend = module.getOrInsertFunction("oreslang_source_actor_send",
-            llvm::FunctionType::get(voidTy, {native_ptr, i64}, false));
-        sourceStop = module.getOrInsertFunction("oreslang_source_actor_stop",
-            llvm::FunctionType::get(voidTy, {native_ptr}, false));
-        sourceRequestStop = module.getOrInsertFunction(
-            "oreslang_source_actor_request_stop",
-            llvm::FunctionType::get(voidTy, {native_ptr}, false));
-        sourceAwaitReady = module.getOrInsertFunction(
-            "oreslang_source_actor_await_ready",
+        sourceSpawn = module.getOrInsertFunction("oreslang_source_actor_spawn_id",
             llvm::FunctionType::get(i64, {native_ptr, native_ptr, i64}, false));
-        sourceAwaitDone = module.getOrInsertFunction(
-            "oreslang_source_actor_await_done",
-            llvm::FunctionType::get(i64, {native_ptr, native_ptr, i64}, false));
-        sourceSpawnId = module.getOrInsertFunction(
-            "oreslang_source_actor_spawn_id",
-            llvm::FunctionType::get(i64, {native_ptr, native_ptr, i64}, false));
-        sourceSendId = module.getOrInsertFunction(
-            "oreslang_source_actor_send_id",
+        sourceSend = module.getOrInsertFunction("oreslang_source_actor_send_id",
             llvm::FunctionType::get(voidTy, {i64, i64}, false));
-        sourceStopId = module.getOrInsertFunction(
-            "oreslang_source_actor_stop_id",
+        sourceStop = module.getOrInsertFunction("oreslang_source_actor_stop_id",
             llvm::FunctionType::get(voidTy, {i64}, false));
-        sourceRequestStopId = module.getOrInsertFunction(
+        sourceRequestStop = module.getOrInsertFunction(
             "oreslang_source_actor_request_stop_id",
             llvm::FunctionType::get(voidTy, {i64}, false));
+        sourceAwaitReady = module.getOrInsertFunction(
+            "oreslang_source_actor_await_ready_id",
+            llvm::FunctionType::get(i64, {i64, native_ptr, i64}, false));
+        sourceAwaitDone = module.getOrInsertFunction(
+            "oreslang_source_actor_await_done_id",
+            llvm::FunctionType::get(i64, {i64, native_ptr, i64}, false));
         for (const auto& actor : source.actors) {
             const std::string prefix = "oreslang_actor_" + actor.name + "_";
             actorInits.emplace(actor.name, llvm::Function::Create(
@@ -1418,12 +1403,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             checked_sum_tag(builder, i64, handle, record_schemas.at(parameter.sum_type), native_sum(source, parameter.sum_type).kind == NativeSumType::Kind::Option ? 2 : 3, sum_check, record_get);
         }
 
-        // A linear source actor ref cannot enter scalar values or calls.
-        // Non-suspending paths use by-value ID handles to rule out malloc
-        // address ABA. Await paths keep legacy void* until their continuation
-        // callback ABI can be migrated as a coherent independent slice.
-        const bool checked_source_actor_refs =
-            fn.ready_await_actor.empty() && fn.done_await_actor.empty();
+        // A compiler-minted actor incarnation ID, never an integer value
+        // converted from a host address. Linear ActorRef cannot escape into
+        // source scalar values, native calls, or foreign FFI.
         std::unordered_map<std::string, llvm::Value*> actorRefs;
         for (const auto& spawn : fn.actor_spawns) {
             llvm::Value* ctor = builder.CreatePointerCast(actorInits.at(spawn.actor_type),
@@ -1432,13 +1414,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 native_ptr);
             const auto actor = std::find_if(source.actors.begin(), source.actors.end(),
                 [&](const ActorDecl& a) { return a.name == spawn.actor_type; });
-            llvm::Value* ref = builder.CreateCall(
-                checked_source_actor_refs ? sourceSpawnId : sourceSpawn,
+            llvm::Value* ref = builder.CreateCall(sourceSpawn,
                 {ctor, handler,
                     llvm::ConstantInt::get(i64,
                         actor->fields.size() + actor->on_message.locals.size())},
-                spawn.name + (checked_source_actor_refs
-                    ? ".actor.checked.id" : ".actor.legacy.ref"));
+                spawn.name + ".actor.checked.id");
             actorRefs.emplace(spawn.name, ref);
         }
         // An explicitly "owned int" lives in a bounded native C region;
@@ -2237,7 +2217,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         llvm::Value* awaited_result = nullptr;
         if (!fn.ready_await_actor.empty()) {
             auto* continuation_type =
-                llvm::FunctionType::get(i64, {native_ptr}, false);
+                llvm::FunctionType::get(i64, {i64}, false);
             auto* resume = llvm::Function::Create(
                 continuation_type,
                 llvm::Function::InternalLinkage,
@@ -2329,7 +2309,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             }
 
             auto* continuation_type =
-                llvm::FunctionType::get(i64, {native_ptr}, false);
+                llvm::FunctionType::get(i64, {i64}, false);
             auto* resume = llvm::Function::Create(
                 continuation_type,
                 llvm::Function::InternalLinkage,
@@ -2380,11 +2360,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                         declarations,
                         &region_moves);
                     builder.CreateCall(
-                        checked_source_actor_refs ? sourceSendId : sourceSend,
+                        sourceSend,
                         {actorRefs.at(send.reference), payload});
                 } else {
                     builder.CreateCall(
-                        checked_source_actor_refs ? sourceStopId : sourceStop,
+                        sourceStop,
                         {actorRefs.at(fn.actor_stops.at(action.index))});
                 }
             }
