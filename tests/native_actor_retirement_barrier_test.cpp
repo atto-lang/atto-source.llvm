@@ -429,7 +429,7 @@ static void two_overlapping_receives_pin_actual_native_done_barrier() {
     });
 
     NativeActorRetirementBarrier* barrier = nullptr;
-    auto ref = group.adopt(412, 19, 1, [&] { barrier->retire(); });
+    auto ref = group.adopt(412, 19, 1, [&] { barrier->retire(true); });
     NativeActorRetirementBarrier owned(
             registry, group.runtime_finalizer(ref), quarantine, {}, receives);
     barrier = &owned;
@@ -441,7 +441,8 @@ static void two_overlapping_receives_pin_actual_native_done_barrier() {
     require(!receives->try_enter(19, 1), "invocation capacity bypass");
     require(receives->active_receives() == 2, "receive count");
     group.close();
-    receives->seal_stop(true);
+    // group.close's callback itself must seal receives: a separate seal_stop
+    // call would conceal the dangerous retirement-versus-admission window.
     require(!receives->try_enter(19, 1), "receive after STOP");
     require(!receives->try_begin_teardown(), "teardown while both receives live");
     require(owned.poll() == Poll::pending && physical_frees == 0,
@@ -495,10 +496,10 @@ static void foreign_receive_fence_cannot_complete_another_actor() {
     require(rejected && correct->active_receives() == 0,
             "stale generation minted guest receive lease");
     group.close();
-    require(owned.poll() == Poll::pending,
-            "missing stop-seal proof admitted native reclamation");
-    correct->seal_stop(false);
-    require(owned.poll() == Poll::completed, "abortive stop did not retire resources");
+    require(!correct->try_enter(20, 5),
+            "abortive group STOP returned with guest receive admission open");
+    require(owned.poll() == Poll::completed,
+            "abortive stop failed to seal and reclaim native resources");
     ref.get_done().get();
 }
 
@@ -598,7 +599,7 @@ static void concurrent_host_receivers_join_native_resource_retirement() {
     NativeActorRetirementBarrier* retiring = nullptr;
     auto ref = group.adopt(414, 23, 4, [&] {
         ores_actor_i64_heap_retire(heap);
-        retiring->retire();
+        retiring->retire(true);
     });
     NativeActorRetirementBarrier barrier(
         registry, group.runtime_finalizer(ref), quarantine, {}, receives);
@@ -634,7 +635,7 @@ static void concurrent_host_receivers_join_native_resource_retirement() {
     if (admitted_both) {
         try {
             group.close();
-            receives->seal_stop(true);
+            // STOP must have sealed new receive admission before return.
             before = receives->active_receives() == 2
                 && !receives->try_enter(23, 4)
                 && !receives->try_begin_teardown()
