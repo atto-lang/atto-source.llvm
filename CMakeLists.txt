@@ -1483,6 +1483,27 @@ if(BUILD_TESTING)
     # expressions (ARM_RESULT); do forms lower to structured statement CFG
     # where arm returns retain FUNCTION_RETURN semantics. Async suspension,
     # replay-unsafe subjects, duplicate cases, and nb dispatch stay fail-closed.
+    # Java-compatible eager scalar |> lowering and fail-closed actor pipe.
+    oreslang_contract_test(native_scalar_value_pipeline_call_ir
+        scalar-pipeline-run.ores --ir "call")
+    oreslang_contract_test(native_scalar_value_pipeline_named_ir
+        scalar-pipeline-named-run.ores --ir "call")
+    oreslang_contract_test(native_scalar_value_pipeline_bad_arity
+        scalar-pipeline-arity-reject.ores --diagnostic "call arity mismatch")
+    oreslang_contract_test(native_scalar_value_pipeline_bad_type
+        scalar-pipeline-type-reject.ores --diagnostic "requires int, got bool")
+    oreslang_contract_test(native_scalar_value_pipeline_noncallable
+        scalar-pipeline-noncallable-reject.ores --diagnostic "native scalar pipeline stage must be a named function")
+    oreslang_contract_test(native_scalar_value_pipeline_budget
+        scalar-pipeline-budget-reject.ores --diagnostic "native scalar pipeline exceeds 64 stages")
+    oreslang_contract_test(native_actor_pipe_rejects_untyped_edges
+        actor-pipe-untyped-reject.ores --diagnostic "actor pipe expressions require typed roles")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_scalar_value_pipeline_call_runtime
+            scalar-pipeline-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_scalar_value_pipeline_named_runtime
+            scalar-pipeline-named-run.ores --run 42 --clang "${ORE_CLANG}")
+    endif()
     oreslang_contract_test(native_value_match_arm_result
         dispatch-value-match-run.ores --ir "ternary.merge")
     # Direct signed-minimum literal remains valid; nested unary negation

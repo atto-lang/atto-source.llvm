@@ -3451,7 +3451,30 @@ private:
         return value;
     }
 
-    std::unique_ptr<Expression> expression() { return conditional(); }
+    // Eager scalar |> pipelines desugar to ordinary checked calls.
+    // Infix actor 'pipe' is a different, unimplemented transport operation.
+    std::unique_ptr<Expression> expression() {
+        auto value = conditional();
+        std::size_t stages = 0;
+        while (accept("|>")) {
+            if (++stages > kMaxNativeExpressionDepth)
+                fail("native scalar pipeline exceeds 64 stages");
+            auto stage = primary();
+            if (stage->kind != Expression::Kind::Variable &&
+                    stage->kind != Expression::Kind::Call)
+                fail("native scalar pipeline stage must be a named function");
+            // Existing function validation checks arity, names, types,
+            // generics and effects. Evaluate the incoming value once.
+            stage->kind = Expression::Kind::Call;
+            stage->arguments.insert(stage->arguments.begin(), std::move(value));
+            stage->argument_names.insert(stage->argument_names.begin(), "");
+            value = std::move(stage);
+        }
+        if (token_.text == "pipe")
+            fail("actor pipe expressions require typed roles, supervisor "
+                 "exclusion, bounded edge transport and ownership lowering");
+        return value;
+    }
 
     std::unique_ptr<Expression> conditional() {
         if (++conditional_depth_ > kMaxNativeExpressionDepth) {
