@@ -575,15 +575,31 @@ static void concurrent_host_receivers_join_native_resource_retirement() {
     NativeActorGroup group(414, 1);
     auto registry = std::make_shared<ActorResourceRegistry>(23, 4);
     auto receives = std::make_shared<NativeActorReceiveFence>(23, 4, 2);
+    // Allocate an actual actor-owned native heap, not only a mock closer.
+    // The scalar ABI remains serial; the concurrent threads below hold
+    // invocation receipts but deliberately do not enter that scalar heap.
+    OresActorI64Heap* heap = ores_actor_i64_heap_open(23, 4, 4);
+    require(heap != nullptr, "parallel retirement native arena admission");
+    const auto heap_turn = ores_actor_i64_heap_enter(heap, 23, 4);
+    const auto heap_slot = ores_actor_i64_heap_new(heap, heap_turn, 42);
+    require(ores_actor_i64_heap_read(heap, heap_turn, heap_slot) == 42,
+            "parallel retirement arena did not preserve owned state");
+    ores_actor_i64_heap_leave(heap, heap_turn);
     std::atomic<unsigned> arrived{0};
     std::atomic<bool> release_a{false}, release_b{false};
     std::atomic<int> freed{0};
-    registry->register_resource(Kind::native_allocation, [&] {
+    registry->register_resource(Kind::native_allocation, [heap, &freed] {
+        if (!ores_actor_i64_heap_try_destroy(heap)) {
+            throw std::runtime_error("parallel receive native arena remained pinned");
+        }
         freed.fetch_add(1, std::memory_order_relaxed);
     });
 
     NativeActorRetirementBarrier* retiring = nullptr;
-    auto ref = group.adopt(414, 23, 4, [&] { retiring->retire(); });
+    auto ref = group.adopt(414, 23, 4, [&] {
+        ores_actor_i64_heap_retire(heap);
+        retiring->retire();
+    });
     NativeActorRetirementBarrier barrier(
         registry, group.runtime_finalizer(ref), quarantine, {}, receives);
     retiring = &barrier;
