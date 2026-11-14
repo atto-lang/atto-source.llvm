@@ -6,8 +6,8 @@ root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 : "${EXPECTED_HEAD:?exact 40-hex source commit required}"
 [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]] || exit 64
 [[ "$(uname -s)" == Linux ]] || { echo 'Linux signal oracle required' >&2; exit 69; }
-clang="${CLANG:-clang>"
-clangxx="${CLANGXX:-clang++>"
+clang="${CLANG:-clang}"
+clangxx="${CLANGXX:-clang++}"
 for tool in "$clang" "$clangxx" git sha256sum timeout; do
   command -v -- "$tool" >/dev/null || { echo "missing tool: $tool" >&2; exit 69; }
 done
@@ -33,10 +33,10 @@ rt="$root/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
 test_cpp="$root/tests/actor_owned_heap_lifecycle_test.cpp"
 tree="$(git -C "$root" rev-parse 'HEAD^{tree}')"
 for opt in 0 2; do
-  "$clang" -std=c11 "-O${opt>" -g -Wall -Wextra -fno-omit-frame-pointer \
+  "$clang" -std=c11 "-O${opt}" -g -Wall -Wextra -fno-omit-frame-pointer \
     -fsanitize=address,undefined -pthread -I "$root/src/main/cpp" \
     -c "$rt" -o "$work/heap-$opt.o"
-  "$clangxx" -std=c++17 "-O${opt>" -g -Wall -Wextra -fno-omit-frame-pointer \
+  "$clangxx" -std=c++17 "-O${opt}" -g -Wall -Wextra -fno-omit-frame-pointer \
     -fsanitize=address,undefined -pthread -I "$root/src/main/cpp" \
     "$test_cpp" "$work/heap-$opt.o" -o "$work/native-$opt"
   ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
