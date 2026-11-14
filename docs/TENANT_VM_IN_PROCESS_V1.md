@@ -60,6 +60,9 @@ The watchdog retries at 10 ms and 100 ms, for at most three attempts, while repo
 A permanently unavailable slot reduces capacity explicitly; if every slot is permanently
 unavailable, the host fails all live VMs, resolves pending calls, and rejects new VM opens
 with `HostClosed`. It never runs guest code on an uncertain stack mapping.
+The first startup on a fresh or replacement carrier must also register an alternate signal
+stack before accepting turns. If `sigaltstack` fails, that carrier retires and is replaced
+through the same bounded watchdog recovery path; no process-wide `abort()` is permitted.
 
 Host calls run on the guest's stack, and a guest chooses how deep that is, so each host call checks for
 256 KiB of remaining stack before leaving guest mode. A shortage counts as out of carrier stack, like any other overflow. Carrier stacks must
