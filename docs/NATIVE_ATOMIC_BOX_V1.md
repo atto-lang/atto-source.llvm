@@ -24,35 +24,63 @@ is performed by these primitives.
 - The backend must require authenticated intrinsic identity before lowering;
   user-declared `Atomic` or foreign raw handles must not invoke this header.
 
-## UniqueBox<T>
+## UniqueBox<T> and FixedBoxArena<T, Slots>
 
-- A move-only deterministic owner; copy is disabled at C++ compile time.
-- Adoption now **consumes a single-use `UniqueAllocationTicket<T>`** rather
-  than accepting an unrestricted raw pointer. A ticket stores the trusted
-  `noexcept` destructor, nonzero owning domain and nonzero generation.
-  Concurrent attempts to consume the *same* ticket permit only one winner.
-  An unconsumed/rejected ticket remains the unique owner and deterministically
-  drops its resource on ticket destruction. No implicit allocation or raw
-  pointer escape API exists.
-- **Trusted allocator invariant:** only the allocator may mint tickets, and it
-  must mint **at most one ticket per live physical allocation/generation**.
-  This native helper cannot prevent a faulty trusted host from intentionally
-  creating *different* tickets for the same pointer. The source-language
-  compiler and FFI boundary must not expose ticket minting to guest code.
-- Ticket lifetime cannot race with ticket adoption. The compiler/runtime
-  must prove this lifetime and exclusive source ownership separately.
-- `get_checked(domain,generation)` denies stale generations and foreign
-  domains, but does not replace a compiler borrow proof.
-- Move invalidates the source. Move-assignment destroys the old destination
-  before adopting the new owner. Destruction first clears the capability,
-  then invokes its destructor exactly once. Repeated reset is idempotent.
-- The guest borrow checker must prevent any outstanding loan at move/drop,
-  any use after take and any borrow crossing a Task suspension or actor
-  teardown that can invalidate storage.
-- A `Box<T>` may be moved between **threads** when `T: Send` is proven.
-  Cross-actor/private-arena transfer is **not implemented**: the backend
-  must relocate/safely transfer storage or serialize the payload; it must
-  never send the address from an actor-private heap.
+- \`UniqueAllocationTicket<T>\` can **no longer be constructed from a raw pointer**.
+  Only the trusted \`FixedBoxArena<T, Slots>\` allocator may mint a ticket.
+  The source compiler does not expose ticket construction to guest code.
+- The allocator owns a compile-time-bounded array of real, aligned object
+  slots. Ticket issuance performs an atomic **free -> constructing -> live**
+  transition. An active allocation cannot receive a second ticket; competing
+  issuers admit at most one owner. No malloc/new heap fallback or GC.
+- A single allocator lifecycle atomic combines **closure** and the number of
+  outstanding allocation leases. \`try_close()\` is linearizable with concurrent
+  \`issue_at()\`; a reported successful close cannot race the publication
+  of a live ticket. Close is irreversible.
+- \`UniqueBox<T>::adopt(ticket)\` consumes a single-use ticket with CAS. A
+  rejected/unconsumed ticket owns its allocation and drops it exactly once.
+  Move invalidates the previous box, while reset first revokes the capability
+  and then invokes trusted allocator drop glue.
+- Reclamation increments a 32-bit per-slot generation; generation overflow
+  retires the slot forever instead of allowing stale-reference ABA revival.
+  Actor/arena domain identities are process-unique (fail closed on rollover).
+- The arena **must outlive** its outstanding owners; destroying an arena with
+  live tickets/boxes terminates rather than leaving dangling host pointers.
+  A guest compiler must still reject moves/drops with outstanding borrows,
+  use-after-move and cross-actor private-heap sharing. Host-provided
+  \`get_checked(domain,generation)\` is **not** a security or borrow proof.
+
+### Proofs and limitations
+
+Exact-source C++ tests exercise stale generations, duplicate adoption,
+concurrent allocation attempts, 16-thread ticket consumption, 64 repeated
+issue-vs-close races, reentrant destruction and deterministic cleanup.
+They run under optimized C++20, ASan, UBSan and TSan on a private runner.
+
+This is a bounded native **foundation**, not yet wired to actor-owned arena
+relocation or the main \`.atto\` borrow checker. The public native allocator
+API must only be reachable through trusted backend/runtime calls.
+
+## Experimental real guest-source Atomic AOT subset
+
+\`src/main/cpp/oreslang/frontend/NativeAtomicAotV1.cpp\` is a **separate**,
+closed-world compiler with its own typed lexer/parser. It accepts exactly one
+\`val Atomic<int>\` or \`val Atomic<bool>\` local in a zero-argument
+\`fnc main(): int\`, plus a small bounded collection of verified atomic calls.
+It emits actual LLVM \`load atomic\`, \`store atomic\`, \`atomicrmw\` and
+\`cmpxchg\` instructions (not non-atomic scalar stand-ins), and \`clang -x ir\`
+produces a native executable with no JIT or hidden GC.
+
+Memory-order validation shares \`NativeAtomicBoxV1.hpp\` rules. The separate
+\`tests/atto_atomic_aot_v1.sh\` compiles positive \`.atto\` fixtures and
+requires native exit code 42, while rejecting unsupported actor/Box syntax,
+copy-like aliases, invalid orders, wrong payloads and unsupported operations
+*before* any output LLVM IR is produced.
+
+It does **not** provide full main compiler integration, ownership or actor
+scheduler lowering, multiple atomic owners, cross-function transfers, arbitrary
+expressions, or five-backend conformance. This slice must remain isolated
+until those requirements are proven.
 
 ## Separate shared ownership
 
