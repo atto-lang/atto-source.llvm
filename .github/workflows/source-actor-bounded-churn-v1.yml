@@ -1,0 +1,87 @@
+name: LLVM bounded .atto source actor churn O0/O2 native guest
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'src/main/cpp/oreslang/runtime/SourceActorBootstrap.c'
+      - 'scripts/test-source-actor-bounded-churn-v1.sh'
+      - 'tests/fixtures/source-actor-bounded-churn-v1/**'
+      - '.github/workflows/source-actor-bounded-churn-v1.yml'
+  push:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'src/main/cpp/oreslang/runtime/SourceActorBootstrap.c'
+      - 'scripts/test-source-actor-bounded-churn-v1.sh'
+      - 'tests/fixtures/source-actor-bounded-churn-v1/**'
+      - '.github/workflows/source-actor-bounded-churn-v1.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  exact-head-bounded-source-actor-churn:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout immutable PR head, no persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Verify exact source identity before building
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          echo "SOURCE_ACTOR_BOUNDED_CHURN_HEAD=$EXPECTED_HEAD" >> "$GITHUB_STEP_SUMMARY"
+          echo "SOURCE_ACTOR_BOUNDED_CHURN_TREE=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_STEP_SUMMARY"
+      - name: Install native LLVM AOT compiler tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-19 llvm-19-dev cmake ninja-build binutils
+      - name: Compile immutable production source compiler and Rust IR GC gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B "$RUNNER_TEMP/atto-native-churn" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+            -DLLVM_DIR=/usr/lib/llvm-19/lib/cmake/llvm
+          cmake --build "$RUNNER_TEMP/atto-native-churn" --target oreslang-llvmc --parallel 2
+          test -x "$RUNNER_TEMP/atto-native-churn/oreslang-llvmc"
+          rustc --edition=2021 -D warnings --test scripts/audit_no_gc_ir.rs \
+            -o "$RUNNER_TEMP/atto-native-churn/no-gc-ir-tests"
+          "$RUNNER_TEMP/atto-native-churn/no-gc-ir-tests" --test-threads=1
+          rustc --edition=2021 -D warnings scripts/audit_no_gc_ir.rs \
+            -o "$RUNNER_TEMP/atto-native-churn/oreslang-no-gc-ir-audit"
+      - name: Execute real native guest 128, 7 and 0 actor loops at O0/O2
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          ORESLANG_LLVMC: ${{ runner.temp }}/atto-native-churn/oreslang-llvmc
+          ORES_NO_GC_IR_AUDIT: ${{ runner.temp }}/atto-native-churn/oreslang-no-gc-ir-audit
+          CLANG: /usr/bin/clang-19
+        run: |
+          set -euo pipefail
+          bash -n scripts/test-source-actor-bounded-churn-v1.sh
+          bash scripts/test-source-actor-bounded-churn-v1.sh |
+            tee "$RUNNER_TEMP/source-actor-bounded-churn-receipts.txt"
+          grep -Fqx "SOURCE_ACTOR_BOUNDED_CHURN_MATRIX_EXECUTED|head=$EXPECTED_HEAD|levels=O0_O2|native_executions=12|positive_variants=3|negative_compiler_rejections=10|async_guest=NOT_EXECUTED|zero_gc_certified=NO" \
+            "$RUNNER_TEMP/source-actor-bounded-churn-receipts.txt"
+          test "$(grep -c '^SOURCE_ACTOR_BOUNDED_CHURN_GUEST_EXECUTED|' \
+            "$RUNNER_TEMP/source-actor-bounded-churn-receipts.txt")" = 2
+      - name: Retain verified host-native guest receipts only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: compiled-bounded-actor-churn-guest-receipts
+          path: ${{ runner.temp }}/source-actor-bounded-churn-receipts.txt
+          if-no-files-found: warn
