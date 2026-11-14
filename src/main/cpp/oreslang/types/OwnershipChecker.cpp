@@ -25,6 +25,7 @@ struct LocalOwnership {
     bool moved = false;
     bool heap_owned = false; // Experimental region slots cannot transfer ownership yet.
     bool int_array = false; // Non-copy lexical array; no borrows or escapes.
+    bool native_atomic_i64 = false; // compiler-minted stack owner, not plain scalar
     bool record_view = false; // readonly materialized value, not an incoming loan
     bool mutable_owner = false; // lexical let mut or exclusive borrowed parameter
     bool assignable = false; // lexical slot replacement, not referent mutation
@@ -279,6 +280,8 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
                 reject(expr, "read conflicts with active mutable borrow of '" + expr.name + "'");
             if (source.int_array)
                 reject(expr, "ownership violation: native Array<int> is non-Copy and cannot escape");
+            if (source.native_atomic_i64)
+                reject(expr, "ATTO_ATOMIC_MAIN_V1_REJECT: Atomic<int> is non-Copy and cannot escape");
             if (!source.class_name.empty())
                 reject(expr, "ownership violation: class is non-Copy; use an explicit borrow");
             return;
@@ -392,6 +395,22 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             if (!same_affine_state(when_true, when_false))
                 reject(expr, "ownership violation: ternary CFG predecessor ownership mismatch");
             locals = std::move(when_true);
+            return;
+        }
+        case Expression::Kind::NativeAtomicCall: {
+            if (!expr.left || expr.left->kind != Expression::Kind::Variable)
+                reject(expr, "Atomic operation must access exactly one named owner");
+            auto found = locals.find(expr.left->name);
+            if (found == locals.end() || !found->second.native_atomic_i64 ||
+                    found->second.moved || found->second.shared_loans ||
+                    found->second.exclusive_loan)
+                reject(expr, "ATTO_ATOMIC_MAIN_V1_REJECT: missing or borrowed Atomic<int> owner");
+            if (expr.name != "load" && expr.name != "fetch_add")
+                reject(expr, "unsupported native atomic operation");
+            if (expr.arguments.size() != (expr.name == "load" ? 0u : 1u))
+                reject(expr, "invalid native atomic arity");
+            for (const auto& arg : expr.arguments)
+                check_value(*arg, locals, functions);
             return;
         }
         case Expression::Kind::ArrayCall: {
@@ -704,10 +723,19 @@ void validate_i64_ownership(Program& program) {
             LocalOwnership entry;
             entry.heap_owned = binding.heap_owned;
             entry.int_array = binding.int_array;
+            entry.native_atomic_i64 = binding.native_atomic_i64;
             entry.mutable_owner = binding.owner_mutable;
             entry.assignable = binding.assignable;
             entry.class_name = binding.class_name;
-            if (binding.int_array) {
+            if (binding.native_atomic_i64) {
+                if (binding.initializer || binding.heap_owned || binding.assignable ||
+                        binding.new_class || binding.move_class ||
+                        function.name != "main" || !function.parameters.empty() ||
+                        !function.actor_spawns.empty() || !function.actor_actions.empty() ||
+                        !function.source_tasks.empty() || !function.future_pipelines.empty() ||
+                        !function.ready_await_actor.empty() || !function.done_await_actor.empty())
+                    throw std::runtime_error("ATTO_ATOMIC_MAIN_V1_REJECT: unverified Atomic<int> ownership context");
+            } else if (binding.int_array) {
                 if (!binding.owner_mutable || binding.heap_owned || binding.initializer)
                     throw std::runtime_error("invalid native Array<int> owner");
             } else if (binding.name.rfind("$effect", 0) == 0 && binding.initializer &&
@@ -888,6 +916,7 @@ void validate_i64_ownership(Program& program) {
         auto scoped_entry = [&](const LocalBinding& binding) {
             LocalOwnership entry;
             entry.int_array = binding.int_array;
+            entry.native_atomic_i64 = binding.native_atomic_i64;
             entry.mutable_owner = binding.owner_mutable;
             entry.assignable = binding.assignable;
             entry.class_name = binding.class_name;
