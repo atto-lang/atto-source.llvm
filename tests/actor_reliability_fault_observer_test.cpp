@@ -2,6 +2,7 @@
 #include <atomic>
 #include <cassert>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -14,6 +15,17 @@ int main(){
   try { K invalid(cap, []{return std::uint64_t{0};}); assert(false); }
   catch(const std::invalid_argument&){}
  }
+
+ // Invalid restart-burst quota must fail before constructing a giant vector.
+ for (const auto quota : {std::size_t{0}, std::size_t{1025},
+                          std::numeric_limits<std::size_t>::max()}) {
+  try { K::RestartBudget invalid(quota, 100, 5,
+                                []{return std::uint64_t{1};}); assert(false); }
+  catch(const std::invalid_argument&){}
+ }
+ K::RestartBudget valid(1024, 100, 5, []{return std::uint64_t{1};});
+ assert(valid.try_acquire(1024).admitted);
+ assert(!valid.try_acquire().admitted);
 
  std::uint64_t clock=0;
  K k(3,[&]()->std::uint64_t{if(clock==4)throw 7;return clock++;});
