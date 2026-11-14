@@ -64,6 +64,9 @@ int oreslang_source_actor_test_readiness_publication_entered(void);
 /* Atomic count of priority supervisor terminal notices processed on the
  * root actor CONTROL lane; useful for exact once-delivery test receipts. */
 uint64_t oreslang_source_actor_test_terminal_notices(void);
+uint64_t oreslang_source_actor_test_panic_notices(void);
+uint64_t oreslang_source_actor_test_stopped_notices(void);
+uint64_t oreslang_source_actor_test_last_panic_code(void);
 #endif
 
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
