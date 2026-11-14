@@ -326,6 +326,82 @@ pub fn compile_ir(source: &str) -> Result<String, String> {
     Ok(out)
 }
 
+// Compile outputs are staged in the destination directory and atomically
+// published only after a complete IR write / successful clang exit. This
+// prevents compiler failures from truncating a previous valid artifact.
+// Creating a private temp path with create_new also rejects preexisting
+// symlinks rather than following them.
+static OUTPUT_SEQUENCE: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+struct OutputStage {
+    temp: std::path::PathBuf,
+    destination: std::path::PathBuf,
+}
+
+impl OutputStage {
+    fn create(
+        source: &std::path::Path,
+        destination: &std::path::Path,
+    ) -> Result<(Self, std::fs::File), String> {
+        if let Ok(output_meta) = std::fs::metadata(destination) {
+            let source_meta = std::fs::metadata(source)
+                .map_err(|e| format!("E_INPUT: {e}"))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                if source_meta.dev() == output_meta.dev()
+                    && source_meta.ino() == output_meta.ino()
+                {
+                    return Err("E_OUTPUT_SOURCE: output aliases the input source".into());
+                }
+            }
+            if std::fs::canonicalize(destination).ok()
+                == std::fs::canonicalize(source).ok()
+            {
+                return Err("E_OUTPUT_SOURCE: output aliases the input source".into());
+            }
+        }
+        let parent = destination.parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let name = destination.file_name()
+            .ok_or("E_OUTPUT: missing output filename")?
+            .to_string_lossy();
+        for _ in 0..64 {
+            let sequence = OUTPUT_SEQUENCE.fetch_add(
+                1, std::sync::atomic::Ordering::Relaxed
+            );
+            let temp = parent.join(format!(
+                ".{name}.atto-stage-{}-{sequence}.tmp",
+                std::process::id()
+            ));
+            match std::fs::OpenOptions::new()
+                .write(true).create_new(true).open(&temp)
+            {
+                Ok(file) => return Ok((
+                    Self { temp, destination: destination.to_path_buf() },
+                    file
+                )),
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(err) => return Err(format!("E_OUTPUT: {err}")),
+            }
+        }
+        Err("E_OUTPUT: could not allocate unique staging filename".into())
+    }
+
+    fn publish(self) -> Result<(), String> {
+        std::fs::rename(&self.temp, &self.destination)
+            .map_err(|e| format!("E_OUTPUT_PUBLISH: {e}"))
+    }
+}
+
+impl Drop for OutputStage {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.temp);
+    }
+}
+
 fn cli() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (src, out, emit_only) = match args.as_slice() {
@@ -338,25 +414,39 @@ fn cli() -> Result<(), String> {
     }
     let content = std::fs::read_to_string(src).map_err(|e|format!("E_INPUT: {e}"))?;
     let ir = compile_ir(&content)?;
+    let (staged, mut stage_file) = OutputStage::create(
+        std::path::Path::new(src), std::path::Path::new(out)
+    )?;
     if emit_only {
-        std::fs::write(out, ir).map_err(|e|format!("E_OUTPUT: {e}"))?;
-        return Ok(());
+        stage_file.write_all(ir.as_bytes()).map_err(|e|format!("E_OUTPUT: {e}"))?;
+        stage_file.flush().map_err(|e|format!("E_OUTPUT: {e}"))?;
+        drop(stage_file);
+        return staged.publish();
     }
-    // LLVM's clang lowers the generated IR to a native, closed-world binary.
+    drop(stage_file);
+    // LLVM's clang lowers IR to closed-world machine code in a private staging
+    // path; even compiler failure cannot damage the previous output artifact.
     // No Wasm runtime, guest interpreter, dynamic language VM, or collector.
     let mut child = Command::new("clang")
-        .args(["-x", "ir", "-O2", "-o", out, "-"])
+        .args(["-x", "ir", "-O2", "-o"])
+        .arg(&staged.temp)
+        .arg("-")
         .stdin(Stdio::piped()).spawn()
         .map_err(|e|format!("E_CLANG: {e}"))?;
-    if let Some(mut input) = child.stdin.take() {
-        input.write_all(ir.as_bytes()).map_err(|e|format!("E_CLANG_INPUT: {e}"))?;
+    let write_result = match child.stdin.take() {
+        Some(mut input) => input.write_all(ir.as_bytes()),
+        None => Err(std::io::Error::other("clang stdin unavailable")),
+    };
+    if let Err(err) = write_result {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("E_CLANG_INPUT: {err}"));
     }
     let status = child.wait().map_err(|e|format!("E_CLANG_WAIT: {e}"))?;
     if !status.success() {
-        let _ = std::fs::remove_file(out);
         return Err(format!("E_CLANG: compilation failed ({status})"));
     }
-    Ok(())
+    staged.publish()
 }
 
 fn main() {
