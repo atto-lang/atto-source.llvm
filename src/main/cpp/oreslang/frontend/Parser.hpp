@@ -488,6 +488,10 @@ struct InvertedSourceOperation {
     std::string field;
     std::array<std::int64_t, 2> values{};
     std::int64_t value = 0;
+    // Independent semantic provenance for a detached value local.
+    // Only Snapshot and ReturnSnapshotRead may name this binding.
+    // Keep at the end to preserve prior five-field aggregate test fixtures.
+    std::string snapshot_binding;
 };
 struct InvertedSourceMain {
     std::string schema_name;
