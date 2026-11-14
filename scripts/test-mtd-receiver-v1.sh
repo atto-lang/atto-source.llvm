@@ -69,4 +69,5 @@ check_negative negative-actor-forward-public.atto NATIVE_ACTOR_FORWARD_PUBLIC_UN
 check_negative negative-actor-forward-isoactor.atto NATIVE_ACTOR_FORWARD_KIND_UNSUPPORTED
 check_negative negative-actor-forward-cross-module.atto NATIVE_ACTOR_FORWARD_SCOPE
 check_negative negative-actor-forward-duplicate-definition.atto NATIVE_ACTOR_DUPLICATE_DEFINITION
-echo "PASS: two native guest fixtures (O0/O2) and fourteen fail-closed cases; sanitized=$sanitized"
+check_negative negative-external-actor-mtd.atto NATIVE_MTD_ACTOR_STATE_SEALED
+echo "PASS: two native guest fixtures (O0/O2) and fifteen fail-closed cases; sanitized=$sanitized"
