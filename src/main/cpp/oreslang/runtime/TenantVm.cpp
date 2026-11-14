@@ -380,6 +380,7 @@ std::uint64_t heap_class_bytes(int index) { return std::uint64_t{kMinHeapClassBy
 #if defined(TENANT_VM_TEST_MPROTECT)
 extern "C" int tenant_vm_test_carrier_sigaltstack(const stack_t*, stack_t*);
 extern "C" bool tenant_vm_test_fail_carrier_altstack_setup();
+extern "C" void tenant_vm_test_record_borrowed_altstack(std::size_t bytes);
 extern "C" void tenant_vm_test_record_recovery_mask();
 #endif
 
@@ -499,6 +500,10 @@ struct TenantVmHost::Core {
                 // carrier instead of overwriting another runtime's registration.
                 if (existing.ss_sp == nullptr || existing.ss_size < (std::size_t{16} << 10))
                     signal_stack_result = -1;
+#if defined(TENANT_VM_TEST_MPROTECT)
+                else
+                    tenant_vm_test_record_borrowed_altstack(existing.ss_size);
+#endif
             } else {
                 stack_t alt{};
                 alt.ss_sp = c->signal_stack;
@@ -1417,15 +1422,7 @@ struct TenantVmHost::Core {
     bool launch_carrier(Carrier* c) {
         pthread_attr_t attributes;
         if (pthread_attr_init(&attributes) != 0) return false;
-#if defined(TENANT_VM_TEST_MPROTECT)
-        const bool default_stack = std::getenv("TENANT_VM_TEST_DEFAULT_PTHREAD_STACK") != nullptr;
-#else
-        const bool default_stack = false;
-#endif
-        // Test-only control: compare ASan startup on ordinary pthread-managed stacks
-        // with the runtime's custom mapped/guarded carrier stacks. Guest admission
-        // is rejected below in this mode.
-        const int attr_status = default_stack ? 0 : pthread_attr_setstack(&attributes,
+        const int attr_status = pthread_attr_setstack(&attributes,
             static_cast<std::uint8_t*>(c->stack) + kCarrierGuardBytes, limits.carrier_stack_bytes);
         if (attr_status != 0) {
             pthread_attr_destroy(&attributes);
@@ -1559,15 +1556,7 @@ std::future<TurnResult> ready_result(Status status) {
 TenantVmHost::TenantVmHost(HostLimits limits) : core_(std::make_shared<Core>(limits)) {
     if (limits.carriers == 0 || limits.max_vms == 0 || limits.carrier_stack_bytes < 2 * kHostCallStackBytes)
         throw std::invalid_argument("TenantVmHost limits");
-#if defined(TENANT_VM_TEST_MPROTECT)
-    // Diagnostic-only: invalid-admission tests can isolate the host's pthread
-    // lifecycle from process-global signal-handler installation. A valid VM open
-    // still fails with SignalHandlerLost when handlers were not installed.
-    if (std::getenv("TENANT_VM_TEST_SKIP_GLOBAL_SIGNAL_HANDLERS") == nullptr)
-        install_handlers_once();
-#else
     install_handlers_once();
-#endif
     Core* core = core_.get();
     core->api.abi_version = ORES_VM_GUEST_ABI_VERSION;
     core->api.alloc = &Core::host_alloc;
@@ -1588,12 +1577,6 @@ TenantVmHost::TenantVmHost(HostLimits limits) : core_(std::make_shared<Core>(lim
         if (!core->allocate_carrier_stack(core->carriers.back().get()))
             give_up("TenantVmHost: carrier stack");
     }
-#if defined(TENANT_VM_TEST_MPROTECT)
-    // Diagnostic-only negative control: keep the real mapped/guarded stacks and the
-    // host's lifecycle but do not create any worker or watchdog thread. Valid VM
-    // admission is refused below while this mode is active.
-    if (std::getenv("TENANT_VM_TEST_SKIP_CARRIER_STARTUP") != nullptr) return;
-#endif
     // All slots must exist before a worker can scan them. Publish each pthread_t before
     // releasing any start gate, including in the partial-construction failure path.
     for (auto& carrier : core->carriers)
@@ -1638,12 +1621,6 @@ VmOpenResult TenantVmHost::open(VmSpec spec) {
         (l.actor_stack_bytes && (l.actor_stack_bytes < kHostCallStackBytes + (std::size_t{64} << 10) ||
             std::uint64_t{l.actor_stack_bytes} + kCarrierGuardBytes + kTurnEntryBytes > core_->limits.carrier_stack_bytes)))
         return refuse(Status::InvalidArgument);
-#if defined(TENANT_VM_TEST_MPROTECT)
-    if (std::getenv("TENANT_VM_TEST_SKIP_CARRIER_STARTUP") != nullptr ||
-        std::getenv("TENANT_VM_TEST_SKIP_ALTSTACK_REGISTRATION") != nullptr ||
-        std::getenv("TENANT_VM_TEST_DEFAULT_PTHREAD_STACK") != nullptr)
-        return refuse(Status::HostClosed);
-#endif
     if (!handlers_are_ours()) return refuse(Status::SignalHandlerLost);
 
     auto vm = std::make_shared<Vm>();
