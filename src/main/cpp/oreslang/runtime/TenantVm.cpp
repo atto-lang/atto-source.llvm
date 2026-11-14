@@ -335,6 +335,13 @@ bool handlers_are_ours() {
         if (sigaction(s, nullptr, &current) != 0 || !(current.sa_flags & SA_SIGINFO) || current.sa_sigaction != on_fault)
             return false;
     }
+    // Losing SIGURG is also unsafe: the watchdog could no longer interrupt an
+    // uncooperative actor or a guest whose VM has been killed. Refuse admission
+    // rather than silently claiming the deadline/kill guarantee still holds.
+    struct sigaction interrupt {};
+    if (sigaction(kInterruptSignal, nullptr, &interrupt) != 0 ||
+        !(interrupt.sa_flags & SA_SIGINFO) || interrupt.sa_sigaction != on_interrupt)
+        return false;
     return true;
 }
 
