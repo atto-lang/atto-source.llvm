@@ -24,7 +24,9 @@ ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 "$tmp/mir-clang"
   -I"$repo/src/main/cpp" \
   "$repo/tests/native_inverted_mir_codegen_smoke.cpp" -o "$tmp/mir-emitter"
 "$tmp/mir-emitter" > "$tmp/guest.ll"
+"$tmp/mir-emitter" --bounds-trap > "$tmp/negative.ll"
 test -s "$tmp/guest.ll"
+test -s "$tmp/negative.ll"
 grep -Fq 'define i32 @main()' "$tmp/guest.ll"
 grep -Fq 'llvm.trap' "$tmp/guest.ll"
 if grep -Eqi 'GC_malloc|GC_collect|Boehm' "$tmp/guest.ll"; then
@@ -42,5 +44,21 @@ for opt in 0 2; do
         exit 1
     fi
     echo "MIR_IR_NATIVE_EXIT_42_O$opt"
+    "$clang" -O"$opt" -x ir "$tmp/negative.ll" -o "$tmp/negative-$opt"
+    # LLVM llvm.trap lowers to an actual illegal-instruction or trap signal.
+    # A normal exit 42, graceful zero exit, SIGSEGV or SIGABRT is not proof.
+    (ulimit -c 0; "$tmp/negative-$opt" >/dev/null 2>&1) 2>/dev/null && {
+        echo "FAIL: checked dense out-of-bounds returned normally at O$opt" >&2
+        exit 1
+    }
+    set +e
+    (ulimit -c 0; "$tmp/negative-$opt" >/dev/null 2>&1) 2>/dev/null
+    trapped=$?
+    set -e
+    if [[ "$trapped" != 132 && "$trapped" != 133 ]]; then
+        echo "FAIL: expected SIGILL/SIGTRAP, got exit $trapped at O$opt" >&2
+        exit 1
+    fi
+    echo "MIR_IR_BOUNDS_TRAP_O$opt"
 done
 echo 'CHECKED_MIR_NATIVE_IR_PASS; .atto source parser NOT_EXECUTED'
