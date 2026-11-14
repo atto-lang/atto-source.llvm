@@ -44,9 +44,15 @@ for suite in clang gcc; do
     -DCMAKE_CXX_FLAGS="-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined" \
     -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
   cmake --build "$build" --parallel 2
+  suites='^(native_actor_done_resource_quiescence|native_actor_resource_registry_quiescence)
+done
+
+  # A typo in a regex or a missing target must never manufacture a PASS.
+  # Require exactly both tests before the sanitizer runs.
+  ctest --test-dir "$build" -N -R "$suites" | grep -F 'Total Tests: 2'
   ASAN_OPTIONS='detect_leaks=1:halt_on_error=1' \
   UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1' \
-    ctest --test-dir "$build" -R '^native_actor_done_resource_quiescence$' \
+    ctest --test-dir "$build" -R "$suites" \
       --output-on-failure --no-tests=error
-  printf 'ATTO_NATIVE_RETIREMENT_HOST_ONLY_PASS=%s %s\n' "$suite" "$actual_head"
+  printf 'ATTO_NATIVE_RETIREMENT_AND_REGISTRY_HOST_PASS=%s %s\n' "$suite" "$actual_head"
 done
