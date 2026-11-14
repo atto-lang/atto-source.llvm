@@ -3818,6 +3818,22 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-arena-test)
     set_tests_properties(native_actor_arena_persistent_scratch PROPERTIES TIMEOUT 25)
 
+    # Host-only compiler-ready 32-bit actor-region adapter, built against
+    # the real ActorArena.c; it is NOT native guest .atto codegen evidence.
+    add_executable(oreslang-native-actor-region-v1-test
+        tests/actor_region_v1_test.c
+        src/main/cpp/oreslang/runtime/ActorRegionV1.c
+        src/main/cpp/oreslang/runtime/ActorArena.c)
+    target_include_directories(oreslang-native-actor-region-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-region-v1-test PRIVATE c_std_11)
+    target_compile_options(oreslang-native-actor-region-v1-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_region_v1_offsets_generation_drop
+        COMMAND oreslang-native-actor-region-v1-test)
+    set_tests_properties(native_actor_region_v1_offsets_generation_drop
+        PROPERTIES TIMEOUT 30)
+
     # Security regression: reject actor-private/control-buffer overlap and
     # overflowing host spans before any memcpy. POSIX fork oracle verifies abort.
     if(UNIX)
