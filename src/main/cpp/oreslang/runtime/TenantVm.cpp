@@ -379,6 +379,12 @@ std::uint64_t heap_class_bytes(int index) { return std::uint64_t{kMinHeapClassBy
 
 } // namespace
 
+// The test build redirects *only* the tenant carrier registration call. Never
+// globally wrap sigaltstack: sanitizers register their own alternate signal stacks.
+#if defined(TENANT_VM_TEST_MPROTECT)
+extern "C" int tenant_vm_test_carrier_sigaltstack(const stack_t*, stack_t*);
+#endif
+
 struct TenantVmHost::Core {
     explicit Core(HostLimits value) : limits(value) {}
 
@@ -478,7 +484,12 @@ struct TenantVmHost::Core {
         stack_t alt{};
         alt.ss_sp = c->signal_stack;
         alt.ss_size = kSignalStackBytes;
-        if (sigaltstack(&alt, nullptr) != 0) {
+#if defined(TENANT_VM_TEST_MPROTECT)
+        const int signal_stack_result = tenant_vm_test_carrier_sigaltstack(&alt, nullptr);
+#else
+        const int signal_stack_result = sigaltstack(&alt, nullptr);
+#endif
+        if (signal_stack_result != 0) {
             // This can fail on a replacement worker even when its mmap succeeded.
             // Never abort the process or run a guest without an alternate fault stack.
             // The watchdog joins and replaces this carrier just like a failed quota guard.
