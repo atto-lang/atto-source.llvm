@@ -683,7 +683,7 @@ pub fnc main(): int {\n  const worker: ActorRef<Worker> = spawn Worker();\n  wor
             .map_err(|e| format!("run rejected AOT case: {e}"))?;
         require(!out.status.success(), format!("invalid source admitted: {text:?}"))?;
         require(
-            fs::read(&output).map_err(|e| e.to_string())? == updated,
+            fs::read(&output).map_err(|e| e.to_string())? == original,
             "failed compile changed existing native output",
         )?;
         let absent = temp.path.join("rejected native app");
