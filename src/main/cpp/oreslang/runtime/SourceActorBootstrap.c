@@ -80,6 +80,9 @@ typedef struct {
     size_t live;
     size_t peak;
     atomic_uint_fast64_t terminal_notices;
+    atomic_uint_fast64_t terminal_panic_notices;
+    atomic_uint_fast64_t terminal_stopped_notices;
+    atomic_uint_fast64_t last_panic_code;
 } SourceActorGroup;
 
 /* Process-local trusted-main group; the compiler only supports linear refs
@@ -187,6 +190,15 @@ int oreslang_source_actor_test_readiness_publication_entered(void) {
 }
 uint64_t oreslang_source_actor_test_terminal_notices(void) {
     return atomic_load_explicit(&group.terminal_notices, memory_order_acquire);
+}
+uint64_t oreslang_source_actor_test_panic_notices(void) {
+    return atomic_load_explicit(&group.terminal_panic_notices, memory_order_acquire);
+}
+uint64_t oreslang_source_actor_test_stopped_notices(void) {
+    return atomic_load_explicit(&group.terminal_stopped_notices, memory_order_acquire);
+}
+uint64_t oreslang_source_actor_test_last_panic_code(void) {
+    return atomic_load_explicit(&group.last_panic_code, memory_order_acquire);
 }
 #endif
 
@@ -648,9 +660,19 @@ static void source_supervisor_notice(
     ensure(raw == &group && parent_slot == SOURCE_GROUP_ROOT_SLOT);
     ensure(failure.child.scheduler_domain == group.root_ref.scheduler_domain
         && failure.child.actor_slot < SOURCE_GROUP_ROOT_SLOT
-        && failure.child.generation != 0
-        && (failure.kind == ORES_NATIVE_CONTROL_PANIC
-            || failure.kind == ORES_NATIVE_CONTROL_STOPPED));
+        && failure.child.generation != 0 && failure.correlation != 0);
+    if (failure.kind == ORES_NATIVE_CONTROL_PANIC) {
+        ensure(failure.failure_code != 0);
+        atomic_store_explicit(&group.last_panic_code,
+                              failure.failure_code, memory_order_release);
+        atomic_fetch_add_explicit(
+            &group.terminal_panic_notices, 1, memory_order_release);
+    } else {
+        ensure(failure.kind == ORES_NATIVE_CONTROL_STOPPED
+            && failure.failure_code == 0);
+        atomic_fetch_add_explicit(
+            &group.terminal_stopped_notices, 1, memory_order_release);
+    }
     atomic_fetch_add_explicit(&group.terminal_notices, 1, memory_order_release);
 }
 
@@ -659,6 +681,9 @@ static void open_group_locked(void) {
     ensure(group.live == 0 && group.next_slot == 0 && group.peak == 0);
     ensure(group.pending_ready == NULL && group.pending_done == NULL);
     atomic_store_explicit(&group.terminal_notices, 0, memory_order_release);
+    atomic_store_explicit(&group.terminal_panic_notices, 0, memory_order_release);
+    atomic_store_explicit(&group.terminal_stopped_notices, 0, memory_order_release);
+    atomic_store_explicit(&group.last_panic_code, 0, memory_order_release);
 
     /*
      * Live trace stores are process-local runtime metadata. They hold logical
