@@ -1,0 +1,29 @@
+name: LLVM Counter v2 identical-source admission (not executable parity)
+on:
+  push:
+    paths:
+      - 'contracts/actor-counter-identical-source-v1/**'
+      - 'tests/counter_v2_source_admission.py'
+      - '.github/workflows/llvm-counter-v2-source-admission.yml'
+  pull_request:
+    paths:
+      - 'contracts/actor-counter-identical-source-v1/**'
+      - 'tests/counter_v2_source_admission.py'
+      - '.github/workflows/llvm-counter-v2-source-admission.yml'
+permissions:
+  contents: read
+jobs:
+  source-admission:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Verify exact source tree and mutation admission
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          python3 tests/counter_v2_source_admission.py
+          echo "LLVM_COUNTER_V2_EXECUTION_STATUS=NOT_EXECUTED"
