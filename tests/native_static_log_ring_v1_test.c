@@ -59,6 +59,6 @@ int main(void) {
         rid_hi, rid_lo, sid_hi, sid_lo, "ignored", 7) == 0);
     assert(ores_native_telemetry_log_stats().pending == 0);
 
-    puts("LLVM_NATIVE_GUEST_LOG_RING_HOST_PASS");
+    puts("LLVM_STATIC_LOG_RING_HOST_PASS");
     return 0;
 }
