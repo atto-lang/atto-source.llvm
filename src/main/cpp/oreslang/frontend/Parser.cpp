@@ -6320,6 +6320,133 @@ void resolve_future_pipeline_contracts(Program& program) {
 
 } // namespace
 
+DeclaredActorReceiveSyntax inspect_declared_actor_receive_syntax(std::string_view source) {
+    // Tokenize with the production native lexer: comments and strings cannot
+    // mint hook names. This is *syntax*, not manifest or runtime admission.
+    if (source.size() > 1024 * 1024 ||
+            source.find('\0') != std::string_view::npos)
+        throw std::runtime_error("DECLARED_ACTOR_RECEIVE_REJECTED: invalid source budget");
+    Lexer lexer(source);
+    Token token = lexer.next();
+    auto advance = [&]() { token = lexer.next(); };
+    auto fail_receive = [&]() {
+        throw std::runtime_error(
+            "DECLARED_ACTOR_RECEIVE_REJECTED: invalid external actor receive at byte "
+            + std::to_string(token.offset));
+    };
+    auto expect = [&](std::string_view text) {
+        if (token.text != text) fail_receive();
+        advance();
+    };
+    auto ident = [&]() -> std::string {
+        if (token.kind != Kind::Identifier || reserved(token.text))
+            fail_receive();
+        std::string result(token.text);
+        advance();
+        return result;
+    };
+    auto critical = [&](std::string_view mode) {
+        const auto origin = token.offset;
+        expect("critical");
+        if (token.offset != origin + 8) fail_receive();
+        expect("-");
+        if (token.offset != origin + 9) fail_receive();
+        expect(mode);
+    };
+    auto state_intrinsic = [&]() {
+        expect("self");
+        expect(".");
+        expect("handle_state");
+        expect("(");
+    };
+
+    DeclaredActorReceiveSyntax result;
+    expect("namespace");
+    result.namespace_name = ident();
+    expect(";");
+    expect("external"); expect("mtd"); expect("(");
+    result.actor_name = ident();
+    result.receiver_name = ident();
+    expect(")"); expect("receive"); expect("(");
+    expect("ActorMail"); expect("<"); expect("int"); expect(">");
+    result.mail_name = ident();
+    expect(")"); expect(":"); expect("void"); expect("{");
+    state_intrinsic();
+    critical("write"); expect("|");
+    const auto write_view = ident();
+    expect("|"); expect("->"); expect("{");
+    const auto lhs_view = ident(); expect(".");
+    result.state_field = ident();
+    expect("=");
+    const auto rhs_view = ident(); expect(".");
+    const auto rhs_field = ident();
+    expect("+");
+    const auto input = ident(); expect("."); expect("value");
+    expect(";"); expect("}"); expect(")"); expect(";");
+
+    expect("val"); expect("int");
+    result.snapshot_name = ident();
+    expect("=");
+    state_intrinsic();
+    critical("read"); expect("|");
+    const auto read_view = ident();
+    expect("|"); expect("->");
+    const auto read_owner = ident(); expect(".");
+    const auto read_field = ident();
+    expect(")"); expect(";");
+
+    // The critical read has ended before output publication, as checked by
+    // this closed statement order; no view pointer is captured in the send.
+    expect("self"); expect("."); expect("send"); expect("(");
+    const auto published = ident();
+    expect(")"); expect(";");
+
+    expect("if");
+    const auto stop_input = ident(); expect("."); expect("value");
+    expect("==");
+    if (token.kind != Kind::Integer || token.text.empty() ||
+            token.text.front() == '_' || token.text.back() == '_' ||
+            token.text.find("__") != std::string_view::npos)
+        fail_receive();
+    std::string stop_digits;
+    stop_digits.reserve(token.text.size());
+    for (const char ch : token.text) {
+        if (ch == '_') continue;
+        if (!digit(ch)) fail_receive();
+        stop_digits.push_back(ch);
+    }
+    const auto parsed = std::from_chars(
+        stop_digits.data(), stop_digits.data() + stop_digits.size(),
+        result.stop_mail_value);
+    if (parsed.ec != std::errc{} ||
+            parsed.ptr != stop_digits.data() + stop_digits.size())
+        fail_receive();
+    advance();
+    expect(";"); expect("do");
+    expect("self"); expect("."); expect("end"); expect("("); expect(")");
+    expect(";"); expect("fi");
+    expect("return"); expect(";"); expect("}");
+    if (token.kind != Kind::End ||
+            result.receiver_name == result.mail_name ||
+            result.receiver_name == write_view ||
+            result.receiver_name == read_view ||
+            result.mail_name == write_view ||
+            result.mail_name == read_view ||
+            result.snapshot_name == write_view ||
+            result.snapshot_name == read_view ||
+            result.snapshot_name == result.mail_name ||
+            result.snapshot_name == result.receiver_name ||
+            lhs_view != write_view || rhs_view != write_view ||
+            rhs_field != result.state_field ||
+            input != result.mail_name ||
+            read_owner != read_view ||
+            read_field != result.state_field ||
+            published != result.snapshot_name ||
+            stop_input != result.mail_name)
+        fail_receive();
+    return result;
+}
+
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int,
                       bool experimental_rt_scalar_loop) {
     Program program = Parser(source, experimental_owned_int,
