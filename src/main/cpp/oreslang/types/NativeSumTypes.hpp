@@ -41,6 +41,11 @@ inline void resolve_native_sums(Program& program) {
     expression = [&](Expression& e, const Env& env, const std::string& expected) -> Hint {
         using E = Expression::Kind;
         if (e.kind == E::SumConstruct) {
+            if (e.trap_origin && (e.name != "Some" || e.arguments.size() != 1 ||
+                    !native_trap_pure_integer(*e.arguments.front())))
+                throw std::runtime_error("invalid native trap AST: operand must be a pure i64 expression");
+            if (e.trap_origin && !expected.empty() && expected != "Option<int>")
+                throw std::runtime_error("native trap requires exactly Option<int>, no nested/erased result conversion");
             std::string selected = expected;
             if (selected.empty()) {
                 if (e.name != "Some" || e.arguments.size() != 1) throw std::runtime_error("native sum constructor requires a declared Option/Result context");
@@ -50,6 +55,8 @@ inline void resolve_native_sums(Program& program) {
             }
             const NativeSumType type = native_sum(program, selected);
             const bool option = type.kind == NativeSumType::Kind::Option;
+            if (e.trap_origin && (!option || type.value_type != ScalarType::I64))
+                throw std::runtime_error("native trap only lowers Option<int> with noncatching checked arithmetic");
             if ((option && e.name != "Some" && e.name != "None") || (!option && e.name != "Ok" && e.name != "Err"))
                 throw std::runtime_error("native sum constructor variant does not match declared sum type");
             if (e.arguments.size() != (e.name == "None" ? 0u : 1u)) throw std::runtime_error("native sum constructor payload arity mismatch");
@@ -86,7 +93,9 @@ inline void resolve_native_sums(Program& program) {
                     slot = 0; while (slot < found->second->parameters.size() && found->second->parameters[slot].name != e.argument_names[i]) ++slot;
                 }
                 const auto context = found != functions.end() && slot < found->second->parameters.size() ? found->second->parameters[slot].sum_type : std::string{};
-                expression(*e.arguments[i], env, context);
+                const auto actual = expression(*e.arguments[i], env, context);
+                if (found != functions.end() && actual.sum != context)
+                    throw std::runtime_error("native call argument cannot implicitly wrap or erase Option/Result");
             }
             if (found == functions.end()) return {};
             return {found->second->return_type, found->second->return_sum, found->second->return_class};
@@ -136,9 +145,12 @@ inline void resolve_native_sums(Program& program) {
             expression(*e.when_false, env, expected.empty() ? yes.sum : expected);
             return yes;
         }
-        Hint left;
+        Hint left, right;
         if (e.left) left = expression(*e.left, env, {});
-        if (e.right) expression(*e.right, env, {});
+        if (e.right) right = expression(*e.right, env, {});
+        if ((e.kind == E::Add || e.kind == E::Subtract || e.kind == E::Multiply ||
+                e.kind == E::Negate) && (!left.sum.empty() || !right.sum.empty()))
+            throw std::runtime_error("native tagged Option/Result is not an integer arithmetic operand");
         for (auto& arg : e.arguments) expression(*arg, env, {});
         if (e.kind == E::LogicalNot || e.kind == E::Equal || e.kind == E::NotEqual || e.kind == E::Less || e.kind == E::LessEqual ||
                 e.kind == E::Greater || e.kind == E::GreaterEqual || e.kind == E::LogicalAnd || e.kind == E::LogicalOr || e.kind == E::LogicalXor)
@@ -157,7 +169,11 @@ inline void resolve_native_sums(Program& program) {
         Env env;
         for (const auto& p : fn.parameters) env.emplace(p.name, Hint{p.scalar_type, p.sum_type, p.class_name});
         for (auto& binding : fn.locals) {
-            if (binding.initializer) expression(*binding.initializer, env, binding.sum_type);
+            if (binding.initializer) {
+                const auto actual = expression(*binding.initializer, env, binding.sum_type);
+                if (actual.sum != binding.sum_type)
+                    throw std::runtime_error("native local Option/Result initializer cannot implicitly wrap or erase tagged value");
+            }
             for (std::size_t i = 0; i < binding.constructor_arguments.size(); ++i) {
                 const auto* field = classes.count(binding.class_name) ? constructor_field(*classes.at(binding.class_name), i) : nullptr;
                 expression(*binding.constructor_arguments[i], env, field ? field->sum_type : std::string{});
@@ -183,7 +199,11 @@ inline void resolve_native_sums(Program& program) {
                     context = scope.at(item.receiver).sum;
                 if (!item.receiver.empty() && scope.count(item.receiver) && classes.count(scope.at(item.receiver).cls))
                     for (const auto& field : classes.at(scope.at(item.receiver).cls)->fields) if (field.name == item.field) context = field.sum_type;
-                if (item.expression) expression(*item.expression, scope, context);
+                if (item.expression) {
+                    const auto actual = expression(*item.expression, scope, context);
+                    if (item.kind == Statement::Kind::Return && actual.sum != context)
+                        throw std::runtime_error("native return cannot implicitly wrap or erase Option/Result");
+                }
                 if (item.array_commit_length) expression(*item.array_commit_length, scope, {});
                 for (auto& value : item.array_commit_values) expression(*value, scope, {});
                 Env yes = scope, no = scope;
@@ -198,7 +218,11 @@ inline void resolve_native_sums(Program& program) {
             if (guard.rhs) expression(*guard.rhs, env, {});
             expression(*guard.result, env, fn.return_sum);
         }
-        if (fn.result) expression(*fn.result, env, fn.return_sum);
+        if (fn.result) {
+            const auto actual = expression(*fn.result, env, fn.return_sum);
+            if (actual.sum != fn.return_sum)
+                throw std::runtime_error("native result cannot implicitly wrap or erase Option/Result");
+        }
     };
     for (auto& fn : program.functions) function(fn);
     for (auto& actor : program.actors) function(actor.on_message);
