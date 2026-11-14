@@ -1,0 +1,7 @@
+// Native array/member calls cannot treat labels as positional arguments.
+// The declared index label is not checked against an array signature yet.
+pub fnc main(): int {
+  val Array<int> values = new Array<int>();
+  values.add(42);
+  return values.get(index: 0);
+}

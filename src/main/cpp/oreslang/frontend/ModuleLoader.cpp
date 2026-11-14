@@ -3,6 +3,7 @@
 #include "oreslang/frontend/ImportPathVariables.hpp"
 #include "oreslang/frontend/ProjectRootImport.hpp"
 #include <cstdlib>
+#include "oreslang/types/NativeSumTypes.hpp"
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -29,6 +30,8 @@ struct Unit {
     bool core_closure_complete = false;
     std::unordered_map<std::string, std::size_t> dependencies;
     std::unordered_map<std::string, std::pair<std::size_t, std::string>> class_imports;
+    // local name -> (unit index, pub function name) from `import fnc`.
+    std::unordered_map<std::string, std::pair<std::size_t, std::string>> function_imports;
     // Declaration identities stay immutable while ASTs are moved/qualified.
     std::unordered_map<std::string, std::unordered_map<std::size_t, bool>> functions;
     std::unordered_set<std::string> classes;
@@ -79,8 +82,8 @@ public:
             if (index && !unit.program.actors.empty())
                 fail(unit, "native imported actor declarations require typed module actor placement lowering");
             for (const auto& type : unit.program.sum_types) {
-                bool found = false; for (const auto& existing : linked.sum_types) if (existing.name == type.name) found = true;
-                if (!found) linked.sum_types.push_back(type);
+                try { merge_native_sum_descriptor(linked.sum_types, type); }
+                catch (const std::runtime_error& error) { fail(unit, error.what()); }
             }
             for (auto& fn : unit.program.functions) {
                 qualify_function(unit, fn);
@@ -355,6 +358,18 @@ private:
             if (imported.local_name == current.program.module)
                 fail(current, "native imported module binding conflicts with containing module");
             const auto& target = *units[selected];
+            if (imported.selected_function) {
+                const auto found = target.functions.find(imported.selected_module);
+                bool exported = false;
+                if (found != target.functions.end())
+                    for (const auto& arity : found->second) exported = exported || arity.second;
+                if (!exported)
+                    fail(current, "unknown or private imported function '" + imported.selected_module + "'");
+                if (current.functions.count(imported.local_name))
+                    fail(current, "imported function conflicts with local function '" + imported.local_name + "'");
+                current.function_imports.emplace(imported.local_name, std::make_pair(selected, imported.selected_module));
+                continue;
+            }
             if (imported.selected_class) {
                 const auto cls = target.class_exports.find(imported.selected_module);
                 if (cls == target.class_exports.end() || !cls->second)
@@ -376,7 +391,7 @@ private:
         return index;
     }
     static void binding_name(const Unit& unit, const std::string& name) {
-        if (unit.dependencies.count(name) || unit.class_imports.count(name))
+        if (unit.dependencies.count(name) || unit.class_imports.count(name) || unit.function_imports.count(name))
             fail(unit, "native module import binding cannot be shadowed: '" + name + "'");
     }
     void expression(const Unit& unit, Expression* expr) {
@@ -398,10 +413,16 @@ private:
             const auto binding = unit.dependencies.find(expr->name.substr(0, dot));
             if (binding == unit.dependencies.end()) fail(unit, "unknown native module binding");
             target = units[binding->second].get(); member = expr->name.substr(dot + 1); external = true;
+        } else if (!unit.functions.count(member)) {
+            const auto imported = unit.function_imports.find(member);
+            if (imported != unit.function_imports.end()) {
+                target = units[imported->second.first].get(); member = imported->second.second; external = true;
+            }
         }
         const auto function = target->functions.find(member);
         if (function == target->functions.end() || !function->second.count(expr->arguments.size()))
-            fail(unit, "unknown function or wrong call arity '" + expr->name + "'");
+            fail(unit, "unknown function or wrong call arity '" + expr->name +
+                (function == target->functions.end() ? "': unknown function" : "': call arity mismatch"));
         if (external && !function->second.at(expr->arguments.size()))
             fail(unit, "imported function is private: '" + expr->name + "'");
         expr->name = target->prefix + member;

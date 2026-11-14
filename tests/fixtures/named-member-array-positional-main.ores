@@ -1,0 +1,6 @@
+// Baseline: rejecting unlowered labels must not reject positional Array<int> calls.
+pub fnc main(): int {
+  val Array<int> values = new Array<int>();
+  values.add(42);
+  return values.get(0);
+}

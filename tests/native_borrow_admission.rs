@@ -214,6 +214,18 @@ fn check_case_with_suffix(
             status.success() && has_definition(&stdout),
             "{name}: missing real IR: {stderr}"
         );
+        if name == "valid-local-in-place-mutation" {
+            // Local i64 updates must not silently acquire a managed/heap
+            // allocator dependency. SSA/stack alloca remain allowed. This
+            // is an IR smoke gate, NOT proof of whole-program zero GC.
+            const ALLOCATORS: [&str; 6] =
+                ["@malloc(", "@calloc(", "@realloc(", "@GC_malloc(", "@ores_gc_alloc(", "@_Znwm("];
+            for line in stdout.lines() {
+                if line.contains("call") && ALLOCATORS.iter().any(|symbol| line.contains(symbol)) {
+                    panic!("{name}: scalar-only source emitted a heap/GC allocation call: {line}");
+                }
+            }
+        }
     }
 }
 
@@ -274,6 +286,7 @@ fn main() {
         check_case(&compiler, &root.0, name, source, Some(expected));
     }
     for (name, source) in [
+        ("valid-local-in-place-mutation", "pub fnc main(): int { let int count = 1; count = count + 1; return count; }\n"),
         ("valid-shared-borrow", "fnc read(borrow int x): int { return x; }\npub fnc main(): int { let int v = 42; return read(rt borrow v); }\n"),
         ("valid-exclusive-mutable-borrow", "fnc read(borrow mut int x): int { return x; }\npub fnc main(): int { let int v = 42; return read(rt mut borrow v); }\n"),
         ("valid-owned-scalar-call", "fnc consume(int x): int { return x; }\npub fnc main(): int { return consume(42); }\n"),

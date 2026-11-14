@@ -55,6 +55,10 @@ struct ManifestLayout {
 inline ManifestLayout validate_manifest(const std::string& manifest_bytes) {
     if (manifest_bytes.size() > 64u * 1024u)
         throw std::runtime_error("native package manifest exceeds 64 KiB");
+    // NUL cannot occur in a TOML text manifest. Different consumers must
+    // never disagree because one treats a truncated C-string as the file.
+    if (manifest_bytes.find('\0') != std::string::npos)
+        throw std::runtime_error("native package manifest contains NUL byte");
     if (manifest_bytes.find("\"\"\"") != std::string::npos ||
             manifest_bytes.find("'''") != std::string::npos)
         throw std::runtime_error("native package manifest multiline TOML requires full parser");
@@ -328,6 +332,11 @@ inline std::filesystem::path resolve_project_root_import(
     reject_nested_package(physical_root, target);
     if (!strict_descendant(source_root, target))
         throw std::runtime_error("native project-root import escapes configured project.root");
+    // A canonical path may still identify a directory or other non-file.
+    // Never hand it to the native source loader as an executable import.
+    std::error_code leaf_error;
+    if (!fs::is_regular_file(target, leaf_error) || leaf_error)
+        throw std::runtime_error("native project-root import source must be a regular file");
     return target;
 }
 
