@@ -12,7 +12,8 @@ using namespace oreslang::runtime;
 static std::int64_t aot(void*, std::int64_t x) noexcept { return x + 1; }
 static std::int64_t traced(void*, std::int64_t x) noexcept { return x + 100; }
 static InstrumentationIdentity identity() {
-    return {std::string(32,'a'),std::string(64,'b'),std::string(64,'c'),std::string(64,'d'),std::string(64,'e')};
+    return {"tenant-a",std::string(32,'a'),std::string(64,'f'),
+            std::string(64,'b'),std::string(64,'c'),std::string(64,'d'),std::string(64,'e')};
 }
 static std::shared_ptr<const InstrumentedVersion> make_version(std::uint64_t gen,
     NativeInstrumentedFn fn, bool aot_probe = false) {
@@ -47,6 +48,12 @@ int main() {
     auto malformed = std::make_shared<InstrumentedVersion>(*v2);
     malformed->identity.ownership_sha256 = std::string(64,'f');
     assert(a.publish(malformed,InstrumentationMode::deep,true,true) == PublishResult::incompatible);
+    auto foreign_tenant = std::make_shared<InstrumentedVersion>(*v2);
+    foreign_tenant->identity.tenant_id = "tenant-b";
+    assert(a.publish(foreign_tenant,InstrumentationMode::deep,true,true) == PublishResult::incompatible);
+    auto different_ir = std::make_shared<InstrumentedVersion>(*v2);
+    different_ir->identity.typed_ir_sha256 = std::string(64,'0');
+    assert(a.publish(different_ir,InstrumentationMode::deep,true,true) == PublishResult::incompatible);
     assert(a.publish(v2,InstrumentationMode::deep,true,true) == PublishResult::accepted);
     assert(a.invoke(41) == 141 && b.invoke(41) == 42);
     assert(a.publish(v2,InstrumentationMode::deep,true,true) == PublishResult::stale_generation);
@@ -99,5 +106,24 @@ int main() {
     }
     for (auto& reader : readers) reader.join();
     assert(bad.load() == 0 && a.invoke(41) == 42 && b.invoke(41) == 42);
-    std::cout << "PASS native host-only per-tenant versioned dispatch, lease-retirement, auth gates, realtime denial and races; NOT LLVM ORC or Atto guest execution\n";
+    assert(a.publication_count() == 503 && b.publication_count() == 0);
+    VersionedInstrumentationDispatch bounded(baseline,true,true,false,2);
+    assert(bounded.publish(make_version(2,traced),InstrumentationMode::deep,true,true)
+        == PublishResult::accepted);
+    bounded.disable();
+    assert(bounded.publish(make_version(3,traced),InstrumentationMode::deep,true,true)
+        == PublishResult::accepted);
+    bounded.disable();
+    assert(bounded.publish(make_version(4,traced),InstrumentationMode::deep,true,true)
+        == PublishResult::resource_limit);
+    assert(bounded.publication_count() == 2 && bounded.active_generation() == 1);
+    // Neither unauthorized nor incompatible candidates consume the budget.
+    VersionedInstrumentationDispatch guarded(baseline,true,true,false,1);
+    assert(guarded.publish(make_version(2,traced),InstrumentationMode::deep,false,true)
+        == PublishResult::unauthorized);
+    assert(guarded.publication_count() == 0);
+    assert(guarded.publish(make_version(2,traced),InstrumentationMode::deep,true,true)
+        == PublishResult::accepted);
+    assert(guarded.publication_count() == 1);
+    std::cout << "PASS native host-only tenant+typedIR-bound versioned dispatch, bounded publications, leases and races; NOT LLVM ORC or Atto guest execution\n";
 }
