@@ -191,6 +191,13 @@ static SourceActor* lookup_actor_id_locked(OresSourceActorId id) {
 }
 
 
+/* Checked await DONE reserves exclusive physical-join authority before
+ * suspension. Native pointers remain internal, never guest-visible IDs. */
+static void claim_actor_join_locked(SourceActor* actor);
+static void source_actor_join_claimed(
+    SourceActor* instance, OresNativeVM* vm, OresNativeActorRef target);
+
+
 int oreslang_source_actor_ready_status(void* opaque) {
     SourceActor* instance = (SourceActor*)opaque;
     if (!instance || instance->magic != SOURCE_ACTOR_MAGIC) return -1;
@@ -855,39 +862,44 @@ int64_t oreslang_source_actor_await_ready(
     return result;
 }
 
-int64_t oreslang_source_actor_await_done(
+static int64_t source_actor_await_done_common(
         void* opaque,
+        OresSourceActorId identity,
         OresSourceActorContinuation continuation,
+        OresSourceActorIdContinuation id_continuation,
         uint64_t source_token) {
-    SourceActor* instance = (SourceActor*)opaque;
-    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
-    ensure(continuation != NULL);
-    ensure(atomic_load_explicit(
-        &instance->stop_requested, memory_order_acquire) == 1);
-    ensure(atomic_load_explicit(
-        &instance->join_started, memory_order_acquire) == 0);
-
-    /*
-     * The physical wait is trusted top-level glue. It must never park an
-     * actor carrier: the target actor may need that carrier to drain accepted
-     * work and publish its terminal acknowledgement.
-     */
-    OresNativeExecutionContext carrier = {0};
-    ensure(!ores_native_vm_current_execution_context(
-        group.vm, ORES_NATIVE_VM_MAIN, &carrier));
-
+    ensure((continuation != NULL) != (id_continuation != NULL));
     DoneAwaitFrame frame = {
         .continuation = continuation,
-        .actor = instance,
+        .id_continuation = id_continuation,
+        .actor_id = identity,
         .source_token = source_token
     };
     ensure(pthread_cond_init(&frame.completed, NULL) == 0);
 
     group_lock();
+    SourceActor* instance = id_continuation
+        ? lookup_actor_id_locked(identity)
+        : live_actor_pointer_locked(opaque);
+    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
+    ensure(atomic_load_explicit(
+        &instance->stop_requested, memory_order_acquire) == 1);
+    ensure(atomic_load_explicit(
+        &instance->join_started, memory_order_acquire) == 0);
     ensure(group.vm && group.root_ref.scheduler_domain
         && group.pending_ready == NULL && group.pending_done == NULL);
+    /* Claim physical teardown exclusively before any unlocked suspension.
+     * This prevents concurrent join from freeing the target while this
+     * Future holds a logical continuation/physical target reference. */
+    if (id_continuation)
+        claim_actor_join_locked(instance);
+    frame.actor = instance;
     OresNativeVM* vm = group.vm;
     const OresNativeActorRef target = instance->ref;
+    OresNativeExecutionContext carrier = {0};
+    for (int domain = 0; domain < ORES_NATIVE_VM_DOMAIN_COUNT; ++domain)
+        ensure(!ores_native_vm_current_execution_context(
+            vm, (enum OresNativeVMDomain)domain, &carrier));
     frame.done_future = ores_native_vm_actor_future_open(
         vm,
         ORES_NATIVE_VM_MAIN,
@@ -949,8 +961,28 @@ int64_t oreslang_source_actor_await_done(
      * the opaque ActorRef allocation valid while the continuation is active,
      * but no guest message/stop capability is admitted after get_done.
      */
-    oreslang_source_actor_join_done(instance);
+    if (id_continuation)
+        source_actor_join_claimed(instance, vm, target);
+    else
+        oreslang_source_actor_join_done(instance);
     return result;
+}
+
+
+int64_t oreslang_source_actor_await_done(
+        void* opaque,
+        OresSourceActorContinuation continuation,
+        uint64_t source_token) {
+    return source_actor_await_done_common(
+        opaque, 0, continuation, NULL, source_token);
+}
+
+int64_t oreslang_source_actor_await_done_id(
+        OresSourceActorId identity,
+        OresSourceActorIdContinuation continuation,
+        uint64_t source_token) {
+    return source_actor_await_done_common(
+        NULL, identity, NULL, continuation, source_token);
 }
 
 int oreslang_source_actor_current_execution_handle(
