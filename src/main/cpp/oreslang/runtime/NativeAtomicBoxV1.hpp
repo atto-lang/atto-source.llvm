@@ -152,10 +152,61 @@ private:
     std::atomic<T> value_;
 };
 
-// Move-only native ownership capability. The allocation/deallocation policy is
-// supplied by a trusted allocator/actor runtime. No implicit new/delete or
-// ARC/GC. A raw actor-private pointer cannot be exposed across domain
-// boundaries by this interface: checked access requires domain + generation.
+// A unique allocation ticket is minted by TRUSTED allocator/runtime code.
+// Guest .atto source cannot mint or copy one. A ticket owns the allocation
+// until it is consumed by a box, then never owns it again. A separate ticket
+// for the *same* pointer would be a trusted allocator contract violation;
+// a process-global pointer registry is deliberately not used.
+//
+// This object must not be destroyed concurrently with a pending adoption.
+// Normal compiler move/borrow rules enforce that ownership discipline.
+template <typename T>
+class UniqueAllocationTicket final {
+public:
+    using Destroy = void (*)(T*) noexcept;
+
+    UniqueAllocationTicket(T* pointer, Destroy destroy, std::uint64_t domain,
+                           std::uint32_t generation) noexcept
+        : pointer_(pointer), destroy_(destroy), domain_(domain),
+          generation_(generation) { }
+    UniqueAllocationTicket(const UniqueAllocationTicket&) = delete;
+    UniqueAllocationTicket& operator=(const UniqueAllocationTicket&) = delete;
+    UniqueAllocationTicket(UniqueAllocationTicket&&) = delete;
+    UniqueAllocationTicket& operator=(UniqueAllocationTicket&&) = delete;
+
+    ~UniqueAllocationTicket() noexcept {
+        // Failed/unconsumed tickets still own their resource. No GC or
+        // leak-on-rejected-adoption. A null destructor denotes a non-owner.
+        if (!claimed_.load(std::memory_order_acquire) && pointer_ && destroy_)
+            destroy_(pointer_);
+    }
+
+private:
+    template <typename U> friend class UniqueBox;
+    bool take(T*& pointer, Destroy& destroy, std::uint64_t& domain,
+              std::uint32_t& generation) noexcept {
+        if (!pointer_ || !destroy_ || !domain_ || !generation_) return false;
+        bool expected = false;
+        if (!claimed_.compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel,
+                std::memory_order_acquire)) return false;
+        pointer = pointer_;
+        destroy = destroy_;
+        domain = domain_;
+        generation = generation_;
+        return true;
+    }
+
+    T* pointer_ = nullptr;
+    Destroy destroy_ = nullptr;
+    std::uint64_t domain_ = 0;
+    std::uint32_t generation_ = 0;
+    std::atomic<bool> claimed_{false};
+};
+
+// Move-only native ownership capability. No implicit new/delete/GC or ARC.
+// Domain/generation must come from the *current* trusted actor allocator
+// at each checked dereference, not from the box's own stored metadata.
 template <typename T>
 class UniqueBox final {
 public:
@@ -165,9 +216,7 @@ public:
     UniqueBox(const UniqueBox&) = delete;
     UniqueBox& operator=(const UniqueBox&) = delete;
 
-    UniqueBox(UniqueBox&& other) noexcept {
-        steal(other);
-    }
+    UniqueBox(UniqueBox&& other) noexcept { steal(other); }
     UniqueBox& operator=(UniqueBox&& other) noexcept {
         if (this != &other) {
             reset();
@@ -177,10 +226,17 @@ public:
     }
     ~UniqueBox() noexcept { reset(); }
 
-    static bool adopt(T* pointer, Destroy destroy, std::uint64_t domain,
-                      std::uint32_t generation, UniqueBox& destination) noexcept {
-        if (!pointer || !destroy || !domain || !generation || destination.pointer_)
-            return false;
+    // Adoption is only possible through a one-shot runtime-minted ticket.
+    // Admission failure leaves destination empty and ticket unconsumed.
+    // The caller must maintain ticket lifetime until adoption completes.
+    static bool adopt(UniqueAllocationTicket<T>& ticket,
+                      UniqueBox& destination) noexcept {
+        if (destination.pointer_) return false;
+        T* pointer = nullptr;
+        Destroy destroy = nullptr;
+        std::uint64_t domain = 0;
+        std::uint32_t generation = 0;
+        if (!ticket.take(pointer, destroy, domain, generation)) return false;
         destination.pointer_ = pointer;
         destination.destroy_ = destroy;
         destination.domain_ = domain;
@@ -188,11 +244,12 @@ public:
         return true;
     }
 
-    // The compiler/runtime must ensure there are no outstanding borrows
-    // when a move/reset occurs. This is not a standalone loan checker.
-    T* get_checked(std::uint64_t domain, std::uint32_t generation) const noexcept {
-        return pointer_ && domain == domain_ && generation == generation_
-            ? pointer_ : nullptr;
+    // The compiler/runtime must also prove that no live borrow remains when
+    // moving or dropping a box. This is not a standalone loan checker.
+    T* get_checked(std::uint64_t current_domain,
+                   std::uint32_t current_generation) const noexcept {
+        return pointer_ && current_domain == domain_
+                && current_generation == generation_ ? pointer_ : nullptr;
     }
     bool is_owned() const noexcept { return pointer_ != nullptr; }
     std::uint64_t owner_domain() const noexcept { return domain_; }
@@ -203,7 +260,7 @@ public:
         Destroy destroy = std::exchange(destroy_, nullptr);
         domain_ = 0;
         generation_ = 0;
-        if (pointer) destroy(pointer); // exactly once, after revoking capability
+        if (pointer) destroy(pointer); // revoke capability *before* destructor
     }
 
 private:
