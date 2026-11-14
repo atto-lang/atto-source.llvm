@@ -56,24 +56,11 @@ class NativeAotReceiptTest(unittest.TestCase):
         self.assertEqual(verification["frontend_unit_tests_passed"], 4)
         self.assertEqual(verification["actual_exit_code"], 42)
         for name, result in verification.items():
-            if name.endswith("_rejected") or name.endswith("_preserved_after_source_or_clang_failure") \
-               or name.endswith("_removed") or name.endswith("_passed") \
-               or name.endswith("_true") or name.endswith("_verified") \
-               or name in ("native_llvm_to_elf_guest_execution",
-                           "output_uses_exclusive_staging_file",
-                           "output_commits_only_after_full_success",
-                           "source_output_alias_rejected",
-                           "symlink_to_input_rejected",
-                           "hardlink_to_input_rejected",
-                           "prior_output_preserved_after_source_or_clang_failure",
-                           "staged_temporary_artifacts_removed",
-                           "deterministic_llvm_ir",
-                           "guest_vm_required",
-                           "guest_gc_required_for_scalar_subset"):
-                if name in ("guest_vm_required", "guest_gc_required_for_scalar_subset"):
-                    self.assertFalse(result, name)
-                else:
-                    self.assertTrue(result, name)
+            if isinstance(result, bool):
+                self.assertEqual(result,
+                                 name not in ("guest_vm_required",
+                                              "guest_gc_required_for_scalar_subset"),
+                                 name)
         for field, value in h["limitations"].items():
             if isinstance(value, bool):
                 self.assertFalse(value, field)
