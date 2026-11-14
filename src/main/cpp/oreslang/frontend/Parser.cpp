@@ -641,6 +641,14 @@ bool callable_nominal_name(std::string_view name) {
             || name == "Routine" || name == "Method";
 }
 
+// Atomic/Box/Arc/Weak are compiler-owned ownership types. Only Atomic<int>
+// currently has a restricted native main-body lowering; the others fail
+// closed. A user nominal/alias must not impersonate that intrinsic identity.
+bool native_ownership_intrinsic_name(std::string_view name) {
+    return name == "Atomic" || name == "Box" ||
+           name == "Arc" || name == "Weak";
+}
+
 // Entry is a compiler-owned nominal product in the Java/Graal frontend.
 // Until the native backend has a real two-slot representation, projection
 // ownership, value equality, transport traits and ABI tests, it must not be
@@ -1220,6 +1228,8 @@ private:
                   "define model is a runtime type and value");
 
         decl.name = identifier();
+        if (native_ownership_intrinsic_name(decl.name))
+            fail("NATIVE_OWNERSHIP_INTRINSIC_RESERVED: compiler-owned type cannot be redefined");
         if (decl.name == "String" || decl.name == "string" || callable_nominal_name(decl.name) || entry_builtin_name(decl.name))
             fail("TYPE_DECL_RESERVED_BUILTIN: compiler-owned nominal type name '" +
                  decl.name + "' cannot be redefined");
@@ -1323,7 +1333,7 @@ private:
         const std::string name = identifier();
         if (name == "String" || name == "string" || name == "int" ||
                 name == "bool" || reserved(name) || callable_nominal_name(name) ||
-                entry_builtin_name(name))
+                entry_builtin_name(name) || native_ownership_intrinsic_name(name))
             fail("native forward type cannot shadow builtin or reserved types");
         if (token_.text == "<")
             fail("native generic type alias forward requires a verified monomorphization ABI");
@@ -1346,7 +1356,8 @@ private:
             fail("native generic type alias requires a verified monomorphization ABI");
         if (name == "int" || name == "bool" || name == "string" ||
                 name == "String" || reserved(name) ||
-                callable_nominal_name(name) || entry_builtin_name(name))
+                callable_nominal_name(name) || entry_builtin_name(name) ||
+                native_ownership_intrinsic_name(name))
             fail("native type alias cannot shadow a builtin or reserved language name");
         require("=");
         std::string target;
@@ -4598,6 +4609,8 @@ private:
         // '_' is reserved for wildcard/inference-hole use, never a
         // stable runtime nominal identity or module contract name.
         std::string name = identifier();
+        if (native_ownership_intrinsic_name(name))
+            fail("NATIVE_OWNERSHIP_INTRINSIC_RESERVED: compiler-owned nominal cannot be redefined");
         if (name == "pattern") fail("contextual pattern keyword cannot declare a native nominal type");
         if (name == "_") fail("wildcard '_' cannot be declared as a nominal type name");
         return name;
