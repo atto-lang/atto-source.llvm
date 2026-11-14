@@ -3099,6 +3099,83 @@ private:
         bool terminal_try_finally = false;
         std::size_t branch_count = 0;
         while (token_.text != "return") {
+            if (token_.text == "while" && !experimental_rt_scalar_loop_) {
+                // A narrow native CFG vertical slice: one scoped actor lifetime
+                // per iteration, closed by a synchronous physical stop/join.
+                // This deliberately does not permit actor refs, loans or
+                // continuations to cross an asynchronous loop back-edge.
+                if (value.bounded_actor_churn || value.scalar_while ||
+                        value.name != "main" || !value.exported ||
+                        !value.parameters.empty() || value.returns_void ||
+                        value.return_type != ScalarType::I64 ||
+                        value.locals.size() != 1 ||
+                        !value.statements.empty() || !value.early_returns.empty() ||
+                        !value.actor_spawns.empty() || !value.actor_actions.empty() ||
+                        !value.actor_field_writes.empty() ||
+                        !value.source_tasks.empty() || !value.future_pipelines.empty() ||
+                        !value.ready_await_actor.empty() ||
+                        !value.done_await_actor.empty() ||
+                        value.has_declared_effects)
+                    fail("bounded actor churn requires isolated zero-argument pub int main");
+                const LocalBinding& local = value.locals.front();
+                if (!(local.assignable || local.owner_mutable) ||
+                        local.heap_owned || local.int_array ||
+                        !local.class_name.empty() || local.scalar_type != ScalarType::I64 ||
+                        !local.initializer ||
+                        local.initializer->kind != Expression::Kind::Integer)
+                    fail("bounded actor churn requires one mutable scalar int counter");
+                auto loop = std::make_unique<BoundedActorChurnLoop>();
+                loop->counter = local.name;
+                loop->initial = local.initializer->integer;
+                require("while");
+                const bool parenthesized = accept("(");
+                if (identifier() != loop->counter)
+                    fail("bounded actor churn condition must use the unique counter");
+                require("<");
+                loop->upper_bound = integer_literal();
+                if (parenthesized) require(")");
+                const bool braced = accept("{");
+                if (!braced) require("do");
+                if (!(accept("const") || accept("val") || accept("let")))
+                    fail("bounded actor churn requires a fresh scoped actor binding");
+                loop->worker.offset = token_.offset;
+                loop->worker.name = identifier();
+                if (loop->worker.name == loop->counter)
+                    fail("bounded actor churn actor ref shadows the loop counter");
+                require("=");
+                require("spawn");
+                loop->worker.actor_type = identifier();
+                require("(");
+                require(")");
+                require(";");
+                loop->worker.declared_type.kind = SourceType::Kind::ActorRef;
+                loop->worker.declared_type.argument = loop->worker.actor_type;
+                // Terminal stop is the only admitted actor effect in this v1
+                // block; it waits for the actual actor VM and heap to retire.
+                // Send/await/throw/return/escape cannot be silently lowered.
+                require("stop");
+                if (identifier() != loop->worker.name)
+                    fail("bounded actor churn must stop its exact scoped actor");
+                require(";");
+                if (identifier() != loop->counter)
+                    fail("bounded actor churn must increment its unique counter");
+                require("=");
+                if (identifier() != loop->counter)
+                    fail("bounded actor churn increment must read its unique counter");
+                require("+");
+                if (integer_literal() != 1)
+                    fail("bounded actor churn increment must be exactly one");
+                require(";");
+                if (braced) require("}");
+                else require("end");
+                if (loop->initial < 0 || loop->upper_bound < loop->initial ||
+                        loop->upper_bound > 1024)
+                    fail("bounded actor churn count must be within 0..1024");
+                value.bounded_actor_churn = std::move(loop);
+                if (token_.text != "return")
+                    fail("bounded actor churn must be followed by one scalar return");
+                continue;
+            }
             if (token_.text == "while" && experimental_rt_scalar_loop_) {
                 if (value.scalar_while || value.locals.size() != 1 ||
                         !value.statements.empty() || !value.early_returns.empty() ||
@@ -3576,6 +3653,10 @@ private:
                     (value.result->kind != Expression::Kind::Variable ||
                      value.result->name != value.scalar_while->counter))
                 fail("experimental scalar loop must return the counter");
+            if (value.bounded_actor_churn &&
+                    (value.result->kind != Expression::Kind::Variable ||
+                     value.result->name != value.bounded_actor_churn->counter))
+                fail("bounded actor churn must return the unique loop counter");
             if (terminal_try_finally && !nonthrowing_protected_read(*value.result))
                 fail("native protected try return requires nonthrowing scalar/field read");
         }
@@ -5412,6 +5493,24 @@ private:
                         !fn.early_returns.empty() || !fn.statements.empty())
                     throw std::runtime_error(
                         "source actor bootstrap requires zero-argument int main without early returns");
+            }
+            if (fn.bounded_actor_churn) {
+                const auto& loop = *fn.bounded_actor_churn;
+                if (fn.name != "main" || !fn.exported || !fn.parameters.empty() ||
+                        fn.returns_void || fn.scalar_while ||
+                        fn.locals.size() != 1 || !fn.statements.empty() ||
+                        !fn.early_returns.empty() || !fn.actor_spawns.empty() ||
+                        !fn.actor_actions.empty() || !fn.actor_sends.empty() ||
+                        !fn.actor_stops.empty() || !fn.actor_field_writes.empty() ||
+                        !fn.ready_await_actor.empty() ||
+                        !fn.done_await_actor.empty() ||
+                        fn.has_declared_effects ||
+                        loop.initial < 0 || loop.upper_bound < loop.initial ||
+                        loop.upper_bound > 1024)
+                    throw std::runtime_error("bounded actor churn failed native ownership admission");
+                if (loop.worker.name == loop.counter ||
+                        actor_types.find(loop.worker.actor_type) == actor_types.end())
+                    throw std::runtime_error("bounded actor churn requires a declared actor type");
             }
             for (const auto& spawn : fn.actor_spawns) {
                 const auto it = actor_types.find(spawn.actor_type);
