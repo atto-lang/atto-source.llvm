@@ -765,6 +765,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_native_telemetry_", 0) == 0)
             throw std::runtime_error("reserved native telemetry ABI symbol collision");
+    // Never allow guest names to shadow the checked actor ID runtime ABI,
+    // the actor-owned heap or compiler-emitted init/handler trampolines.
+    // Else LLVM may silently rename one symbol and link a guest callable
+    // in place of a trusted capability operation.
+    for (const auto& fn : source.functions)
+        if (fn.name.rfind("oreslang_source_actor_", 0) == 0 ||
+                fn.name.rfind("ores_actor_i64_heap_", 0) == 0 ||
+                fn.name.rfind("oreslang_actor_", 0) == 0)
+            throw std::runtime_error(
+                "reserved native checked source actor ABI symbol collision");
 
     // First OresVM entry is deliberately a one-function, pure scalar state
     // transition. Runtime-owned state is injected, never a mutable LLVM global.
