@@ -3,6 +3,7 @@ on:
   push:
     paths:
       - 'src/main/cpp/oreslang/runtime/NativeAtomicBoxV1.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeBoxArenaV1.hpp'
       - 'tests/native_atomic_box_v1_test.cpp'
       - 'src/main/cpp/oreslang/types/AutoTraitRules.hpp'
       - 'tests/native_atomic_box_traits_bounds_test.cpp'
@@ -13,6 +14,7 @@ on:
   pull_request:
     paths:
       - 'src/main/cpp/oreslang/runtime/NativeAtomicBoxV1.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeBoxArenaV1.hpp'
       - 'tests/native_atomic_box_v1_test.cpp'
       - 'src/main/cpp/oreslang/types/AutoTraitRules.hpp'
       - 'tests/native_atomic_box_traits_bounds_test.cpp'
