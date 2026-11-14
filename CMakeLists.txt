@@ -2260,6 +2260,13 @@ if(BUILD_TESTING)
         --ir "ret i64")
     oreslang_contract_test(native_actor_bare_method source-actor-bare-method.ores
         --ir "oreslang_source_actor_spawn")
+    # Real compiled .atto source actor handler now calls the actor-owned frame
+    # bridge (not just a host-only model). Full Clang execution lives in the
+    # existing source_actor_compiled_native_lifecycle CTest.
+    oreslang_contract_test(native_actor_aot_frame_call
+        actor-logical-frame-aot-two-actors.atto --ir "call i32 @oreslang_source_actor_frame_push")
+    oreslang_contract_test(reject_source_actor_frame_abi_symbol_forgery
+        actor-frame-abi-forgery-reject.atto --diagnostic "reserved native actor frame ABI symbol collision")
     oreslang_contract_test(native_actor_suspending_method_gate source-actor-suspend-method-reject.ores
         --diagnostic "native suspends actor method requires continuation lowering")
     oreslang_contract_test(native_actor_final_group_field_gate source-actor-final-group-field-reject.ores
