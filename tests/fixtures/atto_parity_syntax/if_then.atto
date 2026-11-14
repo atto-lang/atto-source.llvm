@@ -1,0 +1,29 @@
+// Canonical `if cond then ... fi` (Java reference form), with and without
+// the optional `;`, plus the deprecated `do` spelling Java still accepts.
+fnc classify(int x): int {
+  if x < 0 then return -1; fi
+  if x == 0; then return 0; fi
+  return 1;
+}
+
+fnc report(int x): void {
+  if x > 10 then
+    stdio.stdout.println("big");
+  else
+    stdio.stdout.println("small");
+  fi
+  return;
+}
+
+fnc legacy(int x): int {
+  if x > 2; do return 2; fi
+  return x;
+}
+
+fnc main(): void {
+  stdio.stdout.println(classify(-5) + classify(0) * 10 + classify(9) * 100);
+  report(11);
+  report(3);
+  stdio.stdout.println(legacy(7) + legacy(1));
+  return;
+}

@@ -7,5 +7,5 @@ fnc consume(borrow mut Pair p): int {
 }
 pub fnc main(): int {
   let Pair p = new Pair();
-  return consume(rt borrow mut p);
+  return consume(rt mut borrow p);
 }
