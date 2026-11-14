@@ -212,10 +212,15 @@ static void source_actor_join_claimed(
 
 
 int oreslang_source_actor_ready_status(void* opaque) {
-    SourceActor* instance = (SourceActor*)opaque;
-    if (!instance || instance->magic != SOURCE_ACTOR_MAGIC) return -1;
-    return atomic_load_explicit(
-        &instance->startup_state, memory_order_acquire);
+    /* Compatibility-only: reject a no-longer-registered pointer before
+     * dereference. This still cannot distinguish reused malloc addresses. */
+    group_lock();
+    SourceActor* instance = live_actor_pointer_locked(opaque);
+    const int status = instance
+        ? atomic_load_explicit(
+            &instance->startup_state, memory_order_acquire) : -1;
+    group_unlock();
+    return status;
 }
 
 int oreslang_source_actor_ready_status_id(OresSourceActorId id) {
@@ -746,12 +751,21 @@ void oreslang_source_actor_send_id(
 }
 
 void oreslang_source_actor_send(void* opaque, int64_t payload) {
-    SourceActor* instance = (SourceActor*)opaque;
+    /* Serialize pointer membership and nonblocking mailbox admission with
+     * join/free; never read an expired allocation before taking group.mutex. */
+    group_lock();
+    SourceActor* instance = live_actor_pointer_locked(opaque);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    if (!instance)
+        fputs("SOURCE_ACTOR_LEGACY_STALE_POINTER_DENIED\n", stderr);
+#endif
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC
         && instance->on_message);
-    ensure(ores_native_vm_try_send(
+    const int accepted = ores_native_vm_try_send(
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref, (uint64_t)payload)
-        == ORES_NATIVE_SEND_ACCEPTED);
+        == ORES_NATIVE_SEND_ACCEPTED;
+    group_unlock();
+    ensure(accepted);
 }
 
 static int source_actor_await_ready_common(
@@ -1060,15 +1074,18 @@ void oreslang_source_actor_request_stop_id(OresSourceActorId identity) {
 }
 
 void oreslang_source_actor_request_stop(void* opaque) {
-    SourceActor* instance = (SourceActor*)opaque;
-    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
-
     /*
-     * Stop admission shares the group mutex with startup/readiness publication
-     * so exactly one side wins the stop-vs-ready linearization point.
-     * This phase still never waits for physical completion.
+     * Validate live membership BEFORE dereferencing actor fields. Old pointer
+     * values cannot be authenticated across allocator reuse; this is only a
+     * UAF mitigation for a completely retired, unregistered allocation.
      */
     group_lock();
+    SourceActor* instance = live_actor_pointer_locked(opaque);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    if (!instance)
+        fputs("SOURCE_ACTOR_LEGACY_STALE_POINTER_DENIED\n", stderr);
+#endif
+    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
     int expected = 0;
     ensure(atomic_compare_exchange_strong_explicit(
         &instance->stop_requested,
