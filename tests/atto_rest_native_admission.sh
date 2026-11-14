@@ -19,10 +19,13 @@ for opt in 0 2; do
   [[ "$observed" == 42 ]] || { echo "FAIL: native LLVM -O$opt guest exited $observed, expected 42" >&2; exit 1; }
   echo "ATTO_NATIVE_AOT_SCALAR_PASS backend=llvm opt=O$opt exit=42"
 done
-if "$compiler" "$negative" > "$tmp/unsupported.ll" 2> "$tmp/rejection.log"; then
-  echo 'FAIL: unsupported REST HTTP/actor source was incorrectly accepted by scalar compiler' >&2
-  exit 1
-fi
+# Reject only a semantic compiler error, not a signal/timeout/tool failure.
+set +e
+timeout --signal=TERM --kill-after=5s 30s "$compiler" "$negative" > "$tmp/unsupported.ll" 2> "$tmp/rejection.log"
+rejection_status=$?
+set -e
+[[ "$rejection_status" == 1 ]] || { echo "FAIL: expected semantic compiler exit 1, got $rejection_status" >&2; exit 1; }
+grep -Fq 'oreslang-llvmc:' "$tmp/rejection.log" || { echo 'FAIL: missing canonical LLVM compiler diagnostic' >&2; exit 1; }
 if grep -Fq 'define ' "$tmp/unsupported.ll"; then
   echo 'FAIL: rejected REST HTTP/actor source emitted executable IR' >&2
   exit 1
