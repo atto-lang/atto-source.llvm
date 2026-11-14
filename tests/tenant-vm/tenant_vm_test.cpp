@@ -1864,7 +1864,9 @@ extern "C" std::uint64_t tenant_vm_test_borrowed_altstack_count();
 // carrier overwrote that registration and intermittently crashed on teardown.
 // Prove the borrowed-stack branch is taken in GCC+ASan and guest faults still work.
 void carrier_preserves_preinstalled_sanitizer_signal_stack() {
+#if defined(__SANITIZE_ADDRESS__) && !defined(__clang__)
     const std::uint64_t before = tenant_vm_test_borrowed_altstack_count();
+#endif
     HostLimits limits;
     limits.carriers = 1;
     TenantVmHost host(limits);
