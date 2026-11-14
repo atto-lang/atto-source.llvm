@@ -1,0 +1,43 @@
+name: Actor receive and native retirement host-only exact-head
+
+on:
+  pull_request:
+    paths:
+      - 'CMakeLists.txt'
+      - 'src/main/cpp/oreslang/runtime/NativeActorReceiveFence.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeActorRetirementBarrier.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c'
+      - 'tests/native_actor_retirement_barrier_test.cpp'
+      - 'scripts/test-native-actor-retirement-host-v1.sh'
+      - '.github/workflows/actor-receive-retirement-host-v1.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'CMakeLists.txt'
+      - 'src/main/cpp/oreslang/runtime/NativeActorReceiveFence.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeActorRetirementBarrier.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c'
+      - 'tests/native_actor_retirement_barrier_test.cpp'
+      - 'scripts/test-native-actor-retirement-host-v1.sh'
+      - '.github/workflows/actor-receive-retirement-host-v1.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  native-host-retirement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Same-repository read-only checkout only. No cross-organization
+      # secrets, private code export, synthetic results, or fallback marker.
+      - name: Checkout exact source head without persistent credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Check out source revision and execute real Clang/GCC sanitizers
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          bash scripts/test-native-actor-retirement-host-v1.sh
