@@ -5638,3 +5638,31 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-oresvm-resource-retirement-test)
     set_tests_properties(native_oresvm_actor_resource_retirement PROPERTIES TIMEOUT 30)
 endif()
+
+
+# Canonical seven-source Counter v2 frontend lexical/type admission.
+# This builds the production-owned checker in isolation and verifies
+# malicious read-loan, STOP, overflow and cross-file binding mutations.
+# It is NOT yet executable ActorMail/critical-state LLVM guest parity.
+if(BUILD_TESTING)
+    add_executable(oreslang-counter-v2-source-admission-test
+        tests/counter_v2_source_admission_test.cpp)
+    target_include_directories(oreslang-counter-v2-source-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-counter-v2-source-admission-test
+        PRIVATE cxx_std_20)
+    target_compile_options(oreslang-counter-v2-source-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_counter_v2_declared_source_admission
+        COMMAND oreslang-counter-v2-source-admission-test
+        "${CMAKE_CURRENT_SOURCE_DIR}/contracts/actor-counter-identical-source-v1")
+    set_tests_properties(native_counter_v2_declared_source_admission
+        PROPERTIES TIMEOUT 20)
+    # The shipped llvmc CLI itself must admit the same package as SOURCE ONLY,
+    # and never claim generated native guest code or emit LLVM IR in this mode.
+    add_test(NAME llvmc_counter_v2_source_only_check
+        COMMAND oreslang-llvmc --counter-v2-check
+        "${CMAKE_CURRENT_SOURCE_DIR}/contracts/actor-counter-identical-source-v1")
+    set_tests_properties(llvmc_counter_v2_source_only_check
+        PROPERTIES PASS_REGULAR_EXPRESSION "guest_executed=false" TIMEOUT 20)
+endif()

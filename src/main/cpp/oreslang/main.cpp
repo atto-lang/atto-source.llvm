@@ -1,5 +1,6 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/CounterV2Source.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ModuleLoader.hpp"
@@ -208,6 +209,7 @@ int main(int argc, char** argv) {
     bool rt_entry_seen = false;
     bool rt_report_seen = false;
     bool constraint_descriptors_only = false;
+    bool counter_v2_check = false;
     std::string rt_entry = "main/0";
     std::string rt_report_path;
     bool tree_shake = false;
@@ -271,6 +273,12 @@ int main(int argc, char** argv) {
             rt_report_seen = true;
             rt_report_path = arg.substr(std::string_view("--rt-report=").size());
             if (rt_report_path.empty()) { std::cerr << "rt-report path cannot be empty\n"; return 2; }
+        } else if (arg == "--counter-v2-check") {
+            if (counter_v2_check) {
+                std::cerr << "duplicate Counter v2 check option\n";
+                return 2;
+            }
+            counter_v2_check = true;
         } else if (arg == "--constraint-descriptors") {
             if (constraint_descriptors_only) {
                 std::cerr << "duplicate constraint-descriptors option\n";
@@ -395,6 +403,28 @@ int main(int argc, char** argv) {
     std::unique_ptr<oreslang::CoreLog> coreLog;
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
+    if (counter_v2_check) {
+        // This is a manifest-owned lexical/type admission check, NOT LLVM
+        // guest lowering or an executable native actor. Only the exact
+        // check + package-root pair is allowed to prevent option ambiguity.
+        if (argc != 3 || path == nullptr) {
+            std::cerr << "usage: oreslang-llvmc --counter-v2-check <package-root>\n";
+            return 2;
+        }
+        try {
+            const auto plan = oreslang::frontend::counter_v2::verify(path);
+            std::cout << "LLVM_COUNTER_V2_SOURCE_CHECK_PASS namespace=" << plan.name_space
+                      << " actor=" << plan.actor
+                      << " state_field=" << plan.state_field
+                      << " source_messages=4 guest_executed=false\n";
+            return 0;
+        } catch (const std::exception& e) {
+            std::cerr << "oreslang-llvmc Counter v2 source rejected: ";
+            print_safe_diagnostic(std::cerr, e.what(), 384);
+            std::cerr << "\n";
+            return 1;
+        }
+    }
     if (path == nullptr) {
         std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
