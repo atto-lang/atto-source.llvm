@@ -102,9 +102,15 @@ For each optimization level it requires:
 - Eight additional actor lifetimes where READY was already published before
   the host wait begins. Those calls must take the nonblocking fast path.
 - A real stop-before-READY cancellation **after** a host waiter has entered
-  its wait. The waiter must wake and fail stop with SIGABRT and a test-only
-  `SOURCE_ACTOR_READY_BARRIER_CANCELLED` marker; returning READY, hanging,
-  or an unrelated sanitizer crash is not an acceptable pass.
+  its wait, with a second trusted-host thread simultaneously attempting the
+  physical join. The runtime pins the `SourceActor` lifetime with a
+  `group.mutex`-protected `ready_waiters` admission; physical teardown
+  must wait for all admitted observers to revoke that pin before the heap and
+  actor allocation can be freed. On cancellation the waiter must release its
+  pin, wake the joiner, and fail stop with SIGABRT and a test-only
+  `SOURCE_ACTOR_READY_BARRIER_CANCELLED` marker. Returning READY, using an
+  already-freed allocation, hanging, or an unrelated sanitizer crash is
+  not an acceptable pass.
 - A real source actor message callback attempting the host-only READY barrier
   from a VM actor carrier. The call must fail stop with SIGABRT and a
   `SOURCE_ACTOR_READY_BARRIER_CARRIER_DENIED` test marker, never park that
