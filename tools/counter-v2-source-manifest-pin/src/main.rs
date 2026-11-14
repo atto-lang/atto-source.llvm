@@ -66,6 +66,18 @@ fn check_bytes(data: &[u8], expected: &str) -> Result<(), String> {
 }
 
 fn verify(root: &Path) -> Result<(), String> {
+    for directory in [
+        root.to_path_buf(),
+        root.join("src"),
+        root.join("src/counter"),
+    ] {
+        let kind = fs::symlink_metadata(&directory)
+            .map_err(|_| "Counter source directory cannot be inspected")?
+            .file_type();
+        if !kind.is_dir() || kind.is_symlink() {
+            return Err("Counter source directory must not be a symlink".into());
+        }
+    }
     let manifest_path = root.join("corpus.json");
     let manifest_type = fs::symlink_metadata(&manifest_path)
         .map_err(|e| format!("cannot stat Counter manifest: {e}"))?
@@ -100,9 +112,19 @@ fn verify(root: &Path) -> Result<(), String> {
     }
 
     let main_dir = root.join("src/counter");
-    let source_count = fs::read_dir(&main_dir)
+    let mut source_count = 0usize;
+    for entry in fs::read_dir(&main_dir)
         .map_err(|e| format!("cannot enumerate Counter source package: {e}"))?
-        .count();
+    {
+        let entry = entry.map_err(|_| "invalid Counter package directory entry")?;
+        let kind = entry
+            .file_type()
+            .map_err(|_| "cannot inspect Counter package directory entry")?;
+        if !kind.is_file() || kind.is_symlink() {
+            return Err("Counter package contains unexpected non-file entry".into());
+        }
+        source_count += 1;
+    }
     if source_count != 6 {
         return Err("Counter v2 package contains unexpected source entries".into());
     }
