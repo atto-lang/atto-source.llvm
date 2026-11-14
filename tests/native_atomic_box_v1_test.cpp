@@ -159,7 +159,8 @@ static void unique_box_lifecycle() {
     UniqueBox<Token> moved(std::move(a));
     REQUIRE(!a.is_owned() && a.get_checked(41, 3) == nullptr);
     REQUIRE(moved.get_checked(41, 3) == &first);
-    moved = std::move(moved);
+    UniqueBox<Token>* self_alias = &moved;
+    moved = std::move(*self_alias);
     REQUIRE(drops.load() == 0);
 
     UniqueBox<Token> replacement;
