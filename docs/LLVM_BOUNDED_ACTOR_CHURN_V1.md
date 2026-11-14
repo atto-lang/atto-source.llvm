@@ -122,9 +122,14 @@ For each optimization level it requires:
 
 Successful exact-head results would thus require **80 actual constructors and
 physical joins**, **64 observed CV waits**, **16 READY fast paths**, and
-**six explicit fail-stop negative executions** over O0/O2 (PENDING
-cancellation, INITIALIZING/pre-publication cancellation, and illegal actor
-carrier blocking at each optimization level). These are
+**12 explicit fail-stop negative executions** over O0/O2 (PENDING
+cancellation, INITIALIZING/pre-publication cancellation, illegal actor
+carrier blocking, and three fully expired-pointer rejections for stop/join/send
+at each optimization level). Additionally, two successful read-only
+`ready_status` calls on fully expired pointers must return -1 after
+physical teardown. The native matrix therefore comprises 16 executions
+in total. The 80 constructors/joins count refers to the required 40
+positive lifecycle cases per optimization level, not the negative probes. These are
 **test requirements, not recorded test results**: source organization Actions
 currently fails prior to executing steps. Host ABI success remains distinct
 from compiler-generated `.atto` execution and whole-process zero-GC proof.
@@ -148,6 +153,16 @@ potentially reuse the same address. Checking that a pointer matches a
 currently-live `group.actors` entry and has the current magic value does
 not distinguish an old actor's stale pointer from a newly allocated actor
 at the same address.
+
+The current draft hardens `ready_status`, `request_stop`,
+`join_done`, and `send` to look up live object membership under
+`group.mutex` before dereferencing `SourceActor` fields. Physical
+`join_done` captures the VM/actor reference while locked and holds a
+single-join admission through DONE, while nonblocking send admission is
+serialized against teardown. The exact-head native suite adds fully
+expired-pointer rejection probes for these four APIs. This **does not
+solve an old-address/new-actor incarnation collision**, nor certify
+the other await/FFI entry points as generation-safe.
 
 This is tracked in
 [issue #1802](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1802).
