@@ -44,9 +44,11 @@ below the start gives every carrier the same limit, and an actor overflows at th
 runs. The guard moves only when the next turn's quota differs from the last one's on that carrier, so
 VMs that share a quota cost no system call per turn. Running past the quota is an ordinary
 `StackOverflow`. With no quota (`0`, the default) a turn has the carrier's whole stack. A quota must be
-at least 320 KiB, and must fit within the carrier's stack together with its guard. If the guard cannot move,
-the turn runs without its quota and `stack_quota_misses` counts it, because the carrier's own guard
-still contains the overflow.
+at least 320 KiB, and must fit within the carrier's stack together with its guard. If guard placement cannot be completed, the turn is **rejected before guest execution** as a stack
+quota failure; `stack_quota_misses` counts rejected turns, not unbounded execution. On a quota
+switch, old-only pages may be restored, but pages shared by the old and new guards remain protected.
+An unrecoverable failure restoring an old mapping aborts the host rather than running another tenant
+with uncertain page protections.
 
 Host calls run on the guest's stack, and a guest chooses how deep that is, so each host call checks for
 256 KiB of remaining stack before leaving guest mode. A shortage counts as out of carrier stack, like any other overflow. Carrier stacks must
