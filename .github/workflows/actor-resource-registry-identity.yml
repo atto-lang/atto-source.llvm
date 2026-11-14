@@ -1,0 +1,67 @@
+name: Actor resource registry identity
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/**'
+      - 'tests/actor_resource_registry*.cpp'
+      - 'tests/native_actor_retirement_barrier_test.cpp'
+      - '.github/workflows/actor-resource-registry-identity.yml'
+      - 'CMakeLists.txt'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  registry-identity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+        mode: [optimized, sanitized]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD" && test -z "$(git status --porcelain)"
+      - name: Build and execute registry identity regressions
+        env:
+          CXX: ${{ matrix.compiler }}
+          MODE: ${{ matrix.mode }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CXX" --version
+          flags=(-O2 -DNDEBUG)
+          if [[ "$MODE" == sanitized ]]; then
+            flags=(-O1 -g -DNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer)
+          fi
+          "$CXX" -std=c++17 -Wall -Wextra -Wpedantic -Werror -pthread \
+            "${flags[@]}" -I src/main/cpp \
+            tests/actor_resource_registry_identity_test.cpp \
+            tests/actor_resource_registry_identity_peer.cpp -o /tmp/registry-identity
+          /tmp/registry-identity
+          "$CXX" -std=c++17 -Wall -Wextra -Wpedantic -Werror -pthread \
+            "${flags[@]}" -DORESLANG_NATIVE_TEST_REGISTRY_DOMAIN_EXHAUSTION \
+            -I src/main/cpp tests/actor_resource_registry_exhaustion_test.cpp \
+            -o /tmp/registry-exhaustion
+          /tmp/registry-exhaustion
+          cc=gcc
+          if [[ "$CXX" == clang++ ]]; then cc=clang; fi
+          "$cc" -std=c11 -Wall -Wextra -Wpedantic -Werror \
+            "${flags[@]}" -I src/main/cpp \
+            -c src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c -o /tmp/registry-heap.o
+          "$CXX" -std=c++17 -Wall -Wextra -Wpedantic -Werror -pthread \
+            "${flags[@]}" -I src/main/cpp tests/native_actor_retirement_barrier_test.cpp \
+            /tmp/registry-heap.o -o /tmp/registry-retirement
+          /tmp/registry-retirement
+          if [[ "$MODE" == optimized ]]; then
+            "$CXX" -std=c++17 -Wall -Wextra -Wpedantic -Werror -pthread \
+              "${flags[@]}" -I src/main/cpp tests/actor_resource_registry_test.cpp \
+              -o /tmp/registry-existing
+            /tmp/registry-existing
+          fi

@@ -14,6 +14,14 @@
 
 namespace oreslang::runtime {
 
+namespace {
+thread_local HungryCarrier::NativeHeap* tls_actor_heap = nullptr;
+}
+
+HungryCarrier::NativeHeap* HungryCarrier::active_heap() noexcept {
+    return tls_actor_heap;
+}
+
 // An independent shared control block outlives the carrier. One atomic
 // admission word linearizes close versus in-flight producer leases.
 struct HungryCarrier::ProducerGate {
@@ -50,6 +58,26 @@ bool HungryCarrier::ProducerHandle::try_send(ActorMessage message) const noexcep
     } catch (...) {
         std::terminate();
     }
+}
+
+bool HungryCarrier::ProducerHandle::try_wake_control() const noexcept {
+    auto gate = gate_;
+    if (!gate) return false;
+    auto state = gate->leases.load(std::memory_order_acquire);
+    for (;;) {
+        if (state & ProducerGate::closing_bit) return false;
+        if ((state & ProducerGate::count_mask) == ProducerGate::count_mask)
+            return false;
+        if (gate->leases.compare_exchange_weak(state, state + 1,
+                                               std::memory_order_acq_rel,
+                                               std::memory_order_acquire))
+            break;
+    }
+    struct LeaseGuard {
+        std::atomic<std::uint64_t>& leases;
+        ~LeaseGuard() { leases.fetch_sub(1, std::memory_order_release); }
+    } guard{gate->leases};
+    return gate->carrier->wake_control();
 }
 
 HungryCarrier::ProducerHandle HungryCarrier::producer_handle() const noexcept {
@@ -137,11 +165,34 @@ HungryCarrier::HungryCarrier(void* actor_state, ActorHandler handler,
       producer_gate_(std::make_shared<ProducerGate>(this)) {
     if (!handler_ || !operation_)
         throw std::invalid_argument("actor and I/O function pointers required");
+    if ((options_.supervisor_control == nullptr)
+            != (options_.supervisor_hooks == nullptr))
+        throw std::invalid_argument("supervisor CONTROL lane requires typed hooks");
     if (options_.require_exclusive_core || options_.require_strict_no_gc ||
         options_.require_hard_realtime)
         throw std::invalid_argument("strict CPU/GC/RT profile is not certified or implemented");
     // The bounded queue's algorithm relies on lock-free atomic indexes on the
     // supported host. Reject a platform that silently implements them with locks.
+    if (!std::atomic<std::size_t>::is_always_lock_free)
+        throw std::invalid_argument("lock-free atomic indexes unavailable");
+    if (options_.spin_before_park.count() < 0 || options_.spin_before_park.count() > 100000)
+        throw std::invalid_argument("spin window exceeds 100 ms maximum");
+}
+
+HungryCarrier::HungryCarrier(void* actor_state, ActorHandlerV2 handler,
+                             void* broker_state, BrokerOperation operation,
+                             Options options)
+    : actor_state_(actor_state), handler_v2_(handler), broker_state_(broker_state),
+      operation_(operation), options_(options),
+      producer_gate_(std::make_shared<ProducerGate>(this)) {
+    if (!handler_v2_ || !operation_)
+        throw std::invalid_argument("actor and I/O function pointers required");
+    if ((options_.supervisor_control == nullptr) !=
+        (options_.supervisor_hooks == nullptr))
+        throw std::invalid_argument("supervisor CONTROL lane requires typed hooks");
+    if (options_.require_exclusive_core || options_.require_strict_no_gc ||
+        options_.require_hard_realtime)
+        throw std::invalid_argument("strict CPU/GC/RT profile is not certified or implemented");
     if (!std::atomic<std::size_t>::is_always_lock_free)
         throw std::invalid_argument("lock-free atomic indexes unavailable");
     if (options_.spin_before_park.count() < 0 || options_.spin_before_park.count() > 100000)
@@ -181,6 +232,21 @@ void HungryCarrier::start() {
         join();
         throw std::runtime_error("actor CPU affinity admission failed");
     }
+}
+
+bool HungryCarrier::wake_control() noexcept {
+    if (options_.supervisor_control == nullptr
+            || !setup_ok_.load(std::memory_order_acquire)
+            || stop_.load(std::memory_order_acquire)
+            || !options_.supervisor_control->urgent()) return false;
+    try {
+        actor_signal_.notify();
+    } catch (...) {
+        failures_.fetch_add(1, std::memory_order_relaxed);
+        request_stop();
+        return false;
+    }
+    return true;
 }
 
 bool HungryCarrier::enqueue_mpsc(ActorMessage message) noexcept {
@@ -237,6 +303,13 @@ void HungryCarrier::join() noexcept {
     } else {
         abandoned_on_stop_.store(accepted - completed, std::memory_order_release);
     }
+    joined_.store(true, std::memory_order_release);
+}
+
+std::optional<CarrierRetirementProof> HungryCarrier::retirement_proof() const noexcept {
+    if (!joined_.load(std::memory_order_acquire) || !options_.heap_owner.has_value())
+        return std::nullopt;
+    return CarrierRetirementProof{*options_.heap_owner};
 }
 
 CarrierStats HungryCarrier::stats() const noexcept {
@@ -248,7 +321,8 @@ CarrierStats HungryCarrier::stats() const noexcept {
             stale_.load(std::memory_order_acquire),
             failures_.load(std::memory_order_acquire),
             thread_tag_.load(std::memory_order_acquire),
-            abandoned_on_stop_.load(std::memory_order_acquire)};
+            abandoned_on_stop_.load(std::memory_order_acquire),
+            cooperations_.load(std::memory_order_acquire)};
 }
 
 bool HungryCarrier::pin_cpu() noexcept {
@@ -269,12 +343,33 @@ bool HungryCarrier::pin_cpu() noexcept {
 #endif
 }
 
-void HungryCarrier::run_handler(ActorMessage message, bool resumed, std::int64_t result) noexcept {
+void HungryCarrier::run_handler(ActorMessage message, ResumeCause cause, std::int64_t result) noexcept {
     if (stop_.load(std::memory_order_acquire)) return;
-    const auto step = handler_(actor_state_, message, resumed, result);
+    // Only actor handler execution may access this heap. Suspension does not
+    // invalidate its handles; broker callbacks have no such capability.
+    tls_actor_heap = &actor_heap_;
+    const auto step = handler_v2_ != nullptr
+        ? handler_v2_(actor_state_, message, cause, result)
+        : handler_(actor_state_, message, cause == ResumeCause::io, result);
+    tls_actor_heap = nullptr;
     if (stop_.load(std::memory_order_acquire)) return;
     if (step.kind == StepKind::done) {
+        cooperating_ = false;
         completed_.fetch_add(1, std::memory_order_release);
+        return;
+    }
+    if (step.kind == StepKind::cooperate) {
+        // CPU handoff is not IO and not logical turn completion. Do not admit
+        // subsequent user envelopes while this frame is runnable. A V1
+        // callback MUST NOT get an invented 'resumed=true' CPU wakeup.
+        if (!handler_v2_ || pending_ || step.value != 0 || step.delay_ms != 0) {
+            failures_.fetch_add(1, std::memory_order_relaxed);
+            request_stop();
+            return;
+        }
+        current_ = message;
+        cooperating_ = true;
+        cooperations_.fetch_add(1, std::memory_order_relaxed);
         return;
     }
     if (step.kind != StepKind::await_io || pending_ ||
@@ -283,6 +378,7 @@ void HungryCarrier::run_handler(ActorMessage message, bool resumed, std::int64_t
         request_stop();
         return;
     }
+    cooperating_ = false;
     ++generation_;
     // Only one logical operation is inflight with serial non-reentrancy.
     // Queue memory is preallocated; no owned actor pointer crosses threads.
@@ -305,7 +401,9 @@ void HungryCarrier::run_handler(ActorMessage message, bool resumed, std::int64_t
 void HungryCarrier::wait_actor() noexcept {
     if (stop_.load(std::memory_order_acquire)) return;
     const auto ready = [this] {
-        return (!pending_ && has_input_ready())
+        return (options_.supervisor_control != nullptr
+                    && options_.supervisor_control->urgent())
+               || (cooperating_ || (!pending_ && has_input_ready()))
                || (pending_ && results_.has_ready())
                || stop_.load(std::memory_order_acquire);
     };
@@ -329,7 +427,7 @@ void HungryCarrier::wait_actor() noexcept {
 void HungryCarrier::actor_loop() noexcept {
     const auto tag = std::hash<std::thread::id>{}(std::this_thread::get_id());
     thread_tag_.store(static_cast<std::uint64_t>(tag), std::memory_order_release);
-    const bool admitted = pin_cpu();
+    const bool admitted = pin_cpu() && actor_heap_.bind_carrier();
     setup_ok_.store(admitted, std::memory_order_release);
     setup_done_.store(true, std::memory_order_release);
     if (!admitted) {
@@ -338,6 +436,20 @@ void HungryCarrier::actor_loop() noexcept {
         return;
     }
     while (!stop_.load(std::memory_order_acquire)) {
+        // Parent CONTROL runs before user envelopes or IO continuations on
+        // this actor's own carrier, never on the producer/failed child's
+        // thread. The typed lane owns its independent bounded capacity.
+        if (options_.supervisor_control != nullptr
+                && options_.supervisor_control->urgent()) {
+            try {
+                (void)options_.supervisor_control->admit_turn(
+                    *options_.supervisor_hooks, false);
+            } catch (...) {
+                failures_.fetch_add(1, std::memory_order_relaxed);
+                request_stop();
+            }
+            continue;
+        }
         if (pending_) {
             Completion c;
             if (results_.try_pop(c)) {
@@ -348,13 +460,19 @@ void HungryCarrier::actor_loop() noexcept {
                 }
                 pending_ = false;
                 io_done_.fetch_add(1, std::memory_order_release);
-                run_handler(current_, true, c.value);
+                run_handler(current_, ResumeCause::io, c.value);
                 continue;
             }
         } else {
+            // CPU continuation precedes another envelope for this same actor.
+            // Parent CONTROL is dispatched at the top of every physical turn.
+            if (cooperating_) {
+                run_handler(current_, ResumeCause::cpu, 0);
+                continue;
+            }
             ActorMessage m;
             if (pop_next_input(m)) {
-                run_handler(m, false, 0);
+                run_handler(m, ResumeCause::initial, 0);
                 continue;
             }
         }

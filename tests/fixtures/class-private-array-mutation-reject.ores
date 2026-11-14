@@ -1,0 +1,8 @@
+define class Secret as
+  let mut Array<int> slots = new Array<int>();
+end
+pub fnc main(): int {
+  let mut Secret secret = new Secret();
+  secret.slots.add(42);
+  return 0;
+}

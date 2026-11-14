@@ -1,0 +1,73 @@
+name: Browser exact-width u32 C export (native Oreslang, not tabs)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'tests/fixtures/browser-c-abi-version-u32*.ores'
+      - 'tests/browser_c_abi_u32_host.c'
+      - 'scripts/verify-browser-c-abi-u32.sh'
+      - 'tests/ci/test-browser-c-abi-u32-gates.sh'
+      - '.github/workflows/browser-c-abi-u32.yml'
+      - 'CMakeLists.txt'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compiled-oreslang-c-u32:
+    # No fork PR source or cross-org tokens; exact PR HEAD (never synthetic merge).
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2 pinned
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify immutable source head and record Git tree
+        id: identity
+        shell: bash
+        env:
+          SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse --verify HEAD)" = "$SOURCE_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          tree="$(git rev-parse --verify 'HEAD^{tree}')"
+          [[ "$tree" =~ ^[0-9a-f]{40}$ ]]
+          printf 'source_sha=%s\nsource_tree=%s\n' "$SOURCE_HEAD_SHA" "$tree"
+          printf 'tree=%s\n' "$tree" >> "$GITHUB_OUTPUT"
+      - name: Install native LLVM toolchain dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y llvm-dev clang cmake ninja-build binutils
+      - name: Reject spoofed compiler and mismatched source identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/verify-browser-c-abi-u32.sh
+          bash -n tests/ci/test-browser-c-abi-u32-gates.sh
+          bash tests/ci/test-browser-c-abi-u32-gates.sh
+      - name: Build real compiler outside the clean source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B "$RUNNER_TEMP/browser-u32-compiler" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+          cmake --build "$RUNNER_TEMP/browser-u32-compiler" \
+            --target oreslang-llvmc --parallel 2
+      - name: Execute real Oreslang ABI version and negative guest fixtures
+        shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EXPECTED_SOURCE_TREE: ${{ steps.identity.outputs.tree }}
+        run: |
+          set -euo pipefail
+          export ORESLANG_LLVMC="$RUNNER_TEMP/browser-u32-compiler/oreslang-llvmc"
+          export ORESLANG_COMPILER_SHA256="$(sha256sum "$ORESLANG_LLVMC" | cut -d ' ' -f1)"
+          bash -n scripts/verify-browser-c-abi-u32.sh
+          bash scripts/verify-browser-c-abi-u32.sh

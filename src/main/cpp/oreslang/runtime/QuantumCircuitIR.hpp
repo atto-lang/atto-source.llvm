@@ -1,7 +1,9 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -32,6 +34,12 @@ public:
         std::vector<bool> filled_classical(static_cast<std::size_t>(classical_bits), false);
         bool terminal = false;
         for (const auto& gate : gates_) {
+            // Enum values can enter from FFI/casts. Unlike Java's enum,
+            // arbitrary native tags exist and must not become silent NOPs
+            // in the simulator or disappear from OpenQASM output.
+            if (gate.op != Op::X && gate.op != Op::H
+                && gate.op != Op::CX && gate.op != Op::Measure)
+                throw std::invalid_argument("unsupported quantum gate opcode");
             if (gate.target < 0 || gate.target >= qubits)
                 throw std::invalid_argument("invalid qubit index");
             if (gate.op == Op::Measure) {
@@ -71,16 +79,23 @@ public:
         if (qubits < 1 || qubits > 16 || classical_bits < 1 || classical_bits > 16)
             throw std::invalid_argument("circuit dimensions exceed simulator profile");
     }
-    Builder& x(int target) { gates_.push_back({Op::X, target, -1, -1}); return *this; }
-    Builder& h(int target) { gates_.push_back({Op::H, target, -1, -1}); return *this; }
+    Builder& x(int target) { return append({Op::X, target, -1, -1}); }
+    Builder& h(int target) { return append({Op::H, target, -1, -1}); }
     Builder& cx(int control, int target) {
-        gates_.push_back({Op::CX, target, control, -1}); return *this;
+        return append({Op::CX, target, control, -1});
     }
     Builder& measure(int qubit, int classical_bit) {
-        gates_.push_back({Op::Measure, qubit, -1, classical_bit}); return *this;
+        return append({Op::Measure, qubit, -1, classical_bit});
     }
     Circuit build() const { return Circuit(qubits_, classical_bits_, gates_); }
 private:
+    Builder& append(Gate gate) {
+        // Reject before allocating an unbounded intermediate guest graph.
+        if (gates_.size() >= 1024)
+            throw std::invalid_argument("circuit exceeds gate quota");
+        gates_.push_back(gate);
+        return *this;
+    }
     int qubits_, classical_bits_;
     std::vector<Gate> gates_;
 };
@@ -155,17 +170,27 @@ inline std::vector<std::uint64_t> simulate_shots(const Circuit& circuit,
     if (shots > 1000000) throw std::invalid_argument("shot quota exceeded");
     const auto probabilities = simulate_probabilities(circuit);
     std::vector<std::uint64_t> counts(probabilities.size(), 0);
+    // One CDF construction plus logarithmic sampling. Previously, one
+    // million shots and 16 classical bits required up to 65 billion probes.
+    std::vector<double> cdf(probabilities.size());
+    double total = 0.0;
+    for (std::size_t i = 0; i < probabilities.size(); ++i) {
+        if (!std::isfinite(probabilities[i]) || probabilities[i] < 0.0)
+            throw std::runtime_error("invalid simulated probability");
+        total += probabilities[i];
+        cdf[i] = total;
+    }
+    if (!std::isfinite(total) || total <= 0.0)
+        throw std::runtime_error("invalid simulated probability mass");
     std::mt19937_64 engine(seed);
     std::uniform_real_distribution<double> uniform(0.0, 1.0);
     for (std::uint32_t sample = 0; sample < shots; ++sample) {
-        const double draw = uniform(engine);
-        double cumulative = 0;
-        std::size_t outcome = probabilities.size() - 1;
-        for (std::size_t j = 0; j < probabilities.size(); ++j) {
-            cumulative += probabilities[j];
-            if (draw < cumulative) { outcome = j; break; }
-        }
-        ++counts[outcome];
+        const double draw = std::min(uniform(engine) * total,
+                                     std::nextafter(total, 0.0));
+        // Strict upper bound skips zero-weight bins even when prefixes repeat.
+        const auto it = std::upper_bound(cdf.begin(), cdf.end(), draw);
+        if (it == cdf.end()) throw std::runtime_error("quantum sampling CDF overflow");
+        ++counts[static_cast<std::size_t>(it - cdf.begin())];
     }
     return counts;
 }

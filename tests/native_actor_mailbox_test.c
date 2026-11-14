@@ -46,6 +46,18 @@ static void* worker(void* arg) {
     ores_native_actor_mailbox_leave(a->lane);
     return NULL;
 }
+typedef struct {
+    OresNativeActorMailbox* lane;
+    atomic_int* result;
+} TryArgs;
+static void* try_worker(void* arg) {
+    TryArgs* a=(TryArgs*)arg;
+    int entered=ores_native_actor_mailbox_try_enter(a->lane);
+    atomic_store(a->result,entered);
+    if (entered) ores_native_actor_mailbox_leave(a->lane);
+    return NULL;
+}
+
 int main(void) {
     OresNativeActorMailbox* lane=ores_native_actor_mailbox_open(THREADS+1);
     check(lane != NULL);
@@ -106,6 +118,30 @@ int main(void) {
     check(atomic_load(&finished)==THREADS);
     check(ores_native_actor_mailbox_pending(retiring)==0);
     check(ores_native_actor_mailbox_try_destroy(retiring)==1);
-    puts("NATIVE_ACTOR_FIFO_MAILBOX_PASS fifo=12 max_active=1 capacity=1 retire_wake=1");
+    /* Host nonparking try-admission cannot overtake a queued FIFO entrant. */
+    OresNativeActorMailbox* probe=ores_native_actor_mailbox_open(2);
+    check(probe != NULL);
+    check(ores_native_actor_mailbox_try_enter(probe)==1);
+    ThreadArgs queued={probe,&active,&max_active,&finished,&order_index,NULL,0};
+    pthread_t queued_thread;
+    check(pthread_create(&queued_thread,NULL,worker,&queued)==0);
+    wait_for_pending(probe,2);
+    atomic_int entered=0;
+    TryArgs attempt={probe,&entered};
+    pthread_t try_thread;
+    check(pthread_create(&try_thread,NULL,try_worker,&attempt)==0);
+    check(pthread_join(try_thread,NULL)==0);
+    check(atomic_load(&entered)==0);
+    check(ores_native_actor_mailbox_rejected(probe)==1);
+    ores_native_actor_mailbox_leave(probe);
+    check(pthread_join(queued_thread,NULL)==0);
+    check(ores_native_actor_mailbox_pending(probe)==0);
+    check(ores_native_actor_mailbox_try_enter(probe)==1);
+    ores_native_actor_mailbox_leave(probe);
+    ores_native_actor_mailbox_retire(probe);
+    check(ores_native_actor_mailbox_try_enter(probe)==0);
+    check(ores_native_actor_mailbox_try_destroy(probe)==1);
+
+    puts("NATIVE_ACTOR_FIFO_MAILBOX_PASS fifo=12 max_active=1 capacity=1 retire_wake=1 try_admission=1");
     return 0;
 }

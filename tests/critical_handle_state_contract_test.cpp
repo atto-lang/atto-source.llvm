@@ -30,6 +30,37 @@ int main() {
     CHECK(admit_critical_handle_state(c, with_rw)
             == CriticalStateAdmission::MissingCallbackCritical);
     c.serial_lifetime_admission_proven = false;
+    // Trusted three-argument policy: a verified serial actor (actor
+    // declaration + scheduler, never callback metadata) still cannot admit an
+    // unmarked state write (spec ch.05/ch.22).
+    CHECK(admit_critical_handle_state(c, with_rw, true)
+            == CriticalStateAdmission::MissingCallbackCritical);
+    c.callback_critical = true;
+    CHECK(admit_critical_handle_state(c, with_rw, true)
+            == CriticalStateAdmission::Accept);
+    c.intrinsic_critical = false;
+    CHECK(admit_critical_handle_state(c, with_rw, true)
+            == CriticalStateAdmission::MissingIntrinsicCritical);
+    c.intrinsic_critical = true;
+    c.one_state_parameter = false;
+    CHECK(admit_critical_handle_state(c, with_rw, true)
+            == CriticalStateAdmission::InvalidStateCallback);
+    c.one_state_parameter = true;
+    c.lexical = false;
+    CHECK(admit_critical_handle_state(c, with_rw, true)
+            == CriticalStateAdmission::InvalidStateCallback);
+    c.lexical = true;
+    c.escapes = true;
+    CHECK(admit_critical_handle_state(c, with_rw, true)
+            == CriticalStateAdmission::CallbackEscape);
+    c.escapes = false;
+    CHECK(admit_critical_handle_state(c, row(READ), true)
+            == CriticalStateAdmission::EffectExceedsWith);
+    // Serial admission cannot be inferred from the callback itself; the
+    // two-argument untrusted policy still fails closed for unmarked writes.
+    c.callback_critical = false;
+    CHECK(admit_critical_handle_state(c, with_rw)
+            == CriticalStateAdmission::MissingCallbackCritical);
     c.callback_critical = true;
     CHECK(admit_critical_handle_state(c, with_rw)
             == CriticalStateAdmission::Accept);
@@ -90,6 +121,21 @@ int main() {
             == CriticalStateAdmission::LoanAcrossSuspension);
     c.state_loan_live_across_suspend = false;
     CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
+            == CriticalStateAdmission::Accept);
+
+    // Trusted admission must not accept forged/reserved bits in either the
+    // inferred callback row or the caller's upper-bound "with" row.
+    constexpr std::uint32_t UNKNOWN = 1u << 31;
+    c.inferred = row(READ);
+    CHECK(admit_critical_handle_state(c, row(READ | UNKNOWN))
+            == CriticalStateAdmission::EffectExceedsWith);
+    c.inferred = row(READ | UNKNOWN);
+    CHECK(admit_critical_handle_state(c, row(READ | UNKNOWN))
+            == CriticalStateAdmission::EffectExceedsWith);
+    CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
+            == CriticalStateAdmission::EffectExceedsWith);
+    c.inferred = row(READ);
+    CHECK(admit_critical_handle_state(c, row(READ))
             == CriticalStateAdmission::Accept);
     return 0;
 }

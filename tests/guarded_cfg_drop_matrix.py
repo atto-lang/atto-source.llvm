@@ -43,13 +43,14 @@ def main():
                 assert compiled.returncode == 0 and not compiled.stderr, (
                     source.name, compiled.stderr)
                 ir = compiled.stdout
-                exits = guards + 1
-                assert ir.count("call void @oreslang_owned_i64_region_drop(") == exits, (
-                    source.name, "missing or duplicate ownership drops")
-                assert ir.count("call void @oreslang_owned_i64_region_close(") == exits, (
+                assert ir.count("exit.cleanup:") == 1, (
+                    source.name, "missing one shared exit cleanup block")
+                assert ir.count("call void @oreslang_owned_i64_region_drop(") == 1, (
+                    source.name, "missing or duplicate ownership drop")
+                assert ir.count("call void @oreslang_owned_i64_region_close(") == 1, (
                     source.name, "missing or duplicate region closure")
-                assert ir.count("call void @llvm.lifetime.end") >= exits, (
-                    source.name, "missing lexical class lifetime exit")
+                assert ir.count("call void @llvm.lifetime.end") >= 1, (
+                    source.name, "missing lexical class cleanup")
                 assert "gc.statepoint" not in ir and "gc.root" not in ir
                 ll = d / (source.stem + ".ll")
                 ll.write_text(ir)

@@ -40,11 +40,15 @@ struct CriticalStateCallback {
 
 inline CriticalStateAdmission admit_critical_handle_state(
         const CriticalStateCallback& callback,
-        FunctionEffects with_effects) noexcept {
+        FunctionEffects with_effects,
+        bool verified_serial_actor = false) noexcept {
     if (!callback.intrinsic_critical) return CriticalStateAdmission::MissingIntrinsicCritical;
-    // Serial admission controls the actor lifetime, not the state loan mode.
-    // No scheduler proof may silently elevate an unmarked READ grant into
-    // exclusive WRITE authority.
+    // Spec ch.05/ch.22: serial actors keep the same sealed-state and loan
+    // rules, and unguarded state mutation fails before emission. An unmarked
+    // callback is READ-only on every actor; any state write needs explicit
+    // critical marking. A verified serial actor (trusted declaration +
+    // scheduler, never guest metadata) cannot mint implicit WRITE authority.
+    (void) verified_serial_actor;
     if (!callback.callback_critical
             && callback.inferred.has(FunctionEffect::StateWrite)) {
         return CriticalStateAdmission::MissingCallbackCritical;
