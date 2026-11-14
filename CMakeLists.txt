@@ -2359,6 +2359,7 @@ if(BUILD_TESTING)
         src/main/cpp/oreslang/runtime/NativeOresVM.c
         src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
         src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
         src/main/cpp/oreslang/runtime/NativeContinuationStore.c
         src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
@@ -5470,6 +5471,7 @@ if(BUILD_TESTING)
         src/main/cpp/oreslang/runtime/NativeOresVM.c
         src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
         src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
         src/main/cpp/oreslang/runtime/NativeContinuationStore.c
         src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
@@ -5492,6 +5494,7 @@ if(BUILD_TESTING)
         src/main/cpp/oreslang/runtime/NativeOresVM.c
         src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
         src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
         src/main/cpp/oreslang/runtime/NativeContinuationStore.c
         src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
@@ -5517,6 +5520,7 @@ if(BUILD_TESTING)
         src/main/cpp/oreslang/runtime/NativeOresVM.c
         src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
         src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
         src/main/cpp/oreslang/runtime/NativeContinuationStore.c
         src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
@@ -5542,6 +5546,7 @@ if(BUILD_TESTING)
             src/main/cpp/oreslang/runtime/NativeOresVM.c
             src/main/cpp/oreslang/runtime/NativeActorFuture.c
             src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+            src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
             src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
             src/main/cpp/oreslang/runtime/NativeContinuationStore.c
             src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
@@ -5577,6 +5582,7 @@ if(BUILD_TESTING)
             src/main/cpp/oreslang/runtime/NativeOresVM.c
             src/main/cpp/oreslang/runtime/NativeActorFuture.c
             src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+            src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
             src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
             src/main/cpp/oreslang/runtime/NativeContinuationStore.c
             src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
