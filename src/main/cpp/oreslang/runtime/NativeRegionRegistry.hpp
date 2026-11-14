@@ -133,6 +133,9 @@ public:
     // An active foreign callback on this same thread cannot be quiesced here:
     // the method throws and retains the retiring entry for a later retry.
     // The supervisor must keep backing allocations mapped until it succeeds.
+private:
+    // Only NativeRegionRuntimeAuthority (or the isolated test shim) can
+    // deactivate another actor's complete native authority.
     void fence_actor(ActorHeapIdentity owner) {
         if (!owner.runtime || !owner.actor || !owner.epoch)
             throw std::invalid_argument("invalid native fence actor identity");
@@ -172,6 +175,7 @@ public:
                 "native actor fence deferred by active same-thread FFI; retry after callback");
     }
 
+public:
     void revoke(const Grant& grant) {
         std::shared_ptr<TrustedPointerWindow> window;
         {
