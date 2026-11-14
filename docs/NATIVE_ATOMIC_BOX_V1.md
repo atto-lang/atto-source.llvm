@@ -55,6 +55,8 @@ is performed by these primitives.
 Exact-source C++ tests exercise stale generations, duplicate adoption,
 concurrent allocation attempts, 16-thread ticket consumption, 64 repeated
 issue-vs-close races, reentrant destruction and deterministic cleanup.
+The issue/close admission shares a single atomic lifecycle word; an issuer
+cannot claim a slot while a successful terminal close is observable.
 They run under optimized C++20, ASan, UBSan and TSan on a private runner.
 
 This is a bounded native **foundation**, not yet wired to actor-owned arena
@@ -81,6 +83,26 @@ It does **not** provide full main compiler integration, ownership or actor
 scheduler lowering, multiple atomic owners, cross-function transfers, arbitrary
 expressions, or five-backend conformance. This slice must remain isolated
 until those requirements are proven.
+
+## Box compiler ownership-admission prototype
+
+\`src/main/cpp/oreslang/types/NativeBoxCompilerAdmissionV1.hpp\` is a
+**typed frontend-effect checker** wired to the existing native ownership CFG
+and exact-once drop planner. It accepts only a *trusted compiler-proven*
+\`Box<T>\` intrinsic identity, tracking initializes, reads, shared/exclusive
+loans and loan releases, \`rt take\` into a separate uninitialized owner,
+drops, and \`T: Send\`-proven one-way moves to independent threads.
+
+It refuses copying, using an owner after move/drop, moving/dropping under
+live loans, suspension with live boxed ownership (until pinned-frame
+lowering exists), and cross-actor sends (until heap relocation is proven).
+The plan is bounded to 64 owners and 4096 effects.
+
+This is **not yet invoked by the main .atto parser** and does not itself
+emit Box guest code. The formal admission API cannot be reached through
+untrusted source user annotations. Its native tests prove the checker
+contracts; integration must add proven AST-to-effect mappings and real
+destructor/cleanup emission into every return/unwind/cancel path.
 
 ## Separate shared ownership
 
