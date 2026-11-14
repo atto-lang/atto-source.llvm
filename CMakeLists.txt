@@ -5,6 +5,29 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Host-only C++17 .oresi v1 preflight with no LLVM SDK dependency.
+# Tests metadata admission, not the compiler, guest or native linker.
+option(ORESLANG_ORESI_HOST_ONLY
+    "Build only pinned .oresi public-interface metadata tests" OFF)
+if(ORESLANG_ORESI_HOST_ONLY)
+    include(CTest)
+    if(NOT BUILD_TESTING)
+        message(FATAL_ERROR "Native .oresi preflight requires BUILD_TESTING=ON")
+    endif()
+    add_executable(oreslang-native-oresi-v1-admission-test
+        tests/native_oresi_v1_admission_test.cpp)
+    target_include_directories(oreslang-native-oresi-v1-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-oresi-v1-admission-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-oresi-v1-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_oresi_v1_import_preflight_host_only
+        COMMAND oreslang-native-oresi-v1-admission-test)
+    set_tests_properties(native_oresi_v1_import_preflight_host_only
+        PROPERTIES TIMEOUT 20)
+    return()
+endif()
+
 # Isolated native host test entrypoint: no LLVM development package, Rust
 # harness, guest frontend or network access is required to verify the real
 # C ActorArena + C++20 proxy slab + actor-owned scheduler contract.
