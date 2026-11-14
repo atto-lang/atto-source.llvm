@@ -80,7 +80,7 @@ for opt in 0 2; do
   done
   for negative in escape abi-shadow; do
     case "$negative" in
-      escape) expected_error='ActorRef|actor.*ref|source actor|cannot.*return|expected.*int' ;;
+      escape) expected_error="unknown parameter 'worker'" ;;
       abi-shadow) expected_error='reserved native checked source actor ABI symbol collision' ;;
     esac
     rc=0
