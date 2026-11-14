@@ -4,6 +4,8 @@ on:
     paths:
       - scripts/compile-aot.sh
       - scripts/audit_no_gc_ir.rs
+      - scripts/audit-aot-linked-image.sh
+      - tests/test-aot-linked-image-audit.sh
       - scripts/test-compile-aot-optimization.sh
       - scripts/test-compile-aot-guest-parity.sh
       - scripts/test-compile-aot-guest-parity-contract.sh
@@ -14,6 +16,8 @@ on:
     paths:
       - scripts/compile-aot.sh
       - scripts/audit_no_gc_ir.rs
+      - scripts/audit-aot-linked-image.sh
+      - tests/test-aot-linked-image-audit.sh
       - scripts/test-compile-aot-optimization.sh
       - scripts/test-compile-aot-guest-parity.sh
       - scripts/test-compile-aot-guest-parity-contract.sh
@@ -46,6 +50,9 @@ jobs:
         run: |
           set -euo pipefail
           bash -n scripts/compile-aot.sh
+          bash -n scripts/audit-aot-linked-image.sh
+          bash -n tests/test-aot-linked-image-audit.sh
+          bash tests/test-aot-linked-image-audit.sh
           bash -n scripts/test-compile-aot-optimization.sh
           bash -n scripts/test-compile-aot-guest-parity-contract.sh
           bash scripts/test-compile-aot-optimization.sh
