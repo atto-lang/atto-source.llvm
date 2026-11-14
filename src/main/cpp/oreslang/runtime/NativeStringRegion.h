@@ -15,7 +15,12 @@ int64_t ores_string_region_end(void);
 int64_t ores_string_literal(const char *data, int64_t size);
 int64_t ores_string_concat(int64_t left, int64_t right);
 int64_t ores_string_equal(int64_t left, int64_t right);
+int64_t ores_string_from_i64(int64_t value);
+int64_t ores_string_from_bool(int64_t value);
 int64_t ores_string_print(int64_t handle, int64_t newline);
+/* Panic path only: drain queued console output before the process aborts.
+ * No-op when no console region is active. */
+void ores_string_panic_flush(void);
 #ifdef __cplusplus
 }
 #endif
