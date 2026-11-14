@@ -1,0 +1,22 @@
+// Target canonical nullary alias slice in opt-in LLVM AOT frontend.
+// Full payload-bearing ActorRef<WorkerMsg> messages are not lowered in this slice.
+define enum Light {
+  Red,
+  Green,
+  Yellow
+}
+fnc next(Light state): Light {
+  do match state over
+    on Red as original -> { return original; }
+    on Green as g -> { return Light.Yellow; }
+    on Yellow -> { return Light.Red; }
+  end
+}
+pub fnc main(): int {
+  val Light active = next(Light.Red);
+  do match active over
+    on Red as r -> { return 11; }
+    on Green as g -> { return 22; }
+    on Yellow -> { return 33; }
+  end
+}
