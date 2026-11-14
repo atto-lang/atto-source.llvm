@@ -2009,18 +2009,33 @@ private:
 
         require("mtd");
         require("(");
-        const bool mutable_receiver = accept("mut");
-        require("self");
-        require(":");
-        const std::string owner = identifier();
+        // Canonical AttoLang syntax is type-first: mtd (Foo self) method().
+        // Keep self-first forms for the existing class-method migration.
+        bool mutable_receiver = false;
+        std::string owner;
+        if (token_.text == "self" || token_.text == "mut") {
+            mutable_receiver = accept("mut");
+            require("self");
+            require(":");
+            owner = identifier();
+        } else {
+            owner = identifier();
+            mutable_receiver = accept("mut");
+            require("self");
+        }
         require(")");
         auto found = std::find_if(program.classes.begin(), program.classes.end(),
             [&](const ClassDecl& cls) { return cls.name == owner; });
         if (found == program.classes.end()) {
+            // A declaration-only actor with type-first methods is valid
+            // AttoLang, but cannot yet be represented by native on_message
+            // class slots. Reject for missing backend lowering, not grammar.
+            if (actor_forwards_.count(owner))
+                fail("NATIVE_ACTOR_MTD_BACKEND_UNSUPPORTED: declaration-only actor receiver needs typed mailbox method lowering");
             const bool actor_target = std::any_of(program.actors.begin(), program.actors.end(),
                 [&](const ActorDecl& actor) { return actor.name == owner; });
             if (actor_target)
-                fail("NATIVE_MTD_ACTOR_STATE_SEALED: external receiver methods cannot extend an actor mailbox/state authority");
+                fail("NATIVE_MTD_ACTOR_STATE_SEALED: external receiver methods cannot extend an already defined actor's sealed state");
             fail("NATIVE_MTD_LOCAL_CLASS_REQUIRED: typed receiver must name an already declared ordinary local class");
         }
         const bool prior_active = external_class_receiver_active_;
