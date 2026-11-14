@@ -160,6 +160,7 @@ if(BUILD_TESTING)
         tests/native_telemetry_span_runtime_test.c
         src/main/cpp/oreslang/runtime/NativeTelemetrySpan.c)
     target_include_directories(oreslang-native-telemetry-span-runtime-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     set_target_properties(oreslang-native-telemetry-span-runtime-test PROPERTIES
         C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
     target_compile_options(oreslang-native-telemetry-span-runtime-test PRIVATE
@@ -194,6 +195,7 @@ if(BUILD_TESTING)
     add_executable(oreslang-native-sum-payload-admission-test
         tests/native_sum_payload_admission_test.cpp)
     target_include_directories(oreslang-native-sum-payload-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-native-sum-payload-admission-test PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
     add_test(NAME native_sum_payload_type_admission
@@ -205,7 +207,9 @@ if(BUILD_TESTING)
     add_executable(oreslang-functor-type-shape-test
         tests/functor_type_rules_test.cpp)
     target_include_directories(oreslang-functor-type-shape-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-functor-type-shape-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME native_functor_recursive_type_shape_host_only
         COMMAND oreslang-functor-type-shape-test)
     set_tests_properties(native_functor_recursive_type_shape_host_only
@@ -216,16 +220,21 @@ if(BUILD_TESTING)
     add_executable(oreslang-native-tensor2d-admission-test
         tests/native_tensor2d_admission_test.cpp)
     target_include_directories(oreslang-native-tensor2d-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-native-tensor2d-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME native_tensor2d_descriptor_geometry_host_only
         COMMAND oreslang-native-tensor2d-admission-test)
     set_tests_properties(native_tensor2d_descriptor_geometry_host_only
+        PROPERTIES TIMEOUT 15)
     # Structural-only hard-RT admission: period, memory and scheduler must
     # fail closed. This test never certifies WCET, physical timing or no-GC.
     add_executable(oreslang-rt-admission-bounds-test
         tests/rt_admission_bounds_test.cpp)
     target_include_directories(oreslang-rt-admission-bounds-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-rt-admission-bounds-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME native_rt_declared_bound_admission
         COMMAND oreslang-rt-admission-bounds-test)
     set_tests_properties(native_rt_declared_bound_admission PROPERTIES TIMEOUT 15)
@@ -252,6 +261,7 @@ if(BUILD_TESTING)
         tests/native_tenant_domain_host_test.c
         src/main/cpp/oreslang/runtime/TenantDomainHost.c)
     target_include_directories(oreslang-native-tenant-domain-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-native-tenant-domain-host-test PRIVATE Threads::Threads)
     set_target_properties(oreslang-native-tenant-domain-host-test PROPERTIES
         C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
