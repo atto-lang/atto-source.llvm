@@ -736,32 +736,54 @@ struct TenantVmHost::Core {
         return true;
     }
 
-    // Puts a guard where this turn's stack quota ends, measured from where turns start, which is the same
-    // depth on every carrier. The guard moves only when the quota differs from the last turn's, so a host
-    // whose VMs share a quota makes no system call here. If it cannot move, the turn runs with the
-    // carrier's whole stack: the quota is for predictable depth, and the carrier's guard still contains.
-    void place_stack_guard(Carrier* c, std::uintptr_t entry, std::uint32_t quota) {
+    // Installs the entire quota guard before a guest turn. If the requested guard cannot be
+    // installed, the turn must not execute: a quota is an admission limit, not telemetry.
+    // Only this carrier thread changes the guard; signal handlers observe it during guest code.
+    bool place_stack_guard(Carrier* c, std::uintptr_t entry, std::uint32_t quota) {
         const auto carrier_floor = reinterpret_cast<std::uintptr_t>(c->stack_guard_low) + kCarrierGuardBytes;
         std::uintptr_t wanted = 0;
         if (quota) {
-            const std::uintptr_t top = (entry - quota) & ~(page_size() - 1);
-            if (top >= carrier_floor + kCarrierGuardBytes) wanted = top - kCarrierGuardBytes;
-            else stack_quota_misses.fetch_add(1, std::memory_order_relaxed);
-        }
-        if (wanted != c->quota_guard_low) {
-            if (wanted && mprotect(reinterpret_cast<void*>(wanted), kCarrierGuardBytes, PROT_NONE) != 0) {
+            const auto page = page_size();
+            if (entry <= quota) {
                 stack_quota_misses.fetch_add(1, std::memory_order_relaxed);
-                wanted = 0;
+                return false;
             }
-            if (c->quota_guard_low && c->quota_guard_low != wanted) {
-                // Restoring part of a mapping this thread owns. If even that fails, a guard would be left
-                // inside the stack where later turns expect memory, so the host cannot go on.
-                if (mprotect(reinterpret_cast<void*>(c->quota_guard_low), kCarrierGuardBytes, PROT_READ | PROT_WRITE) != 0)
-                    std::abort();
+            const std::uintptr_t top = (entry - quota) & ~(page - 1);
+            if (top < carrier_floor + kCarrierGuardBytes) {
+                stack_quota_misses.fetch_add(1, std::memory_order_relaxed);
+                return false;
             }
-            c->quota_guard_low = wanted;
+            wanted = top - kCarrierGuardBytes;
         }
+        const std::uintptr_t previous = c->quota_guard_low;
+        if (wanted == previous) {
+            c->stack_floor = wanted ? wanted + kCarrierGuardBytes : carrier_floor;
+            return true;
+        }
+        // Protect the new whole interval first. Never turn the old/new intersection back to RW.
+        if (wanted && mprotect(reinterpret_cast<void*>(wanted), kCarrierGuardBytes, PROT_NONE) != 0) {
+            stack_quota_misses.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+        if (previous) {
+            const auto previous_end = previous + kCarrierGuardBytes;
+            const auto restore = [](std::uintptr_t start, std::uintptr_t end) {
+                // A failed restore leaves an inconsistent carrier mapping. Aborting the host is
+                // preferable to executing another tenant with unknown effective guard coverage.
+                if (end > start && mprotect(reinterpret_cast<void*>(start), end - start, PROT_READ | PROT_WRITE) != 0)
+                    std::abort();
+            };
+            if (!wanted) {
+                restore(previous, previous_end);
+            } else {
+                if (previous < wanted) restore(previous, std::min(previous_end, wanted));
+                const auto wanted_end = wanted + kCarrierGuardBytes;
+                if (previous_end > wanted_end) restore(std::max(previous, wanted_end), previous_end);
+            }
+        }
+        c->quota_guard_low = wanted;
         c->stack_floor = wanted ? wanted + kCarrierGuardBytes : carrier_floor;
+        return true;
     }
 
     TurnResult execute(Carrier* c, const std::shared_ptr<Vm>& shared, Actor& actor, std::uint32_t slot, const Mail& mail) {
@@ -792,8 +814,12 @@ struct TenantVmHost::Core {
         bool completed = false;
         // Pairs with fail(): it publishes the phase and then scans carriers, this announces
         // the turn and then reads the phase, so at least one of the two sees the other.
-        place_stack_guard(c, reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0)), vm.spec.limits.actor_stack_bytes);
-        if (vm.current_phase() == Phase::Running || vm.current_phase() == Phase::Quiescing) {
+        const bool quota_ready = place_stack_guard(c, reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0)),
+                                                    vm.spec.limits.actor_stack_bytes);
+        if (!quota_ready) {
+            // Reject the turn before any guest instruction. Ordinary actor fault accounting applies.
+            c->trap_reason = FailReason::StackOverflow;
+        } else if (vm.current_phase() == Phase::Running || vm.current_phase() == Phase::Quiescing) {
             completed = enter_guest(c, kind, &api, actor.instance.get(), vm.cage, self, actor.region, scratch,
                                     input_length, output, capacity, &value);
         } else {
