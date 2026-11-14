@@ -90,14 +90,9 @@ public:
         if (module.instructions().empty() ||
                 module.instructions().back().kind != OpKind::Close)
             throw std::logic_error("MIR LLVM requires terminal owner close");
-        // A detached snapshot is a value-producing operation in the native
-        // reference. This restricted i64-pair emitter has no snapshot result
-        // representation. Silently loading and discarding it would compile
-        // an incorrect guest program; reject before emitting any LLVM IR.
-        for (const auto& op : module.instructions()) {
-            if (op.kind == OpKind::Snapshot)
-                throw std::logic_error("MIR LLVM snapshot value lowering not implemented");
-        }
+        // An admitted detached struct snapshot materializes two fresh local
+        // i64 cells, never a raw pointer into the owner or a class handle.
+        // The independently verified MIR forbids snapshot use before capture.
         // A standalone native main must return an actually observed field.
         // Closing the owner alone must never publish an implicit return-zero.
         // Likewise, a read preceding later writes, pushes or swap-erases is
@@ -105,7 +100,8 @@ public:
         // Perform this check *before* any LLVM IR bytes are emitted.
         const auto& actions = module.instructions();
         if (actions.size() < 3 ||
-                actions[actions.size() - 2].kind != OpKind::ReadField)
+                (actions[actions.size() - 2].kind != OpKind::ReadField &&
+                 actions[actions.size() - 2].kind != OpKind::ReadSnapshotField))
             throw std::logic_error("MIR LLVM requires terminal field read before close");
         code_ = "; typed MIR, experimental local i64 pair LLVM IR; no external row handles\n";
         code_ += "declare void @llvm.trap()\n";
@@ -114,6 +110,10 @@ public:
         emit("store i64 0, ptr %length");
         emit("%alive = alloca i1");
         emit("store i1 true, ptr %alive");
+        emit("%snapshot0 = alloca i64");
+        emit("%snapshot1 = alloca i64");
+        emit("store i64 0, ptr %snapshot0");
+        emit("store i64 0, ptr %snapshot1");
         for (const auto* name : {"%col0", "%col1", "%generation"})
             emit(std::string(name) + " = alloca [" + std::to_string(cap_) + " x i64]");
         for (const auto& op : module.instructions()) {
@@ -134,6 +134,21 @@ public:
                     emit("store i64 " + next + ", ptr %length"); ++pushes_;
                     break;
                 }
+                case OpKind::Snapshot: {
+                    const auto idx = index_guard(op.index);
+                    const auto left = load(slot_ptr("%col0", idx));
+                    const auto right = load(slot_ptr("%col1", idx));
+                    emit("store i64 " + left + ", ptr %snapshot0");
+                    emit("store i64 " + right + ", ptr %snapshot1");
+                    break;
+                }
+                case OpKind::ReadSnapshotField: {
+                    // Snapshot cells are immutable detached values. Do NOT
+                    // re-resolve op.index against a mutable owner or alias a
+                    // lane that swap-delete may have moved or scrubbed.
+                    last_read_ = load(op.column ? "%snapshot1" : "%snapshot0");
+                    break;
+                }
                 case OpKind::ReadField: {
                     const auto idx = index_guard(op.index);
                     last_read_ = load(slot_ptr(op.column ? "%col1" : "%col0", idx));
@@ -147,8 +162,6 @@ public:
                          slot_ptr(op.column ? "%col1" : "%col0", idx));
                     break;
                 }
-                case OpKind::Snapshot:
-                    throw std::logic_error("MIR LLVM snapshot value lowering not implemented");
                 case OpKind::EraseSwap: {
                     const auto idx = index_guard(op.index);
                     const auto length = load("%length");
@@ -181,6 +194,8 @@ public:
                                  slot_ptr(lane, std::to_string(cell)));
                         }
                     }
+                    emit("store volatile i64 0, ptr %snapshot0");
+                    emit("store volatile i64 0, ptr %snapshot1");
                     emit("store volatile i64 0, ptr %length");
                     break;
                 default: throw std::logic_error("unsupported MIR opcode in LLVM IR emitter");
