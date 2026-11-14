@@ -239,6 +239,7 @@ int main(void) {
     CHECK(test_long_lived_source_actor_heap_churn() == 0);
     CHECK(tracked_heap_count == 0);
     CHECK(scrubbed_physical_frees == 2);
+    puts("SOURCE_ACTOR_HEAP_HOST_LIFECYCLE_OK|churn=100000|churn_turns=1000|negative=12|scrubbed_heap_frees=2|atto_guest=NO");
 #endif
     return 0;
 }
