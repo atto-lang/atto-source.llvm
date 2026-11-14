@@ -730,33 +730,38 @@ void oreslang_source_actor_send(void* opaque, int64_t payload) {
         == ORES_NATIVE_SEND_ACCEPTED);
 }
 
-int oreslang_source_actor_await_ready_checked(
+static int source_actor_await_ready_common(
         void* opaque,
+        OresSourceActorId identity,
         OresSourceActorContinuation continuation,
+        OresSourceActorIdContinuation id_continuation,
         uint64_t source_token,
         int64_t* result_out) {
-    SourceActor* instance = (SourceActor*)opaque;
-    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
-    ensure(continuation != NULL && result_out != NULL);
-
-    /*
-     * This outer wait is trusted top-level ABI glue, never guest-carrier
-     * blocking. A carrier call would be a deadlock/semantic violation.
-     */
-    OresNativeExecutionContext carrier = {0};
-    ensure(!ores_native_vm_current_execution_context(
-        group.vm, ORES_NATIVE_VM_MAIN, &carrier));
+    ensure((continuation != NULL) != (id_continuation != NULL));
+    ensure(result_out != NULL);
 
     ReadyAwaitFrame frame = {
         .continuation = continuation,
-        .actor = instance,
+        .id_continuation = id_continuation,
+        .actor_id = identity,
         .source_token = source_token
     };
     ensure(pthread_cond_init(&frame.completed, NULL) == 0);
-
     group_lock();
+    SourceActor* instance = id_continuation
+        ? lookup_actor_id_locked(identity)
+        : live_actor_pointer_locked(opaque);
+    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
+    frame.actor = instance;
     ensure(group.vm && group.root_ref.scheduler_domain
         && group.pending_ready == NULL && group.pending_done == NULL);
+    /* Blocking occurs on this trusted outer host thread only. No carrier
+     * from ANY VM domain may be parked while waiting for the root CONTROL
+     * continuation to resume and drain its logical execution context. */
+    OresNativeExecutionContext carrier = {0};
+    for (int domain = 0; domain < ORES_NATIVE_VM_DOMAIN_COUNT; ++domain)
+        ensure(!ores_native_vm_current_execution_context(
+            group.vm, (enum OresNativeVMDomain)domain, &carrier));
     frame.ready_future = ores_native_vm_actor_future_open(
         group.vm,
         ORES_NATIVE_VM_MAIN,
@@ -801,6 +806,37 @@ int oreslang_source_actor_await_ready_checked(
         (unsigned long long)source_token);
 #endif
     return outcome;
+}
+
+int oreslang_source_actor_await_ready_checked(
+        void* opaque,
+        OresSourceActorContinuation continuation,
+        uint64_t source_token,
+        int64_t* result_out) {
+    return source_actor_await_ready_common(
+        opaque, 0, continuation, NULL, source_token, result_out);
+}
+
+int oreslang_source_actor_await_ready_id_checked(
+        OresSourceActorId identity,
+        OresSourceActorIdContinuation continuation,
+        uint64_t source_token,
+        int64_t* result_out) {
+    return source_actor_await_ready_common(
+        NULL, identity, NULL, continuation, source_token, result_out);
+}
+
+int64_t oreslang_source_actor_await_ready_id(
+        OresSourceActorId identity,
+        OresSourceActorIdContinuation continuation,
+        uint64_t source_token) {
+    int64_t result = 0;
+    const int outcome = oreslang_source_actor_await_ready_id_checked(
+        identity, continuation, source_token, &result);
+    /* The typed ActorTerminated guest projection is a separate language
+     * addition. A failed READY must not execute the source continuation. */
+    ensure(outcome == ORES_SOURCE_ACTOR_STARTUP_READY);
+    return result;
 }
 
 int64_t oreslang_source_actor_await_ready(
