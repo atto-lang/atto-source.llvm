@@ -2,6 +2,7 @@
 #include <atomic>
 #include <cassert>
 #include <cstdint>
+#include <deque>
 #include <limits>
 #include <stdexcept>
 #include <thread>
@@ -74,6 +75,51 @@ int main(){
   assert(snap.recent[i].seq==15969+i);
   if(i)assert(snap.recent[i-1].time<snap.recent[i].time);
  }
+ // Model-check the observer ring against a separately maintained FIFO
+ // across small/large capacities, wraparound, and every event category.
+ for (const std::size_t cap : {std::size_t{1}, std::size_t{2},
+                               std::size_t{7}, std::size_t{64},
+                               std::size_t{1024}}) {
+  std::uint64_t tick=100;
+  K oracle(cap,[&]{return tick++;});
+  std::deque<K::Event> expected;
+  std::array<std::uint64_t,(std::size_t)K::EventKind::Count> counts{};
+  for(std::uint64_t i=0;i<10000;++i){
+   const auto kind=static_cast<K::EventKind>(i%counts.size());
+   const auto actor=100+i%13;
+   const auto incarnation=1+i%97;
+   oracle.record(kind,actor,incarnation);
+   ++counts[(std::size_t)kind];
+   if(expected.size()==cap)expected.pop_front();
+   expected.push_back({i,100+i,kind,actor,incarnation});
+   if(i%113==0||i==9999){
+    const auto snapshot=oracle.snapshot();
+    assert(snapshot.next==i+1);
+    assert(snapshot.overwritten==(i+1>cap?i+1-cap:0));
+    assert(snapshot.dropped_observer_events==0);
+    assert(snapshot.clock_regressions==0);
+    assert(snapshot.counters==counts);
+    assert(snapshot.recent.size()==expected.size());
+    for(std::size_t n=0;n<expected.size();++n){
+     const auto& a=snapshot.recent[n];
+     const auto& b=expected[n];
+     assert(a.seq==b.seq&&a.time==b.time&&a.kind==b.kind);
+     assert(a.actor==b.actor&&a.incarnation==b.incarnation);
+    }
+   }
+  }
+  // Bad incarnation is a pre-clock input failure, not an observer event.
+  const auto stopped_at=tick;
+  const auto before_bad=oracle.snapshot();
+  try { oracle.record(K::EventKind::Failed,1,0);assert(false); }
+  catch(const std::invalid_argument&){}
+  assert(tick==stopped_at);
+  const auto after_bad=oracle.snapshot();
+  assert(after_bad.next==before_bad.next);
+  assert(after_bad.overwritten==before_bad.overwritten);
+  assert(after_bad.counters==before_bad.counters);
+ }
+
  // Concurrent restart decisions must account for exactly the admitted burst,
  // not race between a read of size_ and a later write of its timestamp ring.
  std::atomic<std::uint64_t> held_clock{17};
