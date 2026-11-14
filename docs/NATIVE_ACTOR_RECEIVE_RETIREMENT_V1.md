@@ -133,3 +133,33 @@ passed another local 1,000 STOP/admission rounds under Clang 17 and
 leak checking. The **full** updated actor-heap/CMake CTest is
 **NOT_EXECUTED** on the source PR tree. GitHub Actions job reports still
 show failure before any executable job steps.
+
+## STOP sealing moved into trusted native retirement
+
+Audit found that `NativeActorRetirementBarrier::retire()` could publish
+native resource retirement while the optional receive gate still admitted
+new invocations. Previous tests hid the gap by separately calling
+`receives->seal_stop(true)` **after** `group.close()`.
+
+The barrier now seals its attached receive gate as the first operation of
+`retire(bool allow_graceful_teardown=false)`. The default is terminal/
+abortive and **never grants guest tear_down**. A verified graceful stop
+must explicitly call `retire(true)`. STOP then cannot admit a new receive
+after the barrier's retirement callback returns. A later force seal may
+downgrade graceful retirement, never upgrade abortive to graceful.
+
+For native heap/I/O callbacks that do work **before** calling `retire()`,
+the trusted coordinator must call `barrier.seal_stop(graceful)` as the
+FIRST callback operation; `retire()` repeats the seal defensively. The
+real actor-heap test now seals before retiring its scalar heap.
+
+The new regression invokes group close without any separate caller-side
+receive seal and verifies abortive STOP refuses further receive admission,
+forbids guest teardown, retains DONE while a live receiver pin exists,
+then closes one registered native resource and resolves DONE after the
+receipt retires. The graceful two-host-carrier test also asserts receipt
+denial immediately after group close. These full native integration tests
+are **AUTHORED_NOT_EXECUTED** on the exact PR source checkout; the local
+exact-blob `NativeActorReceiveFence.hpp` tests passed 2,000 two-carrier
+races with Clang 17 and 2,000 with GCC 14 under ASan/UBSan (4,000 total).
+No compiled guest or five-backend concurrency certificate is claimed.
