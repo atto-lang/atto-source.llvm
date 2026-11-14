@@ -1,0 +1,3 @@
+define actor Box as
+end
+fnc main(): int { return 42; }
