@@ -1,0 +1,68 @@
+// Candidate AttoLang native guest. NOT_EXECUTED until a pinned compiler runs it.
+// Every assertion is individually attributable; host JS tests do not execute this.
+import class CpuMat2 from '../src/cpu_mat2_gradients';
+import fnc cpu_mat2_valid, cpu_mat2_gemm, cpu_mat2_gemm_flags, cpu_mat2_grad_lhs, cpu_mat2_grad_rhs from '../src/cpu_mat2_gradients';
+
+pub routine main(): void {
+  val CpuMat2 a = new CpuMat2(1.0, 2.0, 3.0, 4.0);
+  val CpuMat2 b = new CpuMat2(5.0, 6.0, 7.0, 8.0);
+  val CpuMat2 identity = new CpuMat2(1.0, 0.0, 0.0, 1.0);
+  val CpuMat2 invalid = new CpuMat2(257.0, 0.0, 0.0, 1.0);
+  val CpuMat2 signed = new CpuMat2(-2.0, 3.0, 4.0, -5.0);
+  val CpuMat2 boundary = new CpuMat2(-256.0, 256.0, 0.0, 0.0);
+
+  if !cpu_mat2_valid(rt borrow a); do rt fail("mat2 1: valid matrix rejected"); fi
+  if cpu_mat2_valid(rt borrow invalid); do rt fail("mat2 2: overbound admitted"); fi
+  if !cpu_mat2_valid(rt borrow boundary); do rt fail("mat2 3: legal bound rejected"); fi
+
+  val product = cpu_mat2_gemm(rt borrow a, rt borrow b);
+  if product.is_err(); do rt fail("mat2 4: ordinary product rejected"); fi
+  val CpuMat2 c = product.unwrap();
+  if c.m00 != 19.0 || c.m01 != 22.0 || c.m10 != 43.0 || c.m11 != 50.0; do
+    rt fail("mat2 5: ordinary product is incorrect");
+  fi
+
+  val left_transposed = cpu_mat2_gemm_flags(rt borrow a, rt borrow b, true, false);
+  if left_transposed.is_err(); do rt fail("mat2 6: lhs transpose rejected"); fi
+  val CpuMat2 lt = left_transposed.unwrap();
+  if lt.m00 != 26.0 || lt.m01 != 30.0 || lt.m10 != 38.0 || lt.m11 != 44.0; do
+    rt fail("mat2 7: lhs transpose product incorrect");
+  fi
+
+  val right_transposed = cpu_mat2_gemm_flags(rt borrow a, rt borrow b, false, true);
+  if right_transposed.is_err(); do rt fail("mat2 8: rhs transpose rejected"); fi
+  val CpuMat2 right_product = right_transposed.unwrap();
+  if right_product.m00 != 17.0 || right_product.m01 != 23.0 || right_product.m10 != 39.0 || right_product.m11 != 53.0; do
+    rt fail("mat2 9: rhs transpose product incorrect");
+  fi
+
+  val grad_a = cpu_mat2_grad_lhs(rt borrow identity, rt borrow b);
+  if grad_a.is_err(); do rt fail("mat2 10: lhs gradient rejected"); fi
+  val CpuMat2 ga = grad_a.unwrap();
+  if ga.m00 != 5.0 || ga.m01 != 7.0 || ga.m10 != 6.0 || ga.m11 != 8.0; do
+    rt fail("mat2 11: lhs gradient incorrect");
+  fi
+
+  val grad_b = cpu_mat2_grad_rhs(rt borrow a, rt borrow identity);
+  if grad_b.is_err(); do rt fail("mat2 12: rhs gradient rejected"); fi
+  val CpuMat2 gb = grad_b.unwrap();
+  if gb.m00 != 1.0 || gb.m01 != 3.0 || gb.m10 != 2.0 || gb.m11 != 4.0; do
+    rt fail("mat2 13: rhs gradient incorrect");
+  fi
+
+  val signed_result = cpu_mat2_gemm(rt borrow signed, rt borrow identity);
+  if signed_result.is_err(); do rt fail("mat2 14: signed identity rejected"); fi
+  val CpuMat2 sr = signed_result.unwrap();
+  if sr.m00 != -2.0 || sr.m01 != 3.0 || sr.m10 != 4.0 || sr.m11 != -5.0; do
+    rt fail("mat2 15: signed identity incorrect");
+  fi
+
+  if !(cpu_mat2_gemm(rt borrow invalid, rt borrow a).is_err()); do
+    rt fail("mat2 16: overbound GEMM accepted");
+  fi
+  if !(cpu_mat2_grad_lhs(rt borrow identity, rt borrow invalid).is_err()); do
+    rt fail("mat2 17: overbound gradient accepted");
+  fi
+  stdio.stdout.println("ORES_CPU_MAT2_GRADIENTS_GUEST_PASS|cases=17");
+  return;
+}
