@@ -82,6 +82,54 @@ for opt in 0 2; do
       exit 1
     fi
   done
+  # A bare native exit code can be forged by a loop that never actually
+  # executes constructors. Compile a second binary with the *same real LLVM
+  # IR and production C runtime sources* under their existing test-only
+  # receipts. The pre-stop READY barrier must force exactly 128 constructor
+  # completions and 128 physical VM/heap shutdowns at each optimization level.
+  rt="$root/src/main/cpp/oreslang/runtime"
+  instrumented="$work/actor-churn-evidence-$opt"
+  "$CLANG" "-O$opt" -g -fno-omit-frame-pointer \\
+    -fsanitize=address,undefined \\
+    -x ir "$work/source-$opt.ll" -x c -std=c11 \\
+    -DORESLANG_SOURCE_ACTOR_TESTING -I "$root/src/main/cpp" \\
+    "$rt/ActorOwnedI64Heap.c" "$rt/NativeActorScheduler.c" \\
+    "$rt/NativeOresVM.c" "$rt/NativeActorFuture.c" \\
+    "$rt/SourceActorBootstrap.c" "$rt/NativeExecutionContextStore.c" \\
+    "$rt/NativeContinuationStore.c" "$rt/NativeAwaitTraceBridge.c" \\
+    "$rt/NativeLogicalTrace.c" -pthread -o "$instrumented"
+  rc=0
+  ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \\
+    timeout 120s "$instrumented" >"$work/evidence-out-$opt" \\
+    2>"$work/evidence-err-$opt" || rc=$?
+  if [[ "$rc" != 128 || -s "$work/evidence-out-$opt" ]]; then
+    echo "SOURCE_ACTOR_CHURN_SANITIZED_EXECUTION_FAIL|O$opt|exit=$rc" >&2
+    cat "$work/evidence-out-$opt" "$work/evidence-err-$opt" >&2
+    exit 1
+  fi
+  # Require actual constructor execution and READY, not merely 128 actor
+  # handles which stop-before-ready legitimately abandons in this runtime.
+  awk '
+    /^SOURCE_ACTOR_VM_ROUTING_VERIFIED / {
+      if ($0 != "SOURCE_ACTOR_VM_ROUTING_VERIFIED domains=4 main=1 cold_carriers=0 root_slot=63") bad=1
+      routing++; next
+    }
+    /^SOURCE_ACTOR_SPAWN_STOP_VERIFIED / {
+      if ($0 != "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=1 released=1 ready=1 accepted=0 processed=0 abandoned=0 last=0") bad=1
+      stop++; next
+    }
+    /^SOURCE_ACTOR_GROUP_VERIFIED / {
+      if ($0 != "SOURCE_ACTOR_GROUP_VERIFIED active=0 slots=1 peak=1 carriers=4") bad=1
+      group++; next
+    }
+    { bad=1 }
+    END { exit (routing==128 && stop==128 && group==128 && !bad ? 0 : 1) }
+  ' "$work/evidence-err-$opt" || {
+    echo "SOURCE_ACTOR_CHURN_PHYSICAL_LIFECYCLE_NOT_PROVEN|O$opt" >&2
+    cat "$work/evidence-err-$opt" >&2
+    exit 1
+  }
+  printf 'SOURCE_ACTOR_CHURN_REAL_CONSTRUCTORS|O%s|ready=128|physically_joined=128|sanitizers=ASAN_UBSAN|guest=EXECUTED|zero_gc_certified=NO\\n' "$opt"
   # Additional accepted forms: canonical while/do/done and zero-trip
   # actor churn. The latter must exit without constructing any actor.
   expected_statuses=(7 0)
