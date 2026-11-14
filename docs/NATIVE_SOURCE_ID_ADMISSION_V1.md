@@ -1,6 +1,6 @@
 # Native source-ID admission v1 (LLVM backend)
 
-**Status:** host-only metadata parsing and static-table admission. **NOT** native `.atto` compiler lowering, instrumented MIR, runtime spans, LLVM ORC JIT or five-backend tracing parity.
+**Status:** host-native metadata admission **plus a new opt-in LLVM compiler IR routine-ID attachment candidate**. The compiler path is not yet executed in this session; it is **NOT** runtime log-site probe insertion, linked guest AOT execution, LLVM ORC JIT or five-backend tracing parity.
 
 This LLVM/C++ implementation is intentionally independent of Java/Truffle's AST and the Rust/Cranelift compilers. It validates the versioned common observable ID format while keeping backend-specific descriptor tables and codegen policy.
 
@@ -21,6 +21,41 @@ ctest --test-dir build-source-ids --output-on-failure
 ~~~
 
 Independently, the header and test compiled and executed in the authoring environment using Clang C++17 `-O1 -fsanitize=address,undefined` and GCC C++17 `-O2` with `-Wall -Wextra -Wpedantic -Werror -UNDEBUG`; each printed `LLVM_SOURCE_ID_HOST_METADATA_PASS`. This is a native **host-only** test, not a compiler guest execution proof.
+
+## Compiler-owned LLVM IR metadata candidate (new draft code)
+
+`LlvmCodegen.hpp` now exposes an opt-in `CheckedSourceRoutineV1` list.
+`emit_verified_llvm_ir` validates its exact scalar callable coverage against
+the LLVM backend's **own parsed `Program`**, accepts only well-formed `rid_`
+IDs, rejects duplicate selectors and unknown functions, and attaches
+`atto.source.routine_id.v1` metadata to the actual LLVM function declarations.
+Actor/generator/class coverage is denied, rather than silently omitted.
+
+A new internal `oreslang-llvmc --selftest-source-routine-ir` invokes the
+**real native parser and LLVM IR code generator** on the Atto scalar
+`pub fnc main(): int { return 42; }` fixture, expects the exact generated
+routine metadata, and rejects wrong-kind, unknown-selector and duplicate IDs.
+The full LLVM CMake branch registers this as the
+`native_source_routine_id_compiler_ir` CTest target. With a compatible LLVM
+SDK, run:
+
+~~~sh
+cmake -S . -B build-llvm -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-llvm --parallel --target oreslang-llvmc
+ctest --test-dir build-llvm -R native_source_routine_id_compiler_ir --output-on-failure
+~~~
+
+**Execution status:** LLVM development libraries and `llvm-config` are not
+available in the local test environment, and GitHub source-org jobs currently
+fail before test steps. Thus this compiler codegen path is **committed but
+UNEXECUTED**, not a passing LLVM guest proof. The available local results are
+the independent native C++ descriptor tests and sanitizers.
+
+**Scope:** the caller-supplied list is not yet loaded from an authenticated
+checked-in package registry. LLVM metadata is not a live event or an
+object-level authenticated source map; this work explicitly does **not**
+claim `log.info` lowering, optimizer-stable runtime probes, trace propagation
+or actual binary code-version retirement.
 
 ## Needed before implementation promotion
 
