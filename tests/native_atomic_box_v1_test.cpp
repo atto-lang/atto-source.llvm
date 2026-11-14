@@ -1,5 +1,6 @@
 #include "oreslang/runtime/NativeAtomicBoxV1.hpp"
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -143,53 +144,130 @@ static void concurrent_atomic_contention() {
     receiver.join();
 }
 
+static_assert(!std::is_copy_constructible_v<UniqueAllocationTicket<Token>>);
+static_assert(!std::is_move_constructible_v<UniqueAllocationTicket<Token>>);
+static_assert(std::is_nothrow_destructible_v<UniqueAllocationTicket<Token>>);
+
 static void unique_box_lifecycle() {
     std::atomic<int> drops{0};
-    Token first{&drops}, second{&drops};
+    Token first{&drops}, second{&drops}, third{&drops};
     UniqueBox<Token> a;
-    REQUIRE(!UniqueBox<Token>::adopt(nullptr, destroy_token, 41, 3, a));
-    REQUIRE(!UniqueBox<Token>::adopt(&first, nullptr, 41, 3, a));
-    REQUIRE(!UniqueBox<Token>::adopt(&first, destroy_token, 0, 3, a));
-    REQUIRE(!UniqueBox<Token>::adopt(&first, destroy_token, 41, 0, a));
-    REQUIRE(UniqueBox<Token>::adopt(&first, destroy_token, 41, 3, a));
-    REQUIRE(!UniqueBox<Token>::adopt(&second, destroy_token, 41, 3, a));
+    {
+        UniqueAllocationTicket<Token> null_pointer(nullptr, destroy_token, 41, 3);
+        UniqueAllocationTicket<Token> null_destroy(&first, nullptr, 41, 3);
+        REQUIRE(!UniqueBox<Token>::adopt(null_pointer, a));
+        REQUIRE(!UniqueBox<Token>::adopt(null_destroy, a));
+        REQUIRE(drops.load() == 0);
+    }
+    {
+        Token invalid{&drops};
+        UniqueAllocationTicket<Token> zero_domain(&invalid, destroy_token, 0, 3);
+        REQUIRE(!UniqueBox<Token>::adopt(zero_domain, a));
+        // An unconsumed ticket still owns the resource and destroys it here.
+    }
+    REQUIRE(drops.load() == 1);
+    {
+        Token invalid{&drops};
+        UniqueAllocationTicket<Token> zero_generation(&invalid, destroy_token, 41, 0);
+        REQUIRE(!UniqueBox<Token>::adopt(zero_generation, a));
+    }
+    REQUIRE(drops.load() == 2);
+
+    UniqueAllocationTicket<Token> first_ticket(&first, destroy_token, 41, 3);
+    UniqueBox<Token> rival;
+    REQUIRE(UniqueBox<Token>::adopt(first_ticket, a));
+    REQUIRE(!UniqueBox<Token>::adopt(first_ticket, rival));
+    REQUIRE(!rival.is_owned()); // cannot create a second owner from same ticket
     REQUIRE(a.get_checked(41, 3) == &first);
     REQUIRE(a.get_checked(41, 4) == nullptr);
     REQUIRE(a.get_checked(42, 3) == nullptr);
+
+    UniqueAllocationTicket<Token> second_ticket(&second, destroy_token, 41, 3);
+    REQUIRE(!UniqueBox<Token>::adopt(second_ticket, a));
+    // Failed occupied-destination adoption must leave ticket available.
+    REQUIRE(UniqueBox<Token>::adopt(second_ticket, rival));
+    REQUIRE(!UniqueBox<Token>::adopt(second_ticket, a));
     UniqueBox<Token> moved(std::move(a));
     REQUIRE(!a.is_owned() && a.get_checked(41, 3) == nullptr);
     REQUIRE(moved.get_checked(41, 3) == &first);
     UniqueBox<Token>* self_alias = &moved;
     moved = std::move(*self_alias);
-    REQUIRE(drops.load() == 0);
+    REQUIRE(drops.load() == 2);
 
-    UniqueBox<Token> replacement;
-    REQUIRE(UniqueBox<Token>::adopt(&second, destroy_token, 41, 3, replacement));
-    moved = std::move(replacement); // must drop first exactly once
-    REQUIRE(drops.load() == 1);
-    REQUIRE(!replacement.is_owned() && replacement.owner_generation() == 0);
+    moved = std::move(rival); // first resource dropped once
+    REQUIRE(drops.load() == 3);
+    REQUIRE(!rival.is_owned() && rival.owner_generation() == 0);
+    moved.reset(); // second resource dropped once
+    REQUIRE(drops.load() == 4);
     moved.reset();
-    REQUIRE(drops.load() == 2);
-    moved.reset();
-    REQUIRE(drops.load() == 2);
+    REQUIRE(drops.load() == 4);
     REQUIRE(!moved.is_owned());
 
-    // Independent thread may receive a uniquely moved box. Type-level T:Send,
-    // borrow exclusion and allocation-domain authorization remain compiler gates.
-    Token third{&drops};
-    REQUIRE(UniqueBox<Token>::adopt(&third, destroy_token, 41, 3, moved));
+    UniqueAllocationTicket<Token> third_ticket(&third, destroy_token, 41, 3);
+    REQUIRE(UniqueBox<Token>::adopt(third_ticket, moved));
     std::thread worker([owned = std::move(moved)] () mutable {
         REQUIRE(owned.get_checked(41, 3) != nullptr);
         owned.reset();
     });
     worker.join();
     REQUIRE(!moved.is_owned());
-    REQUIRE(drops.load() == 3);
+    REQUIRE(drops.load() == 5);
+}
+
+// Even two concurrent trusted host attempts to consume the *same* allocation
+// ticket cannot mint two box owners. This is not permission to mint two
+// different tickets for the same physical allocation.
+static void concurrent_ticket_admission() {
+    std::atomic<int> drops{0};
+    Token token{&drops};
+    UniqueAllocationTicket<Token> ticket(&token, destroy_token, 77, 9);
+    std::array<UniqueBox<Token>, 16> destinations;
+    std::array<bool, 16> results{};
+    std::vector<std::thread> workers;
+    for (int i = 0; i < 16; ++i) {
+        workers.emplace_back([&, i] {
+            results[static_cast<std::size_t>(i)] =
+                UniqueBox<Token>::adopt(ticket, destinations[static_cast<std::size_t>(i)]);
+        });
+    }
+    for (auto& worker : workers) worker.join();
+    int admitted = 0;
+    for (int i = 0; i < 16; ++i) {
+        if (results[static_cast<std::size_t>(i)]) ++admitted;
+        if (destinations[static_cast<std::size_t>(i)].is_owned())
+            REQUIRE(results[static_cast<std::size_t>(i)]);
+    }
+    REQUIRE(admitted == 1);
+    REQUIRE(drops.load() == 0);
+    for (auto& box : destinations) box.reset();
+    REQUIRE(drops.load() == 1);
+}
+
+struct ReentrantToken {
+    UniqueBox<ReentrantToken>* owner;
+    std::atomic<int>* drops;
+};
+static void destroy_reentrant(ReentrantToken* token) noexcept {
+    token->owner->reset();
+    token->drops->fetch_add(1, std::memory_order_relaxed);
+}
+static void reentrant_destructor_revocation() {
+    std::atomic<int> drops{0};
+    UniqueBox<ReentrantToken> box;
+    ReentrantToken token{&box, &drops};
+    UniqueAllocationTicket<ReentrantToken> ticket(&token, destroy_reentrant, 91, 2);
+    REQUIRE(UniqueBox<ReentrantToken>::adopt(ticket, box));
+    box.reset();
+    REQUIRE(drops.load() == 1 && !box.is_owned());
+    box.reset();
+    REQUIRE(drops.load() == 1);
 }
 
 int main() {
     ordering_and_failure_checks();
     concurrent_atomic_contention();
     unique_box_lifecycle();
+    concurrent_ticket_admission();
+    reentrant_destructor_revocation();
     std::puts("ATTO_NATIVE_ATOMIC_BOX_V1_PASS");
 }
