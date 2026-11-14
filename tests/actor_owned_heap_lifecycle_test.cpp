@@ -141,6 +141,53 @@ static int second_carrier(void* argument) {
     return 0;
 }
 
+static int test_long_lived_source_actor_heap_churn(void) {
+    /* 100,000 transients on ONE heap rather than 100,000 short-lived
+     * processes. A persistent compiler-declared field must survive all
+     * reuses. Each temporary allocation is explicitly dropped. */
+    const uint64_t owner = 3301u, incarnation = 11u;
+    OresActorI64Heap* heap = ores_actor_i64_heap_open(owner, incarnation, 2u);
+    CHECK(heap != nullptr);
+    OresActorTurn initial = ores_actor_i64_heap_enter(heap, owner, incarnation);
+    ores_actor_i64_heap_field_init_mutable(
+        heap, initial.domain, initial.epoch, 0u, 41);
+    ores_actor_i64_heap_leave(heap, initial);
+    uint64_t last_generation = 0;
+    for (int turn_index = 0; turn_index < 1000; ++turn_index) {
+        OresActorTurn turn = ores_actor_i64_heap_enter(heap, owner, incarnation);
+        CHECK(ores_actor_i64_heap_field_read(
+                  heap, turn.domain, turn.epoch, 0u) == 41 + turn_index);
+        for (int j = 0; j < 100; ++j) {
+            const int64_t value = (int64_t)turn_index * 100 + j;
+            OresActorSlot temporary = ores_actor_i64_heap_new(heap, turn, value);
+            CHECK(temporary.domain == turn.domain && temporary.index == 1u);
+            CHECK(temporary.generation > last_generation);
+            last_generation = temporary.generation;
+            CHECK(ores_actor_i64_heap_read(heap, turn, temporary) == value);
+            ores_actor_i64_heap_write(heap, turn, temporary, value + 1);
+            CHECK(ores_actor_i64_heap_read(heap, turn, temporary) == value + 1);
+            ores_actor_i64_heap_drop(heap, turn, temporary);
+        }
+        ores_actor_i64_heap_field_write(
+            heap, turn.domain, turn.epoch, 0u, 42 + turn_index);
+        ores_actor_i64_heap_leave(heap, turn);
+    }
+    OresActorTurn final_turn = ores_actor_i64_heap_enter(heap, owner, incarnation);
+    CHECK(ores_actor_i64_heap_field_read(
+              heap, final_turn.domain, final_turn.epoch, 0u) == 1041);
+    /* Simulate a suspended read borrow. Its lease outlives the native
+     * turn and can be released from a different trusted host carrier. */
+    OresActorSlot field = {final_turn.domain, 0u, 1u};
+    OresActorLoan suspended = ores_actor_i64_heap_borrow(heap, final_turn, field);
+    ores_actor_i64_heap_leave(heap, final_turn);
+    ores_actor_i64_heap_retire(heap);
+    CHECK(ores_actor_i64_heap_try_destroy(heap) == 0);
+    std::thread releaser([&] { ores_actor_i64_heap_release(heap, suspended); });
+    releaser.join();
+    CHECK(ores_actor_i64_heap_try_destroy(heap) == 1);
+    return 0;
+}
+
 int main(void) {
     /* One actor heap survives between logical turns and native carriers. */
     OresActorI64Heap* heap = ores_actor_i64_heap_open(29, 7, 2);
@@ -185,8 +232,9 @@ int main(void) {
     CHECK(rejects(CALL_AFTER_RETIRE));
     CHECK(rejects(CROSS_CARRIER_TOKEN));
     CHECK(rejects(NESTED_DIFFERENT_HEAP));
+    CHECK(test_long_lived_source_actor_heap_churn() == 0);
     CHECK(tracked_heap_count == 0);
-    CHECK(scrubbed_physical_frees == 1);
+    CHECK(scrubbed_physical_frees == 2);
 #endif
     return 0;
 }
