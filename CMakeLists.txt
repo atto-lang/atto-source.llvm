@@ -175,6 +175,16 @@ if(BUILD_TESTING)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/trap_option_result_native_source_gate.cmake")
     set_tests_properties(native_trap_result_option_fail_closed PROPERTIES TIMEOUT 90)
 
+    # Byte-identical shared .atto corpus: admit only the current pure trap
+    # source profile; reject all unlowered ordinary throw/Result/Option cases.
+    # Positive CTest on a compiler is not the same as native runtime parity.
+    add_test(NAME native_caller_trap_canonical_source_gate
+        COMMAND "${CMAKE_COMMAND}"
+            "-DORES_TRAP_LLVM_CLI=$<TARGET_FILE:oreslang-llvmc>"
+            "-DORES_TRAP_CORPUS=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/caller-trap-parity"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/trap_canonical_corpus_source_gate.cmake")
+    set_tests_properties(native_caller_trap_canonical_source_gate PROPERTIES TIMEOUT 150)
+
     # Native phase-one proof: actual compiler -> audited LLVM IR -> Clang
     # O0/O2 executable -> real exit 42. Never count this as Result/throw parity.
     add_test(NAME native_trap_int_aot_guest_O0_O2
