@@ -23,6 +23,7 @@ typedef struct {
     OresNativeActorRef parent, first, sibling, replacement;
     OresLogicalFrameV1 stale;
     atomic_int failed_a, b_42, new_a_ok, notices;
+    atomic_int first_notice_entered, release_first_notice;
 } State;
 
 static void check_turn(void* raw, size_t actor, uint64_t payload) {
@@ -78,6 +79,16 @@ static void on_supervisor_failure(void* raw, size_t parent,
         CHECK(f.failure_code == STACK_QUOTA_FAILURE);
         CHECK(f.correlation == 701);
         CHECK(atomic_load_explicit(&s->failed_a, memory_order_acquire) == 1);
+        /* Hold one supervisor CONTROL callback on its own actor lane.
+         * A second terminal envelope may queue, but a third must get
+         * explicit backpressure rather than overwriting the reserved slot. */
+        atomic_store_explicit(&s->first_notice_entered, 1, memory_order_release);
+        for (int i = 0; i < 5000 &&
+                !atomic_load_explicit(&s->release_first_notice, memory_order_acquire); ++i) {
+            const struct timespec nap = {0, 1000000};
+            nanosleep(&nap, NULL);
+        }
+        CHECK(atomic_load_explicit(&s->release_first_notice, memory_order_acquire));
     } else if (observed == 1) {
         CHECK(f.kind == ORES_NATIVE_CONTROL_STOPPED);
         CHECK(f.child.scheduler_domain == s->replacement.scheduler_domain);
@@ -85,6 +96,13 @@ static void on_supervisor_failure(void* raw, size_t parent,
         CHECK(f.child.generation == s->replacement.generation);
         CHECK(f.failure_code == 0);
         CHECK(f.correlation == 702);
+    } else if (observed == 2) {
+        CHECK(f.kind == ORES_NATIVE_CONTROL_STOPPED);
+        CHECK(f.child.scheduler_domain == s->sibling.scheduler_domain);
+        CHECK(f.child.actor_slot == s->sibling.actor_slot);
+        CHECK(f.child.generation == s->sibling.generation);
+        CHECK(f.failure_code == 0);
+        CHECK(f.correlation == 703);
     } else {
         CHECK(0); /* no duplicate terminal notice */
     }
@@ -103,6 +121,8 @@ int main(void) {
     atomic_init(&s.b_42, 0);
     atomic_init(&s.new_a_ok, 0);
     atomic_init(&s.notices, 0);
+    atomic_init(&s.first_notice_entered, 0);
+    atomic_init(&s.release_first_notice, 0);
     s.a = ores_logical_frames_v1_open(701, 1, 1, 1, sizeof(int64_t));
     s.b = ores_logical_frames_v1_open(702, 1, 1, 1, sizeof(int64_t));
     s.a2 = ores_logical_frames_v1_open(701, 2, 1, 1, sizeof(int64_t));
@@ -121,7 +141,7 @@ int main(void) {
     s.parent = ores_native_vm_spawn(vm, ORES_NATIVE_VM_MAIN, SUPERVISOR);
     CHECK(s.parent.scheduler_domain);
     s.first = ores_native_vm_spawn_supervised(vm, ORES_NATIVE_VM_MAIN, ACTOR_A, s.parent);
-    s.sibling = ores_native_vm_spawn(vm, ORES_NATIVE_VM_MAIN, ACTOR_B);
+    s.sibling = ores_native_vm_spawn_supervised(vm, ORES_NATIVE_VM_MAIN, ACTOR_B, s.parent);
     CHECK(s.first.scheduler_domain && s.sibling.scheduler_domain);
     OresNativeActorRef p = ores_native_vm_supervisor_of(vm, ORES_NATIVE_VM_MAIN, s.first);
     CHECK(p.scheduler_domain == s.parent.scheduler_domain && p.generation == s.parent.generation);
@@ -152,7 +172,7 @@ int main(void) {
     CHECK(!ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, forged));
     CHECK(ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, first));
     CHECK(!ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, first));
-    await_one(&s.notices);
+    await_one(&s.first_notice_entered);
 
     /* Restart is explicitly host-driven in this stage, but the replacement
      * is also registered under the same supervisor for terminal accounting. */
@@ -170,17 +190,34 @@ int main(void) {
         .failure_code = 0, .correlation = 702
     };
     CHECK(ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, second));
+    /* The first supervisor CONTROL callback is still executing and the
+     * second notice owns the *one* queued reserved CONTROL slot. A third
+     * finalized child must receive backpressure (no silent event loss). */
+    CHECK(ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, s.sibling));
+    CHECK(ores_native_vm_wait_done(vm, ORES_NATIVE_VM_MAIN, s.sibling));
+    CHECK(ores_logical_frames_v1_close(s.b));
+    CHECK(ores_native_vm_confirm_supervised_finalized(vm, ORES_NATIVE_VM_MAIN, s.sibling));
+    OresNativeActorTerminalFailure third = {
+        .kind = ORES_NATIVE_CONTROL_STOPPED, .child = s.sibling,
+        .failure_code = 0, .correlation = 703
+    };
+    CHECK(!ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, third));
+    atomic_store_explicit(&s.release_first_notice, 1, memory_order_release);
     for (int i = 0; i < 5000 && atomic_load_explicit(&s.notices, memory_order_acquire) < 2; ++i) {
         const struct timespec nap = {0, 1000000};
         nanosleep(&nap, NULL);
     }
-    CHECK(atomic_load_explicit(&s.notices, memory_order_acquire) == 2);
-    CHECK(ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, s.sibling));
-    CHECK(ores_native_vm_wait_done(vm, ORES_NATIVE_VM_MAIN, s.sibling));
-    CHECK(ores_logical_frames_v1_close(s.b));
+    CHECK(atomic_load_explicit(&s.notices, memory_order_acquire) >= 2);
+    CHECK(ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, third));
+    CHECK(!ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, third));
+    for (int i = 0; i < 5000 && atomic_load_explicit(&s.notices, memory_order_acquire) < 3; ++i) {
+        const struct timespec nap = {0, 1000000};
+        nanosleep(&nap, NULL);
+    }
+    CHECK(atomic_load_explicit(&s.notices, memory_order_acquire) == 3);
     CHECK(ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, s.parent));
     CHECK(ores_native_vm_wait_done(vm, ORES_NATIVE_VM_MAIN, s.parent));
     CHECK(ores_native_vm_close(vm));
-    puts("NATIVE_VM_SUPERVISED_QUOTA_PASS finalized=1 notices=2 B=42 replacement=1");
+    puts("NATIVE_VM_SUPERVISED_QUOTA_PASS finalized=1 notices=3 B=42 replacement=1 backpressure_retry=1");
     return 0;
 }
