@@ -922,6 +922,28 @@ int oreslang_source_actor_snapshot_current_trace(
         out);
 }
 
+int oreslang_source_actor_try_request_stop_id(OresSourceActorId identity) {
+    group_lock();
+    SourceActor* actor = lookup_actor_id_locked(identity);
+    int accepted = 0;
+    if (actor && !atomic_load_explicit(
+            &actor->stop_requested, memory_order_acquire)) {
+        /* Constructor/READY and STOP order under this SAME group mutex.
+         * If the VM declines the stop, do not poison stop_requested. */
+        accepted = ores_native_vm_stop_sealed(
+            group.vm, ORES_NATIVE_VM_MAIN, actor->ref);
+        if (accepted)
+            atomic_store_explicit(
+                &actor->stop_requested, 1, memory_order_release);
+    }
+    group_unlock();
+    return accepted;
+}
+
+void oreslang_source_actor_request_stop_id(OresSourceActorId identity) {
+    ensure(oreslang_source_actor_try_request_stop_id(identity));
+}
+
 void oreslang_source_actor_request_stop(void* opaque) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
@@ -953,35 +975,22 @@ void oreslang_source_actor_request_stop(void* opaque) {
     group_unlock();
 }
 
-void oreslang_source_actor_join_done(void* opaque) {
-    SourceActor* instance = (SourceActor*)opaque;
-    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
-    ensure(atomic_load_explicit(
-        &instance->stop_requested, memory_order_acquire) == 1);
-
-    int expected = 0;
-    ensure(atomic_compare_exchange_strong_explicit(
-        &instance->join_started,
-        &expected,
-        1,
-        memory_order_acq_rel,
-        memory_order_acquire));
-
-    /*
-     * This is trusted outer-host glue, never a carrier turn. Do not block a
-     * source actor carrier while waiting for the actor's physical terminal ACK.
-     */
+/* Called ONLY after join_started was exclusively claimed under group
+ * mutex. The claimant pins the allocation and VM until this function
+ * returns; no other join may free it concurrently. */
+static void source_actor_join_claimed(
+        SourceActor* instance, OresNativeVM* vm, OresNativeActorRef target) {
     OresNativeExecutionContext carrier = {0};
-    ensure(!ores_native_vm_current_execution_context(
-        group.vm, ORES_NATIVE_VM_MAIN, &carrier));
-
-    const size_t slot = (size_t)instance->ref.actor_slot;
+    for (int domain = 0; domain < ORES_NATIVE_VM_DOMAIN_COUNT; ++domain)
+        ensure(!ores_native_vm_current_execution_context(
+            vm, (enum OresNativeVMDomain)domain, &carrier));
+    const size_t slot = (size_t)target.actor_slot;
     ensure(ores_native_vm_wait_done(
-        group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
+        vm, ORES_NATIVE_VM_MAIN, target));
 
     group_lock();
-    ensure(group.vm && slot < group.next_slot
-        && group.actors[slot] == instance);
+    ensure(group.vm == vm && slot < group.next_slot
+        && group.actors[slot] == instance && instance->ref.actor_slot == slot);
     const int startup_state = atomic_load_explicit(
         &instance->startup_state, memory_order_acquire);
     ensure(startup_state == ORES_SOURCE_ACTOR_STARTUP_READY
@@ -1021,6 +1030,16 @@ void oreslang_source_actor_join_done(void* opaque) {
 #endif
     group.actors[slot] = NULL;
     instance->magic = 0;
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    if (test_force_address_reuse) {
+        /* Test-only single-entry allocator freelist. The next actor gets
+         * the SAME SourceActor address; its globally unique ID differs.
+         * A bounded single cache avoids indefinite tombstone allocation. */
+        ensure(test_recycled_actor == NULL);
+        memset(instance, 0, sizeof(*instance));
+        test_recycled_actor = instance;
+    } else
+#endif
     free(instance);
     ensure(group.live > 0);
     group.live--;
@@ -1047,6 +1066,53 @@ void oreslang_source_actor_join_done(void* opaque) {
         group.peak = 0;
     }
     group_unlock();
+}
+
+
+static SourceActor* live_actor_pointer_locked(void* opaque) {
+    if (!opaque || !group.vm) return NULL;
+    for (size_t slot = 0; slot < group.next_slot; ++slot)
+        if (group.actors[slot] == opaque)
+            return group.actors[slot];
+    return NULL;
+}
+
+static void claim_actor_join_locked(SourceActor* actor) {
+    ensure(actor != NULL && actor->magic == SOURCE_ACTOR_MAGIC);
+    ensure(atomic_load_explicit(
+        &actor->stop_requested, memory_order_acquire) == 1);
+    int expected = 0;
+    ensure(atomic_compare_exchange_strong_explicit(
+        &actor->join_started, &expected, 1,
+        memory_order_acq_rel, memory_order_acquire));
+}
+
+void oreslang_source_actor_join_done_id(OresSourceActorId identity) {
+    group_lock();
+    SourceActor* actor = lookup_actor_id_locked(identity);
+    claim_actor_join_locked(actor);
+    OresNativeVM* vm = group.vm;
+    const OresNativeActorRef target = actor->ref;
+    group_unlock();
+    source_actor_join_claimed(actor, vm, target);
+}
+
+void oreslang_source_actor_stop_id(OresSourceActorId identity) {
+    oreslang_source_actor_request_stop_id(identity);
+    oreslang_source_actor_join_done_id(identity);
+}
+
+/* Compatibility ABI: pointer membership avoids some stale dereferences,
+ * but recycled malloc addresses are still ambiguous. Compiler-generated
+ * new source must use the identity API, not this legacy path. */
+void oreslang_source_actor_join_done(void* opaque) {
+    group_lock();
+    SourceActor* actor = live_actor_pointer_locked(opaque);
+    claim_actor_join_locked(actor);
+    OresNativeVM* vm = group.vm;
+    const OresNativeActorRef target = actor->ref;
+    group_unlock();
+    source_actor_join_claimed(actor, vm, target);
 }
 
 void oreslang_source_actor_stop(void* opaque) {
