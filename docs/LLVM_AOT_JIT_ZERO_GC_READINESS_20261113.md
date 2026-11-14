@@ -42,6 +42,33 @@ guarantees from ASan/UBSan success or a latency average.
 | OTEL | Native logical trace and await trace helpers are present. | Propagation and actual asynchronous OTLP spans with typed semantic attributes, parent/child relationships, bounds, drops and tenant privacy policy are not proven |
 | Real time | Native bounded arenas, prefault and scheduler tests exist. | No worst-case execution-time, allocator-path or page-fault proof. `shared_ptr` lifetime work and instrumentation publication must remain off hard-real-time turns |
 
+## Additional linked-binary admission in audit PR #1780
+
+The native Linux `scripts/compile-aot.sh` path now invokes
+`scripts/audit-aot-linked-image.sh` **after Clang linking and before atomic
+output publication**. It rejects known collector entrypoints and common
+runtime-loader APIs, unknown ELF `DT_NEEDED` libraries, `RPATH`/`RUNPATH`
+and dynamic auditing/relocation flags, missing `.symtab` evidence and
+uninspectable/non-ELF output. This protects the sealed Linux AOT build
+from several concrete linkage regressions, beyond the earlier IR-only screen.
+A future governed hot-upgrade/JIT artifact needs a separate signed-mode
+admission contract rather than weakening this sealed baseline.
+
+The symbol and dependency scanner does **not** inspect all transitive libc,
+allocator internals, startup objects, dynamically generated machine code,
+arbitrary syscalls, TLS destructors or out-of-process services. It is not
+proof of process-wide zero-GC or hard real-time performance. On non-Linux
+targets this ELF check explicitly reports `NOT_RUN`; the IR gate still runs,
+but an equivalent native Mach-O/PE gate needs separate implementation.
+
+Synthetic controls compiled and exercised locally with Clang 17: 2 admitted
+(clean explicit malloc/free, collector name present only as string data) and
+6 rejected (collector symbol variants, `dlopen`, unknown dynamic library,
+runtime search path and stripped evidence). These are **not** actual
+`.atto` guest tests. Exact-head source-org Actions still report failure
+without executable job steps; source-side governance forbids unapproved
+cross-organization private-source mirroring.
+
 ## Required invariants
 
 - **No guest tracing collector** means no collector roots, statepoints, marking,
