@@ -1,0 +1,2 @@
+// Adjacent pairs matter: spaced '>' tokens are comparisons, never shift.
+pub fnc main(): int { return 255 > > 8; }

@@ -112,6 +112,49 @@ pub fn ir_external_declarations(ir: &str) -> Vec<String> {
         .collect()
 }
 
+/// Ways IR can reach the host without a declared function: external globals
+/// (`@stdout = external global ...`), module-level `asm`, and inline `asm`
+/// calls (an `svc`/`bkpt` syscall bypasses every symbol audit).
+pub fn ir_escape_hatches(ir: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for line in ir.lines().map(str::trim) {
+        if line.starts_with(';') {
+            continue;
+        }
+        if line.starts_with("module asm") {
+            found.push(format!("module-level assembly: {line}"));
+        } else if line.contains(" asm ") || line.contains(" asm sideeffect ") {
+            found.push(format!("inline assembly: {line}"));
+        } else if is_external_global_declaration(line) {
+            found.push(format!("external global: {line}"));
+        }
+    }
+    found
+}
+
+/// LLVM IR permits qualifiers between the linkage and the global kind, e.g.
+/// \`@g = external thread_local addrspace(1) global i32\`. Do not infer
+/// externality from a fixed substring: an external global may carry TLS,
+/// address-space, visibility or other modifiers.
+fn is_external_global_declaration(line: &str) -> bool {
+    let Some((name, rest)) = line.split_once('=') else {
+        return false;
+    };
+    if !name.trim().starts_with('@') {
+        return false;
+    }
+    let mut external = false;
+    for word in rest.split_whitespace() {
+        if matches!(word, "external" | "extern_weak") {
+            external = true;
+        }
+        if matches!(word, "global" | "constant") {
+            return external;
+        }
+    }
+    false
+}
+
 fn declared_name(line: &str) -> Option<String> {
     let at = line.find('@')?;
     let rest = &line[at + 1..];
@@ -149,7 +192,8 @@ pub fn parse_nm(output: &str) -> Vec<NmSymbol> {
 pub fn audit_guest_object(symbols: &[NmSymbol]) -> Vec<String> {
     symbols
         .iter()
-        .filter(|s| s.kind == 'U')
+        // `w`/`v` are weak undefined references: still a request for a host symbol.
+        .filter(|s| matches!(s.kind, 'U' | 'w' | 'v'))
         .filter_map(|s| {
             if let Some(reason) = forbidden_reason(&s.name) {
                 Some(format!("forbidden {reason} symbol `{}`", s.name))
@@ -163,6 +207,11 @@ pub fn audit_guest_object(symbols: &[NmSymbol]) -> Vec<String> {
             }
         })
         .collect()
+}
+
+/// Index of the first console line containing `needle`, if any.
+pub fn line_index(console: &str, needle: &str) -> Option<usize> {
+    console.lines().position(|line| line.contains(needle))
 }
 
 /// Audit a fully linked image: nothing undefined, and no forbidden symbol
@@ -272,6 +321,53 @@ declare void @"ores_actor_send"(ptr)
         assert!(audit_sections(ok).is_empty());
         let bad = "  [ 3] .init_array INIT_ARRAY\n  [ 4] .tbss NOBITS\n  [ 5] .tdata.x PROGBITS\n";
         assert_eq!(audit_sections(bad).len(), 3);
+    }
+
+    #[test]
+    fn ir_escape_hatches_catch_globals_and_assembly() {
+        let clean = "define i64 @f(i64 %x) {\n  ret i64 %x\n}\n; comment mentioning asm \n";
+        assert!(ir_escape_hatches(clean).is_empty());
+        let dirty = "module asm \"svc 0\"\n@stdout = external global ptr\n@w = extern_weak global i8\n  call void asm sideeffect \"svc #0\", \"\"()\n";
+        let found = ir_escape_hatches(dirty);
+        assert_eq!(found.len(), 4, "{found:?}");
+        assert!(found[0].starts_with("module-level assembly"));
+        assert!(found[1].starts_with("external global"));
+        assert!(found[3].starts_with("inline assembly"));
+    }
+
+    #[test]
+    fn ir_external_global_modifiers_cannot_bypass_gate() {
+        let variants = [
+            "@tls = external thread_local global i32",
+            "@tls_weak = extern_weak thread_local(localexec) global i64",
+            "@as = external addrspace(3) global i8",
+            "@const = external dso_local unnamed_addr constant i32",
+            "@weak_const = extern_weak hidden constant i32",
+        ];
+        for ir in variants {
+            let errors = ir_escape_hatches(ir);
+            assert_eq!(errors.len(), 1, "{ir}: {errors:?}");
+            assert!(errors[0].starts_with("external global:"), "{ir}: {errors:?}");
+        }
+        // Fully defined globals, including the similarly named internal
+        // \`externally_initialized\` modifier, are not host references.
+        assert!(ir_escape_hatches("@counter = global i32 0").is_empty());
+        assert!(ir_escape_hatches("@counter = externally_initialized global i32 0").is_empty());
+    }
+
+    #[test]
+    fn guest_weak_undefined_references_are_audited() {
+        let v = audit_guest_object(&[sym('w', "malloc"), sym('v', "mystery")]);
+        assert_eq!(v.len(), 2, "{v:?}");
+        assert!(v[0].contains("libc/OS/allocator"));
+    }
+
+    #[test]
+    fn console_line_order_is_checkable() {
+        let out = "ORES_CORE_TRAP_PROBE start\nORES_CORE_TRAP hardfault\n";
+        assert_eq!(line_index(out, "PROBE start"), Some(0));
+        assert_eq!(line_index(out, "hardfault"), Some(1));
+        assert_eq!(line_index(out, "missing"), None);
     }
 
     #[test]
