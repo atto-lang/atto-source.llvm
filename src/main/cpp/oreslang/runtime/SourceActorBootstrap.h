@@ -98,6 +98,8 @@ int64_t oreslang_source_actor_await_done_id(
  * never retain a tombstone just to make stale handles appear safe. */
 void oreslang_source_actor_test_force_address_reuse(int enabled);
 uint64_t oreslang_source_actor_test_address_reuses(void);
+/* Only while the group has no live actors; never allows rewinding ID space. */
+void oreslang_source_actor_test_advance_next_actor_id(uint64_t candidate);
 #endif
 
 /* Nonblocking bounded one-way send. Overload currently fails closed with a
