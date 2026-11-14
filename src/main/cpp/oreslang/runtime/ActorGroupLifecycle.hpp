@@ -453,7 +453,10 @@ public:
             // is still active or reserved. Failed admission is side-effect-free.
             if (ref.ticket_->logical_turn_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_active.load(std::memory_order_acquire)
-                || ref.ticket_->control_reserved.load(std::memory_order_acquire))
+                || ref.ticket_->control_reserved.load(std::memory_order_acquire)
+                || (ref.ticket_->stop_issued.load(std::memory_order_acquire)
+                    && !ref.ticket_->stop_dispatch_finished.load(
+                            std::memory_order_acquire)))
                 return false;
             // Seal resource admission even when existing loans remain. A
             // failed finalization attempt is a terminal boundary: already
