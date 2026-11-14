@@ -226,4 +226,43 @@ int main() {
         callbackActor, 93, 1, &callbackBacking, sizeof(callbackBacking),
         TrustedPointerWindow::Mode::ReadWrite); });
 
+    // Cross-thread actor fencing must wait for all raw FFI callbacks to
+    // quiesce before declaring the actor's backing storage reclaimable.
+    const ActorHeapIdentity asyncActor{31, 32, 33};
+    std::uint32_t asyncBacking = 606;
+    const auto asyncGrant = issue(NativeRegionRegistry::Trust::Trusted,
+        asyncActor, 95, 1, &asyncBacking, sizeof(asyncBacking),
+        TrustedPointerWindow::Mode::ReadWrite);
+    auto asyncPointer = registry.at<std::uint32_t>(asyncGrant, asyncActor);
+    std::atomic<bool> ffiEntered{false}, releaseFfi{false}, fenceStarted{false},
+                      fenceFinished{false};
+    std::thread ffiWorker([&] {
+        asyncPointer.with_ffi_address(asyncActor, [&](std::uint32_t* raw) {
+            if (*raw != 606) throw std::runtime_error("bad async FFI precondition");
+            ffiEntered.store(true, std::memory_order_release);
+            while (!releaseFfi.load(std::memory_order_acquire))
+                std::this_thread::yield();
+        });
+    });
+    while (!ffiEntered.load(std::memory_order_acquire))
+        std::this_thread::yield();
+    std::thread fenceWorker([&] {
+        fenceStarted.store(true, std::memory_order_release);
+        NativeRegionRegistryTestAccess::fence_actor(registry, asyncActor);
+        fenceFinished.store(true, std::memory_order_release);
+    });
+    while (!fenceStarted.load(std::memory_order_acquire))
+        std::this_thread::yield();
+    // FFI is deliberately still inside its callback: actor-wide revocation
+    // must not report success or allow the caller to unmap memory yet.
+    if (fenceFinished.load(std::memory_order_acquire))
+        throw std::runtime_error("actor fence finished while raw FFI was active");
+    releaseFfi.store(true, std::memory_order_release);
+    ffiWorker.join();
+    fenceWorker.join();
+    if (!fenceFinished.load(std::memory_order_acquire))
+        throw std::runtime_error("actor fence did not complete after FFI exit");
+    reject([&] { (void)asyncPointer.load(asyncActor); });
+    reject([&] { (void)registry.at<std::uint32_t>(asyncGrant, asyncActor); });
+
 }
