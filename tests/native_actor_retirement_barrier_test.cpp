@@ -567,7 +567,95 @@ static void invalid_receive_fence_construction_and_post_owner_release() {
     outstanding.reset();
 }
 
+// Two physically separate host carriers keep a native actor's invocation
+// pins alive after its group is detached. This is actual concurrent host
+// receipt execution, NOT two compiled .atto receiver stacks.
+static void concurrent_host_receivers_join_native_resource_retirement() {
+    NativeActorResourceQuarantine quarantine(1);
+    NativeActorGroup group(414, 1);
+    auto registry = std::make_shared<ActorResourceRegistry>(23, 4);
+    auto receives = std::make_shared<NativeActorReceiveFence>(23, 4, 2);
+    std::atomic<unsigned> arrived{0};
+    std::atomic<bool> release_a{false}, release_b{false};
+    std::atomic<int> freed{0};
+    registry->register_resource(Kind::native_allocation, [&] {
+        freed.fetch_add(1, std::memory_order_relaxed);
+    });
+
+    NativeActorRetirementBarrier* retiring = nullptr;
+    auto ref = group.adopt(414, 23, 4, [&] { retiring->retire(); });
+    NativeActorRetirementBarrier barrier(
+        registry, group.runtime_finalizer(ref), quarantine, {}, receives);
+    retiring = &barrier;
+    require(group.mark_ready(ref), "parallel host receive actor ready");
+
+    std::exception_ptr failure_a, failure_b;
+    auto worker = [&](std::atomic<bool>& release, std::exception_ptr& failure) {
+        try {
+            auto lease = receives->try_enter(23, 4);
+            if (!lease) throw std::logic_error("receive capacity unexpectedly closed");
+            arrived.fetch_add(1, std::memory_order_release);
+            while (!release.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+        } catch (...) {
+            failure = std::current_exception();
+            arrived.fetch_add(1, std::memory_order_release);
+        }
+    };
+    std::thread a(worker, std::ref(release_a), std::ref(failure_a));
+    std::thread b(worker, std::ref(release_b), std::ref(failure_b));
+    const auto deadline = std::chrono::steady_clock::now()
+            + std::chrono::seconds(5);
+    while (arrived.load(std::memory_order_acquire) != 2
+            && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+
+    bool before = false, between = false, after = false;
+    if (arrived.load(std::memory_order_acquire) == 2) {
+        group.close();
+        receives->seal_stop(true);
+        before = receives->active_receives() == 2
+            && !receives->try_enter(23, 4)
+            && !receives->try_begin_teardown()
+            && barrier.poll() == Poll::pending
+            && freed.load(std::memory_order_relaxed) == 0
+            && ref.get_done().wait_for(std::chrono::milliseconds(0))
+                == std::future_status::timeout;
+        release_a.store(true, std::memory_order_release);
+        a.join();
+        between = receives->active_receives() == 1
+            && !receives->try_begin_teardown()
+            && barrier.poll() == Poll::pending
+            && freed.load(std::memory_order_relaxed) == 0;
+        release_b.store(true, std::memory_order_release);
+        b.join();
+        after = receives->active_receives() == 0
+            && receives->try_begin_teardown()
+            && barrier.poll() == Poll::pending
+            && freed.load(std::memory_order_relaxed) == 0;
+    } else {
+        release_a.store(true, std::memory_order_release);
+        release_b.store(true, std::memory_order_release);
+        a.join();
+        b.join();
+    }
+
+    if (failure_a) std::rethrow_exception(failure_a);
+    if (failure_b) std::rethrow_exception(failure_b);
+    require(before && between && after,
+            "two host carriers did not preserve native actor retirement pins");
+    receives->finish_teardown();
+    require(barrier.poll() == Poll::completed,
+            "resource reclamation did not follow both receiver exits and teardown");
+    require(freed.load(std::memory_order_relaxed) == 1,
+            "native actor resource closer did not run exactly once");
+    ref.get_done().get();
+}
+
 int main() {
+    concurrent_host_receivers_join_native_resource_retirement();
     invalid_receive_fence_construction_and_post_owner_release();
     native_receive_stop_admission_race_is_linearizable();
     two_overlapping_receives_pin_actual_native_done_barrier();
