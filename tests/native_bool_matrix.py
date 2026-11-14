@@ -159,7 +159,7 @@ fnc touch(borrow mut Pair p): bool {
   return true;
 }
 fnc probe(borrow mut Pair p): bool {
-  return false ^^ touch(rt mut borrow p);
+  return Xor(false, touch(rt mut borrow p));
 }
 pub fnc main(): int {
   let mut Pair p = new Pair();
