@@ -48,11 +48,10 @@ C
 # section must never satisfy the complete symbol evidence requirement.
 printf 'not a symbol table' >"$work/fake-symbol-data"
 objcopy --add-section .symtab="$work/fake-symbol-data" "$work/stripped" "$work/spoofed-symtab"
+# Some readelf releases emit diagnostics and still exit zero, while newer
+# releases may reject this malformed table differently. Only the auditor's
+# fail-closed decision is mandatory across toolchain versions.
 readelf -W --symbols "$work/spoofed-symtab" >"$work/spoofed-readelf.stdout" 2>"$work/spoofed-readelf.stderr" || true
-[[ -s "$work/spoofed-readelf.stderr" ]] || {
-  echo 'spoofed ELF no longer emits readelf diagnostics; update negative oracle' >&2
-  exit 1
-}
 
 "$clang" -O0 "$work/clean.c" -Wl,-rpath,"$work" -o "$work/runpath"
 "$clang" -fPIC -shared "$work/foreign.c" -o "$work/libforeign.so"
