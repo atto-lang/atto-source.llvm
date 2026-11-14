@@ -1149,6 +1149,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceRequestStop,
         sourceAwaitReady, sourceAwaitDone;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
+    llvm::FunctionCallee actorFramePush, actorFrameStore, actorFrameLoad, actorFramePop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
     if (!source.actors.empty() && !wasm32_target) {
         auto* voidTy = llvm::Type::getVoidTy(context);
@@ -1166,6 +1167,18 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         actorScopedDrop = module.getOrInsertFunction("ores_actor_i64_heap_scoped_drop",
             llvm::FunctionType::get(voidTy,
                 {native_ptr, i64, i64, native_ptr}, false));
+        // First preallocated actor-owned logical frame ABI: source receiver
+        // scalar message crosses the frame, not just a carrier C alloca.
+        // The SourceActorBootstrap binding authenticates the physical turn.
+        // These calls are statically linked; no runtime compiler/JIT is used.
+        actorFramePush = module.getOrInsertFunction("oreslang_source_actor_frame_push",
+            llvm::FunctionType::get(i32, {}, false));
+        actorFrameStore = module.getOrInsertFunction("oreslang_source_actor_frame_store_i64",
+            llvm::FunctionType::get(i32, {i64}, false));
+        actorFrameLoad = module.getOrInsertFunction("oreslang_source_actor_frame_load_i64",
+            llvm::FunctionType::get(i32, {native_ptr}, false));
+        actorFramePop = module.getOrInsertFunction("oreslang_source_actor_frame_pop",
+            llvm::FunctionType::get(i32, {}, false));
         sourceSpawn = module.getOrInsertFunction("oreslang_source_actor_spawn",
             llvm::FunctionType::get(native_ptr, {native_ptr, native_ptr, i64}, false));
         sourceSend = module.getOrInsertFunction("oreslang_source_actor_send",
@@ -3000,10 +3013,26 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         llvm::Value* currentDomain = &*args++;
         llvm::Value* currentEpoch = &*args++;
         llvm::Value* incoming = &*args++;
+        // Actor-owned frame entry/exit is emitted by LLVM, not discovered via
+        // reflection or host-side interpretation. Fail closed before user
+        // effects if frame quota/admission fails. This v1 profile supports
+        // synchronous scalar handlers only, not pinned suspendable locals.
+        auto guard_frame = [&](llvm::Value* admitted, const std::string& name) {
+            auto* ok = llvm::BasicBlock::Create(context, name + ".ok", handler);
+            auto* denied = llvm::BasicBlock::Create(context, name + ".denied", handler);
+            builder.CreateCondBr(
+                builder.CreateICmpNE(admitted, llvm::ConstantInt::get(i32, 0)),
+                ok, denied);
+            builder.SetInsertPoint(denied);
+            builder.CreateRet(llvm::ConstantInt::get(i64, 0));
+            builder.SetInsertPoint(ok);
+        };
+        guard_frame(builder.CreateCall(actorFramePush), "actor.frame.push");
         std::unordered_map<std::string, llvm::Value*> values, emptyFields;
         const std::string param = actor.on_message.parameters[0].name;
         llvm::Value* pslot = builder.CreateAlloca(i64, nullptr, param + ".slot");
-        builder.CreateStore(incoming, pslot);
+        guard_frame(builder.CreateCall(actorFrameStore, {incoming}), "actor.frame.store");
+        guard_frame(builder.CreateCall(actorFrameLoad, {pslot}), "actor.frame.load");
         values.emplace(param, pslot);
         for (std::size_t i=0; i<actor.fields.size(); ++i) {
             const auto& field = actor.fields[i];
@@ -3053,6 +3082,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
              it != actor_owned_tokens.rend(); ++it)
             builder.CreateCall(actorScopedDrop,
                 {actorHeap, currentDomain, currentEpoch, *it});
+        guard_frame(builder.CreateCall(actorFramePop), "actor.frame.pop");
         builder.CreateRet(result);
     }
 
