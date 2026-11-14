@@ -110,6 +110,10 @@ public:
             return PublishResult::incompatible;
         if (mode == InstrumentationMode::on && !variant->aot_probe_variant)
             return PublishResult::unsupported;
+        // Deep instrumentation requires a separately verified newly generated
+        // code version; an already compiled AOT probe is NOT evidence of JIT.
+        if (mode == InstrumentationMode::deep && variant->aot_probe_variant)
+            return PublishResult::unsupported;
         std::lock_guard<std::mutex> guard(publish_mutex_);
         if (variant->generation <= highest_generation_)
             return PublishResult::stale_generation;
