@@ -60,6 +60,14 @@ static void* host_waiter(void* actor) {
     return NULL;
 }
 
+static void* host_joiner(void* actor) {
+    /* Independent trusted-host stop/join, concurrent with a pending
+     * READY waiter. SourceActor must not be freed until that observer
+     * revokes its lifetime pin under group.mutex. */
+    oreslang_source_actor_join_done(actor);
+    return NULL;
+}
+
 static void observe_held_initialization(void) {
     while (!oreslang_source_actor_test_initialization_entered())
         sched_yield();
@@ -144,11 +152,16 @@ static void cancelled_after_waiter_admission(void) {
     check(oreslang_source_actor_ready_status(actor)
           == ORES_SOURCE_ACTOR_STARTUP_PENDING);
     oreslang_source_actor_request_stop(actor);
+    pthread_t joiner;
+    /* Compete for physical teardown while the READY waiter still owns a
+     * lifetime pin and the constructor is held in PENDING. */
+    check(pthread_create(&joiner, NULL, host_joiner, actor) == 0);
     oreslang_source_actor_test_hold_initialization(0);
-    /* The waiting host thread must wake on terminal-before-ready, emit the
-     * TESTING denial marker and abort the process. A successful return or
-     * indefinite wait is never acceptable. */
+    /* The waiting host thread must wake on terminal-before-ready, release
+     * its lifetime pin, emit the TESTING marker and abort the process.
+     * Concurrent physical join must not invalidate its allocation. */
     check(pthread_join(waiter, NULL) == 0);
+    check(pthread_join(joiner, NULL) == 0);
     fputs("UNEXPECTED_READY_AFTER_CANCEL\n", stderr);
     exit(9);
 }
