@@ -3,12 +3,12 @@ on:
   push:
     paths:
       - 'contracts/actor-counter-identical-source-v1/**'
-      - 'tests/counter_v2_source_admission.py'
+      - 'tools/counter-v2-source-manifest-pin/**'
       - '.github/workflows/llvm-counter-v2-source-admission.yml'
   pull_request:
     paths:
       - 'contracts/actor-counter-identical-source-v1/**'
-      - 'tests/counter_v2_source_admission.py'
+      - 'tools/counter-v2-source-manifest-pin/**'
       - '.github/workflows/llvm-counter-v2-source-admission.yml'
 permissions:
   contents: read
@@ -20,10 +20,10 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-      - name: Verify exact source tree and mutation admission
+      - name: Verify pinned canonical source manifest and tamper rejection with Rust
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
-          python3 tests/counter_v2_source_admission.py
+          python3 tools/counter-v2-source-manifest-pin/**
           echo "LLVM_COUNTER_V2_EXECUTION_STATUS=NOT_EXECUTED"
