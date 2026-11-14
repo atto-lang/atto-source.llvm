@@ -51,7 +51,7 @@ jobs:
           bash -n scripts/test-source-actor-checked-id-aba-v1.sh
           bash scripts/test-source-actor-checked-id-aba-v1.sh |
             tee "$RUNNER_TEMP/source-actor-checked-id-aba.txt"
-          grep -Fqx "SOURCE_ACTOR_CHECKED_ID_NATIVE_MATRIX_PASS|head=$EXPECTED_HEAD|levels=O0_O2|real_actors=288|forced_address_reuses=284|death_tests=6|checked_control_resumes=64|native_processes=10|checked_id=64_BIT_VALUE|legacy_pointer_ABA=OPEN|async_await=EXECUTED" \
+          grep -Fqx "SOURCE_ACTOR_CHECKED_ID_NATIVE_MATRIX_PASS|head=$EXPECTED_HEAD|levels=O0_O2|real_actors=288|forced_address_reuses=284|death_tests=8|overflow_rejections=2|checked_control_resumes=64|native_processes=12|checked_id=64_BIT_VALUE|legacy_pointer_ABA=OPEN|async_await=EXECUTED" \
             "$RUNNER_TEMP/source-actor-checked-id-aba.txt"
           test "$(grep -c '^SOURCE_ACTOR_CHECKED_ID_NATIVE_PASS|' "$RUNNER_TEMP/source-actor-checked-id-aba.txt")" = 2
           test "$(grep -c '^SOURCE_ACTOR_CHECKED_ID_AWAIT_NATIVE_PASS|' "$RUNNER_TEMP/source-actor-checked-id-aba.txt")" = 2
