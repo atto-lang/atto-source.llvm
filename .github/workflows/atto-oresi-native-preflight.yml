@@ -1,0 +1,56 @@
+name: AttoLang native .oresi v1 import preflight
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/NativeOresiV1Admission.hpp'
+      - 'tests/native_oresi_v1_admission_test.cpp'
+      - 'CMakeLists.txt'
+      - '.github/workflows/atto-oresi-native-preflight.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-oresi-host-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify source identity
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain)"
+          echo "NATIVE_ORESI_SOURCE_HEAD=$EXPECTED_SHA"
+          echo "NATIVE_ORESI_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Compile and run native parser with GCC and Clang
+        run: |
+          set -euo pipefail
+          for compiler in g++ clang++; do
+            "$compiler" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+              -Isrc/main/cpp tests/native_oresi_v1_admission_test.cpp \
+              -o "/tmp/native-oresi-${compiler}"
+            "/tmp/native-oresi-${compiler}"
+          done
+      - name: ASan and UBSan (native host admission)
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O1 -g -fno-omit-frame-pointer \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Isrc/main/cpp tests/native_oresi_v1_admission_test.cpp -o /tmp/native-oresi-san
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 /tmp/native-oresi-san
+      - name: Verify standalone CMake/CTest target without LLVM dependency
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-oresi -DORESLANG_ORESI_HOST_ONLY=ON -DBUILD_TESTING=ON
+          cmake --build build-oresi --parallel 2
+          ctest --test-dir build-oresi -R '^native_oresi_v1_import_preflight_host_only$' \
+            --output-on-failure --timeout 60
+          echo 'NATIVE_ORESI_PREFLIGHT_EXECUTED=true (NOT a compiler guest/linker test)'
