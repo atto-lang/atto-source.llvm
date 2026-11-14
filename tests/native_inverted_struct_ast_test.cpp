@@ -138,10 +138,12 @@ fnc main(): int {
     check(detached.inverted_main->operations.size() == 6,
           "detached snapshot operation count wrong");
     using Kind = InvertedSourceOperation::Kind;
-    check(detached.inverted_main->operations[1].kind == Kind::Snapshot,
-          "detached struct did not produce typed capture operation");
-    check(detached.inverted_main->operations.back().kind == Kind::ReturnSnapshotRead,
-          "detached struct return did not preserve value-read identity");
+    check(detached.inverted_main->operations[1].kind == Kind::Snapshot &&
+          detached.inverted_main->operations[1].snapshot_binding == "saved",
+          "detached struct did not preserve capture binding identity");
+    check(detached.inverted_main->operations.back().kind == Kind::ReturnSnapshotRead &&
+          detached.inverted_main->operations.back().snapshot_binding == "saved",
+          "detached struct return lost the exact saved-value binding");
     const auto snapshot_mir = dop::mir::verify_production_inverted_i64(detached);
     check(snapshot_mir.mir.instructions().size() == 8,
           "detached native source lost MIR close or value read");
