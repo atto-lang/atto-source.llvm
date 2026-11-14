@@ -279,6 +279,16 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
+        // !eq is an atomic AttoLang inequality token. Never split it into
+        // unary ! and identifier eq, and never consume the prefix of !eqname.
+        // Legacy != remains supported until an explicit, versioned .ores
+        // compatibility migration; no source-profile switch is invented here.
+        if (source_.substr(at_, 3) == "!eq" &&
+                (at_ + 3 == source_.size() ||
+                 !identifier_part(source_[at_ + 3]))) {
+            at_ += 3;
+            return {Kind::Symbol, source_.substr(start, 3), start};
+        }
         // AttoLang's contiguous !eq alias is a single inequality token.
         // Normalize it to the same static 'neq' operator used by the native
         // equality CFG; never consume a prefix of an identifier (!equal).
