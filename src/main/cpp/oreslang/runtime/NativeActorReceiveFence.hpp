@@ -2,7 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <limits>
+#include <exception>
 #include <memory>
 #include <mutex>
 #include <optional>
