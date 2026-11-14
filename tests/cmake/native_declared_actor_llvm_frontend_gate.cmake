@@ -116,5 +116,51 @@ foreach(unit actor contract state increment get_count)
     message(FATAL_ERROR "nominal actor missing fail-closed diagnostic: ${diagnostics}")
   endif()
 endforeach()
+# Syntax-only admission uses the same production native lexer and checks the
+# canonical read-loan release before the later mailbox send. It must never
+# emit LLVM IR or imply full actor execution.
+execute_process(
+  COMMAND "${COMPILER}" "--check-declared-receive-syntax" "${RECEIVE}"
+  RESULT_VARIABLE receive_syntax_result
+  OUTPUT_VARIABLE receive_syntax_receipt
+  ERROR_VARIABLE receive_syntax_error
+)
+if(NOT "${receive_syntax_result}" STREQUAL "0"
+        OR NOT receive_syntax_receipt MATCHES
+        "LLVM_DECLARED_COUNTER_RECEIVE_SYNTAX_PASS\\|namespace=counter\\|actor=Counter\\|field=total\\|stop=4\\|guest_not_executed")
+  message(FATAL_ERROR "Native lexer did not admit canonical detached-read syntax: ${receive_syntax_error}")
+endif()
+
+function(expect_denied_receive mutation from into)
+  file(READ "${RECEIVE}" canonical_receive)
+  string(REPLACE "${from}" "${into}" modified_receive "${canonical_receive}")
+  if("${canonical_receive}" STREQUAL "${modified_receive}")
+    message(FATAL_ERROR "mutation ${mutation} did not actually change the source")
+  endif()
+  set(bad "${OUTPUT_DIR}/counter-receive-negative-${mutation}.atto")
+  file(WRITE "${bad}" "${modified_receive}")
+  execute_process(
+    COMMAND "${COMPILER}" "--check-declared-receive-syntax" "${bad}"
+    RESULT_VARIABLE denied
+    OUTPUT_VARIABLE untrusted_receipt
+    ERROR_VARIABLE denied_diagnostic
+  )
+  if("${denied}" STREQUAL "0" OR NOT "${untrusted_receipt}" STREQUAL ""
+          OR NOT denied_diagnostic MATCHES "DECLARED_ACTOR_RECEIVE_REJECTED")
+    message(FATAL_ERROR "untrusted actor receive passed syntax admission: ${mutation}")
+  endif()
+endfunction()
+
+expect_denied_receive(borrowed_send "self.send(snapshot)" "self.send(s.total)")
+expect_denied_receive(read_effect "critical-read |s| -> s.total"
+  "critical-read |s| -> { self.send(s.total); }")
+expect_denied_receive(read_is_write "critical-read" "critical-write")
+expect_denied_receive(spaced_mode "critical-read" "critical -read")
+expect_denied_receive(mutable_snapshot "val int snapshot" "let int snapshot")
+expect_denied_receive(unowned_delta "s.total + mail.value" "s.total + 1")
+expect_denied_receive(spoofed_receiver "external mtd" "pub mtd")
+expect_denied_receive(no_actor_stop "self.end()" "self.send(5)")
+
+message(STATUS "LLVM canonical declared receive syntax PASS, 8 negative mutations rejected; full actor guest NOT executed")
 message(STATUS "LLVM use namespace real scalar AOT PASS (exit 42); all five unlowered actor units rejected")
 
