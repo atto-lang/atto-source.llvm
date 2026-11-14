@@ -915,6 +915,24 @@ void open_refuses_when_the_fault_handler_was_replaced() {
     CHECK_REASON(host.wait_closed(v.handle).reason, FailReason::MemoryFault);
 }
 
+// The watchdog reserves SIGURG to abort a running guest. If another runtime or
+// library replaces it, admitting work would silently disable cancellation.
+void open_refuses_when_interrupt_handler_was_replaced() {
+    TenantVmHost host;
+    struct sigaction ours{}, foreign{};
+    foreign.sa_handler = SIG_IGN;
+    sigemptyset(&foreign.sa_mask);
+    CHECK_EQ(sigaction(SIGURG, &foreign, &ours), 0);
+    CHECK_STATUS(host.open(spec("interrupt-replaced")).status, Status::SignalHandlerLost);
+    CHECK_EQ(sigaction(SIGURG, &ours, nullptr), 0);
+    auto vm = host.open(spec("interrupt-restored"));
+    REQUIRE_OK(vm);
+    auto actor = host.spawn_actor(vm.handle, KIND_FAULT);
+    REQUIRE_OK(actor);
+    CHECK_STATUS(host.call(actor.actor, words({FAULT_TRAP})).get().status, Status::TenantFailed);
+    CHECK_REASON(host.wait_closed(vm.handle).reason, FailReason::Trap);
+}
+
 // A host call must not leak a C++ exception through guest frames, and creating the host must
 // not leave threads behind when it fails part way.
 void a_failed_host_start_leaves_nothing_running() {
@@ -1973,6 +1991,7 @@ const Case cases[] = {
     {"a_crowded_host_does_not_cost_an_innocent_turn", a_crowded_host_does_not_cost_an_innocent_turn},
     {"a_real_spinner_still_dies_on_cpu_deadline", a_real_spinner_still_dies_on_cpu_deadline},
     {"open_refuses_when_the_fault_handler_was_replaced", open_refuses_when_the_fault_handler_was_replaced},
+    {"open_refuses_when_interrupt_handler_was_replaced", open_refuses_when_interrupt_handler_was_replaced},
     {"a_failed_host_start_leaves_nothing_running", a_failed_host_start_leaves_nothing_running},
     {"wild_access_is_counted_and_can_be_fatal", wild_access_is_counted_and_can_be_fatal},
     {"instance_memory_is_per_actor_and_outside_the_cage", instance_memory_is_per_actor_and_outside_the_cage},
