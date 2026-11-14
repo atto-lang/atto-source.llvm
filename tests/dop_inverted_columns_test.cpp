@@ -284,22 +284,29 @@ int main() {
     check(!row_bad.load());
     // A moved-out loan retains memory if its owner is destroyed.
     std::optional<Store::Loan<0, false>> carried;
+    std::optional<Store::Loan<0, false>> carried2;
     {
         auto owner = std::make_unique<Store>();
         auto retired_handle = owner->push(7.5f, 7, true);
         carried.emplace(owner->borrow_read<0>());
-        // This raw span is a host-only escape, never a legal guest pointer.
-        // The outstanding loan keeps the original backing allocation alive
-        // after owner teardown, so it must be scrubbed before reclamation.
+        carried2.emplace(owner->borrow_read<0>());
+        // This raw span is HOST-ONLY and never a legal guest pointer.
+        // Owner teardown revokes all new checked reads immediately, but
+        // cannot scrub an existing host pointer while a loan is still live:
+        // doing so would race an external reader of that span.
         auto retained = carried->span();
         check(retained.size() == 1 && retained[0] == 7.5f);
         owner.reset();
-        check(retained[0] == 0.0f);
+        check(retained[0] == 7.5f);
+        carried2.reset();  // not the final loan; backing remains intact
+        check(retained[0] == 7.5f);
         expect<std::logic_error>([&] { (void)carried->read_handle(retired_handle); });
         expect<std::logic_error>([&] { (void)carried->span(); });
         expect<std::logic_error>([&] { (void)carried->read_at(0); });
         expect<std::logic_error>([&] { (void)carried->size_checked(); });
     }
+    // Last loan release wipes the retired columns and metadata and frees the
+    // shared state. No host span can be used after its last loan is released.
     carried.reset();
     // Owner IDs are shared across distinct template instantiations.
     oreslang::dop::InvertedColumns<std::int64_t> different_fields;
