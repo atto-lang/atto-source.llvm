@@ -5,6 +5,9 @@ on:
       - 'src/main/cpp/oreslang/runtime/NativeAtomicBoxV1.hpp'
       - 'src/main/cpp/oreslang/runtime/NativeBoxArenaV1.hpp'
       - 'tests/native_atomic_box_v1_test.cpp'
+      - 'src/main/cpp/oreslang/frontend/NativeAtomicAotV1.cpp'
+      - 'tests/atto_atomic_aot_v1.sh'
+      - 'tests/atto-atomic-aot-v1/**'
       - 'src/main/cpp/oreslang/types/AutoTraitRules.hpp'
       - 'tests/native_atomic_box_traits_bounds_test.cpp'
       - 'tests/ownership_auto_traits_dop_test.cpp'
@@ -16,6 +19,9 @@ on:
       - 'src/main/cpp/oreslang/runtime/NativeAtomicBoxV1.hpp'
       - 'src/main/cpp/oreslang/runtime/NativeBoxArenaV1.hpp'
       - 'tests/native_atomic_box_v1_test.cpp'
+      - 'src/main/cpp/oreslang/frontend/NativeAtomicAotV1.cpp'
+      - 'tests/atto_atomic_aot_v1.sh'
+      - 'tests/atto-atomic-aot-v1/**'
       - 'src/main/cpp/oreslang/types/AutoTraitRules.hpp'
       - 'tests/native_atomic_box_traits_bounds_test.cpp'
       - 'tests/ownership_auto_traits_dop_test.cpp'
@@ -48,3 +54,13 @@ jobs:
           set -euo pipefail
           g++ -std=c++20 -O1 -g -pthread -fno-omit-frame-pointer -fsanitize=thread -Wall -Wextra -Werror -Isrc/main/cpp tests/native_atomic_box_v1_test.cpp -o /tmp/atto-native-atomic-box-tsan
           TSAN_OPTIONS="halt_on_error=1" /tmp/atto-native-atomic-box-tsan
+  atomic-guest-native-aot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check typed Atto source to LLVM atomic IR and native binary
+        run: |
+          set -euo pipefail
+          bash tests/atto_atomic_aot_v1.sh
