@@ -190,6 +190,7 @@ if(BUILD_TESTING)
         tests/native_telemetry_span_runtime_test.c
         src/main/cpp/oreslang/runtime/NativeTelemetrySpan.c)
     target_include_directories(oreslang-native-telemetry-span-runtime-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     set_target_properties(oreslang-native-telemetry-span-runtime-test PROPERTIES
         C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
     target_compile_options(oreslang-native-telemetry-span-runtime-test PRIVATE
