@@ -27,8 +27,16 @@ static void rejects(F&& f) {
     throw std::runtime_error("expected checked denial");
 }
 int main() {
+    const auto issuer_before =
+        oreslang::dop::contract::detail::InvertedClassIssuerSequence::allocate();
     rejects<std::invalid_argument>([] { Table invalid(0); });
     Table table(101);
+    oreslang::dop::contract::InvertedClassHandleContract<2> other_capacity(101);
+    const auto issuer_after =
+        oreslang::dop::contract::detail::InvertedClassIssuerSequence::allocate();
+    check(issuer_after == issuer_before + 3,
+          "class issuer sequence must span schema capacities without zero-actor leakage");
+    (void)other_capacity;
     const auto a = table.push(10, 20);
     const auto b = table.push(42, 100);
     const auto c = table.push(7, 11);
