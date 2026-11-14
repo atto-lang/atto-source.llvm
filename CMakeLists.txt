@@ -5,6 +5,22 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Standalone host access-grant regression (no LLVM toolchain or guest proof).
+option(ATTO_ACTOR_ACCESS_HOST_ONLY
+  "Build only the checked actor allocation authority host test" OFF)
+if(ATTO_ACTOR_ACCESS_HOST_ONLY)
+  include(CTest)
+  add_executable(atto_actor_access_v1_host_test
+    tests/actor_isolation_access_v1_test.cpp)
+  target_include_directories(atto_actor_access_v1_host_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_options(atto_actor_access_v1_host_test PRIVATE
+    -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+  add_test(NAME actor_access_v1_host_gate
+    COMMAND atto_actor_access_v1_host_test)
+  return()
+endif()
+
 # Host-only C++17 .oresi v1 preflight with no LLVM SDK dependency.
 # Tests metadata admission, not the compiler, guest or native linker.
 option(ORESLANG_ORESI_HOST_ONLY
