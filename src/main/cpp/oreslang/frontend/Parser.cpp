@@ -661,6 +661,8 @@ public:
 
     Program parse() {
         Program program;
+        if (token_.text == "use" && peek_next().text == "namespace")
+            fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native actor namespace header needs typed module/linker identity");
         while (token_.text == "import") {
             advance();
             if (token_.text == "contract")
@@ -930,6 +932,7 @@ public:
         }
         for (auto& method : methods_) program.functions.push_back(std::move(method));
         if (wrapped_module) require("end");
+        validate_actor_forwards(program);
         if (token_.kind != Kind::End) fail("unexpected trailing source");
         validate_type_only_declarations(program);
         if (!program.namespace_name.empty() &&
@@ -1162,6 +1165,25 @@ private:
             exported = prefix_public || postfix_public;
         }
 
+        // A declared actor is only a same-source compile-time identity. It
+        // must resolve to exactly one real native actor, and never creates
+        // mailbox storage, a runtime actor or a foreign type capability.
+        // Exported forward signatures cannot be enforced by this native actor
+        // ABI, which has no actor visibility field, so reject them for now.
+        if (!already_defined && accept("actor")) {
+            if (exported)
+                fail("NATIVE_ACTOR_FORWARD_PUBLIC_UNSUPPORTED: native actor forward visibility needs an actor export ABI");
+            const std::string name = nominal_declaration_name();
+            if (token_.text == "<")
+                fail("NATIVE_ACTOR_FORWARD_GENERIC_UNSUPPORTED: native actor generics require typed specialization");
+            require(";");
+            if (!actor_forwards_.emplace(name, program.module).second)
+                fail("NATIVE_ACTOR_FORWARD_DUPLICATE: duplicate actor forward '" + name + "'");
+            return;
+        }
+        if (!already_defined && token_.text == "isoactor")
+            fail("NATIVE_ACTOR_FORWARD_KIND_UNSUPPORTED: private isoactor needs isolated actor heap/lifecycle lowering");
+
         TypeOnlyDecl decl;
         decl.module_name = program.module;
         decl.exported = exported;
@@ -1254,6 +1276,25 @@ private:
         if (program.type_only_declarations.size() >= 1024)
             fail("TYPE_ONLY_DECL_BUDGET: maximum 1024 type-only declarations");
         program.type_only_declarations.push_back(std::move(decl));
+    }
+
+    void validate_actor_forwards(const Program& program) const {
+        std::unordered_set<std::string> declared;
+        for (const auto& actor : program.actors) {
+            if (!declared.insert(actor.name).second)
+                fail("NATIVE_ACTOR_DUPLICATE_DEFINITION: duplicate actor '" + actor.name + "'");
+        }
+        for (const auto& forward : actor_forwards_) {
+            const std::string& name = forward.first;
+            if (forward.second != program.module)
+                fail("NATIVE_ACTOR_FORWARD_SCOPE: actor forward crosses a module boundary");
+            if (!declared.count(name)) {
+                for (const auto& cls : program.classes)
+                    if (cls.name == name)
+                        fail("NATIVE_ACTOR_FORWARD_KIND: actor forward resolves to a class");
+                fail("NATIVE_ACTOR_FORWARD_UNRESOLVED: actor forward has no same-source definition '" + name + "'");
+            }
+        }
     }
 
     struct ForwardType {
@@ -6176,6 +6217,7 @@ private:
     }
 
     std::unordered_map<std::string, ForwardType> forwards_;
+    std::unordered_map<std::string, std::string> actor_forwards_;
     std::unordered_map<std::string, ScalarAlias> defined_type_aliases_;
     std::string_view source_;
     Lexer lexer_;
