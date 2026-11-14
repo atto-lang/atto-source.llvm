@@ -2182,12 +2182,17 @@ private:
                     else parameter.class_name = type;
                 }
                 if (token_.text == "?")
-                    fail("native optional type '?' requires versioned Option/default ABI lowering");
+                    fail("E_OPTION_TYPE_ABI_UNSUPPORTED: 'T? name' is a required Option<T> "
+                         "slot, not omittable; versioned Option payload ABI is not implemented");
                 if (alias_extension && token_.text == "self")
                     fail("EXTENSION_SELF_SHADOW: explicit extension parameter cannot be named self");
                 parameter.name = identifier();
                 if (token_.text == "?")
-                    fail("native optional parameter presence '?' requires versioned default/presence ABI lowering");
+                    fail("E_OPTIONAL_FORMAL_ABI_UNSUPPORTED: 'T name?' is an omittable "
+                         "slot, not Option<T>; verified defaults and full-arity ABI are missing");
+                if (token_.text == "=")
+                    fail("E_PARAMETER_DEFAULT_REQUIRES_NAME_QUESTION: a parameter default "
+                         "requires an omittable 'name?' declaration and checked lowering");
                 value.parameters.push_back(std::move(parameter));
             } while (accept(","));
             require(")");
@@ -2222,7 +2227,8 @@ private:
             }
         }
         if (token_.text == "?")
-            fail("native optional return type '?' requires versioned Option/default ABI lowering");
+            fail("E_OPTION_RETURN_ABI_UNSUPPORTED: type-level '?' returns Option<T>, "
+                 "not an omitted argument; native tagged return ABI is missing");
         if (accept("using")) {
             value.has_declared_effects = true;
             do {
