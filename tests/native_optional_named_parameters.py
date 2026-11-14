@@ -32,6 +32,12 @@ def main():
                             "pub fnc main():int{return sum(40,2);}"),
         ("named_scalar_call", "fnc sum(int first,int second):int{return first+second;}"
                              "pub fnc main():int{return sum(second:2,first:40);}"),
+        ("namefirst_positional", "fnc sum(first:int,second:int):int{return first+second;}"
+                                 "pub fnc main():int{return sum(40,2);}"),
+        ("namefirst_named_reordered", "fnc sum(first:int,second:int):int{return first+second;}"
+                                      "pub fnc main():int{return sum(second:2,first:40);}"),
+        ("mixed_declaration_styles", "fnc sum(int first,second:int):int{return first+second;}"
+                                      "pub fnc main():int{return sum(first:40,second:2);}"),
     ]
     rejected = [
         ("required_option", "fnc f(int? value):int{return 42;}",
@@ -52,6 +58,18 @@ def main():
          "E_PARAMETER_DEFAULT_REQUIRES_NAME_QUESTION"),
         ("optional_return", "fnc f():int?{return None;}",
          "E_OPTION_RETURN_ABI_UNSUPPORTED"),
+        ("namefirst_required_option", "fnc f(value:int?):int{return 42;}",
+         "E_OPTION_TYPE_ABI_UNSUPPORTED"),
+        ("namefirst_omittable", "fnc f(value?:int):int{return 42;}",
+         "E_OPTIONAL_FORMAL_ABI_UNSUPPORTED"),
+        ("namefirst_defaulted_omission", "fnc f(value?:int=42):int{return value;}",
+         "E_OPTIONAL_FORMAL_ABI_UNSUPPORTED"),
+        ("namefirst_omittable_option", "fnc f(value?:int?):int{return 42;}",
+         "E_OPTIONAL_FORMAL_ABI_UNSUPPORTED"),
+        ("namefirst_default_requires_marker", "fnc f(value:int=42):int{return value;}",
+         "E_PARAMETER_DEFAULT_REQUIRES_NAME_QUESTION"),
+        ("namefirst_option_bool", "fnc f(value:bool?):int{return 42;}",
+         "E_OPTION_TYPE_ABI_UNSUPPORTED"),
     ]
 
     with tempfile.TemporaryDirectory(prefix="atto-native-parameter-presence-") as tmp:
@@ -78,8 +96,9 @@ def main():
                     diagnostic in result.stderr,
                     label + " failed strict no-IR diagnostic", result)
 
-    print("PASS: 2 native compiled-and-executed named/positional controls;"
-          " 9 optional/type/default compiler rejections; not Option ABI parity")
+    print(f"PASS: {len(positive)} native compiled-and-executed controls;"
+          f" {len(rejected)} optional/type/default compiler rejections;"
+          " no Option/omission ABI parity")
 
 
 if __name__ == "__main__":

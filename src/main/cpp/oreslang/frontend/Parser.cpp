@@ -2155,6 +2155,25 @@ private:
                 if (token_.text == "@")
                     fail("native @Default parameter annotation requires checked literal, Option and ownership ABI lowering");
                 Parameter parameter;
+                bool name_first = false;
+                if (token_.kind == Kind::Identifier) {
+                    const Token next = peek_next();
+                    // Name-level omission lives BEFORE ':' in the name-first
+                    // spelling. This is not a type-position Option<T> suffix.
+                    if (next.text == "?") {
+                        Lexer lookahead = lexer_;
+                        (void)lookahead.next();
+                        if (lookahead.next().text == ":")
+                            fail("E_OPTIONAL_FORMAL_ABI_UNSUPPORTED: 'name?: T' "
+                                 "is an omittable formal, not Option<T>; checked "
+                                 "default/presence ABI lowering is missing");
+                    }
+                    if (next.text == ":") {
+                        parameter.name = identifier();
+                        require(":");
+                        name_first = true;
+                    }
+                }
                 if (accept("borrow")) {
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
                                                     : Parameter::Mode::Borrow;
@@ -2184,9 +2203,9 @@ private:
                 if (token_.text == "?")
                     fail("E_OPTION_TYPE_ABI_UNSUPPORTED: 'T? name' is a required Option<T> "
                          "slot, not omittable; versioned Option payload ABI is not implemented");
-                if (alias_extension && token_.text == "self")
+                if (!name_first) parameter.name = identifier();
+                if (alias_extension && parameter.name == "self")
                     fail("EXTENSION_SELF_SHADOW: explicit extension parameter cannot be named self");
-                parameter.name = identifier();
                 if (token_.text == "?")
                     fail("E_OPTIONAL_FORMAL_ABI_UNSUPPORTED: 'T name?' is an omittable "
                          "slot, not Option<T>; verified defaults and full-arity ABI are missing");
