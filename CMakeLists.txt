@@ -84,6 +84,17 @@ if(ATTO_SOURCE_IDS_HOST_ONLY)
   endif()
   add_test(NAME source_log_manifest_host_only
     COMMAND atto_source_log_manifest_host_test)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(atto_source_log_paths_host_test
+      tests/native_source_log_paths_v1_test.cpp)
+    target_include_directories(atto_source_log_paths_host_test PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(atto_source_log_paths_host_test PRIVATE cxx_std_17)
+    target_compile_options(atto_source_log_paths_host_test PRIVATE
+      -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME source_log_paths_host_only
+      COMMAND atto_source_log_paths_host_test)
+  endif()
   atto_add_static_source_log_ir_abi_test(
     atto_static_source_log_ir_link_host_test
     source_free_static_log_ir_link_host_only)
@@ -305,6 +316,17 @@ if(BUILD_TESTING)
         $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME native_source_log_manifest_admission
         COMMAND oreslang-native-source-log-manifest-test)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(oreslang-native-source-log-paths-test
+            tests/native_source_log_paths_v1_test.cpp)
+        target_include_directories(oreslang-native-source-log-paths-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features(oreslang-native-source-log-paths-test PRIVATE cxx_std_17)
+        target_compile_options(oreslang-native-source-log-paths-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_source_log_physical_paths_admission
+            COMMAND oreslang-native-source-log-paths-test)
+    endif()
     atto_add_static_source_log_ir_abi_test(
         oreslang-native-static-source-log-ir-link-test
         source_free_native_static_log_ir_link_host_only)
