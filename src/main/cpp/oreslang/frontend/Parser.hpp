@@ -489,6 +489,19 @@ struct Program {
 Program parse_program(std::string_view source, bool experimental_owned_int = false,
                       bool experimental_rt_scalar_loop = false);
 
+// Parsed-only canonical external receive. Neither this type nor its parser
+// mints a state-loan ticket or permits LLVM codegen without a package linker.
+struct DeclaredActorReceiveSyntax {
+    std::string namespace_name;
+    std::string actor_name;
+    std::string receiver_name;
+    std::string mail_name;
+    std::string state_field;
+    std::string snapshot_name;
+    std::int64_t stop_mail_value = 0;
+};
+DeclaredActorReceiveSyntax inspect_declared_actor_receive_syntax(std::string_view source);
+
 // Internal module-linking stages: syntax trees are NOT admitted for codegen.
 // resolve_and_validate_program must run after all module names are resolved.
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int = false,
