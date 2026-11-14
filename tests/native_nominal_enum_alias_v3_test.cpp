@@ -88,10 +88,10 @@ int main() {
         expect_rejected(changed(source, "Red,\n  Green,",
             "Red,\n  Red,"), "duplicate nominal case");
         expect_rejected(changed(source, "on Red as original",
-            "on Red { job_id } as original"), "named enum payload patterns require typed payload AOT lowering");
+            "on Red { job_id } as original"), "pattern field is not declared on the nominal case");
         expect_rejected(changed(source, "Red,\n  Green,",
-            "Red { job_id: int },\n  Green,"),
-            "payload-bearing enums require checked payload AOT lowering");
+            "Red { job_id: Bytes },\n  Green,"),
+            "payload AOT admits only Copy int");
         std::cout << "ATTO_LLVM_NOMINAL_ALIAS_V3_HOST_PASS=15\n";
         return 0;
     } catch (const std::exception& e) {
