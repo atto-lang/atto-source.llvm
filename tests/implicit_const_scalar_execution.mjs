@@ -11,6 +11,7 @@ const compiler = process.env.ORESLANG_LLVMC ?? join(root, "build/oreslang-llvmc"
 const clang = process.env.CLANG ?? "clang";
 const cases = [
   ["literal-equivalence", "positive", "a8e49769215a78946009f2cd2ac685b7c34c7804", "42"],
+  ["const-reference", "positive", "a1ebef245f6357ca712b30d9e02d379da3e65abc", "42"],
   ["const-arithmetic", "positive", "44daf131a7793f3b341c41a7e934cf8afe51f9db", "42"],
   ["bool-local", "positive", "52c7909c0d2ba760c000fef2cc4434aefbd91f97", "42"],
   ["runtime-val-let", "positive", "fb47b57cb715ff9162de6a757ae515c1a9c19a30", "42"],
