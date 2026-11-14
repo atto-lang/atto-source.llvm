@@ -286,9 +286,16 @@ int main() {
     std::optional<Store::Loan<0, false>> carried;
     {
         auto owner = std::make_unique<Store>();
-        owner->push(7.5f, 7, true);
+        auto retired_handle = owner->push(7.5f, 7, true);
         carried.emplace(owner->borrow_read<0>());
+        // This raw span is a host-only escape, never a legal guest pointer.
+        // The outstanding loan keeps the original backing allocation alive
+        // after owner teardown, so it must be scrubbed before reclamation.
+        auto retained = carried->span();
+        check(retained.size() == 1 && retained[0] == 7.5f);
         owner.reset();
+        check(retained[0] == 0.0f);
+        expect<std::logic_error>([&] { (void)carried->read_handle(retired_handle); });
         expect<std::logic_error>([&] { (void)carried->span(); });
         expect<std::logic_error>([&] { (void)carried->read_at(0); });
         expect<std::logic_error>([&] { (void)carried->size_checked(); });
