@@ -137,6 +137,27 @@ overlapping `Parser.cpp` received the exact upstream lexer/import additions
 without losing actor-loop checks. Later feature changes remain on top of that
 merge.
 
+## Stale opaque handle and actor-incarnation ABA boundary
+
+The current trusted native source-actor ABI uses a raw `void*` address of a
+dynamically allocated `SourceActor`. The restricted loop's lexical scope
+prevents this ref from escaping that particular guest source form, but the
+runtime APIs themselves are **not generation-checked host capabilities**.
+After physical DONE frees an actor allocation, a later `calloc` can
+potentially reuse the same address. Checking that a pointer matches a
+currently-live `group.actors` entry and has the current magic value does
+not distinguish an old actor's stale pointer from a newly allocated actor
+at the same address.
+
+This is tracked in
+[issue #1802](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1802).
+Before general `ActorRef` reuse, FFI exposure, dynamic async loops or
+untrusted callbacks, the native runtime must use a generation-checked
+handle and fail-closed admission that compares the **original minted actor
+identity**, even when malloc address and scheduler slot are reused.
+The bounded synchronous guest's upcoming successful execution would **not**
+alone close this stale-handle issue.
+
 ## Next work before promotion
 
 1. Restore source GitHub Actions runner admission (#159): no-executed-step
