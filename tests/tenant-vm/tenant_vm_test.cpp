@@ -1424,6 +1424,7 @@ void overlapping_stack_quotas_preserve_entire_guard() {
 #if defined(TENANT_VM_TEST_MPROTECT)
 extern "C" void tenant_vm_test_fail_next_guard_install();
 extern "C" void tenant_vm_test_fail_next_guard_restore();
+extern "C" void tenant_vm_test_fail_next_carrier_allocations(int count);
 
 // The real runtime, not a copied model, must refuse a guest before its first instruction
 // when the OS cannot install the 1 MiB quota guard.
@@ -1453,6 +1454,8 @@ void guard_install_failure_refuses_guest_and_preserves_other_actors() {
 
 // A failed old-only unprotect used to abort the entire process. It must instead quarantine
 // this carrier stack and reject every later guest turn on it, while leaving the host alive.
+// A damaged carrier must be replaced, not used for another guest turn. Exercise
+// repeated retirement to detect stale guards, leaked mappings and stale pthread_t use.
 void guard_restore_failure_quarantines_carrier_without_process_abort() {
     HostLimits limits;
     limits.carriers = 1;
@@ -1465,19 +1468,97 @@ void guard_restore_failure_quarantines_carrier_without_process_abort() {
     auto b = host.spawn_actor(large.handle, KIND_RESTARTABLE);
     REQUIRE_OK(a);
     REQUIRE_OK(b);
-    const TurnResult first = host.call(a.actor, words({RESTART_ADD, 3})).get();
-    CHECK_STATUS(first.status, Status::Ok);
+    for (std::uint64_t round = 1; round <= 5; ++round) {
+        const TurnResult before = host.call(a.actor, words({RESTART_ADD, 3})).get();
+        CHECK_STATUS(before.status, Status::Ok);
+        tenant_vm_test_fail_next_guard_restore();
+        const TurnResult rejected = host.call(b.actor, words({RESTART_ADD, 11})).get();
+        CHECK_STATUS(rejected.status, Status::ActorRestarted);
+        CHECK_REASON(rejected.failure, FailReason::StackOverflow);
+        const auto deadline = std::chrono::steady_clock::now() + Ms(5000);
+        while (host.stats().carrier_replacements < round &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(Ms(2));
+        CHECK_EQ(host.stats().carrier_replacements, round);
+        CHECK_EQ(host.stats().unavailable_carriers, std::uint32_t{0});
+        CHECK_EQ(host.stats().stack_quota_misses, round);
+        const TurnResult after = host.call(a.actor, words({RESTART_ADD, 0})).get();
+        CHECK_STATUS(after.status, Status::Ok);
+        if (after.status == Status::Ok) CHECK_EQ(word(after.payload), std::int64_t{round * 3});
+        CHECK(host.snapshot(small.handle).phase == Phase::Running);
+        CHECK(host.snapshot(large.handle).phase == Phase::Running);
+    }
+}
+
+// A transient failure replacing a carrier retries with backoff rather than silently
+// reducing the worker pool, and does not reexecute the rejected actor's message.
+void carrier_replacement_retries_failed_allocation() {
+    HostLimits limits;
+    limits.carriers = 1;
+    TenantVmHost host(limits);
+    auto small = host.open(stack_spec("replacement-small", 512 << 10));
+    auto large = host.open(stack_spec("replacement-large", 4 << 20));
+    REQUIRE_OK(small);
+    REQUIRE_OK(large);
+    auto a = host.spawn_actor(small.handle, KIND_RESTARTABLE);
+    auto b = host.spawn_actor(large.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(a);
+    REQUIRE_OK(b);
+    CHECK_STATUS(host.call(a.actor, words({RESTART_ADD, 4})).get().status, Status::Ok);
+    tenant_vm_test_fail_next_carrier_allocations(1);
     tenant_vm_test_fail_next_guard_restore();
-    const TurnResult rejected = host.call(b.actor, words({RESTART_ADD, 11})).get();
-    CHECK_STATUS(rejected.status, Status::ActorRestarted);
-    CHECK_REASON(rejected.failure, FailReason::StackOverflow);
-    CHECK_EQ(host.stats().stack_quota_misses, std::uint64_t{1});
-    const TurnResult after = host.call(a.actor, words({RESTART_ADD, 0})).get();
-    CHECK_STATUS(after.status, Status::ActorRestarted);
-    CHECK_REASON(after.failure, FailReason::StackOverflow);
-    CHECK(host.stats().stack_quota_misses >= std::uint64_t{2});
-    CHECK(host.snapshot(small.handle).phase == Phase::Running);
-    CHECK(host.snapshot(large.handle).phase == Phase::Running);
+    const TurnResult failed = host.call(b.actor, words({RESTART_ADD, 19})).get();
+    CHECK_STATUS(failed.status, Status::ActorRestarted);
+    CHECK_REASON(failed.failure, FailReason::StackOverflow);
+    const auto deadline = std::chrono::steady_clock::now() + Ms(5000);
+    while (host.stats().carrier_replacements == 0 &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(Ms(2));
+    CHECK_EQ(host.stats().carrier_replacement_failures, std::uint64_t{1});
+    CHECK_EQ(host.stats().carrier_replacements, std::uint64_t{1});
+    CHECK_EQ(host.stats().unavailable_carriers, std::uint32_t{0});
+    const TurnResult sibling = host.call(a.actor, words({RESTART_ADD, 0})).get();
+    CHECK_STATUS(sibling.status, Status::Ok);
+    if (sibling.status == Status::Ok) CHECK_EQ(word(sibling.payload), std::int64_t{4});
+    const TurnResult new_turn = host.call(b.actor, words({RESTART_ADD, 0})).get();
+    CHECK_STATUS(new_turn.status, Status::Ok);
+    if (new_turn.status == Status::Ok) CHECK_EQ(word(new_turn.payload), std::int64_t{0});
+}
+
+// When no worker can be recreated after the bounded retries, queued calls must
+// complete and the host must refuse new VMs rather than hang indefinitely.
+void carrier_replacement_exhaustion_fails_pending_calls() {
+    HostLimits limits;
+    limits.carriers = 1;
+    TenantVmHost host(limits);
+    auto small = host.open(stack_spec("exhaust-small", 512 << 10));
+    auto large = host.open(stack_spec("exhaust-large", 4 << 20));
+    REQUIRE_OK(small);
+    REQUIRE_OK(large);
+    auto a = host.spawn_actor(small.handle, KIND_RESTARTABLE);
+    auto b = host.spawn_actor(large.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(a);
+    REQUIRE_OK(b);
+    CHECK_STATUS(host.call(a.actor, words({RESTART_ADD, 4})).get().status, Status::Ok);
+    tenant_vm_test_fail_next_carrier_allocations(3);
+    tenant_vm_test_fail_next_guard_restore();
+    const TurnResult failed = host.call(b.actor, words({RESTART_ADD, 19})).get();
+    CHECK_STATUS(failed.status, Status::ActorRestarted);
+    // A pending accepted message will be failed by the watchdog after bounded retries.
+    auto pending = host.call(a.actor, words({RESTART_ADD, 1}));
+    CHECK(pending.wait_for(Ms(5000)) == std::future_status::ready);
+    if (pending.wait_for(Ms(0)) == std::future_status::ready)
+        CHECK_STATUS(pending.get().status, Status::TenantFailed);
+    CHECK_EQ(host.stats().carrier_replacement_failures, std::uint64_t{3});
+    CHECK_EQ(host.stats().carrier_replacements, std::uint64_t{0});
+    CHECK_EQ(host.stats().unavailable_carriers, std::uint32_t{1});
+    const VmTerminal small_closed = host.wait_closed(small.handle);
+    const VmTerminal large_closed = host.wait_closed(large.handle);
+    CHECK(small_closed.phase == Phase::Failed);
+    CHECK(large_closed.phase == Phase::Failed);
+    CHECK_REASON(small_closed.reason, FailReason::HostClosed);
+    CHECK_REASON(large_closed.reason, FailReason::HostClosed);
+    CHECK_STATUS(host.open(stack_spec("after-exhaustion", 512 << 10)).status, Status::HostClosed);
 }
 #endif
 
@@ -1632,6 +1713,8 @@ const Case cases[] = {
 #if defined(TENANT_VM_TEST_MPROTECT)
     {"guard_install_failure_refuses_guest_and_preserves_other_actors", guard_install_failure_refuses_guest_and_preserves_other_actors},
     {"guard_restore_failure_quarantines_carrier_without_process_abort", guard_restore_failure_quarantines_carrier_without_process_abort},
+    {"carrier_replacement_retries_failed_allocation", carrier_replacement_retries_failed_allocation},
+    {"carrier_replacement_exhaustion_fails_pending_calls", carrier_replacement_exhaustion_fails_pending_calls},
 #endif
     {"stack_quota_limits_are_checked", stack_quota_limits_are_checked},
     {"a_restart_waits_before_the_next_turn", a_restart_waits_before_the_next_turn},
