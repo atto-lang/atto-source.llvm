@@ -11,6 +11,25 @@
 
 namespace oreslang::dop::contract {
 
+namespace detail {
+// Shared across *all* Capacity instantiations: future erased-ABI owner
+// identities must not collide simply because physical schemas differ.
+class InvertedClassIssuerSequence final {
+    inline static std::atomic<std::uint64_t> next_{1};
+public:
+    static std::uint64_t allocate() {
+        auto current = next_.load(std::memory_order_relaxed);
+        for (;;) {
+            if (current == std::numeric_limits<std::uint64_t>::max())
+                throw std::overflow_error("inverted class issuer exhausted");
+            if (next_.compare_exchange_weak(
+                    current, current + 1, std::memory_order_relaxed))
+                return current;
+        }
+    }
+};
+} // namespace detail
+
 template<std::size_t Capacity>
 class InvertedClassHandleContract final {
     static_assert(Capacity > 0 && Capacity <= 1024,
@@ -58,17 +77,9 @@ private:
     const std::uint64_t actor_;
     const std::uint64_t issuer_;
     bool closed_ = false;
-    inline static std::atomic<std::uint64_t> next_issuer_{1};
-
-    static std::uint64_t fresh_issuer() {
-        auto current = next_issuer_.load(std::memory_order_relaxed);
-        for (;;) {
-            if (current == std::numeric_limits<std::uint64_t>::max())
-                throw std::overflow_error("inverted class issuer exhausted");
-            if (next_issuer_.compare_exchange_weak(
-                    current, current + 1, std::memory_order_relaxed))
-                return current;
-        }
+    static std::uint64_t checked_actor(std::uint64_t actor_id) {
+        if (!actor_id) throw std::invalid_argument("actor identity must be nonzero");
+        return actor_id;
     }
     void open() const {
         if (closed_) throw std::logic_error("inverted class owner is closed");
@@ -100,9 +111,8 @@ private:
     }
 public:
     explicit InvertedClassHandleContract(std::uint64_t actor_id)
-        : actor_(actor_id), issuer_(fresh_issuer()) {
-        if (!actor_id) throw std::invalid_argument("actor identity must be nonzero");
-    }
+        : actor_(checked_actor(actor_id)),
+          issuer_(detail::InvertedClassIssuerSequence::allocate()) {}
     InvertedClassHandleContract(const InvertedClassHandleContract&) = delete;
     InvertedClassHandleContract& operator=(const InvertedClassHandleContract&) = delete;
     ~InvertedClassHandleContract() { close(); }
