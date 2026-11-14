@@ -39,6 +39,20 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
       - name: Compile
         run: cmake --build build --parallel 2
+      - name: Check Symbol native host regression separately from whole suite
+        run: ctest --test-dir build -R '^native_shared_symbol_image_host_only_v1$' --output-on-failure --timeout 90
+      - name: Symbol immutable image native memory safety (ASan / UBSan)
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O1 -g -pthread -fno-omit-frame-pointer \
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -fsanitize=address,undefined \
+            -I src/main/cpp \
+            tests/native_shared_symbol_literal_image_v1_test.cpp \
+            -o build/native-shared-symbol-image-sanitized
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+          UBSAN_OPTIONS=halt_on_error=1 \
+            ./build/native-shared-symbol-image-sanitized
       - name: Audit full CTest inventory before treating the suite as verified
         run: |
           set -euo pipefail
