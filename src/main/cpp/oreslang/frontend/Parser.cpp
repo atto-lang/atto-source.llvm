@@ -785,8 +785,15 @@ public:
                 if (exported) fail("duplicate pub modifier");
                 exported = true;
             }
-            if (token_.text == "inverted")
-                fail("DOP_INVERTED_BACKEND_UNSUPPORTED: native guest parser requires owned typed SoA lowering");
+            if (accept("inverted")) {
+                if (accept("struct")) {
+                    program.inverted_structs.push_back(inverted_struct_declaration(exported));
+                    continue;
+                }
+                if (accept("class"))
+                    fail("DOP_INVERTED_CLASS_UNSUPPORTED: generation-checked row identities and method lowering required");
+                fail("DOP_INVERTED_DECLARATION_UNSUPPORTED: expected struct or class");
+            }
             // Java M0 admits compiler-only durable declarations. LLVM has no
             // typed history state, command-manifest or replay ABI yet.
             if (token_.text == "activity" || token_.text == "workflow")
@@ -851,6 +858,16 @@ public:
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
+            if (program.inverted_main)
+                fail("production inverted main must be the only source callable");
+            if (!program.inverted_structs.empty() && looks_like_inverted_main()) {
+                if (program.inverted_structs.size() != 1 || wrapped_module ||
+                        !program.functions.empty() || !program.classes.empty() ||
+                        !program.actors.empty() || !program.generators.empty())
+                    fail("production inverted i64 requires one standalone schema and main");
+                program.inverted_main = inverted_source_main(program.inverted_structs.front());
+                continue;
+            }
             if (token_.text == "import")
                 fail("native contract imports require a validated cross-unit linker");
             if (at_type_only_introducer()) {
@@ -930,8 +947,15 @@ public:
                     if (public_class) fail("duplicate pub modifier");
                     public_class = true;
                 }
-                if (token_.text == "inverted")
-                    fail("DOP_INVERTED_BACKEND_UNSUPPORTED: native guest parser requires owned typed SoA lowering");
+                if (accept("inverted")) {
+                    if (accept("struct")) {
+                        program.inverted_structs.push_back(inverted_struct_declaration(public_class));
+                        continue;
+                    }
+                    if (accept("class"))
+                        fail("DOP_INVERTED_CLASS_UNSUPPORTED: generation-checked row identities and method lowering required");
+                    fail("DOP_INVERTED_DECLARATION_UNSUPPORTED: expected struct or class");
+                }
                 // Java M0 admits compiler-only durable declarations. LLVM has no
                 // typed history state, command-manifest or replay ABI yet.
                 if (token_.text == "activity" || token_.text == "workflow")
@@ -986,7 +1010,7 @@ public:
         validate_type_only_declarations(program);
         if (!program.namespace_name.empty() &&
                 (!program.functions.empty() || !program.classes.empty() ||
-                 !program.actors.empty() || !program.contracts.empty() ||
+                 !program.actors.empty() || !program.inverted_structs.empty() || !program.contracts.empty() ||
                  !program.cooperative_loops.empty() || !program.generators.empty())) {
             fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native namespace v1 is metadata-only");
         }
@@ -995,8 +1019,8 @@ public:
         resolve_alias_uses(program);
         if (program.functions.empty() && program.actors.empty() && program.classes.empty() &&
                 program.cooperative_loops.empty() && program.generators.empty() &&
-                program.type_only_declarations.empty())
-            fail("expected at least one function, generator, actor or type-only declaration");
+                program.type_only_declarations.empty() && program.inverted_structs.empty())
+            fail("expected at least one function, generator, actor, type-only or inverted struct declaration");
         // P0 C host exposure is deliberately *version-only*. Without this
         // whole-source check a second unannotated guest function would retain
         // external LLVM linkage and become a callable ELF export, bypassing
@@ -1024,6 +1048,128 @@ public:
     static void validate_complete(const Program& program) { validate(program); }
 
 private:
+    std::unordered_set<std::string> inverted_struct_names_;
+
+    // Structural lexer lookahead is only a dispatch hint, never authorization:
+    // the full source is still consumed and checked below. Other functions
+    // following an inverted declaration retain the legacy fail-closed path.
+    bool looks_like_inverted_main() const {
+        if (token_.text != "fnc") return false;
+        Lexer probe = lexer_;
+        for (std::size_t i = 0; i < 32; ++i) {
+            const auto next = probe.next();
+            if (next.kind == Kind::End || next.text == "}") return false;
+            if (next.text == "InvertedArray") return true;
+        }
+        return false;
+    }
+
+    std::size_t inverted_source_index() {
+        const auto n = signed_integer_literal();
+        if (n < 0 || static_cast<std::uint64_t>(n) >
+                         static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
+            fail("production inverted row index must fit nonnegative size_t");
+        return static_cast<std::size_t>(n);
+    }
+
+    InvertedSourceMain inverted_source_main(const InvertedStructDecl& decl) {
+        if (decl.fields.size() != 2 ||
+                decl.fields[0].type != InvertedScalarKind::I64 ||
+                decl.fields[1].type != InvertedScalarKind::I64)
+            fail("production inverted main requires precisely two i64 fields");
+        InvertedSourceMain result;
+        result.schema_name = decl.name;
+        require("fnc"); require("main"); require("("); require(")");
+        require(":"); require("int"); require("{");
+        require("let");
+        result.owner_name = identifier();
+        require("=");
+        require("InvertedArray"); require("<");
+        if (identifier() != decl.name)
+            fail("production inverted collection nominal schema mismatch");
+        require(">"); require("."); require("with_capacity"); require("(");
+        result.capacity = inverted_source_index();
+        if (result.capacity == 0 || result.capacity > 256)
+            fail("production inverted capacity must be 1..256");
+        require(")"); require(";");
+        while (true) {
+            if (token_.kind == Kind::End || result.operations.size() == 1024)
+                fail("production inverted main missing return or operation budget exceeded");
+            InvertedSourceOperation op;
+            if (accept("return")) {
+                if (identifier() != result.owner_name)
+                    fail("production inverted return must read the local owner");
+                require("."); require("get"); require("(");
+                op.kind = InvertedSourceOperation::Kind::ReturnRead;
+                op.index = inverted_source_index();
+                require(",");
+                op.field = identifier();
+                require(")"); require(";");
+                result.operations.push_back(std::move(op));
+                require("}");
+                return result;
+            }
+            if (identifier() != result.owner_name)
+                fail("production inverted operation must target the local owner");
+            require(".");
+            if (accept("push")) {
+                op.kind = InvertedSourceOperation::Kind::Push;
+                require("(");
+                op.values[0] = signed_integer_literal();
+                require(",");
+                op.values[1] = signed_integer_literal();
+                require(")");
+            } else if (accept("set")) {
+                op.kind = InvertedSourceOperation::Kind::WriteField;
+                require("("); op.index = inverted_source_index();
+                require(","); op.field = identifier(); require(",");
+                op.value = signed_integer_literal(); require(")");
+            } else if (accept("erase_swap")) {
+                op.kind = InvertedSourceOperation::Kind::EraseSwap;
+                require("("); op.index = inverted_source_index(); require(")");
+            } else {
+                fail("production inverted supports only push, set, erase_swap and terminal get");
+            }
+            require(";");
+            result.operations.push_back(std::move(op));
+        }
+    }
+
+    InvertedStructDecl inverted_struct_declaration(bool exported) {
+        InvertedStructDecl decl;
+        decl.exported = exported;
+        decl.offset = token_.offset;
+        decl.name = identifier();
+        if (!inverted_struct_names_.insert(decl.name).second)
+            fail("duplicate inverted struct declaration");
+        require("as");
+        std::unordered_set<std::string> members;
+        while (token_.text != "end") {
+            if (token_.kind == Kind::End)
+                fail("unterminated inverted struct declaration");
+            if (decl.fields.size() == 64)
+                fail("inverted struct field limit exceeded (64)");
+            InvertedStructField field;
+            field.offset = token_.offset;
+            field.mutable_field = accept("let");
+            field.name = identifier();
+            if (!members.insert(field.name).second)
+                fail("duplicate inverted struct field");
+            require(":");
+            if (accept("int") || accept("i64"))
+                field.type = InvertedScalarKind::I64;
+            else if (accept("bool"))
+                field.type = InvertedScalarKind::Bool;
+            else if (accept("f64"))
+                field.type = InvertedScalarKind::F64;
+            else fail("inverted struct member requires fixed scalar int/i64, bool or f64; nested inverted, pointers and resources require checked layout lowering");
+            require(";");
+            decl.fields.push_back(std::move(field));
+        }
+        if (decl.fields.empty()) fail("empty inverted struct is not admitted");
+        require("end");
+        return decl;
+    }
     std::vector<NativeSumType> sum_types_;
     bool is_sum_name(const std::string& name) const {
         return name.rfind("Option<", 0) == 0 || name.rfind("Result<", 0) == 0;
@@ -6571,10 +6717,15 @@ Program parse_unresolved_program(std::string_view source, bool experimental_owne
 }
 
 void resolve_and_validate_program(Program& program) {
-    // Staged MIR descriptors are not yet accepted by the guest parser.
-    // Reject constructed Program objects before scalar codegen can drop them.
-    if (!program.inverted_structs.empty() || program.inverted_main)
-        throw std::runtime_error("DOP_INVERTED_BACKEND_UNSUPPORTED: source admission not connected to verified SoA lowering");
+    // Narrow standalone two-i64 inverted source only. The independent
+    // verified-MIR pass rejects all other source metadata and effects before
+    // any lowering. The normal function pipeline remains unchanged.
+    if (!program.inverted_structs.empty() || program.inverted_main) {
+        if (program.inverted_structs.size() != 1 || !program.inverted_main)
+            throw std::runtime_error("DOP_INVERTED_BACKEND_UNSUPPORTED: no admitted bounded local main");
+        (void)dop::mir::verify_production_inverted_i64(program);
+        return;
+    }
     if (!program.imports.empty())
         throw std::runtime_error("native imports require filesystem module resolution");
     resolve_native_methods(program);
