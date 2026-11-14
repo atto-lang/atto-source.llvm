@@ -63,6 +63,9 @@ typedef struct {
 
 typedef struct {
     pthread_mutex_t mutex;
+    /* Host-only bounded actor churn waits for constructor READY on this CV.
+     * It is not an actor-carrier await or a general Future primitive. */
+    pthread_cond_t startup_changed;
     OresNativeVM* vm;
     OresNativeActorRef root_ref;
     OresNativeExecutionContextStore* executions;
@@ -79,7 +82,10 @@ typedef struct {
  * in a zero-argument top-level main. There is exactly one worker pool per
  * active group, not one pool per actor.
  */
-static SourceActorGroup group = { .mutex = PTHREAD_MUTEX_INITIALIZER };
+static SourceActorGroup group = {
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+    .startup_changed = PTHREAD_COND_INITIALIZER
+};
 static _Atomic uint64_t next_actor_id = 4100;
 static _Thread_local OresNativeExecutionHandle current_source_execution;
 
@@ -419,6 +425,7 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
             &instance->startup_state,
             ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY,
             memory_order_release);
+        ensure(pthread_cond_broadcast(&group.startup_changed) == 0);
         ReadyAwaitFrame* frame = group.pending_ready;
         if (frame && frame->actor == instance)
             settle_ready_if_admitted_locked(frame);
@@ -475,6 +482,7 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
             memory_order_release);
     }
 
+    ensure(pthread_cond_broadcast(&group.startup_changed) == 0);
     ReadyAwaitFrame* frame = group.pending_ready;
     if (frame && frame->actor == instance)
         settle_ready_if_admitted_locked(frame);
@@ -823,6 +831,44 @@ int oreslang_source_actor_snapshot_current_trace(
         continuation_frames,
         continuation_capacity,
         out);
+}
+
+/* The bounded *synchronous trusted-main* actor churn lowering is allowed
+ * to wait for physical constructor READY before it requests stop. The
+ * existing source ActorRef.get_ready() remains a separate Future/CONTROL
+ * suspension protocol. Never expose this blocking glue to an actor carrier.
+ *
+ * Without this fence, spawn(); stop() can validly terminate before the
+ * constructor starts, making 128 returned loop iterations an invalid proxy
+ * for 128 executed actor incarnations.
+ */
+void oreslang_source_actor_wait_ready_blocking(void* opaque) {
+    SourceActor* instance = (SourceActor*)opaque;
+    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
+    OresNativeVM* vm = group.vm;
+    ensure(vm != NULL);
+    OresNativeExecutionContext carrier = {0};
+    ensure(!ores_native_vm_current_execution_context(
+        vm, ORES_NATIVE_VM_MAIN, &carrier));
+
+    group_lock();
+    const size_t slot = (size_t)instance->ref.actor_slot;
+    ensure(group.vm == vm && slot < group.next_slot
+        && group.actors[slot] == instance
+        && !atomic_load_explicit(&instance->stop_requested, memory_order_acquire));
+    for (;;) {
+        const int status = atomic_load_explicit(
+            &instance->startup_state, memory_order_acquire);
+        if (status == ORES_SOURCE_ACTOR_STARTUP_READY) break;
+        ensure(status == ORES_SOURCE_ACTOR_STARTUP_PENDING
+            || status == ORES_SOURCE_ACTOR_STARTUP_INITIALIZING);
+        ensure(pthread_cond_wait(&group.startup_changed, &group.mutex) == 0);
+    }
+    ensure(atomic_load_explicit(
+        &instance->constructor_started, memory_order_acquire) == 1);
+    ensure(atomic_load_explicit(
+        &instance->initialized, memory_order_acquire) == 1);
+    group_unlock();
 }
 
 void oreslang_source_actor_request_stop(void* opaque) {
