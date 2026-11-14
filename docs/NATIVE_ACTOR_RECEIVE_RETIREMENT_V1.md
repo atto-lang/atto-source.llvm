@@ -29,6 +29,25 @@ addition does not weaken them. Callers that do not pass the fence retain
 their previous serial-actor behavior. Runtime source actors must explicitly
 wire the fence before using it to claim concurrent receive safety.
 
+## Additional validation and exact-blob local smoke
+
+The native gate now rejects zero actor ID, zero incarnation and invalid
+receiver capacity **before** allocating its trusted state. This matches
+the `ActorResourceRegistry` identity requirements and avoids inconsistent
+generation-zero actor receipts.
+
+On 2026-11-14, the local standalone test compiled the exact Git blob
+`681442c854abc8acf8009f1ccf1467af5f8dff95` of
+`NativeActorReceiveFence.hpp` (verified with `git hash-object`).
+The executable test passed **2,000 two-carrier STOP/admission races**
+under both Clang 17 and GCC 14 C++17
+`-Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined`,
+including wrong-generation, capacity, repeated release, teardown and
+generation-zero negatives. Leak detection was enabled. This is direct
+execution of the exact **header** in a standalone test, not an execution
+of `NativeActorRetirementBarrier` or full repository CTest target.
+The native retirement integration tests remain authored, NOT_EXECUTED.
+
 ## Evidence and next execution gates
 
 The existing CMake test `native_actor_done_resource_quiescence` has new
