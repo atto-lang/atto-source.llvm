@@ -20,6 +20,9 @@ substitute.
 - `move_by(handle, dx, dy)` is one receiver-style atomic operation: owner lock
   held from identity validation through both checked additions and updates.
   Overflow rejects both writes, never leaving only one field updated.
+- Checked readers racing a closing owner either complete before closure or
+  receive a closed-owner error; underflow as well as overflow rolls back
+  the entire two-field receiver update.
 - Multiple receivers may execute on independent host threads. The reference
   oracle serializes each operation with a mutex. This does **not** implement
   or prove AttoLang's non-parking actor scheduler, sealed state discipline,
@@ -39,6 +42,11 @@ The two committed C++ files were compiled and run using GCC/Clang with
 - Clang `-O2`: passed
 - GCC `-O1 -fsanitize=address -fno-omit-frame-pointer`: passed
 - GCC `-O1 -fsanitize=undefined -fno-omit-frame-pointer`: passed
+- GCC `-O1 -fsanitize=thread -fno-omit-frame-pointer`: passed
+- Clang `-O0` and `-O2`: passed (both optimization levels)
+- GCC `-O0`: passed
+- Clang `-O1 -fsanitize=address`: passed
+- Clang `-O1 -fsanitize=undefined`: passed
 
 This receipt covers a test-only oracle. It is not `oreslang-llvmc` AOT testing.
 The source-owned GitHub workflow will provide separately pinned source-tree,
