@@ -60,6 +60,10 @@ The watchdog retries at 10 ms and 100 ms, for at most three attempts, while repo
 A permanently unavailable slot reduces capacity explicitly; if every slot is permanently
 unavailable, the host fails all live VMs, resolves pending calls, and rejects new VM opens
 with `HostClosed`. It never runs guest code on an uncertain stack mapping.
+OOM recovery and host destruction do not allocate a temporary vector of the live VM
+registry. VM failure settles each already-admitted mailbox promise in place instead of
+growing a temporary deque: the failure path must remain viable when ordinary allocation
+has become unreliable.
 The first startup on a fresh or replacement carrier must also register an alternate signal
 stack before accepting turns. If `sigaltstack` fails, that carrier retires and is replaced
 through the same bounded watchdog recovery path; no process-wide `abort()` is permitted.
