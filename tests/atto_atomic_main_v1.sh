@@ -20,6 +20,14 @@ for f in tests/atto-atomic-main-v1/reject-*.atto; do
     echo "unsafe native Atomic fixture compiled: $f" >&2; exit 1
   fi
   test ! -s "$tmp/reject.ll"
+  case "$f" in
+    *reject-reserved-*)
+      grep -q 'NATIVE_OWNERSHIP_INTRINSIC_RESERVED' "$tmp/reject.err" || {
+        echo "reserved type identity was rejected for the wrong reason: $f" >&2
+        exit 1
+      }
+      ;;
+  esac
 done
 # The first hosted i64 atomic path must never silently lower to a
 # non-threaded Wasm, Cortex-M, or unsupported pointer ABI.
