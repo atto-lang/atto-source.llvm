@@ -135,3 +135,33 @@ CI receipts. Zero-step jobs are NOT executions. Do not copy private source
 between organizations without explicit independently reviewed authorization.
 
 Related historical pointer-design branches Java #1021/#1022 must not be used as source-language precedent. Host/runtime hardening references: LLVM #415 and LLVM #416.
+
+## Actor trust downgrade and lifetime fencing (2026-11-14 proposal)
+
+The host-only `NativeRegionRegistry::fence_actor(runtime, actor, epoch)` API
+provides a supervisor-initiated, incarnation-specific kill fence. This is a
+host security primitive, **not** an AttoLang `unsafe`/pointer feature:
+
+- The registry records the fenced incarnation before revoking its grants. It
+  never issues another grant for that exact actor/epoch; a restarted actor with
+  a new epoch is a separate principal.
+- All matching windows are synchronously revoked and cached cursors fail
+  closed. Unrelated actors' regions remain live. It is safe to reclaim backing
+  memory only after the fence returns successfully and all independent pins
+  have been accounted for.
+- If a same-thread FFI callback attempts to fence itself, retirement is
+  deferred: the operation raises, the raw FFI address remains leased until
+  callback exit, and the supervisor must retry the fence afterward. No partial
+  cleanup may be reported as successful.
+- The method uses the registry's identity authority, not an untrusted source
+  string or a guest-supplied `Trust::Trusted` enum. **Production integration
+  must call this fence on trust downgrade, actor death, supervisor restart and
+  loss of native permission.** That integration is not yet demonstrated.
+- The implementation maintains fenced-incarnation tombstones for the lifetime
+  of the registry. A long-lived supervisor must budget/rotate registries and
+  prove bounded resource use; it must not discard tombstones while a stale
+  grant could still be replayed.
+
+There is no general guest raw-pointer API here, and source-level pointer
+capabilities, typed `unsafe` effects and cross-backend AOT conformance remain
+blocked pending a runtime-minted grant and real compiler lowering tests.
