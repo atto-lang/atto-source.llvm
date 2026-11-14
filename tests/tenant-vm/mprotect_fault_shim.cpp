@@ -3,11 +3,10 @@
 #include <atomic>
 #include <cerrno>
 #include <cstddef>
+#include <cstdint>
 #include <sys/mman.h>
 #include <signal.h>
 #include <pthread.h>
-#include <cstdio>
-#include <cstdlib>
 
 namespace {
 std::atomic<bool> fail_install{false};
@@ -15,6 +14,7 @@ std::atomic<bool> fail_restore{false};
 std::atomic<int> fail_carrier_allocations{0};
 std::atomic<bool> fail_signal_stack_registration{false};
 std::atomic<int> recovered_sigtrap_was_blocked{-1};
+std::atomic<std::uint64_t> borrowed_carrier_altstacks{0};
 }
 
 // Observe only the test-linked original carrier *after* siglongjmp. The test
@@ -31,6 +31,16 @@ extern "C" void tenant_vm_test_record_recovery_mask() {
     const int status = pthread_sigmask(SIG_SETMASK, nullptr, &current);
     const int blocked = status == 0 ? sigismember(&current, SIGTRAP) : -2;
     recovered_sigtrap_was_blocked.store(blocked, std::memory_order_release);
+}
+
+// Count only borrowed, sufficiently large stacks, not newly installed stacks.
+// Under ASan this proves the carrier has not displaced sanitizer-owned memory.
+extern "C" void tenant_vm_test_record_borrowed_altstack(std::size_t bytes) {
+    if (bytes >= (std::size_t{16} << 10))
+        borrowed_carrier_altstacks.fetch_add(1, std::memory_order_release);
+}
+extern "C" std::uint64_t tenant_vm_test_borrowed_altstack_count() {
+    return borrowed_carrier_altstacks.load(std::memory_order_acquire);
 }
 
 extern "C" void tenant_vm_test_fail_next_guard_install() {
@@ -50,21 +60,6 @@ extern "C" bool tenant_vm_test_fail_carrier_altstack_setup() {
 // Deliberately intercept only TenantVm.cpp's own carrier setup. A link-wide
 // --wrap=sigaltstack also hits libasan's startup hook and aborts the process.
 extern "C" int tenant_vm_test_carrier_sigaltstack(const stack_t* ss, stack_t* old_ss) {
-    stack_t current{};
-    const int query_status = sigaltstack(nullptr, &current);
-    if (std::getenv("TENANT_VM_TEST_TRACE_PRIOR_ALTSTACK") != nullptr) {
-        static std::atomic<bool> printed{false};
-        if (!printed.exchange(true, std::memory_order_acq_rel))
-            std::fprintf(stderr, "CARRIER_PRIOR_ALTSTACK query=%d flags=%d bytes=%zu enabled=%d\n",
-                query_status, query_status == 0 ? current.ss_flags : -1,
-                query_status == 0 ? current.ss_size : std::size_t{0},
-                query_status == 0 && !(current.ss_flags & SS_DISABLE));
-    }
-    // Probe whether replacing a pre-existing, runtime-owned alternate stack triggers
-    // the intermittent default-ASan SIGSEGV. Only enabled in private diagnostic CI.
-    if (std::getenv("TENANT_VM_TEST_REUSE_PRIOR_ALTSTACK") != nullptr &&
-        query_status == 0 && !(current.ss_flags & SS_DISABLE))
-        return 0;
     return sigaltstack(ss, old_ss);
 }
 extern "C" void tenant_vm_test_fail_next_carrier_allocations(int count) {
