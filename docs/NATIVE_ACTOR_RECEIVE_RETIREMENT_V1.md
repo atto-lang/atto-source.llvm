@@ -109,3 +109,27 @@ two-thread STOP/admission rounds against exact blob SHA
 `git hash-object`. The new **production integration** CMake/CTest path
 has been authored but **not executed on the full source checkout**.
 No compiled `.atto` actor or full-AOT result is claimed.
+
+## Two-host-carrier real arena retirement test refinement (2026-11-14)
+
+The host-only `concurrent_host_receivers_join_native_resource_retirement`
+test now allocates and reads an actual
+`OresActorI64Heap` for actor 23/incarnation 4. It retires the heap
+through the group callback and permits `ores_actor_i64_heap_try_destroy`
+**only** from the runtime registry closer, after the two admitted receiver
+leases and approved teardown are physically complete. The test checks
+that a native allocator closer is invoked once and that DONE cannot
+settle while a live receive or lifecycle hook still owns memory.
+
+The scalar `OresActorI64Heap` ABI itself still admits only one turn
+at a time; the two host threads own distinct **receive-fence receipts**,
+not two compiler-generated concurrent guest stack frames. Do not call
+this a source-level concurrent actor execution proof.
+
+The exact previously verified native header blob
+`681442c854abc8acf8009f1ccf1467af5f8dff95`
+passed another local 1,000 STOP/admission rounds under Clang 17 and
+1,000 under GCC 14, with C++17 strict warnings and ASan/UBSan plus
+leak checking. The **full** updated actor-heap/CMake CTest is
+**NOT_EXECUTED** on the source PR tree. GitHub Actions job reports still
+show failure before any executable job steps.
