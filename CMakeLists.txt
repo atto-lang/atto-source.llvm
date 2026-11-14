@@ -149,6 +149,18 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-nominal-alias-v3-source-test)
     set_tests_properties(native_nominal_alias_v3_source_admission PROPERTIES TIMEOUT 20)
 
+    # V4: actual local nominal Copy-int payload case typing and scalar
+    # lowering, not a general Bytes/actor payload ABI or a guest AOT receipt.
+    add_executable(oreslang-native-nominal-payload-v4-source-test
+        tests/native_nominal_enum_payload_v4_test.cpp)
+    target_include_directories(oreslang-native-nominal-payload-v4-source-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-nominal-payload-v4-source-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_nominal_payload_v4_source_admission
+        COMMAND oreslang-native-nominal-payload-v4-source-test)
+    set_tests_properties(native_nominal_payload_v4_source_admission PROPERTIES TIMEOUT 20)
+
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
     add_executable(oreslang-native-sum-payload-admission-test
