@@ -34,6 +34,18 @@ for opt in 0 2; do
     exit 1
   fi
   [[ -s "$work/churn-$opt.ll" ]] || { echo 'compiler emitted no IR' >&2; exit 1; }
+  # A constant-output native binary is not evidence that actors executed.
+  # Require an actual call or invoke to a source-actor runtime ABI; mere
+  # declarations, strings and LLVM IR comments must never satisfy this gate.
+  if ! awk '
+    $0 !~ /^[[:space:]]*;/ &&
+    $0 ~ /[[:space:]](call|invoke)[[:space:]]/ &&
+    $0 ~ /@"?(oreslang_source_actor_|ores_actor_)/ { actor_call=1 }
+    END { exit(actor_call ? 0 : 1) }
+  ' "$work/churn-$opt.ll"; then
+    echo "LLVM_ACTOR_HEAP_GUEST_NOT_PROVEN|O$opt|no_source_actor_runtime_calls" >&2
+    exit 1
+  fi
   "$auditor" "$work/churn-$opt.ll" >"$work/no-gc-$opt.log"
   artifact="$work/native-$opt"
   timeout 120s "$root/scripts/compile-aot.sh" "$source" "$artifact" >"$work/build-$opt.log"
