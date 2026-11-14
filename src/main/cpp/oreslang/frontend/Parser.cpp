@@ -6,6 +6,7 @@
 #include "oreslang/types/OwnershipChecker.hpp"
 #include "oreslang/frontend/MethodResolver.hpp"
 #include "oreslang/types/NativeScalarTypes.hpp"
+#include "oreslang/types/InvertedProductionSourceMir.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
 
 #include <algorithm>
