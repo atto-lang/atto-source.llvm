@@ -1,0 +1,64 @@
+# Inverted class handle / receiver reference contract (test-only)
+
+This is a **C++17 host-side reference oracle**, not executable AttoLang
+`.atto` class lowering, a native compiler ABI, a library delivered to guests,
+or the production actor-owned heap/stack runtime. The implementation lives
+under `tests/support` deliberately; it must not be linked as a runtime
+substitute.
+
+## Invariants modeled
+
+- A handle has a private issuer, actor identity, 32-bit slot, and 32-bit
+  generation. The user cannot publicly construct a forged numeric handle.
+- The issuer is unique per owner instance, including when the same actor ID
+  and memory address are reused; a stale handle cannot pass an ABA reuse check.
+- Dense physical row movement on swap-delete does **not** change the identity
+  of surviving rows. Deleted slots increment generation before reuse.
+- Generation exhaustion retires a slot permanently rather than wrapping.
+- `snapshot(handle)` returns a detached two-i64 value; owner mutations,
+  deletion and closure cannot change the captured result.
+- `move_by(handle, dx, dy)` is one receiver-style atomic operation: owner lock
+  held from identity validation through both checked additions and updates.
+  Overflow rejects both writes, never leaving only one field updated.
+- Multiple receivers may execute on independent host threads. The reference
+  oracle serializes each operation with a mutex. This does **not** implement
+  or prove AttoLang's non-parking actor scheduler, sealed state discipline,
+  hard-real-time behavior or isolated logical stacks.
+- The table uses fixed-size inline arrays, without dynamic storage or tracing
+  GC in its own implementation. It does **not** establish a general zero-GC
+  linked binary, actor arena allocation, or a compiler-level ownership proof.
+- Operations fail on owner closure. As with all C++ objects, callers must
+  externally synchronize destruction against concurrent use.
+
+## Locally executed host-only regression
+
+The two committed C++ files were compiled and run using GCC/Clang with
+`-std=c++17 -Wall -Wextra -Wpedantic -Werror -pthread`:
+
+- GCC `-O2`: passed
+- Clang `-O2`: passed
+- GCC `-O1 -fsanitize=address -fno-omit-frame-pointer`: passed
+- GCC `-O1 -fsanitize=undefined -fno-omit-frame-pointer`: passed
+
+This receipt covers a test-only oracle. It is not `oreslang-llvmc` AOT testing.
+The source-owned GitHub workflow will provide separately pinned source-tree,
+compiler/optimization and sanitizer receipts when Actions jobs actually run.
+
+## Next compiler stage (not implemented here)
+
+1. Define an independent inverted **class** AST and typed MIR row handle,
+   distinct from value-struct snapshots. Retain rejection of class declarations
+   in the existing production LLVM parser until verified.
+2. Compile opaque slot+generation/issuer/actor tokens into 32-bit arena-relative
+   actor-owned metadata without a raw guest pointer, leaking references or GC.
+3. Lower `mtd (mut self: Particle) move_by(...)` through an atomic receiver
+   transaction, with checked arithmetic and exception-safe rollback.
+4. Prove stale, foreign, closed-owner, cross-actor and recycled-slot references
+   trap before memory access, including concurrency and hot-load invalidation.
+5. Run actual `.atto` source -> independent HIR/MIR -> LLVM IR -> Clang native
+   AOT `-O0/-O2`, GCC/Clang ASan/UBSan/TSan where applicable, and cross-backend
+   comparison. Do not claim complete inverted class semantics until then.
+
+The source CI security gate is managed independently in
+[LLVM issue #1804](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1804).
+No private source Git tree was copied to an alternate GitHub organization.
