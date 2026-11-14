@@ -208,6 +208,7 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-functor-type-shape-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-functor-type-shape-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME native_functor_recursive_type_shape_host_only
         COMMAND oreslang-functor-type-shape-test)
     set_tests_properties(native_functor_recursive_type_shape_host_only
@@ -220,6 +221,7 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-native-tensor2d-admission-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-native-tensor2d-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME native_tensor2d_descriptor_geometry_host_only
         COMMAND oreslang-native-tensor2d-admission-test)
     set_tests_properties(native_tensor2d_descriptor_geometry_host_only
@@ -231,6 +233,7 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-rt-admission-bounds-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-rt-admission-bounds-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME native_rt_declared_bound_admission
         COMMAND oreslang-rt-admission-bounds-test)
     set_tests_properties(native_rt_declared_bound_admission PROPERTIES TIMEOUT 15)
