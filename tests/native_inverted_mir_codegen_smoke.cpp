@@ -11,8 +11,10 @@
 #include <string>
 
 int main(int argc, char** argv) {
-    const bool negative = argc == 2 && std::string(argv[1]) == "--bounds-trap";
-    if (argc > 2 || (argc == 2 && !negative))
+    const std::string mode = argc == 2 ? argv[1] : "";
+    const bool negative = mode == "--bounds-trap";
+    if (argc > 2 || !(mode.empty() || negative || mode == "--bulk-reuse" ||
+                      mode == "--tail-delete" || mode == "--overwrite"))
         throw std::invalid_argument("unexpected MIR smoke argument");
     using namespace oreslang;
     Program program;
@@ -45,6 +47,35 @@ int main(int argc, char** argv) {
             InvertedSourceOperation{Kind::Push, 0, "", {{20, 101}}, 0},
             InvertedSourceOperation{Kind::EraseSwap, 0, "", {}, 0},
             InvertedSourceOperation{Kind::ReturnRead, 1, "x", {}, 0}
+        };
+    }
+    if (mode == "--bulk-reuse") {
+        // Drive the physical native columns through many insertions and
+        // swap-erases, then reuse freed capacity. The final row is exactly 42.
+        source.capacity = 64;
+        source.operations.clear();
+        for (std::int64_t i = 0; i < 64; ++i)
+            source.operations.push_back(
+                InvertedSourceOperation{Kind::Push, 0, "", {{i, i + 1000}}, 0});
+        for (std::size_t i = 0; i < 32; ++i)
+            source.operations.push_back(
+                InvertedSourceOperation{Kind::EraseSwap, 0, "", {}, 0});
+        source.operations.push_back(
+            InvertedSourceOperation{Kind::Push, 0, "", {{42, 4242}}, 0});
+        source.operations.push_back(
+            InvertedSourceOperation{Kind::ReturnRead, 32, "x", {}, 0});
+    } else if (mode == "--tail-delete") {
+        source.operations = {
+            InvertedSourceOperation{Kind::Push, 0, "", {{42, 111}}, 0},
+            InvertedSourceOperation{Kind::Push, 0, "", {{25, 222}}, 0},
+            InvertedSourceOperation{Kind::EraseSwap, 1, "", {}, 0},
+            InvertedSourceOperation{Kind::ReturnRead, 0, "x", {}, 0}
+        };
+    } else if (mode == "--overwrite") {
+        source.operations = {
+            InvertedSourceOperation{Kind::Push, 0, "", {{0, 88}}, 0},
+            InvertedSourceOperation{Kind::WriteField, 0, "x", {}, 42},
+            InvertedSourceOperation{Kind::ReturnRead, 0, "x", {}, 0}
         };
     }
     program.inverted_main = source;
