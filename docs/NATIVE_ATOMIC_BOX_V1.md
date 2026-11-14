@@ -1,9 +1,6 @@
 # Native AtomicScalar and UniqueBox v1 — AttoLang implementation slice
 
-**Status:** usable native C++20 target runtime primitive and passing focused native tests.
-This is **not yet guest AttoLang** compiler lowering. Do not claim that
-`Atomic<T>`, `Box<T>`, or `Arc<T>` compile from `.atto` source as a result of
-this change. No background GC, OS mutex, allocator thread, or runtime malloc
+**Status:** tested native C++20 allocator/Atomic/Box primitives; the **main LLVM C++17 compiler** now admits a deliberately restricted local `Atomic<int>` `.atto` AOT slice. Guest `Box<T>` and `Arc<T>` remain unsupported by the main compiler; cross-actor and Java/Rust/.NET/Wasm/Forge parity are not implemented. No background GC, OS mutex, allocator thread, or runtime malloc
 is performed by these primitives.
 
 ## AtomicScalar<T>
@@ -121,7 +118,7 @@ consume one allocation ticket, reentrant drop, and ownership cleanup after
 rejected/invalid adoption.
 The test includes memory-order rejection, weak-CAS retries, release/acquire
 publication, after-move invalidation, generation/domain denial, and exactly-once
-drop. The separate actor scheduler and AOT guest compiler were **not** exercised.
+drop. That original focused host proof did not exercise the actor scheduler or the main AOT guest compiler; separate newer compiler proof follows.
 
 Next gates before guest support:
 1. Parser and typed `Atomic<T>` / `Box<T>` identity, validated target width
@@ -134,3 +131,66 @@ Next gates before guest support:
    actor scheduler integration and exact-SHA
    native guest execution. The focused native C++ test passed TSan, but that
    is **not** a guest scheduler race proof or hard-real-time certification.
+
+## 2026-11-14 milestone: main LLVM `.atto` Atomic<i64> integration
+
+The existing `src/main/cpp/oreslang/frontend/Parser.cpp`, `Parser.hpp`,
+`src/main/cpp/oreslang/types/OwnershipChecker.cpp`,
+`NativeScalarTypes.cpp` and `src/main/cpp/oreslang/backend/LlvmCodegen.cpp`
+now jointly admit **exactly one** stack-owned `val Atomic<int>` in
+synchronous zero-argument `fnc main(): int`. The only admitted methods are
+`load([#relaxed|#acquire|#seq_cst])` and
+`fetch_add(int, [#relaxed|#acquire|#release|#acq_rel|#seq_cst])`
+(with optional ordering arguments defaulting to sequential consistency).
+The native type verifier uses a distinct noncopyable AtomicI64 category,
+rather than pretending the owned storage is an i64 scalar.
+The compiler rejects copies/escapes, unsupported calls, multiple owners,
+invalid orders, unsupported bool/Box constructions and unverified contexts.
+
+LLVM IR emits genuine `store atomic i64`, `load atomic i64`,
+`atomicrmw add`; compiled with `clang -x ir` and **AOT executed** as
+native binaries. Target lowering fails closed for Wasm32, Cortex-M,
+isolated VM entrypoints and non-64-bit hosts. This is a **single-owner
+main-scope primitive** — not actor-threaded atomic state, general-purpose
+generics, multi-method actor concurrency or backend parity.
+
+The exact 49-file source SHA mirror of the real C++17 LLVM main compiler
+compiled and ran `tests/atto_atomic_main_v1.sh` on an independent private
+GitHub Actions carrier:
+https://github.com/honeypot-r-us-test/hnpt-lambdas/actions/runs/43649826264
+(including two positive exit-42 AOT fixtures and negative fail-closed
+source fixtures). This is a **focused executable main-compiler slice**,
+not full repository CI. Later CI reruns include the explicit unsupported
+target regression and must remain green before promoting the branch.
+
+## Actor-confined bounded Box region prototype
+
+`src/main/cpp/oreslang/runtime/ActorBoxRegionV1.hpp` is a C++20
+trusted-native wrapper around allocator-issued tickets.
+Supervisor-authenticated `ActorHeapIdentity` is represented by
+(runtime, actor, epoch), with one bound carrier thread, fixed slots,
+generation-protected Box lifetime, synchronous checked callback access,
+exact once deterministic drop and irreversible drained retirement.
+The wrapper rejects foreign threads, wrong domain or epoch, slot reuse
+while occupied, reentrant live callback mutation, and retirement with
+live slots. Host tests pass under independent exact-SHA carrier proof:
+https://github.com/honeypot-r-us-test/hnpt-lambdas/actions/runs/43649903676
+
+**Security boundary:** Identifiers passed into this wrapper are values,
+not proof of supervisor authority by themselves. The scheduler must
+authenticate the caller and certify turn/FFI/I/O quiescence externally.
+The guest `.atto` compiler still needs AST-to-ownership CFG admission,
+borrow lifespan enforcement, Box allocation/move/drop HIR/MIR lowering,
+and complete unwind/cancellation cleanup before actor-owned Box usage
+can be considered implemented. Unsupported raw pointer cross-actor
+transfer remains explicitly rejected.
+
+### Remaining merge blockers
+
+- Full main-frontend `Atomic<T>` support beyond the single local i64
+  owner, with actor sealed state and multiple concurrent receiver methods.
+- Full `Box<T>` main guest lowering into actor-owned heap, preserving
+  compiler-verified borrow lifetimes and deterministic cleanup.
+- Cross-backend semantic conformance (Java/Graal, Rust, .NET, Wasm, Forge),
+  true actor scheduler race proof, and complete mainline integration tests.
+- Branch rebase and source CI review; keep this PR **draft and unmerged**.
