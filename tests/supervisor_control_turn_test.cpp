@@ -1,5 +1,7 @@
 #include "oreslang/runtime/SupervisorControlTurn.hpp"
 #include <atomic>
+#include <limits>
+#include <initializer_list>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -70,6 +72,19 @@ struct Hooks final : SupervisorControlTurn::Hooks {
 };
 
 int main() {
+    // A malicious or corrupted host policy must not allocate an unbounded
+    // restart-history vector before validating its configuration.
+    for (const auto invalidBudget : {std::size_t{1025},
+                 std::numeric_limits<std::size_t>::max()}) {
+        bool rejected = false;
+        try { SupervisorControlTurn invalid(1, invalidBudget, 10); }
+        catch (const std::invalid_argument&) { rejected = true; }
+        CHECK(rejected && "restart policy must be bounded before allocation");
+    }
+    // Zero disables restarts; 1024 is the maximum accepted history.
+    SupervisorControlTurn maxHistory(1, 1024, 10);
+    CHECK(maxHistory.restarts_used() == 0);
+
     using Kind = SupervisorFailureLane::Kind;
     using Key = SupervisorFailureLane::ActorKey;
     SupervisorControlTurn lane(3, 1);
