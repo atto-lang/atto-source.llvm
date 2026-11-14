@@ -654,7 +654,31 @@ static void concurrent_host_receivers_join_native_resource_retirement() {
     ref.get_done().get();
 }
 
+// Host-only serial admission contract. The compiler must eventually select
+// capacity=1 for 'define serial actor' and a bounded >1 value for default actors.
+// A suspended serial invocation retains its lease even without a carrier.
+static void serial_actor_receive_capacity_retains_suspended_identity() {
+    auto serial = std::make_shared<NativeActorReceiveFence>(24, 7, 1);
+    auto first = serial->try_enter(24, 7);
+    require(first.has_value(), "serial first receive admission");
+    require(!serial->try_enter(24, 7), "serial actor admitted second live receive");
+    // Suspending the invocation cannot release its logical stack lease.
+    // A second DATA envelope must remain queued until physical completion.
+    require(serial->active_receives() == 1, "serial suspended stack lost its pin");
+    first->release();
+    auto next = serial->try_enter(24, 7);
+    require(next.has_value(), "serial actor failed to admit next receive after completion");
+    serial->seal_stop(true);
+    require(!serial->try_enter(24, 7), "serial stopped actor accepted user DATA");
+    require(!serial->try_begin_teardown(), "serial active receive overlapped teardown");
+    next->release();
+    require(serial->try_begin_teardown(), "serial cleanup never entered");
+    serial->finish_teardown();
+    require(serial->ready_for_reclamation(), "serial incarnation did not quiesce");
+}
+
 int main() {
+    serial_actor_receive_capacity_retains_suspended_identity();
     concurrent_host_receivers_join_native_resource_retirement();
     invalid_receive_fence_construction_and_post_owner_release();
     native_receive_stop_admission_race_is_linearizable();
