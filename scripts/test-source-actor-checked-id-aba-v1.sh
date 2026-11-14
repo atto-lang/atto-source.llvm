@@ -99,6 +99,42 @@ for opt in 0 2; do
       exit 1
     fi
   done
+  # Fully retired compatibility-only void* actors have no live registration.
+  # Their un-reused addresses must not be dereferenced. This explicitly does
+  # NOT establish ABA safety if a subsequent malloc reuses those address bits.
+  ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+    timeout 45s "$bin" legacy-status >"$work/legacy-status.out" \
+    2>"$work/legacy-status.err" || {
+      echo "SOURCE_ACTOR_LEGACY_STALE_STATUS_FAILED|O$opt" >&2
+      cat "$work/legacy-status.out" "$work/legacy-status.err" >&2
+      exit 1
+    }
+  printf '%s\n' 'SOURCE_ACTOR_LEGACY_STALE_STATUS_REJECTED' >"$work/legacy-status.expected"
+  cmp -s "$work/legacy-status.expected" "$work/legacy-status.out" || {
+    cat "$work/legacy-status.out" >&2
+    exit 1
+  }
+  if grep -Eq 'ERROR: AddressSanitizer|runtime error:|UndefinedBehaviorSanitizer|LeakSanitizer' "$work/legacy-status.err"; then
+    cat "$work/legacy-status.err" >&2
+    exit 1
+  fi
+  for mode in legacy-send legacy-stop legacy-join; do
+    rc=0
+    ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+      timeout 45s "$bin" "$mode" >"$work/$mode.out" \
+      2>"$work/$mode.err" || rc=$?
+    if [[ "$rc" != 134 || -s "$work/$mode.out" ]] ||
+       ! grep -Fqx 'SOURCE_ACTOR_LEGACY_STALE_POINTER_DENIED' "$work/$mode.err"; then
+      echo "SOURCE_ACTOR_LEGACY_STALE_POINTER_NOT_DENIED|O$opt|mode=$mode|exit=$rc" >&2
+      cat "$work/$mode.out" "$work/$mode.err" >&2
+      exit 1
+    fi
+    if grep -Eq 'ERROR: AddressSanitizer|runtime error:|UndefinedBehaviorSanitizer|LeakSanitizer|SOURCE_ACTOR_CHECKED_ID_INVARIANT_FAILED' "$work/$mode.err"; then
+      echo "SOURCE_ACTOR_LEGACY_STALE_POINTER_SANITIZER_FAILURE|O$opt|mode=$mode" >&2
+      cat "$work/$mode.err" >&2
+      exit 1
+    fi
+  done
   # The next mint after UINT64_MAX-1 must abort rather than wrap and
   # revive an old identity. This is a real source runtime invocation.
   rc=0
@@ -163,4 +199,4 @@ for opt in 0 2; do
   printf 'SOURCE_ACTOR_CHECKED_ID_NATIVE_PASS|head=%s|O%s|actors=128|same_address_reuses=127|negative=3|asan_ubsan=EXECUTED|native_sha256=%s|atto_guest=NO\n' \
     "$EXPECTED_HEAD" "$opt" "$(sha256sum "$bin" | cut -d' ' -f1)"
 done
-echo "SOURCE_ACTOR_CHECKED_ID_NATIVE_MATRIX_PASS|head=$EXPECTED_HEAD|levels=O0_O2|real_actors=288|forced_address_reuses=284|death_tests=8|overflow_rejections=2|checked_control_resumes=64|native_processes=12|checked_id=64_BIT_VALUE|legacy_pointer_ABA=OPEN|async_await=EXECUTED"
+echo "SOURCE_ACTOR_CHECKED_ID_NATIVE_MATRIX_PASS|head=$EXPECTED_HEAD|levels=O0_O2|positive_actors=288|forced_address_reuses=284|death_tests=14|overflow_rejections=2|legacy_death_tests=6|legacy_status_rejections=2|checked_control_resumes=64|native_processes=20|checked_id=64_BIT_VALUE|legacy_pointer_ABA=OPEN|async_await=EXECUTED"
