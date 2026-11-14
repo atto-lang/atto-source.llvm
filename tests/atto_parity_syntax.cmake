@@ -101,8 +101,8 @@ reject_case(comma_lambda_not_lowered
   "fnc main() -> int :: val int x = 5, x |> |n| => int -> n + 1 end\n"
   "unsupported Oreslang token")
 reject_case(typed_inline_lambda_not_lowered
-  "fnc main(): int { val f = || => int -> 42; return f(); }\n"
-  "unsupported Oreslang token")
+  "fnc main(): int { val int f = || => int -> 42; return f(); }\n"
+  "NATIVE_LAMBDA_CLOSURE_UNSUPPORTED")
 
 reject_case(equality_alias_mixed_bool_int
   "fnc main(): int { if 7 !eq true then return 1; else return 0; fi }\n"
