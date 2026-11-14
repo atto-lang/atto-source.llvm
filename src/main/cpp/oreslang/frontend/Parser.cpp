@@ -1288,12 +1288,13 @@ private:
             const std::string& name = forward.first;
             if (forward.second != program.module)
                 fail("NATIVE_ACTOR_FORWARD_SCOPE: actor forward crosses a module boundary");
-            if (!declared.count(name)) {
-                for (const auto& cls : program.classes)
-                    if (cls.name == name)
-                        fail("NATIVE_ACTOR_FORWARD_KIND: actor forward resolves to a class");
+            // Reject collisions even if an actor of this name also exists:
+            // no parser-order resolution between class and actor symbols.
+            for (const auto& cls : program.classes)
+                if (cls.name == name)
+                    fail("NATIVE_ACTOR_FORWARD_KIND: actor forward collides with class '" + name + "'");
+            if (!declared.count(name))
                 fail("NATIVE_ACTOR_FORWARD_UNRESOLVED: actor forward has no same-source definition '" + name + "'");
-            }
         }
     }
 
