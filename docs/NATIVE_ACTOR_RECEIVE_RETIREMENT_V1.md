@@ -163,3 +163,35 @@ are **AUTHORED_NOT_EXECUTED** on the exact PR source checkout; the local
 exact-blob `NativeActorReceiveFence.hpp` tests passed 2,000 two-carrier
 races with Clang 17 and 2,000 with GCC 14 under ASan/UBSan (4,000 total).
 No compiled guest or five-backend concurrency certificate is claimed.
+
+## Finalizer identity binding (2026-11-14)
+
+The native retirement barrier previously bound its optional cleanup and
+receive fences to `ActorResourceRegistry::actor_id()/incarnation()`, but
+did not bind its `NativeActorGroup::RuntimeFinalizer` to the same pair.
+A wrongly wired trusted coordinator could therefore attach actor B's DONE
+capability to actor A's resources.
+
+`RuntimeFinalizer::belongs_to(actor, incarnation)` is a native-only,
+read-only identity predicate. The barrier constructor now rejects a
+finalizer whose actor ID **or generation** differs from the resource
+registry, before it can retire resources or acknowledge another actor.
+The finalizer's existing opaque ticket remains the platform authority
+when it actually settles DONE; this numeric guard is defense in depth,
+not a replacement for ticket validation.
+
+The production native retirement test now includes
+`foreign_finalizer_cannot_acknowledge_another_actor_registry()`:
+a foreign actor with the same generation, and the same actor ID with a
+foreign generation, must both be rejected. The unrelated groups then
+close and finalize independently to show the invalid construction did
+not consume or damage the foreign capabilities.
+
+The focused host-only CI workflow's path filters now include
+`ActorGroupLifecycle.hpp` and `ActorResourceRegistry.hpp`.
+
+**Evidence boundary:** This is a reviewed/authored production CTest
+regression, not an executed full native repository build. The source
+Actions job still fails before executable steps. The exact receive
+header standalone sanitizer smoke remains separately verified; it
+does not certify `RuntimeFinalizer` or `NativeActorRetirementBarrier`.
