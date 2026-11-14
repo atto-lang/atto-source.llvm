@@ -46,6 +46,7 @@ int main() {
     REQUIRE(!eligibleEnum({{PayloadLayout::PrimitiveTuple, {"int", "Any"}}}));
     REQUIRE(!eligibleEnum({{PayloadLayout::Unit, {"int"}}}));
     REQUIRE(!eligibleEnum({{PayloadLayout::Primitive, {"int", "bool"}}}));
+    REQUIRE(!eligibleEnum({{static_cast<PayloadLayout>(255), {"int"}}}));
 
     Signature color = signature("go", {
         {Kind::Enum, "unit::Color"}, {Kind::Primitive, "int"}}, eligibleIds);
@@ -96,6 +97,8 @@ int main() {
     rejects([&] { (void)signature("go", {{Kind::Primitive, "Unknown"}}, eligibleIds); });
     rejects([&] { (void)signature("go", {{Kind::Primitive, "{a:int}"}}, eligibleIds); });
     rejects([&] { (void)signature("go", {{Kind::Enum, ""}}, eligibleIds); });
+    rejects([&] { (void)signature("go", {
+        {static_cast<Kind>(255), "int"}}, eligibleIds); });
     rejects([&] { (void)compare(color, signature("other", {
         {Kind::Enum, "unit::Mode"}, {Kind::Primitive, "int"}}, eligibleIds)); });
 
@@ -106,6 +109,75 @@ int main() {
     Signature imported = signature("go", {
         {Kind::Enum, "other::Color"}, {Kind::Primitive, "int"}}, eligibleIds);
     REQUIRE(compare(color, imported) == PairStatus::DistinctEnums);
+
+    // Full-vector static proof: a discriminator match must not allow a
+    // different non-discriminator primitive argument to reach the call site.
+    REQUIRE(selectResolved({color, mode},
+                           {{Kind::Enum, "unit::Color"},
+                            {Kind::Primitive, "int"}}, eligibleIds) == 0);
+    REQUIRE(selectResolved({color, mode},
+                           {{Kind::Enum, "unit::Mode"},
+                            {Kind::Primitive, "int"}}, eligibleIds) == 1);
+    rejects([&] { (void)selectResolved(
+        {color, mode}, {{Kind::Enum, "unit::Color"},
+                        {Kind::Primitive, "string"}}, eligibleIds); });
+    rejects([&] { (void)selectResolved(
+        {color, mode}, {{Kind::Enum, "unit::Color"},
+                        {Kind::Primitive, "Unknown"}}, eligibleIds); });
+    rejects([&] { (void)selectResolved(
+        {color, mode}, {{Kind::Enum, "unit::Color"},
+                        {Kind::Primitive, "f32"}}, eligibleIds); });
+    rejects([&] { (void)selectResolved(
+        {color, mode}, {{Kind::Enum, "attacker::Fake"},
+                        {Kind::Primitive, "int"}}, eligibleIds); });
+    rejects([&] { (void)selectResolved(
+        {color, mode}, {{Kind::Enum, "unit::Color"}}, eligibleIds); });
+    rejects([&] { (void)selectResolved(
+        {color}, {{Kind::Enum, "unit::Color"},
+                  {Kind::Primitive, "int"}}, eligibleIds); });
+
+    Signature colorF64 = signature("go", {
+        {Kind::Enum, "unit::Color"}, {Kind::Primitive, "f64"}}, eligibleIds);
+    Signature modeF64 = signature("go", {
+        {Kind::Enum, "unit::Mode"}, {Kind::Primitive, "f64"}}, eligibleIds);
+    REQUIRE(selectResolved({colorF64, modeF64},
+                           {{Kind::Enum, "unit::Color"},
+                            {Kind::Primitive, "f64"}}, eligibleIds) == 0);
+    rejects([&] { (void)selectResolved(
+        {colorF64, modeF64}, {{Kind::Enum, "unit::Color"},
+                              {Kind::Primitive, "int"}}, eligibleIds); });
+
+    // Public C++ aggregate constructors must not bypass the eligibility
+    // registry, primitive canonicalization or maximum arity.
+    Signature forgedEnum{"go", {{Kind::Enum, "attacker::Fake"},
+                                 {Kind::Primitive, "int"}}};
+    rejects([&] { (void)selectResolved(
+        {forgedEnum, mode},
+        {{Kind::Enum, "unit::Mode"}, {Kind::Primitive, "int"}},
+        eligibleIds); });
+    Signature forgedPrimitive{"go", {{Kind::Enum, "unit::Color"},
+                                      {Kind::Primitive, "Unknown"}}};
+    rejects([&] { (void)selectResolved(
+        {forgedPrimitive, mode},
+        {{Kind::Enum, "unit::Mode"}, {Kind::Primitive, "int"}},
+        eligibleIds); });
+    Signature uncanonical{"go", {{Kind::Enum, "unit::Color"},
+                                 {Kind::Primitive, "String"}}};
+    rejects([&] { (void)selectResolved(
+        {uncanonical, mode},
+        {{Kind::Enum, "unit::Mode"}, {Kind::Primitive, "int"}},
+        eligibleIds); });
+
+    // A cast to the public C++ enum can carry an invalid discriminator
+    // that resembles a primitive; the compiler cannot admit this as a slot.
+    Signature invalidKind{"go", {
+        {Kind::Enum, "unit::Color"},
+        {static_cast<Kind>(255), "int"}
+    }};
+    rejects([&] { (void)selectResolved(
+        {invalidKind, mode},
+        {{Kind::Enum, "unit::Mode"}, {Kind::Primitive, "int"}},
+        eligibleIds); });
 
     // This deliberately exercises only compiler-side keys, NOT LLVM source
     // parsing, AOT vtables, actor dispatch or guest execution.
