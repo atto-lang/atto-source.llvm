@@ -1,0 +1,56 @@
+name: OresLLM ownership grammar (LLVM native)
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  llvm-native-ownership:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact source tree
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          echo "SOURCE_TREE_SHA=$(git rev-parse 'HEAD^{tree}')"
+      - name: Install LLVM native compiler build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang llvm-dev rustc
+      - name: Build actual oreslang-llvmc
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --target oreslang-llvmc --parallel 2
+      - name: Verify mandatory OresLLM native test inventory (never zero tests)
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v clang
+          test -x build/oreslang-llvmc
+          inventory="$(ctest --test-dir build -N -R '^oresllm_')"
+          printf '%s\n' "$inventory"
+          for name in \
+            oresllm_explicit_ownership_borrow_accept \
+            oresllm_explicit_ownership_borrow_execute \
+            oresllm_arithmetic_star_preserved \
+            oresllm_c_style_reference_parameter_rejected \
+            oresllm_c_style_address_of_rejected \
+            oresllm_c_style_pointer_decl_rejected; do
+            grep -Eq "^[[:space:]]*Test[[:space:]]+#[0-9]+:[[:space:]]+${name}$" <<< "$inventory" || {
+              echo "::error::Missing mandatory compiler/native test $name"
+              exit 1
+            }
+          done
+          grep -Eq '^Total Tests: 6$' <<< "$inventory"
+      - name: Execute real source-to-IR, negative-admission and Clang AOT tests
+        run: ctest --test-dir build -R '^oresllm_' --no-tests=error --output-on-failure

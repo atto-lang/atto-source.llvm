@@ -1,0 +1,4 @@
+// Compiler must reject undeclared guest references and emit no LLVM IR.
+pub fnc main(): int {
+  return not_an_authorized_lease_symbol();
+}

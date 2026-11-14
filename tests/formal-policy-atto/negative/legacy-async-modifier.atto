@@ -1,0 +1,4 @@
+// Legacy async is forbidden for functions; use suspends instead.
+async fnc main(): int {
+  return 0;
+}
