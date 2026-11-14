@@ -810,8 +810,29 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         for (const auto& child : stmt.then_statements) scan_log_site(fn, child);
         for (const auto& child : stmt.else_statements) scan_log_site(fn, child);
     };
+    // A guest binding named "log" must never be silently treated as the
+    // compiler-owned logging intrinsic. Reject it even if it appears in a
+    // nested lexical scope or later in the function: v1 does not yet track
+    // all control-flow and shadowing provenance in the static-site table.
+    std::function<bool(const Statement&)> shadows_log;
+    shadows_log = [&](const Statement& stmt) -> bool {
+        if ((stmt.branch_local && stmt.branch_local->name == "log") ||
+            (stmt.kind == Statement::Kind::UsingTelemetrySpan &&
+             stmt.receiver == "log")) return true;
+        return std::any_of(stmt.then_statements.begin(), stmt.then_statements.end(), shadows_log)
+            || std::any_of(stmt.else_statements.begin(), stmt.else_statements.end(), shadows_log);
+    };
     for (const auto& fn : source.functions) {
+        const auto prior = emitted_log_keys.size();
         for (const auto& stmt : fn.statements) scan_log_site(fn, stmt);
+        if (emitted_log_keys.size() != prior &&
+            (std::any_of(fn.parameters.begin(), fn.parameters.end(),
+                    [](const Parameter& p) { return p.name == "log"; }) ||
+             std::any_of(fn.locals.begin(), fn.locals.end(),
+                    [](const LocalBinding& local) { return local.name == "log"; }) ||
+             std::any_of(fn.statements.begin(), fn.statements.end(), shadows_log)))
+            throw std::runtime_error(
+                "native compiler logging intrinsic cannot be shadowed by guest log binding");
     }
     if (emitted_log_keys.size() != checked_sites.size()) {
         throw std::runtime_error("native log.info requires exact source-controlled site ID coverage");
