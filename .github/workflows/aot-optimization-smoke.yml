@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - scripts/compile-aot.sh
+      - scripts/audit_no_gc_ir.rs
       - scripts/test-compile-aot-optimization.sh
       - scripts/test-compile-aot-guest-parity.sh
       - scripts/test-compile-aot-guest-parity-contract.sh
@@ -12,6 +13,7 @@ on:
   push:
     paths:
       - scripts/compile-aot.sh
+      - scripts/audit_no_gc_ir.rs
       - scripts/test-compile-aot-optimization.sh
       - scripts/test-compile-aot-guest-parity.sh
       - scripts/test-compile-aot-guest-parity-contract.sh
