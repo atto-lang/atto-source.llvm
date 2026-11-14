@@ -14,7 +14,7 @@ if ! readelf -Wh "$binary" >/dev/null 2>&1; then
   echo 'LINKED_GC_AUDIT_UNSUPPORTED_FORMAT: not ELF' >&2
   exit 65
 fi
-if ! readelf -W -S "$binary" | grep -Eq '[[:space:]\.symtab[[:space:]]'; then
+if ! readelf -W -S "$binary" | grep -Eq '[[:space:]]\.symtab[[:space:]]'; then
   echo 'LINKED_GC_AUDIT_UNVERIFIABLE: .symtab stripped before audit' >&2
   exit 65
 fi
