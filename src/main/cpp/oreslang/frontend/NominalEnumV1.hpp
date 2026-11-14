@@ -135,8 +135,14 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
         // A pattern may omit its enum owner only when the scrutinee owns
         // the complete closed nominal schema. Trailing `as alias` is scoped
         // to the selected arm and never creates a guest runtime allocation.
-        std::pair<std::string, std::string> nominal_pattern(
-                std::string_view owner, std::string_view foreign_error) {
+        struct CasePattern {
+            std::string first; // variant
+            std::string second; // whole-case alias
+            std::string field; // single statically checked i64 payload field
+        };
+        CasePattern nominal_pattern(
+                std::string_view owner, std::string_view foreign_error,
+                bool allow_int_field = false) {
             const auto first = name();
             std::string variant = first;
             if (take(".")) {
@@ -144,17 +150,25 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
                     throw std::runtime_error(std::string(foreign_error));
                 variant = name();
             }
-            if (current().value == "{") {
-                throw std::runtime_error(
-                    "ADT v3 named enum payload patterns require typed payload AOT lowering");
+            std::string field;
+            if (take("{")) {
+                if (!allow_int_field)
+                    throw std::runtime_error(
+                        "ADT v4 helper cannot borrow payload-bearing nominal enums");
+                field = name();
+                if (!take("}"))
+                    throw std::runtime_error(
+                        "ADT v4 supports exactly one named integer field per pattern");
             }
             std::string alias;
             if (take("as")) {
                 alias = name();
                 if (alias == owner || alias == variant)
                     throw std::runtime_error("ADT v3 alias shadows nominal declaration or variant");
+                if (alias == field)
+                    throw std::runtime_error("ADT v4 whole alias conflicts with payload binding");
             }
-            return {std::move(variant), std::move(alias)};
+            return {std::move(variant), std::move(alias), std::move(field)};
         }
     };
     Reader r{std::move(tokens)};
@@ -164,7 +178,11 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
     // compiler slice; canonical closed nullary syntax uses braces and commas.
     const bool brace_enum = r.take("{");
     if (!brace_enum) r.need("as");
-    struct Variant { std::string name; std::int64_t tag = 0; };
+    struct Variant {
+        std::string name;
+        std::int64_t tag = 0;
+        std::string int_field; // empty for nullary; no owned/Bytes ABI here
+    };
     std::vector<Variant> variants;
     std::unordered_set<std::string> used_names;
     std::unordered_set<std::int64_t> used_tags;
@@ -173,9 +191,18 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
         if (variants.size() == 32 || r.current().value.empty())
             throw std::runtime_error("ADT v1 enum case count exceeds bounds");
         const auto name = r.name();
-        if (r.current().value == "{") {
-            throw std::runtime_error(
-                "ADT v3 payload-bearing enums require checked payload AOT lowering");
+        std::string int_field;
+        if (r.take("{")) {
+            if (!brace_enum)
+                throw std::runtime_error("ADT v4 payload syntax requires canonical enum braces");
+            int_field = r.name();
+            r.need(":");
+            if (!r.take("int"))
+                throw std::runtime_error(
+                    "ADT v4 payload AOT admits only Copy int, never Bytes/owned handles");
+            if (!r.take("}"))
+                throw std::runtime_error(
+                    "ADT v4 payload case must contain exactly one int field");
         }
         if (!used_names.insert(name).second)
             throw std::runtime_error("ADT v1 duplicate nominal case");
@@ -183,7 +210,7 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
         if (tag <= 0 || tag > std::numeric_limits<std::int32_t>::max() ||
                 !used_tags.insert(tag).second)
             throw std::runtime_error("ADT v1 duplicate/invalid case tag");
-        variants.push_back({name, tag});
+        variants.push_back({name, tag, int_field});
         next_tag = tag + 1;
         if (brace_enum) {
             if (!r.take(",") && r.current().value != "}")
@@ -197,6 +224,11 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
     // lowering it to an internal private static scalar call. A foreign
     // enum owner can never enter that helper as an untyped i64 argument.
     std::string helper_name, helper_lowered;
+    const bool has_int_payload = std::any_of(variants.begin(), variants.end(),
+        [](const Variant& v) { return !v.int_field.empty(); });
+    if (has_int_payload && r.current().value == "fnc")
+        throw std::runtime_error(
+            "ADT v4 nominal payload helpers need a checked aggregate calling convention");
     if (r.take("fnc")) {
         helper_name = r.name();
         if (helper_name == owner ||
