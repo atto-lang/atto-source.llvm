@@ -1002,7 +1002,8 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
     let negatives = [
         ("percent", "pub fnc main(): int { return 17 % 5; }\n", "'%' is reserved"),
         ("caret", "pub fnc main(): int { return 5 ^ 3; }\n", "'^' is reserved"),
-        ("double-caret", "pub fnc main(): int { return (true ^^ false) ? 1 : 0; }\n", "'^^' is reserved"),
+        // `^^` is canonical bool XOR (spec ch.16); int operands are a type error.
+        ("double-caret-int", "pub fnc main(): int { return 7 ^^ 3; }\n", "logical operator requires bool"),
         ("pow-unsupported", "pub fnc main(): int { return Integer.pow(2, 3); }\n", "Integer.pow is unsupported"),
         ("wrong-type", "pub fnc main(): int { return Integer.rem(true, 2); }\n", "arithmetic requires int"),
         ("xor-shadowing", "fnc Xor(bool a, bool b): bool { return a; }\npub fnc main(): int { return 0; }\n", "expected non-keyword identifier"),
