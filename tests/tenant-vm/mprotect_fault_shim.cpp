@@ -42,6 +42,11 @@ extern "C" void tenant_vm_test_fail_next_guard_restore() {
 extern "C" void tenant_vm_test_fail_next_signal_stack_registration() {
     fail_signal_stack_registration.store(true, std::memory_order_release);
 }
+extern "C" bool tenant_vm_test_fail_carrier_altstack_setup() {
+    // Consume the injection even if ASan supplied a usable stack and the
+    // carrier would otherwise skip registration. This tests fail-closed startup.
+    return fail_signal_stack_registration.exchange(false, std::memory_order_acq_rel);
+}
 // Deliberately intercept only TenantVm.cpp's own carrier setup. A link-wide
 // --wrap=sigaltstack also hits libasan's startup hook and aborts the process.
 extern "C" int tenant_vm_test_carrier_sigaltstack(const stack_t* ss, stack_t* old_ss) {
@@ -60,11 +65,6 @@ extern "C" int tenant_vm_test_carrier_sigaltstack(const stack_t* ss, stack_t* ol
     if (std::getenv("TENANT_VM_TEST_REUSE_PRIOR_ALTSTACK") != nullptr &&
         query_status == 0 && !(current.ss_flags & SS_DISABLE))
         return 0;
-    if (ss && !(ss->ss_flags & SS_DISABLE) &&
-        fail_signal_stack_registration.exchange(false, std::memory_order_acq_rel)) {
-        errno = ENOMEM;
-        return -1;
-    }
     return sigaltstack(ss, old_ss);
 }
 extern "C" void tenant_vm_test_fail_next_carrier_allocations(int count) {
