@@ -4461,6 +4461,17 @@ if(BUILD_TESTING AND ORE_CLANG)
             DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit-tests")
         add_test(NAME native_no_gc_ir_audit_unit
             COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit-tests")
+        # True native guest execution, not merely source admission or a host
+        # constructor model: compiler IR -> no-GC audit -> Clang O0/O2 -> run.
+        # This remains the restricted nonthrowing Option<int> trap slice.
+        add_test(NAME native_trap_int_guest_aot_o0_o2
+            COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-trap-int-aot.sh"
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}"
+                "${ORE_NO_GC_IR_AUDIT}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/trap-int-native42.atto"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/trap-int-overflow-terminal.atto"
+                "${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh")
+        set_tests_properties(native_trap_int_guest_aot_o0_o2 PROPERTIES TIMEOUT 240)
     else()
         add_test(NAME native_no_gc_ir_audit_unit COMMAND "${CMAKE_COMMAND}" -E false)
     endif()
