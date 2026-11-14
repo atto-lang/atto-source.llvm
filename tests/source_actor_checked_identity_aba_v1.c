@@ -76,6 +76,12 @@ static void positive(void) {
     oreslang_source_actor_test_force_address_reuse(0);
     printf("SOURCE_ACTOR_CHECKED_ID_ABA_PASS|actors=128|actual_address_reuses=127|stale_status=128|stale_send=128|stale_stop=128|physical_joins=128\n");
 }
+static int64_t unexpected_checked_await(OresSourceActorId id) {
+    (void)id;
+    fputs("SOURCE_ACTOR_STALE_AWAIT_CONTINUATION_EXECUTED\n", stderr);
+    abort();
+}
+
 static void expected_abort(const char* mode) {
     oreslang_source_actor_test_force_address_reuse(1);
     OresSourceActorId old = oreslang_source_actor_spawn_id(ctor, echo, 1);
@@ -94,6 +100,12 @@ static void expected_abort(const char* mode) {
         oreslang_source_actor_request_stop_id(old);
     else if (strcmp(mode, "stale-join") == 0)
         oreslang_source_actor_join_done_id(old);
+    else if (strcmp(mode, "stale-await-ready") == 0)
+        (void)oreslang_source_actor_await_ready_id(
+            old, unexpected_checked_await, UINT64_C(0xABA100));
+    else if (strcmp(mode, "stale-await-done") == 0)
+        (void)oreslang_source_actor_await_done_id(
+            old, unexpected_checked_await, UINT64_C(0xABA200));
     else
         exit(64);
     fputs("SOURCE_ACTOR_CHECKED_ID_STALE_ACCEPTED\n", stderr);
