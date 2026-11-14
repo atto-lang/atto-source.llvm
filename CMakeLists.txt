@@ -5887,6 +5887,7 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-proxy-arena-pages-test)
     set_tests_properties(native_proxy_slab_arena_pages_and_zeroization
         PROPERTIES TIMEOUT 30)
+endif()
 
 # Counted physical callback permits and slab/generation-bound drain receipts.
 # Host-only proof: no guest lowering, real epoll integration, or I/O transport.
@@ -5906,9 +5907,11 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-proxy-transport-gate-test)
     set_tests_properties(native_proxy_transport_callback_gate_races
         PROPERTIES TIMEOUT 20)
+endif()
 
 # Linux-only host epoll callback ownership proof with a real socketpair.
 # The bridge wraps the checked-in native epoll reactor rather than mocking it.
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(Threads REQUIRED)
     add_executable(oreslang-native-epoll-transport-bridge-test
         tests/native_epoll_transport_bridge_test.cpp)
@@ -5956,10 +5959,12 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-epoll-bridge-lifetime-test)
     set_tests_properties(native_epoll_bridge_external_handoff_failstop
         PROPERTIES TIMEOUT 20)
+endif()
 
 # Focused Linux epoll actor-owned FD lifetime contract without LLVM frontend or
 # the full VM bootstrap. Compiles the REAL reactor/manager + exact callback
 # ledger, never the lightweight external-adapter mock.
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(Threads REQUIRED)
     add_executable(oreslang-native-actor-nio-fd-lease-test
         tests/native_actor_nio_fd_lease_test.cpp)
@@ -5975,6 +5980,7 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-nio-fd-lease-test)
     set_tests_properties(native_actor_nio_fd_lease_exclusive_rearm
         PROPERTIES TIMEOUT 20)
+endif()
 
 
 # Stacked OresVM actor resource-retirement acceptance gate.
@@ -5992,6 +5998,7 @@ if(BUILD_TESTING)
     add_test(NAME native_oresvm_actor_resource_retirement
         COMMAND oreslang-native-oresvm-resource-retirement-test)
     set_tests_properties(native_oresvm_actor_resource_retirement PROPERTIES TIMEOUT 30)
+endif()
 
 
 # Allocation-free bounded pool primitive, host-only (NOT compiled .atto guest).
@@ -6009,6 +6016,7 @@ if(BUILD_TESTING)
     add_test(NAME native_fixed_buffer_pool_host_only
         COMMAND oreslang-native-fixed-buffer-pool-test)
     set_tests_properties(native_fixed_buffer_pool_host_only PROPERTIES TIMEOUT 30)
+endif()
 
 
 # Separate host-only atomically published buffer-lease mailbox data lane.
@@ -6026,6 +6034,7 @@ if(BUILD_TESTING)
     add_test(NAME native_fixed_buffer_mailbox_host_only
         COMMAND oreslang-native-fixed-buffer-mailbox-test)
     set_tests_properties(native_fixed_buffer_mailbox_host_only PROPERTIES TIMEOUT 30)
+endif()
 
 
 # Physical actor resource registry loan/handoff bridge for pooled messages.
@@ -6043,3 +6052,4 @@ if(BUILD_TESTING)
     add_test(NAME native_fixed_buffer_registry_mailbox_host_only
         COMMAND oreslang-native-fixed-buffer-registry-mailbox-test)
     set_tests_properties(native_fixed_buffer_registry_mailbox_host_only PROPERTIES TIMEOUT 30)
+endif()
