@@ -101,9 +101,10 @@ For each optimization level it requires:
   terminate after successful READY.
 - Eight additional actor lifetimes where READY was already published before
   the host wait begins. Those calls must take the nonblocking fast path.
-- A real stop-before-READY cancellation **after** a host waiter has entered
-  its wait, with a second trusted-host thread simultaneously attempting the
-  physical join. The runtime pins the `SourceActor` lifetime with a
+- Two real stop-before-READY cancellations **after** a host waiter has
+  entered its wait: one during PENDING initialization, and a second after
+  construction has completed but before READY can publish. Each also races a
+  separate trusted-host physical join against the admitted READY waiter. The runtime pins the `SourceActor` lifetime with a
   `group.mutex`-protected `ready_waiters` admission; physical teardown
   must wait for all admitted observers to revoke that pin before the heap and
   actor allocation can be freed. On cancellation the waiter must release its
@@ -121,7 +122,9 @@ For each optimization level it requires:
 
 Successful exact-head results would thus require **80 actual constructors and
 physical joins**, **64 observed CV waits**, **16 READY fast paths**, and
-**four explicit fail-stop negative executions** over O0/O2. These are
+**six explicit fail-stop negative executions** over O0/O2 (PENDING
+cancellation, INITIALIZING/pre-publication cancellation, and illegal actor
+carrier blocking at each optimization level). These are
 **test requirements, not recorded test results**: source organization Actions
 currently fails prior to executing steps. Host ABI success remains distinct
 from compiler-generated `.atto` execution and whole-process zero-GC proof.
