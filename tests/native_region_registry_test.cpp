@@ -8,6 +8,9 @@ struct NativeRegionRegistryTestAccess {
         std::size_t bytes, TrustedPointerWindow::Mode mode) {
         return registry.issue(trust, owner, region, allocation, base, bytes, mode);
     }
+    static void fence_actor(NativeRegionRegistry& registry, ActorHeapIdentity owner) {
+        registry.fence_actor(owner);
+    }
 };
 }
 
@@ -168,8 +171,8 @@ int main() {
     auto stalePointer = registry.at<std::uint32_t>(fencedGrant, fencedActor);
     if (stalePointer.load(fencedActor) != 101)
         throw std::runtime_error("fence test precondition failed");
-    registry.fence_actor(fencedActor);
-    registry.fence_actor(fencedActor); // Idempotent retirement.
+    NativeRegionRegistryTestAccess::fence_actor(registry, fencedActor);
+    NativeRegionRegistryTestAccess::fence_actor(registry, fencedActor); // Idempotent retirement.
     reject([&] { (void)stalePointer.load(fencedActor); });
     reject([&] { stalePointer.store(fencedActor, 22); });
     reject([&] { (void)registry.at<std::uint32_t>(fencedGrant, fencedActor); });
@@ -204,7 +207,7 @@ int main() {
     bool deferredFence = false;
     const auto callbackStatus = callbackPointer.with_ffi_address(callbackActor,
         [&](std::uint32_t* raw) {
-            try { registry.fence_actor(callbackActor); }
+            try { NativeRegionRegistryTestAccess::fence_actor(registry, callbackActor); }
             catch (const std::logic_error&) { deferredFence = true; }
             if (!deferredFence || *raw != 404)
                 throw std::runtime_error("active FFI pointer was prematurely retired");
@@ -218,7 +221,7 @@ int main() {
     reject([&] { (void)secondCallbackPointer.load(callbackActor); });
     reject([&] { (void)registry.at<std::uint32_t>(callbackGrant, callbackActor); });
     reject([&] { (void)registry.at<std::uint32_t>(secondCallbackGrant, callbackActor); });
-    registry.fence_actor(callbackActor); // Retire after callback quiescence.
+    NativeRegionRegistryTestAccess::fence_actor(registry, callbackActor); // Retire after callback quiescence.
     reject([&] { (void)issue(NativeRegionRegistry::Trust::Trusted,
         callbackActor, 93, 1, &callbackBacking, sizeof(callbackBacking),
         TrustedPointerWindow::Mode::ReadWrite); });
