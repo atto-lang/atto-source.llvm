@@ -94,6 +94,21 @@ jobs:
           "$RUNNER_TEMP/atto-llvm-compiler/oreslang-no-gc-ir-audit-tests" --test-threads=1
           test -x "$RUNNER_TEMP/atto-llvm-compiler/oreslang-no-gc-ir-audit"
           sha256sum "$RUNNER_TEMP/atto-llvm-compiler/oreslang-no-gc-ir-audit"
+          # Valid LLVM IR must be refused when its GC attribute crosses lines.
+          # This is an auditor negative canary, NOT guest compilation evidence.
+          cat > "$RUNNER_TEMP/multiline-gc.ll" <<'LLVM_GC_CANARY'
+          define void @guest() gc ; LLVM treats this as a comment
+            "shadow-stack" {
+          entry:
+            ret void
+          }
+          LLVM_GC_CANARY
+          /usr/bin/clang-19 -x ir -c "$RUNNER_TEMP/multiline-gc.ll" -o "$RUNNER_TEMP/multiline-gc.o"
+          if "$RUNNER_TEMP/atto-llvm-compiler/oreslang-no-gc-ir-audit" "$RUNNER_TEMP/multiline-gc.ll"; then
+            echo 'SECURITY REGRESSION: well-formed multiline tracing-GC IR passed admission' >&2
+            exit 1
+          fi
+          echo 'MULTILINE_GC_IR_REJECTED=YES'
       - name: Execute real AttoLang O0/O2 native guests
         env:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
