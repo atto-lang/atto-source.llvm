@@ -1527,7 +1527,15 @@ std::future<TurnResult> ready_result(Status status) {
 TenantVmHost::TenantVmHost(HostLimits limits) : core_(std::make_shared<Core>(limits)) {
     if (limits.carriers == 0 || limits.max_vms == 0 || limits.carrier_stack_bytes < 2 * kHostCallStackBytes)
         throw std::invalid_argument("TenantVmHost limits");
+#if defined(TENANT_VM_TEST_MPROTECT)
+    // Diagnostic-only: invalid-admission tests can isolate the host's pthread
+    // lifecycle from process-global signal-handler installation. A valid VM open
+    // still fails with SignalHandlerLost when handlers were not installed.
+    if (std::getenv("TENANT_VM_TEST_SKIP_GLOBAL_SIGNAL_HANDLERS") == nullptr)
+        install_handlers_once();
+#else
     install_handlers_once();
+#endif
     Core* core = core_.get();
     core->api.abi_version = ORES_VM_GUEST_ABI_VERSION;
     core->api.alloc = &Core::host_alloc;
