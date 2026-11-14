@@ -845,17 +845,19 @@ int oreslang_source_actor_snapshot_current_trace(
 void oreslang_source_actor_wait_ready_blocking(void* opaque) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
-    OresNativeVM* vm = group.vm;
-    ensure(vm != NULL);
-    OresNativeExecutionContext carrier = {0};
-    ensure(!ores_native_vm_current_execution_context(
-        vm, ORES_NATIVE_VM_MAIN, &carrier));
-
     group_lock();
     const size_t slot = (size_t)instance->ref.actor_slot;
-    ensure(group.vm == vm && slot < group.next_slot
+    OresNativeVM* vm = group.vm;
+    ensure(vm && slot < group.next_slot
         && group.actors[slot] == instance
+        && group.pending_ready == NULL && group.pending_done == NULL
         && !atomic_load_explicit(&instance->stop_requested, memory_order_acquire));
+    OresNativeExecutionContext carrier = {0};
+    /* Keep the VM identity stable under the group lock while checking that
+     * the caller is not an actor carrier. A concurrent teardown cannot
+     * swap group.vm between this check and the admission wait below. */
+    ensure(!ores_native_vm_current_execution_context(
+        vm, ORES_NATIVE_VM_MAIN, &carrier));
     for (;;) {
         const int status = atomic_load_explicit(
             &instance->startup_state, memory_order_acquire);
