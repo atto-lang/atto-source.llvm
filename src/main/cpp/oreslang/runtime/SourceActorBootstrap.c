@@ -863,9 +863,15 @@ void oreslang_source_actor_wait_ready_blocking(void* opaque) {
     /* Pin the VM identity under group mutex. Never park an actor carrier
      * from ANY VM domain, not merely MAIN: other domains share the same
      * native worker scheduling infrastructure. */
-    for (int domain = 0; domain < ORES_NATIVE_VM_DOMAIN_COUNT; ++domain)
-        ensure(!ores_native_vm_current_execution_context(
-            vm, (enum OresNativeVMDomain)domain, &carrier));
+    for (int domain = 0; domain < ORES_NATIVE_VM_DOMAIN_COUNT; ++domain) {
+        const int on_carrier = ores_native_vm_current_execution_context(
+            vm, (enum OresNativeVMDomain)domain, &carrier);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+        if (on_carrier)
+            fputs("SOURCE_ACTOR_READY_BARRIER_CARRIER_DENIED\n", stderr);
+#endif
+        ensure(!on_carrier);
+    }
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
     atomic_store_explicit(
         &test_ready_waiter_blocked, 0, memory_order_release);
@@ -874,6 +880,10 @@ void oreslang_source_actor_wait_ready_blocking(void* opaque) {
         const int status = atomic_load_explicit(
             &instance->startup_state, memory_order_acquire);
         if (status == ORES_SOURCE_ACTOR_STARTUP_READY) break;
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+        if (status == ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY)
+            fputs("SOURCE_ACTOR_READY_BARRIER_CANCELLED\n", stderr);
+#endif
         ensure(status == ORES_SOURCE_ACTOR_STARTUP_PENDING
             || status == ORES_SOURCE_ACTOR_STARTUP_INITIALIZING);
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
