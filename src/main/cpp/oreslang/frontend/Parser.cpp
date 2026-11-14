@@ -4169,7 +4169,11 @@ private:
         // closure frames and typed capture ownership are not lowered yet.
         // Fail specifically here rather than allowing a logical-or token to
         // masquerade as a value at the beginning of an expression.
-        if (token_.text == "||" && peek_next().text == "=>") {
+        if (token_.text == "||") {
+            // The native lexer deliberately does not yet combine => into
+            // a single token; matching it as a lookahead symbol would miss
+            // every typed inline lambda. A leading || cannot be a valid
+            // binary logical-or expression, so reject it unconditionally.
             fail("NATIVE_LAMBDA_CLOSURE_UNSUPPORTED: => Type -> lambda requires "
                  "native closure and ownership lowering");
         }
