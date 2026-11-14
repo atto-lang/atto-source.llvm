@@ -39,7 +39,7 @@ if ! printf '%s\n' "$symbols" | awk '
     symbol=$8;
     sub(/@.*/, "", symbol);
     sub(/^_+/, "", symbol);
-    if (symbol ~ /^(GC_malloc|GC_realloc|GC_gcollect|GC_enable|GC_disable|mono_gc_|g_gc_|jl_gc_collect|PyGC_Collect|gc_collect|gc_alloc|gc_mark|gc_sweep|gc_root)/) {
+    if (symbol ~ /^(GC_malloc|GC_realloc|GC_gcollect|GC_enable|GC_disable|mono_gc_|g_gc_|jl_gc_collect|PyGC_Collect|gc_collect|gc_alloc|gc_mark|gc_sweep|gc_root|dlopen|dlmopen|dlsym|dlvsym|libc_dlopen_mode|LLVMOrc)/) {
       print "LINKED_GC_AUDIT_REJECTED_SYMBOL: " symbol > "/dev/stderr";
       found=1;
     }
