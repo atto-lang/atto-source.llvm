@@ -488,6 +488,106 @@ static void two_overlapping_receives_pin_actual_native_done_barrier() {
 
 // A resource registry for actor A must never be coupled to actor B's DONE
 // capability, even if that foreign group has already completed shutdown.
+// Runtime ID is not derivable from actor ID and generation. Independently
+// created runtimes may both own actor 52/generation 7, so a finalizer with
+// those same numbers must still be rejected unless the registry explicitly
+// binds the originating runtime domain.
+static void native_barrier_refuses_unbound_or_wrong_domain_finalizers() {
+    NativeActorResourceQuarantine quarantine(1);
+
+    {
+        NativeActorGroup group(420, 1);
+        auto ref = group.adopt(420, 52, 7, [] {});
+        require(group.mark_ready(ref), "unbound finalizer actor ready");
+        auto registry = std::make_shared<ActorResourceRegistry>(52, 7);
+        bool rejected = false;
+        try {
+            NativeActorRetirementBarrier invalid(
+                registry, group.runtime_finalizer(ref), quarantine);
+        } catch (const std::invalid_argument&) { rejected = true; }
+        require(rejected, "unbound registry minted physical DONE authority");
+        group.close();
+        require(group.runtime_finalizer(ref).finalized(),
+                "unbound test unrelated actor never finished");
+        ref.get_done().get();
+    }
+
+    {
+        NativeActorGroup group(421, 2);
+        auto foreignId = group.adopt(421, 53, 7, [] {});
+        require(group.mark_ready(foreignId), "foreign actor ID ready");
+        auto registry = std::make_shared<ActorResourceRegistry>(52, 7);
+        registry->bind_runtime_id(421);
+        bool rejected = false;
+        try {
+            NativeActorRetirementBarrier invalid(
+                registry, group.runtime_finalizer(foreignId), quarantine);
+        } catch (const std::invalid_argument&) { rejected = true; }
+        require(rejected, "foreign actor ID passed bound-runtime retirement");
+        group.close();
+        require(group.runtime_finalizer(foreignId).finalized(),
+                "foreign actor ID did not independently finish");
+        foreignId.get_done().get();
+    }
+
+    {
+        NativeActorGroup group(422, 1);
+        auto foreignGeneration = group.adopt(422, 52, 8, [] {});
+        require(group.mark_ready(foreignGeneration), "foreign generation ready");
+        auto registry = std::make_shared<ActorResourceRegistry>(52, 7);
+        registry->bind_runtime_id(422);
+        bool rejected = false;
+        try {
+            NativeActorRetirementBarrier invalid(
+                registry, group.runtime_finalizer(foreignGeneration), quarantine);
+        } catch (const std::invalid_argument&) { rejected = true; }
+        require(rejected, "foreign generation passed bound-runtime retirement");
+        group.close();
+        require(group.runtime_finalizer(foreignGeneration).finalized(),
+                "foreign generation did not independently finish");
+        foreignGeneration.get_done().get();
+    }
+
+    {
+        // Same actor ID AND generation, but physically unrelated runtime.
+        NativeActorGroup group(423, 1);
+        auto foreignRuntime = group.adopt(423, 52, 7, [] {});
+        require(group.mark_ready(foreignRuntime), "foreign runtime ready");
+        auto registry = std::make_shared<ActorResourceRegistry>(52, 7);
+        registry->bind_runtime_id(424);
+        bool rejected = false;
+        try {
+            NativeActorRetirementBarrier invalid(
+                registry, group.runtime_finalizer(foreignRuntime), quarantine);
+        } catch (const std::invalid_argument&) { rejected = true; }
+        require(rejected,
+                "foreign runtime with matching numeric actor/generation passed");
+        group.close();
+        require(group.runtime_finalizer(foreignRuntime).finalized(),
+                "foreign runtime did not independently finish");
+        foreignRuntime.get_done().get();
+    }
+
+    {
+        NativeActorGroup group(425, 1);
+        auto owner = group.adopt(425, 52, 7, [] {});
+        require(group.mark_ready(owner), "owning runtime ready");
+        auto registry = std::make_shared<ActorResourceRegistry>(52, 7);
+        registry->bind_runtime_id(425);
+        bool duplicateRejected = false;
+        try { registry->bind_runtime_id(426); }
+        catch (const std::logic_error&) { duplicateRejected = true; }
+        require(duplicateRejected, "runtime binding replaced after first mint");
+        NativeActorRetirementBarrier barrier(
+            registry, group.runtime_finalizer(owner), quarantine);
+        group.close();
+        barrier.retire();
+        require(barrier.poll() == Poll::completed,
+                "correct bound runtime was rejected by native barrier");
+        owner.get_done().get();
+    }
+}
+
 static void foreign_finalizer_cannot_acknowledge_another_actor_registry() {
     NativeActorResourceQuarantine quarantine(1);
     auto registry = std::make_shared<ActorResourceRegistry>(52, 7);
@@ -824,6 +924,7 @@ static void abortive_group_stop_seals_receive_before_any_native_reclaim() {
 }
 
 int main() {
+    native_barrier_refuses_unbound_or_wrong_domain_finalizers();
     foreign_finalizer_cannot_acknowledge_another_actor_registry();
     abortive_group_stop_seals_receive_before_any_native_reclaim();
     serial_actor_receive_capacity_retains_suspended_identity();
