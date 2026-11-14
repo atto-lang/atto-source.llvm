@@ -165,3 +165,73 @@ A fresh local **CMake/CTest 3/3 PASS** comprised the literal ring,
 8 × 1,500 carrier isolation and 50,000-operation model. This verifies
 native **host runtime behavior only**; LLVM compiler IR, actual linked
 Atto guest object, actor scheduler migration and OTLP remain untested.
+
+
+## Ordinary native compiler manifest intake (new experimental CLI)
+
+The native LLVM compiler now accepts an opt-in *canonical package-relative*
+`--source-log-ids=examples/telemetry/log-info-ids.json` argument alongside
+`examples/telemetry/log-info-verified.atto`. The manifest bytes are read
+through the compiler's existing bounded, regular-file and opened-file-identity
+checking source reader and are compared to the exact CLI source-unit path.
+
+A new independent C++17 backend header
+`NativeSourceLogManifestV1.hpp` performs strict schema admission for the
+checked-in JSON fixture: at most 128 KiB of **ASCII JSON with no escaped
+strings**, exactly `schema` / `source_unit` / `routines` / `sites`, bounded
+scalar callable signatures, valid nonzero `rid_` / `sid_`, unique routine
+selectors and unique site IDs, exact parent routine ID and unique
+(function, literal) site pairs. Unknown/duplicate fields, traversal/alias
+source units, invalid kinds, stale sites, and unsupported encodings fail
+closed. Unicode messages, repeated identical literal callsites, actors,
+Wasm, Cortex-M, strict hard-RT, tree-shaking, and JIT are intentionally
+outside this first backend-owned slice.
+
+The ordinary compiler codegen call now receives the checked routine/site
+inventory and **rechecks exact AST site coverage** before generating LLVM
+function metadata and native logging calls. The new manifest option cannot
+be combined with non-hosted and unverified optimization/real-time profiles.
+Diagnostics redact the full manifest path as well as the source path.
+
+For an SDK-backed compiler runner, the pending real guest build begins with:
+
+~~~sh
+cmake -S . -B build-llvm -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-llvm --parallel --target oreslang-llvmc
+./build-llvm/oreslang-llvmc \
+  --source-log-ids=examples/telemetry/log-info-ids.json \
+  examples/telemetry/log-info-verified.atto > build-llvm/verified-log.ll
+ctest --test-dir build-llvm \
+  -R 'native_(guest_log_info_verified_llvm_ir|source_log_manifest_admission)' \
+  --output-on-failure
+~~~
+
+**Real local host proof (not LLVM SDK/full Atto compiler):**
+the exact checked-in C++ manifest header Git blob
+`5c2ac63f3d96185e2e0969b553edf9fb93f4a016`,
+test Git blob `64b236f3db06f2616ef38dfda6262be6f0cc1578`,
+and JSON fixture Git blob `19ebece9eb7d485a626e61cabdd92e958f9f9e70`
+were checked against an independent local reconstruction and passed
+GCC -O2 and Clang -O1 ASan/UBSan with `-Werror -UNDEBUG`.
+The test rejected 20 malformed, ambiguous, forged or mismatched inputs.
+It is registered in both source-ID host-only and full SDK CTest modes.
+
+### Source-free native LLVM IR linking ABI floor
+
+A separate, **hand-authored and source-free** LLVM IR object
+`tests/native_static_source_log_ir_abi_v1.ll` was compiled using Clang
+`-x ir` and linked to the exact production C telemetry runtime plus
+`native_static_source_log_ir_abi_harness_v1.c`. An actual native executable
+returned 42, emitted the expected two static site-ID receipts, retained
+one lexical native span token, and passed OFF→ON→OFF→ON logging.
+It passed with Clang AddressSanitizer and UndefinedBehaviorSanitizer enabled,
+and a local CMake host subset passed 2/2 for manifest admission + linked
+source-free ABI. Both new source-free fixtures match exact committed Git
+blobs. The repo CMake host-only and full SDK modes register this ABI test
+only on supported x86_64 Linux with an available Clang driver.
+
+**This is NOT AttoLang-emitted LLVM IR.** Its source-free linkage cannot
+replace the still-unexecuted end-to-end Atto parsed source → compiler-generated
+LLVM IR → linked native guest → runtime receipts test. A source-controlled
+manifest is also not cryptographically authenticated provenance, a JIT proof,
+or a native hard-real-time guarantee.
