@@ -1425,6 +1425,7 @@ void overlapping_stack_quotas_preserve_entire_guard() {
 extern "C" void tenant_vm_test_fail_next_guard_install();
 extern "C" void tenant_vm_test_fail_next_guard_restore();
 extern "C" void tenant_vm_test_fail_next_carrier_allocations(int count);
+extern "C" void tenant_vm_test_fail_next_signal_stack_registration();
 
 // The real runtime, not a copied model, must refuse a guest before its first instruction
 // when the OS cannot install the 1 MiB quota guard.
@@ -1621,6 +1622,76 @@ void concurrent_tenants_keep_independent_stacks_and_actor_state() {
     CHECK_EQ(host.stats().unavailable_carriers, std::uint32_t{0});
 }
 
+// A replacement thread may fail to install its alternate SIGSEGV stack even though mmap
+// succeeded. The failure must retire that carrier without a process-wide abort.
+void alternate_signal_stack_failure_retire_and_recover() {
+    HostLimits limits;
+    limits.carriers = 1;
+    TenantVmHost host(limits);
+    auto small = host.open(stack_spec("signal-stack-small", 512 << 10));
+    auto large = host.open(stack_spec("signal-stack-large", 4 << 20));
+    REQUIRE_OK(small);
+    REQUIRE_OK(large);
+    auto a = host.spawn_actor(small.handle, KIND_RESTARTABLE);
+    auto b = host.spawn_actor(large.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(a);
+    REQUIRE_OK(b);
+    CHECK_STATUS(host.call(a.actor, words({RESTART_ADD, 5})).get().status, Status::Ok);
+    tenant_vm_test_fail_next_signal_stack_registration();
+    tenant_vm_test_fail_next_guard_restore();
+    const TurnResult rejected = host.call(b.actor, words({RESTART_ADD, 10})).get();
+    CHECK_STATUS(rejected.status, Status::ActorRestarted);
+    CHECK_REASON(rejected.failure, FailReason::StackOverflow);
+    const auto deadline = std::chrono::steady_clock::now() + Ms(5000);
+    while ((host.stats().carrier_replacements < 2 ||
+            host.stats().unavailable_carriers != 0) &&
+            std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(Ms(2));
+    CHECK_EQ(host.stats().carrier_replacements, std::uint64_t{2});
+    CHECK_EQ(host.stats().unavailable_carriers, std::uint32_t{0});
+    const TurnResult resumed = host.call(a.actor, words({RESTART_ADD, 0})).get();
+    CHECK_STATUS(resumed.status, Status::Ok);
+    if (resumed.status == Status::Ok) CHECK_EQ(word(resumed.payload), std::int64_t{5});
+    CHECK(host.snapshot(small.handle).phase == Phase::Running);
+    CHECK(host.snapshot(large.handle).phase == Phase::Running);
+}
+
+// Race the host's clean shutdown and the watchdog's bounded replacement retries.
+// Each cycle leaves a queued admitted message that must be completed exactly once,
+// even when the retiring carrier is the only worker and its replacement is delayed.
+void shutdown_during_carrier_recovery_finishes_all_accepted_mail() {
+    for (int round = 0; round < 12; ++round) {
+        tenant_vm_test_fail_next_carrier_allocations(0);
+        std::future<TurnResult> pending;
+        {
+            HostLimits limits;
+            limits.carriers = 1;
+            TenantVmHost host(limits);
+            auto small = host.open(stack_spec("shutdown-small", 512 << 10));
+            auto large = host.open(stack_spec("shutdown-large", 4 << 20));
+            REQUIRE_OK(small);
+            REQUIRE_OK(large);
+            auto a = host.spawn_actor(small.handle, KIND_RESTARTABLE);
+            auto b = host.spawn_actor(large.handle, KIND_RESTARTABLE);
+            REQUIRE_OK(a);
+            REQUIRE_OK(b);
+            CHECK_STATUS(host.call(a.actor, words({RESTART_ADD, 1})).get().status, Status::Ok);
+            tenant_vm_test_fail_next_carrier_allocations(2);
+            tenant_vm_test_fail_next_guard_restore();
+            const TurnResult rejected = host.call(b.actor, words({RESTART_ADD, 1})).get();
+            CHECK_STATUS(rejected.status, Status::ActorRestarted);
+            pending = host.call(a.actor, words({RESTART_ADD, 7}));
+            // As the worker is retiring, fail one VM and drain/close the other.
+            CHECK_STATUS(host.kill(large.handle), Status::Ok);
+            // Destructor must settle both, regardless of watchdog replacement timing.
+        }
+        tenant_vm_test_fail_next_carrier_allocations(0);
+        CHECK(pending.wait_for(Ms(3000)) == std::future_status::ready);
+        if (pending.wait_for(Ms(0)) == std::future_status::ready)
+            CHECK_STATUS(pending.get().status, Status::TenantFailed);
+    }
+}
+
 // A quota must leave room for host calls, and fit in the carrier's stack with its guard.
 void stack_quota_limits_are_checked() {
     TenantVmHost host;
@@ -1774,6 +1845,8 @@ const Case cases[] = {
     {"guard_restore_failure_quarantines_carrier_without_process_abort", guard_restore_failure_quarantines_carrier_without_process_abort},
     {"carrier_replacement_retries_failed_allocation", carrier_replacement_retries_failed_allocation},
     {"carrier_replacement_exhaustion_fails_pending_calls", carrier_replacement_exhaustion_fails_pending_calls},
+    {"alternate_signal_stack_failure_retire_and_recover", alternate_signal_stack_failure_retire_and_recover},
+    {"shutdown_during_carrier_recovery_finishes_all_accepted_mail", shutdown_during_carrier_recovery_finishes_all_accepted_mail},
 #endif
     {"concurrent_tenants_keep_independent_stacks_and_actor_state", concurrent_tenants_keep_independent_stacks_and_actor_state},
     {"stack_quota_limits_are_checked", stack_quota_limits_are_checked},
