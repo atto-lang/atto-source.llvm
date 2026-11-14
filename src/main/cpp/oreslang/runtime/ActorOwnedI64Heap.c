@@ -412,7 +412,10 @@ int ores_actor_i64_heap_try_destroy(OresActorI64Heap* heap) {
     /* Release lock before teardown; the supervisor must have fenced all
      * transport, scheduler, timer and callback handles to this heap. */
     unlock_heap(heap);
-    memset(heap, 0, bytes);
+    /* Never rely on a dead memset before free: O2/LTO may remove it.
+     * Preserve deterministic erasure of actor fields, loan metadata,
+     * incarnation authority and the allocation header on physical release. */
+    zeroize_bytes(heap, bytes);
     free(heap);
     return 1;
 }
