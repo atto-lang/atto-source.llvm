@@ -18,7 +18,9 @@ const cases = [
   ["implicit-nonconst", "negative", "c3e5221ad48bfc8710249be41422acea41fccc8c", "E_NON_CONST_INITIALIZER"],
   ["explicit-nonconst", "negative", "5a38a3999e3e7e2784c289ab764c68bbeefcf1af", "E_NON_CONST_INITIALIZER"],
   ["const-mut-scalar", "negative", "2ff0af5fdcd84d1db293a6d6c1ebd82076e2e582", "E_CONST_MUT_UNSUPPORTED"],
-  ["const-overflow", "negative", "496fe64c927b7ecee891c9e59d3583b0f2d58bed", "E_CONST_OVERFLOW"]
+  ["const-overflow", "negative", "496fe64c927b7ecee891c9e59d3583b0f2d58bed", "E_CONST_OVERFLOW"],
+  ["implicit-rebind", "negative", "ebc0c31b84869774bd398c9c469bfda58334acc0", "E_IMMUTABLE_REBIND"],
+  ["explicit-rebind", "negative", "87dd9e7483254a0ecb8865d72e5e6e9ee337d4e7", "E_IMMUTABLE_REBIND"]
 ];
 const scratch = mkdtempSync(join(tmpdir(), "atto-implicit-const-"));
 function run(program, args) {
