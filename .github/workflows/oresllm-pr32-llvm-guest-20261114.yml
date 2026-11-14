@@ -1,0 +1,62 @@
+name: OresLLM CPU PR32 actual LLVM guest admission (review-only)
+on:
+  push:
+    branches:
+      - audit/oresllm-cpu-mat2-native-20261114
+permissions:
+  contents: read
+jobs:
+  source-exact-cpu-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify immutable compiler ancestor and exact imported guest blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor 0c5c5caef5d0e7416be49f3e7c4ebf0724c63b96 HEAD
+          test "$(git hash-object tests/oresllm-pr32/src/cpu_mat2_gradients.atto)" = "7387223cab4172ba2ff856a617bfff677135df94"
+          test "$(git hash-object tests/oresllm-pr32/tests/native-cpu-mat2-gradients.atto)" = "46ed461e802f61d6e9ce924db6340a0edbad870a"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          echo "ORESLLM_PR32_COMPILER_ORG_BLOB_MATCH|compiler_branch=gpt6/llvm-guard-fail-arm-native-20261108"
+      - name: Install native LLVM 18 toolchain (no cross-org checkout)
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm-18-dev clang-18 lld-18 libzstd-dev cmake
+      - name: Compile this compiler branch's original C++ sources
+        shell: bash
+        env:
+          LLVM_DIR: /usr/lib/llvm-18/lib/cmake/llvm
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/oresllm-pr32 -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR"
+          cmake --build build/oresllm-pr32 --target oreslang-llvmc -j2
+          test -x build/oresllm-pr32/oreslang-llvmc
+          sha256sum build/oresllm-pr32/oreslang-llvmc
+          echo "ORESLLM_PR32_REAL_COMPILER_BUILT"
+      - name: Compile actual 17-case OresLLM class, float, Result and borrow guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/oresllm-pr32"
+          build/oresllm-pr32/oreslang-llvmc --target=host tests/oresllm-pr32/tests/native-cpu-mat2-gradients.atto > "$RUNNER_TEMP/oresllm-pr32/guest.ll" 2> "$RUNNER_TEMP/oresllm-pr32/compile.err" || {
+            echo "ORESLLM_PR32_COMPILER_REJECTED|guest=NOT_EXECUTED"
+            sed -n '1,60p' "$RUNNER_TEMP/oresllm-pr32/compile.err"
+            exit 1
+          }
+          test -s "$RUNNER_TEMP/oresllm-pr32/guest.ll"
+          grep -F 'define ' "$RUNNER_TEMP/oresllm-pr32/guest.ll"
+          /usr/bin/clang-18 -Wno-override-module -O2 -x ir "$RUNNER_TEMP/oresllm-pr32/guest.ll" -o "$RUNNER_TEMP/oresllm-pr32/guest.native"
+          set +e
+          "$RUNNER_TEMP/oresllm-pr32/guest.native" > "$RUNNER_TEMP/oresllm-pr32/out" 2> "$RUNNER_TEMP/oresllm-pr32/err"
+          status=$?
+          set -e
+          test "$status" -eq 0
+          test "$(grep -Fxc 'ORES_CPU_MAT2_GRADIENTS_GUEST_PASS|cases=17' "$RUNNER_TEMP/oresllm-pr32/out")" -eq 1
+          echo "ORESLLM_PR32_ACTUAL_LLVM_GUEST_PASS|guest=EXECUTED"
