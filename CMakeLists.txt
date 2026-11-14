@@ -16,8 +16,10 @@ if(ATTO_SOURCE_IDS_HOST_ONLY)
   target_include_directories(atto_source_id_v1_host_test PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
   target_compile_features(atto_source_id_v1_host_test PRIVATE cxx_std_17)
-  target_compile_options(atto_source_id_v1_host_test PRIVATE
-    -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(atto_source_id_v1_host_test PRIVATE
+      -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+  endif()
   add_test(NAME source_id_v1_host_metadata_only
     COMMAND atto_source_id_v1_host_test)
   return()
