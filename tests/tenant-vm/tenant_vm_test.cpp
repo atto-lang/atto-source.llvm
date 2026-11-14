@@ -1425,6 +1425,8 @@ void overlapping_stack_quotas_preserve_entire_guard() {
 extern "C" void tenant_vm_test_fail_next_guard_install();
 extern "C" void tenant_vm_test_fail_next_guard_restore();
 extern "C" void tenant_vm_test_fail_next_carrier_allocations(int count);
+extern "C" void tenant_vm_test_reset_recovery_mask();
+extern "C" int tenant_vm_test_recovery_mask_status();
 extern "C" void tenant_vm_test_fail_next_signal_stack_registration();
 
 // The real runtime, not a copied model, must refuse a guest before its first instruction
@@ -1797,6 +1799,46 @@ void all_carriers_lost_settles_many_admitted_tenant_calls() {
 
 #endif
 
+#if defined(TENANT_VM_TEST_MPROTECT)
+// The worker inherits the creating thread's blocked SIGTRAP. Recovering from a
+// guest stack overflow must restore that *same* mask; never unconditionally
+// SIG_UNBLOCK fault signals as the previous Linux implementation did.
+void guest_recovery_preserves_inherited_signal_mask() {
+    struct RestoreMask {
+        sigset_t original{};
+        bool armed = false;
+        ~RestoreMask() {
+            if (armed) (void)pthread_sigmask(SIG_SETMASK, &original, nullptr);
+        }
+    } restore;
+    sigset_t blocked{};
+    sigemptyset(&blocked);
+    sigaddset(&blocked, SIGTRAP);
+    const int result = pthread_sigmask(SIG_BLOCK, &blocked, &restore.original);
+    CHECK_EQ(result, 0);
+    if (result != 0) return;
+    restore.armed = true;
+
+    tenant_vm_test_reset_recovery_mask();
+    {
+        HostLimits limits;
+        limits.carriers = 1;
+        TenantVmHost host(limits);
+        auto vm = host.open(stack_spec("signal-mask-preserved", 512 << 10));
+        REQUIRE_OK(vm);
+        auto actor = host.spawn_actor(vm.handle, KIND_RESTARTABLE);
+        REQUIRE_OK(actor);
+        const TurnResult fault = host.call(actor.actor, words({RESTART_RECURSE_N, 700})).get();
+        CHECK_STATUS(fault.status, Status::ActorRestarted);
+        CHECK_REASON(fault.failure, FailReason::StackOverflow);
+        CHECK_EQ(tenant_vm_test_recovery_mask_status(), 1);
+        const TurnResult resumed = host.call(actor.actor, words({RESTART_ADD, 1})).get();
+        CHECK_STATUS(resumed.status, Status::Ok);
+        CHECK_EQ(host.stats().unavailable_carriers, std::uint32_t{0});
+    }
+}
+#endif
+
 // A quota must leave room for host calls, and fit in the carrier's stack with its guard.
 void stack_quota_limits_are_checked() {
     TenantVmHost host;
@@ -1954,6 +1996,7 @@ const Case cases[] = {
     {"shutdown_during_carrier_recovery_finishes_all_accepted_mail", shutdown_during_carrier_recovery_finishes_all_accepted_mail},
     {"permanently_failed_carrier_leaves_other_tenants_runnable", permanently_failed_carrier_leaves_other_tenants_runnable},
     {"all_carriers_lost_settles_many_admitted_tenant_calls", all_carriers_lost_settles_many_admitted_tenant_calls},
+    {"guest_recovery_preserves_inherited_signal_mask", guest_recovery_preserves_inherited_signal_mask},
 #endif
     {"concurrent_tenants_keep_independent_stacks_and_actor_state", concurrent_tenants_keep_independent_stacks_and_actor_state},
     {"stack_quota_limits_are_checked", stack_quota_limits_are_checked},
