@@ -50,6 +50,24 @@ if(ATTO_ACTOR_RETIREMENT_HOST_ONLY)
     COMMAND atto_actor_resource_registry_host_test)
   set_tests_properties(native_actor_resource_registry_quiescence
     PROPERTIES TIMEOUT 30)
+
+  # Exercise the same production ActorGroup STOP/close and physical DONE
+  # regression as the full suite. This detects lost stop dispatch receipts
+  # and protects against callback/notification races without an LLVM SDK.
+  add_executable(atto_actor_group_lifecycle_host_test
+    tests/actor_group_lifecycle_test.cpp)
+  target_include_directories(atto_actor_group_lifecycle_host_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_features(atto_actor_group_lifecycle_host_test PRIVATE
+    cxx_std_17)
+  target_compile_options(atto_actor_group_lifecycle_host_test PRIVATE
+    -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+  target_link_libraries(atto_actor_group_lifecycle_host_test PRIVATE
+    Threads::Threads)
+  add_test(NAME native_actor_group_managed_worker_readiness
+    COMMAND atto_actor_group_lifecycle_host_test)
+  set_tests_properties(native_actor_group_managed_worker_readiness
+    PROPERTIES TIMEOUT 30)
   return()
 endif()
 
