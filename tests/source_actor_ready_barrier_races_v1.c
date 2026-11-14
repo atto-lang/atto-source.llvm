@@ -141,25 +141,45 @@ static void repeated_positive(int count) {
            count + 8);
 }
 
-static void cancelled_after_waiter_admission(void) {
-    oreslang_source_actor_test_hold_initialization(1);
+static void cancelled_after_waiter_admission(int during_publication) {
+    /* Two adversarial linearization windows:
+     * (a) actor constructor still PENDING, and
+     * (b) constructor has finished but publication is INITIALIZING.
+     * Both are required to reject READY and preserve the waiting ref
+     * while a second trusted host concurrently joins physical DONE. */
+    oreslang_source_actor_test_hold_initialization(!during_publication);
+    oreslang_source_actor_test_hold_readiness_publication(during_publication);
     void* actor = oreslang_source_actor_spawn(initialize, on_message, 1);
     check(actor != NULL);
-    observe_held_initialization();
+    if (during_publication) {
+        while (!oreslang_source_actor_test_readiness_publication_entered())
+            sched_yield();
+        check(atomic_load_explicit(&constructed, memory_order_acquire) == 1);
+        check(oreslang_source_actor_ready_status(actor)
+              == ORES_SOURCE_ACTOR_STARTUP_INITIALIZING);
+    } else {
+        observe_held_initialization();
+        check(oreslang_source_actor_ready_status(actor)
+              == ORES_SOURCE_ACTOR_STARTUP_PENDING);
+    }
     pthread_t waiter;
     check(pthread_create(&waiter, NULL, host_waiter, actor) == 0);
     observe_real_cv_wait();
     check(oreslang_source_actor_ready_status(actor)
-          == ORES_SOURCE_ACTOR_STARTUP_PENDING);
+          == (during_publication
+              ? ORES_SOURCE_ACTOR_STARTUP_INITIALIZING
+              : ORES_SOURCE_ACTOR_STARTUP_PENDING));
     oreslang_source_actor_request_stop(actor);
     pthread_t joiner;
-    /* Compete for physical teardown while the READY waiter still owns a
-     * lifetime pin and the constructor is held in PENDING. */
+    /* The adversarial host join is admitted while the observer owns a
+     * lifetime pin. Neither READY-wait nor DONE-join may use freed memory. */
     check(pthread_create(&joiner, NULL, host_joiner, actor) == 0);
-    oreslang_source_actor_test_hold_initialization(0);
-    /* The waiting host thread must wake on terminal-before-ready, release
-     * its lifetime pin, emit the TESTING marker and abort the process.
-     * Concurrent physical join must not invalidate its allocation. */
+    if (during_publication)
+        oreslang_source_actor_test_hold_readiness_publication(0);
+    else
+        oreslang_source_actor_test_hold_initialization(0);
+    /* Cancellation must wake this admitted observer, revoke its pin,
+     * and fail stop. A successful return or hang is a test failure. */
     check(pthread_join(waiter, NULL) == 0);
     check(pthread_join(joiner, NULL) == 0);
     fputs("UNEXPECTED_READY_AFTER_CANCEL\n", stderr);
@@ -187,8 +207,12 @@ int main(int argc, char** argv) {
         repeated_positive(32);
         return 0;
     }
-    if (strcmp(argv[1], "cancel") == 0) {
-        cancelled_after_waiter_admission();
+    if (strcmp(argv[1], "cancel-pending") == 0) {
+        cancelled_after_waiter_admission(0);
+        return 11;
+    }
+    if (strcmp(argv[1], "cancel-publishing") == 0) {
+        cancelled_after_waiter_admission(1);
         return 11;
     }
     if (strcmp(argv[1], "carrier") == 0) {
