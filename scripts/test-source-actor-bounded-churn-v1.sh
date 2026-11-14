@@ -22,6 +22,7 @@ negative_rels=(
   "tests/fixtures/source-actor-bounded-churn-v1/unbounded-count.atto"
   "tests/fixtures/source-actor-bounded-churn-v1/await-suspension.atto"
   "tests/fixtures/source-actor-bounded-churn-v1/foreign-stop.atto"
+  "tests/fixtures/source-actor-bounded-churn-v1/runtime-abi-shadow.atto"
 )
 check_snapshot() {
   [[ "$(git -C "$root" rev-parse HEAD)" == "$EXPECTED_HEAD" ]] || return 1
@@ -168,6 +169,8 @@ for opt in 0 2; do
         expected_error="bounded actor churn count" ;;
       foreign-stop.atto)
         expected_error="bounded actor churn must stop its exact scoped actor" ;;
+      runtime-abi-shadow.atto)
+        expected_error="reserved native source actor ABI symbol collision" ;;
       *) echo "unreviewed negative fixture: $rel" >&2; exit 78 ;;
     esac
     if [[ "$rc" == 0 || "$rc" == 124 || "$rc" == 125 || -s "$work/negative.ll" ]] ||
@@ -178,9 +181,9 @@ for opt in 0 2; do
     fi
   done
   check_snapshot || { echo 'SOURCE_ACTOR_CHURN_SOURCE_DRIFT' >&2; exit 78; }
-  printf 'SOURCE_ACTOR_BOUNDED_CHURN_GUEST_EXECUTED|head=%s|O%s|actors=128|runs=4|negative=5|source_blob=%s|compiler_sha256=%s|native_sha256=%s|gc=IR_SCREEN_ONLY\n' \
+  printf 'SOURCE_ACTOR_BOUNDED_CHURN_GUEST_EXECUTED|head=%s|O%s|actors=128|runs=4|negative=6|source_blob=%s|compiler_sha256=%s|native_sha256=%s|gc=IR_SCREEN_ONLY\n' \
     "$EXPECTED_HEAD" "$opt" "$(git -C "$root" rev-parse "HEAD:$source_rel")" \
     "$(sha256sum "$compiler" | cut -d' ' -f1)" \
     "$(sha256sum "$artifact" | cut -d' ' -f1)"
 done
-echo "SOURCE_ACTOR_BOUNDED_CHURN_MATRIX_EXECUTED|head=$EXPECTED_HEAD|levels=O0_O2|native_executions=14|sanitized_construction_proofs=2|positive_variants=3|negative_compiler_rejections=10|async_guest=NOT_EXECUTED|zero_gc_certified=NO"
+echo "SOURCE_ACTOR_BOUNDED_CHURN_MATRIX_EXECUTED|head=$EXPECTED_HEAD|levels=O0_O2|native_executions=14|sanitized_construction_proofs=2|positive_variants=3|negative_compiler_rejections=12|async_guest=NOT_EXECUTED|zero_gc_certified=NO"
