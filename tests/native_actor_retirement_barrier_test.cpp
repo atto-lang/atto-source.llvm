@@ -418,7 +418,93 @@ static void failed_source_cleanup_keeps_actor_arena_retained() {
             "missing cleanup created a false get_done");
 }
 
+static void two_overlapping_receives_pin_actual_native_done_barrier() {
+    NativeActorResourceQuarantine quarantine(1);
+    NativeActorGroup group(412, 1);
+    auto registry = std::make_shared<ActorResourceRegistry>(19, 1);
+    auto receives = std::make_shared<NativeActorReceiveFence>(19, 1, 2);
+    std::atomic<int> physical_frees{0};
+    registry->register_resource(Kind::native_allocation, [&] {
+        ++physical_frees;
+    });
+
+    NativeActorRetirementBarrier* barrier = nullptr;
+    auto ref = group.adopt(412, 19, 1, [&] { barrier->retire(); });
+    NativeActorRetirementBarrier owned(
+            registry, group.runtime_finalizer(ref), quarantine, {}, receives);
+    barrier = &owned;
+    require(group.mark_ready(ref), "two-receive actor ready");
+
+    auto first = receives->try_enter(19, 1);
+    auto second = receives->try_enter(19, 1);
+    require(first.has_value() && second.has_value(), "two distinct admissions");
+    require(!receives->try_enter(19, 1), "invocation capacity bypass");
+    require(receives->active_receives() == 2, "receive count");
+    group.close();
+    receives->seal_stop(true);
+    require(!receives->try_enter(19, 1), "receive after STOP");
+    require(!receives->try_begin_teardown(), "teardown while both receives live");
+    require(owned.poll() == Poll::pending && physical_frees == 0,
+            "retirement released arena while two receives were live");
+    require(ref.get_done().wait_for(std::chrono::milliseconds(0))
+                 == std::future_status::timeout, "done before receive quiescence");
+
+    first->release();
+    require(!receives->try_begin_teardown(), "teardown while second receive live");
+    require(owned.poll() == Poll::pending && physical_frees == 0,
+            "retirement released arena while second receive live");
+    second->release();
+    first->release(); // repeated close is inert
+    require(receives->active_receives() == 0, "receive leases did not retire");
+    require(receives->try_begin_teardown(), "once-only lifecycle reservation");
+    require(!receives->try_begin_teardown(), "duplicate lifecycle reservation");
+    require(owned.poll() == Poll::pending && physical_frees == 0,
+            "resource free overlapped running teardown");
+    receives->seal_stop(false); // cancel cannot interrupt a live native callback
+    require(!receives->ready_for_reclamation(),
+            "abortive stop bypassed already-entered teardown");
+    receives->finish_teardown();
+    require(owned.poll() == Poll::completed && physical_frees == 1,
+            "native resource was not reclaimed exactly once after quiescence");
+    ref.get_done().get();
+    require(owned.poll() == Poll::completed && physical_frees == 1,
+            "second DONE reclaimed native resource twice");
+}
+
+static void foreign_receive_fence_cannot_complete_another_actor() {
+    NativeActorResourceQuarantine quarantine(1);
+    NativeActorGroup group(413, 1);
+    auto registry = std::make_shared<ActorResourceRegistry>(20, 5);
+    auto foreign = std::make_shared<NativeActorReceiveFence>(20, 6, 1);
+    NativeActorRetirementBarrier* barrier = nullptr;
+    auto ref = group.adopt(413, 20, 5, [&] { barrier->retire(); });
+    bool rejected = false;
+    try {
+        NativeActorRetirementBarrier invalid(
+                registry, group.runtime_finalizer(ref), quarantine, {}, foreign);
+    } catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected, "foreign incarnation receive fence accepted");
+    auto correct = std::make_shared<NativeActorReceiveFence>(20, 5, 1);
+    NativeActorRetirementBarrier owned(
+            registry, group.runtime_finalizer(ref), quarantine, {}, correct);
+    barrier = &owned;
+    require(group.mark_ready(ref), "correct incarnation ready");
+    rejected = false;
+    try { (void) correct->try_enter(20, 4); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected && correct->active_receives() == 0,
+            "stale generation minted guest receive lease");
+    group.close();
+    require(owned.poll() == Poll::pending,
+            "missing stop-seal proof admitted native reclamation");
+    correct->seal_stop(false);
+    require(owned.poll() == Poll::completed, "abortive stop did not retire resources");
+    ref.get_done().get();
+}
+
 int main() {
+    two_overlapping_receives_pin_actual_native_done_barrier();
+    foreign_receive_fence_cannot_complete_another_actor();
     deferred_source_cleanup_physically_fences_actor_done();
     failed_source_cleanup_keeps_actor_arena_retained();
     successful_heap_retirement();
