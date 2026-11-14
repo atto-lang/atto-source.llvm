@@ -195,3 +195,53 @@ regression, not an executed full native repository build. The source
 Actions job still fails before executable steps. The exact receive
 header standalone sanitizer smoke remains separately verified; it
 does not certify `RuntimeFinalizer` or `NativeActorRetirementBarrier`.
+
+## Exact actor ticket ownership (2026-11-14; supersedes numeric finalizer matching)
+
+Further review found that (actor ID, generation) and even
+(runtime ID, actor ID, generation) are insufficient as physical lifetime
+authority. Separate runtimes can reuse numeric actor identifiers, and
+a runtime can recycle an old numeric identity after physical DONE.
+The earlier `RuntimeFinalizer::belongs_to(...)` numeric predicate has
+therefore been **removed**.
+
+The native resource registry now provides `bind_owner(NativeActorRef)`
+for the trusted coordinator to call once after `NativeActorGroup::adopt`.
+It rejects an actor/generation mismatch, duplicate binding, and
+post-retirement binding. The stored owner retains the opaque actor
+lifetime ticket; `matches_finalizer` delegates to the runtime
+finalizer's existing exact `matches(ref)` ticket check.
+
+`NativeActorRetirementBarrier` now rejects any unbound registry or
+finalizer not attached to the **same opaque actor ticket**, before any
+native resource retirement or DONE settlement. All 14 existing
+production retirement-test registry instances were updated to bind
+the corresponding adopted ref. The intentional unbound negative case
+remains unbound. Further native CTest cases reject:
+- Unbound registry retirement.
+- Wrong actor ID or generation.
+- Different runtime with equal numeric actor ID/generation.
+- Reused (runtime, actor ID, generation) tuple with a *new* opaque ticket.
+- Duplicate or post-retirement registry owner binding.
+- Finalizer from another group whose actor registration remains valid.
+
+The SDK-free `ATTO_ACTOR_RETIREMENT_HOST_ONLY` build now contains
+**both** `native_actor_done_resource_quiescence` and the production
+`native_actor_resource_registry_quiescence` test. The checked-in
+script requires exactly two targets and runs Clang and GCC with
+ASan/UBSan. Retirement runs with LeakSanitizer enabled. The resource
+registry failure tests intentionally quarantine unresolved native
+callbacks, so their distinct sanitizer invocation disables only
+LeakSanitizer and **does not constitute a leak-free registry claim**.
+
+Audit additionally found a malformed shell-test tail in an intermediate
+script commit. It was corrected, and the byte-exact final script
+blob `654f24ed6d5e9f9f6a06c452cc0959940608e2e0`
+was reconstructed locally and passed `bash -n`, with the local
+`git hash-object` matching GitHub.
+
+**Execution boundary:** The new full C++ retirement/registry integration
+targets are still **NOT_EXECUTED** on a source checkout. Source Actions
+have not executed job steps. Isolated exact-source receive-gate smoke
+tests remain separately verified with sanitizers; they do not prove
+this new opaque owner-binding code passed CTest.
