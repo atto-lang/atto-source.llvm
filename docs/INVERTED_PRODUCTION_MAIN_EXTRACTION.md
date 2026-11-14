@@ -12,7 +12,11 @@ fields and one local literal-only `main` containing a bounded
 extension also admits exactly one `let saved = rows.snapshot(index);`
 followed by a terminal `return saved.field;`. The capture copies both i64
 columns to distinct stack-local cells; later source-row writes, swap-delete
-and dense-index reuse cannot change the detached value. This does **not**
+and dense-index reuse cannot change the detached value.
+The parsed capture and saved-field return each retain their lexical
+snapshot binding name. The independent production-MIR verifier checks both
+against the declared local identity, denying forged/mismatched names and
+non-snapshot operations carrying snapshot metadata before code generation. This does **not**
 enable inverted classes or stable reference handles. Real native Parser/Program
 AST is converted to typed HIR, independently verified MIR and checked
 LLVM IR through `oreslang-llvmc`, **without an experimental CLI flag**.
