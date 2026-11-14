@@ -5497,20 +5497,38 @@ private:
             if (fn.bounded_actor_churn) {
                 const auto& loop = *fn.bounded_actor_churn;
                 if (fn.name != "main" || !fn.exported || !fn.parameters.empty() ||
-                        fn.returns_void || fn.scalar_while ||
-                        fn.locals.size() != 1 || !fn.statements.empty() ||
+                        fn.returns_void || fn.return_type != ScalarType::I64 ||
+                        fn.scalar_while || fn.locals.size() != 1 ||
+                        !fn.generic_parameters.empty() || !fn.statements.empty() ||
                         !fn.early_returns.empty() || !fn.actor_spawns.empty() ||
                         !fn.actor_actions.empty() || !fn.actor_sends.empty() ||
                         !fn.actor_stops.empty() || !fn.actor_field_writes.empty() ||
-                        !fn.ready_await_actor.empty() ||
-                        !fn.done_await_actor.empty() ||
-                        fn.has_declared_effects ||
-                        loop.initial < 0 || loop.upper_bound < loop.initial ||
-                        loop.upper_bound > 1024)
+                        !fn.ready_await_actor.empty() || !fn.done_await_actor.empty() ||
+                        !fn.ready_future_name.empty() || !fn.ready_future_actor.empty() ||
+                        !fn.source_tasks.empty() || !fn.future_pipelines.empty() ||
+                        fn.caught_throw_value || !fn.caught_throw_defers.empty() ||
+                        !fn.return_class.empty() || !fn.return_sum.empty() ||
+                        !fn.pending_return_type_alias.empty() ||
+                        fn.has_declared_effects || loop.initial < 0 ||
+                        loop.upper_bound < loop.initial || loop.upper_bound > 1024)
                     throw std::runtime_error("bounded actor churn failed native ownership admission");
-                if (loop.worker.name == loop.counter ||
+                const auto& local = fn.locals.front();
+                if (local.name != loop.counter ||
+                        !(local.assignable || local.owner_mutable) ||
+                        local.heap_owned || local.int_array ||
+                        !local.class_name.empty() ||
+                        local.scalar_type != ScalarType::I64 ||
+                        !local.initializer ||
+                        local.initializer->kind != Expression::Kind::Integer ||
+                        local.initializer->integer != loop.initial ||
+                        !fn.result ||
+                        fn.result->kind != Expression::Kind::Variable ||
+                        fn.result->name != loop.counter ||
+                        loop.worker.name.empty() || loop.worker.name == loop.counter ||
+                        loop.worker.declared_type.kind != SourceType::Kind::ActorRef ||
+                        loop.worker.declared_type.argument != loop.worker.actor_type ||
                         actor_types.find(loop.worker.actor_type) == actor_types.end())
-                    throw std::runtime_error("bounded actor churn requires a declared actor type");
+                    throw std::runtime_error("bounded actor churn requires a declared, uniquely owned scoped actor and counter");
             }
             for (const auto& spawn : fn.actor_spawns) {
                 const auto it = actor_types.find(spawn.actor_type);
