@@ -126,3 +126,25 @@ The ordinary compiler CLI, source registry loading, separate artifact SHA
 attestation, native executable linking and actor-aware OTel context are the
 next required gates. No complete backend parity claim is made.
 
+
+### Concurrent native-carrier regression
+
+`tests/native_static_log_carriers_v1_test.c` (exact Git blob
+`cbbf7aeb23c285cf79dece44c2716f53d553a6f2`) adds a Linux
+`pthread` proof: eight real native carriers each attempt 1,500 static log
+writes under separate nested TLS state. Every carrier retains exactly
+32 events, reports 1,468 bounded drops, drains only its own messages,
+and obtains a distinct nonzero span token. The host/main carrier sees
+zero events and cannot drain another carrier's TLS queue.
+
+The exact committed test was compiled together with exact committed
+`NativeTelemetrySpan.c` and `NativeTelemetrySpan.h` and passed under GCC
+C11 -O2 and Clang C11 -O1 ASan+UBSan, all with -Werror/-UNDEBUG:
+`LLVM_STATIC_LOG_RING_CARRIERS_HOST_PASS:8x1500`. CTest targets are
+`static_log_eight_carriers_host_only` and
+`native_literal_guest_log_eight_carriers_runtime` for the respective
+host-only/full-LLVM configurations.
+
+These are pthread host-carrier tests, **not** Atto actor-message execution,
+actor carrier migration, JIT generation or bounded hard-real-time proof.
+
