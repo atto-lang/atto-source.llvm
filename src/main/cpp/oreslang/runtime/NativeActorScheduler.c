@@ -1556,6 +1556,14 @@ void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
 int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* s) {
     return s && executing == s;
 }
+int ores_native_actor_scheduler_in_any_actor_turn(void) {
+    /* executing is installed only during a scheduler-owned callback and
+     * cleared before leaving it, including CONTROL and WAKE callbacks.
+     * A synthetic SourceTask worker is not exempt from this fence. */
+    return executing != NULL
+        && executing_actor.scheduler_domain != 0
+        && executing_claim.carrier != 0;
+}
 /* Actor-specific authority, not merely membership in the same worker pool. */
 int ores_native_actor_scheduler_is_current_actor(
         OresNativeActorScheduler* s, OresNativeActorRef actor) {
