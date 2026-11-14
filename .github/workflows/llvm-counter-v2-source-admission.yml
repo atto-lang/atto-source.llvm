@@ -25,5 +25,5 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
-          python3 tools/counter-v2-source-manifest-pin/**
+          cargo run --offline --manifest-path tools/counter-v2-source-manifest-pin/Cargo.toml
           echo "LLVM_COUNTER_V2_EXECUTION_STATUS=NOT_EXECUTED"
