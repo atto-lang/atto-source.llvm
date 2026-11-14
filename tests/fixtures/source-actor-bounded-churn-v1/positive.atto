@@ -1,0 +1,16 @@
+// Native LLVM v1: each dynamic ActorRef lives for exactly one loop iteration.
+// stop joins physical VM shutdown before the next actor can be spawned.
+// This deliberately does not use await/send or leak actor refs across turns.
+define actor Worker as {
+  const base: int = 40;
+  pub fnc on_message(int n): int { return base + n; }
+}
+pub fnc main(): int {
+  let iteration: int = 0;
+  while (iteration < 128) {
+    const worker = spawn Worker();
+    stop worker;
+    iteration = iteration + 1;
+  }
+  return iteration;
+}
