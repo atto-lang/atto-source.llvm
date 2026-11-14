@@ -127,10 +127,10 @@ jobs:
           bash scripts/test-source-actor-ready-barrier-v1.sh |
             tee "$RUNNER_TEMP/source-actor-ready-barrier-native.txt"
           for opt in 0 2; do
-            grep -Fqx "SOURCE_ACTOR_READY_BARRIER_NATIVE_PASS|head=$EXPECTED_HEAD|O$opt|constructors=40|cv_waits=32|fast_ready=8|physical_joins=40|cancel=SIGABRT|carrier=SIGABRT|sanitizers=ASAN_UBSAN|atto_guest=NO|zero_gc_certified=NO" \
+            grep -Fqx "SOURCE_ACTOR_READY_BARRIER_NATIVE_PASS|head=$EXPECTED_HEAD|O$opt|constructors=40|cv_waits=32|fast_ready=8|physical_joins=40|cancel_pending=SIGABRT|cancel_publishing=SIGABRT|carrier=SIGABRT|sanitizers=ASAN_UBSAN|atto_guest=NO|zero_gc_certified=NO" \
               "$RUNNER_TEMP/source-actor-ready-barrier-native.txt"
           done
-          grep -Fqx "SOURCE_ACTOR_READY_BARRIER_NATIVE_MATRIX_PASS|head=$EXPECTED_HEAD|levels=O0_O2|native_execs=6|real_ctors=80|real_joins=80|cv_waits=64|fast_paths=16|death_tests=4|guest=NOT_EXECUTED" \
+          grep -Fqx "SOURCE_ACTOR_READY_BARRIER_NATIVE_MATRIX_PASS|head=$EXPECTED_HEAD|levels=O0_O2|native_execs=8|real_ctors=80|real_joins=80|cv_waits=64|fast_paths=16|death_tests=6|guest=NOT_EXECUTED" \
             "$RUNNER_TEMP/source-actor-ready-barrier-native.txt"
           test "$(grep -c '^SOURCE_ACTOR_READY_BARRIER_NATIVE_PASS|' "$RUNNER_TEMP/source-actor-ready-barrier-native.txt")" = 2
       - name: Retain host-only native race receipts
