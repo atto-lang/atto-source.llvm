@@ -1,0 +1,4 @@
+fnc main(): int {
+    val Atomic<bool> counter = Atomic<bool>(false);
+    return 42;
+}

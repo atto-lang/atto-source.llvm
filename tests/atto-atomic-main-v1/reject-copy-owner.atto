@@ -1,0 +1,5 @@
+fnc main(): int {
+    val Atomic<int> counter = Atomic<int>(42);
+    val int alias = counter;
+    return alias;
+}

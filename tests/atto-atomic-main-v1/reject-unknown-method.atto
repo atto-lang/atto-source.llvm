@@ -1,0 +1,4 @@
+fnc main(): int {
+    val Atomic<int> counter = Atomic<int>(42);
+    return counter.get_ptr();
+}
