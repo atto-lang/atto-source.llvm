@@ -117,6 +117,41 @@ fnc main(): int {
           ir.find("call void @llvm.trap()") != std::string::npos,
           "production verified MIR failed to emit checked native IR");
 
+    // The production frontend must parse the value snapshot, not silently
+    // dispatch the source into an ordinary class or scalar function path.
+    const auto detached = parse_program(R"ores(
+define inverted struct P as let x: int; id: int; end
+fnc main(): int {
+    let rows = InvertedArray<P>.with_capacity(3);
+    rows.push(42, 100);
+    let saved = rows.snapshot(0);
+    rows.push(9, 101);
+    rows.set(0, x, 77);
+    rows.erase_swap(0);
+    return saved.x;
+}
+)ores");
+    check(detached.functions.empty() && detached.inverted_main.has_value(),
+          "detached inverted struct lowered through wrong parser route");
+    check(detached.inverted_main->snapshot_name == "saved",
+          "detached snapshot local name lost");
+    check(detached.inverted_main->operations.size() == 6,
+          "detached snapshot operation count wrong");
+    using Kind = InvertedSourceOperation::Kind;
+    check(detached.inverted_main->operations[1].kind == Kind::Snapshot,
+          "detached struct did not produce typed capture operation");
+    check(detached.inverted_main->operations.back().kind == Kind::ReturnSnapshotRead,
+          "detached struct return did not preserve value-read identity");
+    const auto snapshot_mir = dop::mir::verify_production_inverted_i64(detached);
+    check(snapshot_mir.mir.instructions().size() == 8,
+          "detached native source lost MIR close or value read");
+    const auto snapshot_ir = dop::mir::emit_native_i64_pair_ir(
+        snapshot_mir.mir, snapshot_mir.operands);
+    check(snapshot_ir.find("load i64, ptr %snapshot0") != std::string::npos,
+          "snapshot was not materialized as independent LLVM value");
+    check(snapshot_ir.find("store volatile i64 0, ptr %snapshot1") != std::string::npos,
+          "snapshot was not zeroized after terminal field read");
+
     rejects([] {
         (void)parse_program(R"ores(
 define inverted struct P as let x: int; id: int; end
