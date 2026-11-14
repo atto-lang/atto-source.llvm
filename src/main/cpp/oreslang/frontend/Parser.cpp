@@ -2016,8 +2016,13 @@ private:
         require(")");
         auto found = std::find_if(program.classes.begin(), program.classes.end(),
             [&](const ClassDecl& cls) { return cls.name == owner; });
-        if (found == program.classes.end())
+        if (found == program.classes.end()) {
+            const bool actor_target = std::any_of(program.actors.begin(), program.actors.end(),
+                [&](const ActorDecl& actor) { return actor.name == owner; });
+            if (actor_target)
+                fail("NATIVE_MTD_ACTOR_STATE_SEALED: external receiver methods cannot extend an actor mailbox/state authority");
             fail("NATIVE_MTD_LOCAL_CLASS_REQUIRED: typed receiver must name an already declared ordinary local class");
+        }
         const bool prior_active = external_class_receiver_active_;
         const bool prior_mutable = external_class_receiver_mutable_;
         external_class_receiver_active_ = true;
