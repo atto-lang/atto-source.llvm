@@ -64,7 +64,7 @@ for original in 7 19 31 43 59 83; do
             echo "FAIL: seed=$original O$opt got=$result oracle=$expected" >&2
             exit 1
         fi
-        echo "ATTO_RANDOM_SEED_\${original}_O\${opt}_EXPECTED_\${expected}_PASS"
+        echo "ATTO_RANDOM_SEED_$original-OPT_$opt-EXPECTED_$expected-PASS"
     done
     unset values
 done
