@@ -161,11 +161,33 @@ static SourceActor* lookup(size_t index) {
     return actor;
 }
 
+/* Returns the currently live allocation at this address ONLY while the
+ * caller owns group.mutex. Comparing raw address bits before any dereference
+ * prevents use-after-free from a stale pointer that is no longer registered.
+ * This is deliberately NOT a generation/ABA check: allocator address reuse
+ * remains tracked separately until the ABI uses minted checked handles. */
+static SourceActor* find_live_source_actor_locked(void* opaque) {
+    if (!opaque || !group.vm) return NULL;
+    for (size_t slot = 0; slot < group.next_slot; ++slot) {
+        if (group.actors[slot] == opaque) {
+            SourceActor* actor = group.actors[slot];
+            ensure(actor && actor->magic == SOURCE_ACTOR_MAGIC
+                && (size_t)actor->ref.actor_slot == slot);
+            return actor;
+        }
+    }
+    return NULL;
+}
+
 int oreslang_source_actor_ready_status(void* opaque) {
-    SourceActor* instance = (SourceActor*)opaque;
-    if (!instance || instance->magic != SOURCE_ACTOR_MAGIC) return -1;
-    return atomic_load_explicit(
-        &instance->startup_state, memory_order_acquire);
+    group_lock();
+    SourceActor* instance = find_live_source_actor_locked(opaque);
+    const int state = instance
+        ? atomic_load_explicit(
+            &instance->startup_state, memory_order_acquire)
+        : -1;
+    group_unlock();
+    return state;
 }
 
 typedef struct {
@@ -854,19 +876,10 @@ int oreslang_source_actor_snapshot_current_trace(
  * for 128 executed actor incarnations.
  */
 void oreslang_source_actor_wait_ready_blocking(void* opaque) {
-    SourceActor* instance = (SourceActor*)opaque;
     group_lock();
-    /* A stale pointer cannot be dereferenced until it has been matched to
-     * a live actor slot under the group lock. Guest code cannot manufacture
-     * this opaque trusted-main ref; this still is not a general FFI handle. */
-    size_t slot = 0;
-    while (slot < group.next_slot && group.actors[slot] != instance)
-        ++slot;
+    SourceActor* instance = find_live_source_actor_locked(opaque);
     OresNativeVM* vm = group.vm;
-    ensure(instance != NULL && vm && slot < group.next_slot
-        && group.actors[slot] == instance
-        && instance->magic == SOURCE_ACTOR_MAGIC
-        && (size_t)instance->ref.actor_slot == slot
+    ensure(instance != NULL && vm
         && group.pending_ready == NULL && group.pending_done == NULL
         && !atomic_load_explicit(&instance->stop_requested, memory_order_acquire));
     OresNativeExecutionContext carrier = {0};
@@ -928,15 +941,14 @@ void oreslang_source_actor_wait_ready_blocking(void* opaque) {
 }
 
 void oreslang_source_actor_request_stop(void* opaque) {
-    SourceActor* instance = (SourceActor*)opaque;
-    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
-
     /*
-     * Stop admission shares the group mutex with startup/readiness publication
-     * so exactly one side wins the stop-vs-ready linearization point.
-     * This phase still never waits for physical completion.
-     */
+     * Validate pointer membership BEFORE dereferencing or changing atomic
+     * state. Otherwise a stale host ref to an already-freed actor invokes
+     * undefined behavior before the existing group/slot check runs.
+     * Pointer-address ABA still requires generation-checked capabilities. */
     group_lock();
+    SourceActor* instance = find_live_source_actor_locked(opaque);
+    ensure(instance != NULL);
     int expected = 0;
     ensure(atomic_compare_exchange_strong_explicit(
         &instance->stop_requested,
