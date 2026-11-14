@@ -151,6 +151,6 @@ int main(void) {
     CHECK(ores_actor_arena_try_destroy(second.arena), "second arena not reclaimed");
     CHECK(startup_callocs == 10u, "native arena startup allocation count");
     CHECK(physical_frees == 10u, "unbalanced actor physical reclamation");
-    puts("LLVM_ACTOR_ARENA_HOST_LIFECYCLE_PASS|turns=8193|actors=2|negative=2|startup_callocs=10|physical_frees=10|turn_allocations=0|native_guest=NO|zero_gc_certified=NO");
+    puts("LLVM_ACTOR_ARENA_HOST_LIFECYCLE_PASS|parent_turns=8196|stress_turns=8193|actors=2|negative_children=2|startup_callocs=10|physical_frees=10|turn_allocations=0|native_guest=NO|zero_gc_certified=NO");
     return 0;
 }
