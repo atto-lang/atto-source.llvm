@@ -568,6 +568,23 @@ int main(int argc, char** argv) {
         // every exact guest routine/site against the native parsed Program.
         std::optional<oreslang::CheckedSourceLogManifestV1> checked_source_logs;
         if (source_log_manifest_seen) {
+            // Source identity is keyed by a physical package-relative path,
+            // not a user-supplied alias or symlink spelling that could assign
+            // two immutable IDs to the same on-disk callable.
+            const auto root = std::filesystem::canonical(".");
+            const auto physical_source = std::filesystem::path(path);
+            const auto supplied_manifest = std::filesystem::path(source_log_manifest_path);
+            const auto require_local_canonical = [&](const std::filesystem::path& supplied) {
+                if (supplied.empty() || supplied.is_absolute() ||
+                    supplied.lexically_normal() != supplied ||
+                    supplied == "." ||
+                    std::filesystem::canonical(supplied) != root / supplied) {
+                    throw std::runtime_error(
+                        "source-log manifest and source require physical canonical package-relative paths");
+                }
+            };
+            require_local_canonical(physical_source);
+            require_local_canonical(supplied_manifest);
             if (paths_alias(path, source_log_manifest_path))
                 throw std::runtime_error("source-log manifest must not alias source");
             const auto* manifest_file = source_log_manifest_path.c_str();
