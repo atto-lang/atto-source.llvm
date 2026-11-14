@@ -1613,7 +1613,7 @@ void concurrent_tenants_keep_independent_stacks_and_actor_state() {
         CHECK_STATUS(after.status, Status::Ok);
         CHECK_STATUS(other.status, Status::Ok);
         if (after.status == Status::Ok)
-            CHECK_EQ(word(after.payload), g.small ? std::int64_t{0} : std::int64_t{30});
+            CHECK_EQ(word(after.payload), std::int64_t{30}); // committed stored state survives restart
         if (other.status == Status::Ok) CHECK_EQ(word(other.payload), std::int64_t{60});
         CHECK(host.snapshot(g.vm).phase == Phase::Running);
     }
