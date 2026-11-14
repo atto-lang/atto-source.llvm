@@ -816,6 +816,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             throw std::runtime_error("reserved isolate ABI symbol collision");
     if (!source.imports.empty())
         throw std::runtime_error("unresolved native module imports cannot reach LLVM emission");
+    // Compiler/runtime-only frame symbols carry trusted actor-turn authority.
+    // Guest functions must not impersonate them or link against raw frame
+    // tokens, including in scalar-only modules without declared actors.
+    for (const auto& fn : source.functions)
+        if (fn.name.compare(0, sizeof("oreslang_source_actor_frame_") - 1,
+                            "oreslang_source_actor_frame_") == 0)
+            throw std::runtime_error("reserved native actor frame ABI symbol collision");
+
     for (const auto& actor : source.actors) {
         if (actor.max_actor_threads != MaxActorThreads::LOW) {
             throw std::runtime_error("parallel actor LLVM lowering requires compiler-proven per-turn actor state isolation");
