@@ -99,11 +99,29 @@ static void expected_abort(const char* mode) {
     fputs("SOURCE_ACTOR_CHECKED_ID_STALE_ACCEPTED\n", stderr);
     exit(17);
 }
+static void exhausted_ids_fail_closed(void) {
+    oreslang_source_actor_test_advance_next_actor_id(UINT64_MAX - 1);
+    const OresSourceActorId last = oreslang_source_actor_spawn_id(
+        ctor, echo, 1);
+    check(last == UINT64_MAX - 1);
+    until_ready(last);
+    oreslang_source_actor_stop_id(last);
+    check(oreslang_source_actor_ready_status_id(last) == -1);
+    /* Must abort before wrapping / reissuing an old identity. */
+    (void)oreslang_source_actor_spawn_id(ctor, echo, 1);
+    fputs("SOURCE_ACTOR_CHECKED_ID_WRAP_ACCEPTED\n", stderr);
+    exit(19);
+}
+
 int main(int argc, char** argv) {
     if (argc != 2) return 64;
     if (strcmp(argv[1], "positive") == 0) {
         positive();
         return 0;
+    }
+    if (strcmp(argv[1], "exhaust") == 0) {
+        exhausted_ids_fail_closed();
+        return 20;
     }
     expected_abort(argv[1]);
     return 18;
