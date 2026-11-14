@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -284,10 +285,28 @@ public:
     InvertedColumns(InvertedColumns&&) = delete;
     InvertedColumns& operator=(InvertedColumns&&) = delete;
     ~InvertedColumns() {
-        // Outstanding loans retain backing state until their release, so
-        // destruction cannot free memory under a borrower.
+        // Outstanding loans retain the backing state until release. Mark
+        // the owner closed *under the same lock* as all checked reads, then
+        // scrub both live columns and handle metadata in place without
+        // reallocating or disturbing the outstanding loan counters.
+        // Host-only raw spans issued before teardown still have their
+        // backing allocation while the loan lives, but see erased contents.
         std::lock_guard<std::mutex> lock(state_->mutex);
-        state_->closed = true;
+        State& s = *state_;
+        s.closed = true;
+        std::apply([](auto&... column) {
+            (std::fill(column.begin(), column.end(),
+                       typename std::decay_t<decltype(column)>::value_type{}), ...);
+        }, s.columns);
+        std::fill(s.row_slots.begin(), s.row_slots.end(), 0);
+        for (Slot& slot : s.slots) {
+            slot.row = 0;
+            slot.generation = 0;
+            slot.live = false;
+        }
+        std::fill(s.free_slots.begin(), s.free_slots.end(), 0);
+        // readers[]/writers[] intentionally survive until each revoked
+        // Loan destructor releases its accounting under this mutex.
     }
 
     std::size_t size() const {
