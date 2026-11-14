@@ -77,7 +77,7 @@ int main() {
         rejected(changed(source, "on Run { job_id } as r",
                  "on Run { job_id, other } as r"), "exactly one named integer field");
         rejected(changed(source, "val WorkerMsg msg = WorkerMsg.Run { job_id: 37 }",
-                 "val WorkerMsg msg = 1"), "expected '.'");
+                 "val WorkerMsg msg = 1"), "expected unreserved identifier");
 
         std::cout << "ATTO_LLVM_NOMINAL_PAYLOAD_V4_HOST_PASS=14\n";
         return 0;
