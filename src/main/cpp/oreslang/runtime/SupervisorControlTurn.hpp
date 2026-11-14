@@ -52,9 +52,9 @@ public:
                                    std::size_t restart_budget = 0,
                                    std::uint64_t restart_window_ticks = 0)
         : child_failures_(capacity),
-          restart_budget_(restart_budget),
+          restart_budget_(checked_restart_budget(restart_budget)),
           restart_window_ticks_(restart_window_ticks),
-          restart_ticks_(restart_budget, 0) {}
+          restart_ticks_(restart_budget_, 0) {}
 
     void reserve_child(const SupervisorFailureLane::ActorKey& child) {
         child_failures_.reserve(child);
@@ -223,6 +223,16 @@ public:
     }
 
 private:
+    static std::size_t checked_restart_budget(std::size_t budget) {
+        // A malformed host CONTROL policy must fail before constructing an
+        // unbounded restart history vector. Restart is a policy quota, not
+        // permission to allocate SIZE_MAX bytes on supervisor admission.
+        constexpr std::size_t max_restart_history = 1024;
+        if (budget > max_restart_history)
+            throw std::invalid_argument("native supervisor restart budget exceeds 1024");
+        return budget;
+    }
+
     bool consume_restart_slot(std::uint64_t now) noexcept {
         if (restart_budget_ == 0) return false;
         if (restart_window_ticks_ == 0) {
