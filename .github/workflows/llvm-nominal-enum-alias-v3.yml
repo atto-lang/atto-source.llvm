@@ -5,6 +5,8 @@ on:
       - 'src/main/cpp/oreslang/frontend/NominalEnumV1.hpp'
       - 'tests/native_nominal_enum_alias_v3_test.cpp'
       - 'tests/fixtures/adt-nominal-alias-v3.atto'
+      - 'tests/fixtures/adt-nominal-payload-v4.atto'
+      - 'tests/native_nominal_enum_payload_v4_test.cpp'
       - 'CMakeLists.txt'
       - '.github/workflows/llvm-nominal-enum-alias-v3.yml'
   workflow_dispatch:
@@ -35,9 +37,47 @@ jobs:
         run: |
           set -euo pipefail
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
-          cmake --build build --parallel 2 --target oreslang-llvmc oreslang-native-nominal-alias-v3-source-test
+          cmake --build build --parallel 2 --target oreslang-llvmc oreslang-native-nominal-alias-v3-source-test oreslang-native-nominal-payload-v4-source-test
       - name: Run checked source parser and semantic mutation suite (HOST)
-        run: ctest --test-dir build -R '^native_nominal_alias_v3_source_admission$' --output-on-failure
+        run: ctest --test-dir build -R '^native_nominal_(alias_v3|payload_v4)_source_admission
+      - name: Generate guest LLVM IR and execute native O0/O2
+        run: |
+          set -euo pipefail
+          build/oreslang-llvmc --experimental-nominal-enum-v1 tests/fixtures/adt-nominal-alias-v3.atto > build/adt-nominal-alias-v3.ll
+          grep -E '^define ' build/adt-nominal-alias-v3.ll
+          for opt in 0 2; do
+            clang -O"$opt" build/adt-nominal-alias-v3.ll -o "build/adt-nominal-alias-v3-O$opt"
+            set +e
+            "build/adt-nominal-alias-v3-O$opt"
+            status=$?
+            set -e
+            test "$status" -eq 11 || { echo "Expected guest exit 11, got $status"; exit 1; }
+            echo "ATTO_NOMINAL_ALIAS_GUEST_O${opt}_EXIT=11"
+          done
+      - name: Generate checked Copy-int enum payload guest and execute O0/O2
+        run: |
+          set -euo pipefail
+          build/oreslang-llvmc --experimental-nominal-enum-v1 tests/fixtures/adt-nominal-payload-v4.atto > build/adt-nominal-payload-v4.ll
+          grep -E '^define ' build/adt-nominal-payload-v4.ll
+          for opt in 0 2; do
+            clang -O"$opt" build/adt-nominal-payload-v4.ll -o "build/adt-nominal-payload-v4-O$opt"
+            set +e
+            "build/adt-nominal-payload-v4-O$opt"
+            status=$?
+            set -e
+            test "$status" -eq 37 || { echo "Expected payload guest exit 37, got $status"; exit 1; }
+            echo "ATTO_NOMINAL_PAYLOAD_GUEST_O${opt}_EXIT=37"
+          done
+      - name: Reject owned/Bytes payload variants before emitting IR
+        run: |
+          set -euo pipefail
+          printf '%s\n' 'define enum WorkerMsg { Run { job_id: Bytes }, Stop }' > build/unsupported-payload.atto
+          if build/oreslang-llvmc --experimental-nominal-enum-v1 build/unsupported-payload.atto > build/rejected.ll 2> build/rejected.log; then
+            echo 'ERROR: unsupported payload variant compiled'; exit 1
+          fi
+          test ! -s build/rejected.ll
+          grep -q 'payload AOT admits only Copy int' build/rejected.log
+ --output-on-failure
       - name: Generate guest LLVM IR and execute native O0/O2
         run: |
           set -euo pipefail
