@@ -13,6 +13,8 @@ namespace oreslang::types::overloads {
 
 inline constexpr std::size_t MaxSameArityCandidates = 128;
 inline constexpr std::size_t MaxOverloadArity = 64;
+inline constexpr std::size_t MaxEnumCases = 1024;
+inline constexpr std::size_t MaxEnumPayloadFields = 64;
 
 // This is a compiler/linker policy, NOT a guest runtime multimethod.
 // Native source overload admission remains disabled until enum lowering and
@@ -33,7 +35,7 @@ inline bool isPrimitive(const std::string& name) {
 }
 
 inline bool eligibleEnum(const std::vector<Variant>& variants) {
-    if (variants.empty()) return false;
+    if (variants.empty() || variants.size() > MaxEnumCases) return false;
     for (const Variant& value : variants) {
         if (value.layout == PayloadLayout::Unit) {
             if (!value.primitiveFields.empty()) return false;
@@ -70,7 +72,31 @@ struct Signature {
 
 enum class PairStatus { DistinctArity, DistinctEnums, Same, InvalidSameArity };
 
+// Signature is a public aggregate. Every public policy entrypoint must
+// revalidate caller-built values, not merely trust signature() factory calls.
+// This is shape validation, NOT authentication of a resolved enum symbol ID.
+inline void validateSignatureShape(const Signature& value) {
+    if (value.name.empty() || value.arity() > MaxOverloadArity)
+        throw std::invalid_argument("invalid nominal enum overload signature shape");
+    for (const Position& position : value.positions) {
+        if (position.id.empty())
+            throw std::invalid_argument("empty nominal overload position identity");
+        switch (position.kind) {
+            case Kind::Primitive:
+                if (!isPrimitive(position.id))
+                    throw std::invalid_argument("unknown nominal primitive identity");
+                break;
+            case Kind::Enum:
+                break;
+            default:
+                throw std::invalid_argument("unknown nominal overload position kind");
+        }
+    }
+}
+
 inline PairStatus compare(const Signature& left, const Signature& right) {
+    validateSignatureShape(left);
+    validateSignatureShape(right);
     if (left.name != right.name)
         throw std::invalid_argument("comparison requires the same callable name");
     if (left.arity() != right.arity()) return PairStatus::DistinctArity;
@@ -95,6 +121,8 @@ inline Signature signature(
         throw std::invalid_argument("nominal enum overload arity bound exceeded");
     Signature result{std::move(name), {}};
     for (const auto& parameter : resolvedParameters) {
+        if (parameter.first != Kind::Primitive && parameter.first != Kind::Enum)
+            throw std::invalid_argument("unknown nominal overload parameter kind");
         if (parameter.second.empty()) {
             throw std::invalid_argument("parameter has no statically resolved type ID");
         }
@@ -125,6 +153,7 @@ inline std::size_t select(
     if (candidates.empty()) throw std::invalid_argument("empty overload set");
     if (candidates.size() > MaxSameArityCandidates)
         throw std::invalid_argument("nominal enum overload candidate bound exceeded");
+    for (const Signature& candidate : candidates) validateSignatureShape(candidate);
     for (std::size_t i = 0; i < candidates.size(); ++i) {
         if (candidates[i].name != candidates.front().name
             || candidates[i].arity() != candidates.front().arity())

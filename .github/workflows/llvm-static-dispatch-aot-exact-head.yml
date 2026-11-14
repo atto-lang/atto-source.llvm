@@ -1,0 +1,80 @@
+name: LLVM static dispatch - exact-head AOT guest proof
+on:
+  pull_request:
+    paths:
+      - .github/workflows/llvm-static-dispatch-aot-exact-head.yml
+      - CMakeLists.txt
+      - src/main/cpp/oreslang/frontend/MethodResolver.cpp
+      - src/main/cpp/oreslang/frontend/NativeScalarSpecialization.hpp
+      - src/main/cpp/oreslang/backend/LlvmCodegen.cpp
+      - tests/native_static_dispatch_aot.rs
+      - tests/native_static_dispatch_resolver_test.cpp
+      - tests/native_scalar_specialization_plan_test.cpp
+      - tests/native_scalar_generic_source_execution.py
+      - tests/native_class_methods.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-aot-dispatch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Check out exact PR head without persisted GitHub credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Fail closed on wrong source tree and print identity
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          echo "ATTO_DISPATCH_SOURCE_HEAD=$(git rev-parse HEAD)"
+          echo "ATTO_DISPATCH_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+          echo "ATTO_DISPATCH_SOURCE_HEAD=$EXPECTED_HEAD" >> "$GITHUB_STEP_SUMMARY"
+          echo "ATTO_DISPATCH_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_STEP_SUMMARY"
+      - name: Install matched LLVM 19 and Clang 19 for native guest execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-19 llvm-19-dev libclang-rt-19-dev cmake ninja-build
+          command -v rustc
+          /usr/bin/clang-19 --version
+          find /usr/lib/llvm-19/lib/clang -name "libclang_rt.asan*.a" -print
+          /usr/lib/llvm-19/bin/llvm-config --version
+      - name: Configure and build actual LLVM compiler and Rust AOT dispatch proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-static-dispatch -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+            -DLLVM_DIR=/usr/lib/llvm-19/lib/cmake/llvm \
+            -DORE_CLANG=/usr/bin/clang-19
+          cmake --build build-static-dispatch --parallel 2 \
+            --target oreslang-llvmc oreslang-static-dispatch-aot-build \
+            oreslang-native-static-dispatch-resolver-test \
+            oreslang-native-scalar-specialization-plan-test
+          test -x build-static-dispatch/oreslang-llvmc
+          test -x build-static-dispatch/oreslang-static-dispatch-aot
+          test -x build-static-dispatch/oreslang-static-dispatch-predicates
+          test -x build-static-dispatch/oreslang-native-static-dispatch-resolver-test
+          test -x build-static-dispatch/oreslang-native-scalar-specialization-plan-test
+          sha256sum build-static-dispatch/oreslang-llvmc
+          sha256sum build-static-dispatch/oreslang-static-dispatch-aot
+      - name: Run exact-head compiled guest and negative dispatch proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build-static-dispatch --output-on-failure -V \
+            -R '^(native_static_dispatch_aot|native_static_dispatch_predicates|native_static_dispatch_resolver_ir_integrity|native_scalar_i64_specialization_plan|native_scalar_i64_specialization_guest|native_source_class_methods_release|native_source_class_methods_sanitizer)$'
+          echo "ATTO_DISPATCH_GUEST_PROOF=EXECUTED" >> "$GITHUB_STEP_SUMMARY"
+          echo "ATTO_DISPATCH_GUEST_PROOF_HEAD=$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "ATTO_DISPATCH_COMPILER_SHA256=$(sha256sum build-static-dispatch/oreslang-llvmc | cut -d ' ' -f 1)" >> "$GITHUB_STEP_SUMMARY"

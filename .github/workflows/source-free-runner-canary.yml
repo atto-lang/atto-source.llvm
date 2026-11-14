@@ -46,3 +46,10 @@ jobs:
           printf 'SOURCE_FREE_PROBE_METADATA=OBSERVED event=%s sha=%s ref=%s\n' "$GITHUB_EVENT_NAME" "$GITHUB_SHA" "$GITHUB_REF"
           echo "This canary proves command execution only; external API evidence must verify runner_id > 0."
           echo "It does not certify compiler execution, compiled .ores guest execution, artifacts, or backend parity."
+      - name: Compile independent source-free C++17 canary
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' '#include <iostream>' 'int main(){std::cout << "SOURCE_FREE_CPP17_EXECUTED" << std::endl;}' > "$RUNNER_TEMP/sourcefree.cpp"
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror "$RUNNER_TEMP/sourcefree.cpp" -o "$RUNNER_TEMP/sourcefree"
+          "$RUNNER_TEMP/sourcefree" | grep -Fx 'SOURCE_FREE_CPP17_EXECUTED'

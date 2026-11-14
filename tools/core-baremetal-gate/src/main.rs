@@ -176,7 +176,22 @@ impl Gate {
         require(externals.is_empty(), || {
             format!("atto.core guest IR declares external functions: {externals:?}")
         })?;
-        self.pass("atto.core .atto guest compiles to IR with no external declarations");
+        let hatches = audit::ir_escape_hatches(&ir);
+        require(hatches.is_empty(), || {
+            format!("atto.core guest IR reaches the host without a declaration: {hatches:?}")
+        })?;
+        self.pass("atto.core .atto guest compiles to IR with no external declarations, globals or assembly");
+
+        // thumbv7m-none-eabi must default to the core profile: compiling without
+        // the flag has to produce the same module, so the default cannot drift.
+        let default = exec(
+            Command::new(&self.tools.compiler).arg(format!("--target={TARGET}")).arg(&source),
+            None,
+        )?;
+        require(default.status == Some(0) && default.stdout == ir, || {
+            "thumbv7m-none-eabi without --library-profile no longer emits the core-profile module".into()
+        })?;
+        self.pass("thumbv7m-none-eabi defaults to the core profile");
 
         let ir_path = self.work.join("guest.ll");
         write(&ir_path, &ir)?;
@@ -259,7 +274,10 @@ impl Gate {
     fn boot_pass(&mut self, image: &Path) -> GateResult<()> {
         let out = self.qemu(image)?;
         let console = out.console();
-        require(out.status == Some(0) && console.contains(PASS_LINE), || {
+        let unexpected = ["ORES_CORE_TRAP", "ORES_CORE_BAREMETAL_FAIL", "ORES_CORE_UNEXPECTED_EXCEPTION"]
+            .iter()
+            .any(|marker| console.contains(marker));
+        require(out.status == Some(0) && console.contains(PASS_LINE) && !unexpected, || {
             format!("bare-metal run did not pass (status {:?}):\n{}{}", out.status, out.stdout, out.stderr)
         })?;
         self.pass("QEMU Cortex-M3 boots the atto.core .atto image: 6 result vectors incl. entry(5) == 42");
@@ -268,10 +286,17 @@ impl Gate {
 
     fn boot_trap(&mut self, image: &Path) -> GateResult<()> {
         let out = self.qemu(image)?;
+        let console = out.console();
+        // The fault must happen after the probe starts (not from a broken vector
+        // table or reset path), exactly once, and never fall through.
+        let started = audit::line_index(&console, "ORES_CORE_TRAP_PROBE start");
+        let trapped = audit::line_index(&console, TRAP_LINE);
         require(
             out.status.is_some_and(|s| s != 0)
-                && out.console().contains(TRAP_LINE)
-                && !out.console().contains("TRAP_PROBE_FAIL"),
+                && matches!((started, trapped), (Some(s), Some(t)) if s < t)
+                && console.matches(TRAP_LINE).count() == 1
+                && !console.contains("TRAP_PROBE_FAIL")
+                && !console.contains("ORES_CORE_UNEXPECTED_EXCEPTION"),
             || format!("checked overflow did not reach the platform trap hook (status {:?}):\n{}{}",
                 out.status, out.stdout, out.stderr),
         )?;

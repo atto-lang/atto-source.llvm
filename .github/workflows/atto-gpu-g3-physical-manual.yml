@@ -1,0 +1,49 @@
+name: AttoLang GPU G3 real OpenCL dispatch (manual hardware gate)
+
+on:
+  workflow_dispatch:
+    inputs:
+      g2_head_sha:
+        description: 'Exact immutable LLVM G2 kernel compiler commit SHA (PR #1470)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  physical-gpu-saxpy:
+    runs-on: [self-hosted, linux, x64, gpu-physical]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact physical probe commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Checkout separately pinned restricted G2 compiler source
+        uses: actions/checkout@v4
+        with:
+          repository: ores-truffle-oreslang/oreslang-source.llvm
+          ref: ${{ inputs.g2_head_sha }}
+          path: g2-source
+          persist-credentials: false
+
+      - name: Execute GPU hardware-required source-to-device dispatch oracle
+        shell: bash
+        env:
+          ATTO_EXPECTED_HEAD_SHA: ${{ github.sha }}
+          ATTO_G2_SOURCE_DIR: ${{ github.workspace }}/g2-source
+          ATTO_GPU_HW_REQUIRED: '1'
+        run: |
+          bash scripts/verify-atto-gpu-physical-saxpy.sh | tee "$RUNNER_TEMP/atto-gpu-g3-physical-receipt.txt"
+
+      - name: Upload independently classified G3 receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: atto-g3-gpu-${{ github.sha }}-${{ inputs.g2_head_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/atto-gpu-g3-physical-receipt.txt
+          if-no-files-found: warn
+          retention-days: 7

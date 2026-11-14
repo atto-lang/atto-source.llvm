@@ -38,8 +38,20 @@ typedef struct {
     OresNativeVMDomainConfig domains[ORES_NATIVE_VM_DOMAIN_COUNT];
 } OresNativeVMConfig;
 
+/* ABI-separate optional continuation wake configuration. Keeping this out of
+ * OresNativeVMDomainConfig preserves the existing public C struct layout for
+ * hosts compiled against the original VM ABI. The wake callback reuses each
+ * domain's existing context pointer from OresNativeVMConfig. */
+typedef struct {
+    OresNativeActorWakeFn domains[ORES_NATIVE_VM_DOMAIN_COUNT];
+} OresNativeVMWakeConfig;
+
 typedef struct OresNativeVM OresNativeVM;
 OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config);
+/* Opt-in wake-capable VM construction for continuation/NIO runtimes. Existing
+ * ores_native_vm_open() remains wake-free and ABI-compatible. */
+OresNativeVM* ores_native_vm_open_with_wakes(
+    const OresNativeVMConfig* config, const OresNativeVMWakeConfig* wakes);
 /* RT bootstrap: prestart every configured carrier in all four domains before
  * exposing the VM to guest work. No carrier will be created on its DATA or
  * CONTROL hot path thereafter. Unlike normal open(), this starts pthreads.
@@ -122,6 +134,44 @@ int ores_native_vm_stop(
  * an already-active turn and lifecycle CONTROL. */
 int ores_native_vm_stop_sealed(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
+/* Trusted runtime physical-resource loan for the exact VM ActorRef. A retain
+ * that wins before STOP delays poll_done()/wait_done(); STOP winning first
+ * rejects the retain. Release is valid after STOP and is generation-fenced.
+ * These are runtime plumbing hooks, not guest-callable ActorRef methods. */
+int ores_native_vm_actor_resource_retain(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
+int ores_native_vm_actor_resource_release(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
+/* Trusted runtime continuation-wake escrow. Source guest code cannot mint
+ * these tickets. Reserve must happen before an external operation can suspend;
+ * publish schedules the configured on_wake callback and never runs guest code
+ * inline on the producer/completion thread. This VM slice accepts only targets
+ * in the producer's exact scheduler domain; cross-scheduler continuation
+ * routing requires a separately authenticated bridge. */
+int ores_native_vm_actor_reserve_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef producer, OresNativeActorRef target,
+    uint64_t continuation_slot, uint64_t continuation_generation,
+    uint64_t code_generation, uint64_t descriptor_generation,
+    OresNativeWakeTicket* out);
+int ores_native_vm_actor_transfer_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeWakeTicket ticket);
+int ores_native_vm_actor_cancel_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeWakeTicket ticket);
+int ores_native_vm_actor_abort_transferred_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeWakeTicket ticket);
+OresNativeWakePublishStatus ores_native_vm_actor_publish_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeWakeTicket ticket, OresNativeWakeOutcome outcome);
+int ores_native_vm_actor_is_current_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeWakeTicket ticket);
+size_t ores_native_vm_actor_outstanding_wake_loans(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef producer);
 /* External trusted host barriers for compiler-generated linear ActorRef
  * stop/teardown. They do not implement source-level suspend or Future<T>.
  * Never call wait_done from a VM carrier callback. */
@@ -150,12 +200,25 @@ int ores_native_vm_current_execution_context(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeExecutionContext* out);
 
-/* Metadata-only VM master CONTROL coordinator. Coalesces one host wake bit
- * per domain. The host event loop explicitly pumps it; no master pthread or
- * actor carrier starts and no guest callback runs on this path.
- * A wake is NOT actor CONTROL admission, receipt, or supervisor delivery:
- * use ores_native_vm_publish_control() for actual actor mailbox admission.
- * Producer/API calls must be externally fenced before final vm_close(). */
+/* VM-owned CONTROL wake coordinator. Legacy hosts can explicitly pump it
+ * with zero additional threads; a trusted source bootstrap can prestart
+ * exactly ONE dedicated blocking main CONTROL pthread before any actor spawn
+ * and before prepare_realtime(). A real-time prestart attempt permanently
+ * rejects late CONTROL-thread creation, even after failed preallocation.
+ * To use both services, start CONTROL first and then prestart RT carriers.
+ * Its only job is to coalesce signals to domain scheduler conditions:
+ * it never executes guest code, delivers actor mailbox messages or becomes
+ * a fourth actor worker pool. The three actor pools stay lazy.
+ *
+ * This is a wake, NOT actor CONTROL admission or a supervisor receipt.
+ * Actual actor delivery still requires ores_native_vm_publish_control().
+ * External hosts MUST fence producers before final vm_close().
+ */
+int ores_native_vm_start_main_control_loop(OresNativeVM* vm);
+int ores_native_vm_main_control_loop_started(OresNativeVM* vm);
+/* Saturating diagnostic count of successfully signalled pool wakeups.
+ * Counts both autonomous and manual CONTROL pumps, not actor messages. */
+uint64_t ores_native_vm_control_wakes_dispatched(OresNativeVM* vm);
 int ores_native_vm_control_notify(
     OresNativeVM* vm, enum OresNativeVMDomain domain);
 unsigned ores_native_vm_control_pending(OresNativeVM* vm);
