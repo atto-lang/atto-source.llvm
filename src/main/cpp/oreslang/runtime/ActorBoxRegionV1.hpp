@@ -30,12 +30,16 @@ class ActorBoxRegion final {
     std::mutex bind_lock_;
     std::thread::id carrier_{};
     std::atomic<bool> bound_{false};
+    // May be read by a competing bind_carrier; unlike the carrier-local
+    // retired/dropping flags, shutdown admission is synchronized.
+    std::atomic<bool> shutting_down_{false};
     bool retired_ = false;
     bool executing_callback_ = false;
     bool dropping_ = false;
 
     bool on_actor_carrier(ActorHeapIdentity requested) const noexcept {
-        return bound_.load(std::memory_order_acquire) &&
+        return !shutting_down_.load(std::memory_order_acquire) &&
+               bound_.load(std::memory_order_acquire) &&
                std::this_thread::get_id() == carrier_ &&
                requested == identity_;
     }
@@ -49,10 +53,21 @@ public:
     ActorBoxRegion& operator=(ActorBoxRegion&&) = delete;
 
     ~ActorBoxRegion() noexcept {
-        if (bound_.load(std::memory_order_acquire) &&
-                std::this_thread::get_id() != carrier_)
-            std::terminate(); // actor heap teardown must run on owning carrier
-        if (executing_callback_ || dropping_) std::terminate();
+        // The scheduler must already have fenced callbacks and foreign
+        // carriers. Synchronize the admission lock with bind_carrier, then
+        // revoke all new calls BEFORE executing any user-defined destructor.
+        // A T::~T() is permitted to call back into the region, but must not
+        // observe an allocatable or bindable region during destruction.
+        {
+            std::lock_guard<std::mutex> lock(bind_lock_);
+            if (bound_.load(std::memory_order_acquire) &&
+                    std::this_thread::get_id() != carrier_)
+                std::terminate();
+            if (executing_callback_ || dropping_) std::terminate();
+            shutting_down_.store(true, std::memory_order_release);
+        }
+        retired_ = true;
+        dropping_ = true;
         for (auto& box : live_) box.reset();
         if (!arena_.try_close()) std::terminate();
     }
@@ -61,8 +76,10 @@ public:
     // ActorHeapIdentity. Knowing the numeric tuple is not sufficient proof
     // of caller authority; this helper provides no guest-callable bind API.
     bool bind_carrier(ActorHeapIdentity claimed) noexcept {
-        if (!identity_.runtime || !identity_.epoch || claimed != identity_) return false;
+        if (!identity_.runtime || !identity_.epoch || claimed != identity_ ||
+                shutting_down_.load(std::memory_order_acquire)) return false;
         std::lock_guard<std::mutex> lock(bind_lock_);
+        if (shutting_down_.load(std::memory_order_acquire)) return false;
         if (!bound_.load(std::memory_order_relaxed)) {
             carrier_ = std::this_thread::get_id();
             bound_.store(true, std::memory_order_release);
@@ -94,7 +111,8 @@ public:
             return false;
         auto* value = live_[slot].get_checked(arena_.domain(),
                                              live_[slot].owner_generation());
-        if (!value) return false;
+        if (!value || !arena_.is_current_owner(slot, live_[slot].owner_domain(),
+                live_[slot].owner_generation(), value)) return false;
         executing_callback_ = true;
         struct Guard { bool& flag; ~Guard() noexcept { flag = false; } } guard{executing_callback_};
         std::forward<F>(callback)(*value);
@@ -105,6 +123,10 @@ public:
         if (!on_actor_carrier(actor) || retired_ || executing_callback_ ||
                 dropping_ || slot >= Slots || !live_[slot].is_owned())
             return false;
+        const auto* value = live_[slot].get_checked(arena_.domain(),
+                                                      live_[slot].owner_generation());
+        if (!value || !arena_.is_current_owner(slot, live_[slot].owner_domain(),
+                live_[slot].owner_generation(), value)) return false;
         dropping_ = true;
         live_[slot].reset();
         dropping_ = false;
