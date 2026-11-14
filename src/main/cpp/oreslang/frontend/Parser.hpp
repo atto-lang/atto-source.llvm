@@ -482,7 +482,7 @@ struct InvertedStructDecl {
 // production source operations, NOT LLVM IR or a compiler authorization;
 // an independent typed HIR/MIR verifier must admit the complete stream.
 struct InvertedSourceOperation {
-    enum class Kind { Push, WriteField, EraseSwap, ReturnRead };
+    enum class Kind { Push, WriteField, EraseSwap, ReturnRead, Snapshot, ReturnSnapshotRead };
     Kind kind = Kind::Push;
     std::size_t index = 0;
     std::string field;
@@ -492,6 +492,9 @@ struct InvertedSourceOperation {
 struct InvertedSourceMain {
     std::string schema_name;
     std::string owner_name;
+    // At most one detached two-i64 value snapshot in the restricted native main.
+    // This is a lexical value, never a generation-checked class handle.
+    std::string snapshot_name;
     std::size_t capacity = 0;
     std::vector<InvertedSourceOperation> operations;
 };
