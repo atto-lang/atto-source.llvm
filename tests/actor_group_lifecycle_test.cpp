@@ -17,7 +17,86 @@ static void check(bool yes, const char* error) {
     if (!yes) throw std::runtime_error(error);
 }
 
+
+static void concurrent_close_cannot_ack_stop_before_callback_unwinds() {
+    NativeActorGroup group(9601, 1);
+    std::atomic<unsigned> stops{0};
+    std::promise<void> entered, release;
+    auto started = entered.get_future();
+    auto mayFinish = release.get_future().share();
+    auto actor = group.adopt(9601, 71, 1, [&] {
+        stops.fetch_add(1, std::memory_order_relaxed);
+        entered.set_value();
+        mayFinish.wait();
+    });
+    check(group.mark_ready(actor), "blocked native stop actor ready");
+    auto finalizer = group.runtime_finalizer(actor);
+    std::thread stopping([&] { group.stop_workers(); });
+    const bool observed = started.wait_for(2s) == std::future_status::ready;
+    // Group close does not join the separate stop-worker callback carrier.
+    // The exact opaque ticket must keep physical DONE pending until it exits.
+    group.close();
+    const bool prematurelyReady = finalizer.ready_for_resource_reclamation();
+    const bool prematurelyFinalized = finalizer.finalized();
+    const bool prematureDone = actor.get_done().wait_for(0ms) == std::future_status::ready;
+    release.set_value();
+    stopping.join();
+    check(observed, "native STOP callback did not enter");
+    check(stops.load(std::memory_order_acquire) == 1,
+          "concurrent stop_workers/close dispatched STOP more than once");
+    check(!prematurelyReady && !prematurelyFinalized && !prematureDone,
+          "native actor reclaimed while trusted STOP callback was still live");
+    check(finalizer.ready_for_resource_reclamation(),
+          "completed STOP callback did not release its physical receipt");
+    check(finalizer.finalized(), "native actor DONE did not settle after STOP exit");
+    actor.get_done().get();
+}
+
+static void readiness_observer_cannot_delay_native_stop_dispatch() {
+    NativeActorGroup group(9602, 1);
+    std::atomic<unsigned> stops{0};
+    std::promise<void> entered, release;
+    auto observerEntered = entered.get_future();
+    auto unblockObserver = release.get_future().share();
+    auto actor = group.adopt(9602, 72, 1, [&] {
+        stops.fetch_add(1, std::memory_order_release);
+    });
+    actor.when_ready([&](const oreslang::runtime::ActorReadyResult&) {
+        entered.set_value();
+        unblockObserver.wait();
+    });
+    auto finalizer = group.runtime_finalizer(actor);
+    std::thread stopping([&] { group.stop_workers(); });
+    const bool observed = observerEntered.wait_for(2s) == std::future_status::ready;
+    const unsigned dispatchedBeforeObserverReturn =
+        stops.load(std::memory_order_acquire);
+    group.close();
+    const unsigned dispatchedAfterClose =
+        stops.load(std::memory_order_acquire);
+    release.set_value();
+    stopping.join();
+    check(observed, "rejected startup readiness callback did not run");
+    check(dispatchedBeforeObserverReturn == 1 && dispatchedAfterClose == 1,
+          "readiness subscriber blocked or duplicated native STOP dispatch");
+    check(finalizer.ready_for_resource_reclamation(),
+          "stop and detached group did not meet native quiescence proof");
+    check(finalizer.finalized(), "native actor did not finalize after readiness callback");
+    check(actor.get_ready().wait_for(0ms) == std::future_status::ready,
+          "stopped startup readiness never settled");
+    bool expectedRejection = false;
+    try { actor.get_ready().get(); }
+    catch (const std::exception&) { expectedRejection = true; }
+    check(expectedRejection, "stopped startup was incorrectly marked ready");
+    // A negative startup receipt makes get_done exceptional by contract.
+    bool doneRejected = false;
+    try { actor.get_done().get(); }
+    catch (const std::exception&) { doneRejected = true; }
+    check(doneRejected, "failed startup did not propagate into DONE");
+}
+
 int main() {
+    concurrent_close_cannot_ack_stop_before_callback_unwinds();
+    readiness_observer_cannot_delay_native_stop_dispatch();
     {
         NativeActorGroup implicit(12, 1);
         check(implicit.supervisor_id() == NativeActorGroup::root_supervisor_id,
