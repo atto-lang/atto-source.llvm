@@ -262,7 +262,9 @@ int main() {
         detached.inverted_main->operations.insert(
             detached.inverted_main->operations.begin() + 2,
             oreslang::InvertedSourceOperation{SourceKind::Snapshot, 0, "", {}, 0});
+        detached.inverted_main->operations[2].snapshot_binding = "saved";
         detached.inverted_main->operations.back().kind = SourceKind::ReturnSnapshotRead;
+        detached.inverted_main->operations.back().snapshot_binding = "saved";
         const auto native = verify_production_inverted_i64(detached);
         const auto& instructions = native.mir.instructions();
         INVERTED_REQUIRE(instructions[3].kind == OpKind::Snapshot);
@@ -278,6 +280,42 @@ int main() {
         I64PairLlvmEmitter emitter(native.mir.capacity());
         INVERTED_REQUIRE(emitter.build(native.mir, native.operands) == native_ir);
         INVERTED_REQUIRE(emitter.build(compiled.mir, compiled.operands) == ir);
+
+        // Compiler HIR must not trust a detached local name merely because
+        // the Program-level snapshot_name was populated by some earlier pass.
+        // Every capture and return must carry its own matching lexical binding.
+        {
+            auto forged_capture = make_source();
+            forged_capture.inverted_main->snapshot_name = "saved";
+            forged_capture.inverted_main->operations.insert(
+                forged_capture.inverted_main->operations.begin() + 2,
+                oreslang::InvertedSourceOperation{SourceKind::Snapshot, 0, "", {}, 0,
+                                                 "other"});
+            forged_capture.inverted_main->operations.back().kind =
+                SourceKind::ReturnSnapshotRead;
+            forged_capture.inverted_main->operations.back().snapshot_binding = "saved";
+            reject([&] { (void)verify_production_inverted_i64(forged_capture); },
+                   "invalid or duplicate inverted snapshot source metadata");
+        }
+        {
+            auto forged_return = make_source();
+            forged_return.inverted_main->snapshot_name = "saved";
+            forged_return.inverted_main->operations.insert(
+                forged_return.inverted_main->operations.begin() + 2,
+                oreslang::InvertedSourceOperation{SourceKind::Snapshot, 0, "", {}, 0,
+                                                 "saved"});
+            forged_return.inverted_main->operations.back().kind =
+                SourceKind::ReturnSnapshotRead;
+            forged_return.inverted_main->operations.back().snapshot_binding = "other";
+            reject([&] { (void)verify_production_inverted_i64(forged_return); },
+                   "detached snapshot not initialized");
+        }
+        {
+            auto poisoned_push = make_source();
+            poisoned_push.inverted_main->operations[0].snapshot_binding = "saved";
+            reject([&] { (void)verify_production_inverted_i64(poisoned_push); },
+                   "foreign snapshot binding on non-snapshot operation");
+        }
 
         // A forged/deserialized MIR cannot name an uncaptured snapshot.
         auto forged_code = instructions;
@@ -301,7 +339,10 @@ int main() {
         forged_source.inverted_main->operations.insert(
             forged_source.inverted_main->operations.begin() + 3,
             oreslang::InvertedSourceOperation{SourceKind::Snapshot, 0, "", {}, 0});
+        forged_source.inverted_main->operations[2].snapshot_binding = "saved";
+        forged_source.inverted_main->operations[3].snapshot_binding = "saved";
         forged_source.inverted_main->operations.back().kind = SourceKind::ReturnSnapshotRead;
+        forged_source.inverted_main->operations.back().snapshot_binding = "saved";
         reject([&] { (void)verify_production_inverted_i64(forged_source); },
                "invalid or duplicate inverted snapshot source metadata");
     }
