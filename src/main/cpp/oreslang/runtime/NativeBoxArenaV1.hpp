@@ -39,7 +39,7 @@ class FixedBoxArena final {
     static constexpr std::uint8_t kExhausted = 4;
     static constexpr std::uint64_t kClosed = UINT64_C(1) << 63;
     static constexpr std::uint64_t kCount = kClosed - 1;
-    static_assert(sizeof(std::size_t) < 8 || Slots < (std::size_t{1} << 63),
+    static_assert(static_cast<std::uint64_t>(Slots) < kClosed,
                   "Box arena exceeds admission counter capacity");
 
     struct Slot {
