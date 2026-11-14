@@ -13,10 +13,14 @@
 namespace oreslang::runtime {
 
 enum class InstrumentationMode { off, on, deep };
-enum class PublishResult { accepted, unauthorized, unsupported, incompatible, stale_generation, invalid_variant };
+enum class PublishResult { accepted, unauthorized, unsupported, incompatible, stale_generation, invalid_variant, resource_limit };
 
 struct InstrumentationIdentity {
+    // Tenant and typed source IR are part of the code identity; hashes alone
+    // are NOT signature verification or tenant admission authority.
+    std::string tenant_id;
     std::string function_id;
+    std::string typed_ir_sha256;
     std::string abi_sha256;
     std::string effects_sha256;
     std::string ownership_sha256;
@@ -29,12 +33,15 @@ struct InstrumentationIdentity {
         return true;
     }
     bool valid() const noexcept {
-        return is_hex(function_id, 32) && is_hex(abi_sha256, 64) &&
+        return !tenant_id.empty() && tenant_id.size() <= 128 &&
+               is_hex(function_id, 32) && is_hex(typed_ir_sha256, 64) &&
+               is_hex(abi_sha256, 64) &&
                is_hex(effects_sha256, 64) && is_hex(ownership_sha256, 64) &&
                is_hex(continuation_sha256, 64);
     }
     bool operator==(const InstrumentationIdentity& o) const noexcept {
-        return function_id == o.function_id && abi_sha256 == o.abi_sha256 &&
+        return tenant_id == o.tenant_id && function_id == o.function_id &&
+               typed_ir_sha256 == o.typed_ir_sha256 && abi_sha256 == o.abi_sha256 &&
                effects_sha256 == o.effects_sha256 && ownership_sha256 == o.ownership_sha256 &&
                continuation_sha256 == o.continuation_sha256;
     }
@@ -65,11 +72,15 @@ class VersionedInstrumentationDispatch final {
 public:
     VersionedInstrumentationDispatch(std::shared_ptr<const InstrumentedVersion> baseline,
                                      bool aot_probes_supported, bool jit_codegen_supported,
-                                     bool hard_realtime)
+                                     bool hard_realtime,
+                                     std::uint64_t max_publications = 1024)
         : baseline_(std::move(baseline)), active_(baseline_),
           aot_probes_supported_(aot_probes_supported),
           jit_codegen_supported_(jit_codegen_supported), hard_realtime_(hard_realtime),
-          highest_generation_(baseline_ ? baseline_->generation : 0) {
+          highest_generation_(baseline_ ? baseline_->generation : 0),
+          max_publications_(max_publications) {
+        if (max_publications_ == 0)
+            throw std::invalid_argument("bounded native trace publication budget required");
         if (!baseline_ || !baseline_->valid())
             throw std::invalid_argument("invalid immutable AOT baseline");
     }
@@ -102,7 +113,10 @@ public:
         std::lock_guard<std::mutex> guard(publish_mutex_);
         if (variant->generation <= highest_generation_)
             return PublishResult::stale_generation;
+        if (publications_ >= max_publications_)
+            return PublishResult::resource_limit;
         highest_generation_ = variant->generation;
+        ++publications_;
         // Only NEW invocations observe the new pointer; old leases remain live.
         std::atomic_store_explicit(&active_, std::move(variant), std::memory_order_release);
         return PublishResult::accepted;
@@ -113,6 +127,11 @@ public:
     void disable() noexcept {
         std::lock_guard<std::mutex> guard(publish_mutex_);
         std::atomic_store_explicit(&active_, baseline_, std::memory_order_release);
+    }
+
+    std::uint64_t publication_count() const noexcept {
+        std::lock_guard<std::mutex> guard(publish_mutex_);
+        return publications_;
     }
 
     std::uint64_t active_generation() const noexcept {
@@ -128,6 +147,8 @@ private:
     const bool hard_realtime_;
     mutable std::mutex publish_mutex_;
     std::uint64_t highest_generation_;
+    const std::uint64_t max_publications_;
+    std::uint64_t publications_{0};
 };
 
 } // namespace oreslang::runtime
