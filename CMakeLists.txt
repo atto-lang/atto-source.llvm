@@ -139,6 +139,16 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Real compiler / Clang native guest lane for file-level exports.
+    find_program(ORESLANG_EXPORT_CLANG NAMES clang)
+    if(ORESLANG_EXPORT_CLANG)
+        add_test(NAME oreslang-declarative-exports-native
+            COMMAND bash
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/declarative_exports_native.sh"
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORESLANG_EXPORT_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/declarative-exports")
+    endif()
     # C11 dormant telemetry hook lifecycle, bounded per-carrier stack,
     # disabled-mode behavior and runtime switch. Independent from guest proof.
     add_executable(oreslang-native-telemetry-span-runtime-test
