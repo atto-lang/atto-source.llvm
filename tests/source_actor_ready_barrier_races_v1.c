@@ -75,18 +75,33 @@ static void repeated_positive(int count) {
         /* Deterministically keep constructor scheduling PENDING until
          * host_waiter has actually registered a CV wait. This tests the
          * missed-notification boundary, not merely pthread_create. */
-        oreslang_source_actor_test_hold_initialization(1);
+        const int before_constructor = (i % 2) == 0;
+        oreslang_source_actor_test_hold_initialization(before_constructor);
+        oreslang_source_actor_test_hold_readiness_publication(
+            !before_constructor);
         void* actor = oreslang_source_actor_spawn(initialize, on_message, 1);
         check(actor != NULL);
-        observe_held_initialization();
-        check(oreslang_source_actor_ready_status(actor)
-              == ORES_SOURCE_ACTOR_STARTUP_PENDING);
+        if (before_constructor) {
+            observe_held_initialization();
+            check(oreslang_source_actor_ready_status(actor)
+                  == ORES_SOURCE_ACTOR_STARTUP_PENDING);
+        } else {
+            /* Constructor has already completed, but READY cannot publish
+             * until the separate test hook releases the group mutex race. */
+            while (!oreslang_source_actor_test_readiness_publication_entered())
+                sched_yield();
+            check(oreslang_source_actor_ready_status(actor)
+                  == ORES_SOURCE_ACTOR_STARTUP_INITIALIZING);
+        }
         pthread_t waiter;
         check(pthread_create(&waiter, NULL, host_waiter, actor) == 0);
         observe_real_cv_wait();
         check(atomic_load_explicit(&host_wait_complete,
                 memory_order_acquire) == i);
-        oreslang_source_actor_test_hold_initialization(0);
+        if (before_constructor)
+            oreslang_source_actor_test_hold_initialization(0);
+        else
+            oreslang_source_actor_test_hold_readiness_publication(0);
         check(pthread_join(waiter, NULL) == 0);
         check(!oreslang_source_actor_test_ready_waiter_blocked());
         check(oreslang_source_actor_ready_status(actor)
@@ -97,10 +112,25 @@ static void repeated_positive(int count) {
                 memory_order_acquire) == i + 1);
         oreslang_source_actor_stop(actor);
     }
-    printf("SOURCE_ACTOR_READY_RACE_POSITIVE|constructors=%d|ready_waits=%d|joins=%d\n",
+    /* READY can also win before the host arrives. The fast path must
+     * observe the published state immediately, without parking on a stale
+     * condition-variable wake or holding a no-longer-live group pointer. */
+    for (int i = 0; i < 8; ++i) {
+        void* actor = oreslang_source_actor_spawn(initialize, on_message, 1);
+        check(actor != NULL);
+        while (oreslang_source_actor_ready_status(actor)
+                != ORES_SOURCE_ACTOR_STARTUP_READY)
+            sched_yield();
+        oreslang_source_actor_wait_ready_blocking(actor);
+        check(!oreslang_source_actor_test_ready_waiter_blocked());
+        oreslang_source_actor_stop(actor);
+    }
+    check(atomic_load_explicit(&constructed, memory_order_acquire)
+          == count + 8);
+    printf("SOURCE_ACTOR_READY_RACE_POSITIVE|constructors=%d|cv_waits=%d|fast_ready=8|joins=%d\n",
            atomic_load_explicit(&constructed, memory_order_acquire),
            atomic_load_explicit(&host_wait_complete, memory_order_acquire),
-           count);
+           count + 8);
 }
 
 static void cancelled_after_waiter_admission(void) {
