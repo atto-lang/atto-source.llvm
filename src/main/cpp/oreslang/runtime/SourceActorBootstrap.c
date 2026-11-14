@@ -643,12 +643,18 @@ void* oreslang_source_actor_spawn(
 }
 
 void oreslang_source_actor_send(void* opaque, int64_t payload) {
-    SourceActor* instance = (SourceActor*)opaque;
-    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC
-        && instance->on_message);
-    ensure(ores_native_vm_try_send(
+    /* Nonblocking mailbox admission is serialized with physical actor
+     * revocation. Never dereference a stale pointer before live group
+     * membership has been checked under the same mutex used by stop/join.
+     * This does not itself solve a reused-address ABA capability. */
+    group_lock();
+    SourceActor* instance = find_live_source_actor_locked(opaque);
+    ensure(instance != NULL && instance->on_message != NULL);
+    const int accepted = ores_native_vm_try_send(
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref, (uint64_t)payload)
-        == ORES_NATIVE_SEND_ACCEPTED);
+        == ORES_NATIVE_SEND_ACCEPTED;
+    group_unlock();
+    ensure(accepted);
 }
 
 int oreslang_source_actor_await_ready_checked(
