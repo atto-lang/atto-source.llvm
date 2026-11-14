@@ -40,6 +40,18 @@ jobs:
           cmake --build build --parallel 2 --target oreslang-llvmc oreslang-native-nominal-alias-v3-source-test oreslang-native-nominal-payload-v4-source-test
       - name: Run checked source parser and semantic mutation suite (HOST)
         run: ctest --test-dir build -R '^native_nominal_(alias_v3|payload_v4)_source_admission
+      - name: ASan and UBSan on bounded typed payload source frontend
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O1 -g -fno-omit-frame-pointer \
+            -Wall -Wextra -Wpedantic -Werror \
+            -fsanitize=address,undefined \
+            -I src/main/cpp \
+            tests/native_nominal_enum_payload_v4_test.cpp \
+            -o build/nominal-payload-v4-sanitized
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+          UBSAN_OPTIONS=halt_on_error=1 \
+            ./build/nominal-payload-v4-sanitized
       - name: Generate guest LLVM IR and execute native O0/O2
         run: |
           set -euo pipefail
