@@ -222,6 +222,12 @@ if(BUILD_TESTING)
         PASS_REGULAR_EXPRESSION "LLVM_SOURCE_ID_COMPILER_IR_METADATA_PASS"
         TIMEOUT 30)
 
+    add_test(NAME native_guest_log_info_verified_llvm_ir
+        COMMAND oreslang-llvmc --selftest-native-log-info-ir)
+    set_tests_properties(native_guest_log_info_verified_llvm_ir PROPERTIES
+        PASS_REGULAR_EXPRESSION "LLVM_NATIVE_LOG_INFO_GUEST_IR_PASS"
+        TIMEOUT 30)
+
     # AOT trace policy gate; this does not compile a source-level Atto trace.
     find_package(Threads REQUIRED)
     add_executable(oreslang-native-trace-probe-policy-test
