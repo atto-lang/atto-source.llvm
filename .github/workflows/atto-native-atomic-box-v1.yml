@@ -5,6 +5,10 @@ on:
       - 'src/main/cpp/oreslang/runtime/NativeAtomicBoxV1.hpp'
       - 'src/main/cpp/oreslang/runtime/NativeBoxArenaV1.hpp'
       - 'tests/native_atomic_box_v1_test.cpp'
+      - 'src/main/cpp/oreslang/types/NativeBoxCompilerAdmissionV1.hpp'
+      - 'tests/native_box_compiler_admission_v1_test.cpp'
+      - 'src/main/cpp/oreslang/types/OwnershipCfg.hpp'
+      - 'src/main/cpp/oreslang/types/OwnershipDropPlan.hpp'
       - 'src/main/cpp/oreslang/frontend/NativeAtomicAotV1.cpp'
       - 'tests/atto_atomic_aot_v1.sh'
       - 'tests/atto-atomic-aot-v1/**'
@@ -19,6 +23,10 @@ on:
       - 'src/main/cpp/oreslang/runtime/NativeAtomicBoxV1.hpp'
       - 'src/main/cpp/oreslang/runtime/NativeBoxArenaV1.hpp'
       - 'tests/native_atomic_box_v1_test.cpp'
+      - 'src/main/cpp/oreslang/types/NativeBoxCompilerAdmissionV1.hpp'
+      - 'tests/native_box_compiler_admission_v1_test.cpp'
+      - 'src/main/cpp/oreslang/types/OwnershipCfg.hpp'
+      - 'src/main/cpp/oreslang/types/OwnershipDropPlan.hpp'
       - 'src/main/cpp/oreslang/frontend/NativeAtomicAotV1.cpp'
       - 'tests/atto_atomic_aot_v1.sh'
       - 'tests/atto-atomic-aot-v1/**'
@@ -42,6 +50,8 @@ jobs:
           /tmp/atto-native-atomic-box
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -Isrc/main/cpp tests/native_atomic_box_traits_bounds_test.cpp -o /tmp/atto-native-trait-budget
           /tmp/atto-native-trait-budget
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -Isrc/main/cpp tests/native_box_compiler_admission_v1_test.cpp -o /tmp/atto-box-compiler-admission
+          /tmp/atto-box-compiler-admission
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -Isrc/main/cpp tests/ownership_auto_traits_dop_test.cpp -o /tmp/atto-original-auto-trait-dop
           /tmp/atto-original-auto-trait-dop
       - name: Address and undefined behavior sanitizers
