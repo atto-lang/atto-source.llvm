@@ -3111,6 +3111,27 @@ private:
             }
             if (token_.kind == Kind::End || token_.text == "}") {
                 if (return_guards_started) fail("expected 'return'");
+                // Definite return as in the Java reference: a final
+                // `if c then return a; else S...; return b; fi`. The then-arm always
+                // returns, so this is exactly `if c then return a; fi S...; return b;`:
+                // hoist the else arm and use its return as the function result.
+                if (!value.returns_void && !value.statements.empty() && !terminal_try_finally) {
+                    Statement& last = value.statements.back();
+                    if (last.kind == Statement::Kind::Conditional &&
+                            last.then_statements.size() == 1 &&
+                            last.then_statements.front().kind == Statement::Kind::Return &&
+                            !last.else_statements.empty() &&
+                            last.else_statements.back().kind == Statement::Kind::Return &&
+                            last.else_statements.back().expression) {
+                        auto tail = std::move(last.else_statements);
+                        last.else_statements.clear();
+                        value.result = std::move(tail.back().expression);
+                        tail.pop_back();
+                        for (auto& statement : tail) value.statements.push_back(std::move(statement));
+                        require("}");
+                        return value;
+                    }
+                }
                 fail("missing final return");
             }
             // The initial native finally slice admits only guarded returns
@@ -3190,8 +3211,14 @@ private:
                         fail("native protected try return requires nonthrowing scalar/field read");
                     require(";");
                     if (!then_form) require("}");
-                    require("fi");
-                    if (then_form && value.return_class.empty() && !terminal_try_finally) {
+                    // Java accepts `if c then return a; else ...; fi`. In the structured
+                    // then-form an else arm is an ordinary conditional branch; other
+                    // guarded-return contexts have no else lowering and say so.
+                    const bool full_conditional =
+                        then_form && value.return_class.empty() && !terminal_try_finally;
+                    if (!full_conditional && token_.text == "else")
+                        fail("native guarded return cannot take an else branch in this context");
+                    if (full_conditional) {
                         if (return_guards_started)
                             fail("native structured statements cannot follow guarded returns");
                         if (++branch_count > 128) fail("native structured return branch limit exceeded (128)");
@@ -3199,8 +3226,11 @@ private:
                         conditional.condition = std::move(guard.condition);
                         Statement terminal; terminal.kind = Statement::Kind::Return; terminal.offset = offset;
                         terminal.expression = std::move(guard.result); conditional.then_statements.push_back(std::move(terminal));
+                        if (accept("else")) conditional.else_statements = branch_arm(false, then_form);
+                        require("fi");
                         value.statements.push_back(std::move(conditional));
                     } else {
+                        require("fi");
                         value.early_returns.push_back(std::move(guard));
                         return_guards_started = true;
                     }
