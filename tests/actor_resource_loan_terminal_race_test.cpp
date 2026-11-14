@@ -54,6 +54,14 @@ static void live_group_rejects_outstanding_loan() {
     CHECK(actor.outstanding_resource_loans() == 1);
     CHECK(!group.finalized(actor));
     CHECK(actor.outstanding_resource_loans() == 1);
+
+    // A failed physical-finalization attempt is already terminal resource
+    // admission. The existing loan may drain, but stale holders cannot keep
+    // adding work between retries and starve DONE forever.
+    bool late_rejected = false;
+    try { actor.retain_resource_loan(); }
+    catch (const std::logic_error&) { late_rejected = true; }
+    CHECK(late_rejected);
     actor.release_resource_loan();
     CHECK(actor.outstanding_resource_loans() == 0);
     CHECK(group.finalized(actor));
@@ -63,6 +71,110 @@ static void live_group_rejects_outstanding_loan() {
     try { actor.retain_resource_loan(); }
     catch (const std::logic_error&) { rejected = true; }
     CHECK(rejected);
+}
+
+static void stop_seals_new_loans_but_existing_loans_can_drain() {
+    NativeActorGroup group(191007, 1);
+    int stops = 0;
+    auto actor = group.adopt(191007, 204, 1, [&] { ++stops; });
+    CHECK(group.mark_ready(actor));
+
+    actor.retain_resource_loan();
+    CHECK(actor.outstanding_resource_loans() == 1);
+    group.stop_workers();
+    CHECK(stops == 1);
+
+    bool rejected = false;
+    try { actor.retain_resource_loan(); }
+    catch (const std::logic_error&) { rejected = true; }
+    CHECK(rejected);
+    CHECK(actor.outstanding_resource_loans() == 1);
+
+    actor.release_resource_loan();
+    CHECK(actor.outstanding_resource_loans() == 0);
+    CHECK(group.finalized(actor));
+    actor.get_done().get();
+    group.close();
+    CHECK(stops == 1);
+}
+
+static void close_seals_new_loans_but_existing_loans_can_drain() {
+    NativeActorGroup group(191006, 1);
+    auto actor = group.adopt(191006, 203, 1, [] {});
+    CHECK(group.mark_ready(actor));
+    auto finalizer = group.runtime_finalizer(actor);
+
+    actor.retain_resource_loan();
+    CHECK(actor.outstanding_resource_loans() == 1);
+    group.close();
+    CHECK(finalizer.ready_for_actor_turn_quiescence());
+    CHECK(!finalizer.ready_for_resource_reclamation());
+
+    bool rejected = false;
+    try { actor.retain_resource_loan(); }
+    catch (const std::logic_error&) { rejected = true; }
+    CHECK(rejected);
+    CHECK(actor.outstanding_resource_loans() == 1);
+
+    // The terminal bit must not turn release into a fatal underflow. Only
+    // post-terminal admission is forbidden; previously admitted work drains.
+    actor.release_resource_loan();
+    CHECK(actor.outstanding_resource_loans() == 0);
+    CHECK(finalizer.ready_for_resource_reclamation());
+    CHECK(finalizer.finalized());
+    actor.get_done().get();
+}
+
+static void close_and_resource_registration_have_one_winner() {
+    std::uint32_t registration_wins = 0;
+    std::uint32_t close_wins = 0;
+    for (std::uint32_t trial = 0; trial < 2000; ++trial) {
+        NativeActorGroup group(191200 + trial, 1);
+        auto actor = group.adopt(191200 + trial, 500 + trial, 1, [] {});
+        CHECK(group.mark_ready(actor));
+        auto finalizer = group.runtime_finalizer(actor);
+
+        std::atomic<int> ready{0};
+        bool registered = false;
+        bool refused = false;
+        std::thread register_thread([&] {
+            ready.fetch_add(1, std::memory_order_acq_rel);
+            while (ready.load(std::memory_order_acquire) != 2)
+                std::this_thread::yield();
+            try { actor.retain_resource_loan(); registered = true; }
+            catch (const std::logic_error&) { refused = true; }
+        });
+        std::thread close_thread([&] {
+            ready.fetch_add(1, std::memory_order_acq_rel);
+            while (ready.load(std::memory_order_acquire) != 2)
+                std::this_thread::yield();
+            group.close();
+        });
+        register_thread.join();
+        close_thread.join();
+
+        CHECK(registered != refused);
+        CHECK(finalizer.ready_for_actor_turn_quiescence());
+        bool late_rejected = false;
+        try { actor.retain_resource_loan(); }
+        catch (const std::logic_error&) { late_rejected = true; }
+        CHECK(late_rejected);
+
+        if (registered) {
+            ++registration_wins;
+            CHECK(actor.outstanding_resource_loans() == 1);
+            CHECK(!finalizer.ready_for_resource_reclamation());
+            actor.release_resource_loan();
+        } else {
+            ++close_wins;
+            CHECK(actor.outstanding_resource_loans() == 0);
+        }
+
+        CHECK(finalizer.ready_for_resource_reclamation());
+        CHECK(finalizer.finalized());
+        actor.get_done().get();
+    }
+    CHECK(registration_wins + close_wins == 2000);
 }
 
 static void recycled_numeric_ref_cannot_inspect_next_control_slot() {
@@ -265,6 +377,9 @@ static void every_finalization_allocation_failure_is_retryable() {
 
 int main() {
     live_group_rejects_outstanding_loan();
+    stop_seals_new_loans_but_existing_loans_can_drain();
+    close_seals_new_loans_but_existing_loans_can_drain();
+    close_and_resource_registration_have_one_winner();
     recycled_numeric_ref_cannot_inspect_next_control_slot();
     concurrent_registration_and_finalization_have_one_winner();
     settlement_failure_keeps_terminal_resource_seal_retryable();
