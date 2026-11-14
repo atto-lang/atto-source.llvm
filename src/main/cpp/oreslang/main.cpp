@@ -248,6 +248,21 @@ int main(int argc, char** argv) {
                 std::cerr << "dynamic source logging was incorrectly admitted\n";
                 return 2;
             } catch (const std::runtime_error&) { }
+            // A guest-owned log parameter must never hijack or spoof the
+            // compiler-owned static logger's site authority.
+            try {
+                auto shadow = oreslang::parse_program(
+                    "pub fnc main(int log): int {"
+                    " log.info(\"hammer.started\"); return 42; }");
+                (void)oreslang::emit_verified_llvm_ir(
+                    shadow, false, false, false, "",
+                    {{"main", 1, "rid_d5f8e146ba97430dac6bf17430477e2a"}},
+                    {{"main", 1, "hammer.started",
+                      "rid_d5f8e146ba97430dac6bf17430477e2a",
+                      "sid_652e1632e7464fdb936fc40fe24f1c7b"}});
+                std::cerr << "guest log shadowing was incorrectly admitted\n";
+                return 2;
+            } catch (const std::runtime_error&) { }
             std::cout << "LLVM_NATIVE_LOG_INFO_GUEST_IR_PASS\n";
             return 0;
         } catch (const std::exception& error) {
