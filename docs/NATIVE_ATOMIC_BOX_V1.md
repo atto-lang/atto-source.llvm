@@ -220,9 +220,11 @@ blobs and executes reentrant-destructor, stale-generation and malformed
 compiler-event regressions under optimized C++20, ASan+UBSan and TSan:
 https://github.com/honeypot-r-us-test/hnpt-lambdas/actions/runs/43651177318
 
-The source-main compiler proof uses a *focused exact Git blob mirror*
-of the C++17 toolchain source files and `.atto` regression corpus,
-not a byte-for-byte copy of the entire private repository. The carrier
+The source-main compiler proof uses a *focused 53-file exact Git blob
+mirror* of the C++17 toolchain source files and `.atto` regression corpus,
+not a byte-for-byte copy of the entire private repository. The hardened
+type-identity fixtures, true LLVM atomic IR and native exit-42 AOT proof
+also passed: https://github.com/honeypot-r-us-test/hnpt-lambdas/actions/runs/43651484998 The carrier
 uses its **own** `GITHUB_TOKEN` and needs no source cross-org secrets.
 
 This bridge is single-carrier and **does not yet implement the
