@@ -1,0 +1,7 @@
+pub fnc main(): int {
+  if true then
+    42
+  else
+    1
+  fi
+}

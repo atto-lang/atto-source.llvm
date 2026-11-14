@@ -101,6 +101,11 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
             Some(42),
         ),
         (
+            "native-tail-if-implicit",
+            source_root.join("tests/fixtures/numeric-v1/native-tail-if-implicit.atto"),
+            Some(42),
+        ),
+        (
             "stdlib-math-error-root-catch",
             source_root.join("tests/fixtures/numeric-v1/math-module-error-root-catch.ores"),
             Some(42),

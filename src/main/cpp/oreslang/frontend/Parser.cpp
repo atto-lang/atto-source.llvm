@@ -2864,7 +2864,10 @@ private:
                 } else {
                     require("{");
                 }
-                if (accept("return")) {
+                const bool explicit_return = accept("return");
+                const bool implicit_tail_candidate = then_form && !explicit_return &&
+                    token_.kind == Kind::Integer;
+                if (explicit_return || implicit_tail_candidate) {
                     if (value.returns_void)
                         fail("guarded early return requires a scalar result");
                     if (value.early_returns.size() == 8)
@@ -2875,7 +2878,9 @@ private:
                     guard.result = expression();
                     if (terminal_try_finally && !nonthrowing_protected_read(*guard.result))
                         fail("native protected try return requires nonthrowing scalar/field read");
-                    require(";");
+                    if (!accept(";") &&
+                            (!implicit_tail_candidate || token_.text != "else"))
+                        fail("native if return requires ';' before branch boundary");
                     if (!then_form) require("}");
 
                     // Canonical formatter form may make this if the entire
@@ -2885,9 +2890,10 @@ private:
                     // expression rather than inventing a second return CFG.
                     if (then_form && value.return_class.empty() &&
                             !terminal_try_finally && accept("else")) {
-                        require("return");
+                        accept("return");
                         auto fallback = expression();
-                        require(";");
+                        if (!accept(";") && token_.text != "fi")
+                            fail("native terminal if arm requires ';' or fi");
                         require("fi");
                         if (token_.text != "}")
                             fail("terminal if/do/fi return must end the function");
@@ -2901,6 +2907,8 @@ private:
                         return value;
                     }
 
+                    if (implicit_tail_candidate)
+                        fail("implicit if return needs both arms in final callable position");
                     if (then_form) require("fi");
                     if (then_form && value.return_class.empty() && !terminal_try_finally) {
                         if (return_guards_started)
