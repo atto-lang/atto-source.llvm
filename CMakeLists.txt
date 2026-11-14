@@ -136,6 +136,19 @@ if(BUILD_TESTING)
     add_test(NAME native_nominal_function_v2_source_admission
         COMMAND oreslang-native-nominal-function-v2-source-test)
     set_tests_properties(native_nominal_function_v2_source_admission PROPERTIES TIMEOUT 20)
+    # V3 opt-in frontend slice for canonical closed nullary enum variants,
+    # scoped case aliases, and compile-time-only return of Copy enum values.
+    # This host test is NOT LLVM native guest execution or actor payload parity.
+    add_executable(oreslang-native-nominal-alias-v3-source-test
+        tests/native_nominal_enum_alias_v3_test.cpp)
+    target_include_directories(oreslang-native-nominal-alias-v3-source-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-nominal-alias-v3-source-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_nominal_alias_v3_source_admission
+        COMMAND oreslang-native-nominal-alias-v3-source-test)
+    set_tests_properties(native_nominal_alias_v3_source_admission PROPERTIES TIMEOUT 20)
+
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
     add_executable(oreslang-native-sum-payload-admission-test
