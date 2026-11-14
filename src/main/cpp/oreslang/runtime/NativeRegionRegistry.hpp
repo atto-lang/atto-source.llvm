@@ -5,7 +5,9 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <stdexcept>
+#include <tuple>
 #include <unordered_map>
 
 namespace oreslang::runtime {
@@ -48,6 +50,13 @@ private:
     std::unordered_map<std::uint64_t, Entry> entries_;
     std::uint64_t next_slot_ = 1;
     std::uint64_t next_generation_ = 1;
+    // A fenced actor incarnation must never be allowed to mint fresh native
+    // grants in this registry, even after its old bytes are reclaimed.
+    using ActorKey = std::tuple<std::uint64_t, std::uint64_t, std::uint64_t>;
+    std::set<ActorKey> fenced_actors_;
+    static ActorKey actor_key(ActorHeapIdentity a) noexcept {
+        return {a.runtime, a.actor, a.epoch};
+    }
 public:
     NativeRegionRegistry() : registry_id_(next_registry_id_.fetch_add(1, std::memory_order_relaxed)) {
         if (registry_id_ == 0 || registry_id_ == std::numeric_limits<std::uint64_t>::max())
@@ -67,6 +76,8 @@ private:
         if (!owner.runtime || !owner.actor || !owner.epoch)
             throw std::invalid_argument("invalid native grant actor identity");
         std::lock_guard<std::mutex> lock(mu_);
+        if (fenced_actors_.count(actor_key(owner)))
+            throw std::logic_error("actor incarnation is fenced from native grants");
         if (next_slot_ == std::numeric_limits<std::uint64_t>::max() ||
             next_generation_ == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("native grant identity exhausted");
@@ -115,6 +126,48 @@ public:
         return window->at<T>(caller, offset);
     }
 
+    // Supervisor lifecycle/trust-downgrade fence. New grants fail immediately;
+    // existing windows are synchronously revoked before a successful return.
+    // An active foreign callback on this same thread cannot be quiesced here:
+    // the method throws and retains the retiring entry for a later retry.
+    // The supervisor must keep backing allocations mapped until it succeeds.
+    void fence_actor(ActorHeapIdentity owner) {
+        if (!owner.runtime || !owner.actor || !owner.epoch)
+            throw std::invalid_argument("invalid native fence actor identity");
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            // Permanent for this exact incarnation; a newer epoch is distinct.
+            fenced_actors_.insert(actor_key(owner));
+        }
+        for (;;) {
+            std::shared_ptr<TrustedPointerWindow> window;
+            std::uint64_t slot = 0;
+            {
+                std::lock_guard<std::mutex> lock(mu_);
+                for (auto& pair : entries_) {
+                    if (pair.second.grant.owner == owner) {
+                        pair.second.retiring = true;
+                        slot = pair.first;
+                        window = pair.second.window;
+                        break;
+                    }
+                }
+            }
+            if (!window) return;
+            // Do not hold the registry mutex while waiting on an FFI callback.
+            // Cached cursors are also invalidated by the shared window state.
+            if (!window->revoke())
+                throw std::logic_error(
+                    "native actor fence deferred by active same-thread FFI; retry after callback");
+            {
+                std::lock_guard<std::mutex> lock(mu_);
+                const auto it = entries_.find(slot);
+                if (it != entries_.end() && it->second.window == window)
+                    entries_.erase(it);
+            }
+        }
+    }
+
     void revoke(const Grant& grant) {
         std::shared_ptr<TrustedPointerWindow> window;
         {
@@ -132,6 +185,11 @@ public:
         const bool quiesced = window->revoke();
         std::lock_guard<std::mutex> lock(mu_);
         auto it = entries_.find(grant.slot);
+        // A concurrent actor-wide fence may already have completed this
+        // window's revocation and erased the grant. That is success, not an
+        // authority revival or a reason to reinsert the stale entry.
+        if (it == entries_.end() && fenced_actors_.count(actor_key(grant.owner)))
+            return;
         if (it == entries_.end() || it->second.window != window)
             throw std::logic_error("native grant changed during revocation");
         if (!quiesced) {
