@@ -74,4 +74,46 @@ int main(){
   assert(snap.recent[i].seq==15969+i);
   if(i)assert(snap.recent[i-1].time<snap.recent[i].time);
  }
+ // Concurrent restart decisions must account for exactly the admitted burst,
+ // not race between a read of size_ and a later write of its timestamp ring.
+ std::atomic<std::uint64_t> held_clock{17};
+ K::RestartBudget racing(7, 100, 25, [&]{return held_clock.load();});
+ std::atomic<int> restart_admitted{0};
+ std::atomic<int> restart_suppressed{0};
+ std::vector<std::thread> racers;
+ for(int t=0;t<8;++t)racers.emplace_back([&]{
+  for(int j=0;j<100;++j){
+   const auto result=racing.try_acquire();
+   if(result.admitted)restart_admitted.fetch_add(1);
+   else restart_suppressed.fetch_add(1);
+  }
+ });
+ for(auto& racer:racers)racer.join();
+ assert(restart_admitted==7&&restart_suppressed==793);
+ assert(!racing.try_acquire().admitted); // still quarantined
+ held_clock=43; // quarantine elapsed, but old window still full
+ assert(!racing.try_acquire().admitted);
+ held_clock=118; // original attempts are now outside the window
+ assert(racing.try_acquire().admitted);
+
+ // A broken clock must never grant a restart or poison the lock. Time
+ // regression also fails closed and is recoverable after a valid tick.
+ std::uint64_t phase_clock=100;
+ bool fail_clock=false;
+ K::RestartBudget clock_guard(2, 100, 10, [&]() -> std::uint64_t {
+  if(fail_clock) throw std::runtime_error("clock unavailable");
+  return phase_clock;
+ });
+ assert(clock_guard.try_acquire().admitted);
+ fail_clock=true;
+ try { (void)clock_guard.try_acquire();assert(false); }
+ catch(const std::runtime_error&){}
+ fail_clock=false;
+ phase_clock=99;
+ try { (void)clock_guard.try_acquire();assert(false); }
+ catch(const std::logic_error&){}
+ phase_clock=101;
+ assert(clock_guard.try_acquire().admitted);
+ assert(!clock_guard.try_acquire().admitted);
+
 }
