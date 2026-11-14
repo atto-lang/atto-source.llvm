@@ -683,6 +683,19 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_only_declarations.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_type_only_declaration_boundaries PROPERTIES TIMEOUT 90)
+    # Default source compiler -> verified MIR -> native executable.
+    find_program(ORE_INVERTED_PRODUCTION_CLANG
+        NAMES clang clang-23 clang-22 clang-21 clang-20 clang-19 clang-18)
+    if(NOT ORE_INVERTED_PRODUCTION_CLANG)
+        set(ORE_INVERTED_PRODUCTION_CLANG clang)
+    endif()
+    add_test(NAME native_inverted_production_source_to_native
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_inverted_production_guest.sh"
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_INVERTED_PRODUCTION_CLANG}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/inverted-i64"
+            "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit"
+            "${CMAKE_CURRENT_SOURCE_DIR}/contracts/dop-inverted-v1")
+    set_tests_properties(native_inverted_production_source_to_native PROPERTIES TIMEOUT 180)
     add_test(NAME native_type_constraint_descriptor_v1
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_constraint_descriptors.py"
@@ -2728,6 +2741,18 @@ if(BUILD_TESTING)
     add_test(NAME native_dop_checked_region_addressing
         COMMAND oreslang-dop-checked-region-test)
     set_tests_properties(native_dop_checked_region_addressing PROPERTIES TIMEOUT 20)
+
+    add_executable(oreslang-inverted-production-mir-test
+        tests/native_inverted_production_mir_test.cpp)
+    target_include_directories(oreslang-inverted-production-mir-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-inverted-production-mir-test PROPERTIES
+        CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    target_compile_options(oreslang-inverted-production-mir-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME inverted_production_source_mir_cpp17
+        COMMAND oreslang-inverted-production-mir-test)
+    set_tests_properties(inverted_production_source_mir_cpp17 PROPERTIES TIMEOUT 30)
 
     add_executable(oreslang-dop-inverted-columns-test tests/dop_inverted_columns_test.cpp)
     target_include_directories(oreslang-dop-inverted-columns-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
@@ -5269,6 +5294,24 @@ endif()
 # independent of LLVM IR emission. LOW is executable; MEDIUM/HIGH fail closed
 # before codegen until safe per-turn actor frames and state loans exist.
 if(BUILD_TESTING)
+    # Real production parser/resolver AST regression.
+    add_executable(oreslang-native-inverted-struct-ast-test
+        tests/native_inverted_struct_ast_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp
+        src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-native-inverted-struct-ast-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_include_directories(oreslang-native-inverted-struct-ast-test SYSTEM PRIVATE
+        ${LLVM_INCLUDE_DIRS})
+    target_link_libraries(oreslang-native-inverted-struct-ast-test PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_features(oreslang-native-inverted-struct-ast-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-inverted-struct-ast-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_inverted_struct_schema_ast
+        COMMAND oreslang-native-inverted-struct-ast-test)
+    set_tests_properties(native_inverted_struct_schema_ast PROPERTIES TIMEOUT 30)
     add_executable(oreslang-native-actor-max-threads-admission-test
         tests/actor_max_threads_source_admission_test.cpp
         src/main/cpp/oreslang/frontend/Parser.cpp

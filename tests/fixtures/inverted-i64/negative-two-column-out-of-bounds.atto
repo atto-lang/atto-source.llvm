@@ -1,0 +1,10 @@
+define inverted struct Sample as
+    let x: int;
+    id: int;
+end
+
+fnc main(): int {
+    let rows = InvertedArray<Sample>.with_capacity(2);
+    rows.push(9, 7);
+    return rows.get(1, x);
+}
