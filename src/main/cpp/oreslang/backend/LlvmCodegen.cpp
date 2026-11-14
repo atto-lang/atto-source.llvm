@@ -957,6 +957,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         for (const auto& s : fn.actor_sends) scan_string(s.payload.get());
         for (const auto& w : fn.actor_field_writes) scan_string(w.expression.get());
         scan_string(fn.caught_throw_value.get());
+        scan_string(fn.caught_error_try_result.get());
+        for (const auto& local : fn.caught_error_type_match_locals)
+            scan_string(local.initializer.get());
+        scan_string(fn.caught_error_type_match_result.get());
         scan_string(fn.result.get());
     };
     for (const auto& fn : source.functions) scan_function(fn);
@@ -2638,20 +2642,50 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 clear_native_error_slot(
                     builder, error_slot_type, native_error_slot);
                 llvm::Value* caught_result = nullptr;
+                llvm::BasicBlock* caught_exit = nullptr;
                 if (nominal_match) {
-                    // Parser v1 admits literal handler arms only, so eager
-                    // lowering here has no side effects and preserves the
-                    // source-level nominal condition exactly.
-                    auto* matched = lower_return(
-                        *fn.caught_error_type_match_result);
+                    auto* selected = llvm::BasicBlock::Create(
+                        context, "error.catch.nominal.yes", function);
+                    auto* rejected = llvm::BasicBlock::Create(
+                        context, "error.catch.nominal.no", function);
+                    auto* join = llvm::BasicBlock::Create(
+                        context, "error.catch.nominal.join", function);
+                    builder.CreateCondBr(nominal_match, selected, rejected);
+
+                    builder.SetInsertPoint(selected);
+                    // Allocate an independent lexical slot in the selected
+                    // branch. Do not publish it in the function's outer env.
+                    auto catch_storage = storage;
+                    for (const auto& local : fn.caught_error_type_match_locals) {
+                        auto* initializer = lower(*local.initializer, builder, i64,
+                            catch_storage, field_storage, declarations, &region_moves);
+                        auto* slot = builder.CreateAlloca(i64, nullptr,
+                            "caught.local." + local.name);
+                        builder.CreateStore(initializer, slot);
+                        if (!catch_storage.emplace(local.name, slot).second)
+                            throw std::runtime_error("native catch local shadows outer slot");
+                    }
+                    auto* matched = lower(*fn.caught_error_type_match_result,
+                        builder, i64, catch_storage, field_storage,
+                        declarations, &region_moves);
+                    auto* matched_exit = builder.GetInsertBlock();
+                    builder.CreateBr(join);
+
+                    builder.SetInsertPoint(rejected);
                     auto* fallback = lower_return(*fn.result);
-                    caught_result = builder.CreateSelect(
-                        nominal_match, matched, fallback,
-                        "caught.error.nominal.result");
+                    auto* fallback_exit = builder.GetInsertBlock();
+                    builder.CreateBr(join);
+
+                    builder.SetInsertPoint(join);
+                    auto* selected_result = builder.CreatePHI(
+                        i64, 2, "caught.error.nominal.result");
+                    selected_result->addIncoming(matched, matched_exit);
+                    selected_result->addIncoming(fallback, fallback_exit);
+                    caught_result = selected_result;
                 } else {
                     caught_result = lower_return(*fn.result);
                 }
-                auto* caught_exit = builder.GetInsertBlock();
+                caught_exit = builder.GetInsertBlock();
                 builder.CreateBr(catch_merge);
 
                 builder.SetInsertPoint(catch_merge);

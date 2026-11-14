@@ -3155,16 +3155,50 @@ private:
                     if (then_form) {
                         if (!accept("then")) require("do");
                     } else require("{");
-                    // The final expression of a typed catch arm is an
-                    // implicit callable return. Explicit 'return' is equivalent.
-                    accept("return");
-                    if (token_.kind != Kind::Integer)
-                        fail("native ErrorSlot type-match handler requires an integer literal");
-                    value.caught_error_type_match_result = expression();
+                    // Catch-arm i64 bindings have lexical scope and execute
+                    // only after a successful nominal match. Commas sequence
+                    // bindings before the final value; they are not tuples.
+                    if (then_form) {
+                        struct ScopeRestore {
+                            std::unordered_set<std::string>& names;
+                            std::unordered_set<std::string> previous;
+                            ~ScopeRestore() { names = std::move(previous); }
+                        } restore{caught_error_local_names_, caught_error_local_names_};
+                        caught_error_local_names_.clear();
+                        while (accept("let")) {
+                            if (value.caught_error_type_match_locals.size() == 16)
+                                fail("native ErrorSlot catch local budget exceeded (16)");
+                            LocalBinding local;
+                            local.offset = token_.offset;
+                            require("int");
+                            if (token_.text == "val") {
+                                local.name = "val";
+                                advance();
+                            } else local.name = identifier();
+                            if (local.name == value.catch_binding ||
+                                    !caught_error_local_names_.insert(local.name).second)
+                                fail("native ErrorSlot catch local shadows error binding or previous local");
+                            for (const auto& parameter : value.parameters)
+                                if (parameter.name == local.name)
+                                    fail("native ErrorSlot catch local shadows parameter");
+                            for (const auto& previous : value.locals)
+                                if (previous.name == local.name)
+                                    fail("native ErrorSlot catch local shadows outer local");
+                            require("=");
+                            local.initializer = expression();
+                            require(",");
+                            value.caught_error_type_match_locals.push_back(std::move(local));
+                        }
+                        // Return stays optional in tail position.
+                        accept("return");
+                        value.caught_error_type_match_result = expression();
+                    } else {
+                        require("return");
+                        value.caught_error_type_match_result = expression();
+                    }
                     if (!value.caught_error_type_match_result ||
-                            value.caught_error_type_match_result->kind !=
-                                Expression::Kind::Integer)
-                        fail("native ErrorSlot type-match handler requires an integer literal");
+                            !native_pure_scalar_tree(*value.caught_error_type_match_result))
+                        fail("native ErrorSlot match arm requires checked scalar expression");
                     if (!accept(";") && (!then_form || token_.text != "else"))
                         fail("native ErrorSlot catch branch requires ';' or else delimiter");
                     if (!then_form) require("}");
@@ -3786,8 +3820,9 @@ private:
             fail("native ActorGroup source lowering unsupported: "
                  "typed membership capabilities and lifecycle authority required");
         const bool extension_self = extension_header_active_ && token_.text == "self";
+        const bool catch_local = caught_error_local_names_.count(std::string(token_.text)) != 0;
         if (token_.kind != Kind::Identifier || (reserved(token_.text) && token_.text != "pattern" &&
-                !sum_variant(token_.text) &&
+                !sum_variant(token_.text) && !catch_local &&
                 !(token_.text == "self" && (!method_scope_.empty() || extension_self)))) {
             fail("expected int expression");
         }
@@ -3796,7 +3831,9 @@ private:
             expr->name = "self";
             advance();
         }
-        else if (sum_variant(token_.text)) { expr->name = token_.text; advance(); }
+        else if (sum_variant(token_.text) || catch_local) {
+            expr->name = token_.text; advance();
+        }
         else expr->name = identifier();
         if (module_names_.count(expr->name) && accept(".")) expr->name += "." + identifier();
         if (generic_call_type_arguments_ahead()) {
@@ -5177,9 +5214,16 @@ private:
                 validate_expression(
                     *fn.caught_error_try_result, params, functions);
             }
-            if (fn.caught_error_type_match_result)
+            if (fn.caught_error_type_match_result) {
+                auto arm_bindings = params;
+                for (const auto& local : fn.caught_error_type_match_locals) {
+                    validate_expression(*local.initializer, arm_bindings, functions);
+                    if (!arm_bindings.insert(local.name).second)
+                        throw std::runtime_error("duplicate native ErrorSlot catch local");
+                }
                 validate_expression(
-                    *fn.caught_error_type_match_result, params, functions);
+                    *fn.caught_error_type_match_result, arm_bindings, functions);
+            }
             for (const auto& guard : fn.early_returns) {
                 if (guard.condition) validate_expression(*guard.condition, params, functions);
                 else {
@@ -5343,9 +5387,17 @@ private:
             if (fn.caught_error_try_result)
                 require_scalar(*fn.caught_error_try_result, fn.return_type,
                     "native protected ErrorSlot return", scalar_types);
-            if (fn.caught_error_type_match_result)
+            if (fn.caught_error_type_match_result) {
+                auto catch_scalar_types = scalar_types;
+                for (const auto& local : fn.caught_error_type_match_locals) {
+                    require_scalar(*local.initializer, ScalarType::I64,
+                        "native ErrorSlot catch local initializer", catch_scalar_types);
+                    if (!catch_scalar_types.emplace(local.name, ScalarType::I64).second)
+                        throw std::runtime_error("duplicate native ErrorSlot catch local type");
+                }
                 require_scalar(*fn.caught_error_type_match_result, fn.return_type,
-                    "native ErrorSlot type-match return", scalar_types);
+                    "native ErrorSlot type-match return", catch_scalar_types);
+            }
             for (const auto& guard : fn.early_returns) {
                 if (guard.condition) {
                     require_scalar(*guard.condition, ScalarType::Bool,
@@ -5515,6 +5567,8 @@ private:
                 lower_extension_expression(write.expression, aliases);
             lower_extension_expression(fn.caught_throw_value, aliases);
             lower_extension_expression(fn.caught_error_try_result, aliases);
+            for (auto& local : fn.caught_error_type_match_locals)
+                lower_extension_expression(local.initializer, aliases);
             lower_extension_expression(fn.caught_error_type_match_result, aliases);
             for (auto& deferred : fn.caught_throw_defers)
                 lower_extension_expression(deferred.expression, aliases);
@@ -5749,6 +5803,9 @@ private:
     std::unordered_set<std::string> module_names_;
     std::string method_scope_;
     std::unordered_set<std::string> class_receivers_;
+    // Special contextual identifier admission for catch-arm locals (e.g.
+    // 'let int val = 5, val + 42'). Scope ends with the matching arm.
+    std::unordered_set<std::string> caught_error_local_names_;
     std::vector<Function> methods_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;

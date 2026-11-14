@@ -366,10 +366,13 @@ struct Function {
     // binding remains opaque in this slice and cannot be read as an i64.
     std::unique_ptr<Expression> caught_error_try_result;
     // Optional nominal test inside the local ErrorSlot catch:
-    //   if err is type ArithmeticOverflowError { ... } else { ... } fi
+    //   if err is type ArithmeticOverflowError then ... else ... fi
     // v1 supports ArithmeticOverflowError and its builtin Error root.
     std::string caught_error_type_test;
     std::unique_ptr<Expression> caught_error_type_match_result;
+    // Sequential, catch-arm-local i64 bindings. Evaluated only on the
+    // selected nominal-match edge, never speculatively in the error handler.
+    std::vector<LocalBinding> caught_error_type_match_locals;
     std::string catch_binding;
     std::vector<Statement> caught_throw_defers;
     std::unique_ptr<Expression> result;
