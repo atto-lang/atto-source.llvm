@@ -160,8 +160,9 @@ GitHub Actions carrier:
 https://github.com/honeypot-r-us-test/hnpt-lambdas/actions/runs/43649826264
 (including two positive exit-42 AOT fixtures and negative fail-closed
 source fixtures). This is a **focused executable main-compiler slice**,
-not full repository CI. Later CI reruns include the explicit unsupported
-target regression and must remain green before promoting the branch.
+not full repository CI. The latest exact-SHA main compiler rerun also verified the explicit
+Wasm32/Cortex-M fail-closed target regression and is **green**:
+https://github.com/honeypot-r-us-test/hnpt-lambdas/actions/runs/43650173266
 
 ## Actor-confined bounded Box region prototype
 
