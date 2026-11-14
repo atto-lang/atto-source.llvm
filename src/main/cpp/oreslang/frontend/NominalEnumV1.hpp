@@ -79,7 +79,7 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
         } else if (c == '-' && i + 1 < source.size() && source[i + 1] == '>') {
             i += 2;
         } else if (c == '(' || c == ')' || c == '{' || c == '}' ||
-                   c == '.' || c == ':' || c == ';' || c == '=') ++i;
+                   c == '.' || c == ':' || c == ';' || c == '=' || c == ',') ++i;
         else throw std::runtime_error("ADT v1 unsupported source token at byte " +
             std::to_string(at));
         if (tokens.size() >= 10000)
@@ -104,7 +104,7 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
         std::string name() {
             static constexpr std::string_view keywords[] = {
                 "int", "bool", "define", "enum", "end", "match", "over", "on",
-                "return", "pub", "fnc", "val", "let", "main", "when", "if",
+                "return", "pub", "fnc", "val", "let", "main", "when", "if", "as", "do",
                 "then", "else", "fi", "true", "false"
             };
             if (!current().identifier)
@@ -132,17 +132,40 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
             if (take("(")) need(")");
             return {std::move(owner), std::move(which)};
         }
+        // A pattern may omit its enum owner only when the scrutinee owns
+        // the complete closed nominal schema. Trailing `as alias` is scoped
+        // to the selected arm and never creates a guest runtime allocation.
+        std::pair<std::string, std::string> nominal_pattern(
+                std::string_view owner, std::string_view foreign_error) {
+            const auto first = name();
+            std::string variant = first;
+            if (take(".")) {
+                if (first != owner)
+                    throw std::runtime_error(std::string(foreign_error));
+                variant = name();
+            }
+            std::string alias;
+            if (take("as")) {
+                alias = name();
+                if (alias == owner || alias == variant)
+                    throw std::runtime_error("ADT v3 alias shadows nominal declaration or variant");
+            }
+            return {std::move(variant), std::move(alias)};
+        }
     };
     Reader r{std::move(tokens)};
     r.need("define"); r.need("enum");
     const auto owner = r.name();
-    r.need("as");
+    // Legacy `define enum E as ... end` remains admitted in this opt-in
+    // compiler slice; canonical closed nullary syntax uses braces and commas.
+    const bool brace_enum = r.take("{");
+    if (!brace_enum) r.need("as");
     struct Variant { std::string name; std::int64_t tag = 0; };
     std::vector<Variant> variants;
     std::unordered_set<std::string> used_names;
     std::unordered_set<std::int64_t> used_tags;
     std::int64_t next_tag = 1;
-    while (r.current().value != "end") {
+    while (r.current().value != (brace_enum ? "}" : "end")) {
         if (variants.size() == 32 || r.current().value.empty())
             throw std::runtime_error("ADT v1 enum case count exceeds bounds");
         const auto name = r.name();
@@ -154,9 +177,12 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
             throw std::runtime_error("ADT v1 duplicate/invalid case tag");
         variants.push_back({name, tag});
         next_tag = tag + 1;
-        r.take(";");
+        if (brace_enum) {
+            if (!r.take(",") && r.current().value != "}")
+                throw std::runtime_error("ADT v3 expected comma between enum variants");
+        } else r.take(";");
     }
-    r.need("end"); r.take(";");
+    r.need(brace_enum ? "}" : "end"); r.take(";");
     if (variants.size() < 2)
         throw std::runtime_error("ADT v1 requires at least two nullary cases");
     // Parse/check source-nominal helper signature and every return BEFORE
@@ -174,30 +200,43 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
         if (param == owner || param == helper_name)
             throw std::runtime_error("ADT v2 helper parameter shadows nominal symbol");
         r.need(")"); r.need(":"); r.need(owner); r.need("{");
-        r.need("match"); r.need(param); r.need("over");
+        r.take("do"); r.need("match"); r.need(param); r.need("over");
         struct TypedArm { std::int64_t tag = 0, returned = 0; };
         std::vector<TypedArm> helper_arms;
         std::unordered_set<std::string> helper_seen;
         while (r.take("on")) {
-            const auto pattern = r.qualified();
-            if (pattern.first != owner)
-                throw std::runtime_error("ADT v2 helper pattern foreign nominal owner");
+            const auto pattern = r.nominal_pattern(
+                owner, "ADT v2 helper pattern foreign nominal owner");
+            if (!pattern.second.empty() &&
+                    (pattern.second == param || pattern.second == helper_name ||
+                    std::any_of(variants.begin(), variants.end(),
+                        [&](const Variant& v) { return v.name == pattern.second; })))
+                throw std::runtime_error("ADT v3 helper alias shadows an existing nominal binding");
             const auto which = std::find_if(variants.begin(), variants.end(),
-                [&](const Variant& v) { return v.name == pattern.second; });
+                [&](const Variant& v) { return v.name == pattern.first; });
             if (which == variants.end())
                 throw std::runtime_error("ADT v2 helper pattern unknown case");
             if (!helper_seen.insert(which->name).second)
                 throw std::runtime_error("ADT v2 helper duplicate match arm");
             r.need("->"); r.need("{"); r.need("return");
-            const auto result = r.qualified();
-            if (result.first != owner)
-                throw std::runtime_error("ADT v2 helper return foreign nominal owner");
-            const auto returned = std::find_if(variants.begin(), variants.end(),
-                [&](const Variant& v) { return v.name == result.second; });
-            if (returned == variants.end())
-                throw std::runtime_error("ADT v2 helper returns unknown nominal case");
+            std::int64_t return_tag = 0;
+            if (!pattern.second.empty() && r.take(pattern.second)) {
+                // A nullary enum is immutable and Copy. Returning its
+                // arm-local borrowed identity copies a validated tag, never
+                // moves an actor payload or escapes a non-Copy view.
+                return_tag = which->tag;
+            } else {
+                const auto result = r.qualified();
+                if (result.first != owner)
+                    throw std::runtime_error("ADT v2 helper return foreign nominal owner");
+                const auto returned = std::find_if(variants.begin(), variants.end(),
+                    [&](const Variant& v) { return v.name == result.second; });
+                if (returned == variants.end())
+                    throw std::runtime_error("ADT v2 helper returns unknown nominal case");
+                return_tag = returned->tag;
+            }
             r.need(";"); r.need("}");
-            helper_arms.push_back({which->tag, returned->tag});
+            helper_arms.push_back({which->tag, return_tag});
         }
         r.need("end"); r.need("}");
         if (helper_seen.size() != variants.size())
@@ -228,19 +267,23 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
         throw std::runtime_error("ADT v1 unknown nominal case constructor");
     if (calls_helper) r.need(")");
     r.need(";");
-    r.need("match"); r.need(variable); r.need("over");
+    r.take("do"); r.need("match"); r.need(variable); r.need("over");
     struct Arm { std::int64_t tag, result; };
     std::vector<Arm> arms;
     std::unordered_set<std::string> seen;
     while (r.take("on")) {
-        const auto q = r.qualified();
-        if (q.first != owner)
-            throw std::runtime_error("ADT v1 match has foreign nominal owner");
+        const auto q = r.nominal_pattern(owner,
+            "ADT v1 match has foreign nominal owner");
+        if (!q.second.empty() &&
+                (q.second == variable ||
+                std::any_of(variants.begin(), variants.end(),
+                    [&](const Variant& v) { return v.name == q.second; })))
+            throw std::runtime_error("ADT v3 match alias shadows an existing nominal binding");
         const auto which = std::find_if(variants.begin(), variants.end(),
-            [&](const Variant& v) { return v.name == q.second; });
+            [&](const Variant& v) { return v.name == q.first; });
         if (which == variants.end())
             throw std::runtime_error("ADT v1 match has unknown case");
-        if (!seen.insert(q.second).second)
+        if (!seen.insert(q.first).second)
             throw std::runtime_error("ADT v1 duplicate match arm");
         r.need("->"); r.need("{"); r.need("return");
         const auto number = r.number();
