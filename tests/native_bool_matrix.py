@@ -93,15 +93,15 @@ fnc miss(borrow mut Pair p): void {
 }
 fnc choose(borrow mut Pair p): int {
   if (ready()) {
-    hit(rt borrow mut p);
+    hit(rt mut borrow p);
   } else {
-    miss(rt borrow mut p);
+    miss(rt mut borrow p);
   } fi
   return p.first;
 }
 pub fnc main(): int {
   let mut Pair p = new Pair();
-  return choose(rt borrow mut p);
+  return choose(rt mut borrow p);
 }
 """, 42),
     "bool-if-guard": ("""
@@ -121,11 +121,11 @@ fnc touch(borrow mut Pair p): bool {
   return true;
 }
 fnc probe(borrow mut Pair p): bool {
-  return false && touch(rt borrow mut p);
+  return false && touch(rt mut borrow p);
 }
 pub fnc main(): int {
   let mut Pair p = new Pair();
-  probe(rt borrow mut p);
+  probe(rt mut borrow p);
   return p.first;
 }
 """, 1),
@@ -135,11 +135,11 @@ fnc touch(borrow mut Pair p): bool {
   return false;
 }
 fnc probe(borrow mut Pair p): bool {
-  return true || touch(rt borrow mut p);
+  return true || touch(rt mut borrow p);
 }
 pub fnc main(): int {
   let mut Pair p = new Pair();
-  probe(rt borrow mut p);
+  probe(rt mut borrow p);
   return p.first;
 }
 """, 1),
@@ -149,11 +149,11 @@ fnc touch(borrow mut Pair p): bool {
   return true;
 }
 fnc probe(borrow mut Pair p): bool {
-  return false ^^ touch(rt borrow mut p);
+  return Xor(false, touch(rt mut borrow p));
 }
 pub fnc main(): int {
   let mut Pair p = new Pair();
-  probe(rt borrow mut p);
+  probe(rt mut borrow p);
   return p.first;
 }
 """, 42),
@@ -211,14 +211,13 @@ pub fnc main(): bool {
   return true == 1;
 }
 """, "equality operands require the same scalar type"),
-    "reject-bool-borrow-abi": ("""
-fnc borrowed(borrow bool flag): bool {
-  return flag;
-}
+    "reject-overlapping-bool-loans": ("""
+fnc borrowed(borrow mut bool first, borrow mut bool second): int { return 0; }
 pub fnc main(): int {
-  return 0;
+  val flag: bool = false;
+  return borrowed(rt mut borrow flag, rt mut borrow flag);
 }
-""", "native bool borrow ABI is not yet admitted"),
+""", "conflicting active native borrow"),
     "reject-hidden-call-in-declared-effects-arm": ("""
 fnc leaf(): int {
   return 1;
@@ -253,6 +252,12 @@ def compile_and_run(root, name, source, expected, compiler, clang, sanitize):
     src = root / (name + ".ores")
     src.write_text(source, encoding="utf-8")
     produced = execute([compiler, "--tree-shake", str(src)])
+    if "define class" in source:
+        # Main's conservative tree shaker deliberately rejects classes until
+        # constructor roots are modeled. Still execute the unshaken program.
+        assert produced.returncode != 0 and not produced.stdout, name
+        assert "rejects class declarations until class initializer roots are modeled" in produced.stderr, (name, produced.stderr)
+        produced = execute([compiler, str(src)])
     assert produced.returncode == 0 and produced.stdout, (name, produced.stderr)
 
     ll = root / (name + ".ll")

@@ -1,0 +1,3 @@
+// Reserved standard-I/O identity cannot be rebound to synchronous user code.
+fnc read_text_async(int fd): int { return fd; }
+pub fnc main(): int { return read_text_async(1); }

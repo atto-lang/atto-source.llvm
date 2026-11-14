@@ -1,0 +1,103 @@
+name: Native type-only alias exact-head conformance
+
+on:
+  push:
+    branches:
+      - integration/type-only-declarations-current-main-20261024
+    paths:
+      - '.github/workflows/type-only-native-exact-head.yml'
+      - 'CMakeLists.txt'
+      - 'contracts/v1/type-alias-extension-constraint-v1.properties'
+      - 'contracts/v1/type-declarations-conformance-v1.tsv'
+      - 'src/main/cpp/oreslang/main.cpp'
+      - 'src/main/cpp/oreslang/frontend/**'
+      - 'src/main/cpp/oreslang/types/**'
+      - 'tests/native_type_only_declarations.py'
+      - 'tests/shared_type_declarations_conformance.py'
+      - 'tests/native_alias_extension_methods.py'
+      - 'tests/native_type_constraint_descriptors.py'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/type-only-native-exact-head.yml'
+      - 'CMakeLists.txt'
+      - 'contracts/v1/type-alias-extension-constraint-v1.properties'
+      - 'contracts/v1/type-declarations-conformance-v1.tsv'
+      - 'src/main/cpp/oreslang/main.cpp'
+      - 'src/main/cpp/oreslang/frontend/**'
+      - 'src/main/cpp/oreslang/types/**'
+      - 'tests/native_type_only_declarations.py'
+      - 'tests/shared_type_declarations_conformance.py'
+      - 'tests/native_alias_extension_methods.py'
+      - 'tests/native_type_constraint_descriptors.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+concurrency:
+  group: native-type-only-exact-head-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  focused-native-source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Exact source checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify exact source commit
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          echo "Source tree: $(git rev-parse HEAD^{tree})"
+          sha256sum contracts/v1/type-declarations-conformance-v1.tsv
+      - name: Install native compiler dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev python3
+      - name: Configure focused native compiler
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+      - name: Build native compiler from exact source
+        run: cmake --build build --target oreslang-llvmc --parallel 2
+      - name: Execute type-only, constraint-descriptor and alias-extension matrices
+        run: |
+          set -euo pipefail
+          ctest --test-dir build \
+            -R '^(native_shared_type_declaration_conformance|native_type_only_declaration_boundaries|native_type_constraint_descriptor_v1|native_alias_extension_method_aot)$' \
+            --output-on-failure --timeout 120
+
+  complete-native-suite:
+    needs: focused-native-source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Exact source checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify exact source commit
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Install native compiler dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev python3
+      - name: Configure native suite
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+      - name: Build all native test targets
+        run: cmake --build build --parallel 2
+      - name: Run full CTest verification
+        run: ctest --test-dir build --output-on-failure --timeout 240 --parallel 2
+      - name: Execute focused matrices with Python assertions disabled
+        run: |
+          set -euo pipefail
+          python3 -O tests/native_type_only_declarations.py --compiler ./build/oreslang-llvmc
+          python3 -O tests/shared_type_declarations_conformance.py --compiler ./build/oreslang-llvmc --clang "$(command -v clang)"
+          python3 -O tests/native_alias_extension_methods.py --compiler ./build/oreslang-llvmc --clang "$(command -v clang)"
+          python3 -O tests/native_type_constraint_descriptors.py --compiler ./build/oreslang-llvmc

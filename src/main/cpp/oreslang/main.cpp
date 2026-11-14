@@ -2,6 +2,9 @@
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
+#include "oreslang/frontend/ModuleLoader.hpp"
+#include "oreslang/frontend/LibraryProfile.hpp"
+#include "oreslang/frontend/CoreLibrarySources.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 #include "oreslang/runtime/CoreLog.hpp"
 #include "oreslang/types/RealtimeAnalysis.hpp"
@@ -23,43 +26,20 @@
 #include <array>
 #include <string_view>
 
-// Reject malformed Unicode (overlong encodings, surrogates, truncated input and
-// code points above U+10FFFF) and binary NUL before native parser admission.
-static void require_valid_source_utf8(std::string_view source) {
-    for (std::size_t i = 0; i < source.size();) {
-        const auto lead = static_cast<unsigned char>(source[i]);
-        if (lead == 0) throw std::runtime_error("native source contains NUL byte");
-        if (lead <= 0x7f) { ++i; continue; }
 
-        std::size_t continuation_count = 0;
-        unsigned char min_first = 0x80;
-        unsigned char max_first = 0xbf;
-        if (lead >= 0xc2 && lead <= 0xdf) {
-            continuation_count = 1;
-        } else if (lead >= 0xe0 && lead <= 0xef) {
-            continuation_count = 2;
-            if (lead == 0xe0) min_first = 0xa0;
-            if (lead == 0xed) max_first = 0x9f;
-        } else if (lead >= 0xf0 && lead <= 0xf4) {
-            continuation_count = 3;
-            if (lead == 0xf0) min_first = 0x90;
-            if (lead == 0xf4) max_first = 0x8f;
-        } else {
-            throw std::runtime_error("native source is not valid UTF-8");
-        }
-        if (source.size() - i <= continuation_count) {
-            throw std::runtime_error("native source is not valid UTF-8");
-        }
-        for (std::size_t j = 1; j <= continuation_count; ++j) {
-            const auto byte = static_cast<unsigned char>(source[i + j]);
-            if (byte < (j == 1 ? min_first : 0x80) ||
-                byte > (j == 1 ? max_first : 0xbf)) {
-                throw std::runtime_error("native source is not valid UTF-8");
-            }
-        }
-        i += continuation_count + 1;
+// Compiler failures can include guest-controlled tokens and filenames.
+// Never emit terminal control bytes, unbounded exception text or the exact
+// source filesystem path in a native compiler diagnostic.
+static void print_safe_diagnostic(std::ostream& stream, std::string_view message,
+                                  std::size_t limit) {
+    const auto count = std::min(message.size(), limit);
+    for (std::size_t i = 0; i < count; ++i) {
+        const unsigned char byte = static_cast<unsigned char>(message[i]);
+        stream.put(byte >= 32 && byte < 127 ? static_cast<char>(byte) : '?');
     }
+    if (message.size() > limit) stream << "...[truncated]";
 }
+
 
 static bool paths_alias(const char* source_path, const std::string& report_path) {
     std::error_code source_error;
@@ -74,92 +54,55 @@ static bool paths_alias(const char* source_path, const std::string& report_path)
     std::error_code identity_error;
     const bool same_file = std::filesystem::equivalent(source, report, identity_error);
     if (!identity_error) return same_file;
+    // libc++ may report a generic identity error when the destination does
+    // not exist yet. Check that case explicitly without swallowing failures.
+    std::error_code exists_error;
+    const bool report_exists = std::filesystem::exists(report, exists_error);
+    if (!exists_error && !report_exists) return false;
     if (identity_error == std::errc::no_such_file_or_directory) return false;
     throw std::runtime_error("cannot safely compare rt-report/source identity");
 }
 
-static void collect_tree_shake_expression_calls(
-        const oreslang::Expression& expression,
-        std::unordered_set<std::string>& calls) {
-    using Kind = oreslang::Expression::Kind;
-    if (expression.kind == Kind::Call)
-        calls.insert(oreslang::native_function_slot(
-            expression.name, expression.arguments.size()));
-    if (expression.left)
-        collect_tree_shake_expression_calls(*expression.left, calls);
-    if (expression.right)
-        collect_tree_shake_expression_calls(*expression.right, calls);
-    if (expression.condition)
-        collect_tree_shake_expression_calls(*expression.condition, calls);
-    if (expression.condition_lhs)
-        collect_tree_shake_expression_calls(*expression.condition_lhs, calls);
-    if (expression.condition_rhs)
-        collect_tree_shake_expression_calls(*expression.condition_rhs, calls);
-    if (expression.when_true)
-        collect_tree_shake_expression_calls(*expression.when_true, calls);
-    if (expression.when_false)
-        collect_tree_shake_expression_calls(*expression.when_false, calls);
-    for (const auto& argument : expression.arguments)
-        if (argument) collect_tree_shake_expression_calls(*argument, calls);
+static std::vector<std::string> tree_shake_function_calls(
+        const oreslang::Function& function,
+        std::size_t remaining_budget) {
+    const auto facts =
+            oreslang::realtime_detail::direct_facts(function, remaining_budget);
+    if (facts.call_budget_exceeded)
+        throw std::runtime_error(
+            "tree shaking call graph exceeds compiler edge budget");
+    return facts.calls;
 }
 
-static void collect_tree_shake_statement_calls(
-        const oreslang::Statement& statement,
-        std::unordered_set<std::string>& calls) {
-    if (statement.expression)
-        collect_tree_shake_expression_calls(*statement.expression, calls);
-    if (statement.branch_local) {
-        if (statement.branch_local->initializer)
-            collect_tree_shake_expression_calls(
-                *statement.branch_local->initializer, calls);
-        for (const auto& argument : statement.branch_local->constructor_arguments)
-            if (argument) collect_tree_shake_expression_calls(*argument, calls);
-    }
-    if (statement.array_commit_length)
-        collect_tree_shake_expression_calls(*statement.array_commit_length, calls);
-    for (const auto& value : statement.array_commit_values)
-        if (value) collect_tree_shake_expression_calls(*value, calls);
-    if (statement.condition)
-        collect_tree_shake_expression_calls(*statement.condition, calls);
-    if (statement.condition_lhs)
-        collect_tree_shake_expression_calls(*statement.condition_lhs, calls);
-    if (statement.condition_rhs)
-        collect_tree_shake_expression_calls(*statement.condition_rhs, calls);
-    for (const auto& nested : statement.then_statements)
-        collect_tree_shake_statement_calls(nested, calls);
-    for (const auto& nested : statement.else_statements)
-        collect_tree_shake_statement_calls(nested, calls);
-}
-
-static std::unordered_set<std::string> tree_shake_function_calls(
-        const oreslang::Function& function) {
-    std::unordered_set<std::string> calls;
-    for (const auto& local : function.locals) {
-        if (local.initializer)
-            collect_tree_shake_expression_calls(*local.initializer, calls);
-        for (const auto& argument : local.constructor_arguments)
-            if (argument) collect_tree_shake_expression_calls(*argument, calls);
-    }
-    for (const auto& statement : function.statements)
-        collect_tree_shake_statement_calls(statement, calls);
-    for (const auto& guarded : function.early_returns) {
-        if (guarded.condition) collect_tree_shake_expression_calls(*guarded.condition, calls);
-        if (guarded.lhs) collect_tree_shake_expression_calls(*guarded.lhs, calls);
-        if (guarded.rhs) collect_tree_shake_expression_calls(*guarded.rhs, calls);
-        if (guarded.result) collect_tree_shake_expression_calls(*guarded.result, calls);
-    }
-    for (const auto& send : function.actor_sends)
-        if (send.payload) collect_tree_shake_expression_calls(*send.payload, calls);
-    for (const auto& write : function.actor_field_writes)
-        if (write.expression)
-            collect_tree_shake_expression_calls(*write.expression, calls);
-    if (function.caught_throw_value)
-        collect_tree_shake_expression_calls(*function.caught_throw_value, calls);
-    for (const auto& statement : function.caught_throw_defers)
-        collect_tree_shake_statement_calls(statement, calls);
-    if (function.result)
-        collect_tree_shake_expression_calls(*function.result, calls);
-    return calls;
+static void require_function_only_tree_shake_surface(
+        const oreslang::Program& program) {
+    if (!program.actors.empty())
+        throw std::runtime_error(
+            "tree shaking currently rejects actor declarations until actor roots are modeled");
+    if (!program.classes.empty())
+        throw std::runtime_error(
+            "tree shaking currently rejects class declarations until class initializer roots are modeled");
+    if (!program.cooperative_loops.empty())
+        throw std::runtime_error(
+            "tree shaking currently rejects cooperative loop declarations until continuation ABI roots are modeled");
+    if (std::any_of(
+            program.functions.begin(),
+            program.functions.end(),
+            [](const oreslang::Function& fn) {
+                return static_cast<bool>(fn.scalar_while);
+            }))
+        throw std::runtime_error(
+            "tree shaking currently rejects scalar continuation functions until continuation ABI roots are modeled");
+    if (std::any_of(
+            program.functions.begin(),
+            program.functions.end(),
+            [](const oreslang::Function& fn) {
+                return fn.async_source_i64 ||
+                    !fn.source_tasks.empty() ||
+                    !fn.future_pipelines.empty();
+            }))
+        throw std::runtime_error(
+            "tree shaking currently rejects Task/Future pipeline metadata edges until they participate in the semantic reachability graph");
 }
 
 static void tree_shake_functions(oreslang::Program& program, const std::vector<std::string>& requested_roots) {
@@ -167,7 +110,8 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
     for (std::size_t i = 0; i < program.functions.size(); ++i) {
         const auto& function = program.functions[i];
         const std::string key =
-            oreslang::native_function_slot(function.name, function.parameters.size());
+            oreslang::realtime_detail::function_key(
+                function.name, function.parameters.size());
         if (!definitions.emplace(key, i).second)
             throw std::runtime_error(
                 "tree shaking requires unique native function name/arity identities");
@@ -180,7 +124,7 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
             std::vector<std::string> matches;
             for (const auto& function : program.functions) {
                 if (function.name == requested)
-                    matches.push_back(oreslang::native_function_slot(
+                    matches.push_back(oreslang::realtime_detail::function_key(
                         function.name, function.parameters.size()));
             }
             if (matches.empty())
@@ -193,8 +137,23 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
         for (const auto& function : program.functions) {
             if (function.exported || function.name == "main") {
                 const std::string key =
-                    oreslang::native_function_slot(function.name, function.parameters.size());
+                    oreslang::realtime_detail::function_key(
+                        function.name, function.parameters.size());
                 if (reachable.insert(key).second) pending.push_back(key);
+            }
+            if (function.exported) {
+                // LLVM names overloaded families according to family
+                // cardinality. Preserve every sibling of a public overload in
+                // conservative mode so removing a private sibling cannot
+                // silently rename the surviving exported ABI symbol.
+                for (const auto& sibling : program.functions) {
+                    if (sibling.name != function.name) continue;
+                    const std::string sibling_key =
+                        oreslang::realtime_detail::function_key(
+                            sibling.name, sibling.parameters.size());
+                    if (reachable.insert(sibling_key).second)
+                        pending.push_back(sibling_key);
+                }
             }
         }
     }
@@ -202,12 +161,18 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
         throw std::runtime_error(
             "tree shaking requires an explicit root, main, or at least one pub function");
 
+    std::size_t scanned_edges = 0;
     for (std::size_t cursor = 0; cursor < pending.size(); ++cursor) {
         const auto definition = definitions.find(pending[cursor]);
         if (definition == definitions.end())
             throw std::runtime_error("tree shaking found an unresolved function root");
-        const auto calls =
-            tree_shake_function_calls(program.functions[definition->second]);
+        if (scanned_edges >= oreslang::realtime_detail::kMaxRealtimeCallEdges)
+            throw std::runtime_error(
+                "tree shaking call graph exceeds compiler edge budget");
+        const auto calls = tree_shake_function_calls(
+                program.functions[definition->second],
+                oreslang::realtime_detail::kMaxRealtimeCallEdges - scanned_edges);
+        scanned_edges += calls.size();
         for (const auto& call : calls) {
             if (!definitions.count(call))
                 throw std::runtime_error(
@@ -219,7 +184,7 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
     program.functions.erase(
         std::remove_if(program.functions.begin(), program.functions.end(),
             [&](const oreslang::Function& function) {
-                return !reachable.count(oreslang::native_function_slot(
+                return !reachable.count(oreslang::realtime_detail::function_key(
                     function.name, function.parameters.size()));
             }),
         program.functions.end());
@@ -235,12 +200,19 @@ int main(int argc, char** argv) {
     bool target_seen = false;
     bool native_hard_rt_profile = false;
     bool profile_seen = false;
+    std::optional<oreslang::frontend::LibraryProfile> library_profile;
+    bool library_profile_seen = false;
+    bool allocator_provider_seen = false;
+    bool bounded_allocator_provider = false;
     bool rt_check_only = false;
     bool rt_entry_seen = false;
     bool rt_report_seen = false;
+    bool constraint_descriptors_only = false;
     std::string rt_entry = "main/0";
     std::string rt_report_path;
     bool tree_shake = false;
+    bool isolate_entry_seen = false;
+    std::string isolate_entry;
     std::vector<std::string> tree_shake_roots;
     const char* path = nullptr;
     // Host-only severity policy: last CLI flag overrides the environment.
@@ -248,7 +220,35 @@ int main(int argc, char** argv) {
     std::string coreLogLevel = envLevel ? envLevel : "off";
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
-        if (arg.rfind("--profile=", 0) == 0) {
+        if (arg.rfind("--allocator-provider=", 0) == 0) {
+            if (allocator_provider_seen) {
+                std::cerr << "duplicate allocator-provider option\n";
+                return 2;
+            }
+            allocator_provider_seen = true;
+            const std::string provider =
+                arg.substr(std::string_view("--allocator-provider=").size());
+            if (provider != "bounded-arena") {
+                std::cerr << "unsupported allocator provider: " << provider
+                          << " (expected bounded-arena)\n";
+                return 2;
+            }
+            bounded_allocator_provider = true;
+        } else if (arg.rfind("--library-profile=", 0) == 0) {
+            if (library_profile_seen) {
+                std::cerr << "duplicate library-profile option\n";
+                return 2;
+            }
+            library_profile_seen = true;
+            const std::string profile =
+                arg.substr(std::string_view("--library-profile=").size());
+            library_profile = oreslang::frontend::parse_library_profile(profile);
+            if (!library_profile.has_value()) {
+                std::cerr << "unsupported library profile: " << profile
+                          << " (expected core or std)\n";
+                return 2;
+            }
+        } else if (arg.rfind("--profile=", 0) == 0) {
             if (profile_seen) { std::cerr << "duplicate profile option\n"; return 2; }
             profile_seen = true;
             const std::string profile = arg.substr(std::string_view("--profile=").size());
@@ -271,6 +271,12 @@ int main(int argc, char** argv) {
             rt_report_seen = true;
             rt_report_path = arg.substr(std::string_view("--rt-report=").size());
             if (rt_report_path.empty()) { std::cerr << "rt-report path cannot be empty\n"; return 2; }
+        } else if (arg == "--constraint-descriptors") {
+            if (constraint_descriptors_only) {
+                std::cerr << "duplicate constraint-descriptors option\n";
+                return 2;
+            }
+            constraint_descriptors_only = true;
         } else if (arg.rfind("--core-log-level=", 0) == 0) {
             coreLogLevel = arg.substr(std::string_view("--core-log-level=").size());
         } else if (arg == "--no-core-log") {
@@ -283,6 +289,11 @@ int main(int argc, char** argv) {
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
+        } else if (arg.rfind("--isolate-entry=", 0) == 0) {
+            if (isolate_entry_seen) { std::cerr << "duplicate isolate entry\n"; return 2; }
+            isolate_entry_seen = true;
+            isolate_entry = arg.substr(std::string("--isolate-entry=").size());
+            if (isolate_entry.empty()) { std::cerr << "empty isolate entry\n"; return 2; }
         } else if (arg == "--tree-shake") {
             if (tree_shake) { std::cerr << "duplicate tree-shake option\n"; return 2; }
             tree_shake = true;
@@ -315,6 +326,57 @@ int main(int argc, char** argv) {
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
     }
+    // Public library architecture has exactly two layers. For now the native
+    // backend only certifies the freestanding core profile on targets whose ABI
+    // is explicitly no-OS, and the std profile on the ordinary hosted target.
+    // This is intentionally fail-closed until effect/capability closure can
+    // prove additional combinations.
+    const bool freestanding_library_target = wasm32_target || cortex_m_target;
+    if (!library_profile.has_value()) {
+        library_profile =
+            oreslang::frontend::default_library_profile(freestanding_library_target);
+    }
+    const std::string_view library_profile_error =
+        oreslang::frontend::library_profile_admission_error(
+            *library_profile, freestanding_library_target);
+    if (!library_profile_error.empty()) {
+        std::cerr << library_profile_error;
+        if (*library_profile == oreslang::frontend::LibraryProfile::Core) {
+            std::cerr << " (wasm32-unknown-unknown or thumbv7m-none-eabi)";
+        }
+        std::cerr << "\n";
+        return 2;
+    }
+    if (bounded_allocator_provider && !freestanding_library_target) {
+        std::cerr << "bounded-arena allocator provider is certified only for freestanding targets\n";
+        return 2;
+    }
+    if (bounded_allocator_provider &&
+            *library_profile != oreslang::frontend::LibraryProfile::Core) {
+        std::cerr << "allocator provider requires library-profile=core\n";
+        return 2;
+    }
+    const std::uint32_t admitted_provider_bits =
+        bounded_allocator_provider
+            ? oreslang::frontend::core_provider_bit(
+                oreslang::frontend::CoreProviderRequirement::Allocator)
+            : 0u;
+
+    if (constraint_descriptors_only &&
+            (tree_shake || !tree_shake_roots.empty() || native_hard_rt_profile ||
+             rt_check_only || rt_entry_seen || rt_report_seen ||
+             experimental_owned_int || experimental_rt_scalar_loop ||
+             target_seen || allocator_provider_seen)) {
+        std::cerr << "constraint-descriptors is a metadata-only mode and cannot be combined with execution/codegen options\n";
+        return 2;
+    }
+    if (isolate_entry_seen && (tree_shake || !tree_shake_roots.empty() ||
+            wasm32_target || cortex_m_target || experimental_owned_int ||
+            experimental_rt_scalar_loop || native_hard_rt_profile ||
+            bounded_allocator_provider || rt_check_only || rt_report_seen)) {
+        std::cerr << "isolate entry supports only ordinary host scalar codegen\n";
+        return 2;
+    }
     if (!tree_shake && !tree_shake_roots.empty()) {
         std::cerr << "tree-shake-root requires --tree-shake\n";
         return 2;
@@ -334,16 +396,24 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
+    std::string source_module;
+    std::string source_namespace;
     try {
         std::cout.exceptions(std::ios::badbit | std::ios::failbit);
         const std::size_t kMaxSourceBytes = cortex_m_target ? 128u * 1024u : 8u * 1024u * 1024u;
-        const auto text = read_regular_source(path, kMaxSourceBytes, cortex_m_target
+        const char* source_overflow = cortex_m_target
             ? "cortex-m source exceeds 128 KiB limit"
-            : "native source exceeds 8 MiB admission limit");
+            : "native source exceeds 8 MiB admission limit";
+        const SourceIdentity expected_source_identity =
+            capture_source_identity(path, kMaxSourceBytes, source_overflow);
+        SourceIdentity source_identity;
+        const auto text = read_regular_source(
+            path, kMaxSourceBytes, source_overflow,
+            &source_identity, &expected_source_identity);
         require_valid_source_utf8(text);
         // Target/capability directives are lexical comments in the native
         // subset. Reject rather than silently discard unverified portability
@@ -360,8 +430,48 @@ int main(int argc, char** argv) {
         if (native_hard_rt_profile && experimental_owned_int)
             throw std::runtime_error("native-hard-rt profile rejects experimental owned heap lowering");
 
-        auto ast = oreslang::parse_program(text, experimental_owned_int,
-                                           experimental_rt_scalar_loop);
+        auto ast = oreslang::load_native_program(
+            path, text, source_identity, experimental_owned_int,
+            experimental_rt_scalar_loop, !wasm32_target && !cortex_m_target,
+            admitted_provider_bits);
+        source_module = ast.module;
+        source_namespace = ast.namespace_name;
+
+        // A enabled telemetry scope currently calls CLOCK_MONOTONIC on a
+        // native carrier. It has not been subjected to a proven WCET/time
+        // budget; do not certify this as hard-real-time compatible merely
+        // because the compiler can emit native LLVM IR.
+        if (native_hard_rt_profile || rt_report_seen) {
+            std::function<bool(const oreslang::Statement&)> has_span =
+                [&](const oreslang::Statement& stmt) {
+                    return stmt.kind ==
+                            oreslang::Statement::Kind::UsingTelemetrySpan
+                        || std::any_of(stmt.then_statements.begin(),
+                            stmt.then_statements.end(), has_span)
+                        || std::any_of(stmt.else_statements.begin(),
+                            stmt.else_statements.end(), has_span);
+                };
+            for (const auto& fn : ast.functions)
+                if (std::any_of(fn.statements.begin(),
+                        fn.statements.end(), has_span))
+                    throw std::runtime_error(
+                        "native telemetry using lacks bounded WCET/probe"
+                        " budget proof for native-hard-rt profile");
+        }
+
+        if (constraint_descriptors_only) {
+            for (const auto& descriptor : ast.type_constraint_descriptors) {
+                std::cout << "descriptor\t"
+                          << descriptor.schema_id << '\t'
+                          << descriptor.qualified_type_name << '\t'
+                          << descriptor.representation << '\t'
+                          << (descriptor.validation_required ? "true" : "false") << '\t'
+                          << descriptor.fingerprint << '\t'
+                          << descriptor.canonical << '\n';
+            }
+            std::cout.flush();
+            return 0;
+        }
 
         if (rt_report_seen && path != nullptr && paths_alias(path, rt_report_path))
             throw std::runtime_error("rt-report path must not overwrite source input");
@@ -415,10 +525,16 @@ int main(int argc, char** argv) {
 
                 using Kind = oreslang::Expression::Kind;
                 switch (expr.kind) {
-                    case Kind::Integer: case Kind::Variable: return true;
-                    case Kind::Negate:
+                    case Kind::Integer: case Kind::Boolean:
+                    case Kind::Variable: return true;
+                    case Kind::Negate: case Kind::LogicalNot:
                         return expr.left && scalar(*expr.left, depth + 1, calls);
                     case Kind::Add: case Kind::Subtract: case Kind::Multiply:
+                    case Kind::Equal: case Kind::NotEqual:
+                    case Kind::Less: case Kind::LessEqual:
+                    case Kind::Greater: case Kind::GreaterEqual:
+                    case Kind::LogicalAnd: case Kind::LogicalOr:
+                    case Kind::LogicalXor:
                         return expr.left && expr.right &&
                                scalar(*expr.left, depth + 1, calls) &&
                                scalar(*expr.right, depth + 1, calls);
@@ -428,6 +544,19 @@ int main(int argc, char** argv) {
                         for (const auto& arg : expr.arguments)
                             if (!arg || !scalar(*arg, depth + 1, calls)) return false;
                         return true;
+                    case Kind::ArrayCall:
+                        if (!bounded_allocator_provider || !expr.left ||
+                                expr.left->kind != Kind::Variable ||
+                                expr.name != "get" ||
+                                expr.arguments.size() != 1 ||
+                                !expr.arguments.front())
+                            return false;
+                        return scalar(
+                            *expr.arguments.front(), depth + 1, calls);
+                    case Kind::Field:
+                        return bounded_allocator_provider && expr.left &&
+                            expr.left->kind == Kind::Variable &&
+                            expr.name == "size";
                     default: return false;
                 }
             };
@@ -508,18 +637,98 @@ int main(int argc, char** argv) {
                 // The trusted C runtime owns static actors, mailboxes, and
                 // orderly stop/drain; this does not admit guest awaits.
             }
+            auto guarded_scalar_returns = [&](const oreslang::Function& fn) {
+                if (fn.statements.size() > 8) return false;
+                for (const auto& statement : fn.statements) {
+                    if (statement.kind != oreslang::Statement::Kind::Conditional ||
+                            !statement.condition ||
+                            statement.condition_lhs || statement.condition_rhs ||
+                            !statement.else_statements.empty() ||
+                            statement.then_statements.size() != 1)
+                        return false;
+                    const auto& terminal = statement.then_statements.front();
+                    if (terminal.kind != oreslang::Statement::Kind::Return ||
+                            !terminal.expression ||
+                            terminal.condition || terminal.condition_lhs ||
+                            terminal.condition_rhs ||
+                            !terminal.then_statements.empty() ||
+                            !terminal.else_statements.empty())
+                        return false;
+                    std::vector<std::string> condition_calls;
+                    if (!scalar(*statement.condition, 0, condition_calls) ||
+                            !condition_calls.empty())
+                        return false;
+                    std::vector<std::string> return_calls;
+                    if (!scalar(*terminal.expression, 0, return_calls))
+                        return false;
+                }
+                return true;
+            };
+            auto bounded_allocator_function =
+                [&](const oreslang::Function& fn) {
+                    if (!bounded_allocator_provider ||
+                            fn.locals.empty() || fn.locals.size() > 20 ||
+                            !fn.statements.empty())
+                        return false;
+                    std::unordered_set<std::string> arrays;
+                    std::size_t owners = 0;
+                    std::size_t effects = 0;
+                    for (const auto& local : fn.locals) {
+                        if (local.int_array) {
+                            if (++owners > 4 || !local.owner_mutable ||
+                                    local.heap_owned || local.new_class ||
+                                    !local.class_name.empty() ||
+                                    local.initializer)
+                                return false;
+                            if (!arrays.insert(local.name).second)
+                                return false;
+                            continue;
+                        }
+                        if (local.name.rfind("$effect", 0) != 0 ||
+                                !local.initializer ||
+                                local.initializer->kind !=
+                                    oreslang::Expression::Kind::ArrayCall ||
+                                ++effects > 16)
+                            return false;
+                        const auto& call = *local.initializer;
+                        if (!call.left ||
+                                call.left->kind !=
+                                    oreslang::Expression::Kind::Variable ||
+                                !arrays.count(call.left->name))
+                            return false;
+                        const std::size_t expected =
+                            call.name == "add" ? 1 :
+                            (call.name == "set" ? 2 : 0);
+                        if (expected == 0 ||
+                                call.arguments.size() != expected)
+                            return false;
+                        for (const auto& argument : call.arguments) {
+                            std::vector<std::string> calls;
+                            if (!argument ||
+                                    !scalar(*argument, 0, calls) ||
+                                    !calls.empty())
+                                return false;
+                        }
+                    }
+                    return owners != 0;
+                };
             for (const auto& fn : ast.functions) {
+                const bool scalar_function =
+                    fn.locals.empty() && guarded_scalar_returns(fn);
+                const bool allocator_function =
+                    bounded_allocator_function(fn);
                 if ((!ast.actors.empty() && fn.name != "main") ||
                     (ast.actors.empty() && fn.name == "main") ||
                     fn.returns_void || !fn.result ||
-                    !fn.locals.empty() || !fn.statements.empty() ||
+                    (!scalar_function && !allocator_function) ||
                     !fn.early_returns.empty() ||
                     (ast.actors.empty() && (!fn.actor_spawns.empty() ||
                         !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
                         !fn.actor_actions.empty() || !fn.actor_field_writes.empty())) ||
                     fn.scalar_while || fn.caught_throw_value ||
                     !fn.caught_throw_defers.empty() || fn.has_declared_effects)
-                    throw std::runtime_error("cortex-m target rejects main, effects or non-scalar functions");
+                    throw std::runtime_error(
+                        "cortex-m target rejects main, effects or unbounded functions");
                 if (fn.parameters.size() > max_parameters)
                     throw std::runtime_error("cortex-m parameter budget exceeded");
                 for (const auto& param : fn.parameters)
@@ -562,10 +771,21 @@ int main(int argc, char** argv) {
             // Tree shaking is an optimization, not conditional compilation.
             // Validate/codegen the complete admitted source once before pruning
             // so unsupported target features cannot hide in unreachable code.
-            (void)oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
+            (void)oreslang::emit_verified_llvm_ir(
+                ast, wasm32_target, cortex_m_target,
+                bounded_allocator_provider);
+
+            // The shipped pass is deliberately function-only. Richer Program
+            // owners have hidden semantic/ABI roots that are not represented
+            // by the direct-call graph yet. Fail closed rather than deleting
+            // a helper that is reachable only from an actor handler, class
+            // initializer, or host-driven continuation.
+            require_function_only_tree_shake_surface(ast);
             tree_shake_functions(ast, tree_shake_roots);
         }
-        std::cout << oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
+        std::cout << oreslang::emit_verified_llvm_ir(
+                ast, wasm32_target, cortex_m_target,
+                bounded_allocator_provider, isolate_entry);
         std::cout.flush();
         if (coreLog) coreLog->dump(stderr);
         return 0;
@@ -574,7 +794,38 @@ int main(int argc, char** argv) {
         if (coreLog)
             coreLog->record(oreslang::CoreLog::Level::Error,
                             oreslang::CoreLog::EventId::CompileFailed, 1);
-        std::cerr << "oreslang-llvmc: " << error.what() << '\n';
+        std::cerr << "oreslang-llvmc: ";
+        std::string diagnostic = error.what();
+        if (path != nullptr && *path != '\0') {
+            const std::string source_path(path);
+            // Full host paths are private CI metadata, not error context.
+            // Replace exact input-path occurrences before rendering.
+            std::size_t found = 0;
+            while ((found = diagnostic.find(source_path, found)) != std::string::npos) {
+                diagnostic.replace(found, source_path.size(), "<source>");
+                found += sizeof("<source>") - 1;
+            }
+        }
+        print_safe_diagnostic(std::cerr, diagnostic, 2048);
+        if (path != nullptr) {
+            std::string_view source_name(path);
+            const auto slash = source_name.find_last_of("/\\");
+            if (slash != std::string_view::npos) source_name.remove_prefix(slash + 1);
+            std::cerr << " [file: ";
+            print_safe_diagnostic(std::cerr, source_name, 128);
+            std::cerr << "]";
+        }
+        if (!source_module.empty()) {
+            std::cerr << " [module: ";
+            print_safe_diagnostic(std::cerr, source_module, 128);
+            std::cerr << "]";
+        }
+        if (!source_namespace.empty()) {
+            std::cerr << " [namespace: ";
+            print_safe_diagnostic(std::cerr, source_namespace, 128);
+            std::cerr << "]";
+        }
+        std::cerr << '\n';
         if (coreLog) coreLog->dump(stderr);
         return 1;
     }

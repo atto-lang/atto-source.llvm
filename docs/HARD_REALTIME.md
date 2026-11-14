@@ -62,6 +62,12 @@ The RT domain should support preallocated workers, explicit CPU affinity/reserva
 
 The existing cooperation watchdog remains diagnostic. It is not a deadline guarantee.
 
+Status: the dispatch substrate exists as `NativeRtDomain` (preallocated
+pinned workers, static actor placement, bounded lock-free SPSC queues,
+CONTROL-before-DATA, fail-closed SCHED_FIFO/affinity). Fixed-priority/EDF
+admission and per-actor deadlines are not implemented yet. See
+[NATIVE_RT_DOMAIN.md](NATIVE_RT_DOMAIN.md).
+
 ## AOT audit
 
 The release gate must inspect the final linked artifact and transitive runtime/FFI dependencies, not only generated LLVM IR. It must fail if a certified path reaches a tracing runtime, interpreter/JIT, unknown allocator, or unknown blocking primitive.

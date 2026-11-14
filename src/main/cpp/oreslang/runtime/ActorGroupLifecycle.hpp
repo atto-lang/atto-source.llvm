@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <future>
 #include <map>
@@ -41,6 +42,55 @@ public:
     std::uint64_t actor_id() const noexcept { return actor_id_; }
     std::uint64_t generation() const noexcept { return generation_; }
 
+    // Runtime-only, lock-free negative admission check for new external I/O.
+    // Not a live physical-turn claim and NOT atomic with concurrent STOP:
+    // the supervisor must revoke its WAL queue when STOP linearizes.
+    bool resource_admission_open() const noexcept {
+        return !ticket_->stop_issued.load(std::memory_order_acquire)
+            && !ticket_->detached_from_group.load(std::memory_order_acquire)
+            && !ticket_->physically_done.load(std::memory_order_acquire)
+            && !(ticket_->resource_state.load(std::memory_order_acquire)
+                 & terminal_resource_bit);
+    }
+
+    // Trusted native resource accounting for physical loans issued to this
+    // actor generation. The top bit seals registration at finalization; a
+    // successful registration cannot race past physical DONE. This is not a
+    // guest-visible reference capability.
+    void retain_resource_loan() const {
+        auto current = ticket_->resource_state.load(std::memory_order_acquire);
+        for (;;) {
+            if (current & terminal_resource_bit)
+                throw std::logic_error("actor resources already terminal");
+            if (current == terminal_resource_bit - 1)
+                throw std::overflow_error("actor resource loan counter exhausted");
+            if (ticket_->resource_state.compare_exchange_weak(
+                    current, current + 1, std::memory_order_acq_rel,
+                    std::memory_order_acquire))
+                return;
+        }
+    }
+
+    void release_resource_loan() const noexcept {
+        auto current = ticket_->resource_state.load(std::memory_order_acquire);
+        for (;;) {
+            // Terminal sealing blocks NEW loans but must not strand loans
+            // admitted before STOP/close/finalization. The low 63 bits remain
+            // a drainable count while the high bit stays sticky.
+            if ((current & (terminal_resource_bit - 1)) == 0)
+                std::terminate();
+            if (ticket_->resource_state.compare_exchange_weak(
+                    current, current - 1, std::memory_order_acq_rel,
+                    std::memory_order_acquire))
+                return;
+        }
+    }
+
+    std::uint64_t outstanding_resource_loans() const noexcept {
+        return ticket_->resource_state.load(std::memory_order_acquire)
+            & (terminal_resource_bit - 1);
+    }
+
     // HOST-ONLY futures: guest awaits must suspend the scheduler, never block
     // a carrier using shared_future::get(). Not cancellation capabilities.
     std::shared_future<void> get_ready() const { return ticket_->ready_future; }
@@ -76,6 +126,13 @@ public:
             && generation_ == other.generation_;
     }
 
+    // Numeric identity is useful for routing labels but is insufficient
+    // authorization when a finalized actor's IDs are reused. The opaque
+    // scheduler ticket distinguishes physical actor incarnations (ABA).
+    bool same_incarnation(const NativeActorRef& other) const noexcept {
+        return *this == other && ticket_ == other.ticket_;
+    }
+
     /**
      * Register an enqueue-only host continuation. Never run guest code from
      * this callback; the caller must post guest resumption to its scheduler.
@@ -96,6 +153,9 @@ public:
     }
 
 private:
+    static constexpr std::uint64_t terminal_resource_bit =
+        std::uint64_t{1} << 63;
+
     struct Ticket {
         std::mutex mutex;
         bool settled = false;
@@ -116,6 +176,9 @@ private:
         std::atomic<bool> control_reserved{false};
         std::atomic<bool> control_dropped{false};
         std::atomic<bool> logical_turn_active{false};
+        // Actor incarnation loan counter; terminal flag atomically prevents
+        // late registration after DONE is committed.
+        std::atomic<std::uint64_t> resource_state{0};
     };
 
     friend class NativeActorGroup;
@@ -189,11 +252,26 @@ public:
          * Detachment publishes a no-new-turns fence. All fields belong to
          * the ref's shared generation-fenced ticket and survive group close.
          */
-        bool ready_for_resource_reclamation() const noexcept {
+        // Bind terminal mailbox retirement to this exact actor incarnation
+        // and opaque readiness ticket; numeric IDs alone are not authority.
+        bool matches(const NativeActorRef& ref) const noexcept {
+            return ref_ == ref && ref_.ticket_ == ref.ticket_;
+        }
+
+        // Phase 1: safe to retire queued messages after STOP. Their owned
+        // receipts may still be charged, so this deliberately ignores loans.
+        bool ready_for_actor_turn_quiescence() const noexcept {
             return ref_.ticket_->detached_from_group.load(std::memory_order_acquire)
                 && !ref_.ticket_->logical_turn_active.load(std::memory_order_acquire)
                 && !ref_.ticket_->control_active.load(std::memory_order_acquire)
                 && !ref_.ticket_->control_reserved.load(std::memory_order_acquire);
+        }
+
+        // Phase 2: physical reclamation is legal only after all native loans
+        // (including preparing, queued, checked-out mailbox receipts) retire.
+        bool ready_for_resource_reclamation() const noexcept {
+            return ready_for_actor_turn_quiescence()
+                && ref_.outstanding_resource_loans() == 0;
         }
 
         bool finalized(std::string failure = "") const {
@@ -226,7 +304,8 @@ public:
         std::lock_guard<std::mutex> guard(mutex_);
         if (closed_) return false;
         auto it = workers_.find(ref.actor_id());
-        return it != workers_.end() && it->second.ref == ref
+        return it != workers_.end()
+            && it->second.ref.same_incarnation(ref)
             && bool(it->second.pending_control);
     }
 
@@ -371,22 +450,45 @@ public:
                 || ref.ticket_->control_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_reserved.load(std::memory_order_acquire))
                 return false;
-            // Close may settle readiness after detaching the worker table,
-            // outside the group lock. The ticket mutex decides the winner.
-            ActorReadyResult rejected{false,
-                failure.empty() ? "actor terminated before ready" : failure};
-            callbacks = settle_ticket(ref, std::move(rejected));
-            // A cancelled or failed startup is also a terminal failure,
-            // even when its physical cleanup acknowledgment has no separate
-            // error argument. Inspect readiness under the ticket mutex:
-            // close() may have rejected startup on another thread.
-            if (failure.empty()) {
-                std::lock_guard<std::mutex> ticket_guard(ref.ticket_->mutex);
-                if (!ref.ticket_->result.ready)
-                    failure = ref.ticket_->result.error;
+            // Seal resource admission even when existing loans remain. A
+            // failed finalization attempt is a terminal boundary: already
+            // admitted loans may drain, but no stale holder may create new
+            // physical work and starve DONE indefinitely.
+            const std::uint64_t resource_state =
+                ref.ticket_->resource_state.fetch_or(
+                    NativeActorRef::terminal_resource_bit,
+                    std::memory_order_acq_rel);
+            if ((resource_state & (NativeActorRef::terminal_resource_bit - 1)) != 0)
+                return false;
+            // The terminal-only state is also the retry marker after an
+            // allocation failure during readiness/DONE settlement.
+            if ((resource_state & NativeActorRef::terminal_resource_bit)
+                    && ref.ticket_->physically_done.load(std::memory_order_acquire))
+                return false;
+            try {
+                // Close may settle readiness after detaching the worker table,
+                // outside the group lock. The ticket mutex decides the winner.
+                ActorReadyResult rejected{false,
+                    failure.empty() ? "actor terminated before ready" : failure};
+                callbacks = settle_ticket(ref, std::move(rejected));
+                // A cancelled or failed startup is also a terminal failure,
+                // even when its physical cleanup acknowledgment has no separate
+                // error argument. Inspect readiness under the ticket mutex:
+                // close() may have rejected startup on another thread.
+                if (failure.empty()) {
+                    std::lock_guard<std::mutex> ticket_guard(ref.ticket_->mutex);
+                    if (!ref.ticket_->result.ready)
+                        failure = ref.ticket_->result.error;
+                }
+                // Settle done ONLY on acknowledged physical finalization.
+                done_callbacks = settle_done(ref, failure);
+            } catch (...) {
+                // Keep the terminal resource-admission fence sticky. A later
+                // serialized finalization call recognizes the sealed state and
+                // resumes settlement; reopening loans here would permit late
+                // physical-resource resurrection after logical termination.
+                throw;
             }
-            // Settle done ONLY on acknowledged physical finalization.
-            done_callbacks = settle_done(ref, failure);
             ref.ticket_->physically_done.store(true, std::memory_order_release);
             workers_.erase(ref.actor_id());
             owners.live.erase(it);
@@ -439,8 +541,16 @@ public:
                     rejection.ref, std::move(rejection.result));
             for (auto& item : workers_) {
                 Entry& worker = item.second;
-                if (worker.phase != Phase::stopping)
+                if (worker.phase != Phase::stopping) {
+                    // STOP is the logical terminal admission boundary. Race it
+                    // atomically with resource/message admission: a retain that
+                    // wins just before this seal is counted and may drain; a
+                    // retain after the seal is rejected.
+                    worker.ref.ticket_->resource_state.fetch_or(
+                        NativeActorRef::terminal_resource_bit,
+                        std::memory_order_acq_rel);
                     worker.phase = Phase::stopping;
+                }
             }
         }
         for (auto& rejection : rejections)
@@ -461,11 +571,21 @@ public:
             if (closed_) return;
             closed_ = true;
             detached.swap(workers_);
-            // Publish only AFTER detaching group ownership. The runtime-held
-            // finalizer may retire an actor following true physical quiescence.
-            for (const auto& item : detached)
+            // Closing the group is a terminal resource-admission fence.
+            // Atomically preserve any already-admitted loan count while
+            // blocking every later retain. Those existing loans may still
+            // release after this bit is set; DONE waits for the count to drain.
+            //
+            // Publish detached_from_group only after the admission seal, so a
+            // RuntimeFinalizer can never observe detachment while a stale
+            // holder is still permitted to register fresh physical work.
+            for (const auto& item : detached) {
+                item.second.ref.ticket_->resource_state.fetch_or(
+                    NativeActorRef::terminal_resource_bit,
+                    std::memory_order_acq_rel);
                 item.second.ref.ticket_->detached_from_group.store(
                     true, std::memory_order_release);
+            }
         }
         for (auto& item : detached) {
             Entry& worker = item.second;
@@ -559,15 +679,38 @@ private:
                 || ref.ticket_->control_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_reserved.load(std::memory_order_acquire))
                 return false;
-            ActorReadyResult rejected{false,
-                failure.empty() ? "actor terminated before ready" : failure};
-            callbacks = settle_ticket(ref, std::move(rejected));
-            if (failure.empty()) {
-                std::lock_guard<std::mutex> ticket_guard(ref.ticket_->mutex);
-                if (!ref.ticket_->result.ready)
-                    failure = ref.ticket_->result.error;
+            // Seal resource admission even when existing loans remain. A
+            // failed finalization attempt is a terminal boundary: already
+            // admitted loans may drain, but no stale holder may create new
+            // physical work and starve DONE indefinitely.
+            const std::uint64_t resource_state =
+                ref.ticket_->resource_state.fetch_or(
+                    NativeActorRef::terminal_resource_bit,
+                    std::memory_order_acq_rel);
+            if ((resource_state & (NativeActorRef::terminal_resource_bit - 1)) != 0)
+                return false;
+            // The terminal-only state is also the retry marker after an
+            // allocation failure during readiness/DONE settlement.
+            if ((resource_state & NativeActorRef::terminal_resource_bit)
+                    && ref.ticket_->physically_done.load(std::memory_order_acquire))
+                return false;
+            try {
+                ActorReadyResult rejected{false,
+                    failure.empty() ? "actor terminated before ready" : failure};
+                callbacks = settle_ticket(ref, std::move(rejected));
+                if (failure.empty()) {
+                    std::lock_guard<std::mutex> ticket_guard(ref.ticket_->mutex);
+                    if (!ref.ticket_->result.ready)
+                        failure = ref.ticket_->result.error;
+                }
+                done_callbacks = settle_done(ref, failure);
+            } catch (...) {
+                // Keep the terminal resource-admission fence sticky. A later
+                // serialized finalization call recognizes the sealed state and
+                // resumes settlement; reopening loans here would permit late
+                // physical-resource resurrection after logical termination.
+                throw;
             }
-            done_callbacks = settle_done(ref, failure);
             ref.ticket_->physically_done.store(true, std::memory_order_release);
             owners.live.erase(it);
         }
@@ -594,14 +737,20 @@ private:
 
     static std::vector<NativeActorRef::DoneContinuation> settle_done(
             const NativeActorRef& ref, const std::string& error) {
-        std::lock_guard<std::mutex> guard(ref.ticket_->mutex);
-        if (ref.ticket_->done_settled) return {};
+        // Stage every allocating object before publishing the one-shot promise.
+        // If allocation/copy fails, callers may retry physical finalization
+        // without encountering an already-satisfied promise paired with an
+        // unset done_settled/result state.
+        ActorDoneResult staged{error.empty(), error};
         std::exception_ptr failure;
         if (!error.empty())
             failure = std::make_exception_ptr(std::runtime_error(error));
+
+        std::lock_guard<std::mutex> guard(ref.ticket_->mutex);
+        if (ref.ticket_->done_settled) return {};
+        ref.ticket_->done_result = std::move(staged);
         if (failure) ref.ticket_->done_promise.set_exception(failure);
         else ref.ticket_->done_promise.set_value();
-        ref.ticket_->done_result = ActorDoneResult{error.empty(), error};
         ref.ticket_->done_settled = true;
         std::vector<NativeActorRef::DoneContinuation> callbacks;
         callbacks.swap(ref.ticket_->done_waiters);

@@ -8,6 +8,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
+#include "oreslang/backend/LlvmCompat.hpp"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -30,7 +31,7 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
     auto* i64 = llvm::Type::getInt64Ty(context);
     auto* i32 = llvm::Type::getInt32Ty(context);
     auto* voidTy = llvm::Type::getVoidTy(context);
-    auto* ptr = i64->getPointerTo();
+    auto* ptr = native_pointer_type(context, i64);
     auto* frameTy = llvm::StructType::create(context, {i64, i64, i64},
                                              "oreslang.rt.scalar.frame");
     constexpr std::uint64_t kMagic = 0x4f5245534c4f4f50ULL;
@@ -39,7 +40,7 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         return b.CreateStructGEP(frameTy, frame, index, "frame.field");
     };
     const auto fail = [&](llvm::IRBuilder<>& b) {
-        b.CreateCall(llvm::Intrinsic::getDeclaration(&module, llvm::Intrinsic::trap));
+        b.CreateCall(native_trap(module));
         b.CreateUnreachable();
     };
     const auto entryGuard = [&](llvm::Function* fn, llvm::Value* frame, llvm::IRBuilder<>& b) {

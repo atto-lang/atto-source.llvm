@@ -34,7 +34,26 @@ int ores_native_await_trace_resume_begin(
     OresNativeExecutionHandle* out_execution,
     OresNativeExecutionContext* out_context);
 
-/* Finish after the resumed guest turn/cleanup has left its native stack. */
+/*
+ * Scheduler-only Future wakeup path. Unlike the legacy direct causal trace
+ * resume, this refuses to resume until the owning producer has published
+ * READY in NativeContinuationStore, and atomically competes with cancellation.
+ * Call only after the scheduler admitted the correct actor CONTROL turn.
+ */
+int ores_native_await_trace_ready_resume_begin(
+    OresNativeExecutionContextStore* executions,
+    OresNativeContinuationStore* continuations,
+    OresNativeExecutionId resumed_execution_id,
+    OresNativeSuspensionLink link,
+    OresNativeExecutionHandle* out_execution,
+    OresNativeExecutionContext* out_context);
+
+/*
+ * Finish after the resumed guest turn/cleanup has left its native stack.
+ * The suspended continuation and its exact generation-fenced parent handle
+ * and logical source ExecutionId must still match the stored claim. This is
+ * a trusted scheduler operation, not an exposed guest completion capability.
+ */
 int ores_native_await_trace_resume_finish(
     OresNativeContinuationStore* continuations,
     OresNativeSuspensionLink link);

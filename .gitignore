@@ -7,3 +7,7 @@
 *.so
 *.dylib
 *.exe
+
+tmp/
+
+temp/

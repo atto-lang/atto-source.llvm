@@ -1,0 +1,44 @@
+name: AttoLang GPU G2 restricted device-source compiler
+
+on:
+  pull_request:
+    paths:
+      - 'tools/atto_gpu_saxpy_kernelc.cpp'
+      - 'tests/gpu-saxpy-g2/**'
+      - 'scripts/verify-atto-gpu-saxpy-g2.sh'
+      - '.github/workflows/atto-gpu-saxpy-g2.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  exact-head-device-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout immutable PR source head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Install Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Execute source-to-device compiler and OpenCL syntax assertions
+        shell: bash
+        env:
+          ATTO_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          bash scripts/verify-atto-gpu-saxpy-g2.sh | tee "$RUNNER_TEMP/gpu-g2-device-source-receipt.txt"
+
+      - name: Upload non-promoting G2 evidence receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpu-g2-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gpu-g2-device-source-receipt.txt
+          if-no-files-found: warn
+          retention-days: 7
