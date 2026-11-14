@@ -36,6 +36,9 @@ typedef struct {
     atomic_int stop_requested;
     atomic_int join_started;
     atomic_uint_fast64_t processed;
+    atomic_uint_fast64_t successful;
+    atomic_uint_fast64_t failed;
+    atomic_uint_fast64_t failure_code;
     atomic_int_fast64_t last_result;
 } SourceActor;
 
@@ -76,6 +79,7 @@ typedef struct {
     size_t next_slot;
     size_t live;
     size_t peak;
+    atomic_uint_fast64_t terminal_notices;
 } SourceActorGroup;
 
 /* Process-local trusted-main group; the compiler only supports linear refs
@@ -99,8 +103,11 @@ static _Thread_local int frame_faulted;
 
 static int reject_compiled_frame(void) {
     frame_faulted = 1;
-    if (frame_actor)
+    if (frame_actor) {
         atomic_store_explicit(&frame_actor->logical_frame_failed, 1, memory_order_release);
+        atomic_store_explicit(&frame_actor->failure_code,
+                              ORES_SOURCE_ACTOR_FAILURE_FRAME, memory_order_release);
+    }
     return 0;
 }
 
@@ -178,6 +185,9 @@ int oreslang_source_actor_test_readiness_publication_entered(void) {
     return atomic_load_explicit(
         &test_readiness_publication_entered, memory_order_acquire);
 }
+uint64_t oreslang_source_actor_test_terminal_notices(void) {
+    return atomic_load_explicit(&group.terminal_notices, memory_order_acquire);
+}
 #endif
 
 static void ensure(int condition) { if (!condition) abort(); }
@@ -205,6 +215,21 @@ int oreslang_source_actor_ready_status(void* opaque) {
     if (!instance || instance->magic != SOURCE_ACTOR_MAGIC) return -1;
     return atomic_load_explicit(
         &instance->startup_state, memory_order_acquire);
+}
+
+int oreslang_source_actor_message_receipt(
+        void* opaque, OresSourceActorMessageReceipt* out) {
+    SourceActor* instance = (SourceActor*)opaque;
+    if (!instance || instance->magic != SOURCE_ACTOR_MAGIC || !out) return 0;
+    *out = (OresSourceActorMessageReceipt){
+        .processed_callbacks = atomic_load_explicit(&instance->processed, memory_order_acquire),
+        .successful_messages = atomic_load_explicit(&instance->successful, memory_order_acquire),
+        .failed_messages = atomic_load_explicit(&instance->failed, memory_order_acquire),
+        .failure_code = atomic_load_explicit(&instance->failure_code, memory_order_acquire),
+        .last_success_result = atomic_load_explicit(&instance->last_result, memory_order_acquire),
+        .stop_requested = atomic_load_explicit(&instance->stop_requested, memory_order_acquire)
+    };
+    return 1;
 }
 
 typedef struct {
@@ -547,25 +572,32 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
         ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
     OresLogicalTurnV1 logical = {0};
     int64_t result = 0;
-    if (ores_logical_frames_v1_begin(instance->logical_frames, instance->id, 1, &logical)) {
-        /* Exclusive serial actor guest profile. Ordinary multi-turn actors
-         * require the future guarded-state/concurrent-heap lowering, not this
-         * serial-only heap ABI. Do not confuse C worker stack with this frame. */
+    int succeeded = 0;
+
+    /* This scalar ABI serializes source receiver turns on the scheduler lane.
+     * A successful native callback can return zero; zero is never our
+     * failure sentinel. Admission and frame drop status decide success. */
+    if (!atomic_load_explicit(&instance->logical_frame_failed, memory_order_acquire)
+        && ores_logical_frames_v1_begin(instance->logical_frames, instance->id, 1, &logical)) {
         frame_actor = instance;
         frame_turn = logical;
         frame_handle = (OresLogicalFrameV1){0};
         frame_active = 0;
         frame_faulted = 0;
-        if (!atomic_load_explicit(&instance->logical_frame_failed, memory_order_acquire))
-            result = instance->on_message(
-                instance->heap, turn.domain, turn.epoch, (int64_t)payload);
-        if (frame_faulted || frame_active) {
-            /* Fail closed on a miscompiled/over-quota handler. Preserve
-             * sibling actor execution; do not abort the entire native VM. */
+
+        result = instance->on_message(
+            instance->heap, turn.domain, turn.epoch, (int64_t)payload);
+
+        if (!frame_faulted && !frame_active
+            && ores_logical_frames_v1_end(instance->logical_frames, logical)) {
+            succeeded = 1;
+        } else {
+            /* Cancel owns scrubbing even when the generated receiver forgot
+             * to pop or a frame read/write failed. No output from this
+             * callback is treated as a successful guest result. */
             atomic_store_explicit(&instance->logical_frame_failed, 1, memory_order_release);
-            (void)ores_logical_frames_v1_cancel(instance->logical_frames, logical);
-        } else if (!ores_logical_frames_v1_end(instance->logical_frames, logical)) {
-            atomic_store_explicit(&instance->logical_frame_failed, 1, memory_order_release);
+            atomic_store_explicit(&instance->failure_code,
+                                  ORES_SOURCE_ACTOR_FAILURE_FRAME, memory_order_release);
             (void)ores_logical_frames_v1_cancel(instance->logical_frames, logical);
         }
         frame_actor = NULL;
@@ -575,16 +607,58 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
         frame_faulted = 0;
     } else {
         atomic_store_explicit(&instance->logical_frame_failed, 1, memory_order_release);
+        atomic_store_explicit(&instance->failure_code,
+                              ORES_SOURCE_ACTOR_FAILURE_FRAME, memory_order_release);
     }
     ores_actor_i64_heap_leave(instance->heap, turn);
-    atomic_store_explicit(&instance->last_result, result, memory_order_relaxed);
+
+    if (succeeded) {
+        atomic_store_explicit(&instance->last_result, result, memory_order_relaxed);
+        atomic_fetch_add_explicit(&instance->successful, 1, memory_order_release);
+    } else {
+        atomic_fetch_add_explicit(&instance->failed, 1, memory_order_release);
+    }
+    /* Matches the scheduler's *physically processed* DATA callback count.
+     * A failed callback is processed by the carrier, not a successful turn. */
     atomic_fetch_add_explicit(&instance->processed, 1, memory_order_release);
+
+    if (!succeeded) {
+        /* Seal future DATA immediately on a frame failure while allowing this
+         * callback to finish its physical carrier turn. Stop is idempotent
+         * against a trusted outer-host request racing this callback. */
+        group_lock();
+        int expected = 0;
+        if (atomic_compare_exchange_strong_explicit(
+                &instance->stop_requested, &expected, 1,
+                memory_order_acq_rel, memory_order_acquire)) {
+            ensure(ores_native_vm_stop_sealed(
+                group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
+        }
+        group_unlock();
+    }
+}
+
+/* Typed priority CONTROL belongs to the root supervisor's actor lane.
+ * Do not look up freed child pointers: only immutable scheduler identities
+ * and the typed, runtime-issued terminal envelope cross this boundary.
+ * Policy-driven automatic restart is a separate compiler/runtime milestone.
+ */
+static void source_supervisor_notice(
+        void* raw, size_t parent_slot, OresNativeActorTerminalFailure failure) {
+    ensure(raw == &group && parent_slot == SOURCE_GROUP_ROOT_SLOT);
+    ensure(failure.child.scheduler_domain == group.root_ref.scheduler_domain
+        && failure.child.actor_slot < SOURCE_GROUP_ROOT_SLOT
+        && failure.child.generation != 0
+        && (failure.kind == ORES_NATIVE_CONTROL_PANIC
+            || failure.kind == ORES_NATIVE_CONTROL_STOPPED));
+    atomic_fetch_add_explicit(&group.terminal_notices, 1, memory_order_release);
 }
 
 static void open_group_locked(void) {
     ensure(!group.vm && !group.executions && !group.continuations);
     ensure(group.live == 0 && group.next_slot == 0 && group.peak == 0);
     ensure(group.pending_ready == NULL && group.pending_done == NULL);
+    atomic_store_explicit(&group.terminal_notices, 0, memory_order_release);
 
     /*
      * Live trace stores are process-local runtime metadata. They hold logical
@@ -607,6 +681,7 @@ static void open_group_locked(void) {
             i == ORES_NATIVE_VM_MAIN ? SOURCE_GROUP_CARRIERS : 1;
         cfg.domains[i].on_message = deliver;
         cfg.domains[i].on_control = initialize;
+        cfg.domains[i].on_failure = source_supervisor_notice;
         cfg.domains[i].context = &group;
     }
     group.vm = ores_native_vm_open(&cfg);
@@ -666,6 +741,9 @@ void* oreslang_source_actor_spawn(
     atomic_init(&instance->stop_requested, 0);
     atomic_init(&instance->join_started, 0);
     atomic_init(&instance->processed, 0);
+    atomic_init(&instance->successful, 0);
+    atomic_init(&instance->failed, 0);
+    atomic_init(&instance->failure_code, 0);
     atomic_init(&instance->last_result, 0);
     atomic_init(&instance->logical_frame_failed, 0);
 
@@ -675,8 +753,10 @@ void* oreslang_source_actor_spawn(
     instance->logical_frames = ores_logical_frames_v1_open(instance->id, 1, 1, 16, 64);
     ensure(instance->logical_frames != NULL);
     group.actors[slot] = instance;
-    instance->ref =
-        ores_native_vm_spawn(group.vm, ORES_NATIVE_VM_MAIN, slot);
+    /* Every compiler-generated source actor has a registered root supervisor.
+     * This is host lifecycle metadata; it grants no guest supervisor pointer. */
+    instance->ref = ores_native_vm_spawn_supervised(
+        group.vm, ORES_NATIVE_VM_MAIN, slot, group.root_ref);
     ensure(instance->ref.scheduler_domain
         && instance->ref.actor_slot == slot);
     group.live++;
@@ -689,13 +769,19 @@ void* oreslang_source_actor_spawn(
     return instance;
 }
 
-void oreslang_source_actor_send(void* opaque, int64_t payload) {
+int oreslang_source_actor_try_send(void* opaque, int64_t payload) {
     SourceActor* instance = (SourceActor*)opaque;
-    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC
-        && instance->on_message);
-    ensure(ores_native_vm_try_send(
+    if (!instance || instance->magic != SOURCE_ACTOR_MAGIC
+        || !instance->on_message
+        || atomic_load_explicit(&instance->logical_frame_failed, memory_order_acquire)
+        || atomic_load_explicit(&instance->stop_requested, memory_order_acquire))
+        return 0;
+    return ores_native_vm_try_send(
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref, (uint64_t)payload)
-        == ORES_NATIVE_SEND_ACCEPTED);
+        == ORES_NATIVE_SEND_ACCEPTED;
+}
+void oreslang_source_actor_send(void* opaque, int64_t payload) {
+    ensure(oreslang_source_actor_try_send(opaque, payload));
 }
 
 int oreslang_source_actor_await_ready_checked(
@@ -924,12 +1010,16 @@ void oreslang_source_actor_request_stop(void* opaque) {
      */
     group_lock();
     int expected = 0;
-    ensure(atomic_compare_exchange_strong_explicit(
+    const int first_request = atomic_compare_exchange_strong_explicit(
         &instance->stop_requested,
         &expected,
         1,
         memory_order_acq_rel,
-        memory_order_acquire));
+        memory_order_acquire);
+    /* A frame error may already have sealed the mailbox on the carrier.
+     * An outer host may still issue its ordinary stop/get_done sequence. */
+    ensure(first_request ||
+        atomic_load_explicit(&instance->logical_frame_failed, memory_order_acquire));
 
     const size_t slot = (size_t)instance->ref.actor_slot;
     ensure(group.vm && slot < group.next_slot
@@ -939,8 +1029,9 @@ void oreslang_source_actor_request_stop(void* opaque) {
      * future DATA and abandon queued DATA, while an already-active turn is
      * allowed to cross its physical execution boundary.
      */
-    ensure(ores_native_vm_stop_sealed(
-        group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
+    if (first_request)
+        ensure(ores_native_vm_stop_sealed(
+            group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
     group_unlock();
 }
 
