@@ -5499,6 +5499,8 @@ private:
                 if (fn.name != "main" || !fn.exported || !fn.parameters.empty() ||
                         fn.returns_void || fn.return_type != ScalarType::I64 ||
                         fn.scalar_while || fn.locals.size() != 1 ||
+                        fn.async_source_i64 || !fn.method_owner.empty() ||
+                        fn.native_internal || !fn.c_export_u32_symbol.empty() ||
                         !fn.generic_parameters.empty() || !fn.statements.empty() ||
                         !fn.early_returns.empty() || !fn.actor_spawns.empty() ||
                         !fn.actor_actions.empty() || !fn.actor_sends.empty() ||
@@ -5507,6 +5509,8 @@ private:
                         !fn.ready_future_name.empty() || !fn.ready_future_actor.empty() ||
                         !fn.source_tasks.empty() || !fn.future_pipelines.empty() ||
                         fn.caught_throw_value || !fn.caught_throw_defers.empty() ||
+                        !fn.catch_binding.empty() ||
+                        fn.ready_await_form != NativeAwaitForm::None ||
                         !fn.return_class.empty() || !fn.return_sum.empty() ||
                         !fn.pending_return_type_alias.empty() ||
                         fn.has_declared_effects || loop.initial < 0 ||
