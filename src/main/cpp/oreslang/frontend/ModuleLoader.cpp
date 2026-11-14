@@ -61,6 +61,11 @@ public:
         linked.namespace_name = units.front()->program.namespace_name;
         for (std::size_t index = 0; index < units.size(); ++index) {
             auto& unit = *units[index];
+            // The current linker transports ordinary scalar/class/actor
+            // declarations only. An inverted owner must never disappear
+            // while imported source units are combined.
+            if (!unit.program.inverted_structs.empty() || unit.program.inverted_main)
+                fail(unit, "DOP_INVERTED_CROSS_UNIT_UNSUPPORTED: linked inverted owner needs checked schema/owner identity");
             if (!unit.program.type_only_declarations.empty() ||
                     !unit.program.type_constraint_descriptors.empty() ||
                     !unit.program.namespace_name.empty()) {
