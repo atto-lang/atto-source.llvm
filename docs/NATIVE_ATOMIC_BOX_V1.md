@@ -54,7 +54,7 @@ quiescence. Do not infer `Arc` safety from `AtomicScalar` alone.
 
 Native exact-blob proof: the two C++ source blobs were SHA checked inside a
 separate private Actions carrier before optimized compilation and ASan/UBSan
-execution, with 10 concurrent lanes and 400,000 total atomic increments.
+and TSan execution, with 10 concurrent lanes and 400,000 total atomic increments.
 The test includes memory-order rejection, weak-CAS retries, release/acquire
 publication, after-move invalidation, generation/domain denial, and exactly-once
 drop. The separate actor scheduler and AOT guest compiler were **not** exercised.
@@ -66,5 +66,6 @@ Next gates before guest support:
    Java/Graal, Rust, .NET Native AOT, Wasm, and independent Forge contracts.
 3. Actor method concurrency, allocator lifetime pinning, cancellation/STOP,
    user-supplied bad casts and FFI boundaries, cross-actor relocation or denial.
-4. TSan where supported, additional target architectures and exact-SHA native
-   guest execution. TSan or hard-real-time certification is **not** claimed.
+4. Additional target architectures, actor scheduler integration and exact-SHA
+   native guest execution. The focused native C++ test passed TSan, but that
+   is **not** a guest scheduler race proof or hard-real-time certification.
