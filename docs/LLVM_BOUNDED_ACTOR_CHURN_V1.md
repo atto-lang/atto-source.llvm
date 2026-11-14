@@ -70,6 +70,15 @@ at both optimization levels.
   with no emitted IR: missing stop, double stop, count exceeding the
   bound, async suspension, stopping a foreign reference, and a forged
   trusted-runtime readiness ABI symbol.
+- A separately linked real native guest built from the same generated LLVM
+  IR and production C actor runtime with `ORESLANG_SOURCE_ACTOR_TESTING`
+  must execute under ASan/UBSan at **both O0 and O2**. Its actual runtime
+  receipts must prove exactly 128 constructors executed and reached READY,
+  128 complete stop/joins, and 128 group teardowns. Immediate spawn/stop
+  without this readiness fence can legitimately cancel before construction;
+  the exit status alone would not be acceptable evidence.
+- A reserved source-actor or scalar-heap ABI name declared by user code must
+  be rejected by the compiler rather than linked as a fake host runtime.
 - Successful results produce only `SOURCE_ACTOR_BOUNDED_CHURN_*`
   receipts with `async_guest=NOT_EXECUTED` and
   `zero_gc_certified=NO`. O0/O2 compilation, native execution and
