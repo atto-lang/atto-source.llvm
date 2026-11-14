@@ -35,7 +35,7 @@ for opt in 0 2; do
     timeout --signal=TERM 90s "$work/arena-$opt" >"$result" 2>"$work/err-$opt" || {
       cat "$work/err-$opt" >&2; echo "actor arena sanitizer O$opt failed" >&2; exit 1;
     }
-  grep -Fqx 'LLVM_ACTOR_ARENA_HOST_LIFECYCLE_PASS|turns=8193|actors=2|negative=2|startup_callocs=10|physical_frees=10|turn_allocations=0|native_guest=NO|zero_gc_certified=NO' "$result" || {
+  grep -Fqx 'LLVM_ACTOR_ARENA_HOST_LIFECYCLE_PASS|parent_turns=8196|stress_turns=8193|actors=2|negative_children=2|startup_callocs=10|physical_frees=10|turn_allocations=0|native_guest=NO|zero_gc_certified=NO' "$result" || {
     cat "$result" "$work/err-$opt" >&2; exit 1;
   }
   [[ ! -s "$work/err-$opt" ]] || { cat "$work/err-$opt" >&2; exit 1; }
