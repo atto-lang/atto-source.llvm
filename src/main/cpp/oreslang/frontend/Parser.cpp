@@ -299,6 +299,7 @@ public:
              !identifier_part(source_[at_ + 3]))) {
             at_ += 3;
             return {Kind::Symbol, source_.substr(start, 3), start};
+        }
         // Contiguous comparison/logical operators are single tokens, matching
         // the Java/Graal precedence grammar.
         for (std::string_view op : {"->", "::", "|>", "==", "!=", "<=", ">=", "&&", "||", "^^"}) {
