@@ -27,3 +27,8 @@ jobs:
           set -euo pipefail
           g++ -std=c++20 -O1 -g -pthread -fno-omit-frame-pointer -fsanitize=address,undefined -Wall -Wextra -Werror -Isrc/main/cpp tests/native_atomic_box_v1_test.cpp -o /tmp/atto-native-atomic-box-sanitized
           /tmp/atto-native-atomic-box-sanitized
+      - name: ThreadSanitizer race detection
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -O1 -g -pthread -fno-omit-frame-pointer -fsanitize=thread -Wall -Wextra -Werror -Isrc/main/cpp tests/native_atomic_box_v1_test.cpp -o /tmp/atto-native-atomic-box-tsan
+          TSAN_OPTIONS="halt_on_error=1" /tmp/atto-native-atomic-box-tsan
