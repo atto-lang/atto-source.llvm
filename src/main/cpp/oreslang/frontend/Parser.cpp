@@ -353,7 +353,7 @@ public:
         // Admit '@' as a TOKEN only so existing parameter-local @Default guards
         // can issue their specific fail-closed diagnostic instead of a generic
         // unsupported-token error. No annotation execution is enabled.
-        if (std::string_view("(){},:;+-*/%=.<>@?!").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*/%=.<>@?!#").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -2045,6 +2045,11 @@ private:
         method_scope_ = owner;
         struct RestoreReceivers { std::unordered_set<std::string>& target; std::unordered_set<std::string> prior; ~RestoreReceivers() { target = std::move(prior); } } restore_receivers{class_receivers_, std::move(class_receivers_)};
         class_receivers_.clear();
+        struct RestoreAtomic { std::unordered_set<std::string>& target;
+            std::unordered_set<std::string> prior;
+            ~RestoreAtomic() { target = std::move(prior); }
+        } restore_atomic{atomic_i64_receivers_, std::move(atomic_i64_receivers_)};
+        atomic_i64_receivers_.clear();
         Function value;
         value.method_owner = owner;
         const bool alias_extension = extension_header_active_;
@@ -2420,7 +2425,32 @@ private:
             require(";");
             return true;
         };
+        auto native_atomic_local = [&]() -> bool {
+            if (!(token_.text == "val" && peek_next().text == "Atomic"))
+                return false;
+            // First safe main-compiler slice: one non-Copy, non-escaping
+            // stack-owned Atomic<int> in synchronous zero-arg main only.
+            if (!owner.empty() || value.name != "main" || value.async_source_i64 ||
+                    !value.parameters.empty() || !value.locals.empty() ||
+                    !value.source_tasks.empty() || !value.future_pipelines.empty() ||
+                    !value.actor_spawns.empty() || !atomic_i64_receivers_.empty())
+                fail("ATTO_ATOMIC_MAIN_V1_REJECT: requires the first and only owned Atomic<int> in synchronous main");
+            LocalBinding local;
+            local.offset = token_.offset;
+            local.native_atomic_i64 = true;
+            local.scalar_type = ScalarType::I64;
+            require("val"); require("Atomic"); require("<"); require("int"); require(">");
+            local.name = identifier();
+            require("=");
+            require("Atomic"); require("<"); require("int"); require(">"); require("(");
+            local.native_atomic_initial = signed_integer_literal();
+            require(")"); require(";");
+            atomic_i64_receivers_.insert(local.name);
+            value.locals.push_back(std::move(local));
+            return true;
+        };
         while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio" || array_effect_ahead()) {
+            if (native_atomic_local()) continue;
             // Typed Future<void> is admitted ONLY as a linear lexical alias
             // for one already-spawned ActorRef.get_ready() lifecycle promise.
             // No scalar/object borrow crosses this suspension, and general
@@ -4389,6 +4419,33 @@ private:
             auto field = make_expression(Expression::Kind::Field, offset);
             field->left = std::move(expr);
             field->name = identifier();
+            if (field->left && field->left->kind == Expression::Kind::Variable &&
+                    atomic_i64_receivers_.count(field->left->name)) {
+                if (field->name != "load" && field->name != "fetch_add")
+                    fail("ATTO_ATOMIC_MAIN_V1_REJECT: only load/fetch_add are admitted");
+                field->kind = Expression::Kind::NativeAtomicCall;
+                require("(");
+                if (field->name == "fetch_add") {
+                    field->arguments.push_back(expression());
+                    if (accept(",")) {
+                        require("#");
+                        field->atomic_order = identifier();
+                    }
+                } else if (token_.text != ")") {
+                    require("#");
+                    field->atomic_order = identifier();
+                }
+                require(")");
+                const auto& order = field->atomic_order;
+                const bool load_ok = order == "relaxed" || order == "acquire" ||
+                                     order == "seq_cst";
+                const bool rmw_ok = load_ok || order == "release" ||
+                                    order == "acq_rel";
+                if (!(field->name == "load" ? load_ok : rmw_ok))
+                    fail("ATTO_ATOMIC_MAIN_V1_REJECT: invalid atomic memory ordering");
+                expr = std::move(field);
+                continue;
+            }
             // Keep ActorRef.send(...) for the outer actor action parser.
             // Eager ArrayCall parsing would erase the send/stop ordering.
             const bool named_class_receiver = field->left
@@ -4730,6 +4787,15 @@ private:
             case Expression::Kind::Field:
                 validate_expression(*expr.left, parameters, functions, depth + 1);
                 return;
+            case Expression::Kind::NativeAtomicCall:
+                if (!expr.left || expr.left->kind != Expression::Kind::Variable)
+                    throw std::runtime_error("Atomic call lacks compiler-owned receiver");
+                validate_expression(*expr.left, parameters, functions, depth + 1);
+                if (expr.arguments.size() != (expr.name == "fetch_add" ? 1u : 0u))
+                    throw std::runtime_error("Atomic expression arity mismatch");
+                for (const auto& arg : expr.arguments)
+                    validate_expression(*arg, parameters, functions, depth + 1);
+                return;
             case Expression::Kind::ArrayCall:
                 // Named extension calls are lowered to ordinary Call nodes
                 // before this validation. Remaining ArrayCall nodes have no
@@ -4944,6 +5010,16 @@ private:
                     if (found != variables.end()) return found->second;
                 }
                 return ScalarType::I64;
+            }
+            case Expression::Kind::NativeAtomicCall: {
+                if (!expr.left || expr.left->kind != Expression::Kind::Variable ||
+                        (expr.name != "load" && expr.name != "fetch_add") ||
+                        expr.arguments.size() != (expr.name == "fetch_add" ? 1u : 0u))
+                    throw std::runtime_error("unproven native Atomic<int> expression");
+                for (const auto& arg : expr.arguments)
+                    require_type(validate_scalar_expression(*arg, variables, functions, depth + 1),
+                                 ScalarType::I64, "Atomic<int>.fetch_add");
+                return expr.resolved_type = ScalarType::I64;
             }
             case Expression::Kind::ArrayCall: {
                 // Defensive duplicate gate: scalar analysis must also reject
@@ -5639,7 +5715,11 @@ private:
             }
             for (const auto& binding : fn.locals) {
                 // Validate before publishing the name: reject self/forward reads.
-                if (binding.int_array) {
+                if (binding.native_atomic_i64) {
+                    if (binding.initializer || binding.heap_owned ||
+                            binding.new_class || binding.move_class || binding.assignable)
+                        throw std::runtime_error("ATTO_ATOMIC_MAIN_V1_REJECT: malformed unique Atomic owner");
+                } else if (binding.int_array) {
                     // Construction was parsed as exactly new Array<int>().
                     // Its initializer is a trusted runtime operation, never
                     // a user-callable scalar or transferable class value.
@@ -5843,6 +5923,12 @@ private:
             };
 
             for (const auto& binding : fn.locals) {
+                if (binding.native_atomic_i64) {
+                    // Atomic<int> is non-Copy; the guest never sees its
+                    // address or a scalar alias to its owned storage.
+                    scalar_types.emplace(binding.name, ScalarType::I64);
+                    continue;
+                }
                 if (binding.int_array || binding.new_class || binding.move_class) {
                     scalar_types.emplace(binding.name, ScalarType::I64);
                     if (binding.int_array)
@@ -6388,6 +6474,7 @@ private:
     std::unordered_set<std::string> function_import_names_;
     std::string method_scope_;
     std::unordered_set<std::string> class_receivers_;
+    std::unordered_set<std::string> atomic_i64_receivers_;
     std::vector<Function> methods_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
