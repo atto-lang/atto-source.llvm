@@ -55,6 +55,11 @@ int main() {
     rejects<std::overflow_error>([&] { table.move_by(high, 1, 12); });
     check(table.snapshot(high).x == max && table.snapshot(high).y == 0,
           "overflow committed partial receiver mutation");
+    const auto min = std::numeric_limits<std::int64_t>::min();
+    auto low = table.push(min, 0);
+    rejects<std::overflow_error>([&] { table.move_by(low, -1, 12); });
+    check(table.snapshot(low).x == min && table.snapshot(low).y == 0,
+          "underflow committed partial receiver mutation");
     table.close();
     table.close(); // idempotent
     rejects<std::logic_error>([&] { (void)table.snapshot(a); });
@@ -106,5 +111,38 @@ int main() {
           "receiver threads lost an update or exposed torn state");
     concurrent.erase_swap(shared);
     rejects<std::out_of_range>([&] { (void)concurrent.snapshot(shared); });
+
+    // Owner shutdown racing checked readers is linearized: a read either
+    // completes before closure or reports closed owner. It never reads freed
+    // storage, and all access after closure must be rejected.
+    Table teardown(404);
+    auto live = teardown.push(1, 2);
+    std::atomic<bool> start_teardown{false};
+    std::atomic<unsigned> reads_before_close{0};
+    std::atomic<unsigned> denials_after_close{0};
+    std::vector<std::thread> readers;
+    for (int i = 0; i < 2; ++i) readers.emplace_back([&] {
+        while (!start_teardown.load(std::memory_order_acquire))
+            std::this_thread::yield();
+        for (;;) {
+            try {
+                const auto value = teardown.snapshot(live);
+                if (value.x != 1 || value.y != 2)
+                    broken.store(true, std::memory_order_relaxed);
+                reads_before_close.fetch_add(1, std::memory_order_relaxed);
+            } catch (const std::logic_error&) {
+                denials_after_close.fetch_add(1, std::memory_order_relaxed);
+                break;
+            }
+        }
+    });
+    start_teardown.store(true, std::memory_order_release);
+    while (reads_before_close.load(std::memory_order_relaxed) < 50)
+        std::this_thread::yield();
+    teardown.close();
+    for (auto& t : readers) t.join();
+    check(!broken.load() && denials_after_close.load() == 2,
+          "concurrent owner teardown exposed stale data or failed denial");
+    rejects<std::logic_error>([&] { (void)teardown.snapshot(live); });
     return 0;
 }
