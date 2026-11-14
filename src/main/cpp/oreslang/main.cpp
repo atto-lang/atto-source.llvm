@@ -336,6 +336,8 @@ int main(int argc, char** argv) {
     std::string rt_entry = "main/0";
     std::string rt_report_path;
     bool tree_shake = false;
+    bool source_log_manifest_seen = false;
+    std::string source_log_manifest_path;
     bool isolate_entry_seen = false;
     std::string isolate_entry;
     std::vector<std::string> tree_shake_roots;
@@ -414,6 +416,18 @@ int main(int argc, char** argv) {
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
+        } else if (arg.rfind("--source-log-ids=", 0) == 0) {
+            if (source_log_manifest_seen) {
+                std::cerr << "duplicate source-log-ids option\n";
+                return 2;
+            }
+            source_log_manifest_seen = true;
+            source_log_manifest_path =
+                arg.substr(std::string_view("--source-log-ids=").size());
+            if (source_log_manifest_path.empty()) {
+                std::cerr << "source-log-ids path cannot be empty\n";
+                return 2;
+            }
         } else if (arg.rfind("--isolate-entry=", 0) == 0) {
             if (isolate_entry_seen) { std::cerr << "duplicate isolate entry\n"; return 2; }
             isolate_entry_seen = true;
@@ -502,6 +516,14 @@ int main(int argc, char** argv) {
         std::cerr << "isolate entry supports only ordinary host scalar codegen\n";
         return 2;
     }
+    if (source_log_manifest_seen &&
+        (wasm32_target || cortex_m_target || native_hard_rt_profile ||
+         rt_report_seen || rt_check_only || tree_shake || isolate_entry_seen ||
+         constraint_descriptors_only || bounded_allocator_provider ||
+         experimental_rt_scalar_loop)) {
+        std::cerr << "checked source-log IDs currently require unoptimized hosted scalar LLVM AOT\n";
+        return 2;
+    }
     if (!tree_shake && !tree_shake_roots.empty()) {
         std::cerr << "tree-shake-root requires --tree-shake\n";
         return 2;
@@ -540,6 +562,27 @@ int main(int argc, char** argv) {
             path, kMaxSourceBytes, source_overflow,
             &source_identity, &expected_source_identity);
         require_valid_source_utf8(text);
+        // Independently identity-check and bound the on-disk manifest. A
+        // source-controlled JSON file does not become trusted runtime input
+        // merely by matching the .atto filename: the compiler revalidates
+        // every exact guest routine/site against the native parsed Program.
+        std::optional<oreslang::CheckedSourceLogManifestV1> checked_source_logs;
+        if (source_log_manifest_seen) {
+            if (paths_alias(path, source_log_manifest_path))
+                throw std::runtime_error("source-log manifest must not alias source");
+            const auto* manifest_file = source_log_manifest_path.c_str();
+            constexpr std::size_t manifest_limit = 131072u;
+            const auto immutable_manifest = capture_source_identity(
+                manifest_file, manifest_limit,
+                "checked source-log manifest exceeds 128 KiB");
+            SourceIdentity read_manifest{};
+            const auto manifest_text = read_regular_source(
+                manifest_file, manifest_limit,
+                "checked source-log manifest exceeds 128 KiB",
+                &read_manifest, &immutable_manifest);
+            checked_source_logs = oreslang::parse_checked_source_log_manifest_v1(
+                manifest_text, std::string_view(path));
+        }
         // Target/capability directives are lexical comments in the native
         // subset. Reject rather than silently discard unverified portability
         // constraints before parsing or emitting LLVM IR.
@@ -910,7 +953,11 @@ int main(int argc, char** argv) {
         }
         std::cout << oreslang::emit_verified_llvm_ir(
                 ast, wasm32_target, cortex_m_target,
-                bounded_allocator_provider, isolate_entry);
+                bounded_allocator_provider, isolate_entry,
+                checked_source_logs ? checked_source_logs->routines
+                                    : std::vector<oreslang::CheckedSourceRoutineV1>{},
+                checked_source_logs ? checked_source_logs->sites
+                                    : std::vector<oreslang::CheckedLogSiteV1>{});
         std::cout.flush();
         if (coreLog) coreLog->dump(stderr);
         return 0;
