@@ -1857,6 +1857,34 @@ void guest_recovery_preserves_inherited_signal_mask() {
 }
 #endif
 
+#if defined(TENANT_VM_TEST_MPROTECT)
+extern "C" std::uint64_t tenant_vm_test_borrowed_altstack_count();
+
+// ASan registers its own alternate signal stack on each worker. Previously the
+// carrier overwrote that registration and intermittently crashed on teardown.
+// Prove the borrowed-stack branch is taken in GCC+ASan and guest faults still work.
+void carrier_preserves_preinstalled_sanitizer_signal_stack() {
+    const std::uint64_t before = tenant_vm_test_borrowed_altstack_count();
+    HostLimits limits;
+    limits.carriers = 1;
+    TenantVmHost host(limits);
+    auto vm = host.open(stack_spec("borrowed-sanitizer-altstack", 512 << 10));
+    REQUIRE_OK(vm);
+    auto a = host.spawn_actor(vm.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(a);
+    CHECK_STATUS(host.call(a.actor, words({RESTART_ADD, 5})).get().status, Status::Ok);
+#if defined(__SANITIZE_ADDRESS__) && !defined(__clang__)
+    CHECK_EQ(tenant_vm_test_borrowed_altstack_count(), before + 1);
+#endif
+    const TurnResult overflow = host.call(a.actor, words({RESTART_RECURSE_N, 700})).get();
+    CHECK_STATUS(overflow.status, Status::ActorRestarted);
+    CHECK_REASON(overflow.failure, FailReason::StackOverflow);
+    const TurnResult recovered = host.call(a.actor, words({RESTART_ADD, 0})).get();
+    CHECK_STATUS(recovered.status, Status::Ok);
+    CHECK_EQ(host.stats().unavailable_carriers, std::uint32_t{0});
+}
+#endif
+
 // A quota must leave room for host calls, and fit in the carrier's stack with its guard.
 void stack_quota_limits_are_checked() {
     TenantVmHost host;
@@ -2016,6 +2044,7 @@ const Case cases[] = {
     {"permanently_failed_carrier_leaves_other_tenants_runnable", permanently_failed_carrier_leaves_other_tenants_runnable},
     {"all_carriers_lost_settles_many_admitted_tenant_calls", all_carriers_lost_settles_many_admitted_tenant_calls},
     {"guest_recovery_preserves_inherited_signal_mask", guest_recovery_preserves_inherited_signal_mask},
+    {"carrier_preserves_preinstalled_sanitizer_signal_stack", carrier_preserves_preinstalled_sanitizer_signal_stack},
 #endif
     {"concurrent_tenants_keep_independent_stacks_and_actor_state", concurrent_tenants_keep_independent_stacks_and_actor_state},
     {"stack_quota_limits_are_checked", stack_quota_limits_are_checked},
