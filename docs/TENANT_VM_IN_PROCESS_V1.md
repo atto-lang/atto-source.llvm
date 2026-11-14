@@ -64,9 +64,14 @@ OOM recovery and host destruction do not allocate a temporary vector of the live
 registry. VM failure settles each already-admitted mailbox promise in place instead of
 growing a temporary deque: the failure path must remain viable when ordinary allocation
 has become unreliable.
-The first startup on a fresh or replacement carrier must also register an alternate signal
-stack before accepting turns. If `sigaltstack` fails, that carrier retires and is replaced
-through the same bounded watchdog recovery path; no process-wide `abort()` is permitted.
+Before accepting guest turns, each worker queries its current alternate signal
+stack. GCC AddressSanitizer, for example, can have already registered its own active
+32 KiB stack on the worker. The host **must reuse that stack without replacing or
+unmapping it**. Only when no stack is active does AttoLang register its own 64 KiB
+stack. If the query or registration fails, or a borrowed stack is missing a
+pointer or smaller than 16 KiB, that carrier retires through the bounded watchdog
+recovery path; no process-wide `abort()` is permitted. A test-only injected
+startup failure is checked even if a pre-existing sanitizer stack is usable.
 
 **Signal ownership.** A carrier's `sigsetjmp` records its complete pre-guest signal mask
 on Linux and Darwin; `siglongjmp` restores that exact mask after a guest trap, rather
@@ -76,14 +81,15 @@ The host refuses VM admission with `SignalHandlerLost` if any required fault han
 regression blocks `SIGTRAP` before starting the worker, overflows an actor stack,
 and confirms that the inherited block is still present after guest recovery.
 
-**Remaining sanitizer caveat:** the GCC AddressSanitizer default-handler stress
-reproduced an intermittent process SIGSEGV even in a test that only starts a host
-and validates invalid restart parameters (without executing any guest turn).
-A 150-run sanitized executable negative control without constructing a host
-passed. This does not establish the root cause; host signal-handler ownership,
-carrier startup/teardown, and sanitizer interaction need additional verification
-before merging the PR. Tests that disable ASan's signal handler cannot satisfy
-the default-handler acceptance gate.
+**ASan signal-stack regression:** repeated GCC AddressSanitizer host
+creation/destruction exposed an intermittent SIGSEGV without any guest turn.
+Diagnostic variants with signal-stack registration skipped passed 120/120
+lifecycle trials; a variant overwriting an existing registered stack crashed
+in repeated trials. Inspecting the carrier confirmed an enabled 32 KiB stack
+preinstalled by ASan. The runtime now preserves it, and an explicit native
+regression verifies this reuse on GCC+ASan. Repeated tests must run with
+ASan's normal SIGSEGV handler enabled; runs that disable it are diagnostics,
+not an acceptable replacement for default-ASan verification.
 
 Host calls run on the guest's stack, and a guest chooses how deep that is, so each host call checks for
 256 KiB of remaining stack before leaving guest mode. A shortage counts as out of carrier stack, like any other overflow. Carrier stacks must
