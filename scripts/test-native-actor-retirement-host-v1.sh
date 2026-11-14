@@ -44,13 +44,20 @@ for suite in clang gcc; do
     -DCMAKE_CXX_FLAGS="-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined" \
     -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
   cmake --build "$build" --parallel 2
-  suites="^(native_actor_done_resource_quiescence|native_actor_resource_registry_quiescence)$"
-  # Fail if one or both expected targets are missing.
-  ctest --test-dir "$build" -N -R "$suites" | grep -F "Total Tests: 2"
+  suites="^(native_actor_done_resource_quiescence|native_actor_resource_registry_quiescence|native_actor_group_managed_worker_readiness)$"
+  # Fail if any of the THREE expected production test targets is missing.
+  ctest --test-dir "$build" -N -R "$suites" | grep -F "Total Tests: 3"
   # Retirement integration closes successful actors: leak checking stays ON.
   ASAN_OPTIONS="detect_leaks=1:halt_on_error=1" \
   UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1" \
     ctest --test-dir "$build" -R "^native_actor_done_resource_quiescence$" \
+      --output-on-failure --no-tests=error
+  # Group lifecycle must not strand stop dispatch or acknowledge DONE while
+  # a trusted STOP callback remains on a foreign carrier. No intentional
+  # long-lived resource captures are left by this group-only regression.
+  ASAN_OPTIONS="detect_leaks=1:halt_on_error=1" \
+  UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1" \
+    ctest --test-dir "$build" -R "^native_actor_group_managed_worker_readiness$" \
       --output-on-failure --no-tests=error
   # Registry failure fixtures intentionally retain unsafe FFI captures until
   # verified isolate shutdown. ASan+UBSan remain on, LSAN is scoped off here.
@@ -58,5 +65,5 @@ for suite in clang gcc; do
   UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1" \
     ctest --test-dir "$build" -R "^native_actor_resource_registry_quiescence$" \
       --output-on-failure --no-tests=error
-  printf "ATTO_NATIVE_RETIREMENT_LSAN_AND_REGISTRY_ASAN_UBSAN_PASS=%s %s\n" "$suite" "$actual_head"
+  printf "ATTO_NATIVE_RETIREMENT_GROUP_LSAN_AND_REGISTRY_ASAN_UBSAN_PASS=%s %s\n" "$suite" "$actual_head"
 done
