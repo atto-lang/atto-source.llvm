@@ -396,31 +396,40 @@ int main() {
     assert(parentCalled == 1 && childCalled == 1);
     assert(childCascade.try_reclaim().status == Reclaim::complete);
 
-    // Runtime identity must be bound by the creating coordinator, once,
-    // before a registry may authorize a NativeActorRetirementBarrier. Two
-    // independent runtimes can reuse the same actor/generation numbers.
-    ActorResourceRegistry runtimeBound(9620, 1);
-    assert(runtimeBound.bound_runtime_id() == 0);
-    bool invalidRuntimeRejected = false;
-    try { runtimeBound.bind_runtime_id(0); }
-    catch (const std::invalid_argument&) { invalidRuntimeRejected = true; }
-    assert(invalidRuntimeRejected && runtimeBound.bound_runtime_id() == 0);
-    runtimeBound.bind_runtime_id(641);
-    assert(runtimeBound.bound_runtime_id() == 641);
-    bool duplicateRuntimeRejected = false;
-    try { runtimeBound.bind_runtime_id(641); }
-    catch (const std::logic_error&) { duplicateRuntimeRejected = true; }
-    assert(duplicateRuntimeRejected);
-    bool foreignRuntimeRejected = false;
-    try { runtimeBound.bind_runtime_id(642); }
-    catch (const std::logic_error&) { foreignRuntimeRejected = true; }
-    assert(foreignRuntimeRejected && runtimeBound.bound_runtime_id() == 641);
-    runtimeBound.retire();
-    bool retiredRegistryRejected = false;
-    try { runtimeBound.bind_runtime_id(643); }
-    catch (const std::logic_error&) { retiredRegistryRejected = true; }
-    assert(retiredRegistryRejected && runtimeBound.bound_runtime_id() == 641);
-    assert(runtimeBound.try_reclaim().status == Reclaim::complete);
+    // Resource lifetime authority is the opaque actor ticket, not a
+    // forgeable/reusable (runtime, actor_id, generation) numeric tuple.
+    oreslang::runtime::NativeActorGroup identityGroup(641, 2);
+    auto owner = identityGroup.adopt(641, 9620, 1, [] {});
+    auto foreign = identityGroup.adopt(641, 9621, 1, [] {});
+    assert(identityGroup.mark_ready(owner));
+    assert(identityGroup.mark_ready(foreign));
+
+    ActorResourceRegistry ownerBound(9620, 1);
+    assert(!ownerBound.has_bound_owner());
+    bool foreignBindingRejected = false;
+    try { ownerBound.bind_owner(foreign); }
+    catch (const std::invalid_argument&) { foreignBindingRejected = true; }
+    assert(foreignBindingRejected && !ownerBound.has_bound_owner());
+    ownerBound.bind_owner(owner);
+    assert(ownerBound.has_bound_owner());
+    assert(ownerBound.matches_finalizer(identityGroup.runtime_finalizer(owner)));
+    assert(!ownerBound.matches_finalizer(identityGroup.runtime_finalizer(foreign)));
+
+    bool duplicateOwnerRejected = false;
+    try { ownerBound.bind_owner(owner); }
+    catch (const std::logic_error&) { duplicateOwnerRejected = true; }
+    assert(duplicateOwnerRejected);
+    ownerBound.retire();
+    bool postRetirementRebindRejected = false;
+    try { ownerBound.bind_owner(owner); }
+    catch (const std::logic_error&) { postRetirementRebindRejected = true; }
+    assert(postRetirementRebindRejected);
+    assert(ownerBound.try_reclaim().status == Reclaim::complete);
+    identityGroup.close();
+    assert(identityGroup.runtime_finalizer(owner).finalized());
+    assert(identityGroup.runtime_finalizer(foreign).finalized());
+    owner.get_done().get();
+    foreign.get_done().get();
 
     ActorResourceRegistry tokenBound(18, 1, 1);
     std::vector<ActorResourceRegistry::Ticket> outstanding;
