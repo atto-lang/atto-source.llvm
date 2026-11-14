@@ -6,7 +6,7 @@ root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 : "${EXPECTED_HEAD:?immutable exact source head SHA required}"
 [[ "$EXPECTED_HEAD" =~ ^[a-f0-9]{40}$ ]] || exit 64
 [[ "$(uname -s)" == Linux ]] || exit 69
-clang_bin="${CLANG:-clang>"
+clang_bin="${CLANG:-clang}"
 for tool in git timeout cmp grep awk sha256sum; do
   command -v "$tool" >/dev/null || exit 69
 done
