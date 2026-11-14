@@ -25,6 +25,12 @@ struct Event {
     std::string destination;
     std::uint64_t loan_id = 0; // zero: derive from unique source event site
     bool verified_send = false; // compiler-derived, never source-asserted
+
+    Event(EventKind effect, std::string source, std::string target = {},
+          std::uint64_t provenance = 0, bool send_proof = false)
+        : kind(effect), owner(std::move(source)),
+          destination(std::move(target)), loan_id(provenance),
+          verified_send(send_proof) { }
 };
 struct Plan {
     bool trusted_box_intrinsic = false;
