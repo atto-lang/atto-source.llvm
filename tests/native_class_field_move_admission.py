@@ -31,14 +31,20 @@ def main():
             p = subprocess.run([*cmd, str(fixture)], capture_output=True,
                                text=True, timeout=30)
             if diagnostic:
-                assert p.returncode != 0, (source, p.stdout)
-                assert diagnostic in p.stderr, (source, p.stderr)
-                assert not p.stdout.strip(), "emitted LLVM IR after rejection"
+                if p.returncode != 1:
+                    raise AssertionError(("expected source diagnostic exit 1", source, p.returncode, p.stdout))
+                if diagnostic not in p.stderr:
+                    raise AssertionError((source, p.stderr))
+                if p.stdout.strip():
+                    raise AssertionError("emitted LLVM IR after rejection")
                 rejects += 1
             else:
-                assert p.returncode == 0, (source, p.stderr)
-                assert p.stdout.startswith("; ModuleID"), (source, p.stdout)
-                assert not p.stderr, (source, p.stderr)
+                if p.returncode != 0:
+                    raise AssertionError((source, p.stderr))
+                if not p.stdout.startswith("; ModuleID"):
+                    raise AssertionError((source, p.stdout))
+                if p.stderr:
+                    raise AssertionError((source, p.stderr))
                 accepts += 1
 
         for count in (1, 2, 8, 16):
@@ -71,7 +77,7 @@ def main():
                   "cannot borrow a partially moved class")
             check(decl +
                   "fnc view(borrow mut Record p): int { return rt take p.f0; }\n" +
-                  head + "  return view(rt borrow mut p);\n}\n",
+                  head + "  return view(rt mut borrow p);\n}\n",
                   "cannot take a class field through a borrowed parameter")
             check(decl + head +
                   "  const v: int = rt take p.f0;\n"

@@ -208,11 +208,24 @@ must fail closed. Ordinary `Channel<T>` stays FIFO; mailbox QoS lives in
 `ActorMailbox`, not in the underlying channel API.
 
 STOP/CANCEL/restart fencing is out-of-band runtime authority and cannot
-be queued behind any guest message. When no higher-level handler is active,
-continuation wakeups are preferred, but must have a bounded dispatch burst:
-a perpetually refilled continuation queue must not starve user work.
-A suspended serial/source handler is the exception: its continuation keeps
-the logical handler lease, so another user message cannot run until it ends.
+be queued behind any guest message. Continuations must be distinguished by
+**logical actor-lane ownership**, not merely their arrival time:
+
+- A **task-owning continuation** resumes an outstanding actor task or source
+  receive and keeps precedence over user-mail work newly admitted *after*
+  that task started. A finite continuation burst does not revoke the task's
+  logical execution lease. In particular, repeated `rt cooperate` calls
+  may yield the physical carrier but must not let URGENT/NORMAL mail overtake
+  that outstanding task.
+- An **unowned, lease-free wakeup** carries no active logical guest handler
+  and must receive bounded fair scheduling relative to runnable user mail.
+  An indefinitely refilled notification channel must not starve a NORMAL
+  mailbox indefinitely.
+- Unless the runtime has a verified, nonforgeable classification for these
+  two groups, it **must conservatively preserve continuation precedence**,
+  rather than use a shared untyped continuation-burst counter. STOP/CANCEL
+  remains out-of-band in either case.
+
 The dispatcher then schedules URGENT/NORMAL/BULK with **bounded starvation**
 (e.g., quota-limited weighted deficit round robin, age promotion and
 non-starvable NORMAL/BULK service). Within a lane, stable per-sender FIFO is

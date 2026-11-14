@@ -15,10 +15,10 @@ import sys
 import tempfile
 
 BATCH_FULL_QUOTA = """define class Four as
-  let mut Array<int> previous = new Array<int>();
-  let mut Array<int> following = new Array<int>();
-  let mut Array<int> values = new Array<int>();
-  let mut Array<int> occupied = new Array<int>();
+  pub let mut Array<int> previous = new Array<int>();
+  pub let mut Array<int> following = new Array<int>();
+  pub let mut Array<int> values = new Array<int>();
+  pub let mut Array<int> occupied = new Array<int>();
 end
 pub fnc main(): int {
   let mut Four q = new Four();
@@ -28,10 +28,10 @@ pub fnc main(): int {
 }
 """
 BATCH_COMMIT = """define class Four as
-  let mut Array<int> previous = new Array<int>();
-  let mut Array<int> following = new Array<int>();
-  let mut Array<int> values = new Array<int>();
-  let mut Array<int> occupied = new Array<int>();
+  pub let mut Array<int> previous = new Array<int>();
+  pub let mut Array<int> following = new Array<int>();
+  pub let mut Array<int> values = new Array<int>();
+  pub let mut Array<int> occupied = new Array<int>();
 end
 pub fnc main(): int {
   let mut Four q = new Four();
@@ -48,8 +48,8 @@ LEXICAL = """pub fnc main(): int {
 }
 """
 REPLACED_FIELD = """define class Pair as
-  let mut Array<int> first = new Array<int>();
-  let mut Array<int> second = new Array<int>();
+  pub let mut Array<int> first = new Array<int>();
+  pub let mut Array<int> second = new Array<int>();
 end
 pub fnc main(): int {
   let mut Pair pair = new Pair();
@@ -61,8 +61,8 @@ pub fnc main(): int {
 }
 """
 MOVED_CLASS = """define class Pair as
-  let mut Array<int> first = new Array<int>();
-  let mut Array<int> second = new Array<int>();
+  pub let mut Array<int> first = new Array<int>();
+  pub let mut Array<int> second = new Array<int>();
 end
 pub fnc main(): int {
   let mut Pair original = new Pair();
@@ -80,10 +80,10 @@ MIXED = """pub fnc main(): int {
 }
 """
 CLASS = """define class Four as
-  let mut Array<int> a = new Array<int>();
-  let mut Array<int> b = new Array<int>();
-  let mut Array<int> c = new Array<int>();
-  let mut Array<int> d = new Array<int>();
+  pub let mut Array<int> a = new Array<int>();
+  pub let mut Array<int> b = new Array<int>();
+  pub let mut Array<int> c = new Array<int>();
+  pub let mut Array<int> d = new Array<int>();
 end
 pub fnc main(): int {
   let mut Four f = new Four();

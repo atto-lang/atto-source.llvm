@@ -1,9 +1,14 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/NativeFlatClasses.hpp"
+#include "oreslang/types/NativeSumTypes.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
+#include "oreslang/frontend/NativeScalarSpecialization.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
+#include "oreslang/runtime/OresIsolateAbi.h"
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -16,12 +21,16 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
+#include "oreslang/backend/LlvmCompat.hpp"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
+#if LLVM_VERSION_MAJOR >= 21
+#include "llvm/TargetParser/Triple.h"
+#endif
 
 namespace oreslang {
 
@@ -53,9 +62,31 @@ struct RegionMoveLowering {
     // Values exactly match OresNativeIntArrayStatus; not a guest Result yet.
     llvm::Value* array_failure_status = nullptr;
     const std::unordered_map<std::string, llvm::Value*>* owned_failure_handles = nullptr;
+    const std::unordered_map<std::string, const ClassDecl*>* record_classes = nullptr;
+    const std::unordered_map<std::string, std::uint64_t>* record_schemas = nullptr;
+    llvm::FunctionCallee record_new, record_get, record_check;
+    const std::unordered_map<std::string, llvm::Value*>* class_array_regions = nullptr;
+    const std::unordered_map<std::string, std::vector<std::size_t>>* class_array_parameters = nullptr;
+    const std::unordered_map<std::string, bool>* owning_results = nullptr;
+    llvm::Value* result_destination = nullptr;
+    llvm::Value* result_region = nullptr;
+    const NativeClassLayouts* layouts = nullptr;
+    const Program* sum_program = nullptr;
+    llvm::FunctionCallee sum_check;
+    // Compiler-frozen scalar direct targets, never a runtime selector table.
+    const NativeI64DispatchImage* frozen_scalar_dispatch = nullptr;
+    const std::unordered_map<std::string, llvm::Function*>* frozen_scalar_callees = nullptr;
+    const std::unordered_map<std::string, std::string>* frozen_scalar_symbols = nullptr;
 };
 
-// Only a lexical named array or a direct class-owned array field is legal.
+llvm::Value* receiver_array_region(const Expression& receiver, const RegionMoveLowering* moves) {
+    if (receiver.kind == Expression::Kind::Field && receiver.left &&
+            moves->class_array_regions)
+        return moves->class_array_regions->at(native_place_key(*receiver.left));
+    return moves->array_region;
+}
+
+// Only a lexical named array or a checked descendant array place is legal.
 // The type/ownership pass must already have certified this receiver.
 llvm::Value* array_handle_address(const Expression& receiver,
                                    const std::unordered_map<std::string, llvm::Value*>& storage,
@@ -66,11 +97,57 @@ llvm::Value* array_handle_address(const Expression& receiver,
             moves->array_names->count(receiver.name))
         return storage.at(receiver.name);
     if (receiver.kind == Expression::Kind::Field && receiver.left &&
-            receiver.left->kind == Expression::Kind::Variable && moves->array_fields) {
-        const std::string key = field_key(receiver.left->name, receiver.name);
+            moves->array_fields) {
+        const std::string key = native_place_key(receiver);
         if (moves->array_fields->count(key)) return fields.at(key);
     }
     throw std::runtime_error("native Array<int> receiver is not an owned place");
+}
+
+llvm::Value* checked_sum_tag(llvm::IRBuilder<>& builder, llvm::Type* i64, llvm::Value* handle,
+                            std::uint64_t schema, std::size_t fields, llvm::FunctionCallee check, llvm::FunctionCallee get) {
+    auto* function = builder.GetInsertBlock()->getParent();
+    auto* schema_ok = llvm::BasicBlock::Create(builder.getContext(), "sum.schema.valid", function);
+    auto* tag_ok = llvm::BasicBlock::Create(builder.getContext(), "sum.tag.valid", function);
+    auto* invalid = llvm::BasicBlock::Create(builder.getContext(), "sum.invalid", function);
+    auto* status = builder.CreateCall(check, {handle, llvm::ConstantInt::get(i64, schema), llvm::ConstantInt::get(i64, fields)});
+    builder.CreateCondBr(builder.CreateICmpEQ(status, llvm::ConstantInt::get(i64, 0)), schema_ok, invalid);
+    builder.SetInsertPoint(invalid);
+    auto panic = function->getParent()->getOrInsertFunction("abort", llvm::FunctionType::get(builder.getVoidTy(), false));
+    builder.CreateCall(panic); builder.CreateUnreachable();
+    builder.SetInsertPoint(schema_ok);
+    auto* tag = builder.CreateCall(get, {handle, llvm::ConstantInt::get(i64, schema), llvm::ConstantInt::get(i64, 0)});
+    builder.CreateCondBr(builder.CreateICmpULE(tag, llvm::ConstantInt::get(i64, 1)), tag_ok, invalid);
+    builder.SetInsertPoint(tag_ok); return tag;
+}
+
+llvm::AllocaInst* entry_alloca(llvm::IRBuilder<>& builder, llvm::Type* type, llvm::Value* count = nullptr, const llvm::Twine& name = "") {
+    auto& entry = builder.GetInsertBlock()->getParent()->getEntryBlock();
+    llvm::IRBuilder<> slots(&entry, entry.begin());
+    return slots.CreateAlloca(type, count, name);
+}
+
+llvm::Value* checked_signed_arithmetic(llvm::IRBuilder<>& builder,
+                                      llvm::Intrinsic::ID operation,
+                                      llvm::Value* left, llvm::Value* right,
+                                      const std::string& name) {
+    // Source int follows the shared no-wrapping i64 contract. Use defined
+    // overflow intrinsics, never poison-producing nsw arithmetic. A target
+    // trap is the current failure ABI; typed actor errors remain separate.
+    auto* module = builder.GetInsertBlock()->getModule();
+    auto* parent = builder.GetInsertBlock()->getParent();
+    auto* intrinsic = llvm::Intrinsic::getDeclaration(module, operation, {left->getType()});
+    auto* pair = builder.CreateCall(intrinsic, {left, right}, name + ".checked");
+    auto* value = builder.CreateExtractValue(pair, {0}, name + ".value");
+    auto* overflow = builder.CreateExtractValue(pair, {1}, name + ".overflow");
+    auto* failed = llvm::BasicBlock::Create(builder.getContext(), name + ".trap", parent);
+    auto* proceed = llvm::BasicBlock::Create(builder.getContext(), name + ".ok", parent);
+    builder.CreateCondBr(overflow, failed, proceed);
+    builder.SetInsertPoint(failed);
+    builder.CreateCall(llvm::Intrinsic::getDeclaration(module, llvm::Intrinsic::trap));
+    builder.CreateUnreachable();
+    builder.SetInsertPoint(proceed);
+    return value;
 }
 
 llvm::Value* lower(const Expression& expr,
@@ -81,9 +158,148 @@ llvm::Value* lower(const Expression& expr,
                    const std::unordered_map<std::string, llvm::Function*>& functions,
                    const RegionMoveLowering* moves = nullptr) {
     switch (expr.kind) {
+        case Expression::Kind::SumConstruct: {
+            const auto& type = native_sum(*moves->sum_program, expr.sum_type);
+            const bool option = type.kind == NativeSumType::Kind::Option;
+            const std::size_t count = option ? 2 : 3;
+            const bool error = expr.name == "Err";
+            const auto tag = option ? (expr.name == "Some" ? 1 : 0) : (error ? 1 : 0);
+            auto* payload = expr.arguments.empty() ? llvm::ConstantInt::get(i64, 0)
+                : lower(*expr.arguments[0], builder, i64, storage, field_storage, functions, moves);
+            auto* values = entry_alloca(builder, i64, llvm::ConstantInt::get(i64, count), "sum.fields");
+            for (std::size_t i = 0; i < count; ++i) builder.CreateStore(llvm::ConstantInt::get(i64, 0),
+                builder.CreateGEP(i64, values, llvm::ConstantInt::get(i64, i)));
+            builder.CreateStore(llvm::ConstantInt::get(i64, tag), values);
+            if (!expr.arguments.empty()) builder.CreateStore(payload, builder.CreateGEP(i64, values, llvm::ConstantInt::get(i64, error ? 2 : 1)));
+            return builder.CreateCall(moves->record_new, {llvm::ConstantInt::get(i64, moves->record_schemas->at(expr.sum_type)),
+                llvm::ConstantInt::get(i64, count), values}, "sum.value");
+        }
+        case Expression::Kind::SumAccess: {
+            const auto& type = native_sum(*moves->sum_program, expr.sum_type);
+            auto* handle = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            const bool expect = expr.name == "expect";
+            llvm::Value* fallback = expr.arguments.empty() || expect ? nullptr : lower(*expr.arguments[0], builder, i64, storage, field_storage, functions, moves);
+            const auto schema = moves->record_schemas->at(expr.sum_type);
+            auto* tag = checked_sum_tag(builder, i64, handle, schema, type.kind == NativeSumType::Kind::Option ? 2 : 3, moves->sum_check, moves->record_get);
+            const bool option = type.kind == NativeSumType::Kind::Option;
+            if (expr.name == "is_some" || expr.name == "is_none" || expr.name == "is_ok" || expr.name == "is_err") {
+                const auto selected = expr.name == "is_some" || expr.name == "is_err" ? 1 : 0;
+                return builder.CreateZExt(builder.CreateICmpEQ(tag, llvm::ConstantInt::get(i64, selected)), i64);
+            }
+            const auto selected = option ? 1 : 0;
+            auto* function = builder.GetInsertBlock()->getParent();
+            auto* present = llvm::BasicBlock::Create(builder.getContext(), "sum.payload.present", function);
+            auto* absent = llvm::BasicBlock::Create(builder.getContext(), "sum.payload.absent", function);
+            builder.CreateCondBr(builder.CreateICmpEQ(tag, llvm::ConstantInt::get(i64, selected)), present, absent);
+            builder.SetInsertPoint(present);
+            auto* value = builder.CreateCall(moves->record_get, {handle, llvm::ConstantInt::get(i64, schema), llvm::ConstantInt::get(i64, 1)});
+            if (!fallback) {
+                builder.SetInsertPoint(absent);
+                auto flush = function->getParent()->getOrInsertFunction("ores_string_panic_flush",
+                    llvm::FunctionType::get(builder.getVoidTy(), false));
+                builder.CreateCall(flush);
+                if (expect) {
+                    // Literal message (enforced by the sum resolver) to stderr, then the
+                    // same abort path as unwrap. Java appends ": <payload>"; this slice does not.
+                    const std::string message = expr.arguments[0]->name + "\n";
+                    auto* text = builder.CreateGlobalStringPtr(message, "expect.message");
+                    auto write = function->getParent()->getOrInsertFunction("write", llvm::FunctionType::get(
+                        i64, {builder.getInt32Ty(), builder.getPtrTy(), i64}, false));
+                    builder.CreateCall(write, {builder.getInt32(2), text, llvm::ConstantInt::get(i64, message.size())});
+                }
+                auto panic = function->getParent()->getOrInsertFunction("abort", llvm::FunctionType::get(builder.getVoidTy(), false));
+                builder.CreateCall(panic); builder.CreateUnreachable(); builder.SetInsertPoint(present); return value;
+            }
+            auto* merge = llvm::BasicBlock::Create(builder.getContext(), "sum.fallback.merge", function);
+            builder.CreateBr(merge); builder.SetInsertPoint(absent); builder.CreateBr(merge);
+            builder.SetInsertPoint(merge); auto* result = builder.CreatePHI(i64, 2);
+            result->addIncoming(value, present); result->addIncoming(fallback, absent); return result;
+        }
+        case Expression::Kind::RecordConstruct: {
+            if (!moves || !moves->record_classes || !moves->record_schemas)
+                throw std::runtime_error("record construction lacks typed root region");
+            const auto& cls = *moves->record_classes->at(expr.name);
+            if (moves->layouts->at(expr.name).owns_arrays) throw std::runtime_error("owning constructor requires destination ownership");
+            std::unordered_map<std::string, llvm::Value*> parameters;
+            for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
+                const auto* original = constructor_field(moves->layouts->source(expr.name), i);
+                if (original && !original->class_name.empty()) {
+                    const auto& argument = *expr.arguments[i];
+                    const auto& child = argument.kind == Expression::Kind::Take ? *argument.left : argument;
+                    llvm::Value* record = nullptr;
+                    if (child.kind != Expression::Kind::Variable) {
+                        if (moves->layouts->at(original->class_name).owns_arrays) throw std::runtime_error("nested immutable record contains owned arrays");
+                        record = lower(child, builder, i64, storage, field_storage, functions, moves);
+                        builder.CreateCall(moves->record_check, {record, llvm::ConstantInt::get(i64, moves->record_schemas->at(original->class_name))});
+                    }
+                    std::size_t field_index = 0;
+                    for (const auto& leaf : moves->layouts->at(original->class_name).leaves) {
+                        auto* snapshot = entry_alloca(builder, i64, nullptr, "nested.record.argument");
+                        llvm::Value* value = record ? static_cast<llvm::Value*>(builder.CreateCall(moves->record_get,
+                            {record, llvm::ConstantInt::get(i64, moves->record_schemas->at(original->class_name)), llvm::ConstantInt::get(i64, field_index)}))
+                            : builder.CreateLoad(i64, field_storage.at(field_key(child.name, leaf.path)));
+                        ++field_index;
+                        builder.CreateStore(value, snapshot);
+                        parameters.emplace(field_key(original->name, leaf.path), snapshot);
+                    }
+                    continue;
+                }
+                auto* value = lower(*expr.arguments[i], builder, i64, storage, field_storage, functions, moves);
+                auto* slot = entry_alloca(builder, i64, nullptr, "record.argument");
+                builder.CreateStore(value, slot);
+                parameters.emplace(cls.constructor_parameters.at(i), slot);
+            }
+            auto* values = entry_alloca(builder, i64, llvm::ConstantInt::get(i64, cls.fields.size()), "record.fields");
+            const std::unordered_map<std::string, llvm::Value*> no_fields;
+            for (std::size_t i = 0; i < cls.fields.size(); ++i) {
+                auto* value = lower(*cls.fields[i].initializer_expression, builder, i64, parameters, no_fields, functions, moves);
+                builder.CreateStore(value, builder.CreateGEP(i64, values, llvm::ConstantInt::get(i64, i)));
+            }
+            return builder.CreateCall(moves->record_new, {
+                llvm::ConstantInt::get(i64, moves->record_schemas->at(cls.name)),
+                llvm::ConstantInt::get(i64, cls.fields.size()), values}, "record.handle");
+        }
+        case Expression::Kind::String: {
+            auto* module = builder.GetInsertBlock()->getModule();
+            auto* bytes = builder.CreateGlobalStringPtr(expr.name, "string.literal");
+            auto runtime = module->getOrInsertFunction("ores_string_literal",
+                llvm::FunctionType::get(i64, {bytes->getType(), i64}, false));
+            return builder.CreateCall(runtime, {bytes, llvm::ConstantInt::get(i64, expr.name.size())}, "string.handle");
+        }
+        case Expression::Kind::Console: {
+            auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            auto* module = builder.GetInsertBlock()->getModule();
+            if (expr.resolved_type == ScalarType::I64) {
+                // Decimal text, matching Java's rendering of an int.
+                auto format = module->getOrInsertFunction("ores_string_from_i64", llvm::FunctionType::get(i64, {i64}, false));
+                value = builder.CreateCall(format, {value}, "console.int.text");
+            } else if (expr.resolved_type == ScalarType::Bool) {
+                auto format = module->getOrInsertFunction("ores_string_from_bool", llvm::FunctionType::get(i64, {i64}, false));
+                value = builder.CreateCall(format, {value}, "console.bool.text");
+            }
+            auto runtime = builder.GetInsertBlock()->getModule()->getOrInsertFunction("ores_string_print",
+                llvm::FunctionType::get(i64, {i64, i64}, false));
+            return builder.CreateCall(runtime, {value, llvm::ConstantInt::get(i64, expr.name == "println")}, "console.status");
+        }
         case Expression::Kind::Integer:
             return llvm::ConstantInt::getSigned(i64, expr.integer);
+        case Expression::Kind::Boolean:
+            return llvm::ConstantInt::get(i64, expr.boolean ? 1 : 0);
         case Expression::Kind::Variable: {
+            if (!expr.resolved_class.empty()) {
+                if (!moves || !moves->record_classes || !moves->record_schemas)
+                    throw std::runtime_error("record value lacks root-region provenance");
+                const auto& cls = *moves->record_classes->at(expr.resolved_class);
+                if (moves->layouts->at(expr.resolved_class).owns_arrays) throw std::runtime_error("owning aggregate value requires destination transfer");
+                auto* values = entry_alloca(builder, i64, llvm::ConstantInt::get(i64, cls.fields.size()), "return.record.fields");
+                for (std::size_t i = 0; i < cls.fields.size(); ++i) {
+                    auto* value = builder.CreateLoad(i64, field_storage.at(field_key(expr.name, cls.fields[i].name)));
+                    builder.CreateStore(value, builder.CreateGEP(i64, values, llvm::ConstantInt::get(i64, i)));
+                }
+                return builder.CreateCall(moves->record_new, {
+                    llvm::ConstantInt::get(i64, moves->record_schemas->at(cls.name)),
+                    llvm::ConstantInt::get(i64, cls.fields.size()), values}, "return.record.handle");
+            }
             llvm::Value* stored = builder.CreateLoad(i64, storage.at(expr.name),
                 expr.name + ".read");
             if (moves && moves->live_flags &&
@@ -99,7 +315,7 @@ llvm::Value* lower(const Expression& expr,
                     array_handle_address(*expr.left, storage, field_storage, moves),
                     "class.array.size.handle");
                 return builder.CreateCall(moves->array_length,
-                    {moves->array_region, handle}, "class.array.size");
+                    {receiver_array_region(*expr.left, moves), handle}, "class.array.size");
             }
             if (moves && moves->array_names && expr.left &&
                     expr.left->kind == Expression::Kind::Variable &&
@@ -111,7 +327,7 @@ llvm::Value* lower(const Expression& expr,
                 return builder.CreateCall(moves->array_length,
                     {moves->array_region, handle}, expr.left->name + ".size");
             }
-            return builder.CreateLoad(i64, field_storage.at(field_key(expr.left->name, expr.name)),
+            return builder.CreateLoad(i64, field_storage.at(native_place_key(expr)),
                                       expr.left->name + "." + expr.name + ".read");
         case Expression::Kind::ArrayCall: {
             if (!expr.left)
@@ -119,15 +335,16 @@ llvm::Value* lower(const Expression& expr,
             llvm::Value* handle = builder.CreateLoad(i64,
                 array_handle_address(*expr.left, storage, field_storage, moves),
                 "owned.array.call.handle");
+            llvm::Value* selected_region = receiver_array_region(*expr.left, moves);
             std::vector<llvm::Value*> args;
             for (const auto& arg : expr.arguments)
                 args.push_back(lower(*arg, builder, i64, storage, field_storage, functions, moves));
             if (expr.name == "get" && args.size() == 1)
                 return builder.CreateCall(moves->array_get,
-                    {moves->array_region, handle, args[0]}, "array.get");
+                    {selected_region, handle, args[0]}, "array.get");
             if (expr.name == "add" && args.size() == 1) {
                 llvm::Value* status = builder.CreateCall(moves->array_add,
-                    {moves->array_region, handle, args[0]}, "array.add.status");
+                    {selected_region, handle, args[0]}, "array.add.status");
                 llvm::BasicBlock* proceed = llvm::BasicBlock::Create(
                     builder.getContext(), "array.add.ok", builder.GetInsertBlock()->getParent());
                 llvm::BasicBlock* failed = llvm::BasicBlock::Create(
@@ -141,13 +358,23 @@ llvm::Value* lower(const Expression& expr,
                 builder.SetInsertPoint(proceed);
                 return llvm::ConstantInt::get(i64, 0);
             }
-            if (expr.name == "set" && args.size() == 2)
-                return builder.CreateCall(moves->array_set,
-                    {moves->array_region, handle, args[0], args[1]});
+            if (expr.name == "set" && args.size() == 2) {
+                builder.CreateCall(moves->array_set,
+                    {selected_region, handle, args[0], args[1]});
+                return llvm::ConstantInt::get(i64, 0); // compiler-only discarded ANF effect status
+            }
             throw std::runtime_error("unsupported Array<int> native method");
         }
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut: {
+            // The ownership pass admits checked scalar and class projections.
+            // field_storage contains the actual in-place i64 address, not a
+            // temporary copy: a mutable loan can write the field back.
+            // Its conservatively whole-object lifetime ends with this call.
+            if (expr.left && expr.left->kind == Expression::Kind::Field) {
+                return expr.left->resolved_class.empty() ? field_storage.at(native_place_key(*expr.left))
+                    : storage.at(native_place_key(*expr.left));
+            }
             // Heap owner storage is a HANDLE, never a borrowable i64 address.
             // A shared call-scoped loan reads into a temporary scalar stack
             // slot that cannot escape this synchronous call. Mutable loans
@@ -160,15 +387,18 @@ llvm::Value* lower(const Expression& expr,
                     storage.at(expr.left->name), "borrow.owner.handle");
                 llvm::Value* snapshot = builder.CreateCall(moves->read,
                     {moves->region, handle}, "borrow.owner.value");
-                llvm::Value* temporary = builder.CreateAlloca(i64, nullptr,
+                llvm::Value* temporary = entry_alloca(builder, i64, nullptr,
                     "borrow.owner.snapshot");
                 builder.CreateStore(snapshot, temporary);
                 return temporary;
             }
             return storage.at(expr.left->name);
         }
-        case Expression::Kind::Negate:
-            return builder.CreateNeg(lower(*expr.left, builder, i64, storage, field_storage, functions, moves), "neg");
+        case Expression::Kind::Negate: {
+            auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow,
+                llvm::ConstantInt::get(i64, 0), value, "neg");
+        }
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
             return lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
@@ -201,21 +431,260 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::Add: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
-            return builder.CreateAdd(left, right, "add");
+            if (expr.resolved_type == ScalarType::String) {
+                auto runtime = builder.GetInsertBlock()->getModule()->getOrInsertFunction("ores_string_concat",
+                    llvm::FunctionType::get(i64, {i64, i64}, false));
+                return builder.CreateCall(runtime, {left, right}, "string.concat");
+            }
+            return checked_signed_arithmetic(builder, llvm::Intrinsic::sadd_with_overflow,
+                left, right, "add");
         }
         case Expression::Kind::Subtract: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
-            return builder.CreateSub(left, right, "sub");
+            return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow,
+                left, right, "sub");
         }
         case Expression::Kind::Multiply: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
-            return builder.CreateMul(left, right, "mul");
+            return checked_signed_arithmetic(builder, llvm::Intrinsic::smul_with_overflow,
+                left, right, "mul");
+        }
+        case Expression::Kind::ShiftLeft:
+        case Expression::Kind::ShiftRight:
+        case Expression::Kind::ShiftUnsignedRight: {
+            if (!expr.left || !expr.right)
+                throw std::runtime_error("native shift AST missing operand");
+            llvm::Value* left = lower(*expr.left, builder, i64, storage,
+                                      field_storage, functions, moves);
+            llvm::Value* distance = lower(*expr.right, builder, i64, storage,
+                                          field_storage, functions, moves);
+            // Java/Graal accepts shift distances only in 0..63. Unlike Java
+            // bytecode, LLVM shifts with a distance >= bit width are poison,
+            // and blindly masking to 63 would incorrectly admit 64, -1, etc.
+            // The unsigned comparison rejects negatives and oversized i64
+            // distances in one check BEFORE constructing any shift instruction.
+            auto* module = builder.GetInsertBlock()->getModule();
+            auto* parent = builder.GetInsertBlock()->getParent();
+            auto* invalid = llvm::BasicBlock::Create(
+                builder.getContext(), "shift.distance.invalid", parent);
+            auto* valid = llvm::BasicBlock::Create(
+                builder.getContext(), "shift.distance.valid", parent);
+            builder.CreateCondBr(builder.CreateICmpULT(
+                distance, llvm::ConstantInt::get(i64, 64)), valid, invalid);
+            builder.SetInsertPoint(invalid);
+            // Native target currently uses a trap for typed runtime errors.
+            // This is fail-closed rather than Java's exception-class parity.
+            builder.CreateCall(
+                llvm::Intrinsic::getDeclaration(module, llvm::Intrinsic::trap));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(valid);
+            if (expr.kind == Expression::Kind::ShiftLeft)
+                return builder.CreateShl(left, distance, "shift.left");
+            if (expr.kind == Expression::Kind::ShiftRight)
+                return builder.CreateAShr(left, distance, "shift.signed.right");
+            return builder.CreateLShr(left, distance, "shift.unsigned.right");
+        }
+        case Expression::Kind::Remainder:
+        case Expression::Kind::Modulo: {
+            if (!expr.left || !expr.right)
+                throw std::runtime_error("native Integer.rem/mod requires two operands");
+            const bool modulo = expr.kind == Expression::Kind::Modulo;
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            // A zero divisor traps, like checked overflow.
+            auto* module = builder.GetInsertBlock()->getModule();
+            auto* parent = builder.GetInsertBlock()->getParent();
+            auto* failed = llvm::BasicBlock::Create(builder.getContext(), "rem.zero.trap", parent);
+            auto* proceed = llvm::BasicBlock::Create(builder.getContext(), "rem.ok", parent);
+            builder.CreateCondBr(builder.CreateICmpEQ(right, llvm::ConstantInt::get(i64, 0), "rem.zero"),
+                failed, proceed);
+            builder.SetInsertPoint(failed);
+            builder.CreateCall(llvm::Intrinsic::getDeclaration(module, llvm::Intrinsic::trap));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(proceed);
+            // Any value modulo -1 is 0, including INT64_MIN, but LLVM srem INT64_MIN, -1
+            // is poison. srem by 1 is also 0, so divide by 1 in that case instead.
+            llvm::Value* minus_one = builder.CreateICmpEQ(right,
+                llvm::ConstantInt::getSigned(i64, -1), "rem.minus.one");
+            llvm::Value* safe = builder.CreateSelect(minus_one, llvm::ConstantInt::get(i64, 1), right, "rem.divisor");
+            llvm::Value* remainder = builder.CreateSRem(left, safe, "srem");
+            if (!modulo) return remainder;
+            // Euclidean modulus: shift a negative remainder by |divisor|. The true result
+            // lies in [0, |divisor|), so wrapping add/sub is exact even for INT64_MIN.
+            llvm::Value* negative = builder.CreateICmpSLT(remainder, llvm::ConstantInt::get(i64, 0), "mod.negative");
+            llvm::Value* positive_divisor = builder.CreateICmpSGT(right, llvm::ConstantInt::get(i64, 0), "mod.divisor.positive");
+            llvm::Value* adjusted = builder.CreateSelect(positive_divisor,
+                builder.CreateAdd(remainder, right, "mod.add"),
+                builder.CreateSub(remainder, right, "mod.sub"), "mod.adjusted");
+            return builder.CreateSelect(negative, adjusted, remainder, "mod");
+        }
+        case Expression::Kind::BitXor: {
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            return builder.CreateXor(left, right, "bitxor");
+        }
+        case Expression::Kind::LogicalNot: {
+            llvm::Value* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            return builder.CreateZExt(
+                builder.CreateICmpEQ(value, llvm::ConstantInt::get(i64, 0), "bool.not.i1"),
+                i64, "bool.not");
+        }
+        case Expression::Kind::Equal:
+        case Expression::Kind::NotEqual:
+        case Expression::Kind::Less:
+        case Expression::Kind::LessEqual:
+        case Expression::Kind::Greater:
+        case Expression::Kind::GreaterEqual: {
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            if (expr.left->resolved_type == ScalarType::String) {
+                if (expr.kind != Expression::Kind::Equal && expr.kind != Expression::Kind::NotEqual)
+                    throw std::runtime_error("native String ordered comparison is not supported");
+                auto runtime = builder.GetInsertBlock()->getModule()->getOrInsertFunction("ores_string_equal",
+                    llvm::FunctionType::get(i64, {i64, i64}, false));
+                llvm::Value* equal = builder.CreateCall(runtime, {left, right}, "string.equal");
+                return expr.kind == Expression::Kind::Equal ? equal
+                    : builder.CreateZExt(builder.CreateICmpEQ(equal, llvm::ConstantInt::get(i64, 0)), i64, "string.not.equal");
+            }
+            llvm::Value* compared = nullptr;
+            switch (expr.kind) {
+                case Expression::Kind::Equal:
+                    compared = builder.CreateICmpEQ(left, right, "cmp.eq.i1"); break;
+                case Expression::Kind::NotEqual:
+                    compared = builder.CreateICmpNE(left, right, "cmp.ne.i1"); break;
+                case Expression::Kind::Less:
+                    compared = builder.CreateICmpSLT(left, right, "cmp.lt.i1"); break;
+                case Expression::Kind::LessEqual:
+                    compared = builder.CreateICmpSLE(left, right, "cmp.le.i1"); break;
+                case Expression::Kind::Greater:
+                    compared = builder.CreateICmpSGT(left, right, "cmp.gt.i1"); break;
+                case Expression::Kind::GreaterEqual:
+                    compared = builder.CreateICmpSGE(left, right, "cmp.ge.i1"); break;
+                default: break;
+            }
+            return builder.CreateZExt(compared, i64, "cmp.bool");
+        }
+        case Expression::Kind::LogicalXor: {
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* lb = builder.CreateICmpNE(left, llvm::ConstantInt::get(i64, 0), "xor.left.i1");
+            llvm::Value* rb = builder.CreateICmpNE(right, llvm::ConstantInt::get(i64, 0), "xor.right.i1");
+            return builder.CreateZExt(builder.CreateXor(lb, rb, "xor.i1"), i64, "xor.bool");
+        }
+        case Expression::Kind::LogicalAnd:
+        case Expression::Kind::LogicalOr: {
+            llvm::Function* parent = builder.GetInsertBlock()->getParent();
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* leftBool = builder.CreateICmpNE(
+                left, llvm::ConstantInt::get(i64, 0), "logic.left.i1");
+            llvm::BasicBlock* leftExit = builder.GetInsertBlock();
+            llvm::BasicBlock* rhs = llvm::BasicBlock::Create(
+                builder.getContext(), "logic.rhs", parent);
+            llvm::BasicBlock* merge = llvm::BasicBlock::Create(
+                builder.getContext(), "logic.merge", parent);
+            if (expr.kind == Expression::Kind::LogicalAnd)
+                builder.CreateCondBr(leftBool, rhs, merge);
+            else
+                builder.CreateCondBr(leftBool, merge, rhs);
+
+            builder.SetInsertPoint(rhs);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* rightBool = builder.CreateICmpNE(
+                right, llvm::ConstantInt::get(i64, 0), "logic.right.i1");
+            llvm::Value* rightCanonical = builder.CreateZExt(rightBool, i64, "logic.right.bool");
+            llvm::BasicBlock* rhsExit = builder.GetInsertBlock();
+            builder.CreateBr(merge);
+
+            builder.SetInsertPoint(merge);
+            auto* result = builder.CreatePHI(i64, 2, "logic.value");
+            result->addIncoming(
+                llvm::ConstantInt::get(i64,
+                    expr.kind == Expression::Kind::LogicalOr ? 1 : 0),
+                leftExit);
+            result->addIncoming(rightCanonical, rhsExit);
+            return result;
+        }
+        case Expression::Kind::Conditional: {
+            // Type admission has proven a bool condition and compatible arm
+            // result types; ownership admission has proven a valid affine join.
+            // Evaluate the condition once, then only the selected value arm.
+            llvm::Value* conditionValue = nullptr;
+            if (expr.condition) {
+                conditionValue = lower(*expr.condition, builder, i64,
+                    storage, field_storage, functions, moves);
+            } else {
+                llvm::Value* lhs = lower(*expr.condition_lhs, builder, i64,
+                    storage, field_storage, functions, moves);
+                llvm::Value* rhs = lower(*expr.condition_rhs, builder, i64,
+                    storage, field_storage, functions, moves);
+                conditionValue = builder.CreateZExt(
+                    builder.CreateICmpEQ(lhs, rhs, "ternary.eq.i1"),
+                    i64, "ternary.eq");
+            }
+            llvm::Value* condition = builder.CreateICmpNE(
+                conditionValue, llvm::ConstantInt::get(i64, 0), "ternary.cond.i1");
+            llvm::Function* parent = builder.GetInsertBlock()->getParent();
+            llvm::BasicBlock* whenTrue = llvm::BasicBlock::Create(
+                builder.getContext(), "ternary.true", parent);
+            llvm::BasicBlock* whenFalse = llvm::BasicBlock::Create(
+                builder.getContext(), "ternary.false", parent);
+            llvm::BasicBlock* merge = llvm::BasicBlock::Create(
+                builder.getContext(), "ternary.merge", parent);
+            builder.CreateCondBr(condition, whenTrue, whenFalse);
+
+            builder.SetInsertPoint(whenTrue);
+            llvm::Value* trueValue = lower(*expr.when_true, builder, i64,
+                storage, field_storage, functions, moves);
+            llvm::BasicBlock* trueExit = builder.GetInsertBlock();
+            builder.CreateBr(merge);
+
+            builder.SetInsertPoint(whenFalse);
+            llvm::Value* falseValue = lower(*expr.when_false, builder, i64,
+                storage, field_storage, functions, moves);
+            llvm::BasicBlock* falseExit = builder.GetInsertBlock();
+            builder.CreateBr(merge);
+
+            builder.SetInsertPoint(merge);
+            auto* value = builder.CreatePHI(i64, 2, "ternary.value");
+            value->addIncoming(trueValue, trueExit);
+            value->addIncoming(falseValue, falseExit);
+            return value;
         }
         case Expression::Kind::Call: {
-            llvm::Function* callee = functions.at(native_function_slot(expr.name, expr.arguments.size()));
-            if (callee->arg_size() != expr.arguments.size()) {
+            const std::string call_selector = native_function_slot(
+                expr.name, expr.arguments.size());
+            llvm::Function* callee = functions.at(call_selector);
+            if (moves && moves->frozen_scalar_dispatch) {
+                const auto* witness = moves->frozen_scalar_dispatch->find_direct(call_selector);
+                if (witness) {
+                    if (!moves->frozen_scalar_callees || !moves->frozen_scalar_symbols)
+                        throw std::runtime_error("native AOT static call lacks frozen target ledger");
+                    const auto frozen_callee = moves->frozen_scalar_callees->find(call_selector);
+                    const auto frozen_symbol = moves->frozen_scalar_symbols->find(call_selector);
+                    if (frozen_callee == moves->frozen_scalar_callees->end() ||
+                        frozen_symbol == moves->frozen_scalar_symbols->end() ||
+                        frozen_callee->second != callee)
+                        throw std::runtime_error("native AOT static call callee identity mismatch");
+                    std::vector<std::string> formal_labels;
+                    formal_labels.reserve(witness->parameter_abi.size());
+                    if (callee->arg_size() < witness->parameter_abi.size())
+                        throw std::runtime_error("native AOT static call formal ABI mismatch");
+                    for (std::size_t i = 0; i < witness->parameter_abi.size(); ++i)
+                        formal_labels.push_back(callee->getArg(i)->getName().str());
+                    verify_native_i64_scalar_call_witness(
+                        *witness, call_selector, frozen_symbol->second,
+                        callee->getName().str(), expr.arguments.size(), formal_labels,
+                        callee->getLinkage() == llvm::GlobalValue::InternalLinkage);
+                }
+            }
+            const std::vector<std::size_t> no_hidden;
+            const auto& hidden = moves && moves->class_array_parameters
+                ? moves->class_array_parameters->at(native_function_slot(expr.name, expr.arguments.size())) : no_hidden;
+            const bool owning = moves && moves->owning_results &&
+                moves->owning_results->at(native_function_slot(expr.name, expr.arguments.size()));
+            if (callee->arg_size() != expr.arguments.size() + hidden.size() + (owning ? 2 : 0)) {
                 throw std::runtime_error("native named call argument count mismatch");
             }
             if (!expr.argument_names.empty()
@@ -223,6 +692,7 @@ llvm::Value* lower(const Expression& expr,
                 throw std::runtime_error("invalid native call label layout");
             }
             std::vector<llvm::Value*> ordered(expr.arguments.size(), nullptr);
+            std::vector<const Expression*> ordered_source(expr.arguments.size(), nullptr);
             std::vector<bool> filled(expr.arguments.size(), false);
             std::size_t positional = 0;
             bool named_seen = false;
@@ -254,9 +724,23 @@ llvm::Value* lower(const Expression& expr,
                     throw std::runtime_error("duplicate native named call binding");
                 }
                 filled[target] = true;
+                ordered_source[target] = expr.arguments[i].get();
                 // Emit instructions in source order, not in formal-slot order.
                 ordered[target] = lower(*expr.arguments[i], builder, i64,
                                         storage, field_storage, functions, moves);
+            }
+            for (std::size_t parameter : hidden) {
+                const auto& arg = *ordered_source.at(parameter);
+                if (!arg.left || (arg.left->kind != Expression::Kind::Variable && arg.left->kind != Expression::Kind::Field) ||
+                        (arg.kind != Expression::Kind::Borrow && arg.kind != Expression::Kind::BorrowMut))
+                    throw std::runtime_error("collection class argument lacks named borrowed provenance");
+                ordered.push_back(moves->class_array_regions->at(native_place_key(*arg.left)));
+            }
+            if (owning) {
+                if (!moves->result_destination || !moves->result_region)
+                    throw std::runtime_error("owning call result requires explicit destination ownership");
+                ordered.push_back(moves->result_destination);
+                ordered.push_back(moves->result_region);
             }
             return builder.CreateCall(callee, ordered,
                 callee->getReturnType()->isVoidTy() ? "" : "call");
@@ -267,7 +751,77 @@ llvm::Value* lower(const Expression& expr,
 
 } // namespace
 
-std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
+std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
+                                  bool cortex_m_target,
+                                  bool bounded_allocator_provider,
+                                  const std::string& isolate_entry) {
+    for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
+    for (const auto& fn : source.functions)
+        if (fn.name.rfind("ores_record_", 0) == 0)
+            throw std::runtime_error("reserved native record runtime symbol collision");
+    for (const auto& fn : source.functions)
+        if (fn.name.rfind("ores_string_", 0) == 0)
+            throw std::runtime_error("reserved native string runtime symbol collision");
+    for (const auto& fn : source.functions)
+        if (fn.name.rfind("ores_native_telemetry_", 0) == 0)
+            throw std::runtime_error("reserved native telemetry ABI symbol collision");
+
+    // First OresVM entry is deliberately a one-function, pure scalar state
+    // transition. Runtime-owned state is injected, never a mutable LLVM global.
+    if (!isolate_entry.empty()) {
+        if (wasm32_target || cortex_m_target || source.functions.size() != 1 ||
+            !source.imports.empty() || !source.actors.empty() ||
+            !source.classes.empty() || !source.generators.empty() ||
+            !source.cooperative_loops.empty() || !source.sum_types.empty())
+            throw std::runtime_error("isolate entry requires one native scalar function");
+        const auto& fn = source.functions.front();
+        if (fn.name != isolate_entry || fn.name == "main" ||
+            fn.name == "ores_guest_entry" || !fn.exported || fn.native_internal ||
+            fn.async_source_i64 || fn.returns_void || fn.return_type != ScalarType::I64 ||
+            !fn.return_class.empty() || !fn.return_sum.empty() ||
+            fn.parameters.size() != 2 || !fn.locals.empty() ||
+            !fn.statements.empty() || !fn.early_returns.empty() ||
+            !fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
+            !fn.actor_stops.empty() || !fn.actor_actions.empty() ||
+            !fn.actor_field_writes.empty() || !fn.source_tasks.empty() ||
+            !fn.future_pipelines.empty() || !fn.ready_await_actor.empty() ||
+            !fn.done_await_actor.empty() || fn.scalar_while ||
+            fn.caught_throw_value || !fn.method_owner.empty() ||
+            !fn.result || !fn.generic_parameters.empty())
+            throw std::runtime_error("isolate entry requires pure pub fnc (int,int): int");
+        for (const auto& param : fn.parameters)
+            if (param.mode != Parameter::Mode::Value ||
+                param.scalar_type != ScalarType::I64 || !param.class_name.empty() ||
+                !param.sum_type.empty() || !param.generic_type.empty())
+                throw std::runtime_error("isolate entry requires i64 value arguments");
+        const auto pure = [&](const auto& self, const Expression& expr) -> bool {
+            using K = Expression::Kind;
+            switch (expr.kind) {
+                case K::Integer: return true;
+                case K::Variable:
+                    return expr.name == fn.parameters[0].name ||
+                           expr.name == fn.parameters[1].name;
+                case K::Negate: return expr.left && self(self, *expr.left);
+                case K::Add: case K::Subtract: case K::Multiply:
+                    return expr.left && expr.right && self(self, *expr.left) &&
+                           self(self, *expr.right);
+                default: return false;
+            }
+        };
+        if (!pure(pure, *fn.result))
+            throw std::runtime_error("isolate entry requires arithmetic-only result");
+    }
+    for (const auto& fn : source.functions)
+        if (fn.name == "ores_guest_entry")
+            throw std::runtime_error("reserved isolate ABI symbol collision");
+    if (!source.imports.empty())
+        throw std::runtime_error("unresolved native module imports cannot reach LLVM emission");
+    for (const auto& actor : source.actors) {
+        if (actor.max_actor_threads != MaxActorThreads::LOW) {
+            throw std::runtime_error("parallel actor LLVM lowering requires compiler-proven per-turn actor state isolation");
+        }
+    }
+    if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
             throw std::runtime_error("experimental scalar loop unsupported target/owners");
@@ -300,13 +854,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             if (!fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
                 !fn.actor_stops.empty() || !fn.actor_field_writes.empty())
                 throw std::runtime_error("wasm32 actor operations are not implemented");
+            if (!fn.source_tasks.empty() || !fn.future_pipelines.empty())
+                throw std::runtime_error(
+                    "wasm32 source Task/Future scheduler runtime is not implemented");
             for (const auto& local : fn.locals) {
                 // Preserve the native heap-owned diagnostic independently
                 // of array-backed ownership rejection.
                 if (local.heap_owned)
                     throw std::runtime_error("wasm32 native heap-owned regions are not implemented");
-                if (local.int_array)
-                    throw std::runtime_error("wasm32 native heap-owned/Array<int> regions are not implemented");
+                if (local.int_array && !bounded_allocator_provider)
+                    throw std::runtime_error(
+                        "wasm32 Array<int> requires an explicit allocator provider");
             }
         }
     }
@@ -316,7 +874,87 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     constexpr const char* guest_main_symbol = "__oreslang_guest_main";
     const auto main_it = std::find_if(source.functions.begin(), source.functions.end(),
         [](const Function& fn) { return fn.name == "main"; });
-    const bool native_main = !wasm32_target && main_it != source.functions.end();
+    const bool native_main = !wasm32_target && !cortex_m_target &&
+        main_it != source.functions.end();
+    bool string_runtime = false, console_runtime = false, record_runtime = !source.sum_types.empty(), iteration_runtime = false;
+    const NativeClassLayouts layouts(source);
+    std::unordered_map<std::string, ClassDecl> flat_classes;
+    for (const auto& cls : source.classes) flat_classes.emplace(cls.name, native_flat_class(cls, layouts));
+    auto class_owns_arrays = [&](const std::string& name) {
+        return flat_classes.count(name) && layouts.at(name).owns_arrays;
+    };
+    for (const auto& type : source.sum_types)
+        if (type.value_type == ScalarType::String || (type.kind == NativeSumType::Kind::Result && type.error_type == ScalarType::String)) string_runtime = true;
+    const bool owning_result_runtime = std::any_of(source.functions.begin(), source.functions.end(),
+        [&](const Function& f) { return class_owns_arrays(f.return_class); });
+    std::function<void(const Expression*)> scan_string = [&](const Expression* e) {
+        if (!e) return;
+        if (e->kind == Expression::Kind::RecordConstruct && !class_owns_arrays(e->name)) record_runtime = true;
+        if (e->kind == Expression::Kind::String || e->resolved_type == ScalarType::String) string_runtime = true;
+        if (e->kind == Expression::Kind::Console) console_runtime = string_runtime = true;
+        scan_string(e->left.get()); scan_string(e->right.get()); scan_string(e->condition.get());
+        scan_string(e->condition_lhs.get()); scan_string(e->condition_rhs.get());
+        scan_string(e->when_true.get()); scan_string(e->when_false.get());
+        for (const auto& arg : e->arguments) scan_string(arg.get());
+    };
+    std::function<void(const Statement&)> scan_statement = [&](const Statement& s) {
+        if (s.branch_local && s.branch_local->int_array) {
+            if (wasm32_target)
+                throw std::runtime_error("wasm32 scoped array owners require allocator-provider scope qualification");
+            if (s.branch_local->array_element_type == ScalarType::String) string_runtime = true;
+            if (!s.branch_local->array_record_class.empty()) record_runtime = true;
+        }
+        if (s.kind == Statement::Kind::ForEach || s.kind == Statement::Kind::ForIndex)
+            iteration_runtime = true;
+        scan_string(s.expression.get()); scan_string(s.condition.get());
+        scan_string(s.loop_step.get());
+        scan_string(s.condition_lhs.get()); scan_string(s.condition_rhs.get());
+        if (s.branch_local) scan_string(s.branch_local->initializer.get());
+        for (const auto& child : s.then_statements) scan_statement(child);
+        for (const auto& child : s.else_statements) scan_statement(child);
+    };
+    auto scan_function = [&](const Function& fn) {
+        if (!fn.return_class.empty() && !class_owns_arrays(fn.return_class)) record_runtime = true;
+        if (fn.return_type == ScalarType::String) string_runtime = true;
+        for (const auto& p : fn.parameters) if (p.scalar_type == ScalarType::String) string_runtime = true;
+        for (const auto& local : fn.locals) {
+            if (!local.array_record_class.empty() || (local.record_view && !class_owns_arrays(local.class_name))) record_runtime = true;
+            if (local.int_array && local.array_element_type == ScalarType::String) string_runtime = true;
+            scan_string(local.initializer.get());
+            for (const auto& arg : local.constructor_arguments) scan_string(arg.get());
+        }
+        for (const auto& s : fn.statements) scan_statement(s);
+        for (const auto& g : fn.early_returns) {
+            scan_string(g.condition.get()); scan_string(g.lhs.get()); scan_string(g.rhs.get()); scan_string(g.result.get());
+        }
+        for (const auto& s : fn.caught_throw_defers) scan_statement(s);
+        for (const auto& s : fn.actor_sends) scan_string(s.payload.get());
+        for (const auto& w : fn.actor_field_writes) scan_string(w.expression.get());
+        scan_string(fn.caught_throw_value.get());
+        scan_string(fn.result.get());
+    };
+    for (const auto& fn : source.functions) scan_function(fn);
+    for (const auto& cls : source.classes) for (const auto& field : cls.fields) {
+        if (field.int_array && field.array_element_type == ScalarType::String) string_runtime = true;
+        if (!field.array_record_class.empty()) record_runtime = true;
+        if (field.scalar_type == ScalarType::String) string_runtime = true;
+        scan_string(field.initializer_expression.get());
+    }
+    for (const auto& actor : source.actors) {
+        for (const auto& field : actor.fields) scan_string(field.initializer.get());
+        scan_function(actor.on_message);
+    }
+    if (string_runtime || record_runtime || owning_result_runtime || iteration_runtime) {
+        if (!native_main || !source.actors.empty() || std::any_of(source.functions.begin(), source.functions.end(),
+                [](const Function& f) {
+                    return !f.ready_await_actor.empty() || f.caught_throw_value ||
+                        f.scalar_while || !f.source_tasks.empty() ||
+                        !f.future_pipelines.empty();
+                }))
+            throw std::runtime_error(string_runtime
+                ? "native strings currently require a synchronous host main region without actors, suspension or exception frames"
+                : "native records/owning results currently require a synchronous host main region without actors, suspension or exception frames");
+    }
     if (native_main) {
         if (!main_it->parameters.empty())
             throw std::runtime_error("native main() must have zero arguments");
@@ -328,19 +966,39 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     // The wasm32 environment is an explicit code-generation target. This
     // emits verified, target-marked IR; object/linking remains in oreslang-wasm.
     // Never infer browser capabilities from the target triple alone.
+    if (cortex_m_target) {
+        // Experimental Cortex-M3 native ABI: scalar i64 functions, no OS wrapper.
+        const auto profile = TargetAbi::parse("thumbv7m-none-eabi");
+        if (!profile.experimental_cortexm_ir())
+            throw std::runtime_error("Cortex-M IR emission is not admitted");
+#if LLVM_VERSION_MAJOR >= 21
+        module.setTargetTriple(llvm::Triple(std::string(profile.triple())));
+#else
+        module.setTargetTriple(std::string(profile.triple()));
+#endif
+        module.setDataLayout("e-m:e-p:32:32-Fi8-i64:64-v128:64:128-a:0:32-n32-S64");
+        if (module.getDataLayout().getPointerSizeInBits(0) != 32 ||
+            !module.getDataLayout().isLittleEndian())
+            throw std::runtime_error("Cortex-M ABI/data layout mismatch");
+    }
     if (wasm32_target) {
         const auto profile = TargetAbi::parse("wasm32-unknown-unknown");
         if (!profile.experimental_wasm32_ir())
             throw std::runtime_error("wasm32 target profile is not enabled");
+#if LLVM_VERSION_MAJOR >= 21
+        module.setTargetTriple(llvm::Triple(std::string(profile.triple())));
+#else
         module.setTargetTriple(std::string(profile.triple()));
+#endif
         module.setDataLayout("e-m:e-p:32:32-i64:64-n32:64-S128");
         const auto& actual = module.getDataLayout();
         if (actual.getPointerSizeInBits(0) != profile.pointer_bits()
                 || actual.isLittleEndian() != (profile.endian() == "little"))
             throw std::runtime_error("wasm32 target ABI/data layout mismatch");
     }
-    llvm::Type* i64 = llvm::Type::getInt64Ty(context);
-    llvm::Type* loan_ptr = i64->getPointerTo();
+    auto* i64 = llvm::Type::getInt64Ty(context);
+    llvm::Type* i32 = llvm::Type::getInt32Ty(context);
+    llvm::Type* loan_ptr = native_pointer_type(context, i64);
     // LLVM 18 removed Type::getInt8PtrTy. Use opaque address-space-zero
     // pointers on modern LLVM while preserving pre-18 typed-pointer support.
 #if LLVM_VERSION_MAJOR >= 18
@@ -351,6 +1009,53 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     // The test-only native owned-int experiment must never leak declarations
     // or allocations into ordinary int code. Resolve the ABI only when a
     // program actually contains a gated experimental heap-owned local.
+    // AOT scoped probes remain dormant unless trusted native host control
+    // explicitly enables them. Only hosted LLVM targets have the bounded,
+    // C11 thread-local telemetry ABI; freestanding/Wasm must fail closed.
+    std::function<bool(const Statement&)> has_native_scope =
+        [&](const Statement& statement) -> bool {
+            return statement.kind == Statement::Kind::UsingTelemetrySpan
+                || std::any_of(statement.then_statements.begin(),
+                               statement.then_statements.end(), has_native_scope)
+                || std::any_of(statement.else_statements.begin(),
+                               statement.else_statements.end(), has_native_scope);
+        };
+    const bool has_native_telemetry = std::any_of(
+        source.functions.begin(), source.functions.end(),
+        [&](const Function& fn) {
+            return std::any_of(fn.statements.begin(), fn.statements.end(),
+                               has_native_scope);
+        });
+    if (has_native_telemetry && (wasm32_target || cortex_m_target))
+        throw std::runtime_error(
+            "native telemetry span runtime currently supports only hosted LLVM AOT");
+    llvm::FunctionCallee telemetryBegin, telemetryEnd;
+    if (has_native_telemetry) {
+        telemetryBegin = module.getOrInsertFunction(
+            "ores_native_telemetry_span_begin",
+            llvm::FunctionType::get(i64, {native_ptr, i64}, false));
+        telemetryEnd = module.getOrInsertFunction(
+            "ores_native_telemetry_span_end",
+            llvm::FunctionType::get(llvm::Type::getVoidTy(context), {i64}, false));
+    }
+    const bool has_source_tasks = std::any_of(
+        source.functions.begin(), source.functions.end(),
+        [](const Function& fn) {
+            return !fn.source_tasks.empty() || !fn.future_pipelines.empty();
+        });
+    llvm::FunctionCallee taskStart, taskAwait, taskShutdown;
+    if (has_source_tasks) {
+        taskStart = module.getOrInsertFunction(
+            "oreslang_source_task_start_i64",
+            llvm::FunctionType::get(native_ptr, {native_ptr}, false));
+        taskAwait = module.getOrInsertFunction(
+            "oreslang_source_task_await_i64",
+            llvm::FunctionType::get(i64, {native_ptr}, false));
+        taskShutdown = module.getOrInsertFunction(
+            "oreslang_source_task_runtime_shutdown",
+            llvm::FunctionType::get(i32, {}, false));
+    }
+
     const bool has_region_bindings = std::any_of(source.functions.begin(), source.functions.end(),
         [](const Function& fn) {
             return std::any_of(fn.locals.begin(), fn.locals.end(),
@@ -372,9 +1077,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
 
     // Emit declarations only for functions that actually own Array<int>
     // locals. Opaque, unique handles are never exposed as guest values.
-    const bool has_array_bindings = std::any_of(source.functions.begin(), source.functions.end(),
+    std::function<bool(const Statement&)> contains_scoped_array = [&](const Statement& stmt) {
+        return (stmt.kind == Statement::Kind::ScopedLocal && stmt.branch_local->int_array) ||
+            std::any_of(stmt.then_statements.begin(), stmt.then_statements.end(), contains_scoped_array) ||
+            std::any_of(stmt.else_statements.begin(), stmt.else_statements.end(), contains_scoped_array);
+    };
+    const bool has_array_bindings = std::any_of(source.classes.begin(), source.classes.end(), [&](const ClassDecl& cls) {
+        return layouts.at(cls.name).owns_arrays;
+    }) || std::any_of(source.functions.begin(), source.functions.end(),
         [&](const Function& fn) {
-            return std::any_of(fn.locals.begin(), fn.locals.end(),
+            return std::any_of(fn.statements.begin(), fn.statements.end(), contains_scoped_array) || std::any_of(fn.locals.begin(), fn.locals.end(),
                 [&](const LocalBinding& b) {
                     if (b.int_array) return true;
                     if (!b.new_class) return false;
@@ -387,14 +1099,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         });
     llvm::FunctionCallee arrayOpen, arrayNew, arrayAdd, arrayGet, arraySet,
                          arrayLength, arrayDrop, arrayClose, arrayAbort,
-                         arrayPrepareFilledMany, arrayCommitMany, arrayUnhandled;
+                         arrayPrepareFilledMany, arrayCommitMany, arrayTransferMany, arrayUnhandled;
     if (has_array_bindings) {
         auto* voidTy = llvm::Type::getVoidTy(context);
         auto* i32 = llvm::Type::getInt32Ty(context);
         arrayOpen = module.getOrInsertFunction("oreslang_int_array_try_region_open",
-            llvm::FunctionType::get(i32, {native_ptr->getPointerTo()}, false));
+            llvm::FunctionType::get(i32, {native_pointer_type(context, native_ptr)}, false));
         arrayNew = module.getOrInsertFunction("oreslang_int_array_try_new",
             llvm::FunctionType::get(i32, {native_ptr, loan_ptr}, false));
+        arrayTransferMany = module.getOrInsertFunction("oreslang_int_array_try_transfer_many",
+            llvm::FunctionType::get(i32, {native_ptr, native_ptr, i64,
+                native_pointer_type(context, loan_ptr), native_pointer_type(context, loan_ptr)}, false));
         arrayAdd = module.getOrInsertFunction("oreslang_int_array_try_add",
             llvm::FunctionType::get(i32, {native_ptr, i64, i64}, false));
         // Each opaque handle slot is i64. Arrays of handle-slot pointers
@@ -406,9 +1121,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         arrayCommitMany = module.getOrInsertFunction(
             "oreslang_int_array_commit_many",
             llvm::FunctionType::get(voidTy,
-                {native_ptr, i64, loan_ptr->getPointerTo(),
-                 loan_ptr->getPointerTo()}, false));
-        arrayAbort = module.getOrInsertFunction("abort",
+                {native_ptr, i64, native_pointer_type(context, loan_ptr),
+                 native_pointer_type(context, loan_ptr)}, false));
+        arrayAbort = module.getOrInsertFunction(
+            bounded_allocator_provider
+                ? "oreslang_freestanding_panic"
+                : "abort",
             llvm::FunctionType::get(voidTy, {}, false));
         arrayUnhandled = module.getOrInsertFunction(
             "oreslang_int_array_unhandled_resource_failure",
@@ -428,7 +1146,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     // Only generated source actors resolve this native scheduler/heap ABI.
     // No actor imports appear in ordinary scalar/class compilation.
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
-    llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop;
+    llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceRequestStop,
+        sourceAwaitReady, sourceAwaitDone;
+    llvm::FunctionCallee actorScopedNew, actorScopedDrop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
     if (!source.actors.empty() && !wasm32_target) {
         auto* voidTy = llvm::Type::getVoidTy(context);
@@ -440,12 +1160,27 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             llvm::FunctionType::get(i64, {native_ptr, i64, i64, i64}, false));
         fieldWrite = module.getOrInsertFunction("ores_actor_i64_heap_field_write",
             llvm::FunctionType::get(voidTy, {native_ptr, i64, i64, i64, i64}, false));
+        actorScopedNew = module.getOrInsertFunction("ores_actor_i64_heap_scoped_new",
+            llvm::FunctionType::get(voidTy,
+                {native_ptr, i64, i64, i64, native_ptr}, false));
+        actorScopedDrop = module.getOrInsertFunction("ores_actor_i64_heap_scoped_drop",
+            llvm::FunctionType::get(voidTy,
+                {native_ptr, i64, i64, native_ptr}, false));
         sourceSpawn = module.getOrInsertFunction("oreslang_source_actor_spawn",
             llvm::FunctionType::get(native_ptr, {native_ptr, native_ptr, i64}, false));
         sourceSend = module.getOrInsertFunction("oreslang_source_actor_send",
             llvm::FunctionType::get(voidTy, {native_ptr, i64}, false));
         sourceStop = module.getOrInsertFunction("oreslang_source_actor_stop",
             llvm::FunctionType::get(voidTy, {native_ptr}, false));
+        sourceRequestStop = module.getOrInsertFunction(
+            "oreslang_source_actor_request_stop",
+            llvm::FunctionType::get(voidTy, {native_ptr}, false));
+        sourceAwaitReady = module.getOrInsertFunction(
+            "oreslang_source_actor_await_ready",
+            llvm::FunctionType::get(i64, {native_ptr, native_ptr, i64}, false));
+        sourceAwaitDone = module.getOrInsertFunction(
+            "oreslang_source_actor_await_done",
+            llvm::FunctionType::get(i64, {native_ptr, native_ptr, i64}, false));
         for (const auto& actor : source.actors) {
             const std::string prefix = "oreslang_actor_" + actor.name + "_";
             actorInits.emplace(actor.name, llvm::Function::Create(
@@ -458,8 +1193,28 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     }
     std::unordered_map<std::string, llvm::Function*> declarations;
     std::unordered_map<std::string, llvm::StructType*> class_types;
+    std::unordered_map<std::string, const ClassDecl*> record_classes;
+    std::unordered_map<std::string, std::uint64_t> record_schemas;
+    llvm::FunctionCallee record_new, record_get, record_check, sum_check;
+    if (record_runtime) {
+        record_new = module.getOrInsertFunction("ores_record_new",
+            llvm::FunctionType::get(i64, {i64, i64, native_ptr}, false));
+        record_get = module.getOrInsertFunction("ores_record_get",
+            llvm::FunctionType::get(i64, {i64, i64, i64}, false));
+        sum_check = module.getOrInsertFunction("ores_record_check_shape",
+            llvm::FunctionType::get(i64, {i64, i64, i64}, false));
+        record_check = module.getOrInsertFunction("ores_record_check",
+            llvm::FunctionType::get(i64, {i64, i64}, false));
+    }
     std::unordered_map<std::string, std::unordered_map<std::string, std::size_t>> field_indices;
-    for (const auto& cls : source.classes) {
+    std::unordered_map<std::string, bool> class_has_arrays;
+    std::unordered_map<std::string, std::vector<std::size_t>> class_array_parameters;
+    std::unordered_map<std::string, bool> owning_results;
+    for (const auto& source_class : source.classes) {
+        const auto& cls = flat_classes.at(source_class.name);
+        record_classes.emplace(cls.name, &cls);
+        record_schemas.emplace(cls.name, record_schemas.size() + 1);
+        class_has_arrays.emplace(cls.name, layouts.at(cls.name).owns_arrays);
         std::vector<llvm::Type*> layout(cls.fields.size(), i64);
         class_types.emplace(cls.name, llvm::StructType::create(context, layout, cls.name));
         std::unordered_map<std::string, std::size_t> indices;
@@ -468,42 +1223,150 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         field_indices.emplace(cls.name, std::move(indices));
     }
 
+    for (const auto& type : source.sum_types) record_schemas.emplace(type.name, record_schemas.size() + 1);
+
     // Exact by-value i64 / borrowed-i64-pointer argument types for all
     // same-module functions; no unsound conversion to i64 is permitted.
     // Unique free functions retain their ABI symbol, overloaded families use arity slots.
     std::unordered_map<std::string, std::size_t> family_sizes;
     for (const auto& fn : source.functions) ++family_sizes[fn.name];
+    // The existing typed native frontend admits concrete int generic
+    // arguments only. Freeze a canonical, bounded one-per-declaration
+    // specialization map before emitting any function bodies.
+    const auto frozen_i64_dispatch = freeze_native_i64_dispatch_image(source);
+    // The frozen image carries exact compiler-owned selectors, concrete type
+    // tuples, bounded closure evidence and symbol suffixes. Do not replace
+    // it with JIT profile data or a runtime name registry.
+    std::unordered_set<std::string> emitted_function_symbols;
+    std::unordered_map<std::string, llvm::Function*> frozen_scalar_callees;
+    std::unordered_map<std::string, std::string> frozen_scalar_symbols;
+    std::size_t emitted_concrete_specializations = 0;
     for (const auto& fn : source.functions) {
-        const std::string base_symbol = native_main && source.module.empty() && fn.name == "main"
-            ? guest_main_symbol
-            : (source.module.empty() ? fn.name : source.module + "." + fn.name);
-        const std::string symbol = family_sizes.at(fn.name) > 1
-            ? native_function_slot(base_symbol, fn.parameters.size())
-            : base_symbol;
+        const auto* specialization = frozen_i64_dispatch.find_direct(
+            native_function_slot(fn.name, fn.parameters.size()));
+        // Single compiler-owned symbol planner covers qualified module names,
+        // overload slots, concrete generic ABI suffixes and reserved runtime
+        // names. Do this before LLVM is allowed to silently uniquify a global.
+        const std::string symbol = plan_native_aot_function_symbol(
+            source, fn, frozen_i64_dispatch, family_sizes.at(fn.name),
+            native_main, cortex_m_target);
+        if (!emitted_function_symbols.insert(symbol).second)
+            throw std::runtime_error("native AOT emitted function symbol collision");
+        if (module.getNamedValue(symbol))
+            throw std::runtime_error("native AOT direct dispatch linker symbol collision");
         std::vector<llvm::Type*> argument_types;
         for (const auto& param : fn.parameters)
             argument_types.push_back(param.class_name.empty()
                 ? (param.mode == Parameter::Mode::Value ? i64 : loan_ptr)
-                : class_types.at(param.class_name)->getPointerTo());
+                : native_pointer_type(context, class_types.at(param.class_name)));
+        std::vector<std::size_t> hidden;
+        for (std::size_t i = 0; i < fn.parameters.size(); ++i)
+            if (!fn.parameters[i].class_name.empty() && class_has_arrays.at(fn.parameters[i].class_name)) {
+                hidden.push_back(i);
+                argument_types.push_back(native_ptr);
+            }
+        class_array_parameters.emplace(native_function_slot(fn.name, fn.parameters.size()), hidden);
+        const bool owning = class_owns_arrays(fn.return_class);
+        owning_results.emplace(native_function_slot(fn.name, fn.parameters.size()), owning);
+        if (owning) { argument_types.push_back(native_ptr); argument_types.push_back(native_ptr); }
         llvm::FunctionType* signature = llvm::FunctionType::get(
             fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
             argument_types, false);
+        if (specialization != nullptr) {
+            // Compare the LLVM physical ABI to the independently frozen
+            // typed parameter modes before binding the direct-call symbol.
+            // Hidden collection-region pointers and owned-return slots are
+            // compiler-generated ABI parameters. Demand the *exact* count:
+            // matching only explicit source arguments would silently allow
+            // a dropped or forged trailing ownership parameter.
+            std::size_t frozen_hidden_regions = 0;
+            for (const auto& param : specialization->parameter_abi)
+                if (!param.class_name.empty() && class_has_arrays.at(param.class_name))
+                    ++frozen_hidden_regions;
+            const std::size_t frozen_result_slots =
+                class_owns_arrays(specialization->return_class) ? 2 : 0;
+            if (hidden.size() != frozen_hidden_regions ||
+                (owning ? 2u : 0u) != frozen_result_slots ||
+                signature->getNumParams() !=
+                    specialization->parameter_abi.size() +
+                    frozen_hidden_regions + frozen_result_slots ||
+                signature->getReturnType()->isVoidTy() != specialization->returns_void ||
+                (!specialization->returns_void &&
+                 signature->getReturnType() != i64))
+                throw std::runtime_error("native AOT specialized LLVM function ABI mismatch");
+            for (std::size_t i = 0; i < specialization->parameter_abi.size(); ++i) {
+                const auto& param = specialization->parameter_abi[i];
+                llvm::Type* expected = param.class_name.empty()
+                    ? (param.mode == Parameter::Mode::Value ? i64 : loan_ptr)
+                    : native_pointer_type(context, class_types.at(param.class_name));
+                if (signature->getParamType(i) != expected)
+                    throw std::runtime_error("native AOT specialized LLVM parameter ABI mismatch");
+            }
+        }
         llvm::Function* declaration = llvm::Function::Create(
-            signature, llvm::Function::ExternalLinkage, symbol, module);
+            signature,
+            (fn.native_internal || fn.async_source_i64 ||
+             !fn.c_export_u32_symbol.empty() ||
+             specialization != nullptr)
+                ? llvm::Function::InternalLinkage
+                : llvm::Function::ExternalLinkage,
+            symbol, module);
+        // LLVM may silently uniquify a symbol after a collision with a
+        // runtime/import declaration. That would sever the frozen dispatch
+        // target even when our source-function symbol set is collision-free.
+        if (declaration->getName().str() != symbol)
+            throw std::runtime_error("native AOT direct dispatch linker symbol collision");
+        if (specialization != nullptr) {
+            const auto selector = native_function_slot(fn.name, fn.parameters.size());
+            if (!frozen_scalar_callees.emplace(selector, declaration).second ||
+                !frozen_scalar_symbols.emplace(selector, symbol).second)
+                throw std::runtime_error("duplicate native AOT frozen callee ledger identity");
+            ++emitted_concrete_specializations;
+        }
         // Forward references must already expose parameter labels.
         std::size_t label_index = 0;
-        for (auto& formal : declaration->args())
-            formal.setName(fn.parameters[label_index++].name);
-        declarations.emplace(native_function_slot(fn.name, fn.parameters.size()), declaration);
+        for (auto& formal : declaration->args()) {
+            if (label_index < fn.parameters.size()) formal.setName(fn.parameters[label_index].name);
+            else if (label_index < fn.parameters.size() + hidden.size())
+                formal.setName("$region." + fn.parameters[hidden.at(label_index - fn.parameters.size())].name);
+            else formal.setName(label_index == fn.parameters.size() + hidden.size() ? "$result" : "$result.region");
+            ++label_index;
+        }
+        if (!declarations.emplace(native_function_slot(fn.name, fn.parameters.size()),
+                                  declaration).second)
+            throw std::runtime_error("native AOT duplicate declaration selector");
     }
+    if (emitted_concrete_specializations != frozen_i64_dispatch.direct_targets.size())
+        throw std::runtime_error("native AOT frozen direct dispatch image incomplete at emission");
     for (const auto& fn : source.functions) {
         llvm::Function* function = declarations.at(native_function_slot(fn.name, fn.parameters.size()));
         llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", function);
         llvm::IRBuilder<> builder(entry);
         std::unordered_map<std::string, llvm::Value*> storage;
         std::unordered_map<std::string, llvm::Value*> field_storage;
+        std::unordered_map<std::string, llvm::Value*> class_array_regions;
+        auto register_subobjects = [&](const std::string& owner, const std::string& type, llvm::Value* slot) {
+            std::vector<std::string> names;
+            for (const auto& child : layouts.at(type).subobjects) {
+                const auto key = field_key(owner, child.first);
+                auto* address = builder.CreateStructGEP(class_types.at(type), slot, static_cast<unsigned>(layouts.at(type).offsets.at(child.first)));
+                auto* typed = builder.CreateBitCast(address, native_pointer_type(context, class_types.at(child.second)));
+                if (!storage.emplace(key, typed).second) throw std::runtime_error("nested native storage collision");
+                if (class_array_regions.count(owner)) class_array_regions.emplace(key, class_array_regions.at(owner));
+                names.push_back(key);
+            }
+            return names;
+        };
+
+        const auto& hidden = class_array_parameters.at(native_function_slot(fn.name, fn.parameters.size()));
+        const bool owning_return = owning_results.at(native_function_slot(fn.name, fn.parameters.size()));
+        llvm::Value* result_destination = owning_return ? function->getArg(fn.parameters.size() + hidden.size()) : nullptr;
+        llvm::Value* result_region = owning_return ? function->getArg(fn.parameters.size() + hidden.size() + 1) : nullptr;
+        for (std::size_t i = 0; i < hidden.size(); ++i)
+            class_array_regions.emplace(fn.parameters[hidden[i]].name, function->getArg(fn.parameters.size() + i));
         std::size_t index = 0;
         for (auto& arg : function->args()) {
+            if (index == fn.parameters.size()) break;
             const Parameter& param = fn.parameters[index++];
             arg.setName(param.name);
             if (!param.class_name.empty()) {
@@ -513,13 +1376,29 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                         builder.CreateStructGEP(class_types.at(param.class_name), &arg,
                             static_cast<unsigned>(field_index), param.name + "." + field));
                 }
+                register_subobjects(param.name, param.class_name, &arg);
             } else if (param.mode == Parameter::Mode::Value) {
                 llvm::Value* slot = builder.CreateAlloca(i64, nullptr, param.name + ".slot");
-                builder.CreateStore(&arg, slot);
+                llvm::Value* incoming = &arg;
+                if (param.scalar_type == ScalarType::Bool) {
+                    // Public/native callers are not trusted to preserve the
+                    // source-level canonical bool representation. Normalize
+                    // every nonzero ABI value to exactly 1 at function entry.
+                    incoming = builder.CreateZExt(
+                        builder.CreateICmpNE(&arg, llvm::ConstantInt::get(i64, 0),
+                            param.name + ".bool.abi.i1"),
+                        i64, param.name + ".bool.abi");
+                }
+                builder.CreateStore(incoming, slot);
                 storage.emplace(param.name, slot);
             } else {
                 storage.emplace(param.name, &arg);
             }
+        }
+
+        for (const auto& parameter : fn.parameters) if (!parameter.sum_type.empty()) {
+            auto* handle = builder.CreateLoad(i64, storage.at(parameter.name));
+            checked_sum_tag(builder, i64, handle, record_schemas.at(parameter.sum_type), native_sum(source, parameter.sum_type).kind == NativeSumType::Kind::Option ? 2 : 3, sum_check, record_get);
         }
 
         // Every source actor ref is an opaque, unique capability owned by
@@ -533,7 +1412,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             const auto actor = std::find_if(source.actors.begin(), source.actors.end(),
                 [&](const ActorDecl& a) { return a.name == spawn.actor_type; });
             llvm::Value* ref = builder.CreateCall(sourceSpawn, {ctor, handler,
-                llvm::ConstantInt::get(i64, actor->fields.size())}, spawn.name + ".actor.ref");
+                llvm::ConstantInt::get(i64,
+                    actor->fields.size() + actor->on_message.locals.size())},
+                spawn.name + ".actor.ref");
             actorRefs.emplace(spawn.name, ref);
         }
         // An explicitly "owned int" lives in a bounded native C region;
@@ -557,16 +1438,24 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                                         static_cast<std::uint64_t>(heap_count))}, "native.owned.region");
         std::unordered_set<std::string> array_names;
         std::unordered_set<std::string> array_field_keys;
+        for (const auto& param : fn.parameters) if (!param.class_name.empty())
+            for (const auto& field : record_classes.at(param.class_name)->fields)
+                if (field.int_array) array_field_keys.insert(field_key(param.name, field.name));
         std::size_t array_owner_count = 0;
+        std::function<void(const Statement&)> count_scoped_arrays = [&](const Statement& stmt) {
+            if (stmt.kind == Statement::Kind::ScopedLocal && stmt.branch_local->int_array)
+                ++array_owner_count;
+            for (const auto& child : stmt.then_statements) count_scoped_arrays(child);
+            for (const auto& child : stmt.else_statements) count_scoped_arrays(child);
+        };
+        for (const auto& stmt : fn.statements) count_scoped_arrays(stmt);
         for (const auto& local : fn.locals) {
             if (local.int_array) {
                 array_names.insert(local.name);
                 ++array_owner_count;
-            } else if (local.new_class) {
-                const auto cls = std::find_if(source.classes.begin(), source.classes.end(),
-                    [&](const ClassDecl& item) { return item.name == local.class_name; });
-                if (cls != source.classes.end())
-                    for (const auto& fld : cls->fields)
+            } else if (local.new_class || (local.record_view && class_owns_arrays(local.class_name))) {
+                const auto* cls = &flat_classes.at(local.class_name);
+                for (const auto& fld : cls->fields)
                         if (fld.int_array) ++array_owner_count;
             }
         }
@@ -591,7 +1480,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         // shadow assigned at its original allocation. Moving an owner
         // changes the place, never the token or its failure cleanup authority.
         std::unordered_map<std::string, llvm::Value*> array_failure_places;
-        if (array_owner_count) {
+        if (array_owner_count || !hidden.empty()) {
             array_handle_shadows = builder.CreateAlloca(i64,
                 llvm::ConstantInt::get(i64, array_owner_count), "array.failure.owners");
             for (std::size_t k = 0; k < array_owner_count; ++k) {
@@ -612,6 +1501,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 llvm::Type::getInt32Ty(context), nullptr, "array.failure.status.slot");
             builder.CreateStore(llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0),
                 array_failure_status);
+            if (array_owner_count) {
             llvm::Value* open_out = builder.CreateAlloca(native_ptr, nullptr, "array.region.out");
             llvm::Value* open_status = builder.CreateCall(arrayOpen, {open_out}, "array.region.status");
             llvm::BasicBlock* opened = llvm::BasicBlock::Create(
@@ -631,14 +1521,18 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             builder.CreateUnreachable();
             builder.SetInsertPoint(opened);
             array_region = builder.CreateLoad(native_ptr, open_out, "native.int.array.region");
+            }
         }
-        const RegionMoveLowering region_moves{region, regionRead, regionDrop, &owned_live_flags,
+        RegionMoveLowering region_moves{region, regionRead, regionDrop, &owned_live_flags,
             array_region, arrayAdd, arrayGet, arraySet, arrayLength, &array_names,
-            &array_field_keys, array_failure, array_failure_status, &owned_failure_handles};
+            &array_field_keys, array_failure, array_failure_status, &owned_failure_handles,
+            &record_classes, &record_schemas, record_new, record_get, record_check,
+            &class_array_regions, &class_array_parameters, &owning_results};
         auto new_checked_array = [&](const std::string& label) -> llvm::Value* {
             if (!array_handle_shadows || next_array_shadow >= array_owner_count)
                 throw std::runtime_error("missing native array failure owner slot");
-            llvm::Value* address = builder.CreateGEP(i64, array_handle_shadows,
+            llvm::IRBuilder<> shadow_slots(llvm::cast<llvm::Instruction>(array_handle_shadows)->getNextNode());
+            llvm::Value* address = shadow_slots.CreateGEP(i64, array_handle_shadows,
                 llvm::ConstantInt::get(i64, next_array_shadow++),
                 label + ".failure.owner");
             array_failure_places.emplace(label, address);
@@ -657,6 +1551,79 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             builder.SetInsertPoint(proceed);
             return builder.CreateLoad(i64, address, label + ".array.new");
         };
+        region_moves.layouts = &layouts;
+        region_moves.sum_program = &source;
+        region_moves.sum_check = sum_check;
+        region_moves.frozen_scalar_dispatch = &frozen_i64_dispatch;
+        region_moves.frozen_scalar_callees = &frozen_scalar_callees;
+        region_moves.frozen_scalar_symbols = &frozen_scalar_symbols;
+
+        std::unordered_map<std::string, llvm::Value*> source_task_handles;
+        for (const auto& task : fn.source_tasks) {
+            if (!has_source_tasks || !task.result)
+                throw std::runtime_error(
+                    "source Task<int> lacks runtime/result lowering");
+            auto* producer = llvm::Function::Create(
+                llvm::FunctionType::get(i64, {}, false),
+                llvm::Function::InternalLinkage,
+                function->getName().str() + ".task." + task.name + ".producer",
+                module);
+            llvm::IRBuilder<> producer_builder(
+                llvm::BasicBlock::Create(
+                    context, "entry", producer));
+            const std::unordered_map<std::string, llvm::Value*> no_storage;
+            const std::unordered_map<std::string, llvm::Value*> no_fields;
+            auto* produced = lower(
+                *task.result, producer_builder, i64,
+                no_storage, no_fields, declarations);
+            producer_builder.CreateRet(produced);
+            source_task_handles.emplace(
+                task.name,
+                builder.CreateCall(
+                    taskStart,
+                    {builder.CreatePointerCast(
+                        producer, native_ptr,
+                        task.name + ".task.producer.abi")},
+                    task.name + ".task.handle"));
+        }
+        for (const auto& pipeline : fn.future_pipelines) {
+            const std::uint64_t authority =
+                future_pipeline_authority_fingerprint(pipeline);
+            if (!has_source_tasks || pipeline.plans.empty() ||
+                    pipeline.stages.empty() || !pipeline.ownership_admitted ||
+                    pipeline.ownership_authority_fingerprint == 0 ||
+                    pipeline.ownership_authority_fingerprint != authority)
+                throw std::runtime_error(
+                    "source Future<int> pipeline lacks exact post-ownership lowering authority");
+            auto* producer = llvm::Function::Create(
+                llvm::FunctionType::get(i64, {}, false),
+                llvm::Function::InternalLinkage,
+                function->getName().str() + ".future." + pipeline.name +
+                    (pipeline.root_consumed ? ".consumed.producer"
+                                            : ".borrowed.producer"),
+                module);
+            llvm::IRBuilder<> producer_builder(
+                llvm::BasicBlock::Create(context, "entry", producer));
+            llvm::Value* produced = producer_builder.CreateCall(
+                declarations.at(native_function_slot(
+                    pipeline.producer_function, 0)));
+            for (const auto& stage_name : pipeline.stages) {
+                produced = producer_builder.CreateCall(
+                    declarations.at(native_function_slot(stage_name, 1)),
+                    {produced},
+                    pipeline.name + "." + stage_name + ".value");
+            }
+            producer_builder.CreateRet(produced);
+            source_task_handles.emplace(
+                pipeline.name,
+                builder.CreateCall(
+                    taskStart,
+                    {builder.CreatePointerCast(
+                        producer, native_ptr,
+                        pipeline.name + ".future.producer.abi")},
+                    pipeline.name + ".future.handle"));
+        }
+
         for (const auto& binding : fn.locals) {
             if (binding.int_array) {
                 llvm::Value* handle = new_checked_array(binding.name);
@@ -667,14 +1634,100 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 lexical_slots.push_back({binding.name, slot, false, 8, true});
                 continue;
             }
+            if (binding.record_view && class_owns_arrays(binding.class_name)) {
+                const auto& cls = *record_classes.at(binding.class_name);
+                auto* shape = class_types.at(binding.class_name);
+                auto* slot = builder.CreateAlloca(shape, nullptr, binding.name + ".owned.result");
+                const auto bytes = cls.fields.size() * 8;
+                native_lifetime_start(builder, slot, bytes);
+                std::vector<std::string> owned_fields;
+                for (std::size_t i = 0; i < cls.fields.size(); ++i) {
+                    auto* address = builder.CreateStructGEP(shape, slot, static_cast<unsigned>(i));
+                    builder.CreateStore(llvm::ConstantInt::get(i64, 0), address);
+                    const auto key = field_key(binding.name, cls.fields[i].name);
+                    field_storage.emplace(key, address);
+                    if (cls.fields[i].int_array) {
+                        if (next_array_shadow >= array_owner_count) throw std::runtime_error("missing owning result cleanup slot");
+                        auto* shadow = builder.CreateGEP(i64, array_handle_shadows,
+                            llvm::ConstantInt::get(i64, next_array_shadow++));
+                        array_failure_places.emplace(key, shadow);
+                        array_field_keys.insert(key);
+                        owned_fields.push_back(key);
+                    }
+                }
+                RegionMoveLowering call_moves = region_moves;
+                call_moves.result_destination = slot;
+                call_moves.result_region = array_region;
+                lower(*binding.initializer, builder, i64, storage, field_storage, declarations, &call_moves);
+                for (const auto& key : owned_fields)
+                    builder.CreateStore(builder.CreateLoad(i64, field_storage.at(key)), array_failure_places.at(key));
+                storage.emplace(binding.name, slot);
+                class_array_regions.emplace(binding.name, array_region);
+                register_subobjects(binding.name, binding.class_name, slot);
+                lexical_slots.push_back({binding.name, slot, false, bytes, false, std::move(owned_fields)});
+                continue;
+            }
+            if (binding.record_view) {
+                const auto& cls = *record_classes.at(binding.class_name);
+                auto* shape = class_types.at(binding.class_name);
+                auto* slot = builder.CreateAlloca(shape, nullptr, binding.name + ".record.view");
+                const auto bytes = cls.fields.size() * 8;
+                native_lifetime_start(builder, slot, bytes);
+                auto* handle = lower(*binding.initializer, builder, i64, storage, field_storage, declarations, &region_moves);
+                builder.CreateCall(record_check, {handle, llvm::ConstantInt::get(i64, record_schemas.at(cls.name))});
+                for (std::size_t i = 0; i < cls.fields.size(); ++i) {
+                    auto* value = builder.CreateCall(record_get, {handle,
+                        llvm::ConstantInt::get(i64, record_schemas.at(cls.name)), llvm::ConstantInt::get(i64, i)});
+                    auto* address = builder.CreateStructGEP(shape, slot, static_cast<unsigned>(i));
+                    builder.CreateStore(value, address);
+                    field_storage.emplace(field_key(binding.name, cls.fields[i].name), address);
+                }
+                storage.emplace(binding.name, slot);
+                register_subobjects(binding.name, binding.class_name, slot);
+                lexical_slots.push_back({binding.name, slot, false, bytes});
+                continue;
+            }
             if (binding.new_class || binding.move_class) {
+                if (class_has_arrays.at(binding.class_name))
+                    class_array_regions.emplace(binding.name, binding.move_class
+                        ? class_array_regions.at(binding.move_source) : array_region);
                 llvm::StructType* shape = class_types.at(binding.class_name);
                 llvm::Value* slot = builder.CreateAlloca(shape, nullptr, binding.name + ".record");
-                const auto cls = std::find_if(source.classes.begin(), source.classes.end(),
-                    [&](const ClassDecl& item) { return item.name == binding.class_name; });
+                const auto* cls = &flat_classes.at(binding.class_name);
+                // Resolve constructor arguments while caller storage is live;
+                // never expose private parameter slots as class fields.
+                std::unordered_map<std::string, llvm::Value*> ctor_storage;
+                std::unordered_map<std::string, std::string> ctor_sources;
+                if (binding.new_class) {
+                    if (binding.constructor_arguments.size() != cls->constructor_parameters.size())
+                        throw std::runtime_error("native class constructor argument arity mismatch");
+                    for (std::size_t ai = 0; ai < binding.constructor_arguments.size(); ++ai) {
+                        const auto* source_field = constructor_field(layouts.source(binding.class_name), ai);
+                        const auto& original_argument = *binding.constructor_arguments[ai];
+                        const auto& source_argument = original_argument.kind == Expression::Kind::Take ? *original_argument.left : original_argument;
+                        if (source_field && !source_field->class_name.empty()) {
+                            if (source_argument.kind != Expression::Kind::Variable) throw std::runtime_error("nested constructor lacks named owner");
+                            for (const auto& leaf : layouts.at(source_field->class_name).leaves) {
+                                const auto destination = field_key(source_field->name, leaf.path);
+                                const auto source_key = field_key(source_argument.name, leaf.path);
+                                auto* value = builder.CreateLoad(i64, field_storage.at(source_key));
+                                auto* snapshot = builder.CreateAlloca(i64, nullptr, "nested.constructor.snapshot");
+                                builder.CreateStore(value, snapshot); ctor_storage.emplace(destination, snapshot);
+                                ctor_sources.emplace(destination, source_key);
+                            }
+                            continue;
+                        }
+                        if (source_field && source_field->int_array) ctor_sources.emplace(source_field->name, source_argument.name);
+                        llvm::Value* value = lower(*binding.constructor_arguments[ai],
+                            builder, i64, storage, field_storage, declarations, &region_moves);
+                        llvm::Value* arg_slot = builder.CreateAlloca(i64, nullptr,
+                            binding.name + ".constructor." + cls->constructor_parameters[ai]);
+                        builder.CreateStore(value, arg_slot);
+                        ctor_storage.emplace(cls->constructor_parameters[ai], arg_slot);
+                    }
+                }
                 const std::uint64_t bytes = static_cast<std::uint64_t>(cls->fields.size()) * 8;
-                builder.CreateLifetimeStart(slot,
-                    llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), bytes));
+                native_lifetime_start(builder, slot, bytes);
                 // Prepare before publishing class field addresses. On any
                 // failure the checked cleanup reads only initialized shadows,
                 // never uninitialized class field storage.
@@ -686,7 +1739,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                         static_cast<unsigned>(i), binding.name + "." + item.name);
                     llvm::Value* initial = nullptr;
                     if (item.int_array) {
-                        if (binding.new_class) {
+                        if (binding.new_class && item.constructor_argument) {
+                            const auto source_key = ctor_sources.at(item.name);
+                            initial = builder.CreateLoad(i64, ctor_storage.at(item.name));
+                            auto* previous = storage.count(source_key) ? storage.at(source_key) : field_storage.at(source_key);
+                            builder.CreateStore(llvm::ConstantInt::get(i64, 0), previous);
+                            array_failure_places.emplace(field_key(binding.name, item.name), array_failure_places.at(source_key));
+                        } else if (binding.new_class) {
                             initial = new_checked_array(binding.name + "." + item.name);
                         } else {
                             // Unique whole-class rt take: transfer the token
@@ -703,11 +1762,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                         }
                         owned_fields.push_back(field_key(binding.name, item.name));
                     } else {
-                        initial = binding.new_class
-                            ? static_cast<llvm::Value*>(llvm::ConstantInt::getSigned(i64, item.initial))
-                            : builder.CreateLoad(i64,
+                        if (binding.new_class) {
+                            if (!item.initializer_expression)
+                                throw std::runtime_error("native class scalar initializer is missing");
+                            const std::unordered_map<std::string, llvm::Value*> no_fields;
+                            initial = lower(*item.initializer_expression, builder, i64,
+                                ctor_storage, no_fields, declarations, &region_moves);
+                        } else {
+                            initial = builder.CreateLoad(i64,
                                 field_storage.at(field_key(binding.move_source, item.name)),
                                 binding.move_source + "." + item.name + ".take");
+                        }
                     }
                     if (!item.int_array || binding.new_class)
                         builder.CreateStore(initial, address);
@@ -718,11 +1783,33 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 for (const auto& name : owned_fields)
                     array_field_keys.insert(name);
                 storage.emplace(binding.name, slot);
+                register_subobjects(binding.name, binding.class_name, slot);
                 lexical_slots.push_back({binding.name, slot, false, bytes, false,
                                          std::move(owned_fields)});
                 continue;
             }
-            llvm::Value* initial = lower(*binding.initializer, builder, i64, storage, field_storage, declarations, &region_moves);
+            llvm::Value* initial = nullptr;
+            if (!binding.task_await_name.empty() ||
+                    !binding.future_await_name.empty()) {
+                const std::string& awaited = !binding.task_await_name.empty()
+                    ? binding.task_await_name
+                    : binding.future_await_name;
+                const auto task = source_task_handles.find(awaited);
+                if (task == source_task_handles.end())
+                    throw std::runtime_error(
+                        "Task/Future<int> await lost runtime handle");
+                initial = builder.CreateCall(
+                    taskAwait, {task->second},
+                    binding.name + (!binding.task_await_name.empty()
+                        ? ".task.awaited" : ".future.awaited"));
+            } else {
+                if (!binding.initializer)
+                    throw std::runtime_error(
+                        "native scalar local lacks initializer");
+                initial = lower(
+                    *binding.initializer, builder, i64, storage,
+                    field_storage, declarations, &region_moves);
+            }
             llvm::Value* slot = nullptr;
             if (binding.heap_owned) {
                 // Store only an opaque, generation-checked lifetime token.
@@ -739,7 +1826,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 owned_live_flags.emplace(binding.name, live);
             } else {
                 slot = builder.CreateAlloca(i64, nullptr, binding.name + ".stack.owned");
-                builder.CreateLifetimeStart(slot, llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), 8));
+                native_lifetime_start(builder, slot, 8);
                 builder.CreateStore(initial, slot);
             }
             storage.emplace(binding.name, slot);
@@ -747,6 +1834,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         }
         std::vector<const Statement*> deferred_effects;
         auto lower_effect = [&](const Statement& effect) {
+            if (effect.kind == Statement::Kind::ScalarWrite) {
+                auto* value = lower(*effect.expression, builder, i64, storage, field_storage, declarations, &region_moves);
+                builder.CreateStore(value, storage.at(effect.receiver));
+                return;
+            }
             if (effect.kind == Statement::Kind::ArrayCommitFilled) {
                 // OwnershipChecker guarantees a live unique mutable class
                 // with exactly four array fields; the class layout fixes
@@ -871,30 +1963,202 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         // Branch-local trivial i64 owners are initialized only along their
         // reached predecessor and end their lifetime before the join. They
         // never enter the enclosing lexical_slots or deferred cleanup list.
-        auto lower_arm = [&](const std::vector<Statement>& arm) {
-            std::vector<std::string> scoped_names;
+        bool structured_returns = false;
+        std::function<void(const Statement&)> find_returns = [&](const Statement& stmt) {
+            if (stmt.kind == Statement::Kind::Return) structured_returns = true;
+            for (const auto& child : stmt.then_statements) find_returns(child);
+            for (const auto& child : stmt.else_statements) find_returns(child);
+        };
+        for (const auto& stmt : fn.statements) find_returns(stmt);
+        llvm::BasicBlock* structured_cleanup = structured_returns
+            ? llvm::BasicBlock::Create(context, "exit.cleanup", function) : nullptr;
+        llvm::Value* structured_snapshot = structured_returns && !fn.returns_void
+            ? builder.CreateAlloca(i64, nullptr, "return.snapshot.slot") : nullptr;
+        struct ScopedSlot { std::string name; llvm::Value* address; std::size_t bytes; std::vector<std::string> fields; std::vector<std::string> subobjects; llvm::Value* array_shadow = nullptr; };
+        auto scoped_value = [&](const LocalBinding& local, llvm::Value* init) {
+            const bool record = !local.class_name.empty();
+            llvm::Type* shape = record ? static_cast<llvm::Type*>(class_types.at(local.class_name)) : i64;
+            const std::size_t bytes = record ? record_classes.at(local.class_name)->fields.size() * 8 : 8;
+            // Allocate once per native invocation, never on every back-edge.
+            llvm::IRBuilder<> entry_slots(&function->getEntryBlock(), function->getEntryBlock().begin());
+            auto* slot = entry_slots.CreateAlloca(shape, nullptr, local.name + ".arm.stack");
+            if (local.int_array) entry_slots.CreateStore(llvm::ConstantInt::get(i64, 0), slot);
+            // Array handle slots remain addressable for the whole invocation:
+            // a common return epilogue may inspect an unreached declaration.
+            // The resource itself is still created/dropped at lexical edges.
+            if (!local.int_array) native_lifetime_start(builder, slot, bytes);
+            ScopedSlot result{local.name, slot, bytes, {}, {}};
+            if (local.int_array) {
+                init = new_checked_array(local.name);
+                result.array_shadow = array_failure_places.at(local.name);
+                array_names.insert(local.name);
+            }
+            if (record) {
+                const auto& cls = *record_classes.at(local.class_name);
+                auto* schema = llvm::ConstantInt::get(i64, record_schemas.at(cls.name));
+                builder.CreateCall(record_check, {init, schema});
+                for (std::size_t i = 0; i < cls.fields.size(); ++i) {
+                    auto* value = builder.CreateCall(record_get, {init, schema, llvm::ConstantInt::get(i64, i)});
+                    auto* address = builder.CreateStructGEP(class_types.at(local.class_name), slot, static_cast<unsigned>(i));
+                    builder.CreateStore(value, address);
+                    const auto key = field_key(local.name, cls.fields[i].name);
+                    if (!field_storage.emplace(key, address).second) throw std::runtime_error("scoped record field collision");
+                    result.fields.push_back(key);
+                }
+            } else builder.CreateStore(init, slot);
+            if (!storage.emplace(local.name, slot).second) throw std::runtime_error("scoped value shadows existing storage");
+            if (record) result.subobjects = register_subobjects(local.name, local.class_name, slot);
+            return result;
+        };
+        auto finish_scope = [&](const ScopedSlot& slot) {
+            if (slot.array_shadow) {
+                // The cleanup shadow outlives lexical storage and is also
+                // consumed by the resource-failure epilogue. Retire both
+                // slots before the next loop iteration can allocate again.
+                auto* handle = builder.CreateLoad(i64, slot.address);
+                auto* drop = llvm::BasicBlock::Create(context, "scope.array.drop", function);
+                auto* next = llvm::BasicBlock::Create(context, "scope.array.drop.next", function);
+                builder.CreateCondBr(builder.CreateICmpNE(handle, llvm::ConstantInt::get(i64, 0)), drop, next);
+                builder.SetInsertPoint(drop);
+                builder.CreateCall(arrayDrop, {array_region, handle});
+                builder.CreateStore(llvm::ConstantInt::get(i64, 0), slot.address);
+                builder.CreateStore(llvm::ConstantInt::get(i64, 0), slot.array_shadow);
+                builder.CreateBr(next);
+                builder.SetInsertPoint(next);
+            }
+            if (!slot.array_shadow) native_lifetime_end(builder, slot.address, slot.bytes);
+        };
+        auto forget_array_scope = [&](const ScopedSlot& slot) {
+            if (slot.array_shadow) {
+                array_names.erase(slot.name);
+                array_failure_places.erase(slot.name);
+            }
+        };
+        auto end_scope = [&](const ScopedSlot& slot) {
+            finish_scope(slot);
+            forget_array_scope(slot);
+            for (const auto& key : slot.subobjects) { storage.erase(key); class_array_regions.erase(key); }
+            for (const auto& key : slot.fields) field_storage.erase(key);
+            storage.erase(slot.name);
+        };
+        std::vector<ScopedSlot> active_scopes;
+        // Compiler-owned opaque span tokens: not visible to guest expressions.
+        // This stack represents only the non-suspending region being lowered.
+        std::vector<llvm::Value*> active_telemetry_scopes;
+        std::vector<ScopedSlot> ordered_root_scopes;
+        auto forget_scope = [&](const ScopedSlot& slot) {
+            forget_array_scope(slot);
+            for (const auto& key : slot.subobjects) { storage.erase(key); class_array_regions.erase(key); }
+            for (const auto& key : slot.fields) field_storage.erase(key);
+            storage.erase(slot.name);
+        };
+        std::function<void(const std::vector<Statement>&)> lower_arm;
+        std::function<void(const Statement&)> lower_control;
+        lower_arm = [&](const std::vector<Statement>& arm) {
+            const auto scope_start = active_scopes.size();
             for (const auto& action : arm) {
+                if (builder.GetInsertBlock()->getTerminator()) break;
+                if (action.kind == Statement::Kind::ForEach || action.kind == Statement::Kind::ForIndex || action.kind == Statement::Kind::Conditional || action.kind == Statement::Kind::Return || action.kind == Statement::Kind::UsingTelemetrySpan) {
+                    lower_control(action); continue;
+                }
                 if (action.kind != Statement::Kind::ScopedLocal) {
                     lower_effect(action);
                     continue;
                 }
                 const LocalBinding& local = *action.branch_local;
-                llvm::Value* init = lower(*local.initializer, builder, i64,
-                    storage, field_storage, declarations, &region_moves);
-                llvm::Value* slot = builder.CreateAlloca(i64, nullptr,
-                    local.name + ".arm.stack");
-                builder.CreateLifetimeStart(slot,
-                    llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), 8));
-                builder.CreateStore(init, slot);
-                if (!storage.emplace(local.name, slot).second)
-                    throw std::runtime_error("branch-local shadows existing LLVM storage");
-                scoped_names.push_back(local.name);
+                llvm::Value* init = local.initializer ? lower(*local.initializer, builder, i64,
+                    storage, field_storage, declarations, &region_moves) : nullptr;
+                active_scopes.push_back(scoped_value(local, init));
             }
-            for (auto it = scoped_names.rbegin(); it != scoped_names.rend(); ++it) {
-                builder.CreateLifetimeEnd(storage.at(*it),
-                    llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), 8));
-                storage.erase(*it);
+            while (active_scopes.size() > scope_start) {
+                const auto scope = active_scopes.back(); active_scopes.pop_back();
+                if (!builder.GetInsertBlock()->getTerminator()) end_scope(scope);
+                else forget_scope(scope);
             }
+        };
+        lower_control = [&](const Statement& stmt) {
+            if (stmt.kind == Statement::Kind::UsingTelemetrySpan) {
+                if (!has_native_telemetry || !telemetryBegin.getCallee()
+                        || !telemetryEnd.getCallee())
+                    throw std::runtime_error("LLVM native telemetry ABI missing");
+                llvm::Value* name = builder.CreateGlobalStringPtr(
+                    stmt.telemetry_operation, "atto.telemetry.operation");
+                llvm::Value* token = builder.CreateCall(
+                    telemetryBegin,
+                    {name, llvm::ConstantInt::get(i64, stmt.telemetry_operation.size())},
+                    "atto.telemetry.scope.token");
+                active_telemetry_scopes.push_back(token);
+                lower_arm(stmt.then_statements);
+                active_telemetry_scopes.pop_back();
+                if (!builder.GetInsertBlock()->getTerminator())
+                    builder.CreateCall(telemetryEnd, {token});
+                return;
+            }
+            if (stmt.kind == Statement::Kind::Return) {
+                auto* result = stmt.expression ? lower(*stmt.expression, builder, i64, storage, field_storage, declarations, &region_moves) : nullptr;
+                if (!fn.returns_void) builder.CreateStore(result, structured_snapshot);
+                // End only the live lexical span stack, LIFO, before dropping
+                // temporary owners and taking the structured cleanup edge.
+                for (auto it = active_telemetry_scopes.rbegin();
+                     it != active_telemetry_scopes.rend(); ++it)
+                    builder.CreateCall(telemetryEnd, {*it});
+                for (auto it = active_scopes.rbegin(); it != active_scopes.rend(); ++it)
+                    finish_scope(*it);
+                builder.CreateBr(structured_cleanup); return;
+            }
+            if (stmt.kind == Statement::Kind::ForIndex) {
+                auto* initial = lower(*stmt.branch_local->initializer, builder, i64, storage, field_storage, declarations, &region_moves);
+                const auto counter = scoped_value(*stmt.branch_local, initial); active_scopes.push_back(counter);
+                auto* header = llvm::BasicBlock::Create(context, "for.index.header", function);
+                auto* body = llvm::BasicBlock::Create(context, "for.index.body", function);
+                auto* exit = llvm::BasicBlock::Create(context, "for.index.exit", function);
+                builder.CreateBr(header); builder.SetInsertPoint(header);
+                auto* condition = lower(*stmt.condition, builder, i64, storage, field_storage, declarations, &region_moves);
+                builder.CreateCondBr(builder.CreateICmpNE(condition, llvm::ConstantInt::get(i64, 0)), body, exit);
+                builder.SetInsertPoint(body); lower_arm(stmt.then_statements);
+                if (!builder.GetInsertBlock()->getTerminator()) {
+                    auto* next = lower(*stmt.loop_step, builder, i64, storage, field_storage, declarations, &region_moves);
+                    builder.CreateStore(next, counter.address); builder.CreateBr(header);
+                }
+                active_scopes.pop_back(); builder.SetInsertPoint(exit); end_scope(counter); return;
+            }
+            if (stmt.kind == Statement::Kind::ForEach) {
+                auto* selected = receiver_array_region(*stmt.expression, &region_moves);
+                auto* handle = builder.CreateLoad(i64, array_handle_address(*stmt.expression, storage, field_storage, &region_moves));
+                auto* length = builder.CreateCall(arrayLength, {selected, handle});
+                auto* entrance = builder.GetInsertBlock();
+                auto* header = llvm::BasicBlock::Create(context, "foreach.header", function);
+                auto* body = llvm::BasicBlock::Create(context, "foreach.body", function);
+                auto* exit = llvm::BasicBlock::Create(context, "foreach.exit", function);
+                builder.CreateBr(header); builder.SetInsertPoint(header);
+                auto* index = builder.CreatePHI(i64, 2, "foreach.index");
+                index->addIncoming(llvm::ConstantInt::get(i64, 0), entrance);
+                builder.CreateCondBr(builder.CreateICmpULT(index, length), body, exit);
+                builder.SetInsertPoint(body);
+                auto* element = builder.CreateCall(arrayGet, {selected, handle, index});
+                auto scope = scoped_value(*stmt.branch_local, element); active_scopes.push_back(scope);
+                lower_arm(stmt.then_statements); active_scopes.pop_back();
+                if (!builder.GetInsertBlock()->getTerminator()) {
+                    end_scope(scope);
+                    auto* next = builder.CreateAdd(index, llvm::ConstantInt::get(i64, 1));
+                    auto* tail = builder.GetInsertBlock(); builder.CreateBr(header); index->addIncoming(next, tail);
+                } else forget_scope(scope);
+                builder.SetInsertPoint(exit); return;
+            }
+            llvm::Value* condition = nullptr;
+            if (stmt.condition) condition = lower(*stmt.condition, builder, i64, storage, field_storage, declarations, &region_moves);
+            else {
+                auto* a = lower(*stmt.condition_lhs, builder, i64, storage, field_storage, declarations, &region_moves);
+                auto* b = lower(*stmt.condition_rhs, builder, i64, storage, field_storage, declarations, &region_moves);
+                condition = builder.CreateZExt(builder.CreateICmpEQ(a, b), i64);
+            }
+            auto* yes = llvm::BasicBlock::Create(context, "if.then", function);
+            auto* no = llvm::BasicBlock::Create(context, "if.else", function);
+            auto* join = llvm::BasicBlock::Create(context, "if.merge", function);
+            builder.CreateCondBr(builder.CreateICmpNE(condition, llvm::ConstantInt::get(i64, 0)), yes, no);
+            builder.SetInsertPoint(yes); lower_arm(stmt.then_statements); const bool yes_live = !builder.GetInsertBlock()->getTerminator(); if (yes_live) builder.CreateBr(join);
+            builder.SetInsertPoint(no); lower_arm(stmt.else_statements); const bool no_live = !builder.GetInsertBlock()->getTerminator(); if (no_live) builder.CreateBr(join);
+            builder.SetInsertPoint(join); if (!yes_live && !no_live) builder.CreateUnreachable();
         };
         if (fn.caught_throw_value) {
             // Real native CFG edges. Evaluate payload once, run scoped LIFO
@@ -926,47 +2190,283 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 deferred_effects.push_back(&stmt);
                 continue;
             }
-            if (stmt.kind == Statement::Kind::Conditional) {
-                llvm::Value* lhs = lower(*stmt.condition_lhs, builder, i64,
-                    storage, field_storage, declarations, &region_moves);
-                llvm::Value* rhs = lower(*stmt.condition_rhs, builder, i64,
-                    storage, field_storage, declarations, &region_moves);
-                llvm::Value* condition = builder.CreateICmpEQ(lhs, rhs, "if.else.eq");
-                llvm::BasicBlock* thenBlock = llvm::BasicBlock::Create(
-                    context, "if.then", function);
-                llvm::BasicBlock* elseBlock = llvm::BasicBlock::Create(
-                    context, "if.else", function);
-                llvm::BasicBlock* mergeBlock = llvm::BasicBlock::Create(
-                    context, "if.merge", function);
-                builder.CreateCondBr(condition, thenBlock, elseBlock);
-                builder.SetInsertPoint(thenBlock);
-                lower_arm(stmt.then_statements);
-                builder.CreateBr(mergeBlock);
-                builder.SetInsertPoint(elseBlock);
-                lower_arm(stmt.else_statements);
-                builder.CreateBr(mergeBlock);
-                builder.SetInsertPoint(mergeBlock);
+            if (builder.GetInsertBlock()->getTerminator()) break;
+            if (stmt.kind == Statement::Kind::ScopedLocal) {
+                const auto& local = *stmt.branch_local;
+                auto* value = local.initializer ? lower(*local.initializer, builder, i64, storage, field_storage, declarations, &region_moves) : nullptr;
+                ordered_root_scopes.push_back(scoped_value(local, value));
                 continue;
+            }
+            if (stmt.kind == Statement::Kind::ForEach || stmt.kind == Statement::Kind::ForIndex ||
+                    stmt.kind == Statement::Kind::Conditional || stmt.kind == Statement::Kind::UsingTelemetrySpan) {
+                lower_control(stmt); continue;
             }
             lower_effect(stmt);
         }
 
-        // Emit observable actor effects in source order. Reordering all sends
-        // ahead of all stops incorrectly executes a stopped worker's messages.
-        for (const auto& action : fn.actor_actions) {
-            if (action.kind == ActorAction::Kind::Send) {
+        /*
+         * A lifecycle await splits trusted-main execution at one verified point.
+         * get_ready resumes before stop; get_done requests stop first and resumes
+         * only after the scheduler's physical terminal acknowledgement. Neither
+         * path blocks an actor carrier.
+         */
+        llvm::Value* awaited_result = nullptr;
+        if (!fn.ready_await_actor.empty()) {
+            auto* continuation_type =
+                llvm::FunctionType::get(i64, {native_ptr}, false);
+            auto* resume = llvm::Function::Create(
+                continuation_type,
+                llvm::Function::InternalLinkage,
+                function->getName().str() + ".ready_continuation",
+                module);
+            auto* admitted =
+                llvm::BasicBlock::Create(context, "admitted", resume);
+            llvm::IRBuilder<> resumed(admitted);
+            auto* resumed_actor = &*resume->arg_begin();
+            resumed_actor->setName(fn.ready_await_actor);
+
+            const std::unordered_map<std::string, llvm::Value*> no_storage;
+            const std::unordered_map<std::string, llvm::Value*> no_fields;
+            for (const auto& action : fn.actor_actions) {
+                if (action.kind != ActorAction::Kind::Send) continue;
                 const auto& send = fn.actor_sends.at(action.index);
-                llvm::Value* payload = lower(*send.payload, builder, i64, storage, field_storage, declarations, &region_moves);
-                builder.CreateCall(sourceSend, {actorRefs.at(send.reference), payload});
-            } else {
-                builder.CreateCall(sourceStop, {actorRefs.at(fn.actor_stops.at(action.index))});
+                llvm::Value* payload = lower(
+                    *send.payload,
+                    resumed,
+                    i64,
+                    no_storage,
+                    no_fields,
+                    declarations,
+                    nullptr);
+                if (send.reference != fn.ready_await_actor)
+                    throw std::runtime_error(
+                        "await continuation references unexpected ActorRef");
+                resumed.CreateCall(sourceSend, {resumed_actor, payload});
+            }
+            llvm::Value* continuation_result = lower(
+                *fn.result,
+                resumed,
+                i64,
+                no_storage,
+                no_fields,
+                declarations,
+                nullptr);
+            resumed.CreateRet(continuation_result);
+
+            llvm::Value* continuation_ptr =
+                builder.CreatePointerCast(resume, native_ptr);
+            awaited_result = builder.CreateCall(
+                sourceAwaitReady,
+                {
+                    actorRefs.at(fn.ready_await_actor),
+                    continuation_ptr,
+                    llvm::ConstantInt::get(
+                        llvm::cast<llvm::IntegerType>(i64),
+                        static_cast<std::uint64_t>(fn.ready_await_offset))
+                },
+                "future.await.result");
+
+            for (const auto& action : fn.actor_actions) {
+                if (action.kind == ActorAction::Kind::Stop)
+                    builder.CreateCall(
+                        sourceStop,
+                        {actorRefs.at(fn.actor_stops.at(action.index))});
+            }
+        } else if (!fn.done_await_actor.empty()) {
+            /*
+             * get_done is a terminal lifecycle await. All observable actor
+             * effects occur before the boundary; stop itself is only a
+             * nonblocking scheduler request. The trusted runtime waits for
+             * physical quiescence and resumes this scalar continuation.
+             */
+            for (const auto& action : fn.actor_actions) {
+                if (action.kind == ActorAction::Kind::Send) {
+                    const auto& send = fn.actor_sends.at(action.index);
+                    llvm::Value* payload = lower(
+                        *send.payload,
+                        builder,
+                        i64,
+                        storage,
+                        field_storage,
+                        declarations,
+                        &region_moves);
+                    builder.CreateCall(
+                        sourceSend,
+                        {actorRefs.at(send.reference), payload});
+                } else {
+                    const auto& stopped = fn.actor_stops.at(action.index);
+                    if (stopped != fn.done_await_actor)
+                        throw std::runtime_error(
+                            "get_done continuation references unexpected ActorRef");
+                    builder.CreateCall(
+                        sourceRequestStop,
+                        {actorRefs.at(stopped)});
+                }
+            }
+
+            auto* continuation_type =
+                llvm::FunctionType::get(i64, {native_ptr}, false);
+            auto* resume = llvm::Function::Create(
+                continuation_type,
+                llvm::Function::InternalLinkage,
+                function->getName().str() + ".done_continuation",
+                module);
+            auto* admitted =
+                llvm::BasicBlock::Create(context, "admitted", resume);
+            llvm::IRBuilder<> resumed(admitted);
+            auto* resumed_actor = &*resume->arg_begin();
+            resumed_actor->setName(fn.done_await_actor);
+
+            const std::unordered_map<std::string, llvm::Value*> no_storage;
+            const std::unordered_map<std::string, llvm::Value*> no_fields;
+            llvm::Value* continuation_result = lower(
+                *fn.result,
+                resumed,
+                i64,
+                no_storage,
+                no_fields,
+                declarations,
+                nullptr);
+            resumed.CreateRet(continuation_result);
+
+            llvm::Value* continuation_ptr =
+                builder.CreatePointerCast(resume, native_ptr);
+            awaited_result = builder.CreateCall(
+                sourceAwaitDone,
+                {
+                    actorRefs.at(fn.done_await_actor),
+                    continuation_ptr,
+                    llvm::ConstantInt::get(
+                        llvm::cast<llvm::IntegerType>(i64),
+                        static_cast<std::uint64_t>(fn.done_await_offset))
+                },
+                "future.await.done.result");
+        } else {
+            // Emit observable actor effects in source order. Reordering all
+            // sends ahead of all stops executes stopped workers' messages.
+            for (const auto& action : fn.actor_actions) {
+                if (action.kind == ActorAction::Kind::Send) {
+                    const auto& send = fn.actor_sends.at(action.index);
+                    llvm::Value* payload = lower(
+                        *send.payload,
+                        builder,
+                        i64,
+                        storage,
+                        field_storage,
+                        declarations,
+                        &region_moves);
+                    builder.CreateCall(
+                        sourceSend,
+                        {actorRefs.at(send.reference), payload});
+                } else {
+                    builder.CreateCall(
+                        sourceStop,
+                        {actorRefs.at(fn.actor_stops.at(action.index))});
+                }
             }
         }
         // One cleanup authority for every guarded-return path. A function
         // with only its final return and no registered defer has exactly one
         // exit by construction, so preserve its direct ret IR contract.
         // That fast path still runs the same drop and lifetime cleanup.
+        std::function<llvm::Value*(const Expression&)> lower_return;
+        lower_return = [&](const Expression& expr) -> llvm::Value* {
+            if (!owning_return) return lower(expr, builder, i64, storage, field_storage, declarations, &region_moves);
+            if (expr.kind == Expression::Kind::Call) {
+                RegionMoveLowering forwarding = region_moves;
+                forwarding.result_destination = result_destination;
+                forwarding.result_region = result_region;
+                return lower(expr, builder, i64, storage, field_storage, declarations, &forwarding);
+            }
+            if (expr.kind == Expression::Kind::Conditional) {
+                llvm::Value* condition = expr.condition
+                    ? lower(*expr.condition, builder, i64, storage, field_storage, declarations, &region_moves)
+                    : builder.CreateZExt(builder.CreateICmpEQ(
+                        lower(*expr.condition_lhs, builder, i64, storage, field_storage, declarations, &region_moves),
+                        lower(*expr.condition_rhs, builder, i64, storage, field_storage, declarations, &region_moves)), i64);
+                auto* yes = llvm::BasicBlock::Create(context, "owning.return.yes", function);
+                auto* no = llvm::BasicBlock::Create(context, "owning.return.no", function);
+                auto* join = llvm::BasicBlock::Create(context, "owning.return.join", function);
+                builder.CreateCondBr(builder.CreateICmpNE(condition, llvm::ConstantInt::get(i64, 0)), yes, no);
+                builder.SetInsertPoint(yes); auto* a = lower_return(*expr.when_true); auto* a_exit = builder.GetInsertBlock(); builder.CreateBr(join);
+                builder.SetInsertPoint(no); auto* b = lower_return(*expr.when_false); auto* b_exit = builder.GetInsertBlock(); builder.CreateBr(join);
+                builder.SetInsertPoint(join); auto* value = builder.CreatePHI(i64, 2);
+                value->addIncoming(a, a_exit); value->addIncoming(b, b_exit); return value;
+            }
+            if (!array_region || !array_failure)
+                throw std::runtime_error("owning return lacks local cleanup authority");
+            const auto& cls = *record_classes.at(fn.return_class);
+            auto* shape = class_types.at(fn.return_class);
+            std::unordered_map<std::string, llvm::Value*> parameters;
+            std::unordered_map<std::string, std::string> constructor_sources;
+            if (expr.kind == Expression::Kind::RecordConstruct) {
+                for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
+                    const auto* original = constructor_field(layouts.source(fn.return_class), i);
+                    const auto& argument = *expr.arguments[i];
+                    const auto& child = argument.kind == Expression::Kind::Take ? *argument.left : argument;
+                    if (original && !original->class_name.empty()) {
+                        for (const auto& leaf : layouts.at(original->class_name).leaves) {
+                            const auto key = field_key(original->name, leaf.path);
+                            const auto source = field_key(child.name, leaf.path);
+                            auto* slot = builder.CreateAlloca(i64, nullptr, "nested.return.argument");
+                            builder.CreateStore(builder.CreateLoad(i64, field_storage.at(source)), slot);
+                            parameters.emplace(key, slot); constructor_sources.emplace(key, source);
+                        }
+                        continue;
+                    }
+                    if (original && original->int_array) constructor_sources.emplace(original->name, child.name);
+                    auto* value = lower(*expr.arguments[i], builder, i64, storage, field_storage, declarations, &region_moves);
+                    auto* address = builder.CreateAlloca(i64, nullptr, "owning.return.argument");
+                    builder.CreateStore(value, address); parameters.emplace(cls.constructor_parameters.at(i), address);
+                }
+            } else if (expr.kind != Expression::Kind::Variable) {
+                throw std::runtime_error("unsupported owning aggregate return expression");
+            }
+            const std::size_t count = std::count_if(cls.fields.begin(), cls.fields.end(), [](const ClassField& f) { return f.int_array; });
+            auto* destinations = builder.CreateAlloca(loan_ptr, llvm::ConstantInt::get(i64, count));
+            auto* sources = builder.CreateAlloca(loan_ptr, llvm::ConstantInt::get(i64, count));
+            std::vector<llvm::Value*> shadows;
+            std::size_t position = 0;
+            const std::unordered_map<std::string, llvm::Value*> no_fields;
+            for (std::size_t i = 0; i < cls.fields.size(); ++i) {
+                const auto& field = cls.fields[i];
+                auto* destination = builder.CreateStructGEP(shape, result_destination, static_cast<unsigned>(i));
+                if (field.int_array) {
+                    std::string source_key;
+                    llvm::Value* source_place = nullptr;
+                    if (expr.kind == Expression::Kind::Variable) {
+                        source_key = field_key(expr.name, field.name);
+                        source_place = field_storage.at(source_key);
+                    } else {
+                        source_key = constructor_sources.at(field.name);
+                        source_place = storage.count(source_key) ? storage.at(source_key) : field_storage.at(source_key);
+                    }
+                    auto* index = llvm::ConstantInt::get(i64, position++);
+                    builder.CreateStore(destination, builder.CreateGEP(loan_ptr, destinations, index));
+                    builder.CreateStore(source_place, builder.CreateGEP(loan_ptr, sources, index));
+                    shadows.push_back(array_failure_places.at(source_key));
+                } else {
+                    auto* value = expr.kind == Expression::Kind::Variable
+                        ? builder.CreateLoad(i64, field_storage.at(field_key(expr.name, field.name)))
+                        : lower(*field.initializer_expression, builder, i64, parameters, no_fields, declarations, &region_moves);
+                    builder.CreateStore(value, destination);
+                }
+            }
+            auto* status = builder.CreateCall(arrayTransferMany, {array_region, result_region,
+                llvm::ConstantInt::get(i64, count), destinations, sources});
+            auto* ok = llvm::BasicBlock::Create(context, "owning.return.transferred", function);
+            auto* denied = llvm::BasicBlock::Create(context, "owning.return.denied", function);
+            builder.CreateCondBr(builder.CreateICmpEQ(status, llvm::ConstantInt::get(status->getType(), 0)), ok, denied);
+            builder.SetInsertPoint(denied); builder.CreateStore(status, array_failure_status); builder.CreateBr(array_failure);
+            builder.SetInsertPoint(ok);
+            for (auto* shadow : shadows) builder.CreateStore(llvm::ConstantInt::get(i64, 0), shadow);
+            return llvm::ConstantInt::get(i64, 0); // owning ABI publishes through caller storage
+        };
         auto emit_lexical_cleanup = [&]() {
+            // Root lexical locals can be referenced by deferred cleanup.
+            // Their lifetimes end after defers, unlike branch temporaries.
+            for (auto it = ordered_root_scopes.rbegin(); it != ordered_root_scopes.rend(); ++it)
+                finish_scope(*it);
             for (auto it = lexical_slots.rbegin(); it != lexical_slots.rend(); ++it) {
                 if (it->int_array) {
                     llvm::Value* handle = builder.CreateLoad(i64,
@@ -1026,50 +2526,64 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                         builder.SetInsertPoint(after_drop);
                     }
                     // llvm.lifetime.end is not a source-level destructor.
-                    builder.CreateLifetimeEnd(it->address,
-                        llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), it->bytes));
+                    native_lifetime_end(builder, it->address, it->bytes);
                 }
             }
             if (array_region != nullptr) builder.CreateCall(arrayClose, {array_region});
             if (region != nullptr) builder.CreateCall(regionClose, {region});
         };
-        if (fn.early_returns.empty() && deferred_effects.empty()) {
+        if (fn.early_returns.empty() && deferred_effects.empty() && !structured_returns) {
             // Maintain stable native IR (ret i64 42, for example) for
             // functions without a multi-exit cleanup obligation.
-            llvm::Value* result = fn.result
-                ? lower(*fn.result, builder, i64, storage, field_storage, declarations, &region_moves)
-                : nullptr;
+            llvm::Value* result = awaited_result
+                ? awaited_result
+                : (fn.result
+                    ? lower_return(*fn.result)
+                    : nullptr);
             emit_lexical_cleanup();
             if (fn.returns_void) builder.CreateRetVoid();
             else builder.CreateRet(result);
         } else {
             llvm::Value* return_snapshot = fn.returns_void
-                ? nullptr : builder.CreateAlloca(i64, nullptr, "return.snapshot.slot");
-            llvm::BasicBlock* cleanup = llvm::BasicBlock::Create(
+                ? nullptr : (structured_returns ? structured_snapshot : builder.CreateAlloca(i64, nullptr, "return.snapshot.slot"));
+            llvm::BasicBlock* cleanup = structured_returns ? structured_cleanup : llvm::BasicBlock::Create(
                 context, "exit.cleanup", function);
             auto branch_to_cleanup = [&](llvm::Value* value) {
                 if (!fn.returns_void) builder.CreateStore(value, return_snapshot);
                 builder.CreateBr(cleanup);
             };
-            for (const auto& guard : fn.early_returns) {
-                llvm::Value* left = lower(*guard.lhs, builder, i64, storage, field_storage,
-                    declarations, &region_moves);
-                llvm::Value* right = lower(*guard.rhs, builder, i64, storage, field_storage,
-                    declarations, &region_moves);
-                llvm::Value* equal = builder.CreateICmpEQ(left, right, "return.guard.eq");
-                llvm::BasicBlock* taken = llvm::BasicBlock::Create(context, "guard.return", function);
-                llvm::BasicBlock* next = llvm::BasicBlock::Create(context, "guard.next", function);
-                builder.CreateCondBr(equal, taken, next);
-                builder.SetInsertPoint(taken);
-                llvm::Value* selected = lower(*guard.result, builder, i64,
-                    storage, field_storage, declarations, &region_moves);
-                branch_to_cleanup(selected);
-                builder.SetInsertPoint(next);
+            if (!builder.GetInsertBlock()->getTerminator()) {
+                for (const auto& guard : fn.early_returns) {
+                    llvm::Value* conditionValue = nullptr;
+                    if (guard.condition) {
+                        conditionValue = lower(*guard.condition, builder, i64, storage, field_storage,
+                            declarations, &region_moves);
+                    } else {
+                        llvm::Value* left = lower(*guard.lhs, builder, i64, storage, field_storage,
+                            declarations, &region_moves);
+                        llvm::Value* right = lower(*guard.rhs, builder, i64, storage, field_storage,
+                            declarations, &region_moves);
+                        conditionValue = builder.CreateZExt(
+                            builder.CreateICmpEQ(left, right, "return.guard.eq.i1"),
+                            i64, "return.guard.eq");
+                    }
+                    llvm::Value* takenCondition = builder.CreateICmpNE(
+                        conditionValue, llvm::ConstantInt::get(i64, 0), "return.guard.cond.i1");
+                    llvm::BasicBlock* taken = llvm::BasicBlock::Create(context, "guard.return", function);
+                    llvm::BasicBlock* next = llvm::BasicBlock::Create(context, "guard.next", function);
+                    builder.CreateCondBr(takenCondition, taken, next);
+                    builder.SetInsertPoint(taken);
+                    llvm::Value* selected = lower_return(*guard.result);
+                    branch_to_cleanup(selected);
+                    builder.SetInsertPoint(next);
+                }
+                llvm::Value* result = awaited_result
+                    ? awaited_result
+                    : (fn.result
+                        ? lower_return(*fn.result)
+                        : nullptr);
+                branch_to_cleanup(result);
             }
-            llvm::Value* result = fn.result
-                ? lower(*fn.result, builder, i64, storage, field_storage,
-                    declarations, &region_moves) : nullptr;
-            branch_to_cleanup(result);
             builder.SetInsertPoint(cleanup);
             // Capture the return before deferred calls can mutate class fields.
             for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it) {
@@ -1108,7 +2622,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 builder.CreateBr(next);
                 builder.SetInsertPoint(next);
             }
-            builder.CreateCall(arrayClose, {array_region});
+            if (array_region != nullptr) builder.CreateCall(arrayClose, {array_region});
             if (region != nullptr) {
                 for (auto it = heap_failure_slots.rbegin();
                      it != heap_failure_slots.rend(); ++it) {
@@ -1158,6 +2672,202 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         }
     }
 
+
+    // Native sync generator v1: caller-owned pinned frame [state,index].
+    // No guest/native stack survives a pull and no tracing-GC object is
+    // introduced. ABI status is 1=YIELD, 0=DONE, -1=invalid activation.
+    if (!source.generators.empty() && (wasm32_target || cortex_m_target))
+        throw std::runtime_error(
+            "native generator v1 is not yet admitted for wasm32/Cortex-M targets");
+    for (const auto& generator : source.generators) {
+        const auto linkage = generator.exported
+            ? llvm::Function::ExternalLinkage
+            : llvm::Function::InternalLinkage;
+        const std::string prefix = "oreslang_rt_gen_" + generator.name + "_";
+        auto* init = llvm::Function::Create(
+            llvm::FunctionType::get(i32, {loan_ptr}, false),
+            linkage, prefix + "init", module);
+        auto* next = llvm::Function::Create(
+            llvm::FunctionType::get(i32, {loan_ptr, loan_ptr}, false),
+            linkage, prefix + "next", module);
+        auto* close = llvm::Function::Create(
+            llvm::FunctionType::get(i32, {loan_ptr}, false),
+            linkage, prefix + "close", module);
+        auto* zero = llvm::ConstantInt::get(i64, 0);
+        auto* active_state = llvm::ConstantInt::get(i64, 1);
+        auto* done_state = llvm::ConstantInt::get(i64, 2);
+        const auto return_i32 = [&](llvm::IRBuilder<>& b, int value) {
+            b.CreateRet(llvm::ConstantInt::getSigned(i32, value));
+        };
+
+        {
+            llvm::IRBuilder<> b(llvm::BasicBlock::Create(context, "entry", init));
+            auto* frame = init->getArg(0);
+            auto* nonnull = llvm::BasicBlock::Create(context, "nonnull", init);
+            auto* invalid = llvm::BasicBlock::Create(context, "invalid", init);
+            b.CreateCondBr(
+                b.CreateICmpNE(frame, llvm::ConstantPointerNull::get(
+                    llvm::cast<llvm::PointerType>(loan_ptr))),
+                nonnull, invalid);
+            b.SetInsertPoint(invalid);
+            return_i32(b, -1);
+            b.SetInsertPoint(nonnull);
+            auto* state = b.CreateLoad(i64, frame, "state");
+            auto* fresh = llvm::BasicBlock::Create(context, "fresh", init);
+            auto* active = llvm::BasicBlock::Create(context, "active", init);
+            auto* done = llvm::BasicBlock::Create(context, "done", init);
+            auto* invalid_state = llvm::BasicBlock::Create(context, "invalid.state", init);
+            auto* state_switch = b.CreateSwitch(state, invalid_state, 3);
+            state_switch->addCase(zero, fresh);
+            state_switch->addCase(active_state, active);
+            state_switch->addCase(done_state, done);
+            b.SetInsertPoint(fresh);
+            b.CreateStore(active_state, frame);
+            b.CreateStore(zero, b.CreateInBoundsGEP(i64, frame,
+                llvm::ConstantInt::get(i64, 1)));
+            return_i32(b, 1);
+            b.SetInsertPoint(active);
+            auto* active_index_addr = b.CreateInBoundsGEP(
+                i64, frame, llvm::ConstantInt::get(i64, 1));
+            auto* active_index = b.CreateLoad(i64, active_index_addr, "active.index");
+            auto* active_valid = llvm::BasicBlock::Create(context, "active.valid", init);
+            auto* active_invalid = llvm::BasicBlock::Create(context, "active.invalid", init);
+            b.CreateCondBr(
+                b.CreateICmpULE(active_index,
+                    llvm::ConstantInt::get(i64, generator.yields.size())),
+                active_valid, active_invalid);
+            b.SetInsertPoint(active_valid);
+            return_i32(b, 0);
+            b.SetInsertPoint(active_invalid);
+            return_i32(b, -1);
+            b.SetInsertPoint(done);
+            auto* done_index_addr = b.CreateInBoundsGEP(
+                i64, frame, llvm::ConstantInt::get(i64, 1));
+            auto* done_index = b.CreateLoad(i64, done_index_addr, "done.index");
+            auto* done_valid = llvm::BasicBlock::Create(context, "done.valid", init);
+            auto* done_invalid = llvm::BasicBlock::Create(context, "done.invalid", init);
+            b.CreateCondBr(b.CreateICmpEQ(done_index, zero), done_valid, done_invalid);
+            b.SetInsertPoint(done_valid);
+            return_i32(b, 0);
+            b.SetInsertPoint(done_invalid);
+            return_i32(b, -1);
+            b.SetInsertPoint(invalid_state);
+            return_i32(b, -1);
+        }
+
+        {
+            llvm::IRBuilder<> b(llvm::BasicBlock::Create(context, "entry", next));
+            auto args = next->arg_begin();
+            auto* frame = &*args++;
+            auto* out = &*args;
+            auto* nonnull = llvm::BasicBlock::Create(context, "nonnull", next);
+            auto* null_invalid = llvm::BasicBlock::Create(context, "null.invalid", next);
+            auto* null_pointer = llvm::ConstantPointerNull::get(
+                llvm::cast<llvm::PointerType>(loan_ptr));
+            b.CreateCondBr(
+                b.CreateAnd(b.CreateICmpNE(frame, null_pointer),
+                            b.CreateICmpNE(out, null_pointer)),
+                nonnull, null_invalid);
+            b.SetInsertPoint(null_invalid);
+            return_i32(b, -1);
+            b.SetInsertPoint(nonnull);
+            auto* state = b.CreateLoad(i64, frame, "state");
+            auto* active = llvm::BasicBlock::Create(context, "active", next);
+            auto* done = llvm::BasicBlock::Create(context, "done", next);
+            auto* invalid = llvm::BasicBlock::Create(context, "invalid", next);
+            auto* state_switch = b.CreateSwitch(state, invalid, 2);
+            state_switch->addCase(active_state, active);
+            state_switch->addCase(done_state, done);
+            b.SetInsertPoint(done);
+            auto* done_index_addr = b.CreateInBoundsGEP(
+                i64, frame, llvm::ConstantInt::get(i64, 1));
+            auto* done_index = b.CreateLoad(i64, done_index_addr, "done.index");
+            auto* done_valid = llvm::BasicBlock::Create(context, "done.valid", next);
+            auto* done_invalid = llvm::BasicBlock::Create(context, "done.invalid", next);
+            b.CreateCondBr(b.CreateICmpEQ(done_index, zero), done_valid, done_invalid);
+            b.SetInsertPoint(done_valid);
+            return_i32(b, 0);
+            b.SetInsertPoint(done_invalid);
+            return_i32(b, -1);
+            b.SetInsertPoint(invalid);
+            return_i32(b, -1);
+            b.SetInsertPoint(active);
+            auto* index_addr = b.CreateInBoundsGEP(
+                i64, frame, llvm::ConstantInt::get(i64, 1));
+            auto* index = b.CreateLoad(i64, index_addr, "yield.index");
+            auto* exhausted = llvm::BasicBlock::Create(context, "exhausted", next);
+            auto* yield_dispatch = llvm::BasicBlock::Create(context, "yield.dispatch", next);
+            auto* invalid_index = llvm::BasicBlock::Create(context, "invalid.index.range", next);
+            auto* yield_count = llvm::ConstantInt::get(i64, generator.yields.size());
+            auto* in_range = b.CreateICmpULT(index, yield_count);
+            auto* at_end = b.CreateICmpEQ(index, yield_count);
+            auto* non_yield = llvm::BasicBlock::Create(context, "non.yield", next);
+            b.CreateCondBr(in_range, yield_dispatch, non_yield);
+            b.SetInsertPoint(non_yield);
+            b.CreateCondBr(at_end, exhausted, invalid_index);
+            b.SetInsertPoint(invalid_index);
+            return_i32(b, -1);
+            b.SetInsertPoint(exhausted);
+            b.CreateStore(done_state, frame);
+            b.CreateStore(zero, index_addr);
+            return_i32(b, 0);
+            b.SetInsertPoint(yield_dispatch);
+            auto* bad_index = llvm::BasicBlock::Create(context, "bad.index", next);
+            auto* index_switch = b.CreateSwitch(index, bad_index,
+                static_cast<unsigned>(generator.yields.size()));
+            for (std::size_t i = 0; i < generator.yields.size(); ++i) {
+                auto* emit = llvm::BasicBlock::Create(
+                    context, "yield." + std::to_string(i), next);
+                index_switch->addCase(llvm::ConstantInt::get(i64, i), emit);
+                b.SetInsertPoint(emit);
+                b.CreateStore(
+                    llvm::ConstantInt::getSigned(i64, generator.yields[i]), out);
+                b.CreateStore(llvm::ConstantInt::get(i64, i + 1), index_addr);
+                return_i32(b, 1);
+            }
+            b.SetInsertPoint(bad_index);
+            return_i32(b, -1);
+        }
+
+        {
+            llvm::IRBuilder<> b(llvm::BasicBlock::Create(context, "entry", close));
+            auto* frame = close->getArg(0);
+            auto* nonnull = llvm::BasicBlock::Create(context, "nonnull", close);
+            auto* null_invalid = llvm::BasicBlock::Create(context, "null.invalid", close);
+            b.CreateCondBr(
+                b.CreateICmpNE(frame, llvm::ConstantPointerNull::get(
+                    llvm::cast<llvm::PointerType>(loan_ptr))),
+                nonnull, null_invalid);
+            b.SetInsertPoint(null_invalid);
+            return_i32(b, -1);
+            b.SetInsertPoint(nonnull);
+            auto* state = b.CreateLoad(i64, frame, "state");
+            auto* active = llvm::BasicBlock::Create(context, "active", close);
+            auto* done = llvm::BasicBlock::Create(context, "done", close);
+            auto* invalid = llvm::BasicBlock::Create(context, "invalid", close);
+            auto* state_switch = b.CreateSwitch(state, invalid, 2);
+            state_switch->addCase(active_state, active);
+            state_switch->addCase(done_state, done);
+            b.SetInsertPoint(active);
+            b.CreateStore(done_state, frame);
+            b.CreateStore(zero, b.CreateInBoundsGEP(i64, frame,
+                llvm::ConstantInt::get(i64, 1)));
+            return_i32(b, 1);
+            b.SetInsertPoint(done);
+            auto* done_index_addr = b.CreateInBoundsGEP(
+                i64, frame, llvm::ConstantInt::get(i64, 1));
+            auto* done_index = b.CreateLoad(i64, done_index_addr, "done.index");
+            auto* done_valid = llvm::BasicBlock::Create(context, "done.valid", close);
+            auto* done_invalid = llvm::BasicBlock::Create(context, "done.invalid", close);
+            b.CreateCondBr(b.CreateICmpEQ(done_index, zero), done_valid, done_invalid);
+            b.SetInsertPoint(done_valid);
+            return_i32(b, 0);
+            b.SetInsertPoint(done_invalid);
+            return_i32(b, -1);
+            b.SetInsertPoint(invalid);
+            return_i32(b, -1);
+        }
+    }
 
     // First compiler-generated heap continuation: exactly one frame-owned
     // scalar updated at a committed loop backedge. There is no actor or
@@ -1304,6 +3014,26 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             builder.CreateStore(value, slot);
             values.emplace(field.name, slot);
         }
+        // The compiler owns these three-word stack tokens. Source locals
+        // are immutable, synchronous and cannot be moved or borrowed here.
+        std::vector<llvm::Value*> actor_owned_tokens;
+        for (const auto& local : actor.on_message.locals) {
+            if (!local.heap_owned || !local.initializer)
+                throw std::runtime_error("unexpected actor handler owned-local kind");
+            llvm::Value* initial = lower(*local.initializer, builder, i64,
+                values, emptyFields, declarations);
+            llvm::Value* token = builder.CreateAlloca(
+                llvm::ArrayType::get(i64, 3), nullptr,
+                local.name + ".actor.owned.token");
+            builder.CreateCall(actorScopedNew,
+                {actorHeap, currentDomain, currentEpoch, initial, token});
+            // Pure reads of an immutable scalar agree with the native payload.
+            llvm::Value* slot = builder.CreateAlloca(i64, nullptr,
+                local.name + ".actor.owned.cached");
+            builder.CreateStore(initial, slot);
+            values.emplace(local.name, slot);
+            actor_owned_tokens.push_back(token);
+        }
         for (const auto& write : actor.on_message.actor_field_writes) {
             auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
                 [&](const LocalBinding& f) { return f.name == write.field; });
@@ -1317,6 +3047,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         }
         llvm::Value* result = lower(*actor.on_message.result, builder, i64, values,
             emptyFields, declarations);
+        // The native actor scheduler admits no next message until the current
+        // synchronous handler has dropped all temporary owners in LIFO order.
+        for (auto it = actor_owned_tokens.rbegin();
+             it != actor_owned_tokens.rend(); ++it)
+            builder.CreateCall(actorScopedDrop,
+                {actorHeap, currentDomain, currentEpoch, *it});
         builder.CreateRet(result);
     }
 
@@ -1350,7 +3086,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             // 'unreachable' alone is optimizer UB, not a reliable runtime
             // guard. Emit a real llvm.trap, which lowers to Wasm's trap
             // instruction even at -Oz; never permit duplicate INIT/TEARDOWN.
-            b.CreateCall(llvm::Intrinsic::getDeclaration(&module, llvm::Intrinsic::trap));
+            b.CreateCall(native_trap(module));
             b.CreateUnreachable();
             b.SetInsertPoint(pass);
         };
@@ -1408,28 +3144,271 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         finish.CreateStore(two, lifecycle);
         finish.CreateRetVoid();
     }
+    // P0 browser FFI foundation: an annotated, public, constant-returning
+    // guest Oreslang function is the ONLY source of the version value. Its
+    // i64 guest ABI stays unchanged. Generate a distinct, exactly i32 C
+    // entrypoint so hosts never cast a 64-bit function to a 32-bit ABI.
+    // There is intentionally no opaque-handle/tab/renderer ABI here.
+    for (const auto& fn : source.functions) {
+        if (fn.c_export_u32_symbol.empty()) continue;
+        if (wasm32_target || cortex_m_target || !source.module.empty() ||
+            source.functions.size() != 1 || !source.classes.empty() ||
+            !source.generators.empty() || !source.cooperative_loops.empty() ||
+            !source.type_only_declarations.empty() || !source.contracts.empty() ||
+            !source.imports.empty() || !source.sum_types.empty() ||
+            fn.c_export_u32_symbol != "ores_browser_abi_version" ||
+            fn.name == fn.c_export_u32_symbol || fn.name == "main" ||
+            fn.name.find('.') != std::string::npos ||
+            !fn.exported || fn.native_internal || fn.async_source_i64 ||
+            !fn.method_owner.empty() || !fn.parameters.empty() ||
+            !fn.generic_parameters.empty() || fn.returns_void ||
+            fn.return_type != ScalarType::I64 || !fn.return_class.empty() ||
+            !fn.return_sum.empty() || !fn.pending_return_type_alias.empty() ||
+            fn.has_declared_effects || !fn.result ||
+            fn.result->kind != Expression::Kind::Integer ||
+            fn.result->integer != 1 || !fn.locals.empty() ||
+            !fn.statements.empty() || !fn.early_returns.empty() ||
+            !fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
+            !fn.actor_stops.empty() || !fn.actor_actions.empty() ||
+            !fn.actor_field_writes.empty() ||
+            !fn.ready_await_actor.empty() || !fn.done_await_actor.empty() ||
+            !fn.ready_future_name.empty() || !fn.ready_future_actor.empty() ||
+            !source.actors.empty() ||
+            !fn.source_tasks.empty() || !fn.future_pipelines.empty() ||
+            fn.scalar_while || fn.caught_throw_value ||
+            !fn.caught_throw_defers.empty())
+            throw std::runtime_error(
+                "C_EXPORT_U32_REJECT: forged or unsupported browser host ABI declaration");
+        // A companion plain guest i64 function must never impersonate one
+        // of the browser's unimplemented C ABI entrypoints. A linker can
+        // otherwise export an incorrect same-name symbol even while the
+        // version trampoline is properly typed.
+        for (const auto& other : source.functions) {
+            if (other.name == "ores_browser_open" ||
+                other.name == "ores_browser_dispatch" ||
+                other.name == "ores_browser_snapshot" ||
+                other.name == "ores_browser_close")
+                throw std::runtime_error(
+                    "C_EXPORT_U32_REJECT: unimplemented browser C symbol shadowed by guest");
+        }
+        // An overloaded guest family is subject to arity-based mangling.
+        // This initial C ABI admits a single stable guest definition only;
+        // never let adding an unrelated overload silently rename or redirect
+        // the implementation behind the exported host symbol.
+        if (family_sizes.at(fn.name) != 1)
+            throw std::runtime_error(
+                "C_EXPORT_U32_REJECT: overloaded guest export family forbidden");
+        if (module.getNamedValue(fn.c_export_u32_symbol))
+            throw std::runtime_error(
+                "C_EXPORT_U32_REJECT: C ABI symbol collision");
+        llvm::Function* guest =
+            declarations.at(native_function_slot(fn.name, 0));
+        if (guest->getReturnType() != i64 || guest->arg_size() != 0 ||
+            guest->getLinkage() != llvm::GlobalValue::InternalLinkage)
+            throw std::runtime_error(
+                "C_EXPORT_U32_REJECT: guest ABI does not match checked i64() contract");
+        auto* host = llvm::Function::Create(
+            llvm::FunctionType::get(i32, false),
+            llvm::Function::ExternalLinkage,
+            fn.c_export_u32_symbol, module);
+        auto* entry = llvm::BasicBlock::Create(context, "entry", host);
+        auto* accepted = llvm::BasicBlock::Create(context, "u32.valid", host);
+        auto* rejected = llvm::BasicBlock::Create(context, "u32.trap", host);
+        llvm::IRBuilder<> b(entry);
+        llvm::Value* value = b.CreateCall(guest);
+        // Treat negative i64 as unsigned > UINT32_MAX; reject rather than
+        // silently truncating a forged guest result.
+        llvm::Value* in_range = b.CreateICmpULE(
+            value, llvm::ConstantInt::get(i64, UINT32_MAX));
+        b.CreateCondBr(in_range, accepted, rejected);
+        b.SetInsertPoint(rejected);
+        b.CreateCall(llvm::Intrinsic::getDeclaration(
+            &module, llvm::Intrinsic::trap));
+        b.CreateUnreachable();
+        b.SetInsertPoint(accepted);
+        b.CreateRet(b.CreateTrunc(value, i32));
+    }
     if (native_main) {
         // OS/process ABI boundary: never expose i64/void Oreslang main as C main.
         // Reject invalid statuses without Unix low-byte truncation (256 -> 0).
-        llvm::Type* i32 = llvm::Type::getInt32Ty(context);
         auto* host_main = llvm::Function::Create(
             llvm::FunctionType::get(i32, false),
             llvm::Function::ExternalLinkage, "main", module);
         auto* entry = llvm::BasicBlock::Create(context, "entry", host_main);
         llvm::IRBuilder<> builder(entry);
         llvm::Function* guest = declarations.at(native_function_slot("main", 0));
+        llvm::FunctionCallee string_end;
+        llvm::FunctionCallee record_end;
+        if (string_runtime) {
+            auto begin = module.getOrInsertFunction("ores_string_region_begin",
+                llvm::FunctionType::get(i64, {i64}, false));
+            string_end = module.getOrInsertFunction("ores_string_region_end",
+                llvm::FunctionType::get(i64, {}, false));
+            auto* status = builder.CreateCall(begin, {llvm::ConstantInt::get(i64, console_runtime)});
+            auto* ready = llvm::BasicBlock::Create(context, "string.region.ready", host_main);
+            auto* failed = llvm::BasicBlock::Create(context, "string.region.error", host_main);
+            builder.CreateCondBr(builder.CreateICmpEQ(status, llvm::ConstantInt::get(i64, 0)), ready, failed);
+            builder.SetInsertPoint(failed); builder.CreateRet(llvm::ConstantInt::get(i32, 1));
+            builder.SetInsertPoint(ready);
+        }
+        if (record_runtime) {
+            auto begin = module.getOrInsertFunction("ores_record_region_begin", llvm::FunctionType::get(i64, {}, false));
+            record_end = module.getOrInsertFunction("ores_record_region_end", llvm::FunctionType::get(i64, {}, false));
+            auto* status = builder.CreateCall(begin);
+            auto* ready = llvm::BasicBlock::Create(context, "record.region.ready", host_main);
+            auto* failed = llvm::BasicBlock::Create(context, "record.region.error", host_main);
+            builder.CreateCondBr(builder.CreateICmpEQ(status, llvm::ConstantInt::get(i64, 0)), ready, failed);
+            builder.SetInsertPoint(failed);
+            if (string_runtime) builder.CreateCall(string_end);
+            builder.CreateRet(llvm::ConstantInt::get(i32, 1));
+            builder.SetInsertPoint(ready);
+        }
         llvm::Value* result = builder.CreateCall(guest);
+        llvm::Value* tasks_ok = has_source_tasks
+            ? builder.CreateICmpEQ(
+                builder.CreateCall(taskShutdown),
+                llvm::ConstantInt::get(i32, 1),
+                "source.tasks.shutdown.ok")
+            : llvm::ConstantInt::getTrue(context);
+        llvm::Value* records_ok = record_runtime
+            ? builder.CreateICmpEQ(builder.CreateCall(record_end), llvm::ConstantInt::get(i64, 0))
+            : llvm::ConstantInt::getTrue(context);
+        llvm::Value* output_ok = string_runtime
+            ? builder.CreateICmpEQ(builder.CreateCall(string_end), llvm::ConstantInt::get(i64, 0))
+            : llvm::ConstantInt::getTrue(context);
+        output_ok = builder.CreateAnd(output_ok, records_ok);
+        output_ok = builder.CreateAnd(output_ok, tasks_ok);
         if (main_it->returns_void) {
-            builder.CreateRet(llvm::ConstantInt::get(i32, 0));
+            builder.CreateRet(builder.CreateSelect(output_ok, llvm::ConstantInt::get(i32, 0), llvm::ConstantInt::get(i32, 1)));
         } else {
             llvm::Value* valid = builder.CreateICmpULE(
                 result, llvm::ConstantInt::get(i64, 255), "valid.exit.status");
+            valid = builder.CreateAnd(valid, output_ok);
             llvm::Value* narrowed = builder.CreateTrunc(result, i32);
             builder.CreateRet(builder.CreateSelect(valid, narrowed,
                 llvm::ConstantInt::get(i32, 1), "checked.exit.status"));
         }
     }
 
+
+    if (!isolate_entry.empty()) {
+        // Isolate guest entry ABI v2: status is distinct from signed i64 output.
+        // Tenant mutable state is accessed only through context callbacks.
+        // No writable process-global guest state is emitted by this wrapper.
+        auto* ctx_type = llvm::StructType::get(context,
+            {i32, i32, i64, native_ptr, native_ptr, native_ptr});
+        auto* wrapper = llvm::Function::Create(
+            llvm::FunctionType::get(i32, {native_ptr, i64, native_ptr}, false),
+            llvm::Function::ExternalLinkage, "ores_guest_entry", module);
+        auto* entry = llvm::BasicBlock::Create(context, "entry", wrapper);
+        auto* validate = llvm::BasicBlock::Create(context, "validate", wrapper);
+        auto* read = llvm::BasicBlock::Create(context, "read", wrapper);
+        auto* execute = llvm::BasicBlock::Create(context, "execute", wrapper);
+        auto* success = llvm::BasicBlock::Create(context, "success", wrapper);
+        auto* bad_context = llvm::BasicBlock::Create(context, "bad.context", wrapper);
+        auto* bad_load = llvm::BasicBlock::Create(context, "bad.load", wrapper);
+        auto* bad_store = llvm::BasicBlock::Create(context, "bad.store", wrapper);
+        auto* bad_arithmetic = llvm::BasicBlock::Create(context, "bad.arithmetic", wrapper);
+        llvm::IRBuilder<> b(entry);
+        auto* ctx = wrapper->getArg(0);
+        auto* input = wrapper->getArg(1);
+        auto* out = wrapper->getArg(2);
+        auto* pointers_valid = b.CreateAnd(b.CreateIsNotNull(ctx),
+                                           b.CreateIsNotNull(out));
+        b.CreateCondBr(pointers_valid, validate, bad_context);
+        b.SetInsertPoint(validate);
+        auto* typed_ctx = b.CreateBitCast(ctx, ctx_type->getPointerTo());
+        auto* version = b.CreateLoad(i32, b.CreateStructGEP(ctx_type, typed_ctx, 0));
+        auto* slots = b.CreateLoad(i32, b.CreateStructGEP(ctx_type, typed_ctx, 1));
+        auto* data = b.CreateLoad(native_ptr, b.CreateStructGEP(ctx_type, typed_ctx, 3));
+        auto* load_fn = b.CreateLoad(native_ptr, b.CreateStructGEP(ctx_type, typed_ctx, 4));
+        auto* store_fn = b.CreateLoad(native_ptr, b.CreateStructGEP(ctx_type, typed_ctx, 5));
+        auto* compatible = b.CreateAnd(
+            b.CreateAnd(b.CreateICmpEQ(version, llvm::ConstantInt::get(i32, ORES_ISOLATE_ABI_VERSION)),
+                        b.CreateICmpEQ(slots, llvm::ConstantInt::get(i32, ORES_ISOLATE_I64_SLOTS))),
+            b.CreateAnd(b.CreateIsNotNull(data),
+                b.CreateAnd(b.CreateIsNotNull(load_fn), b.CreateIsNotNull(store_fn))));
+        b.CreateCondBr(compatible, read, bad_context);
+        b.SetInsertPoint(read);
+        auto* old_slot = b.CreateAlloca(i64, nullptr, "tenant.old");
+        auto* load_type = llvm::FunctionType::get(i32, {native_ptr, i32, native_ptr}, false);
+        // LLVM 14-17 typed pointers require an actual function pointer type;
+        // LLVM 18+ opaque pointers naturally collapse this to the same ptr.
+        auto* load_callee = b.CreateBitCast(load_fn, load_type->getPointerTo());
+        auto* load_ok = b.CreateCall(load_type, load_callee,
+            {data, llvm::ConstantInt::get(i32, 0), b.CreateBitCast(old_slot, native_ptr)});
+        b.CreateCondBr(b.CreateICmpEQ(load_ok, llvm::ConstantInt::get(i32, 1)),
+                       execute, bad_load);
+        b.SetInsertPoint(execute);
+        auto* old = b.CreateLoad(i64, old_slot);
+        // In isolate-entry mode, lower the already-validated pure Oreslang AST
+        // directly into the status-producing guest wrapper. Calling the
+        // ordinary i64 function would use llvm.trap on signed overflow and
+        // terminate the entire in-process OresVM, not just this tenant.
+        // Each arithmetic operation branches to a recoverable ABI failure
+        // before any state store. The ordinary function is internal-only.
+        const auto& source_step = source.functions.front();
+        const auto emit_checked_pure = [&](const auto& self,
+                                           const Expression& expr) -> llvm::Value* {
+            using K = Expression::Kind;
+            switch (expr.kind) {
+                case K::Integer:
+                    return llvm::ConstantInt::getSigned(i64, expr.integer);
+                case K::Variable:
+                    if (expr.name == source_step.parameters[0].name) return old;
+                    if (expr.name == source_step.parameters[1].name) return input;
+                    throw std::logic_error("invalid isolate scalar parameter");
+                case K::Negate:
+                case K::Add:
+                case K::Subtract:
+                case K::Multiply: {
+                    const bool negative = expr.kind == K::Negate;
+                    auto* lhs = negative
+                        ? static_cast<llvm::Value*>(llvm::ConstantInt::get(i64, 0))
+                        : self(self, *expr.left);
+                    auto* rhs = negative
+                        ? self(self, *expr.left)
+                        : self(self, *expr.right);
+                    const auto op = (negative || expr.kind == K::Subtract)
+                        ? llvm::Intrinsic::ssub_with_overflow
+                        : (expr.kind == K::Multiply)
+                            ? llvm::Intrinsic::smul_with_overflow
+                            : llvm::Intrinsic::sadd_with_overflow;
+                    auto* intrinsic = llvm::Intrinsic::getDeclaration(
+                        &module, op, {i64});
+                    auto* pair = b.CreateCall(intrinsic, {lhs, rhs},
+                                               "isolate.arithmetic.checked");
+                    auto* value = b.CreateExtractValue(pair, {0}, "isolate.arithmetic.value");
+                    auto* overflow = b.CreateExtractValue(pair, {1}, "isolate.arithmetic.overflow");
+                    auto* proceed = llvm::BasicBlock::Create(
+                        context, "isolate.arithmetic.ok", wrapper);
+                    b.CreateCondBr(overflow, bad_arithmetic, proceed);
+                    b.SetInsertPoint(proceed);
+                    return value;
+                }
+                default:
+                    throw std::logic_error("unvalidated isolate expression");
+            }
+        };
+        auto* next = emit_checked_pure(emit_checked_pure, *source_step.result);
+        auto* store_type = llvm::FunctionType::get(i32, {native_ptr, i32, i64}, false);
+        auto* store_callee = b.CreateBitCast(store_fn, store_type->getPointerTo());
+        auto* saved = b.CreateCall(store_type, store_callee,
+            {data, llvm::ConstantInt::get(i32, 0), next});
+        b.CreateCondBr(b.CreateICmpEQ(saved, llvm::ConstantInt::get(i32, 1)),
+                       success, bad_store);
+        b.SetInsertPoint(success);
+        b.CreateStore(next, out);
+        b.CreateRet(llvm::ConstantInt::get(i32, 0));
+        b.SetInsertPoint(bad_context);
+        b.CreateRet(llvm::ConstantInt::get(i32, 1));
+        b.SetInsertPoint(bad_load);
+        b.CreateRet(llvm::ConstantInt::get(i32, 2));
+        b.SetInsertPoint(bad_store);
+        b.CreateRet(llvm::ConstantInt::get(i32, ORES_GUEST_STORE_DENIED));
+        b.SetInsertPoint(bad_arithmetic);
+        b.CreateRet(llvm::ConstantInt::get(i32, ORES_GUEST_OVERFLOW));
+    }
     std::string diagnostics;
     llvm::raw_string_ostream errors(diagnostics);
     if (llvm::verifyModule(module, &errors)) {
@@ -1444,3 +3423,4 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
 }
 
 } // namespace oreslang
+
