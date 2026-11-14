@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <exception>
 #include <limits>
+#include <new>
+#include <cstddef>
 #include <stdexcept>
 #include <thread>
 #include <type_traits>
@@ -58,6 +60,24 @@ int main() {
     rejects<std::logic_error>([&] { (void)table.snapshot(a); });
     rejects<std::logic_error>([&] { table.push(1, 2); });
     check(saved.x == 42, "detached value invalidated on close");
+    // Even placement-new at an identical address and actor identity must not
+    // resurrect a stale handle after the previous owner was destroyed.
+    alignas(Table) unsigned char storage[sizeof(Table)];
+    auto* previous = new (storage) Table(101);
+    const auto obsolete = previous->push(3, 4);
+    previous->~Table();
+    auto* replacement = new (storage) Table(101);
+    replacement->push(8, 9);
+    rejects<std::out_of_range>([&] { (void)replacement->snapshot(obsolete); });
+    replacement->~Table();
+
+    oreslang::dop::contract::InvertedClassHandleContract<2> full(222);
+    auto first = full.push(1, 2);
+    full.push(3, 4);
+    rejects<std::out_of_range>([&] { full.push(5, 6); });
+    full.erase_swap(first);
+    full.push(7, 8);
+    rejects<std::out_of_range>([&] { (void)full.snapshot(first); });
 
     // Two receiver lanes are allowed to execute in parallel. All fields in
     // each move are committed under one lock, so no torn snapshots are legal.
