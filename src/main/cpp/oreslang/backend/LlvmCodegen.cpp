@@ -1148,6 +1148,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceRequestStop,
         sourceAwaitReady, sourceAwaitDone;
+    // ID is a by-value i64 minted by the trusted runtime, NOT an address.
+    // Existing Future continuation callbacks still use the legacy void*
+    // protocol; they are not silently cast to an integer-actor callback.
+    llvm::FunctionCallee sourceSpawnId, sourceSendId, sourceStopId,
+        sourceRequestStopId;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
     if (!source.actors.empty() && !wasm32_target) {
@@ -1181,6 +1186,18 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         sourceAwaitDone = module.getOrInsertFunction(
             "oreslang_source_actor_await_done",
             llvm::FunctionType::get(i64, {native_ptr, native_ptr, i64}, false));
+        sourceSpawnId = module.getOrInsertFunction(
+            "oreslang_source_actor_spawn_id",
+            llvm::FunctionType::get(i64, {native_ptr, native_ptr, i64}, false));
+        sourceSendId = module.getOrInsertFunction(
+            "oreslang_source_actor_send_id",
+            llvm::FunctionType::get(voidTy, {i64, i64}, false));
+        sourceStopId = module.getOrInsertFunction(
+            "oreslang_source_actor_stop_id",
+            llvm::FunctionType::get(voidTy, {i64}, false));
+        sourceRequestStopId = module.getOrInsertFunction(
+            "oreslang_source_actor_request_stop_id",
+            llvm::FunctionType::get(voidTy, {i64}, false));
         for (const auto& actor : source.actors) {
             const std::string prefix = "oreslang_actor_" + actor.name + "_";
             actorInits.emplace(actor.name, llvm::Function::Create(
@@ -1401,8 +1418,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             checked_sum_tag(builder, i64, handle, record_schemas.at(parameter.sum_type), native_sum(source, parameter.sum_type).kind == NativeSumType::Kind::Option ? 2 : 3, sum_check, record_get);
         }
 
-        // Every source actor ref is an opaque, unique capability owned by
-        // trusted top-level main; it cannot enter scalar values or calls.
+        // A linear source actor ref cannot enter scalar values or calls.
+        // Non-suspending paths use by-value ID handles to rule out malloc
+        // address ABA. Await paths keep legacy void* until their continuation
+        // callback ABI can be migrated as a coherent independent slice.
+        const bool checked_source_actor_refs =
+            fn.ready_await_actor.empty() && fn.done_await_actor.empty();
         std::unordered_map<std::string, llvm::Value*> actorRefs;
         for (const auto& spawn : fn.actor_spawns) {
             llvm::Value* ctor = builder.CreatePointerCast(actorInits.at(spawn.actor_type),
@@ -1411,10 +1432,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 native_ptr);
             const auto actor = std::find_if(source.actors.begin(), source.actors.end(),
                 [&](const ActorDecl& a) { return a.name == spawn.actor_type; });
-            llvm::Value* ref = builder.CreateCall(sourceSpawn, {ctor, handler,
-                llvm::ConstantInt::get(i64,
-                    actor->fields.size() + actor->on_message.locals.size())},
-                spawn.name + ".actor.ref");
+            llvm::Value* ref = builder.CreateCall(
+                checked_source_actor_refs ? sourceSpawnId : sourceSpawn,
+                {ctor, handler,
+                    llvm::ConstantInt::get(i64,
+                        actor->fields.size() + actor->on_message.locals.size())},
+                spawn.name + (checked_source_actor_refs
+                    ? ".actor.checked.id" : ".actor.legacy.ref"));
             actorRefs.emplace(spawn.name, ref);
         }
         // An explicitly "owned int" lives in a bounded native C region;
@@ -2356,11 +2380,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                         declarations,
                         &region_moves);
                     builder.CreateCall(
-                        sourceSend,
+                        checked_source_actor_refs ? sourceSendId : sourceSend,
                         {actorRefs.at(send.reference), payload});
                 } else {
                     builder.CreateCall(
-                        sourceStop,
+                        checked_source_actor_refs ? sourceStopId : sourceStop,
                         {actorRefs.at(fn.actor_stops.at(action.index))});
                 }
             }
