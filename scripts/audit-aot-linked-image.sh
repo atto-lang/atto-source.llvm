@@ -33,7 +33,12 @@ readelf_checked() {
   fi
   printf '%s\n' "$result"
 }
-readelf_checked -h >/dev/null || exit 65
+header="$(readelf_checked -h)" || exit 65
+# Reject relocatable objects and shared libraries passed off as executables.
+if ! grep -Eq '^[[:space:]]*Type:[[:space:]]+(EXEC|DYN)[[:space:]]' <<<"$header"; then
+  echo 'LINKED_GC_AUDIT_UNVERIFIABLE: ELF is not an executable image' >&2
+  exit 65
+fi
 sections="$(readelf_checked -S)" || exit 65
 # A named .symtab section is not sufficient: a faked .symtab may contain
 # arbitrary data or zero entries. Verify its ELF SHT_SYMTAB section type.
@@ -42,6 +47,13 @@ if ! grep -Eq '[[:space:]]\.symtab[[:space:]]+SYMTAB[[:space:]]' <<<"$sections";
   exit 65
 fi
 dynamic="$(readelf_checked -d)" || exit 65
+# PIE executables and shared libraries are both ET_DYN. A shared object
+# cannot be admitted as a sealed native executable.
+if grep -Eq '^[[:space:]]*Type:[[:space:]]+DYN[[:space:]]' <<<"$header" &&
+   ! grep -Eq '\(FLAGS_1\).*\bPIE\b' <<<"$dynamic"; then
+  echo 'LINKED_GC_AUDIT_UNVERIFIABLE: ET_DYN without PIE executable flag' >&2
+  exit 65
+fi
 if grep -Eq '\((RPATH|RUNPATH|AUDIT|DEPAUDIT|TEXTREL|FILTER|AUXILIARY)\)' <<<"$dynamic"; then
   echo 'LINKED_GC_AUDIT_UNVERIFIABLE: dynamic search, injection or text relocation' >&2
   exit 65
