@@ -1562,6 +1562,65 @@ void carrier_replacement_exhaustion_fails_pending_calls() {
 }
 #endif
 
+// Shared carriers must not make one actor's stack quota or restart clear its sibling's
+// state. Drive many VMs/actors concurrently through the *real* runtime scheduler.
+void concurrent_tenants_keep_independent_stacks_and_actor_state() {
+    HostLimits limits;
+    limits.carriers = 4;
+    TenantVmHost host(limits);
+    struct Group {
+        VmHandle vm;
+        VmActor actor;
+        VmActor sibling;
+        bool small;
+    };
+    std::vector<Group> groups;
+    for (int i = 0; i < 8; ++i) {
+        const bool small = i % 2 == 0;
+        auto vm = host.open(stack_spec("quota-tenant-" + std::to_string(i),
+                                       small ? (512 << 10) : (4 << 20)));
+        REQUIRE_OK(vm);
+        auto a = host.spawn_actor(vm.handle, KIND_RESTARTABLE);
+        auto b = host.spawn_actor(vm.handle, KIND_RESTARTABLE);
+        REQUIRE_OK(a);
+        REQUIRE_OK(b);
+        groups.push_back(Group{vm.handle, a.actor, b.actor, small});
+    }
+    for (int round = 0; round < 30; ++round) {
+        std::vector<std::future<TurnResult>> turns;
+        for (const auto& g : groups) {
+            turns.push_back(host.call(g.actor, words({RESTART_ADD, 1})));
+            turns.push_back(host.call(g.sibling, words({RESTART_ADD, 2})));
+        }
+        for (auto& turn : turns) CHECK_STATUS(turn.get().status, Status::Ok);
+    }
+    for (const auto& g : groups) {
+        const TurnResult first = host.call(g.actor, words({RESTART_ADD, 0})).get();
+        const TurnResult sibling = host.call(g.sibling, words({RESTART_ADD, 0})).get();
+        CHECK_STATUS(first.status, Status::Ok);
+        CHECK_STATUS(sibling.status, Status::Ok);
+        if (first.status == Status::Ok) CHECK_EQ(word(first.payload), std::int64_t{30});
+        if (sibling.status == Status::Ok) CHECK_EQ(word(sibling.payload), std::int64_t{60});
+        const TurnResult depth = host.call(g.actor, words({RESTART_RECURSE_N, 700})).get();
+        if (g.small) {
+            CHECK_STATUS(depth.status, Status::ActorRestarted);
+            CHECK_REASON(depth.failure, FailReason::StackOverflow);
+        } else {
+            CHECK_STATUS(depth.status, Status::Ok);
+        }
+        const TurnResult after = host.call(g.actor, words({RESTART_ADD, 0})).get();
+        const TurnResult other = host.call(g.sibling, words({RESTART_ADD, 0})).get();
+        CHECK_STATUS(after.status, Status::Ok);
+        CHECK_STATUS(other.status, Status::Ok);
+        if (after.status == Status::Ok)
+            CHECK_EQ(word(after.payload), g.small ? std::int64_t{0} : std::int64_t{30});
+        if (other.status == Status::Ok) CHECK_EQ(word(other.payload), std::int64_t{60});
+        CHECK(host.snapshot(g.vm).phase == Phase::Running);
+    }
+    CHECK_EQ(host.stats().carrier_replacements, std::uint64_t{0});
+    CHECK_EQ(host.stats().unavailable_carriers, std::uint32_t{0});
+}
+
 // A quota must leave room for host calls, and fit in the carrier's stack with its guard.
 void stack_quota_limits_are_checked() {
     TenantVmHost host;
@@ -1716,6 +1775,7 @@ const Case cases[] = {
     {"carrier_replacement_retries_failed_allocation", carrier_replacement_retries_failed_allocation},
     {"carrier_replacement_exhaustion_fails_pending_calls", carrier_replacement_exhaustion_fails_pending_calls},
 #endif
+    {"concurrent_tenants_keep_independent_stacks_and_actor_state", concurrent_tenants_keep_independent_stacks_and_actor_state},
     {"stack_quota_limits_are_checked", stack_quota_limits_are_checked},
     {"a_restart_waits_before_the_next_turn", a_restart_waits_before_the_next_turn},
     {"an_unconfined_fault_still_fails_the_vm", an_unconfined_fault_still_fails_the_vm},
