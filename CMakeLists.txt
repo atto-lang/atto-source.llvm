@@ -35,6 +35,22 @@ if(ATTO_ACTOR_RETIREMENT_HOST_ONLY)
   return()
 endif()
 
+# Standalone host access-grant regression (no LLVM toolchain or guest proof).
+option(ATTO_ACTOR_ACCESS_HOST_ONLY
+  "Build only the checked actor allocation authority host test" OFF)
+if(ATTO_ACTOR_ACCESS_HOST_ONLY)
+  include(CTest)
+  add_executable(atto_actor_access_v1_host_test
+    tests/actor_isolation_access_v1_test.cpp)
+  target_include_directories(atto_actor_access_v1_host_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_options(atto_actor_access_v1_host_test PRIVATE
+    -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+  add_test(NAME actor_access_v1_host_gate
+    COMMAND atto_actor_access_v1_host_test)
+  return()
+endif()
+
 # Host-only C++17 .oresi v1 preflight with no LLVM SDK dependency.
 # Tests metadata admission, not the compiler, guest or native linker.
 option(ORESLANG_ORESI_HOST_ONLY
@@ -3847,6 +3863,22 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_arena_persistent_scratch
         COMMAND oreslang-native-actor-arena-test)
     set_tests_properties(native_actor_arena_persistent_scratch PROPERTIES TIMEOUT 25)
+
+    # Host-only compiler-ready 32-bit actor-region adapter, built against
+    # the real ActorArena.c; it is NOT native guest .atto codegen evidence.
+    add_executable(oreslang-native-actor-region-v1-test
+        tests/actor_region_v1_test.c
+        src/main/cpp/oreslang/runtime/ActorRegionV1.c
+        src/main/cpp/oreslang/runtime/ActorArena.c)
+    target_include_directories(oreslang-native-actor-region-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-region-v1-test PRIVATE c_std_11)
+    target_compile_options(oreslang-native-actor-region-v1-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_region_v1_offsets_generation_drop
+        COMMAND oreslang-native-actor-region-v1-test)
+    set_tests_properties(native_actor_region_v1_offsets_generation_drop
+        PROPERTIES TIMEOUT 30)
 
     # Security regression: reject actor-private/control-buffer overlap and
     # overflowing host spans before any memcpy. POSIX fork oracle verifies abort.
