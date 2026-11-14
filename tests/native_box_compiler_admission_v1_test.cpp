@@ -62,6 +62,9 @@ int main() {
     // frame across await/select is permitted to claim deterministic cleanup.
     reject(plan({"box"}, {{E::Initialize,"box"}}, false));
     reject(plan({"box"}, {{E::Initialize,"box"},{E::Copy,"box"}}));
+    // Malformed trusted IR effects must not be treated as harmless no-ops.
+    reject(plan({"box"}, {{E::Initialize,"box"},
+                          {static_cast<E>(0xff),"box"}}));
     reject(plan({"box"}, {{E::Initialize,"box"},{E::Read,"box"},
                           {E::TakeInto,"box","box"}}));
     reject(plan({"box"}, {{E::Initialize,"box"},{E::TakeInto,"box","missing"}}));
