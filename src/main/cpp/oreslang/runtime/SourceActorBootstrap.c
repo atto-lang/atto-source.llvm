@@ -695,7 +695,12 @@ int oreslang_source_actor_try_send_id(
 
 void oreslang_source_actor_send_id(
         OresSourceActorId identity, int64_t payload) {
-    ensure(oreslang_source_actor_try_send_id(identity, payload));
+    const int accepted = oreslang_source_actor_try_send_id(identity, payload);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    if (!accepted)
+        fputs("SOURCE_ACTOR_CHECKED_ID_REJECTED\n", stderr);
+#endif
+    ensure(accepted);
 }
 
 void oreslang_source_actor_send(void* opaque, int64_t payload) {
@@ -941,7 +946,12 @@ int oreslang_source_actor_try_request_stop_id(OresSourceActorId identity) {
 }
 
 void oreslang_source_actor_request_stop_id(OresSourceActorId identity) {
-    ensure(oreslang_source_actor_try_request_stop_id(identity));
+    const int accepted = oreslang_source_actor_try_request_stop_id(identity);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    if (!accepted)
+        fputs("SOURCE_ACTOR_CHECKED_ID_REJECTED\n", stderr);
+#endif
+    ensure(accepted);
 }
 
 void oreslang_source_actor_request_stop(void* opaque) {
@@ -1090,6 +1100,10 @@ static void claim_actor_join_locked(SourceActor* actor) {
 void oreslang_source_actor_join_done_id(OresSourceActorId identity) {
     group_lock();
     SourceActor* actor = lookup_actor_id_locked(identity);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    if (!actor)
+        fputs("SOURCE_ACTOR_CHECKED_ID_REJECTED\n", stderr);
+#endif
     claim_actor_join_locked(actor);
     OresNativeVM* vm = group.vm;
     const OresNativeActorRef target = actor->ref;
