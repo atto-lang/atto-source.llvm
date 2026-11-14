@@ -55,6 +55,7 @@ const char* to_string(Status s) noexcept {
         case Status::ActorRestarted: return "ActorRestarted";
         case Status::ActorTerminated: return "ActorTerminated";
         case Status::PipelineAborted: return "PipelineAborted";
+        case Status::IncompatibleCode: return "IncompatibleCode";
     }
     return "Unknown";
 }
@@ -141,8 +142,17 @@ struct Mail {
     std::promise<TurnResult> promise;
 };
 
+// One installed version of a VM's guest code. Actors hold it, so it outlives every turn that uses it.
+struct Code {
+    const OresVmGuestModule* module = nullptr;
+    std::shared_ptr<const void> owner; // e.g. the mapped library; released with the last actor on this version
+    std::uint64_t version = 0;
+};
+
 struct Actor {
-    const OresVmGuestKind* kind = nullptr;
+    const OresVmGuestKind* kind = nullptr; // points into code->module, so only valid while code is held
+    std::shared_ptr<const Code> code;
+    std::uint32_t kind_index = 0;
     std::uint32_t generation = 0; // bumped at every release, so stale refs never match
     std::uint32_t region = 0;
     std::uint32_t region_bytes = 0;
@@ -166,7 +176,8 @@ struct Actor {
 
 struct Vm {
     std::mutex mutex;
-    VmSpec spec;
+    VmSpec spec; // spec.module is the code at open; current code is `code`
+    std::shared_ptr<const Code> code;
     std::uint64_t generation = 0;
     std::uint8_t* cage = nullptr;
     std::atomic<int> phase{static_cast<int>(Phase::Running)};
@@ -597,6 +608,31 @@ struct TenantVmHost::Core {
         maybe_retire(vm);
     }
 
+    // Moves an idle actor onto the VM's current code. Its instance is cleared because lowered code
+    // keeps Wasm globals and function tables there, and a table entry from the old code must never be
+    // called once that code can be unmapped. Region, heap and stored state stay, so the new code
+    // resumes from stored state exactly as after a restart.
+    static void switch_code_locked(Vm& vm, Actor& actor) {
+        if (!actor.live || actor.running || actor.code == vm.code) return;
+        actor.kind = &vm.code->module->kinds[actor.kind_index];
+        if (actor.kind->instance_bytes) std::memset(actor.instance.get(), 0, actor.kind->instance_bytes);
+        actor.code = vm.code;
+    }
+
+    // Same memory layout, so regions, heaps and stored state already allocated stay valid.
+    static bool compatible_code(const OresVmGuestModule& from, const OresVmGuestModule& to) {
+        if (to.kind_count < from.kind_count) return false;
+        for (std::uint32_t i = 0; i < from.kind_count; ++i) {
+            const OresVmGuestKind& a = from.kinds[i];
+            const OresVmGuestKind& b = to.kinds[i];
+            if (a.state_bytes != b.state_bytes || a.heap_bytes != b.heap_bytes ||
+                a.scratch_bytes != b.scratch_bytes || a.instance_bytes != b.instance_bytes ||
+                a.stored_bytes != b.stored_bytes || a.flags != b.flags)
+                return false;
+        }
+        return true;
+    }
+
     void finish_turn_locked(const std::shared_ptr<Vm>& vm, Actor& actor, std::uint32_t slot, bool& over_budget) {
         actor.running = false;
         --vm->running;
@@ -604,6 +640,8 @@ struct TenantVmHost::Core {
         over_budget = budget && vm->cpu_ns.load(std::memory_order_relaxed) / 1000000 > budget;
         const Phase phase = vm->current_phase();
         if (phase == Phase::Running || phase == Phase::Quiescing) {
+            // An upgrade that landed during this turn takes effect here, at the turn boundary.
+            switch_code_locked(*vm, actor);
             if (actor.stopping && actor.mailbox.empty()) release_actor_locked(*vm, actor, slot);
             else make_ready_locked(vm, slot);
             schedule_locked(vm);
@@ -894,8 +932,8 @@ struct TenantVmHost::Core {
 
     Status spawn_locked(const std::shared_ptr<Vm>& vm, std::uint32_t kind_index, std::uint64_t& out_ref) {
         Vm& v = *vm;
-        if (kind_index >= v.spec.module->kind_count) return Status::BadKind;
-        const OresVmGuestKind* kind = &v.spec.module->kinds[kind_index];
+        if (kind_index >= v.code->module->kind_count) return Status::BadKind;
+        const OresVmGuestKind* kind = &v.code->module->kinds[kind_index];
         if (v.live_actors >= v.spec.limits.max_actors) return Status::ActorQuota;
         const auto bytes = static_cast<std::uint32_t>(align_up(
             std::uint64_t{kind->state_bytes} + kind->heap_bytes + kind->scratch_bytes, kAlignment));
@@ -916,6 +954,8 @@ struct TenantVmHost::Core {
         }
         Actor& actor = *v.actors[slot];
         actor.kind = kind;
+        actor.code = v.code;
+        actor.kind_index = kind_index;
         actor.slot = slot;
         actor.parent = 0;
         actor.aborted = false;
@@ -964,6 +1004,8 @@ struct TenantVmHost::Core {
         vm.instance_bytes -= std::uint64_t{actor.kind->instance_bytes} + actor.kind->stored_bytes;
         actor.instance.reset();
         actor.heap_free.reset();
+        actor.kind = nullptr;
+        actor.code.reset(); // may release an old code version once its last actor is gone
         vm.pending_stops.insert(vm.pending_stops.end(), actor.children.begin(), actor.children.end());
         actor.children.clear();
         actor.live = false;
@@ -1504,6 +1546,8 @@ VmOpenResult TenantVmHost::open(VmSpec spec) {
 
     auto vm = std::make_shared<Vm>();
     vm->spec = std::move(spec);
+    // The owner moves into the first code version, so an upgrade can release it.
+    vm->code = std::make_shared<const Code>(Code{vm->spec.module, std::move(vm->spec.module_owner), 1});
     vm->closed = vm->closed_promise.get_future().share();
     {
         std::lock_guard<std::mutex> lock(core_->registry_mutex);
@@ -1587,6 +1631,23 @@ Status TenantVmHost::stop_actor(const VmActor& ref) {
     return Status::Ok;
 }
 
+VmUpgradeResult TenantVmHost::upgrade(const VmHandle& handle, const OresVmGuestModule* module,
+                                      std::shared_ptr<const void> module_owner) {
+    VmUpgradeResult out;
+    Status status = Status::Ok;
+    auto vm = core_->resolve(handle.root_, handle.vm_, handle.generation_, status);
+    if (!vm) { out.status = status; return out; }
+    if (!valid_module(module)) { out.status = Status::InvalidArgument; return out; }
+    std::lock_guard<std::mutex> lock(vm->mutex);
+    if (vm->current_phase() != Phase::Running) { out.status = Status::NotRunning; return out; }
+    if (!Core::compatible_code(*vm->code->module, *module)) { out.status = Status::IncompatibleCode; return out; }
+    vm->code = std::make_shared<const Code>(Code{module, std::move(module_owner), vm->code->version + 1});
+    for (auto& actor : vm->actors) Core::switch_code_locked(*vm, *actor);
+    out.status = Status::Ok;
+    out.code_version = vm->code->version;
+    return out;
+}
+
 Status TenantVmHost::begin_shutdown(const VmHandle& handle) {
     Status status = Status::Ok;
     auto vm = core_->resolve(handle.root_, handle.vm_, handle.generation_, status);
@@ -1638,6 +1699,9 @@ VmSnapshot TenantVmHost::snapshot(const VmHandle& handle) const {
     out.mail_abandoned = vm->mail_abandoned;
     out.pipelines_aborted = vm->pipelines_aborted;
     out.actors_aborted = vm->actors_aborted;
+    out.code_version = vm->code->version;
+    for (const auto& actor : vm->actors)
+        if (actor->live && actor->code != vm->code) ++out.actors_on_old_code;
     return out;
 }
 

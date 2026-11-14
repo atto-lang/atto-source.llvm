@@ -1497,6 +1497,226 @@ void restart_stress() {
     std::printf("  %llu turns failed and restarted, across 240 VMs ended in every way\n", static_cast<unsigned long long>(restarted.load()));
 }
 
+// ---------------------------------------------------------------------------
+// Hot upgrade: new guest code for a running VM, keeping actor state. The same mechanism installs an
+// instrumented (tracing) build of a VM's code and takes it out again.
+
+// A copy of the test module whose layout is identical, with some kinds' code replaced.
+struct TestModule {
+    std::vector<OresVmGuestKind> kinds;
+    OresVmGuestModule module{};
+};
+std::shared_ptr<TestModule> module_with(std::initializer_list<std::pair<std::uint32_t, OresVmGuestTurn>> turns) {
+    auto m = std::make_shared<TestModule>();
+    m->kinds.assign(ores_vm_test_module.kinds, ores_vm_test_module.kinds + ores_vm_test_module.kind_count);
+    for (const auto& [kind, turn] : turns) m->kinds[kind].turn = turn;
+    m->module = {ORES_VM_GUEST_ABI_VERSION, static_cast<std::uint32_t>(m->kinds.size()), m->kinds.data()};
+    return m;
+}
+VmSpec spec_with(const std::string& id, std::shared_ptr<TestModule> m) {
+    VmSpec s = spec(id);
+    s.module = &m->module;
+    s.module_owner = std::move(m);
+    return s;
+}
+VmUpgradeResult upgrade_to(TenantVmHost& host, const VmHandle& vm, std::shared_ptr<TestModule> m) {
+    const OresVmGuestModule* module = &m->module;
+    return host.upgrade(vm, module, std::move(m));
+}
+
+// Version 2 of three test kinds. Same layout, different behaviour, so a reply shows which code ran.
+std::int64_t counter_x1000(const OresVmHostApi*, void*, std::uint8_t* cage, std::uint64_t, std::uint32_t state,
+                           std::uint32_t in, std::uint32_t in_len, std::uint32_t out, std::uint32_t) {
+    if (in_len != 8) return -2;
+    const std::int64_t total = *ORES_VM_AT(std::int64_t, cage, state) + 1000 * *ORES_VM_AT(std::int64_t, cage, in);
+    *ORES_VM_AT(std::int64_t, cage, state) = total;
+    *ORES_VM_AT(std::int64_t, cage, out) = total;
+    return 8;
+}
+std::int64_t instance_v2(const OresVmHostApi*, void* inst, std::uint8_t* cage, std::uint64_t, std::uint32_t,
+                         std::uint32_t, std::uint32_t, std::uint32_t out, std::uint32_t) {
+    *ORES_VM_AT(std::int64_t, cage, out) = 100 + ++*static_cast<std::int64_t*>(inst);
+    return 8;
+}
+std::int64_t burn_v2(const OresVmHostApi*, void*, std::uint8_t* cage, std::uint64_t, std::uint32_t,
+                     std::uint32_t in, std::uint32_t, std::uint32_t out, std::uint32_t) {
+    volatile std::uint64_t i = 0;
+    const auto n = static_cast<std::uint64_t>(*ORES_VM_AT(std::int64_t, cage, in));
+    while (i < n) i = i + 1;
+    *ORES_VM_AT(std::int64_t, cage, out) = 2;
+    return 8;
+}
+
+void hot_upgrade_switches_code_and_keeps_state() {
+    TenantVmHost host;
+    auto base = module_with({});
+    std::weak_ptr<TestModule> base_alive = base;
+    auto v = host.open(spec_with("up", std::move(base)));
+    auto other = host.open(spec("other"));
+    REQUIRE_OK(v);
+    REQUIRE_OK(other);
+    auto counter = host.spawn_actor(v.handle, KIND_COUNTER);
+    auto inst = host.spawn_actor(v.handle, KIND_INSTANCE);
+    auto stored = host.spawn_actor(v.handle, KIND_RESTARTABLE);
+    auto neighbour = host.spawn_actor(other.handle, KIND_COUNTER);
+    REQUIRE_OK(counter); REQUIRE_OK(inst); REQUIRE_OK(stored); REQUIRE_OK(neighbour);
+    CHECK_EQ(word(host.call(counter.actor, words({5})).get().payload), 5);
+    CHECK_EQ(word(host.call(inst.actor, {}).get().payload), 1);
+    CHECK_EQ(word(host.call(inst.actor, {}).get().payload), 2);
+    CHECK_EQ(word(host.call(stored.actor, words({RESTART_ADD, 5})).get().payload), 5);
+    CHECK_EQ(host.snapshot(v.handle).code_version, 1u);
+
+    auto v2 = module_with({{KIND_COUNTER, counter_x1000}, {KIND_INSTANCE, instance_v2}});
+    std::weak_ptr<TestModule> v2_alive = v2;
+    auto up = upgrade_to(host, v.handle, std::move(v2));
+    CHECK_STATUS(up.status, Status::Ok);
+    CHECK_EQ(up.code_version, 2u);
+    CHECK_EQ(host.snapshot(v.handle).actors_on_old_code, 0u);
+    CHECK(base_alive.expired()); // nothing is in a turn, so the old code is released at once
+
+    CHECK_EQ(word(host.call(counter.actor, words({1})).get().payload), 1005);    // new code, same state
+    CHECK_EQ(word(host.call(inst.actor, {}).get().payload), 101);                // instance cleared, new code
+    CHECK_EQ(word(host.call(stored.actor, words({RESTART_ADD, 1})).get().payload), 6); // resumed from stored
+    CHECK_EQ(word(host.call(neighbour.actor, words({1})).get().payload), 1);     // another tenant untouched
+    auto fresh = host.spawn_actor(v.handle, KIND_COUNTER);
+    REQUIRE_OK(fresh);
+    CHECK_EQ(word(host.call(fresh.actor, words({1})).get().payload), 1000);      // new actors get new code
+
+    // Taking an instrumented build out again is the same operation in the other direction.
+    auto back = upgrade_to(host, v.handle, module_with({}));
+    CHECK_STATUS(back.status, Status::Ok);
+    CHECK_EQ(back.code_version, 3u);
+    CHECK(v2_alive.expired());
+    CHECK_EQ(word(host.call(counter.actor, words({1})).get().payload), 1006);
+    CHECK_EQ(host.snapshot(v.handle).phase, Phase::Running);
+    CHECK_EQ(host.stats().traps_contained, 0u);
+}
+
+void an_inflight_turn_finishes_on_the_old_code() {
+    TenantVmHost host;
+    auto v1 = module_with({});
+    std::weak_ptr<TestModule> v1_alive = v1;
+    auto v = host.open(spec_with("inflight", std::move(v1)));
+    REQUIRE_OK(v);
+    auto burner = host.spawn_actor(v.handle, KIND_BURN);
+    REQUIRE_OK(burner);
+    // Calibrate a turn of about 600 ms, well inside the 2 s deadline.
+    std::int64_t n = 20'000'000;
+    for (;;) {
+        const auto t = std::chrono::steady_clock::now();
+        CHECK_STATUS(host.call(burner.actor, words({n})).get().status, Status::Ok);
+        const long long ms = ms_since(t);
+        if (ms >= 60 || n > (std::int64_t{1} << 40)) { n = n * 600 / std::max<long long>(ms, 1); break; }
+        n *= 4;
+    }
+    auto slow = host.call(burner.actor, words({n}));
+    std::this_thread::sleep_for(Ms(150));
+    auto up = upgrade_to(host, v.handle, module_with({{KIND_BURN, burn_v2}}));
+    CHECK_STATUS(up.status, Status::Ok);
+    CHECK_EQ(host.snapshot(v.handle).actors_on_old_code, 1u); // still in its turn
+    CHECK(!v1_alive.expired());                               // so its code stays mapped
+    TurnResult r = slow.get();
+    CHECK_STATUS(r.status, Status::Ok);
+    CHECK(r.payload.empty()); // the old code's reply: it ran to the end on the version it started on
+    CHECK_EQ(host.snapshot(v.handle).actors_on_old_code, 0u);
+    CHECK(v1_alive.expired()); // released once the last turn on it ended
+    CHECK_EQ(word(host.call(burner.actor, words({1})).get().payload), 2); // next turn: new code
+}
+
+void upgrade_refuses_unsafe_changes() {
+    TenantVmHost host;
+    auto v = host.open(spec("refuse"));
+    REQUIRE_OK(v);
+    auto counter = host.spawn_actor(v.handle, KIND_COUNTER);
+    REQUIRE_OK(counter);
+    CHECK_EQ(word(host.call(counter.actor, words({7})).get().payload), 7);
+
+    auto bigger_state = module_with({});
+    bigger_state->kinds[KIND_COUNTER].state_bytes += 16;
+    CHECK_STATUS(upgrade_to(host, v.handle, bigger_state).status, Status::IncompatibleCode);
+    auto new_flags = module_with({});
+    new_flags->kinds[KIND_COUNTER].flags = ORES_VM_KIND_RESTARTABLE;
+    CHECK_STATUS(upgrade_to(host, v.handle, new_flags).status, Status::IncompatibleCode);
+    auto more_instance = module_with({});
+    more_instance->kinds[KIND_INSTANCE].instance_bytes += 8;
+    CHECK_STATUS(upgrade_to(host, v.handle, more_instance).status, Status::IncompatibleCode);
+    auto fewer = module_with({});
+    fewer->kinds.pop_back();
+    fewer->module.kind_count = static_cast<std::uint32_t>(fewer->kinds.size());
+    CHECK_STATUS(upgrade_to(host, v.handle, fewer).status, Status::IncompatibleCode);
+    auto wrong_abi = module_with({});
+    wrong_abi->module.abi_version = ORES_VM_GUEST_ABI_VERSION + 1;
+    CHECK_STATUS(upgrade_to(host, v.handle, wrong_abi).status, Status::InvalidArgument);
+    CHECK_STATUS(host.upgrade(v.handle, nullptr, nullptr).status, Status::InvalidArgument);
+    CHECK_EQ(host.snapshot(v.handle).code_version, 1u); // nothing changed
+    CHECK_EQ(word(host.call(counter.actor, words({1})).get().payload), 8);
+
+    // Appending a kind is allowed, and the new kind can then be spawned.
+    auto appended = module_with({{KIND_COUNTER, counter_x1000}});
+    appended->kinds.push_back(appended->kinds[KIND_COUNTER]);
+    appended->module.kinds = appended->kinds.data();
+    appended->module.kind_count = static_cast<std::uint32_t>(appended->kinds.size());
+    const std::uint32_t new_kind = appended->module.kind_count - 1;
+    CHECK_STATUS(upgrade_to(host, v.handle, appended).status, Status::Ok);
+    auto added = host.spawn_actor(v.handle, new_kind);
+    REQUIRE_OK(added);
+    CHECK_EQ(word(host.call(added.actor, words({2})).get().payload), 2000);
+
+    // Authority: another host's handle, a quiescing VM and a retired VM are all refused.
+    TenantVmHost other;
+    auto foreign = other.open(spec("refuse"));
+    REQUIRE_OK(foreign);
+    CHECK(upgrade_to(host, foreign.handle, module_with({})).status != Status::Ok);
+    CHECK_STATUS(host.begin_shutdown(v.handle), Status::Ok);
+    const Status late = upgrade_to(host, v.handle, module_with({})).status;
+    CHECK(late == Status::NotRunning || late == Status::StaleHandle);
+    host.wait_closed(v.handle);
+    CHECK(upgrade_to(host, v.handle, module_with({})).status != Status::Ok);
+}
+
+void upgrade_under_load_stress() {
+    TenantVmHost host;
+    std::vector<std::weak_ptr<TestModule>> versions;
+    auto first = module_with({});
+    versions.push_back(first);
+    auto v = host.open(spec_with("stress", std::move(first)));
+    REQUIRE_OK(v);
+    constexpr int Actors = 4, Calls = 2000, Upgrades = 200;
+    std::vector<VmActor> actors;
+    for (int i = 0; i < Actors; ++i) {
+        auto a = host.spawn_actor(v.handle, KIND_COUNTER);
+        REQUIRE_OK(a);
+        actors.push_back(a.actor);
+    }
+    std::atomic<int> bad{0};
+    std::vector<std::thread> callers;
+    for (int i = 0; i < Actors; ++i) {
+        callers.emplace_back([&, i] {
+            std::int64_t prev = 0;
+            for (int c = 0; c < Calls; ++c) {
+                TurnResult r = host.call(actors[i], words({1})).get();
+                const std::int64_t total = word(r.payload);
+                // Each turn ran entirely on one version: it added exactly 1 or exactly 1000.
+                if (r.status != Status::Ok || (total - prev != 1 && total - prev != 1000)) bad.fetch_add(1);
+                prev = total;
+            }
+        });
+    }
+    for (int u = 0; u < Upgrades; ++u) {
+        auto next = u % 2 == 0 ? module_with({{KIND_COUNTER, counter_x1000}}) : module_with({});
+        versions.push_back(next);
+        if (upgrade_to(host, v.handle, std::move(next)).status != Status::Ok) bad.fetch_add(1);
+        std::this_thread::sleep_for(std::chrono::microseconds(200));
+    }
+    for (auto& t : callers) t.join();
+    CHECK_EQ(bad.load(), 0);
+    CHECK_EQ(host.snapshot(v.handle).code_version, std::uint64_t{Upgrades} + 1);
+    CHECK_EQ(host.snapshot(v.handle).actors_on_old_code, 0u);
+    for (std::size_t i = 0; i + 1 < versions.size(); ++i) CHECK(versions[i].expired()); // all superseded code released
+    CHECK(!versions.back().expired());
+    CHECK_EQ(host.snapshot(v.handle).phase, Phase::Running);
+}
+
 struct Case { const char* name; void (*run)(); };
 const Case cases[] = {
     {"equal_offsets_are_different_memory", equal_offsets_are_different_memory},
@@ -1540,6 +1760,10 @@ const Case cases[] = {
     {"stopping_an_owner_stops_what_it_owns", stopping_an_owner_stops_what_it_owns},
     {"an_owner_stops_when_its_child_ends", an_owner_stops_when_its_child_ends},
     {"restart_stress", restart_stress},
+    {"hot_upgrade_switches_code_and_keeps_state", hot_upgrade_switches_code_and_keeps_state},
+    {"an_inflight_turn_finishes_on_the_old_code", an_inflight_turn_finishes_on_the_old_code},
+    {"upgrade_refuses_unsafe_changes", upgrade_refuses_unsafe_changes},
+    {"upgrade_under_load_stress", upgrade_under_load_stress},
     {"thousand_vms_in_one_process", thousand_vms_in_one_process},
 };
 } // namespace

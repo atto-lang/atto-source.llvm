@@ -24,6 +24,10 @@ void ores_vm_c_guest_free(OresVmCGuest*);
 OresVmCVm* ores_vm_c_open_guest(OresVmCHost*, const char* tenant_id, const OresVmCGuest*,
                                 uint32_t turn_deadline_ms, int32_t* status);
 void ores_vm_c_vm_free(OresVmCVm*);
+/* Hot upgrade: replace a running VM's guest code with a digest-admitted library of the same
+ * memory layout, keeping actor state. Returns the Status value (IncompatibleCode if a kind's layout
+ * changes). Turns already running finish on the old code. */
+int32_t ores_vm_c_upgrade_guest(OresVmCHost*, OresVmCVm*, const OresVmCGuest*, uint64_t* code_version);
 OresVmCActor* ores_vm_c_spawn(OresVmCHost*, OresVmCVm*, uint32_t kind, int32_t* status);
 void ores_vm_c_actor_free(OresVmCActor*);
 /* Blocks the caller until the turn ends. */
