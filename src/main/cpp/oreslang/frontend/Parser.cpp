@@ -832,6 +832,9 @@ public:
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
             if (token_.text == "export") {
+                // File-level export metadata must not be minted inside a
+                // module wrapper and treated as a root symbol capability.
+                if (wrapped_module) fail("EXPORT_SCOPE: file-level export inside module");
                 export_declaration(program);
                 continue;
             }
