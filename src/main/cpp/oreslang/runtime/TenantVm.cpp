@@ -482,7 +482,11 @@ struct TenantVmHost::Core {
         alt.ss_sp = c->signal_stack;
         alt.ss_size = kSignalStackBytes;
 #if defined(TENANT_VM_TEST_MPROTECT)
-        const int signal_stack_result = tenant_vm_test_carrier_sigaltstack(&alt, nullptr);
+        // Diagnostic control only: workers with no guest admission can test whether
+        // installing the custom alternate signal stack triggers ASan instability.
+        const int signal_stack_result =
+            std::getenv("TENANT_VM_TEST_SKIP_ALTSTACK_REGISTRATION") != nullptr ?
+                0 : tenant_vm_test_carrier_sigaltstack(&alt, nullptr);
 #else
         const int signal_stack_result = sigaltstack(&alt, nullptr);
 #endif
@@ -1393,7 +1397,15 @@ struct TenantVmHost::Core {
     bool launch_carrier(Carrier* c) {
         pthread_attr_t attributes;
         if (pthread_attr_init(&attributes) != 0) return false;
-        const int attr_status = pthread_attr_setstack(&attributes,
+#if defined(TENANT_VM_TEST_MPROTECT)
+        const bool default_stack = std::getenv("TENANT_VM_TEST_DEFAULT_PTHREAD_STACK") != nullptr;
+#else
+        const bool default_stack = false;
+#endif
+        // Test-only control: compare ASan startup on ordinary pthread-managed stacks
+        // with the runtime's custom mapped/guarded carrier stacks. Guest admission
+        // is rejected below in this mode.
+        const int attr_status = default_stack ? 0 : pthread_attr_setstack(&attributes,
             static_cast<std::uint8_t*>(c->stack) + kCarrierGuardBytes, limits.carrier_stack_bytes);
         if (attr_status != 0) {
             pthread_attr_destroy(&attributes);
@@ -1607,7 +1619,9 @@ VmOpenResult TenantVmHost::open(VmSpec spec) {
             std::uint64_t{l.actor_stack_bytes} + kCarrierGuardBytes + kTurnEntryBytes > core_->limits.carrier_stack_bytes)))
         return refuse(Status::InvalidArgument);
 #if defined(TENANT_VM_TEST_MPROTECT)
-    if (std::getenv("TENANT_VM_TEST_SKIP_CARRIER_STARTUP") != nullptr)
+    if (std::getenv("TENANT_VM_TEST_SKIP_CARRIER_STARTUP") != nullptr ||
+        std::getenv("TENANT_VM_TEST_SKIP_ALTSTACK_REGISTRATION") != nullptr ||
+        std::getenv("TENANT_VM_TEST_DEFAULT_PTHREAD_STACK") != nullptr)
         return refuse(Status::HostClosed);
 #endif
     if (!handlers_are_ours()) return refuse(Status::SignalHandlerLost);
