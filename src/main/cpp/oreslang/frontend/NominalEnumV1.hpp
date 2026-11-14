@@ -144,6 +144,10 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
                     throw std::runtime_error(std::string(foreign_error));
                 variant = name();
             }
+            if (current().value == "{") {
+                throw std::runtime_error(
+                    "ADT v3 named enum payload patterns require typed payload AOT lowering");
+            }
             std::string alias;
             if (take("as")) {
                 alias = name();
@@ -169,6 +173,10 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
         if (variants.size() == 32 || r.current().value.empty())
             throw std::runtime_error("ADT v1 enum case count exceeds bounds");
         const auto name = r.name();
+        if (r.current().value == "{") {
+            throw std::runtime_error(
+                "ADT v3 payload-bearing enums require checked payload AOT lowering");
+        }
         if (!used_names.insert(name).second)
             throw std::runtime_error("ADT v1 duplicate nominal case");
         const auto tag = r.take("=") ? r.number() : next_tag;
