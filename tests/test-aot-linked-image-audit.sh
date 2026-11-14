@@ -25,6 +25,10 @@ cat >"$work/collector2.c" <<'C'
 void gc_collect(void) {}
 int main(void) { gc_collect(); return 0; }
 C
+cat >"$work/loader.c" <<'C'
+#include <dlfcn.h>
+int main(void) { return dlopen(0, RTLD_NOW) == 0; }
+C
 cat >"$work/foreign.c" <<'C'
 int foreign_x(void) { return 1; }
 C
@@ -36,13 +40,14 @@ C
 "$clang" -O0 "$work/data.c" -o "$work/data"
 "$clang" -O0 "$work/collector.c" -o "$work/collector"
 "$clang" -O0 "$work/collector2.c" -o "$work/collector2"
+"$clang" -O0 "$work/loader.c" -ldl -o "$work/loader"
 "$clang" -O0 -s "$work/clean.c" -o "$work/stripped"
 "$clang" -O0 "$work/clean.c" -Wl,-rpath,"$work" -o "$work/runpath"
 "$clang" -fPIC -shared "$work/foreign.c" -o "$work/libforeign.so"
 "$clang" "$work/foreign_main.c" -L"$work" -lforeign -o "$work/foreign"
 bash "$auditor" "$work/clean" >/dev/null
 bash "$auditor" "$work/data" >/dev/null
-for disallowed in collector collector2 stripped runpath foreign; do
+for disallowed in collector collector2 stripped runpath foreign loader; do
   if bash "$auditor" "$work/$disallowed" >"$work/result.log" 2>&1; then
     echo "FAIL: unsafe/unverifiable binary admitted: $disallowed" >&2
     exit 1
@@ -51,4 +56,4 @@ for disallowed in collector collector2 stripped runpath foreign; do
     cat "$work/result.log" >&2; echo "FAIL: missing rejection receipt: $disallowed" >&2; exit 1;
   }
 done
-printf 'LINKED_AOT_GC_SCREEN_TESTS_PASS|positive=2|negative=5|guest_executed=NO\n'
+printf 'LINKED_AOT_GC_SCREEN_TESTS_PASS|positive=2|negative=6|guest_executed=NO\n'
