@@ -208,6 +208,7 @@ int main(int argc, char** argv) {
     bool rt_entry_seen = false;
     bool rt_report_seen = false;
     bool constraint_descriptors_only = false;
+    bool declared_receive_syntax_only = false;
     std::string rt_entry = "main/0";
     std::string rt_report_path;
     bool tree_shake = false;
@@ -271,6 +272,12 @@ int main(int argc, char** argv) {
             rt_report_seen = true;
             rt_report_path = arg.substr(std::string_view("--rt-report=").size());
             if (rt_report_path.empty()) { std::cerr << "rt-report path cannot be empty\n"; return 2; }
+        } else if (arg == "--check-declared-receive-syntax") {
+            if (declared_receive_syntax_only) {
+                std::cerr << "duplicate check-declared-receive-syntax option\n";
+                return 2;
+            }
+            declared_receive_syntax_only = true;
         } else if (arg == "--constraint-descriptors") {
             if (constraint_descriptors_only) {
                 std::cerr << "duplicate constraint-descriptors option\n";
@@ -370,6 +377,15 @@ int main(int argc, char** argv) {
         std::cerr << "constraint-descriptors is a metadata-only mode and cannot be combined with execution/codegen options\n";
         return 2;
     }
+    if (declared_receive_syntax_only &&
+            (constraint_descriptors_only || tree_shake || !tree_shake_roots.empty() ||
+             isolate_entry_seen || native_hard_rt_profile || rt_check_only ||
+             rt_entry_seen || rt_report_seen || target_seen ||
+             experimental_owned_int || experimental_rt_scalar_loop ||
+             allocator_provider_seen || library_profile_seen)) {
+        std::cerr << "declared receive syntax verification cannot be combined with codegen or target flags\n";
+        return 2;
+    }
     if (isolate_entry_seen && (tree_shake || !tree_shake_roots.empty() ||
             wasm32_target || cortex_m_target || experimental_owned_int ||
             experimental_rt_scalar_loop || native_hard_rt_profile ||
@@ -420,6 +436,19 @@ int main(int argc, char** argv) {
         // constraints before parsing or emitting LLVM IR.
         if (text.find("// ores:") != std::string::npos) {
             throw std::runtime_error("native target admission unsupported: ores environment headers require compiler verification");
+        }
+        if (declared_receive_syntax_only) {
+            const auto verified =
+                oreslang::inspect_declared_actor_receive_syntax(text);
+            // This receipt cannot be misread as generated LLVM IR or a
+            // verified cross-file actor dispatch: no guest is executed.
+            std::cout << "LLVM_DECLARED_COUNTER_RECEIVE_SYNTAX_PASS"
+                      << "|namespace=" << verified.namespace_name
+                      << "|actor=" << verified.actor_name
+                      << "|field=" << verified.state_field
+                      << "|stop=" << verified.stop_mail_value
+                      << "|guest_not_executed\n";
+            return 0;
         }
         if (experimental_rt_scalar_loop && (wasm32_target || experimental_owned_int))
             throw std::runtime_error("scalar-loop frame requires native host and no owned-int experiment");
