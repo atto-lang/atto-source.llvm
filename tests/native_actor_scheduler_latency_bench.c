@@ -339,6 +339,120 @@ static void sched_fanin(size_t actors, size_t active, size_t workers,
     free(f.refs);
 }
 
+#ifdef ORESLANG_BENCH_HAS_RT_DOMAIN
+#include "oreslang/runtime/NativeRtDomain.h"
+/* ---- per-core RT domain (NativeRtDomain.c) ---------------------------- */
+typedef struct {
+    uint32_t peer[2];
+    size_t hops;
+    _Atomic size_t done;
+    _Atomic int finished;
+    uint64_t* samples;
+} RtPing;
+
+static void rt_ping_handler(void* raw, OresRtSender* self, uint32_t actor, uint64_t stamp) {
+    RtPing* p = raw;
+    const uint64_t arrived = now_ns();
+    size_t i = atomic_load_explicit(&p->done, memory_order_relaxed);
+    p->samples[i] = arrived - stamp;
+    atomic_store_explicit(&p->done, i + 1, memory_order_relaxed);
+    if (i + 1 >= p->hops) {
+        atomic_store_explicit(&p->finished, 1, memory_order_release);
+        return;
+    }
+    check(ores_rt_send(self, actor == 0 ? 1 : 0, now_ns()) == ORES_RT_SEND_OK, "rt send");
+}
+
+/* Two actors on two different cores (cross-core hop) or one core. */
+static void rt_pingpong(uint32_t cores, size_t hops, uint32_t spin_ns,
+                        const uint32_t* cpus, size_t ncpu) {
+    RtPing p;
+    memset(&p, 0, sizeof(p));
+    p.hops = hops;
+    p.samples = calloc(hops, sizeof(uint64_t));
+    check(p.samples != NULL, "alloc");
+    uint32_t placement[2] = {0, cores - 1};
+    OresRtDomainOptions o = {
+        .core_count = cores, .cpus = ncpu >= cores ? cpus : NULL,
+        .actor_count = 2, .actor_core = placement, .external_senders = 1,
+        .ring_capacity = 64, .idle_spin_ns = spin_ns, .on_data = rt_ping_handler, .ctx = &p,
+    };
+    OresRtDomain* d = ores_rt_domain_open(&o);
+    check(d != NULL, "rt open");
+    check(ores_rt_domain_start(d), "rt start");
+    check(ores_rt_send(ores_rt_domain_external_sender(d, 0), 0, now_ns()) == ORES_RT_SEND_OK,
+          "rt kick");
+    while (!atomic_load_explicit(&p.finished, memory_order_acquire)) {
+        struct timespec pause = {0, 200000};
+        nanosleep(&pause, NULL);
+    }
+    const int pinned = ores_rt_domain_affinity_observed(d);
+    check(ores_rt_domain_stop(d), "rt stop");
+    ores_rt_domain_destroy(d);
+    char extra[128];
+    snprintf(extra, sizeof(extra), "cores=%u spin_ns=%u pinned=%d %s",
+             cores, spin_ns, pinned, cores > 1 ? "hop=cross_core" : "hop=same_core");
+    report("rt_pingpong", extra, p.samples, hops);
+    free(p.samples);
+}
+
+typedef struct {
+    OresRtDomain* d;
+    uint32_t id, actors;
+    size_t each;
+} RtProducer;
+static _Atomic uint64_t g_rt_turns;
+static void rt_count(void* ctx, OresRtSender* self, uint32_t actor, uint64_t payload) {
+    (void)ctx; (void)self; (void)actor; (void)payload;
+    atomic_fetch_add_explicit(&g_rt_turns, 1, memory_order_relaxed);
+}
+static void* rt_producer(void* raw) {
+    RtProducer* a = raw;
+    OresRtSender* s = ores_rt_domain_external_sender(a->d, a->id);
+    uint32_t actor = a->id;
+    for (size_t sent = 0; sent < a->each;) {
+        if (ores_rt_send(s, actor, sent) == ORES_RT_SEND_OK) ++sent;
+        else cpu_relax();
+        if (++actor == a->actors) actor = 0;
+    }
+    return NULL;
+}
+static void rt_fanin(uint32_t cores, uint32_t producers, uint32_t actors, size_t each,
+                     uint32_t spin_ns, const uint32_t* cpus, size_t ncpu) {
+    uint32_t* placement = calloc(actors, sizeof(uint32_t));
+    check(placement != NULL, "alloc");
+    for (uint32_t a = 0; a < actors; ++a) placement[a] = a % cores;
+    atomic_store(&g_rt_turns, 0);
+    OresRtDomainOptions o = {
+        .core_count = cores, .cpus = ncpu >= cores ? cpus : NULL,
+        .actor_count = actors, .actor_core = placement, .external_senders = producers,
+        .ring_capacity = 1024, .idle_spin_ns = spin_ns, .on_data = rt_count,
+    };
+    OresRtDomain* d = ores_rt_domain_open(&o);
+    check(d && ores_rt_domain_start(d), "rt open/start");
+    pthread_t t[ORES_RT_MAX_EXTERNAL];
+    RtProducer args[ORES_RT_MAX_EXTERNAL];
+    const uint64_t start = now_ns();
+    for (uint32_t p = 0; p < producers; ++p) {
+        args[p] = (RtProducer){d, p, actors, each};
+        check(pthread_create(&t[p], NULL, rt_producer, &args[p]) == 0, "create");
+    }
+    for (uint32_t p = 0; p < producers; ++p) pthread_join(t[p], NULL);
+    check(ores_rt_domain_stop(d), "rt stop");
+    const uint64_t elapsed = now_ns() - start;
+    const uint64_t turns = atomic_load(&g_rt_turns);
+    check(turns == (uint64_t)producers * each, "rt turn count");
+    ores_rt_domain_destroy(d);
+    free(placement);
+    printf("scenario=rt_fanin cores=%u producers=%u actors=%u spin_ns=%u turns=%llu "
+           "elapsed_ns=%llu turns_per_sec=%.0f ns_per_turn=%.1f\n",
+           cores, producers, actors, spin_ns, (unsigned long long)turns,
+           (unsigned long long)elapsed, (double)turns * 1e9 / (double)elapsed,
+           (double)elapsed / (double)turns);
+    fflush(stdout);
+}
+#endif
+
 int main(int argc, char** argv) {
     size_t hops = 200000;
     uint32_t spin_ns = 0;
@@ -378,5 +492,10 @@ int main(int argc, char** argv) {
     sched_fanin(16, 16, 4, 4, fanin_each, spin_ns, cpus, ncpu);
     sched_fanin(1024, 4, 4, 4, fanin_each, spin_ns, cpus, ncpu);
     sched_fanin(1024, 64, 8, 4, fanin_each, spin_ns, cpus, ncpu);
+#ifdef ORESLANG_BENCH_HAS_RT_DOMAIN
+    rt_pingpong(1, hops, spin_ns, cpus, ncpu);
+    rt_pingpong(2, hops, spin_ns, cpus, ncpu);
+    rt_fanin(4, 4, 64, fanin_each, spin_ns, cpus, ncpu);
+#endif
     return 0;
 }
