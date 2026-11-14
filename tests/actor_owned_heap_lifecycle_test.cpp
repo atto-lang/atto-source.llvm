@@ -13,6 +13,43 @@
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "actor heap check failed at %d\n", __LINE__); return 1; } } while (0)
 
+/* Linker --wrap intercepts calls from production ActorOwnedI64Heap.c,
+ * not its C++ test host's unrelated allocator traffic. Check actual bytes
+ * BEFORE real free at O0/O2, never after the allocation lifetime ends.
+ * This is scalar-heap direct linkage, NOT process-wide GC certification. */
+struct TrackedHeapAllocation { void* p; size_t bytes; };
+static TrackedHeapAllocation tracked_heap[32];
+static size_t tracked_heap_count;
+static size_t scrubbed_physical_frees;
+extern "C" void* __real_calloc(size_t count, size_t size);
+extern "C" void __real_free(void*);
+extern "C" void* __wrap_calloc(size_t count, size_t size) {
+    if (size && count > SIZE_MAX / size) abort();
+    void* p = __real_calloc(count, size);
+    if (p) {
+        if (tracked_heap_count == 32) abort();
+        tracked_heap[tracked_heap_count++] = TrackedHeapAllocation{p, count * size};
+    }
+    return p;
+}
+extern "C" void __wrap_free(void* p) {
+    if (!p) return;
+    size_t i = 0;
+    while (i < tracked_heap_count && tracked_heap[i].p != p) ++i;
+    if (i == tracked_heap_count) abort();
+    const volatile unsigned char* bytes =
+        static_cast<const volatile unsigned char*>(p);
+    for (size_t j = 0; j < tracked_heap[i].bytes; ++j) {
+        if (bytes[j] != 0) {
+            fputs("ACTOR_OWNED_I64_HEAP_UNSCRUBBED_PRE_FREE\n", stderr);
+            abort();
+        }
+    }
+    tracked_heap[i] = tracked_heap[--tracked_heap_count];
+    ++scrubbed_physical_frees;
+    __real_free(p);
+}
+
 enum Misuse { WRONG_OWNER, WRONG_EPOCH, FORGED_SLOT, DROP_LOANED, WRITE_LOANED, STALE_SLOT_REUSED, FOREIGN_SLOT, DOUBLE_LOAN_RELEASE, REENTER, CALL_AFTER_RETIRE, CROSS_CARRIER_TOKEN, NESTED_DIFFERENT_HEAP };
 static void invalid_call(enum Misuse which) {
     OresActorI64Heap* heap = ores_actor_i64_heap_open(29, 7, 2);
@@ -148,6 +185,8 @@ int main(void) {
     CHECK(rejects(CALL_AFTER_RETIRE));
     CHECK(rejects(CROSS_CARRIER_TOKEN));
     CHECK(rejects(NESTED_DIFFERENT_HEAP));
+    CHECK(tracked_heap_count == 0);
+    CHECK(scrubbed_physical_frees == 1);
 #endif
     return 0;
 }
