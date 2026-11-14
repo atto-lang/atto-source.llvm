@@ -83,6 +83,7 @@ run_case(attolang_equality "${fixtures}/attolang_equality.atto" 0)
 # Real compiler + LLVM IR + clang + process exit status, not parser-only fixtures.
 run_case(comma_body_fnc_routine "${fixtures}/comma_body_fncs.atto" 42)
 run_case(comma_body_mtd "${fixtures}/comma_body_methods.atto" 42)
+run_case(comma_body_named_pipe "${fixtures}/comma_body_named_pipe.atto" 42)
 
 
 # Strict native scalar equality enforces identical operand types. The
