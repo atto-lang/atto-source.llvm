@@ -1,0 +1,5 @@
+// Result.expect on Ok yields the payload and prints nothing.
+fnc main(): int {
+  val Result<int, String> good = Ok(41);
+  return good.expect("unreachable") + 1;
+}
