@@ -42,7 +42,7 @@ ctest --test-dir build --output-on-failure -j 2
 The native guest test compiles three `.atto` positives into LLVM IR and
 executes each at Clang O0 and O2 expecting exit 42. The out-of-bounds guest
 must terminate from a real SIGILL/SIGTRAP at both optimization levels.
-Five source-admission negatives and five unsupported compiler-mode negatives
+Five source-admission negatives and seven unsupported compiler-mode negatives
 must fail before writing any LLVM IR. Then run GCC/Clang sanitizer builds
 (ASan and UBSan), compare against the exact-main baseline, and obtain
 independent review.
@@ -51,3 +51,10 @@ Current receipt: **SOURCE_COMMITTED**. Production exact-head full
 compiler, CTest, native guest, sanitizers and five-backend parity:
 **NOT_EXECUTED**. GitHub pre-step failure is not a test failure.
 No cross-organization private-source mirror was performed.
+
+## Current-main command admission reconciliation
+
+Current main additionally exposes `--isolate-entry` and explicitly records
+`--target=host`. Neither is a supported modifier for this restricted
+inverted-owner native `main`: both must be rejected **before IR output**.
+The native guest harness includes negative tests for both options.
