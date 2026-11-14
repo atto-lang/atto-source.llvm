@@ -1557,6 +1557,12 @@ private:
         // borrow/take/await need separate lifetime-aware lowering.
         while (token_.text != "return") {
             if (token_.kind == Kind::End || token_.text == "}") fail("actor handler requires return");
+            // The legacy capture-free Task<int> bridge uses a synthetic
+            // scheduler. It cannot preserve this actor's pool, incarnation,
+            // sealed state or physical STOP barrier. Reject at source
+            // admission, before any AOT artifact could use that ABI.
+            if (token_.text == "let" && peek_next().text == "Task")
+                fail("native actor task blocks require actor-owned scheduler continuation lowering; foreign Task pool is forbidden");
             if (token_.text == "const") {
                 if (!method.actor_field_writes.empty())
                     fail("native actor owned temporaries must precede field writes");
