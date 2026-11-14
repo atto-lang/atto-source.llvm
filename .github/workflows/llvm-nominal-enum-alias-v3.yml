@@ -60,4 +60,4 @@ jobs:
             echo 'ERROR: unsupported payload variant compiled'; exit 1
           fi
           test ! -s build/rejected.ll
-          grep -q 'expected comma' build/rejected.log || grep -q 'expected' build/rejected.log
+          grep -q 'payload-bearing enums require checked payload AOT lowering' build/rejected.log
