@@ -1147,7 +1147,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // No actor imports appear in ordinary scalar/class compilation.
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceRequestStop,
-        sourceAwaitReady, sourceAwaitDone;
+        sourceAwaitReady, sourceAwaitDone, sourceWaitReadyBlocking;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
     if (!source.actors.empty() && !wasm32_target) {
@@ -1171,6 +1171,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         sourceSend = module.getOrInsertFunction("oreslang_source_actor_send",
             llvm::FunctionType::get(voidTy, {native_ptr, i64}, false));
         sourceStop = module.getOrInsertFunction("oreslang_source_actor_stop",
+            llvm::FunctionType::get(voidTy, {native_ptr}, false));
+        sourceWaitReadyBlocking = module.getOrInsertFunction(
+            "oreslang_source_actor_wait_ready_blocking",
             llvm::FunctionType::get(voidTy, {native_ptr}, false));
         sourceRequestStop = module.getOrInsertFunction(
             "oreslang_source_actor_request_stop",
@@ -2221,7 +2224,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     return entry.name == loop.worker.actor_type;
                 });
             if (a == source.actors.end() || !sourceSpawn.getCallee() ||
-                    !sourceStop.getCallee())
+                    !sourceWaitReadyBlocking.getCallee() || !sourceStop.getCallee())
                 throw std::runtime_error(
                     "bounded actor churn missing verified source-actor runtime");
             llvm::Value* counter_slot = storage.at(loop.counter);
@@ -2248,6 +2251,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 {ctor, handler, llvm::ConstantInt::get(
                     i64, a->fields.size() + a->on_message.locals.size())},
                 loop.worker.name + ".scoped.actor.ref");
+            // Join the constructor's READY transition on trusted main.
+            // A naked spawn(); stop() can cancel before construction and
+            // would falsely count an uninitialized actor incarnation.
+            // This is explicitly host-only blocking glue, never a carrier
+            // suspension or the source ActorRef.get_ready() Future protocol.
+            builder.CreateCall(sourceWaitReadyBlocking, {scoped_actor});
             builder.CreateCall(sourceStop, {scoped_actor});
             llvm::Value* next = builder.CreateAdd(
                 current, llvm::ConstantInt::get(i64, 1),
