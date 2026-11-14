@@ -107,6 +107,11 @@ inline Proof check(const Plan& plan) {
         case EventKind::ActorSend:
             throw std::runtime_error(
                 "Box actor send requires relocation/serialization and destination heap authority");
+        default:
+            // This plan may be constructed from partially lowered IR in
+            // trusted compiler code. Never accept an unknown effect as a
+            // no-op; that could silently omit an ownership move or drop.
+            throw std::runtime_error("unknown Box ownership effect kind");
         }
     }
     const auto analysis = ownership::verify(graph);
