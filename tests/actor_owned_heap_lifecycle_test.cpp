@@ -179,8 +179,12 @@ static int test_long_lived_source_actor_heap_churn(void) {
      * turn and can be released from a different trusted host carrier. */
     OresActorSlot field = {final_turn.domain, 0u, 1u};
     OresActorLoan suspended = ores_actor_i64_heap_borrow(heap, final_turn, field);
-    ores_actor_i64_heap_leave(heap, final_turn);
+    /* Supervisor cancellation may retire a heap while its final actor turn
+     * is still unwinding. Neither an active turn nor its cross-turn loan
+     * permits physical release. A retired turn may still leave. */
     ores_actor_i64_heap_retire(heap);
+    CHECK(ores_actor_i64_heap_try_destroy(heap) == 0);
+    ores_actor_i64_heap_leave(heap, final_turn);
     CHECK(ores_actor_i64_heap_try_destroy(heap) == 0);
     std::thread releaser([&] { ores_actor_i64_heap_release(heap, suspended); });
     releaser.join();
