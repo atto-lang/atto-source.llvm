@@ -40,7 +40,7 @@ struct Expression {
     enum class Kind {
         Integer, Boolean, String, Console, Variable,
         Negate, LogicalNot,
-        Add, Subtract, Multiply, Remainder,
+        Add, Subtract, Multiply, Remainder, Modulo, BitXor,
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
@@ -285,7 +285,7 @@ struct ActorFieldWrite {
 };
 
 struct Statement {
-    enum class Kind { Call, FieldWrite, ScalarWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return };
+    enum class Kind { Call, FieldWrite, ScalarWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return, UsingTelemetrySpan };
     Kind kind;
     // Scoped scalar or readonly leaf record. ForEach uses an implicit element
     // binding (no initializer); expression is its named array source and
@@ -294,6 +294,9 @@ struct Statement {
     std::unique_ptr<Expression> expression;
     std::string receiver;
     std::string field;
+    // UsingTelemetrySpan: literal operation name, alias is compile-time-only;
+    // no guest-visible pointer, dynamic handle or actor message transfer.
+    std::string telemetry_operation;
     // ForIndex: branch_local initializer, condition and checked next value.
     std::unique_ptr<Expression> loop_step;
     // Dedicated compiler intrinsic, never lowered as a guest-callable
