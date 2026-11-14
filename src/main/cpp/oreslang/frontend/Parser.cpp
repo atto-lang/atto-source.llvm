@@ -404,12 +404,25 @@ bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
 // borrows and effects are never reclassified as compile-time expressions.
 // Checked integer math is evaluated here for const overflow diagnostics.
 std::optional<std::int64_t> native_const_integer_value(
-        const Expression& expr, std::size_t depth = 1) {
+        const Expression& expr, const std::vector<LocalBinding>& known,
+        std::size_t depth = 1) {
     require_expression_depth(depth, expr.offset);
     using K = Expression::Kind;
     if (expr.kind == K::Integer) return expr.integer;
+    if (expr.kind == K::Variable) {
+        // Look only at preceding fixed primitive const bindings. Runtime val,
+        // let, imported globals, handles, and effects cannot be constexpr.
+        auto found = std::find_if(known.rbegin(), known.rend(),
+            [&](const LocalBinding& binding) { return binding.name == expr.name; });
+        if (found == known.rend() || found->assignable || found->owner_mutable ||
+                found->heap_owned || found->int_array || !found->class_name.empty() ||
+                !found->sum_type.empty() || !found->initializer ||
+                found->scalar_type != ScalarType::I64)
+            return std::nullopt;
+        return native_const_integer_value(*found->initializer, known, depth + 1);
+    }
     if (expr.kind == K::Negate && expr.left) {
-        const auto v = native_const_integer_value(*expr.left, depth + 1);
+        const auto v = native_const_integer_value(*expr.left, known, depth + 1);
         if (!v) return std::nullopt;
         if (*v == std::numeric_limits<std::int64_t>::min())
             throw std::runtime_error("E_CONST_OVERFLOW: signed integer negate");
@@ -417,8 +430,8 @@ std::optional<std::int64_t> native_const_integer_value(
     }
     if ((expr.kind == K::Add || expr.kind == K::Subtract ||
             expr.kind == K::Multiply) && expr.left && expr.right) {
-        const auto a = native_const_integer_value(*expr.left, depth + 1);
-        const auto b = native_const_integer_value(*expr.right, depth + 1);
+        const auto a = native_const_integer_value(*expr.left, known, depth + 1);
+        const auto b = native_const_integer_value(*expr.right, known, depth + 1);
         if (!a || !b) return std::nullopt;
         std::int64_t result = 0;
         bool overflow = false;
@@ -431,18 +444,28 @@ std::optional<std::int64_t> native_const_integer_value(
     return std::nullopt;
 }
 
-bool native_const_scalar_tree(const Expression& expr, std::size_t depth = 1) {
+bool native_const_scalar_tree(
+        const Expression& expr, const std::vector<LocalBinding>& known,
+        std::size_t depth = 1) {
     require_expression_depth(depth, expr.offset);
     using K = Expression::Kind;
     if (expr.kind == K::Integer || expr.kind == K::Boolean ||
             expr.kind == K::String) return true;
+    if (expr.kind == K::Variable) {
+        auto found = std::find_if(known.rbegin(), known.rend(),
+            [&](const LocalBinding& binding) { return binding.name == expr.name; });
+        return found != known.rend() && !found->assignable && !found->owner_mutable &&
+                !found->heap_owned && !found->int_array && found->class_name.empty() &&
+                found->sum_type.empty() && found->initializer &&
+                native_const_scalar_tree(*found->initializer, known, depth + 1);
+    }
     if (expr.kind == K::Negate && expr.left)
-        return native_const_integer_value(expr, depth).has_value();
+        return native_const_integer_value(expr, known, depth).has_value();
     if (expr.kind == K::LogicalNot && expr.left)
-        return native_const_scalar_tree(*expr.left, depth + 1);
+        return native_const_scalar_tree(*expr.left, known, depth + 1);
     if (expr.kind == K::Add || expr.kind == K::Subtract ||
             expr.kind == K::Multiply) {
-        return native_const_integer_value(expr, depth).has_value();
+        return native_const_integer_value(expr, known, depth).has_value();
     }
     if (expr.kind == K::Equal || expr.kind == K::NotEqual ||
             expr.kind == K::Less || expr.kind == K::LessEqual ||
@@ -450,8 +473,8 @@ bool native_const_scalar_tree(const Expression& expr, std::size_t depth = 1) {
             expr.kind == K::LogicalAnd || expr.kind == K::LogicalOr ||
             expr.kind == K::LogicalXor) {
         return expr.left && expr.right &&
-                native_const_scalar_tree(*expr.left, depth + 1) &&
-                native_const_scalar_tree(*expr.right, depth + 1);
+                native_const_scalar_tree(*expr.left, known, depth + 1) &&
+                native_const_scalar_tree(*expr.right, known, depth + 1);
     }
     return false;
 }
@@ -2484,7 +2507,7 @@ private:
                 } else {
                     binding.initializer = expression();
                     if (mode == "const" &&
-                            !native_const_scalar_tree(*binding.initializer))
+                            !native_const_scalar_tree(*binding.initializer, value.locals))
                         fail("E_NON_CONST_INITIALIZER: type-first/const scalar requires a compile-time value");
                 }
             } else if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
