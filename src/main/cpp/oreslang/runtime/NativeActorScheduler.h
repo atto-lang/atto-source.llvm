@@ -286,6 +286,11 @@ int ores_native_actor_scheduler_commit_if_both_live_v1(
     OresNativeActorScheduler* scheduler, OresNativeActorRef sender,
     OresNativeActorRef recipient, OresNativeActorBoundedCommitV1 commit,
     void* opaque);
+/* Trusted host-only guard: true during ANY native actor scheduler callback,
+ * regardless of which scheduler owns the carrier. This does not grant actor
+ * authority; callers use it to reject unsafe fallback to foreign/root pools.
+ * Returns zero on external producer threads and between actor turns. */
+int ores_native_actor_scheduler_in_any_actor_turn(void);
 /* Exact live actor identity for trusted callback/FFI bridges only. */
 int ores_native_actor_scheduler_is_current_actor(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
