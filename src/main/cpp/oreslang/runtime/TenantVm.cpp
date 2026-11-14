@@ -252,22 +252,11 @@ __attribute__((tls_model("initial-exec")))
 #endif
 thread_local Carrier* t_carrier = nullptr;
 
-// On Darwin only the mask-saving form also restores the kernel's on-alt-stack state, which
-// a recovery from a stack overflow depends on. Linux derives that state from the SP.
-#if defined(__APPLE__)
+// Preserve the *exact* pre-guest signal mask on every platform. In particular a
+// siglongjmp from our SA_ONSTACK handler must not permanently unblock signals the host,
+// ASan, or another runtime deliberately blocked on this carrier. The prior Linux
+// sigsetjmp(env, 0) + unconditional SIG_UNBLOCK lost that mask state.
 #define ORES_VM_SETJMP(env) sigsetjmp(env, 1)
-#else
-#define ORES_VM_SETJMP(env) sigsetjmp(env, 0)
-#endif
-
-void unblock_recovered_signals() {
-#if !defined(__APPLE__)
-    sigset_t set;
-    sigemptyset(&set);
-    for (int s : {SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGTRAP, kInterruptSignal}) sigaddset(&set, s);
-    pthread_sigmask(SIG_UNBLOCK, &set, nullptr);
-#endif
-}
 
 struct sigaction g_previous[64];
 
@@ -383,6 +372,7 @@ std::uint64_t heap_class_bytes(int index) { return std::uint64_t{kMinHeapClassBy
 // globally wrap sigaltstack: sanitizers register their own alternate signal stacks.
 #if defined(TENANT_VM_TEST_MPROTECT)
 extern "C" int tenant_vm_test_carrier_sigaltstack(const stack_t*, stack_t*);
+extern "C" void tenant_vm_test_record_recovery_mask();
 #endif
 
 struct TenantVmHost::Core {
@@ -763,7 +753,10 @@ struct TenantVmHost::Core {
                             std::int64_t* out) {
         if (ORES_VM_SETJMP(c->resume) != 0) {
             c->in_guest = 0;
-            unblock_recovered_signals();
+#if defined(TENANT_VM_TEST_MPROTECT)
+            // Test-only observer confirms siglongjmp restored the worker's original mask.
+            tenant_vm_test_record_recovery_mask();
+#endif
             return false;
         }
         c->in_guest = 1;
