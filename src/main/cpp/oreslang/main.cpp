@@ -442,6 +442,7 @@ int main(int argc, char** argv) {
             // Bounded production two-i64 stack owner only; no escaping
             // handles, async/actor lifetime, or target/RT guarantees.
             if (experimental_owned_int || experimental_rt_scalar_loop ||
+                    target_seen || isolate_entry_seen ||
                     wasm32_target || cortex_m_target || native_hard_rt_profile ||
                     rt_check_only || rt_report_seen || rt_entry_seen ||
                     tree_shake || !tree_shake_roots.empty() ||
