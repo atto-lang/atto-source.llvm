@@ -8,6 +8,7 @@
 #include <set>
 #include <stdexcept>
 #include <tuple>
+#include <vector>
 #include <unordered_map>
 
 namespace oreslang::runtime {
@@ -134,38 +135,40 @@ public:
     void fence_actor(ActorHeapIdentity owner) {
         if (!owner.runtime || !owner.actor || !owner.epoch)
             throw std::invalid_argument("invalid native fence actor identity");
+        // Allocate the snapshot before changing admission policy. A failed
+        // allocation must not leave a half-fenced actor with live cursors.
+        std::vector<std::pair<std::uint64_t, std::shared_ptr<TrustedPointerWindow>>> pending;
         {
             std::lock_guard<std::mutex> lock(mu_);
+            for (const auto& pair : entries_) {
+                if (pair.second.grant.owner == owner)
+                    pending.emplace_back(pair.first, pair.second.window);
+            }
             // Permanent for this exact incarnation; a newer epoch is distinct.
             fenced_actors_.insert(actor_key(owner));
-        }
-        for (;;) {
-            std::shared_ptr<TrustedPointerWindow> window;
-            std::uint64_t slot = 0;
-            {
-                std::lock_guard<std::mutex> lock(mu_);
-                for (auto& pair : entries_) {
-                    if (pair.second.grant.owner == owner) {
-                        pair.second.retiring = true;
-                        slot = pair.first;
-                        window = pair.second.window;
-                        break;
-                    }
-                }
-            }
-            if (!window) return;
-            // Do not hold the registry mutex while waiting on an FFI callback.
-            // Cached cursors are also invalidated by the shared window state.
-            if (!window->revoke())
-                throw std::logic_error(
-                    "native actor fence deferred by active same-thread FFI; retry after callback");
-            {
-                std::lock_guard<std::mutex> lock(mu_);
-                const auto it = entries_.find(slot);
-                if (it != entries_.end() && it->second.window == window)
-                    entries_.erase(it);
+            for (const auto& pair : pending) {
+                const auto it = entries_.find(pair.first);
+                if (it != entries_.end()) it->second.retiring = true;
             }
         }
+        // Revoke every grant, even if a same-thread callback defers one of
+        // them; returning early would leave other cached cursors live.
+        bool deferred = false;
+        for (const auto& pair : pending) {
+            // Never hold mu_ while waiting for a callback; it might call back
+            // into this registry. Cached cursors share the revoked state.
+            if (!pair.second->revoke()) {
+                deferred = true;
+                continue;
+            }
+            std::lock_guard<std::mutex> lock(mu_);
+            const auto it = entries_.find(pair.first);
+            if (it != entries_.end() && it->second.window == pair.second)
+                entries_.erase(it);
+        }
+        if (deferred)
+            throw std::logic_error(
+                "native actor fence deferred by active same-thread FFI; retry after callback");
     }
 
     void revoke(const Grant& grant) {
