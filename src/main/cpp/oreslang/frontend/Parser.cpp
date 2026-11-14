@@ -1103,17 +1103,49 @@ private:
                 fail("production inverted main missing return or operation budget exceeded");
             InvertedSourceOperation op;
             if (accept("return")) {
-                if (identifier() != result.owner_name)
-                    fail("production inverted return must read the local owner");
-                require("."); require("get"); require("(");
-                op.kind = InvertedSourceOperation::Kind::ReturnRead;
-                op.index = inverted_source_index();
-                require(",");
-                op.field = identifier();
-                require(")"); require(";");
+                const auto value_name = identifier();
+                if (value_name == result.owner_name) {
+                    require("."); require("get"); require("(");
+                    op.kind = InvertedSourceOperation::Kind::ReturnRead;
+                    op.index = inverted_source_index();
+                    require(",");
+                    op.field = identifier();
+                    require(")");
+                    if (!result.snapshot_name.empty())
+                        fail("production inverted detached snapshot must be returned");
+                } else if (!result.snapshot_name.empty() &&
+                           value_name == result.snapshot_name) {
+                    // The saved row is a detached value. Reading it after
+                    // a column write or swap-delete must observe old cells.
+                    require(".");
+                    op.kind = InvertedSourceOperation::Kind::ReturnSnapshotRead;
+                    op.snapshot_binding = value_name;
+                    op.field = identifier();
+                } else {
+                    fail("production inverted return must read the local owner or detached snapshot");
+                }
+                require(";");
                 result.operations.push_back(std::move(op));
                 require("}");
                 return result;
+            }
+            if (accept("let")) {
+                if (!result.snapshot_name.empty())
+                    fail("production inverted main admits only one detached snapshot");
+                const auto name = identifier();
+                if (name == result.owner_name)
+                    fail("production inverted snapshot cannot shadow owner");
+                require("=");
+                if (identifier() != result.owner_name)
+                    fail("production inverted snapshot requires the local owner");
+                require("."); require("snapshot"); require("(");
+                op.kind = InvertedSourceOperation::Kind::Snapshot;
+                op.snapshot_binding = name;
+                op.index = inverted_source_index();
+                require(")"); require(";");
+                result.snapshot_name = name;
+                result.operations.push_back(std::move(op));
+                continue;
             }
             if (identifier() != result.owner_name)
                 fail("production inverted operation must target the local owner");

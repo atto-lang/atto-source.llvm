@@ -1,0 +1,15 @@
+// Validate the right-hand column of an independent detached value.
+// Capturing id=42 must still return 42 after swap-delete replaces row 0.
+define inverted struct Position as
+    let x: int;
+    id: int;
+end
+
+fnc main(): int {
+    let rows = InvertedArray<Position>.with_capacity(2);
+    rows.push(7, 42);
+    let saved = rows.snapshot(0);
+    rows.push(99, 11);
+    rows.erase_swap(0);
+    return saved.id;
+}

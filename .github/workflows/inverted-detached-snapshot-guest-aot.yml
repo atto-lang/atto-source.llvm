@@ -1,0 +1,87 @@
+name: Inverted detached struct source-to-AOT
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      - 'src/main/cpp/oreslang/types/Inverted*.hpp'
+      - 'tests/native_inverted_production_mir_test.cpp'
+      - 'tests/native_inverted_struct_ast_test.cpp'
+      - 'tests/native_inverted_production_guest.sh'
+      - 'tests/fixtures/inverted-i64/**'
+      - '.github/workflows/inverted-detached-snapshot-guest-aot.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  independent-mir:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # pinned v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Verify exact PR head
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          echo "SOURCE_TREE_SHA=$(git rev-parse 'HEAD^{tree}')"
+      - name: Compile and execute independent production MIR verifier
+        run: |
+          set -euo pipefail
+          "${{ matrix.compiler }}" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Isrc/main/cpp tests/native_inverted_production_mir_test.cpp \
+            -o /tmp/atto-inverted-snapshot-mir
+          /tmp/atto-inverted-snapshot-mir
+          echo INVERTED_SNAPSHOT_MIR=EXECUTED
+
+  source-to-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # pinned v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Verify exact PR head
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          echo "SOURCE_TREE_SHA=$(git rev-parse 'HEAD^{tree}')"
+      - name: Install LLVM native toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y llvm-dev clang cmake ninja-build
+          llvm-config --version
+          clang --version
+          rustc --version
+      - name: Build actual source compiler and independent tests
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=ON -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build build --parallel 2 --target \
+            oreslang-llvmc \
+            oreslang-inverted-production-mir-test \
+            oreslang-native-inverted-struct-ast-test \
+            oreslang-no-gc-ir-audit-build
+      - name: Execute parser, MIR and real compiled guest .atto O0/O2 checks
+        run: |
+          set -euo pipefail
+          ctest --test-dir build --output-on-failure -R \
+            '^(native_inverted_struct_schema_ast|inverted_production_source_mir_cpp17|native_inverted_production_source_to_native)$'
+          echo INVERTED_SNAPSHOT_GUEST_AOT=EXECUTED

@@ -1,0 +1,12 @@
+// A copied value can only be returned through its exact lexical binding.
+define inverted struct Position as
+    let x: int;
+    id: int;
+end
+
+fnc main(): int {
+    let rows = InvertedArray<Position>.with_capacity(2);
+    rows.push(42, 100);
+    let saved = rows.snapshot(0);
+    return other.x;
+}

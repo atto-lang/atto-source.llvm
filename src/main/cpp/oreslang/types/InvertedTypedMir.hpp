@@ -35,8 +35,8 @@ class Module final {
     std::vector<Instruction> code_;
 
     static bool uses_field(OpKind kind) {
-        return kind == OpKind::ReadField || kind == OpKind::WriteField ||
-               kind == OpKind::BorrowRead || kind == OpKind::BorrowWrite ||
+        return kind == OpKind::ReadField || kind == OpKind::ReadSnapshotField ||
+               kind == OpKind::WriteField || kind == OpKind::BorrowRead || kind == OpKind::BorrowWrite ||
                kind == OpKind::ReleaseRead || kind == OpKind::ReleaseWrite;
     }
     static bool uses_row(OpKind kind) {
@@ -58,6 +58,7 @@ class Module final {
         std::vector<bool> writers(layout_.columns(), false);
         std::size_t length = 0;
         bool closed = false;
+        bool snapshot_ready = false;
         for (std::size_t i = 0; i < code_.size(); ++i) {
             const auto& op = code_[i];
             if (closed) throw std::logic_error("inverted MIR operation after close");
@@ -126,10 +127,17 @@ class Module final {
                     --length;
                     break;
                 case OpKind::Snapshot:
-                    if (op.index >= length)
-                        throw std::logic_error("invalid inverted MIR snapshot index");
+                    if (snapshot_ready || op.index >= length)
+                        throw std::logic_error("invalid or duplicate inverted MIR snapshot index");
                     for (bool w : writers)
                         if (w) throw std::logic_error("inverted MIR snapshot conflicts with writer");
+                    snapshot_ready = true;
+                    break;
+                case OpKind::ReadSnapshotField:
+                    if (!snapshot_ready || op.index != 0)
+                        throw std::logic_error("inverted MIR detached snapshot field read without value");
+                    // No original row or active-column loan guard is needed:
+                    // snapshot was copied to separate, immutable local cells.
                     break;
                 case OpKind::Suspend:
                     throw std::logic_error("inverted MIR suspension lacks owner pinning");
