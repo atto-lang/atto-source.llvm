@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <charconv>
 #include <limits>
+#include <optional>
 #include <functional>
 #include <cctype>
 #include <stdexcept>
