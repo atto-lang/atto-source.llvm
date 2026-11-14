@@ -1,0 +1,5 @@
+fnc main(): int {
+    val Atomic<int> counter = Atomic<int>(7);
+    val int leaked = another.load();
+    return 42;
+}

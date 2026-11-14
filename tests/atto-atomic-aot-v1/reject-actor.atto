@@ -1,0 +1,5 @@
+declare actor Worker;
+fnc main(): int {
+    val Atomic<int> counter = Atomic<int>(0);
+    return counter.load();
+}
