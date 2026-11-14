@@ -396,6 +396,32 @@ int main() {
     assert(parentCalled == 1 && childCalled == 1);
     assert(childCascade.try_reclaim().status == Reclaim::complete);
 
+    // Runtime identity must be bound by the creating coordinator, once,
+    // before a registry may authorize a NativeActorRetirementBarrier. Two
+    // independent runtimes can reuse the same actor/generation numbers.
+    ActorResourceRegistry runtimeBound(9620, 1);
+    assert(runtimeBound.bound_runtime_id() == 0);
+    bool invalidRuntimeRejected = false;
+    try { runtimeBound.bind_runtime_id(0); }
+    catch (const std::invalid_argument&) { invalidRuntimeRejected = true; }
+    assert(invalidRuntimeRejected && runtimeBound.bound_runtime_id() == 0);
+    runtimeBound.bind_runtime_id(641);
+    assert(runtimeBound.bound_runtime_id() == 641);
+    bool duplicateRuntimeRejected = false;
+    try { runtimeBound.bind_runtime_id(641); }
+    catch (const std::logic_error&) { duplicateRuntimeRejected = true; }
+    assert(duplicateRuntimeRejected);
+    bool foreignRuntimeRejected = false;
+    try { runtimeBound.bind_runtime_id(642); }
+    catch (const std::logic_error&) { foreignRuntimeRejected = true; }
+    assert(foreignRuntimeRejected && runtimeBound.bound_runtime_id() == 641);
+    runtimeBound.retire();
+    bool retiredRegistryRejected = false;
+    try { runtimeBound.bind_runtime_id(643); }
+    catch (const std::logic_error&) { retiredRegistryRejected = true; }
+    assert(retiredRegistryRejected && runtimeBound.bound_runtime_id() == 641);
+    assert(runtimeBound.try_reclaim().status == Reclaim::complete);
+
     ActorResourceRegistry tokenBound(18, 1, 1);
     std::vector<ActorResourceRegistry::Ticket> outstanding;
     outstanding.reserve(4096);
