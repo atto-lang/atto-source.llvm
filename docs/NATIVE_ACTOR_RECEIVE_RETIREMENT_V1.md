@@ -273,3 +273,62 @@ GitHub blob `654f24ed6d5e9f9f6a06c452cc0959940608e2e0`
 and **passed `bash -n`**, with local `git hash-object` equal
 to the remote Git blob SHA. This is syntax verification only;
 the script's full native test commands remain not executed.
+
+## Native ActorGroup STOP dispatch and physical callback receipt (2026-11-14)
+
+An additional trusted host race was found in `ActorGroupLifecycle.hpp`:
+`stop_workers()` marked workers `stopping` while still holding the
+admission monitor, then notified readiness observers before issuing
+STOP. A blocked notification delayed physical STOP indefinitely.
+Concurrent `close()` skipped workers already marked `stopping`,
+allowing close to return without submitting their stop callback.
+
+`stop_workers()` now dispatches requested stops **before** invoking
+external readiness observers. `close()` dispatches for every detached
+entry (including those marked stopping), relying on the existing
+ticket-local atomic `stop_issued.exchange(true)` for exactly-once
+delivery. This removes both the missing dispatch and callback-order
+starvation windows.
+
+Another independent race allowed `RuntimeFinalizer` to observe a
+detached group while its previously dispatched STOP callback was
+still physically executing on another carrier. The shared actor
+ticket now has a separate `stop_dispatch_finished` receipt, published
+with release ordering **after the callback actually returns or
+throws**. Detached `RuntimeFinalizer::ready_for_actor_turn_quiescence`,
+`finalized_after_close`, and the live group
+`NativeActorGroup::finalized` (when STOP has been requested) reject
+premature DONE/resource release until this receipt is visible.
+The callback completion bit alone does **not** certify successful
+native cleanup: the retirement registry, receive gate, cleanup gate,
+I/O loans, and quarantine checks remain independent requirements.
+
+Three deterministic native group regressions were added to the
+production `actor_group_lifecycle_test.cpp`:
+
+1. STOP callback blocks physically while `close()` runs on another
+   carrier; both resource readiness and DONE must remain pending.
+2. A readiness subscriber blocks while `stop_workers()` runs; STOP
+   must have been dispatched exactly once *before* notification.
+3. The legacy `group.finalized(ref)` API must not settle DONE
+   while a trusted STOP callback is still executing.
+
+The `ATTO_ACTOR_RETIREMENT_HOST_ONLY` SDK-free CMake branch now
+requires **three** production CTests: actor resource registry,
+retirement barrier, and group lifecycle. The exact checked-in host
+script SHA `044431747fd10ff6e7f67935f82f6cd270f93b45`
+was reconstructed locally, verified with `git hash-object`, and
+passed `bash -n`. Retirement and group lifecycle run with
+Clang/GCC ASan/UBSan **and** leak detection. The resource registry
+test keeps ASan/UBSan, but has LeakSanitizer disabled because its
+negative tests intentionally retain unsafe failed-callback captures
+until independently verified isolate shutdown.
+
+**Evidence boundary:** The new full group/registry/retirement CTests
+are written but still **NOT_EXECUTED** on the exact PR checkout.
+The source Actions jobs do not report executable steps. The isolated
+byte-exact source receive gate passed 2,000 two-carrier STOP/admission
+races under each of Clang 17 and GCC 14, ASan/UBSan; the Java source
+gate passed independent strict-JDK21 checks. Neither result proves
+that the complete new C++ group header compiles or that an actor
+emitted by the AttoLang compiler runs concurrently.
