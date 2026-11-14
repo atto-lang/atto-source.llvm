@@ -539,7 +539,36 @@ static void native_receive_stop_admission_race_is_linearizable() {
     }
 }
 
+static void invalid_receive_fence_construction_and_post_owner_release() {
+    bool rejected_zero_actor = false;
+    bool rejected_zero_incarnation = false;
+    bool rejected_zero_capacity = false;
+    bool rejected_excessive_capacity = false;
+    try { NativeActorReceiveFence invalid(0, 1, 1); }
+    catch (const std::invalid_argument&) { rejected_zero_actor = true; }
+    try { NativeActorReceiveFence invalid(1, 0, 1); }
+    catch (const std::invalid_argument&) { rejected_zero_incarnation = true; }
+    try { NativeActorReceiveFence invalid(1, 1, 0); }
+    catch (const std::invalid_argument&) { rejected_zero_capacity = true; }
+    try { NativeActorReceiveFence invalid(1, 1, 4097); }
+    catch (const std::invalid_argument&) { rejected_excessive_capacity = true; }
+    require(rejected_zero_actor && rejected_zero_incarnation
+                && rejected_zero_capacity && rejected_excessive_capacity,
+            "invalid native actor receive admission allocated a fence");
+
+    std::optional<NativeActorReceiveFence::ReceiveLease> outstanding;
+    {
+        auto fence = std::make_unique<NativeActorReceiveFence>(22, 9, 1);
+        outstanding = fence->try_enter(22, 9);
+        require(outstanding.has_value(), "receive lease admission");
+    }
+    // The lease owns the bounded generation state, not a raw pointer to its
+    // now-destroyed factory gate. Dropping it cannot use freed gate memory.
+    outstanding.reset();
+}
+
 int main() {
+    invalid_receive_fence_construction_and_post_owner_release();
     native_receive_stop_admission_race_is_linearizable();
     two_overlapping_receives_pin_actual_native_done_barrier();
     foreign_receive_fence_cannot_complete_another_actor();
