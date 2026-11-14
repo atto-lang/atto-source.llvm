@@ -40,6 +40,12 @@ int oreslang_source_actor_test_readiness_publication_entered(void);
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
                                   OresSourceActorMessage on_message,
                                   uint64_t fields);
+/* Restricted bounded actor-churn compiler glue ONLY: trusted external main
+ * waits on a condition variable until the constructor reaches READY.
+ * It is forbidden on actor carriers and is NOT a general Future/get_ready()
+ * or nonblocking suspension implementation. Must precede stop(actor).
+ */
+void oreslang_source_actor_wait_ready_blocking(void* actor);
 /* Nonblocking bounded one-way send. Overload currently fails closed with a
  * host error; a typed guest overload result still needs compiler lowering.
  */
