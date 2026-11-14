@@ -1182,7 +1182,7 @@ void repeated_failures_end_only_that_actor() {
     VmSpec s = spec("loop");
     s.limits.restart_budget = 3;
     s.limits.restart_window_ms = 60000;
-    s.limits.restart_backoff_ms = 1;
+    s.limits.restart_backoff_ms = 50;
     s.limits.mailbox_capacity = 16;
     auto v = host.open(s);
     REQUIRE_OK(v);
@@ -1194,8 +1194,15 @@ void repeated_failures_end_only_that_actor() {
     // Successes between failures do not refill the budget: it is failures per window.
     for (int i = 0; i < 3; ++i) {
         CHECK_STATUS(host.call(a.actor, words({RESTART_ADD_THEN_TRAP, 1})).get().status, Status::ActorRestarted);
-        CHECK_STATUS(host.call(a.actor, words({RESTART_ADD, 1})).get().status, Status::Ok);
+        // Keep successes *between* failures, but do not clear the third failure's backoff.
+        // Otherwise the carrier can complete the terminal turn before the second call is admitted,
+        // making mail_abandoned == 0 a valid scheduling outcome rather than a lost-mail defect.
+        if (i < 2)
+            CHECK_STATUS(host.call(a.actor, words({RESTART_ADD, 1})).get().status, Status::Ok);
     }
+    // With the third failure's 200 ms backoff still active, the fatal fourth turn and
+    // its successor are both admitted before either can execute. This is a mailbox test,
+    // not an accidental race against a fast carrier.
     // Mail queued behind the last failure is reported, not dropped.
     auto last = host.call(a.actor, words({RESTART_ADD_THEN_TRAP, 1}));
     auto queued = host.call(a.actor, words({RESTART_ADD, 1}));
