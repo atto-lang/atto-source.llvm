@@ -10,7 +10,10 @@
 #include <stdexcept>
 #include <string>
 
-int main() {
+int main(int argc, char** argv) {
+    const bool negative = argc == 2 && std::string(argv[1]) == "--bounds-trap";
+    if (argc > 2 || (argc == 2 && !negative))
+        throw std::invalid_argument("unexpected MIR smoke argument");
     using namespace oreslang;
     Program program;
     InvertedStructDecl decl;
@@ -33,6 +36,17 @@ int main() {
         InvertedSourceOperation{Kind::EraseSwap, 0, "", {}, 0},
         InvertedSourceOperation{Kind::ReturnRead, 0, "x", {}, 0}
     };
+    if (negative) {
+        // Deleting dense row 0 from two rows moves row 1 to position 0.
+        // The old dense position 1 must TRAP at runtime, not return 42 or
+        // be resurrected as a generation-checked object handle.
+        source.operations = {
+            InvertedSourceOperation{Kind::Push, 0, "", {{11, 100}}, 0},
+            InvertedSourceOperation{Kind::Push, 0, "", {{20, 101}}, 0},
+            InvertedSourceOperation{Kind::EraseSwap, 0, "", {}, 0},
+            InvertedSourceOperation{Kind::ReturnRead, 1, "x", {}, 0}
+        };
+    }
     program.inverted_main = source;
 
     const auto verified = dop::mir::verify_production_inverted_i64(program);
