@@ -193,6 +193,70 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
 
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view(argv[1]) == "--selftest-native-log-info-ir") {
+        try {
+            auto program = oreslang::parse_program(
+                "pub fnc main(): int { "
+                "using telemetry.span(\"hammer\") as span {"
+                "log.info(\"hammer.started\"); log.info(\"hammer.finished\");"
+                "} return 42; }");
+            const std::vector<oreslang::CheckedSourceRoutineV1> routines = {
+                {"main", 0, "rid_d5f8e146ba97430dac6bf17430477e2a"}
+            };
+            const std::vector<oreslang::CheckedLogSiteV1> sites = {
+                {"main", 0, "hammer.started",
+                    "rid_d5f8e146ba97430dac6bf17430477e2a",
+                    "sid_652e1632e7464fdb936fc40fe24f1c7b"},
+                {"main", 0, "hammer.finished",
+                    "rid_d5f8e146ba97430dac6bf17430477e2a",
+                    "sid_77777777777777777777777777777777"}
+            };
+            const auto ir = oreslang::emit_verified_llvm_ir(
+                program, false, false, false, "", routines, sites);
+            if (ir.find("ores_native_telemetry_span_begin") == std::string::npos ||
+                ir.find("ores_native_telemetry_log_info") == std::string::npos ||
+                ir.find("atto.source.site_id.v1") == std::string::npos ||
+                ir.find("sid_652e1632e7464fdb936fc40fe24f1c7b") == std::string::npos ||
+                ir.find("sid_77777777777777777777777777777777") == std::string::npos) {
+                std::cerr << "native source log callsite/IDs not present in guest LLVM IR\n";
+                return 2;
+            }
+            auto rejected = [&](const std::vector<oreslang::CheckedLogSiteV1>& proposed) {
+                try {
+                    (void)oreslang::emit_verified_llvm_ir(
+                        program, false, false, false, "", routines, proposed);
+                    return false;
+                } catch (const std::runtime_error&) { return true; }
+            };
+            auto wrong = sites;
+            wrong[0].site_id = "rid_652e1632e7464fdb936fc40fe24f1c7b";
+            auto duplicate = sites;
+            duplicate[1].site_id = duplicate[0].site_id;
+            auto stale = sites;
+            stale[0].message = "stale.source.site";
+            auto foreign = sites;
+            foreign[0].routine_id = "rid_99999999999999999999999999999999";
+            if (!rejected({}) || !rejected(wrong) || !rejected(duplicate) ||
+                !rejected(stale) || !rejected(foreign) ||
+                !rejected({sites[0]})) {
+                std::cerr << "native LLVM source logging admitted stale/wrong site identities\n";
+                return 2;
+            }
+            try {
+                (void)oreslang::parse_program(
+                    "pub fnc main(): int { log.info(42); return 42; }");
+                std::cerr << "dynamic source logging was incorrectly admitted\n";
+                return 2;
+            } catch (const std::runtime_error&) { }
+            std::cout << "LLVM_NATIVE_LOG_INFO_GUEST_IR_PASS\n";
+            return 0;
+        } catch (const std::exception& error) {
+            std::cerr << "LLVM guest static log selftest failed: ";
+            print_safe_diagnostic(std::cerr, error.what(), 160);
+            std::cerr << '\n';
+            return 2;
+        }
+    }
     // Internal exact-frontend + LLVM IR regression; not a public source ID
     // authoring interface, not a native executable/OTel/JIT proof.
     if (argc == 2 && std::string_view(argv[1]) == "--selftest-source-routine-ir") {
