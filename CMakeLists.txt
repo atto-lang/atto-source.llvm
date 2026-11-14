@@ -175,6 +175,23 @@ if(ATTO_ACTOR_LOGICAL_FRAMES_HOST_ONLY)
     add_test(NAME native_actor_a_b_frame_quota_isolation
         COMMAND atto-native-actor-a-b-quota-host-test)
     set_tests_properties(native_actor_a_b_frame_quota_isolation PROPERTIES TIMEOUT 20)
+
+    # Uses the real typed supervisor CONTROL scheduler and actor-owned frames.
+    # This is native host evidence, not a compiled .atto failure path.
+    add_executable(atto-native-actor-frame-control-host-test
+        tests/native_actor_frame_quota_supervisor_test.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(atto-native-actor-frame-control-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(atto-native-actor-frame-control-host-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(atto-native-actor-frame-control-host-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(atto-native-actor-frame-control-host-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_frame_quota_typed_supervisor_control
+        COMMAND atto-native-actor-frame-control-host-test)
+    set_tests_properties(native_actor_frame_quota_typed_supervisor_control PROPERTIES TIMEOUT 30)
     return()
 endif()
 
@@ -234,6 +251,21 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_a_b_quota_sibling_42
         COMMAND oreslang-native-actor-a-b-quota-test)
     set_tests_properties(native_actor_a_b_quota_sibling_42 PROPERTIES TIMEOUT 20)
+
+    add_executable(oreslang-native-actor-frame-control-test
+        tests/native_actor_frame_quota_supervisor_test.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-frame-control-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-actor-frame-control-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(oreslang-native-actor-frame-control-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-actor-frame-control-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_frame_quota_typed_supervisor_e2e
+        COMMAND oreslang-native-actor-frame-control-test)
+    set_tests_properties(native_actor_frame_quota_typed_supervisor_e2e PROPERTIES TIMEOUT 30)
 
     # AOT trace policy gate; this does not compile a source-level Atto trace.
     find_package(Threads REQUIRED)
