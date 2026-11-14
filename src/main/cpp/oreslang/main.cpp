@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/GpuG1AttoSaxpySource.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
@@ -207,6 +208,8 @@ int main(int argc, char** argv) {
     bool rt_check_only = false;
     bool frontend_check_only = false;
     bool analyze_requested = false;
+    bool gpu_g1_kernel_ir = false;
+    bool gpu_g1_other_option = false;
     bool rt_entry_seen = false;
     bool rt_report_seen = false;
     bool constraint_descriptors_only = false;
@@ -222,6 +225,8 @@ int main(int argc, char** argv) {
     std::string coreLogLevel = envLevel ? envLevel : "off";
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
+        if (!arg.empty() && arg[0] == '-' && arg != "--gpu-g1-kernel-ir")
+            gpu_g1_other_option = true;
         if (arg.rfind("--allocator-provider=", 0) == 0) {
             if (allocator_provider_seen) {
                 std::cerr << "duplicate allocator-provider option\n";
@@ -265,6 +270,9 @@ int main(int argc, char** argv) {
         } else if (arg == "--analyze") {
             if (analyze_requested) { std::cerr << "duplicate analyze option\n"; return 2; }
             analyze_requested = true;
+        } else if (arg == "--gpu-g1-kernel-ir") {
+            if (gpu_g1_kernel_ir) { std::cerr << "duplicate gpu-g1-kernel-ir option\n"; return 2; }
+            gpu_g1_kernel_ir = true;
         } else if (arg == "--rt-check") {
             if (rt_check_only) { std::cerr << "duplicate rt-check option\n"; return 2; }
             rt_check_only = true;
@@ -349,6 +357,10 @@ int main(int argc, char** argv) {
              target_seen || allocator_provider_seen)) {
         std::cerr << "--check is frontend-only and cannot be combined with codegen, "
                      "real-time reports, target, or experimental options\n";
+        return 2;
+    }
+    if (gpu_g1_kernel_ir && gpu_g1_other_option) {
+        std::cerr << "GPU-G1-SOURCE-004: isolated G1 source lowering forbids unrelated compiler options\n";
         return 2;
     }
     // Public library architecture has exactly two layers. For now the native
@@ -445,6 +457,20 @@ int main(int argc, char** argv) {
         // constraints before parsing or emitting LLVM IR.
         if (text.find("// ores:") != std::string::npos) {
             throw std::runtime_error("native target admission unsupported: ores environment headers require compiler verification");
+        }
+        if (gpu_g1_kernel_ir) {
+            // Isolated compiler-backed kernel-only proof; NOT general gpu fnc,
+            // host launch, device execution or a host-target scalar function.
+            const std::string source_path(path);
+            if (source_path.size() < 6 ||
+                source_path.compare(source_path.size() - 5, 5, ".atto") != 0)
+                throw std::runtime_error("GPU-G1-SOURCE-001: canonical .atto extension required");
+            if (text.size() > 65536)
+                throw std::runtime_error("GPU-G1-SOURCE-001: source exceeds kernel budget");
+            const auto kernel = oreslang::gpu::g1::compile_g1_saxpy_source(text);
+            std::cout << kernel.llvm_ir;
+            std::cout.flush();
+            return 0;
         }
         if (experimental_rt_scalar_loop && (wasm32_target || experimental_owned_int))
             throw std::runtime_error("scalar-loop frame requires native host and no owned-int experiment");
