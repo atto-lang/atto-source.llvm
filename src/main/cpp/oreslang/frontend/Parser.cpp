@@ -745,7 +745,7 @@ public:
             if (token_.text == "activity" || token_.text == "workflow")
                 fail("DURABLE_M0_BACKEND_UNSUPPORTED: LLVM requires typed durable manifest and replay lowering");
             if (token_.text == "mtd") {
-                program.functions.push_back(extension_method(exported));
+                parse_receiver_mtd(program, exported);
                 continue;
             }
             if (token_.text == "type" || token_.text == "trait" ||
@@ -818,6 +818,14 @@ public:
                 program.generators.push_back(std::move(generator));
                 continue;
             }
+            // A receiver-first mtd is a declaration, not a standalone function.
+            // Preserve the previous define mtd name on Alias form separately.
+            if (token_.text == "mtd" ||
+                    (token_.text == "pub" && peek_next().text == "mtd")) {
+                const bool method_exported = accept("pub");
+                parse_receiver_mtd(program, method_exported);
+                continue;
+            }
             bool public_class = token_.text == "pub" && peek_next().text == "define";
             if (public_class) advance();
             if (accept("@")) {
@@ -882,7 +890,7 @@ public:
                 if (token_.text == "activity" || token_.text == "workflow")
                     fail("DURABLE_M0_BACKEND_UNSUPPORTED: LLVM requires typed durable manifest and replay lowering");
                 if (token_.text == "mtd") {
-                    program.functions.push_back(extension_method(public_class));
+                    parse_receiver_mtd(program, public_class);
                     continue;
                 }
                 if (token_.text == "type" || token_.text == "trait" ||
@@ -1948,6 +1956,46 @@ private:
         return "$mtd$" + receiver + "$" + method;
     }
 
+    void parse_receiver_mtd(Program& program, bool exported) {
+        // Legacy named-alias extensions remain supported but do not grant
+        // class ownership or mutation. This canonical spelling is restricted
+        // to an ordinary class already declared in this same source unit.
+        if (peek_next().text != "(") {
+            program.functions.push_back(extension_method(exported));
+            return;
+        }
+
+        require("mtd");
+        require("(");
+        const bool mutable_receiver = accept("mut");
+        require("self");
+        require(":");
+        const std::string owner = identifier();
+        require(")");
+        auto found = std::find_if(program.classes.begin(), program.classes.end(),
+            [&](const ClassDecl& cls) { return cls.name == owner; });
+        if (found == program.classes.end())
+            fail("NATIVE_MTD_LOCAL_CLASS_REQUIRED: typed receiver must name an already declared ordinary local class");
+        const bool prior_active = external_class_receiver_active_;
+        const bool prior_mutable = external_class_receiver_mutable_;
+        external_class_receiver_active_ = true;
+        external_class_receiver_mutable_ = mutable_receiver;
+        Function method = function(owner, exported);
+        external_class_receiver_active_ = prior_active;
+        external_class_receiver_mutable_ = prior_mutable;
+        ClassMethod signature;
+        signature.name = method.name.substr(owner.size() + 1);
+        signature.arity = native_source_value_arity(method.parameters.size(), true);
+        signature.public_member = exported;
+        signature.mutable_receiver =
+            method.parameters.front().mode == Parameter::Mode::BorrowMut;
+        for (const auto& prior : found->methods)
+            if (prior.name == signature.name && prior.arity == signature.arity)
+                fail("NATIVE_MTD_DUPLICATE_SLOT: duplicate receiver method name/arity");
+        found->methods.push_back(std::move(signature));
+        methods_.push_back(std::move(method));
+    }
+
     Function extension_method(bool exported) {
         extension_offset_ = token_.offset;
         require("mtd");
@@ -2086,7 +2134,13 @@ private:
         }
         if (!owner.empty()) {
             Parameter receiver;
-            receiver.name = "self"; receiver.class_name = owner; receiver.mode = Parameter::Mode::Borrow;
+            receiver.name = "self"; receiver.class_name = owner;
+            receiver.mode = external_class_receiver_mutable_
+                ? Parameter::Mode::BorrowMut : Parameter::Mode::Borrow;
+            if (external_class_receiver_active_ &&
+                    (token_.text == "self" ||
+                    (token_.text == "mut" && peek_next().text == "self")))
+                fail("NATIVE_MTD_DUPLICATE_SELF: receiver is already declared in mtd header");
             if (accept("mut")) {
                 require("self");
                 receiver.mode = Parameter::Mode::BorrowMut;
@@ -6136,6 +6190,8 @@ private:
         std::unordered_map<std::string, std::unordered_set<std::size_t>>> extension_methods_;
     std::unordered_set<std::string> extension_public_slots_;
     bool extension_header_active_ = false;
+    bool external_class_receiver_active_ = false;
+    bool external_class_receiver_mutable_ = false;
     // Inside a native actor on_message body: `self.field` names the actor field.
     bool actor_handler_active_ = false;
     std::string extension_receiver_alias_;
