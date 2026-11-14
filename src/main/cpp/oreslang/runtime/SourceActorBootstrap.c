@@ -41,7 +41,9 @@ typedef struct {
     pthread_cond_t completed;
     OresNativeActorFuture* ready_future;
     OresSourceActorContinuation continuation;
+    OresSourceActorIdContinuation id_continuation;
     SourceActor* actor;
+    OresSourceActorId actor_id;
     OresNativeSuspensionLink link;
     uint64_t source_token;
     int suspend_recorded;
@@ -54,7 +56,9 @@ typedef struct {
     pthread_cond_t completed;
     OresNativeActorFuture* done_future;
     OresSourceActorContinuation continuation;
+    OresSourceActorIdContinuation id_continuation;
     SourceActor* actor;
+    OresSourceActorId actor_id;
     OresNativeSuspensionLink link;
     uint64_t source_token;
     int suspend_recorded;
@@ -291,7 +295,9 @@ static void root_suspend_turn(void) {
 static void root_resume_turn(void) {
     ReadyAwaitFrame* frame;
     OresSourceActorContinuation continuation;
+    OresSourceActorIdContinuation id_continuation;
     SourceActor* actor;
+    OresSourceActorId actor_id;
     OresNativeSuspensionLink link;
     int future_status;
 
@@ -303,7 +309,10 @@ static void root_resume_turn(void) {
     ensure(future_status == ORES_NATIVE_FUTURE_READY
         || future_status == ORES_NATIVE_FUTURE_FAILED);
     continuation = frame->continuation;
+    id_continuation = frame->id_continuation;
     actor = frame->actor;
+    actor_id = frame->actor_id;
+    ensure((continuation != NULL) != (id_continuation != NULL));
     link = frame->link;
     group_unlock();
 
@@ -334,7 +343,9 @@ static void root_resume_turn(void) {
     if (future_status == ORES_NATIVE_FUTURE_READY) {
         ensure(!ores_native_store_handle_valid(current_source_execution));
         current_source_execution = resumed;
-        result = continuation(actor);
+        result = id_continuation
+            ? id_continuation(actor_id)
+            : continuation(actor);
         current_source_execution = (OresNativeExecutionHandle){0, 0};
         outcome = ORES_SOURCE_ACTOR_STARTUP_READY;
     }
@@ -387,7 +398,9 @@ static void root_done_suspend_turn(void) {
 static void root_done_resume_turn(void) {
     DoneAwaitFrame* frame;
     OresSourceActorContinuation continuation;
+    OresSourceActorIdContinuation id_continuation;
     SourceActor* actor;
+    OresSourceActorId actor_id;
     OresNativeSuspensionLink link;
 
     group_lock();
@@ -397,7 +410,10 @@ static void root_done_resume_turn(void) {
     ensure(ores_native_actor_future_status(frame->done_future)
         == ORES_NATIVE_FUTURE_READY);
     continuation = frame->continuation;
+    id_continuation = frame->id_continuation;
     actor = frame->actor;
+    actor_id = frame->actor_id;
+    ensure((continuation != NULL) != (id_continuation != NULL));
     link = frame->link;
     group_unlock();
 
@@ -419,7 +435,9 @@ static void root_done_resume_turn(void) {
     ensure(same_allocation(logical.allocation, physical.allocation));
     ensure(!ores_native_store_handle_valid(current_source_execution));
     current_source_execution = resumed;
-    const int64_t result = continuation(actor);
+    const int64_t result = id_continuation
+        ? id_continuation(actor_id)
+        : continuation(actor);
     current_source_execution = (OresNativeExecutionHandle){0, 0};
 
     ensure(ores_native_await_trace_resume_finish(group.continuations, link));
