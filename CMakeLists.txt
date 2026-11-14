@@ -321,6 +321,28 @@ if(BUILD_TESTING)
         PASS_REGULAR_EXPRESSION "LLVM_NATIVE_LOG_INFO_GUEST_IR_PASS"
         TIMEOUT 30)
 
+    # Full compiler proof: this target invokes oreslang-llvmc on the actual
+    # reviewed .atto source + JSON manifest, compiles the emitted LLVM IR,
+    # links the production C runtime and checks exit 42 + both real receipts.
+    # It is NOT the standalone source-free IR ABI regression above.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
+       CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
+        find_program(ATTO_NATIVE_LOG_GUEST_CLANG
+            NAMES clang clang-20 clang-19 clang-18 clang-17)
+        if(ATTO_NATIVE_LOG_GUEST_CLANG)
+            add_test(NAME native_log_info_compiler_linked_guest_full_aot
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DATTO_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+                    "-DATTO_COMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                    "-DATTO_CLANG=${ATTO_NATIVE_LOG_GUEST_CLANG}"
+                    "-DATTO_WORK=${CMAKE_CURRENT_BINARY_DIR}/native-log-guest-check"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_guest_log_info_full_aot.cmake")
+            set_tests_properties(native_log_info_compiler_linked_guest_full_aot PROPERTIES
+                PASS_REGULAR_EXPRESSION "LLVM_NATIVE_LOG_INFO_LINKED_ATTO_GUEST_PASS:42"
+                TIMEOUT 45)
+        endif()
+    endif()
+
     # AOT trace policy gate; this does not compile a source-level Atto trace.
     find_package(Threads REQUIRED)
     add_executable(oreslang-native-trace-probe-policy-test
