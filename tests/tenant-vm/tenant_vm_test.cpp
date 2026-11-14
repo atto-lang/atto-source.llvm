@@ -1622,6 +1622,7 @@ void concurrent_tenants_keep_independent_stacks_and_actor_state() {
     CHECK_EQ(host.stats().unavailable_carriers, std::uint32_t{0});
 }
 
+#if defined(TENANT_VM_TEST_MPROTECT)
 // A replacement thread may fail to install its alternate SIGSEGV stack even though mmap
 // succeeded. The failure must retire that carrier without a process-wide abort.
 void alternate_signal_stack_failure_retire_and_recover() {
@@ -1691,6 +1692,58 @@ void shutdown_during_carrier_recovery_finishes_all_accepted_mail() {
             CHECK_STATUS(pending.get().status, Status::TenantFailed);
     }
 }
+
+// A permanently unavailable carrier consumes capacity but must not stop other tenants
+// while a second carrier remains healthy. Three quota sizes force guard switches on
+// a two-carrier pool without assuming which worker schedules a particular turn.
+void permanently_failed_carrier_leaves_other_tenants_runnable() {
+    HostLimits limits;
+    limits.carriers = 2;
+    TenantVmHost host(limits);
+    auto small = host.open(stack_spec("survivor-small", 512 << 10));
+    auto medium = host.open(stack_spec("survivor-medium", 1 << 20));
+    auto large = host.open(stack_spec("survivor-large", 4 << 20));
+    REQUIRE_OK(small);
+    REQUIRE_OK(medium);
+    REQUIRE_OK(large);
+    auto a = host.spawn_actor(small.handle, KIND_RESTARTABLE);
+    auto b = host.spawn_actor(medium.handle, KIND_RESTARTABLE);
+    auto c = host.spawn_actor(large.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(a);
+    REQUIRE_OK(b);
+    REQUIRE_OK(c);
+    for (int i = 0; i < 4; ++i) {
+        CHECK_STATUS(host.call(a.actor, words({RESTART_ADD, 1})).get().status, Status::Ok);
+        CHECK_STATUS(host.call(b.actor, words({RESTART_ADD, 1})).get().status, Status::Ok);
+        CHECK_STATUS(host.call(c.actor, words({RESTART_ADD, 1})).get().status, Status::Ok);
+    }
+    tenant_vm_test_fail_next_carrier_allocations(3);
+    tenant_vm_test_fail_next_guard_restore();
+    for (int i = 0; i < 96 && host.stats().unavailable_carriers == 0; ++i) {
+        for (const auto& actor : {a.actor, b.actor, c.actor}) {
+            const Status status = host.call(actor, words({RESTART_ADD, 1})).get().status;
+            CHECK(status == Status::Ok || status == Status::ActorRestarted);
+        }
+    }
+    const auto deadline = std::chrono::steady_clock::now() + Ms(5000);
+    while ((host.stats().carrier_replacement_failures < 3 ||
+            host.stats().unavailable_carriers != 1) &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(Ms(2));
+    CHECK_EQ(host.stats().carrier_replacement_failures, std::uint64_t{3});
+    CHECK_EQ(host.stats().unavailable_carriers, std::uint32_t{1});
+    CHECK_EQ(host.stats().carrier_replacements, std::uint64_t{0});
+    for (int i = 0; i < 12; ++i) {
+        CHECK_STATUS(host.call(a.actor, words({RESTART_ADD, 1})).get().status, Status::Ok);
+        CHECK_STATUS(host.call(b.actor, words({RESTART_ADD, 1})).get().status, Status::Ok);
+        CHECK_STATUS(host.call(c.actor, words({RESTART_ADD, 1})).get().status, Status::Ok);
+    }
+    CHECK(host.snapshot(small.handle).phase == Phase::Running);
+    CHECK(host.snapshot(medium.handle).phase == Phase::Running);
+    CHECK(host.snapshot(large.handle).phase == Phase::Running);
+    CHECK_EQ(host.stats().unavailable_carriers, std::uint32_t{1});
+}
+#endif
 
 // A quota must leave room for host calls, and fit in the carrier's stack with its guard.
 void stack_quota_limits_are_checked() {
@@ -1847,6 +1900,7 @@ const Case cases[] = {
     {"carrier_replacement_exhaustion_fails_pending_calls", carrier_replacement_exhaustion_fails_pending_calls},
     {"alternate_signal_stack_failure_retire_and_recover", alternate_signal_stack_failure_retire_and_recover},
     {"shutdown_during_carrier_recovery_finishes_all_accepted_mail", shutdown_during_carrier_recovery_finishes_all_accepted_mail},
+    {"permanently_failed_carrier_leaves_other_tenants_runnable", permanently_failed_carrier_leaves_other_tenants_runnable},
 #endif
     {"concurrent_tenants_keep_independent_stacks_and_actor_state", concurrent_tenants_keep_independent_stacks_and_actor_state},
     {"stack_quota_limits_are_checked", stack_quota_limits_are_checked},
