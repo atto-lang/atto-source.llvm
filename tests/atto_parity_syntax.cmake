@@ -80,9 +80,20 @@ run_case(expect_ok "${fixtures}/expect_ok.atto" 42)
 run_case(expect_err "${fixtures}/expect_err.atto" nonzero)
 run_case(import_fnc "${fixtures}/import_fnc/main.atto" 0)
 run_case(attolang_equality "${fixtures}/attolang_equality.atto" 0)
+# Real compiler + LLVM IR + clang + process exit status, not parser-only fixtures.
+run_case(comma_body_fnc_routine "${fixtures}/comma_body_fncs.atto" 42)
+run_case(comma_body_mtd "${fixtures}/comma_body_methods.atto" 42)
+
 
 # Strict native scalar equality enforces identical operand types. The
 # accepted aliases are all lowered to static comparison instructions.
+reject_case(comma_body_trailing
+  "fnc main() -> int :: int x = 5, end\\n"
+  "requires item after ','")
+reject_case(comma_body_empty
+  "fnc main() -> int :: int x = 5,, x end\\n"
+  "empty item")
+
 reject_case(equality_alias_mixed_bool_int
   "fnc main(): int { if 7 !eq true then return 1; else return 0; fi }\n"
   "equality operands require the same scalar type")
