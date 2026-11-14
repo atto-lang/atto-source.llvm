@@ -63,7 +63,7 @@ NativeBytePatternMatch<N> native_match_bytes(
         const std::array<NativePatternElement, N>& pattern,
         bool capture_tail = false) noexcept {
     NativeBytePatternMatch<N> result;
-    if (!source.valid() || N > source.size || (!capture_tail && N != source.size))
+    if (!source.valid() || (capture_tail && N == 0) || N > source.size || (!capture_tail && N != source.size))
         return result;
     for (std::size_t i = 0; i < N; ++i) {
         switch (pattern[i].kind) {
@@ -101,7 +101,7 @@ NativeBitPatternMatch<N> native_match_bits(
         const std::array<NativePatternElement, N>& pattern,
         bool capture_tail = false) noexcept {
     NativeBitPatternMatch<N> result;
-    if (!source.valid() || N > source.length || (!capture_tail && N != source.length))
+    if (!source.valid() || (capture_tail && N == 0) || N > source.length || (!capture_tail && N != source.length))
         return result;
     for (std::size_t i = 0; i < N; ++i) {
         const auto absolute = source.offset + i;
