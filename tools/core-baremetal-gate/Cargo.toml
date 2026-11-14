@@ -1,0 +1,12 @@
+[package]
+name = "core-baremetal-gate"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Links an ores.core program into a no-libc Cortex-M3 image, audits its symbols, and boots it under QEMU."
+
+[[bin]]
+name = "core-baremetal-gate"
+path = "src/main.rs"
+
+[dependencies]

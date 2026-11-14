@@ -2,6 +2,7 @@
 
 #include "oreslang/runtime/ActorArena.h"
 #include "oreslang/runtime/ActorShardColumns.hpp"
+#include "oreslang/runtime/NativeTransportCallbackGate.hpp"
 #include "oreslang/runtime/ProxyRequestSlab.hpp"
 
 #include <algorithm>
@@ -44,9 +45,12 @@ inline std::uint64_t reserve_proxy_slab_identity() {
  * a future actor-turn-batched kernel, but keeps the existing arena guard and
  * its 1 MiB-per-persistent-slot policy rather than exporting raw pointers.
  *
- * Host must fence external I/O, preferably close() on the owning actor
- * turn, then retire actor budget after exact scheduler done. The destructor
- * can scrub a quiescent, unclosed slab only after that retirement fence.
+ * Trusted host must register one move-only callback permit before enqueueing
+ * each I/O completion/timer/waker that may touch this arena. Shutdown freezes
+ * admissions and drains those permits, then the transport gate issues a
+ * generation/slab-bound DrainReceipt. Only that receipt can authorize close
+ * on the owning actor turn; logical live()==0 alone is never sufficient.
+ * This proof covers registered host callbacks, not unregistered OS activity.
  * Any live request remains fail-stop. This object and its budgets must outlive
  * all associated callback envelopes; teardown must precede destruction of
  * scheduler and budget ledgers. No Oreslang source lowering is provided.
@@ -69,7 +73,9 @@ public:
             ActorShardBudget& actor_budget, ActorShardBudget& vm_budget,
             Layout layout, std::uint32_t capacity, std::uint32_t lanes)
         : scheduler_(scheduler), owner_(owner), actor_budget_(actor_budget),
-          vm_budget_(vm_budget), identity_(reserve_proxy_slab_identity()) {
+          vm_budget_(vm_budget), identity_(reserve_proxy_slab_identity()),
+          callback_gate_(owner_.scheduler_domain, owner_.actor_slot,
+                         owner_.generation, identity_) {
         require_owner();
         if (!identity_ || identity_ == UINT64_MAX || owner_.actor_slot == UINT64_MAX
                 || &actor_budget_ == &vm_budget_
@@ -126,8 +132,10 @@ public:
             // An actor may have drained all requests but missed explicit
             // close() during terminal cancellation. Permit trusted host
             // cleanup ONLY after the scheduler-done retirement fence.
-            // Anything still live, including pending I/O, remains fail-stop.
-            if (!actor_budget_.retired() || slab_->live() != 0) std::abort();
+            // A retired logical actor is not an external callback join.
+            // An explicit owner-turn host quiescence assertion is required.
+            if (!actor_budget_.retired() || !transport_quiescent_
+                    || slab_->live() != 0) std::abort();
             ArenaTurn session(arena_, owner_);
             slab_->resume(session.turn());
             slab_->close();
@@ -158,7 +166,16 @@ public:
     }
     std::uint64_t admit(std::uint32_t epoch, std::uint32_t connection,
                         std::uint32_t route) {
-        return in_turn([&] { return slab_->admit(epoch, connection, route); });
+        return in_turn([&] {
+            // This permit is the admission linearization point. A concurrent
+            // freeze either wins first (reject) or must count this operation
+            // until it returns, including the underlying native slab write.
+            auto admission = callback_gate_.try_admit();
+            if (!admission || transport_quiescent_) {
+                throw std::logic_error("proxy slab transport is closing");
+            }
+            return slab_->admit(epoch, connection, route);
+        });
     }
     std::uint32_t route(std::uint64_t ticket) const {
         return in_turn([&] { return slab_->route(ticket); });
@@ -177,6 +194,12 @@ public:
     // The claim alone is NOT enough to prove the destination slab/actor.
     Receipt pin(std::uint64_t ticket) {
         return in_turn([&] {
+            // Never check a separate accepting() flag then perform an
+            // uncounted callback pin: shutdown can race in between.
+            auto admission = callback_gate_.try_admit();
+            if (!admission || transport_quiescent_) {
+                throw std::logic_error("proxy slab transport is closing");
+            }
             auto claim = slab_->pin(ticket);
             return claim ? Receipt{owner_.scheduler_domain, owner_.actor_slot,
                 owner_.generation, identity_, ticket, claim} : Receipt{};
@@ -203,9 +226,40 @@ public:
     bool retire(std::uint64_t ticket) {
         return in_turn([&] { return slab_->retire(ticket); });
     }
+
+    // Export only to trusted transport/supervisor code on the owner actor
+    // lane. It must retain a Permit from enqueue until callback teardown
+    // completes, even if the callback runs on a different physical carrier.
+    NativeTransportCallbackGate& transport_callbacks() {
+        require_owner();
+        if (closed_) throw std::logic_error("proxy request slab is closed");
+        return callback_gate_;
+    }
+
+    // Nonblocking: transport first freezes admission, joins/revokes all
+    // registered asynchronous callbacks, and obtains a DrainReceipt. The
+    // receipt must originate from THIS slab's exact actor generation.
+    // Admission, freeze and drain use one bounded atomic stop/count word.
+    void confirm_transport_quiescence(
+            const NativeTransportCallbackGate::DrainReceipt& receipt) {
+        in_turn([&] {
+            if (!callback_gate_.verifies(receipt)) {
+                throw std::logic_error("invalid or undrained transport receipt");
+            }
+            if (slab_->live() != 0) {
+                throw std::logic_error(
+                    "cannot confirm transport quiescence with live requests");
+            }
+            transport_quiescent_ = true;
+        });
+    }
+
     void close() {
         require_owner();
         if (closed_) return;
+        if (!transport_quiescent_) {
+            throw std::logic_error("transport quiescence not confirmed");
+        }
         in_turn([&] { slab_->close(); });
         closed_ = true;
     }
@@ -244,12 +298,16 @@ private:
     ActorShardBudget& actor_budget_;
     ActorShardBudget& vm_budget_;
     std::uint64_t identity_;
+    NativeTransportCallbackGate callback_gate_;
     std::size_t reserved_bytes_ = 0;
     std::size_t page_bytes_ = 0;
     std::size_t pages_count_ = 0;
     std::array<OresArenaHandle, 16> handles_{};
     OresActorArena* arena_ = nullptr;
     std::unique_ptr<ProxyRequestSlab> slab_;
+    // Monotonic recorded verification of a gate-issued DrainReceipt.
+    // Never inferred solely from slab_->live()==0 or scheduler retirement.
+    bool transport_quiescent_ = false;
     bool closed_ = false;
 };
 
