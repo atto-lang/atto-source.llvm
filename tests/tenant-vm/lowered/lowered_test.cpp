@@ -419,6 +419,157 @@ void atto_hot_upgrade_keeps_actor_state() {
     std::printf("  counter.atto v1 -> v2 -> v1 in a running VM; actor state kept, old libraries released\n");
 }
 
+// Runtime tracing of real compiled AttoLang: one request through Head -> Middle -> Sink becomes one
+// W3C trace, switched on and off per VM while it runs, with no restart and no code change.
+bool wait_for_spans(TenantVmHost& host, const VmHandle& vm, std::uint64_t recorded) {
+    for (int i = 0; i < 5000; ++i) {
+        if (host.snapshot(vm).spans_recorded >= recorded) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+}
+bool wait_for_turns(TenantVmHost& host, const VmHandle& vm, std::uint64_t turns) {
+    for (int i = 0; i < 5000; ++i) {
+        if (host.snapshot(vm).turns >= turns) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+}
+const SpanRecord* span_of_kind(const std::vector<SpanRecord>& spans, std::uint32_t kind) {
+    for (const auto& s : spans) if (s.kind == kind) return &s;
+    return nullptr;
+}
+
+void atto_pipeline_traces_one_request() {
+    const LoadedGuest pipeline = load("atto_pipeline");
+    if (!pipeline.module) return;
+    enum { SINK = 0, MIDDLE = 1, HEAD = 2 };
+    TenantVmHost host;
+    auto vm = host.open(spec("traced", pipeline));
+    auto quiet = host.open(spec("untraced", pipeline)); // another tenant, tracing never on
+    REQUIRE_OK(vm);
+    REQUIRE_OK(quiet);
+    auto head = host.spawn_actor(vm.handle, HEAD);
+    auto quiet_head = host.spawn_actor(quiet.handle, HEAD);
+    REQUIRE_OK(head);
+    REQUIRE_OK(quiet_head);
+    CHECK_STATUS(host.set_tracing(vm.handle, TraceSettings{true, 1024}), Status::Ok);
+
+    // 1. An incoming request with W3C context: three spans, one trace, parent to child.
+    TraceContext incoming;
+    CHECK(parse_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", incoming));
+    CHECK(host.call(head.actor, one(1), incoming).get().status == Status::Ok);
+    CHECK(host.call(quiet_head.actor, one(1), incoming).get().status == Status::Ok);
+    CHECK(wait_for_spans(host, vm.handle, 3));
+    auto spans = host.drain_spans(vm.handle, 100);
+    CHECK(spans.size() == 3);
+    const SpanRecord* h = span_of_kind(spans, HEAD);
+    const SpanRecord* m = span_of_kind(spans, MIDDLE);
+    const SpanRecord* s = span_of_kind(spans, SINK);
+    CHECK(h && m && s);
+    if (!h || !m || !s) return;
+    for (const SpanRecord* x : {h, m, s}) {
+        CHECK(x->trace_id == incoming.trace_id);
+        CHECK(x->has_parent);
+        CHECK(x->status == Status::Ok);
+        CHECK(x->code_version == 1);
+        CHECK(x->end_unix_ns >= x->start_unix_ns);
+    }
+    CHECK(h->parent_span_id == incoming.span_id);
+    CHECK(m->parent_span_id == h->span_id);
+    CHECK(s->parent_span_id == m->span_id);
+    CHECK(h->span_id != m->span_id && m->span_id != s->span_id);
+    CHECK(host.snapshot(quiet.handle).spans_recorded == 0); // tracing is per tenant
+    CHECK(host.drain_spans(quiet.handle, 100).empty());
+
+    // 2. Off: turns still run, nothing is recorded.
+    CHECK_STATUS(host.set_tracing(vm.handle, TraceSettings{false, 1024}), Status::Ok);
+    const std::uint64_t turns = host.snapshot(vm.handle).turns;
+    CHECK(host.call(head.actor, one(2), incoming).get().status == Status::Ok);
+    CHECK(wait_for_turns(host, vm.handle, turns + 3));
+    CHECK(host.snapshot(vm.handle).spans_recorded == 3);
+
+    // 3. On again, no incoming context: a fresh root trace shared by all three stages.
+    CHECK_STATUS(host.set_tracing(vm.handle, TraceSettings{true, 1024}), Status::Ok);
+    CHECK(host.call(head.actor, one(3)).get().status == Status::Ok);
+    CHECK(wait_for_spans(host, vm.handle, 6));
+    spans = host.drain_spans(vm.handle, 100);
+    CHECK(spans.size() == 3);
+    h = span_of_kind(spans, HEAD);
+    if (!h) return;
+    CHECK(!h->has_parent);
+    CHECK(h->trace_id != incoming.trace_id);
+    for (const auto& x : spans) CHECK(x.trace_id == h->trace_id);
+
+    // 4. After a hot upgrade, spans name the code they ran on.
+    {
+        const LoadedGuest again = load("atto_pipeline");
+        CHECK_STATUS(host.upgrade(vm.handle, again.module, again.owner).status, Status::Ok);
+    }
+    CHECK(host.call(head.actor, one(4)).get().status == Status::Ok);
+    CHECK(wait_for_spans(host, vm.handle, 9));
+    spans = host.drain_spans(vm.handle, 100);
+    CHECK(spans.size() == 3);
+    for (const auto& x : spans) CHECK(x.code_version == 2);
+
+    // 5. A full buffer drops and counts; it never blocks or grows.
+    CHECK_STATUS(host.set_tracing(vm.handle, TraceSettings{true, 2}), Status::Ok);
+    CHECK(host.call(head.actor, one(5)).get().status == Status::Ok);
+    CHECK(wait_for_spans(host, vm.handle, 12));
+    const VmSnapshot snap = host.snapshot(vm.handle);
+    CHECK(snap.spans_buffered == 2);
+    CHECK(snap.spans_dropped == 1);
+    CHECK_STATUS(host.set_tracing(vm.handle, TraceSettings{true, 0}), Status::InvalidArgument);
+    CHECK(host.snapshot(vm.handle).actor_restarts == 0); // Sink saw 1..5 in order throughout
+    std::printf("  head -> middle -> sink: one trace per request, per-tenant on/off, upgrade visible, bounded\n");
+}
+
+void traceparent_is_validated() {
+    TraceContext c;
+    CHECK(parse_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", c) && c.sampled);
+    CHECK(format_traceparent(c) == "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01");
+    CHECK(parse_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00", c) && !c.sampled);
+    for (const char* bad : {"", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7",
+                            "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                            "00-00000000000000000000000000000000-00f067aa0ba902b7-01",
+                            "00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01",
+                            "00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01",
+                            "00-4bf92f3577b34da6a3ce929d0e0e473g-00f067aa0ba902b7-01",
+                            "00_4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-extra"}) {
+        TraceContext untouched;
+        CHECK(!parse_traceparent(bad, untouched));
+    }
+}
+
+// What tracing costs: turns per second on one actor with tracing off, then on.
+void tracing_overhead_is_measured() {
+    const LoadedGuest counter = load("atto_counter");
+    if (!counter.module) return;
+    TenantVmHost host;
+    auto vm = host.open(spec("overhead", counter));
+    REQUIRE_OK(vm);
+    auto a = host.spawn_actor(vm.handle, 0);
+    REQUIRE_OK(a);
+    const auto run = [&](int n) {
+        const auto t = std::chrono::steady_clock::now();
+        for (int i = 0; i < n; ++i) host.call(a.actor, one(1)).get();
+        return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count();
+    };
+    run(5000); // warm
+    double off = 0, on = 0;
+    for (int round = 0; round < 3; ++round) {
+        CHECK_STATUS(host.set_tracing(vm.handle, TraceSettings{false, 1024}), Status::Ok);
+        off += run(50000);
+        CHECK_STATUS(host.set_tracing(vm.handle, TraceSettings{true, 1 << 20}), Status::Ok);
+        on += run(50000);
+        host.drain_spans(vm.handle, 1 << 20);
+    }
+    std::printf("  150000 turns each: tracing off %.0f turns/s, on %.0f turns/s (%.1f%% slower on)\n",
+                150000 / off, 150000 / on, (on / off - 1) * 100);
+    CHECK(host.snapshot(vm.handle).spans_dropped == 0);
+}
+
 // A trap in source restarts that actor from its last finished turn. Everything else carries on.
 void atto_failed_actor_restarts_from_stored_state() {
     const LoadedGuest counter = load("atto_counter");
@@ -908,6 +1059,9 @@ const Case cases[] = {
 #if defined(TENANT_VM_HAVE_ATTO)
     {"atto_actor_state_is_private_and_durable", atto_actor_state_is_private_and_durable},
     {"atto_hot_upgrade_keeps_actor_state", atto_hot_upgrade_keeps_actor_state},
+    {"atto_pipeline_traces_one_request", atto_pipeline_traces_one_request},
+    {"traceparent_is_validated", traceparent_is_validated},
+    {"tracing_overhead_is_measured", tracing_overhead_is_measured},
     {"atto_failed_actor_restarts_from_stored_state", atto_failed_actor_restarts_from_stored_state},
     {"atto_without_bounds_checks_no_restart", atto_without_bounds_checks_no_restart},
     {"atto_runaway_source_ends_only_its_turn", atto_runaway_source_ends_only_its_turn},
