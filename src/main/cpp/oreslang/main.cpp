@@ -193,6 +193,52 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
 
 
 int main(int argc, char** argv) {
+    // Internal exact-frontend + LLVM IR regression; not a public source ID
+    // authoring interface, not a native executable/OTel/JIT proof.
+    if (argc == 2 && std::string_view(argv[1]) == "--selftest-source-routine-ir") {
+        try {
+            auto program = oreslang::parse_program(
+                "pub fnc main(): int { return 42; }");
+            const std::vector<oreslang::CheckedSourceRoutineV1> ok = {
+                {"main", 0, "rid_d5f8e146ba97430dac6bf17430477e2a"}
+            };
+            auto emitted = oreslang::emit_verified_llvm_ir(
+                program, false, false, false, "", ok);
+            if (emitted.find("atto.source.routine_id.v1") == std::string::npos ||
+                emitted.find("rid_d5f8e146ba97430dac6bf17430477e2a") ==
+                    std::string::npos) {
+                std::cerr << "native LLVM source ID metadata was not emitted\n";
+                return 2;
+            }
+            auto rejects = [&](std::vector<oreslang::CheckedSourceRoutineV1> ids) {
+                try {
+                    (void)oreslang::emit_verified_llvm_ir(
+                        program, false, false, false, "", ids);
+                    return false;
+                } catch (const std::runtime_error&) {
+                    return true;
+                }
+            };
+            if (!rejects({{"main", 0,
+                    "sid_d5f8e146ba97430dac6bf17430477e2a"}}) ||
+                !rejects({{"other", 0,
+                    "rid_d5f8e146ba97430dac6bf17430477e2a"}}) ||
+                !rejects({{"main", 0,
+                    "rid_d5f8e146ba97430dac6bf17430477e2a"},
+                    {"main", 0,
+                    "rid_d5f8e146ba97430dac6bf17430477e2a"}})) {
+                std::cerr << "invalid native LLVM source ID binding admitted\n";
+                return 2;
+            }
+            std::cout << "LLVM_SOURCE_ID_COMPILER_IR_METADATA_PASS\n";
+            return 0;
+        } catch (const std::exception& error) {
+            std::cerr << "native LLVM source ID compiler test failed: ";
+            print_safe_diagnostic(std::cerr, error.what(), 160);
+            std::cerr << '\n';
+            return 2;
+        }
+    }
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
     bool wasm32_target = false;
