@@ -144,7 +144,7 @@ bool reserved(std::string_view name) {
         "define", "class", "enum", "pattern", "module", "contract", "conforms", "namespace",
         "import", "from", "as", "extends", "implements", "try", "catch",
         "throw", "raise", "panic", "recover",
-        "finally", "end", "fi", "if", "guard", "do", "else", "then", "new",
+        "finally", "end", "fi", "if", "ifnot", "unless", "guard", "do", "else", "then", "new",
         "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "gen", "generator",
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
@@ -2852,9 +2852,17 @@ private:
                     actions.push_back(std::move(inverted));
                     continue;
                 }
-                if (token_.text == "if" && !finally_scope) {
+                if ((token_.text == "if" || token_.text == "ifnot" ||
+                        token_.text == "unless") && !finally_scope) {
+                    const bool inverted = token_.text != "if";
+                    const auto condition_offset = token_.offset;
                     advance(); statement.kind = Statement::Kind::Conditional;
                     statement.condition = expression();
+                    if (inverted) {
+                        auto negative = make_expression(Expression::Kind::LogicalNot, condition_offset);
+                        negative->left = std::move(statement.condition);
+                        statement.condition = std::move(negative);
+                    }
                     if (accept_keyword_if_header()) {
                         statement.then_statements = branch_arm(false, true);
                         if (accept("else")) statement.else_statements = branch_arm(false, true);
@@ -3277,7 +3285,8 @@ private:
             // The initial native finally slice admits only guarded returns
             // and a terminal return in the protected region. No potentially
             // throwing calls, nested effects or suspension can be skipped.
-            if (terminal_try_finally && token_.text != "if")
+            if (terminal_try_finally && token_.text != "if" &&
+                    token_.text != "ifnot" && token_.text != "unless")
                 fail("native terminal try supports only return guards and final return");
             if (token_.text == "do") {
                 const std::string next(peek_next().text);
@@ -3330,10 +3339,16 @@ private:
                 value.statements.push_back(std::move(inverted));
                 continue;
             }
-            if (token_.text == "if") {
+            if (token_.text == "if" || token_.text == "ifnot" || token_.text == "unless") {
                 const auto offset = token_.offset;
-                require("if");
+                const bool inverted = token_.text != "if";
+                advance();
                 auto condition = expression();
+                if (inverted) {
+                    auto negative = make_expression(Expression::Kind::LogicalNot, offset);
+                    negative->left = std::move(condition);
+                    condition = std::move(negative);
+                }
                 if (terminal_try_finally && !native_pure_scalar_tree(*condition))
                     fail("native protected try guard requires a pure nonthrowing bool expression");
                 const bool then_form = accept_keyword_if_header();

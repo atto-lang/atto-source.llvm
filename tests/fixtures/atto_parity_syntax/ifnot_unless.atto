@@ -1,0 +1,30 @@
+// Both negated starters must evaluate a boolean condition once, and
+// preserve ordinary else and fi behavior in the native compiler.
+fnc choose(bool flag): int {
+  ifnot flag then return 11; else return 99; fi
+  return 0;
+}
+
+fnc report(bool flag): void {
+  unless flag then
+    stdio.stdout.println("no");
+  else
+    stdio.stdout.println("yes");
+  fi
+  return;
+}
+
+fnc main(): void {
+  stdio.stdout.println(choose(false));
+  stdio.stdout.println(choose(true));
+  report(false);
+  report(true);
+  unless false; then
+    ifnot true then
+      stdio.stdout.println("bad");
+    else
+      stdio.stdout.println("nested");
+    fi
+  fi
+  return;
+}

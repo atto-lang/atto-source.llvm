@@ -75,6 +75,7 @@ function(reject_case name text needle)
 endfunction()
 
 run_case(if_then "${fixtures}/if_then.atto" 0)
+run_case(ifnot_unless "${fixtures}/ifnot_unless.atto" 0)
 run_case(stdout_write "${fixtures}/stdout_write.atto" 0)
 run_case(expect_ok "${fixtures}/expect_ok.atto" 42)
 run_case(expect_err "${fixtures}/expect_err.atto" nonzero)
@@ -120,6 +121,12 @@ reject_case(stdout_unknown_member
 reject_case(if_semicolon_requires_then
   "fnc main(): int {\n  if 1 == 1; return 1; fi\n  return 0;\n}\n"
   "expected 'then'")
+reject_case(ifnot_reject_integer
+  "fnc main(): int { ifnot 1 then return 1; else return 0; fi }\n"
+  "native if condition")
+reject_case(unless_reject_integer
+  "fnc main(): int { unless 1 then return 1; else return 0; fi }\n"
+  "native if condition")
 
 if(failures GREATER 0)
   message(FATAL_ERROR "atto parity syntax: ${failures} failure(s)")
