@@ -14,6 +14,7 @@ command -v "$clang_bin" >/dev/null || exit 69
 ulimit -c 0 || true
 paths=(
   tests/source_actor_checked_identity_aba_v1.c
+  tests/source_actor_checked_identity_await_v1.c
   scripts/test-source-actor-checked-id-aba-v1.sh
   src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
   src/main/cpp/oreslang/runtime/SourceActorBootstrap.h
@@ -98,8 +99,54 @@ for opt in 0 2; do
       exit 1
     fi
   done
+  # Typed root CONTROL ready/done continuation proof using real native VM,
+  # not synthetic actor callbacks. Every callback must carry the originally
+  # minted ID across suspension and the next forced allocation-address reuse.
+  await_bin="$work/checked-id-await-O$opt"
+  "$clang_bin" -std=c11 "-O$opt" -g -Wall -Wextra \
+    -fno-omit-frame-pointer -fsanitize=address,undefined \
+    -DORESLANG_SOURCE_ACTOR_TESTING -I "$root/src/main/cpp" \
+    "$root/tests/source_actor_checked_identity_await_v1.c" \
+    "${sources[@]}" -pthread -o "$await_bin"
+  ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+    timeout 120s "$await_bin" >"$work/await.out" 2>"$work/await.err" || {
+      echo "SOURCE_ACTOR_CHECKED_ID_AWAIT_NATIVE_FAIL|O$opt" >&2
+      cat "$work/await.out" "$work/await.err" >&2
+      exit 1
+    }
+  printf '%s\n' 'SOURCE_ACTOR_CHECKED_ID_AWAIT_PASS|actors=16|reused_addresses=15|ready_callbacks=16|done_callbacks=16|physical_joins=16' >"$work/await.expected"
+  cmp -s "$work/await.expected" "$work/await.out" || {
+    cat "$work/await.out" >&2; exit 1;
+  }
+  awk '
+    /^SOURCE_ACTOR_VM_ROUTING_VERIFIED / { routing++; next }
+    /^SOURCE_ACTOR_SPAWN_STOP_VERIFIED / {
+      if ($0 !~ /constructor_on_worker=1 released=1 /) bad=1
+      joined++; next
+    }
+    /^SOURCE_ACTOR_GROUP_VERIFIED / {
+      if ($0 != "SOURCE_ACTOR_GROUP_VERIFIED active=0 slots=1 peak=1 carriers=4") bad=1
+      group++; next
+    }
+    /^SOURCE_AWAIT_READY_TRACE_PASS / {
+      if ($0 !~ /outcome=2 execution_id_persisted=1 fresh_resume=1 root_slot=63 /) bad=1
+      ready++; next
+    }
+    /^SOURCE_AWAIT_DONE_TRACE_PASS / {
+      if ($0 !~ /terminal_ack=1 execution_id_persisted=1 fresh_resume=1 root_slot=63 /) bad=1
+      done++; next
+    }
+    { bad=1 }
+    END { exit(routing==16 && joined==16 && group==16 && ready==16 && done==16 && !bad ? 0 : 1) }
+  ' "$work/await.err" || {
+    echo "SOURCE_ACTOR_CHECKED_ID_AWAIT_MISSING_CONTROL_RECEIPTS|O$opt" >&2
+    cat "$work/await.err" >&2
+    exit 1
+  }
+  printf 'SOURCE_ACTOR_CHECKED_ID_AWAIT_NATIVE_PASS|head=%s|O%s|actors=16|forced_address_reuses=15|root_ready=16|root_done=16|asan_ubsan=EXECUTED|native_sha256=%s\n' \
+    "$EXPECTED_HEAD" "$opt" "$(sha256sum "$await_bin" | cut -d' ' -f1)"
   check_snapshot || { echo "SOURCE_ACTOR_CHECKED_ID_SOURCE_DRIFT" >&2; exit 78; }
   printf 'SOURCE_ACTOR_CHECKED_ID_NATIVE_PASS|head=%s|O%s|actors=128|same_address_reuses=127|negative=3|asan_ubsan=EXECUTED|native_sha256=%s|atto_guest=NO\n' \
     "$EXPECTED_HEAD" "$opt" "$(sha256sum "$bin" | cut -d' ' -f1)"
 done
-echo "SOURCE_ACTOR_CHECKED_ID_NATIVE_MATRIX_PASS|head=$EXPECTED_HEAD|levels=O0_O2|real_actors=256|forced_address_reuses=254|death_tests=6|checked_id=64_BIT_VALUE|legacy_pointer_ABA=OPEN|async_await=NOT_EXECUTED"
+echo "SOURCE_ACTOR_CHECKED_ID_NATIVE_MATRIX_PASS|head=$EXPECTED_HEAD|levels=O0_O2|real_actors=288|forced_address_reuses=284|death_tests=6|checked_control_resumes=64|native_processes=10|checked_id=64_BIT_VALUE|legacy_pointer_ABA=OPEN|async_await=EXECUTED"
