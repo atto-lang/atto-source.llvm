@@ -20,6 +20,38 @@
 
 namespace oreslang::frontend::counter_v2 {
 
+// Canonical typed actor-state MIR. Loan IDs here are compile-time
+// instruction-local labels, NEVER scheduler-issued runtime authority.
+enum class MirOp {
+    RequireActorTurn, AcquireWrite, LoadStateI64, LoadMailI64,
+    CheckedAddI64, StoreStateI64, ReleaseWrite,
+    AcquireRead, CopyStateI64, ReleaseRead,
+    MailboxSendCopyI64, CheckStop, ReturnVoid
+};
+enum class LoanKind { Read, Write };
+enum class LoanAction { Borrow, Release };
+struct SymbolicLoan {
+    std::string field;
+    std::uint32_t identity = 0;
+    LoanKind kind = LoanKind::Read;
+    LoanAction action = LoanAction::Borrow;
+    bool generation_fence_required = false;
+    bool current_actor_turn_required = false;
+};
+inline constexpr std::array<MirOp, 13> kReceiveMir{{
+    MirOp::RequireActorTurn, MirOp::AcquireWrite,
+    MirOp::LoadStateI64, MirOp::LoadMailI64,
+    MirOp::CheckedAddI64, MirOp::StoreStateI64,
+    MirOp::ReleaseWrite, MirOp::AcquireRead,
+    MirOp::CopyStateI64, MirOp::ReleaseRead,
+    MirOp::MailboxSendCopyI64, MirOp::CheckStop, MirOp::ReturnVoid
+}};
+static_assert(kReceiveMir[6] == MirOp::ReleaseWrite &&
+              kReceiveMir[7] == MirOp::AcquireRead &&
+              kReceiveMir[9] == MirOp::ReleaseRead &&
+              kReceiveMir[10] == MirOp::MailboxSendCopyI64,
+              "actor mailbox send must follow detached read loan release");
+
 struct VerifiedPlan {
     std::string name_space;
     std::string actor;
@@ -27,6 +59,10 @@ struct VerifiedPlan {
     std::int64_t initial = 0;
     std::int64_t stop = 0;
     std::array<std::int64_t, 4> messages{};
+    std::array<MirOp, 13> receive_mir = kReceiveMir;
+    std::array<SymbolicLoan, 4> symbolic_loans{};
+    // This plan is semantic compiler metadata, not executable guest IR.
+    // Only the actor runtime may supply actual generation-fenced permits.
 };
 
 // Keep source offsets to distinguish adjacent critical-read/write from
@@ -348,8 +384,25 @@ inline VerifiedPlan verify(const std::filesystem::path& root) {
     main.e("("); main.e(")"); main.e(";"); main.e("return");
     main.e(";"); main.e("}"); main.done();
 
-    // This plan is a bounded compiler admission witness ONLY. It does not
-    // allocate, return or forge a runtime actor/state-loan capability.
+    // The write permit is released before starting the read permit,
+    // and the detached scalar is copied before the reader is released.
+    // The mailbox instruction follows both releases. No runtime loan
+    // identity is ever constructed by this compile-time verifier.
+    plan.symbolic_loans = {{
+        {plan.state_field, 1u, LoanKind::Write, LoanAction::Borrow, true, true},
+        {plan.state_field, 1u, LoanKind::Write, LoanAction::Release, true, true},
+        {plan.state_field, 2u, LoanKind::Read, LoanAction::Borrow, true, true},
+        {plan.state_field, 2u, LoanKind::Read, LoanAction::Release, true, true}
+    }};
+    if (plan.receive_mir != kReceiveMir ||
+        plan.symbolic_loans[0].identity == plan.symbolic_loans[2].identity ||
+        plan.symbolic_loans[0].kind != LoanKind::Write ||
+        plan.symbolic_loans[1].action != LoanAction::Release ||
+        plan.symbolic_loans[2].kind != LoanKind::Read ||
+        plan.symbolic_loans[3].action != LoanAction::Release ||
+        plan.symbolic_loans[0].field != plan.symbolic_loans[2].field)
+        throw std::runtime_error("Counter v2 invalid typed actor state MIR");
+    // Source-verified symbolic MIR is not executable LLVM codegen.
     return plan;
 }
 } // namespace oreslang::frontend::counter_v2

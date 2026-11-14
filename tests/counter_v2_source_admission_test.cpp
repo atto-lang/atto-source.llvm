@@ -75,6 +75,23 @@ int main(int argc, char** argv) {
             plan.stop != 4 || plan.messages != std::array<std::int64_t, 4>{1, 2, 3, 4})
             throw std::runtime_error("canonical Counter source plan mismatched");
 
+        if (plan.receive_mir != counter::kReceiveMir ||
+            plan.receive_mir[9] != counter::MirOp::ReleaseRead ||
+            plan.receive_mir[10] != counter::MirOp::MailboxSendCopyI64 ||
+            plan.receive_mir[4] != counter::MirOp::CheckedAddI64 ||
+            plan.symbolic_loans[0].kind != counter::LoanKind::Write ||
+            plan.symbolic_loans[1].action != counter::LoanAction::Release ||
+            plan.symbolic_loans[2].kind != counter::LoanKind::Read ||
+            plan.symbolic_loans[3].action != counter::LoanAction::Release ||
+            plan.symbolic_loans[0].identity == plan.symbolic_loans[2].identity)
+            throw std::runtime_error("Counter typed state MIR loses balanced ownership");
+        for (const auto& loan : plan.symbolic_loans) {
+            if (!loan.generation_fence_required ||
+                !loan.current_actor_turn_required ||
+                loan.field != "total")
+                throw std::runtime_error("typed loan missing actor turn/generation fence");
+        }
+
         Scratch scratch;
         constexpr std::array<std::string_view, 7> units{
             ".atto.pkg.toml", "src/counter/actor.atto",
