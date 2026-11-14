@@ -115,7 +115,7 @@ fn main() {
     let int b = await w;
     return a + b;
 }
-"#, "await must immediately consume");
+"#, "requires await to immediately consume");
 
     rejected(&compiler, &dir.0, "call-producer.ores",
         r#"fnc helper(): int { return 41; }

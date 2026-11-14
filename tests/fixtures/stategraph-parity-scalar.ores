@@ -1,0 +1,4 @@
+// LLVM source guest: deterministic graph-step integer result.
+pub fnc main(): int {
+  return (6 + 1) * 6;
+}
