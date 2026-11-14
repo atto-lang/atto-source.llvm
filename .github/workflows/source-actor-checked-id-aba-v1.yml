@@ -7,6 +7,7 @@ on:
       - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
       - 'tests/source_actor_checked_identity_aba_v1.c'
       - 'tests/source_actor_checked_identity_await_v1.c'
+      - 'tests/source_actor_e2e.py'
       - 'tests/fixtures/source-actor-checked-id-v1/**'
       - 'scripts/test-source-actor-checked-id-aba-v1.sh'
       - 'scripts/test-source-actor-checked-id-guest-v1.sh'
@@ -18,6 +19,7 @@ on:
       - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
       - 'tests/source_actor_checked_identity_aba_v1.c'
       - 'tests/source_actor_checked_identity_await_v1.c'
+      - 'tests/source_actor_e2e.py'
       - 'tests/fixtures/source-actor-checked-id-v1/**'
       - 'scripts/test-source-actor-checked-id-aba-v1.sh'
       - 'scripts/test-source-actor-checked-id-guest-v1.sh'
@@ -106,6 +108,21 @@ jobs:
           grep -Fqx "SOURCE_ACTOR_CHECKED_GUEST_MATRIX_EXECUTED|head=$EXPECTED_HEAD|O0_O2=1|native_runs=32|compiled_cases=8|negative_rejections=4|ready_done_id_callbacks=2_PER_OPT|legacy_pointer_calls=0|linked_zero_gc=NOT_CERTIFIED" \
             "$RUNNER_TEMP/source-actor-checked-id-guest.txt"
           test "$(grep -c '^SOURCE_ACTOR_CHECKED_GUEST_EXECUTED|' "$RUNNER_TEMP/source-actor-checked-id-guest.txt")" = 8
+      - name: Full historical source actor physical-lifecycle regression under native sanitizers
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          python3 tests/source_actor_e2e.py \
+            --compiler "$RUNNER_TEMP/checked-source-id-build/oreslang-llvmc" \
+            --clang /usr/bin/clang-19 \
+            --root "$PWD" --sanitize |
+            tee "$RUNNER_TEMP/source-actor-historical-regression.txt"
+          grep -Fqx "PASS current-source actor lowering and physical heap reclamation" \
+            "$RUNNER_TEMP/source-actor-historical-regression.txt"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
