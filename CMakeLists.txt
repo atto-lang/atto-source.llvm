@@ -160,6 +160,21 @@ if(ATTO_ACTOR_LOGICAL_FRAMES_HOST_ONLY)
     add_test(NAME actor_logical_frames_v1_native_host
         COMMAND atto-native-actor-logical-frames-host-test)
     set_tests_properties(actor_logical_frames_v1_native_host PROPERTIES TIMEOUT 20)
+    # Actual native frame allocator: Actor A fails its quota, B still returns
+    # 42, and A restart cannot reuse prior actor-incarnation handles.
+    add_executable(atto-native-actor-a-b-quota-host-test
+        tests/native_actor_a_b_quota_isolation_test.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c)
+    target_include_directories(atto-native-actor-a-b-quota-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(atto-native-actor-a-b-quota-host-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(atto-native-actor-a-b-quota-host-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(atto-native-actor-a-b-quota-host-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_a_b_frame_quota_isolation
+        COMMAND atto-native-actor-a-b-quota-host-test)
+    set_tests_properties(native_actor_a_b_frame_quota_isolation PROPERTIES TIMEOUT 20)
     return()
 endif()
 
@@ -206,6 +221,19 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_logical_frames_v1
         COMMAND oreslang-native-actor-logical-frames-v1-test)
     set_tests_properties(native_actor_logical_frames_v1 PROPERTIES TIMEOUT 20)
+    add_executable(oreslang-native-actor-a-b-quota-test
+        tests/native_actor_a_b_quota_isolation_test.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c)
+    target_include_directories(oreslang-native-actor-a-b-quota-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-actor-a-b-quota-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(oreslang-native-actor-a-b-quota-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-actor-a-b-quota-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_a_b_quota_sibling_42
+        COMMAND oreslang-native-actor-a-b-quota-test)
+    set_tests_properties(native_actor_a_b_quota_sibling_42 PROPERTIES TIMEOUT 20)
 
     # AOT trace policy gate; this does not compile a source-level Atto trace.
     find_package(Threads REQUIRED)
