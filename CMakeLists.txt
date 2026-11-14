@@ -38,6 +38,8 @@ if(ATTO_SOURCE_IDS_HOST_ONLY)
     tests/native_source_log_manifest_v1_test.cpp)
   target_include_directories(atto_source_log_manifest_host_test PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_definitions(atto_source_log_manifest_host_test PRIVATE
+    ATTO_SOURCE_LOG_MANIFEST_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/examples/telemetry/log-info-ids.json")
   target_compile_features(atto_source_log_manifest_host_test PRIVATE cxx_std_17)
   if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(atto_source_log_manifest_host_test PRIVATE
@@ -256,6 +258,8 @@ if(BUILD_TESTING)
         tests/native_source_log_manifest_v1_test.cpp)
     target_include_directories(oreslang-native-source-log-manifest-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_definitions(oreslang-native-source-log-manifest-test PRIVATE
+        ATTO_SOURCE_LOG_MANIFEST_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/examples/telemetry/log-info-ids.json")
     target_compile_features(oreslang-native-source-log-manifest-test PRIVATE cxx_std_17)
     target_compile_options(oreslang-native-source-log-manifest-test PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
