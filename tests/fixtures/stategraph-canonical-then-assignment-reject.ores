@@ -1,0 +1,7 @@
+// Negative: assignment is not allowed in a conditional expression.
+// The compiler must return nonzero and must not emit even partial LLVM IR.
+pub fnc main(): int {
+  let int value = 41;
+  if value = 42 then return 42; fi
+  return 1;
+}

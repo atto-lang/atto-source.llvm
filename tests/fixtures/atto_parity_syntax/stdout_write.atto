@@ -1,0 +1,18 @@
+// stdio.stdout.write/println render String, int and bool like Java:
+// write adds no newline; ints are plain decimal; bools are true/false.
+fnc main(): void {
+  stdio.stdout.write("a=");
+  stdio.stdout.println(42);
+  stdio.stdout.write("neg=");
+  stdio.stdout.println(-7);
+  stdio.stdout.write("min=");
+  stdio.stdout.println(-9223372036854775807 - 1);
+  stdio.stdout.write("max=");
+  stdio.stdout.println(9223372036854775807);
+  stdio.stdout.write("t=");
+  stdio.stdout.println(3 > 2);
+  stdio.stdout.write("f=");
+  stdio.stdout.println(1 == 2);
+  stdio.println(0);
+  return;
+}

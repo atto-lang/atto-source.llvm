@@ -381,6 +381,51 @@ fn aot_driver(driver: &Path, compiler: &Path, clang: &Path) -> Result<(), String
                 format!("{label}: artifact identical to baseline despite distinct guest return"))?;
         }
     }
+    // Source actors through the same driver: the IR declares the native actor
+    // runtime, so the driver must link the scheduler/VM/actor heap itself.
+    // Two distinct returns prove the exit code comes from the guest.
+    let actor_source = temp.path.join("actor.atto");
+    for (label, done_await, expected_exit) in [("actor-ready", false, 44), ("actor-done", true, 45)] {
+        let program = format!(
+            "define actor Worker as {{\n  let total: int = 0;\n  pub fnc on_message(int n): int {{\n    total = total + n;\n    return total;\n  }}\n}}\n\
+             pub fnc main(): int {{\n  const worker: ActorRef<Worker> = spawn Worker();\n{}  stop worker;\n{}  return {expected_exit};\n}}\n",
+            if done_await { "" } else {
+                "  const Future<void> ready = worker.get_ready();\n  await ready;\n  worker.send(1);\n  worker.send(2);\n"
+            },
+            if done_await { "  await worker.get_done();\n" } else { "" });
+        fs::write(&actor_source, program).map_err(|e| format!("{label}: write guest: {e}"))?;
+        let built = Command::new(driver)
+            .arg(&actor_source).arg(&output)
+            .env("ORESLANG_LLVMC", compiler).env("CLANG", clang)
+            .output().map_err(|e| format!("{label}: AOT driver: {e}"))?;
+        require(built.status.success(),
+            format!("{label}: actor runtime link failed: {}", stderr(&built)))?;
+        let executed = Command::new(&output)
+            .env_clear().env("PATH", "/nonexistent")
+            .output().map_err(|e| format!("{label}: native entrypoint: {e}"))?;
+        require(executed.status.code() == Some(expected_exit),
+            format!("{label}: native actor guest returned {:?} instead of {expected_exit}: {}",
+                executed.status.code(), stderr(&executed)))?;
+    }
+
+    // Canonical spelling shared with the Java frontend: `as ... end`, a
+    // type-first field, `self.field`, a bare method and `worker.stop()`.
+    // The same bytes must run on both backends.
+    fs::write(&actor_source, "define actor Worker as\n  let int total = 0;\n  pub on_message(int n): int {\n    self.total = self.total + n;\n    return self.total;\n  }\nend\n\
+pub fnc main(): int {\n  const worker: ActorRef<Worker> = spawn Worker();\n  worker.stop();\n  await worker.get_done();\n  return 46;\n}\n")
+        .map_err(|e| format!("canonical actor: write guest: {e}"))?;
+    let built = Command::new(driver)
+        .arg(&actor_source).arg(&output)
+        .env("ORESLANG_LLVMC", compiler).env("CLANG", clang)
+        .output().map_err(|e| format!("canonical actor: AOT driver: {e}"))?;
+    require(built.status.success(),
+        format!("canonical actor: compile/link failed: {}", stderr(&built)))?;
+    let executed = Command::new(&output)
+        .env_clear().env("PATH", "/nonexistent")
+        .output().map_err(|e| format!("canonical actor: native entrypoint: {e}"))?;
+    require(executed.status.code() == Some(46),
+        format!("canonical actor guest returned {:?} instead of 46", executed.status.code()))?;
+
     // Rebuild the original image before negative cases: they must preserve
     // exactly these published bytes and never publish a partial executable.
     fs::write(&source, "fnc main(): int { return 42; }\n")
@@ -530,38 +575,131 @@ fn tagged_message_wire(binary: &Path, vectors: &Path) -> Result<(), String> {
 fn native_async_io_boundary(compiler: &Path) -> Result<(), String> {
     let temp = TempDir::new("ores-async-io-boundary-").map_err(|e| e.to_string())?;
     let fixture = temp.path.join("probe.ores");
-    // These names must remain rejected until typed effects, native continuation
-    // lowering, and nonblocking transports are implemented together.
+
+    // Concrete standard-I/O spellings named by the native async-only contract.
+    // Until registry/effect/continuation lowering lands together, each spelling
+    // must be unavailable as a call and impossible to impersonate as a user
+    // global function or method.
     let operations = [
-        ("read blocking", "read_text_blocking(1)"),
-        ("read async", "read_text_async(1)"),
-        ("write blocking", "write_text_blocking(1)"),
-        ("write async", "write_text_async(1)"),
-        ("TCP connect blocking", "connect_blocking(1)"),
-        ("TCP connect async", "connect_async(1)"),
-        ("TCP read blocking", "read_line_blocking(1)"),
-        ("TCP read async", "read_line_async(1)"),
-        ("TCP write blocking", "socket_write_text_blocking(1)"),
-        ("TCP write async", "socket_write_text_async(1)"),
-        ("HTTP GET blocking", "http_get_text_blocking(1)"),
-        ("HTTP GET async", "http_get_text_async(1)"),
-        ("HTTP POST blocking", "http_post_text_blocking(1)"),
-        ("HTTP POST async", "http_post_text_async(1)"),
-        ("stdio blocking", "println_blocking(1)"),
-        ("stdio async", "println_async(1)"),
+        ("legacy read", "read_text"),
+        ("legacy write", "write_text"),
+        ("read blocking", "read_text_blocking"),
+        ("read async", "read_text_async"),
+        ("write blocking", "write_text_blocking"),
+        ("write async", "write_text_async"),
+        ("TCP connect blocking", "connect_blocking"),
+        ("TCP connect async", "connect_async"),
+        ("TCP read blocking", "read_line_blocking"),
+        ("TCP read async", "read_line_async"),
+        ("TCP write blocking", "socket_write_text_blocking"),
+        ("TCP write async", "socket_write_text_async"),
+        ("HTTP GET blocking", "http_get_text_blocking"),
+        ("HTTP GET async", "http_get_text_async"),
+        ("HTTP POST blocking", "http_post_text_blocking"),
+        ("HTTP POST async", "http_post_text_async"),
+        ("stdio blocking", "println_blocking"),
+        ("stdio async", "println_async"),
     ];
-    for (name, operation) in operations {
-        fs::write(&fixture, format!("pub fnc main(): int {{ return {operation}; }}\n"))
-            .map_err(|e| format!("{name}: write fixture: {e}"))?;
+
+    for (name, symbol) in operations {
+        let undefined_call = format!(
+            r#"pub fnc main(): int {{ return {symbol}(1); }}
+"#
+        );
+        fs::write(&fixture, undefined_call)
+            .map_err(|e| format!("{name}: write undefined-call fixture: {e}"))?;
         let out = run(compiler, [fixture.as_os_str()])?;
-        require(!out.status.success(),
-            format!("{name}: unsupported native I/O compiled: {}", stdout(&out)))?;
-        require(stdout(&out).trim().is_empty(),
-            format!("{name}: unsupported native I/O emitted LLVM IR: {}", stdout(&out)))?;
-        require(stderr(&out).contains("unknown function or wrong call arity"),
-            format!("{name}: missing explicit rejection diagnostic: {}", stderr(&out)))?;
+        require(
+            !out.status.success(),
+            format!("{name}: unsupported native I/O compiled: {}", stdout(&out)),
+        )?;
+        require(
+            stdout(&out).trim().is_empty(),
+            format!("{name}: unsupported native I/O emitted LLVM IR: {}", stdout(&out)),
+        )?;
+        require(
+            stderr(&out).contains("unknown function or wrong call arity"),
+            format!("{name}: missing undefined-call rejection diagnostic: {}", stderr(&out)),
+        )?;
+
+        let global_launder = format!(
+            r#"fnc {symbol}(int n): int {{ return n; }}
+pub fnc main(): int {{ return {symbol}(1); }}
+"#
+        );
+        fs::write(&fixture, global_launder)
+            .map_err(|e| format!("{name}: write declaration-laundering fixture: {e}"))?;
+        let out = run(compiler, [fixture.as_os_str()])?;
+        require(
+            !out.status.success()
+                && stdout(&out).trim().is_empty()
+                && stderr(&out).contains("native I/O callable name is compiler-owned"),
+            format!(
+                "{name}: global declaration laundered reserved I/O identity; status={:?}, stdout={}, stderr={}",
+                out.status.code(),
+                stdout(&out),
+                stderr(&out)
+            ),
+        )?;
+
+        let method_launder = format!(
+            r#"define class SocketFacade as
+  pub {symbol}(self, int n): int {{ return n; }}
+end
+pub fnc main(): int {{
+  let SocketFacade s = new SocketFacade();
+  return s.{symbol}(1);
+}}
+"#
+        );
+        fs::write(&fixture, method_launder)
+            .map_err(|e| format!("{name}: write method-laundering fixture: {e}"))?;
+        let out = run(compiler, [fixture.as_os_str()])?;
+        require(
+            !out.status.success()
+                && stdout(&out).trim().is_empty()
+                && stderr(&out).contains("native I/O callable name is compiler-owned"),
+            format!(
+                "{name}: method declaration laundered reserved I/O identity; status={:?}, stdout={}, stderr={}",
+                out.status.code(),
+                stdout(&out),
+                stderr(&out)
+            ),
+        )?;
     }
-    println!("Native async-only I/O boundary: {} unsupported native bindings fail closed", operations.len());
+
+    // The reservation is identity-based, not suffix-based. Preserve ordinary
+    // synchronous user functions that happen to end in _async/_blocking.
+    let positives = [
+        ("blocking suffix", "pure_math_blocking"),
+        ("async suffix", "checksum_async"),
+        ("similar I/O-looking suffix", "read_textish_async"),
+    ];
+    for (name, symbol) in positives {
+        let program = format!(
+            r#"fnc {symbol}(int n): int {{ return n + 1; }}
+pub fnc main(): int {{ return {symbol}(41); }}
+"#
+        );
+        fs::write(&fixture, program)
+            .map_err(|e| format!("{name}: write positive fixture: {e}"))?;
+        let out = run(compiler, [fixture.as_os_str()])?;
+        require(
+            out.status.success() && stdout(&out).starts_with("; ModuleID"),
+            format!(
+                "{name}: ordinary user suffix was over-reserved; status={:?}, stdout={}, stderr={}",
+                out.status.code(),
+                stdout(&out),
+                stderr(&out)
+            ),
+        )?;
+    }
+
+    println!(
+        "Native async-only I/O boundary: {} reserved standard spellings reject undefined/global/method laundering; {} user suffix controls compile",
+        operations.len(),
+        positives.len()
+    );
     Ok(())
 }
 
@@ -757,32 +895,46 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
     let ir = temp.path.join("remainder.ll");
     let executable = temp.path.join("remainder-native");
 
-    let positives = [
-        ("positive", "pub fnc main(): int { return 17 % 5; }\n", 2),
-        ("negative-dividend", "pub fnc main(): int { return (-17 % 5) + 10; }\n", 8),
-        ("precedence", "pub fnc main(): int { return 4 + 17 % 5 * 3; }\n", 10),
-        ("associativity", "pub fnc main(): int { return 20 % 6 % 4; }\n", 2),
-        ("function-param", "fnc rem(int n): int { return n % 7; }\n\
-            pub fnc main(): int { return rem(52); }\n", 3),
-        ("exact-divisor", "pub fnc main(): int { return 64 % 8; }\n", 0),
-        ("divisor-one", "pub fnc main(): int { return (-14 % 1) + 6; }\n", 6),
-        ("signed-min-divisor-one", "pub fnc main(): int { return ((-9223372036854775807 - 1) % 1) + 11; }\n", 11),
-        ("negative-divisor", "pub fnc main(): int { return 17 % -5; }\n", 2),
-        ("both-negative", "pub fnc main(): int { return (-17 % -5) + 10; }\n", 8),
-        ("negative-precedence", "pub fnc main(): int { return 4 + 17 % -5 * 3; }\n", 10),
-        ("negative-associativity", "pub fnc main(): int { return 20 % 6 % -4; }\n", 2),
-        ("negative-function-param", "fnc rem(int n): int { return n % -7; }\n\
-            pub fnc main(): int { return rem(52); }\n", 3),
-        ("negative-minus-one", "pub fnc main(): int { return 5 % -1; }\n", 0),
-        ("min-dividend-minus-one", "pub fnc main(): int { return ((-9223372036854775807 - 1) % -1) + 13; }\n", 13),
-        ("signed-min-divisor", "pub fnc main(): int { return 5 % -9223372036854775808; }\n", 5),
-        ("min-both-sides", "pub fnc main(): int { return ((-9223372036854775807 - 1) % -9223372036854775808) + 17; }\n", 17),
+    // %, ^ and ^^ are reserved. Named Integer operations carry the semantics:
+    // rem truncates toward zero, mod is never negative, and a zero divisor traps.
+    let min = "(-9223372036854775807 - 1)";
+    let rem_fn = "fnc r(int a, int b): int { return Integer.rem(a, b); }\n";
+    let mod_fn = "fnc m(int a, int b): int { return Integer.mod(a, b); }\n";
+    let positives: Vec<(&str, String, i32)> = vec![
+        ("positive", "pub fnc main(): int { return Integer.rem(17, 5); }\n".into(), 2),
+        ("negative-dividend", "pub fnc main(): int { return Integer.rem(-17, 5) + 10; }\n".into(), 8),
+        ("precedence", "pub fnc main(): int { return 4 + Integer.rem(17, 5) * 3; }\n".into(), 10),
+        ("nested", "pub fnc main(): int { return Integer.rem(Integer.rem(20, 6), 4); }\n".into(), 2),
+        ("function-param", "fnc rem(int n): int { return Integer.rem(n, 7); }\n\
+            pub fnc main(): int { return rem(52); }\n".into(), 3),
+        ("exact-divisor", "pub fnc main(): int { return Integer.rem(64, 8); }\n".into(), 0),
+        ("divisor-one", "pub fnc main(): int { return Integer.rem(-14, 1) + 6; }\n".into(), 6),
+        ("signed-min-divisor-one", format!("pub fnc main(): int {{ return Integer.rem({min}, 1) + 11; }}\n"), 11),
+        ("negative-divisor", "pub fnc main(): int { return Integer.rem(17, -5); }\n".into(), 2),
+        ("both-negative", "pub fnc main(): int { return Integer.rem(-17, -5) + 10; }\n".into(), 8),
+        ("negative-minus-one", "pub fnc main(): int { return Integer.rem(5, -1); }\n".into(), 0),
+        ("min-dividend-minus-one", format!("pub fnc main(): int {{ return Integer.rem({min}, -1) + 13; }}\n"), 13),
+        ("signed-min-divisor", format!("pub fnc main(): int {{ return Integer.rem(5, {min}); }}\n"), 5),
+        ("min-both-sides", format!("pub fnc main(): int {{ return Integer.rem({min}, {min}) + 17; }}\n"), 17),
         // Full signed-i64 equality returns 0/1; POSIX process exit status
         // otherwise truncates an incorrect large result modulo 256.
-        ("full-width-min-negative-seven", "pub fnc main(): int { return (((-9223372036854775807 - 1) % -7) == -1) ? 0 : 1; }\n", 0),
-        ("full-width-max-negative-seven", "pub fnc main(): int { return ((9223372036854775807 % -7) == 0) ? 0 : 1; }\n", 0),
+        ("full-width-min-negative-seven", format!("pub fnc main(): int {{ return (Integer.rem({min}, -7) == -1) ? 0 : 1; }}\n"), 0),
+        ("full-width-max-negative-seven", "pub fnc main(): int { return (Integer.rem(9223372036854775807, -7) == 0) ? 0 : 1; }\n".into(), 0),
+        ("runtime-divisor", format!("{rem_fn}pub fnc main(): int {{ return r(52, 7); }}\n"), 3),
+        ("runtime-negative-divisor", format!("{rem_fn}pub fnc main(): int {{ return r(-17, -5) + 10; }}\n"), 8),
+        ("runtime-min-minus-one", format!("{rem_fn}pub fnc main(): int {{ return r({min}, -1) + 21; }}\n"), 21),
+        ("mod-negative-dividend", "pub fnc main(): int { return Integer.mod(-9, 4); }\n".into(), 3),
+        ("mod-both-negative", "pub fnc main(): int { return Integer.mod(-9, -4); }\n".into(), 3),
+        ("mod-negative-divisor", "pub fnc main(): int { return Integer.mod(9, -4); }\n".into(), 1),
+        ("mod-runtime", format!("{mod_fn}pub fnc main(): int {{ return m(-9, 4); }}\n"), 3),
+        ("mod-runtime-min-minus-one", format!("{mod_fn}pub fnc main(): int {{ return m({min}, -1) + 5; }}\n"), 5),
+        ("mod-full-width", format!("{mod_fn}pub fnc main(): int {{ return (m(-1, {min}) == 9223372036854775807) ? 0 : 1; }}\n"), 0),
+        ("bitxor", "pub fnc main(): int { return Integer.bitXor(5, 3); }\n".into(), 6),
+        ("bitxor-full-width", format!("pub fnc main(): int {{ return (Integer.bitXor({min}, 9223372036854775807) == -1) ? 0 : 1; }}\n"), 0),
+        ("bool-xor", "pub fnc main(): int { return (Xor(true, false) && !Xor(true, true)) ? 0 : 1; }\n".into(), 0),
     ];
-    for (name, program, expected) in positives {
+    for (name, program, expected) in &positives {
+        let (name, expected) = (*name, *expected);
         fs::write(&source, program).map_err(|e| format!("{name}: write: {e}"))?;
         let compiled = run(compiler, [source.as_os_str()])?;
         require(
@@ -790,16 +942,16 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
             format!("{name}: native frontend rejected source: {}", stderr(&compiled)),
         )?;
         let llvm_ir = stdout(&compiled);
-        if name == "function-param" || name == "negative-function-param" {
+        if name == "function-param" || name == "runtime-divisor" {
             require(
                 llvm_ir.contains("srem i64 "),
                 format!("{name}: emitted IR lacks runtime signed remainder"),
             )?;
         }
-        if name == "min-dividend-minus-one" {
+        if name == "runtime-min-minus-one" {
             require(
-                !llvm_ir.contains("srem i64 "),
-                format!("{name}: emitted unsafe signed-min / -1 srem"),
+                llvm_ir.contains("rem.divisor"),
+                format!("{name}: missing the -1 divisor guard that avoids srem poison"),
             )?;
         }
         fs::write(&ir, &compiled.stdout).map_err(|e| format!("{name}: IR: {e}"))?;
@@ -827,22 +979,33 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
             )?;
         }
     }
+    let traps: Vec<(&str, String)> = vec![
+        ("zero-literal-divisor", "pub fnc main(): int { return Integer.rem(5, 0); }\n".into()),
+        ("zero-runtime-divisor", format!("{rem_fn}pub fnc main(): int {{ return r(5, 0); }}\n")),
+        ("mod-zero-runtime-divisor", format!("{mod_fn}pub fnc main(): int {{ return m(5, 0); }}\n")),
+    ];
+    for (name, program) in &traps {
+        fs::write(&source, program).map_err(|e| format!("{name}: write: {e}"))?;
+        let compiled = run(compiler, [source.as_os_str()])?;
+        require(compiled.status.success(),
+            format!("{name}: native frontend rejected source: {}", stderr(&compiled)))?;
+        fs::write(&ir, &compiled.stdout).map_err(|e| format!("{name}: IR: {e}"))?;
+        for level in ["-O0", "-O2"] {
+            let linked = run(clang, [OsStr::new(level), ir.as_os_str(), OsStr::new("-o"), executable.as_os_str()])?;
+            require(linked.status.success(), format!("{name} {level}: Clang failed: {}", stderr(&linked)))?;
+            let executed = run(&executable, std::iter::empty::<&str>())?;
+            // A zero divisor must stop the program, never return a value.
+            require(executed.status.code().is_none(),
+                format!("{name} {level}: expected a trap, observed exit {:?}", executed.status.code()))?;
+        }
+    }
     let negatives = [
-        ("zero-divisor", "pub fnc main(): int { return 5 % 0; }\n",
-            "nonzero signed integer literal divisor"),
-        ("negative-zero", "pub fnc main(): int { return 5 % -0; }\n",
-            "nonzero signed integer literal divisor"),
-        ("computed-divisor", "pub fnc main(): int { return 5 % (3 - 1); }\n",
-            "nonzero signed integer literal divisor"),
-        ("runtime-divisor", "fnc rem(int n): int { return 5 % n; }\n\
-            pub fnc main(): int { return rem(2); }\n",
-            "nonzero signed integer literal divisor"),
-        ("nonliteral-unary", "pub fnc main(): int { return 5 % -(1 + 2); }\n",
-            "nonzero signed integer literal divisor"),
-        ("double-negative", "pub fnc main(): int { return 5 % -(-2); }\n",
-            "nonzero signed integer literal divisor"),
-        ("wrong-type", "pub fnc main(): int { return true % 2; }\n",
-            "arithmetic requires int"),
+        ("percent", "pub fnc main(): int { return 17 % 5; }\n", "'%' is reserved"),
+        ("caret", "pub fnc main(): int { return 5 ^ 3; }\n", "'^' is reserved"),
+        ("double-caret", "pub fnc main(): int { return (true ^^ false) ? 1 : 0; }\n", "'^^' is reserved"),
+        ("pow-unsupported", "pub fnc main(): int { return Integer.pow(2, 3); }\n", "Integer.pow is unsupported"),
+        ("wrong-type", "pub fnc main(): int { return Integer.rem(true, 2); }\n", "arithmetic requires int"),
+        ("xor-shadowing", "fnc Xor(bool a, bool b): bool { return a; }\npub fnc main(): int { return 0; }\n", "expected non-keyword identifier"),
     ];
     for (name, program, diagnostic) in negatives {
         fs::write(&source, program).map_err(|e| format!("{name}: write: {e}"))?;
@@ -856,8 +1019,8 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
         )?;
     }
     println!(
-        "Native Java-compatible signed remainder: {} compiled cases at -O0/-O2, {} fail-closed negatives",
-        positives.len(), negatives.len()
+        "Native Integer.rem/mod/bitXor: {} compiled cases and {} zero-divisor traps at -O0/-O2, {} reserved-operator negatives",
+        positives.len(), traps.len(), negatives.len()
     );
     Ok(())
 }
