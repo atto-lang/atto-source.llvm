@@ -32,6 +32,24 @@ if(ATTO_ACTOR_RETIREMENT_HOST_ONLY)
   add_test(NAME native_actor_done_resource_quiescence
     COMMAND atto_actor_retirement_host_test)
   set_tests_properties(native_actor_done_resource_quiescence PROPERTIES TIMEOUT 30)
+
+  # The same full-suite production registry test also checks one-shot runtime
+  # binding, token exhaustion, quarantine, and concurrent lease retirement.
+  # Keep both targets in the host-only SDK-free sanitizer workflow.
+  add_executable(atto_actor_resource_registry_host_test
+    tests/actor_resource_registry_test.cpp)
+  target_include_directories(atto_actor_resource_registry_host_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_features(atto_actor_resource_registry_host_test PRIVATE
+    cxx_std_17)
+  target_compile_options(atto_actor_resource_registry_host_test PRIVATE
+    -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+  target_link_libraries(atto_actor_resource_registry_host_test PRIVATE
+    Threads::Threads)
+  add_test(NAME native_actor_resource_registry_quiescence
+    COMMAND atto_actor_resource_registry_host_test)
+  set_tests_properties(native_actor_resource_registry_quiescence
+    PROPERTIES TIMEOUT 30)
   return()
 endif()
 
