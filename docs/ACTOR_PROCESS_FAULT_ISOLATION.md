@@ -12,7 +12,7 @@ caller may translate the notice into its own priority supervisor CONTROL
 message, but **that mailbox integration is not implemented here**.
 
 The typed results distinguish clean exit, nonzero exit, signal termination,
-timeout, failed spawn, and failed wait. A SIGSEGV or SIGABRT in one worker does
+timeout, failed spawn, and failed wait. A SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT, or SIGKILL in one worker does
 not terminate its supervisor process. A concurrent healthy worker completes
 while a second worker crashes. The worker gets only PATH/LC_ALL in its explicit
 environment. The parent waits on that one child PID, not `waitpid(-1)`.
@@ -42,7 +42,8 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
-The test spawns an external executable and checks isolated SIGSEGV, SIGABRT,
+The test spawns an external executable and checks isolated SIGSEGV, SIGBUS,
+SIGILL, SIGFPE, SIGKILL, SIGABRT,
 nonzero and clean exits, a hung worker killed at a bounded deadline, inherited
 environment sanitization, and a healthy concurrent sibling. Expected child
 signals are intentional fault injection; do not interpret an individual child
