@@ -789,6 +789,10 @@ static int source_actor_await_ready_common(
     SourceActor* instance = id_continuation
         ? lookup_actor_id_locked(identity)
         : live_actor_pointer_locked(opaque);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    if (id_continuation && !instance)
+        fputs("SOURCE_ACTOR_CHECKED_ID_REJECTED\n", stderr);
+#endif
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
     frame.actor = instance;
     ensure(group.vm && group.root_ref.scheduler_domain
@@ -913,6 +917,10 @@ static int64_t source_actor_await_done_common(
     SourceActor* instance = id_continuation
         ? lookup_actor_id_locked(identity)
         : live_actor_pointer_locked(opaque);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    if (id_continuation && !instance)
+        fputs("SOURCE_ACTOR_CHECKED_ID_REJECTED\n", stderr);
+#endif
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
     ensure(atomic_load_explicit(
         &instance->stop_requested, memory_order_acquire) == 1);
