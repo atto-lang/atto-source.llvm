@@ -163,8 +163,18 @@ public:
     NativeActorRetirementBarrier(const NativeActorRetirementBarrier&) = delete;
     NativeActorRetirementBarrier& operator=(const NativeActorRetirementBarrier&) = delete;
 
-    void retire() {
-        resources_->retire();  // closes new admissions before any done attempt
+    /**
+     * STOP's receiver-admission linearization point is this method's
+     * receive-fence seal, not a later scheduler poll or caller-side
+     * seal_stop(). No actor-specific receive may be admitted after it wins.
+     *
+     * Fail closed by default: panic, cancellation, and force retirement must
+     * NOT enable guest tear_down. The trusted coordinator must explicitly
+     * pass true for a verified graceful actor termination.
+     */
+    void retire(bool allow_graceful_teardown = false) {
+        if (receives_) receives_->seal_stop(allow_graceful_teardown);
+        resources_->retire();  // closes new resource admissions
         retired_.store(true, std::memory_order_release);
     }
 
