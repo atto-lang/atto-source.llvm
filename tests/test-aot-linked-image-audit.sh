@@ -38,6 +38,7 @@ extern int foreign_x(void);
 int main(void) { return foreign_x() != 1; }
 C
 "$clang" -O0 "$work/clean.c" -o "$work/clean"
+"$clang" -O0 -c "$work/clean.c" -o "$work/clean.o"
 "$clang" -O0 "$work/data.c" -o "$work/data"
 "$clang" -O0 "$work/collector.c" -o "$work/collector"
 "$clang" -O0 "$work/collector2.c" -o "$work/collector2"
@@ -58,7 +59,7 @@ readelf -W --symbols "$work/spoofed-symtab" >"$work/spoofed-readelf.stdout" 2>"$
 "$clang" "$work/foreign_main.c" -L"$work" -lforeign -o "$work/foreign"
 bash "$auditor" "$work/clean" >/dev/null
 bash "$auditor" "$work/data" >/dev/null
-for disallowed in collector collector2 stripped runpath foreign loader spoofed-symtab; do
+for disallowed in collector collector2 stripped runpath foreign loader spoofed-symtab clean.o libforeign.so; do
   if bash "$auditor" "$work/$disallowed" >"$work/result.log" 2>&1; then
     echo "FAIL: unsafe/unverifiable binary admitted: $disallowed" >&2
     exit 1
@@ -67,4 +68,4 @@ for disallowed in collector collector2 stripped runpath foreign loader spoofed-s
     cat "$work/result.log" >&2; echo "FAIL: missing rejection receipt: $disallowed" >&2; exit 1;
   }
 done
-printf 'LINKED_AOT_GC_SCREEN_TESTS_PASS|positive=2|negative=7|guest_executed=NO\n'
+printf 'LINKED_AOT_GC_SCREEN_TESTS_PASS|positive=2|negative=9|guest_executed=NO\n'
