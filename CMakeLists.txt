@@ -171,6 +171,7 @@ if(BUILD_TESTING)
     add_test(NAME native_trap_result_option_fail_closed
         COMMAND "${CMAKE_COMMAND}"
             "-DORES_TRAP_LLVM_CLI=$<TARGET_FILE:oreslang-llvmc>"
+            "-DORES_TRAP_SHARED_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/trap-three-backend-target.atto"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/trap_option_result_native_source_gate.cmake")
     set_tests_properties(native_trap_result_option_fail_closed PROPERTIES TIMEOUT 90)
 
