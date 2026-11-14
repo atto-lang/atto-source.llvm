@@ -3,12 +3,12 @@ define class Point as
   let int x = 40;
 end
 
-pub mtd (mut self: Point) move_by(int dx): void {
+pub mtd (Point mut self) move_by(int dx): void {
   self.x = self.x + dx;
   return;
 }
 
-pub mtd (self: Point) read_x(): int {
+pub mtd (Point self) read_x(): int {
   return self.x;
 }
 
