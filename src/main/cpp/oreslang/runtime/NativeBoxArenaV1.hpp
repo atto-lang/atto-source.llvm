@@ -100,6 +100,26 @@ public:
     std::uint64_t domain() const noexcept { return domain_; }
     static constexpr std::size_t capacity() noexcept { return Slots; }
 
+    // Trusted allocator-side witness: independent of the Box's self-reported
+    // generation/domain. The caller must already hold exclusive ownership
+    // (or a pinned immutable lifetime) while using the returned boolean;
+    // this is a validation check, NOT a lease against concurrent destruction.
+    // In the ActorBoxRegion only the owning carrier performs those actions.
+    bool is_current_owner(std::size_t index, std::uint64_t domain,
+                          std::uint32_t generation, const T* pointer) const noexcept {
+        if (index >= Slots || !pointer || !generation || domain != domain_)
+            return false;
+        const auto& slot = slots_[index];
+        if (slot.state.load(std::memory_order_acquire) != kLive)
+            return false;
+        if (slot.generation.load(std::memory_order_acquire) != generation)
+            return false;
+        // Comparing addresses does not dereference a potentially stale
+        // guest pointer or delegate trust to caller-controlled generation.
+        return static_cast<const void*>(pointer) ==
+               static_cast<const void*>(slot.storage);
+    }
+
     // Construction is guaranteed nothrow. A busy, exhausted, retired or
     // out-of-range slot produces an invalid ticket without touching T.
     // Returning a nonmovable ticket relies on C++17+ guaranteed copy elision.
