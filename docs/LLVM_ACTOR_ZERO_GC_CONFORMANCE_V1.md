@@ -25,6 +25,43 @@ production ActorArena objects; it is not an entire process allocator trace.
 The compiler-backed fixture additionally insists on generated calls to
 the actor ABI to reject a constant-output-only executable.
 
+## Compiler-selected source actor heap hardening (2026-11-14)
+
+The source actor compiler runtime selects
+\`src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c\`, **not**
+\`ActorArena.c\`. The two allocators have distinct ABIs; native ActorArena
+success alone never establishes source actor heap correctness.
+
+This PR also changes the production compiler-selected scalar heap:
+
+- Bind \`ores_actor_i64_heap_enter\` to a physical carrier via C11
+  \`_Thread_local\` authority. Matching a copied domain/epoch on another thread
+  is no longer sufficient. One carrier cannot enter a second actor heap
+  while a first turn is still active.
+- \`leave\` revokes thread-local admission. A fresh \`enter\` on another
+  thread after the first turn ended still supports actor migration.
+- Cross-turn read loans remain releaseable by a trusted host without
+  re-entering a turn; retiring a heap still waits for loans to drain.
+- Physical teardown uses the existing volatile \`zeroize_bytes\` instead of
+  an O2-deletable dead \`memset\` immediately before \`free\`.
+
+The separate \`scripts/test-source-actor-heap-carrier-v1.sh\` compiles
+production \`ActorOwnedI64Heap.c\` and the original
+\`tests/actor_owned_heap_lifecycle_test.cpp\` at O0/O2 with Clang
+ASan/UBSan. It adds fail-stop negative cases for a stolen active
+turn token on another native carrier and a nested admission to another
+actor heap. A linker-level \`calloc/free\` wrapper tracks the actual
+scalar heap storage and requires every tracked byte to be zero at the
+\`free\` boundary. The wrapper is limited to direct linkage from the
+compiled runtime object, not other process allocations.
+
+These are **new test requirements, not executed test results**. Source
+GitHub Actions still reports failure with \`steps=null\`, and no
+complete local private-source checkout has been tested. This is not
+proof that the guest compiler lowers all types into an owned heap,
+that 128 actor incarnations actually run, or that full process no-GC
+has been achieved.
+
 ## Release criteria still unproven
 
 1. **Ownership lowering:** production compiler emits correct actor-owned
