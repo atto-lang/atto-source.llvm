@@ -189,6 +189,47 @@ and complete unwind/cancellation cleanup before actor-owned Box usage
 can be considered implemented. Unsupported raw pointer cross-actor
 transfer remains explicitly rejected.
 
+## Follow-up hardening audit: teardown reentrancy and intrinsic identity
+
+An adversarial review found a **teardown reentrancy window**:
+the actor Box region formerly reset owned boxes before revoking access.
+A `T` destructor on the owning carrier could call back into that
+same region and mint another allocation while destruction was underway.
+`ActorBoxRegionV1` now synchronizes carrier binding, sets an atomic
+shutdown fence **before any destructor**, and refuses all reentrant
+admissions, callbacks, drops and retirement calls during teardown.
+This lock is used only for carrier admission and terminal destruction,
+not for per-turn actor allocation or Box access.
+
+`FixedBoxArena::is_current_owner` now checks the actual slot state,
+allocator domain, generation and allocation address independently from
+the Box's metadata. The actor wrapper uses that check before exposing
+a borrowed Box reference and before dropping a slot. **The caller must
+still prove no concurrent lifetime mutation**; this check does not pin
+an otherwise racing pointer.
+
+The typed Box ownership-effect checker now rejects unknown enum
+discriminants rather than accidentally treating a malformed compiler
+event as a no-op. Main parser/type aliases also reserve
+`Atomic`, `Box`, `Arc`, and `Weak` as compiler-owned type identities;
+guest aliases, actor/class declarations or type-only declarations may
+not spoof their intrinsic identity.
+
+The private alternate-runner native proof builds the exact changed Git
+blobs and executes reentrant-destructor, stale-generation and malformed
+compiler-event regressions under optimized C++20, ASan+UBSan and TSan:
+https://github.com/honeypot-r-us-test/hnpt-lambdas/actions/runs/43651177318
+
+The source-main compiler proof uses a *focused exact Git blob mirror*
+of the C++17 toolchain source files and `.atto` regression corpus,
+not a byte-for-byte copy of the entire private repository. The carrier
+uses its **own** `GITHUB_TOKEN` and needs no source cross-org secrets.
+
+This bridge is single-carrier and **does not yet implement the
+multi-threaded actor method model**. Production migration across
+carriers, multiple concurrent receivers, scheduler quiescence, and
+guest `Box<T>` lowering remain blocked until independently proven.
+
 ### Remaining merge blockers
 
 - Full main-frontend `Atomic<T>` support beyond the single local i64
