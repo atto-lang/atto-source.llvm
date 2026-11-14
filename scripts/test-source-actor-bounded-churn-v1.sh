@@ -103,8 +103,19 @@ for opt in 0 2; do
     negative="$root/$rel"
     rc=0
     timeout 30s "$compiler" --target=host "$negative" >"$work/negative.ll" 2>"$work/negative.err" || rc=$?
+    case "${rel##*/}" in
+      missing-stop.atto|await-suspension.atto)
+        expected_error="expected.*stop" ;;
+      double-stop.atto)
+        expected_error="(expected.*identifier|bounded actor churn.*increment)" ;;
+      unbounded-count.atto)
+        expected_error="bounded actor churn count" ;;
+      foreign-stop.atto)
+        expected_error="bounded actor churn must stop its exact scoped actor" ;;
+      *) echo "unreviewed negative fixture: $rel" >&2; exit 78 ;;
+    esac
     if [[ "$rc" == 0 || "$rc" == 124 || "$rc" == 125 || -s "$work/negative.ll" ]] ||
-      ! grep -Eiq 'bounded actor churn|expected.*stop|expected.*identifier|expected.*=' "$work/negative.err"; then
+      ! grep -Eiq "$expected_error" "$work/negative.err"; then
       echo "SOURCE_ACTOR_CHURN_INVALID_ACCEPTED|O$opt|file=$rel|exit=$rc" >&2
       cat "$work/negative.err" >&2
       exit 1
