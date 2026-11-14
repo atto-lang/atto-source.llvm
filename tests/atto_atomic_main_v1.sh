@@ -21,4 +21,13 @@ for f in tests/atto-atomic-main-v1/reject-*.atto; do
   fi
   test ! -s "$tmp/reject.ll"
 done
+# The first hosted i64 atomic path must never silently lower to a
+# non-threaded Wasm, Cortex-M, or unsupported pointer ABI.
+for target in wasm32 thumbv7m-none-eabi; do
+  if "$compiler" "--target=$target" tests/atto-atomic-main-v1/main-int.atto >"$tmp/unsupported.ll" 2>"$tmp/unsupported.err"; then
+    echo "unsupported atomic AOT target admitted: $target" >&2
+    exit 1
+  fi
+  test ! -s "$tmp/unsupported.ll"
+done
 echo ATTO_MAIN_COMPILER_ATOMIC_I64_AOT_PASS
