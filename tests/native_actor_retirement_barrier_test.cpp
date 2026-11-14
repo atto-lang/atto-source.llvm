@@ -13,6 +13,7 @@
 #include <optional>
 #include <stdexcept>
 #include <thread>
+#include <vector>
 
 namespace oreslang::runtime {
 struct NativeSourceCleanupGateTestPeer {
@@ -707,7 +708,7 @@ static void foreign_receive_fence_cannot_complete_another_actor() {
 // Concurrent host admission/STOP race for the new bounded invocation gate.
 // This is deliberately NOT a compiled .atto concurrent receive fixture.
 static void native_receive_stop_admission_race_is_linearizable() {
-    for (unsigned round = 0; round < 64; ++round) {
+    for (unsigned round = 0; round < 256; ++round) {
         auto receives = std::make_shared<NativeActorReceiveFence>(91, round + 1, 2);
         std::atomic<bool> start{false}, release{false};
         std::atomic<unsigned> attempted{0}, accepted{0};
@@ -962,7 +963,68 @@ static void abortive_group_stop_seals_receive_before_any_native_reclaim() {
             "failed guest lifecycle teardown appeared after DONE");
 }
 
+// A future concurrent actor must not bypass capacity bounds or leak an
+// actor-owned pin when a logical invocation lease moves between stacks.
+static void native_receive_capacity_move_and_owner_death() {
+    NativeActorReceiveFence bounded(82, 1, 4096);
+    std::vector<NativeActorReceiveFence::ReceiveLease> held;
+    held.reserve(4096);
+    for (unsigned i = 0; i < 4096; ++i) {
+        auto next = bounded.try_enter(82, 1);
+        require(next.has_value(), "bounded receive capacity lost before 4096");
+        held.push_back(std::move(*next));
+    }
+    require(bounded.active_receives() == 4096
+                && !bounded.try_enter(82, 1),
+            "native receive capacity overflow");
+    bool foreignRejected = false;
+    try { (void) bounded.try_enter(82, 2); }
+    catch (const std::invalid_argument&) { foreignRejected = true; }
+    require(foreignRejected && bounded.active_receives() == 4096,
+            "foreign generation changed active receive count");
+    bounded.seal_stop(true);
+    require(!bounded.try_begin_teardown(), "teardown entered while capacity fully leased");
+    held.clear();
+    require(bounded.active_receives() == 0,
+            "bulk move-only lease destruction did not drain");
+    require(bounded.try_begin_teardown(), "graceful teardown never became eligible");
+    bounded.seal_stop(false);
+    require(!bounded.ready_for_reclamation(),
+            "abortive downgrade bypassed live teardown");
+    bounded.finish_teardown();
+    require(bounded.ready_for_reclamation(),
+            "finished teardown did not authorize safe reclamation");
+
+    NativeActorReceiveFence from(83, 1, 2);
+    NativeActorReceiveFence to(84, 1, 2);
+    auto first = from.try_enter(83, 1);
+    auto second = to.try_enter(84, 1);
+    require(first.has_value() && second.has_value(),
+            "move-assignment lease setup failed");
+    *first = std::move(*second);
+    require(from.active_receives() == 0 && to.active_receives() == 1,
+            "move-assignment leaked previous actor's receive pin");
+    from.seal_stop(false);
+    to.seal_stop(false);
+    require(from.ready_for_reclamation(), "old actor still pinned by moved lease");
+    first.reset();
+    second.reset();
+    require(to.ready_for_reclamation(), "new actor still pinned after moved lease drop");
+
+    std::optional<NativeActorReceiveFence::ReceiveLease> postOwner;
+    {
+        auto owner = std::make_unique<NativeActorReceiveFence>(85, 1, 1);
+        postOwner = owner->try_enter(85, 1);
+        require(postOwner.has_value(), "post-owner gate lease admission");
+        owner->seal_stop(false);
+    }
+    // The receipt holds shared State, not the destroyed factory object's
+    // address. This drop is safe even after the gate owner was released.
+    postOwner.reset();
+}
+
 int main() {
+    native_receive_capacity_move_and_owner_death();
     native_barrier_refuses_unbound_or_wrong_domain_finalizers();
     foreign_finalizer_cannot_acknowledge_another_actor_registry();
     abortive_group_stop_seals_receive_before_any_native_reclaim();
