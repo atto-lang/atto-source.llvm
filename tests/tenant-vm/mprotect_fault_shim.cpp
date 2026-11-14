@@ -6,6 +6,8 @@
 #include <sys/mman.h>
 #include <signal.h>
 #include <pthread.h>
+#include <cstdio>
+#include <cstdlib>
 
 namespace {
 std::atomic<bool> fail_install{false};
@@ -43,6 +45,21 @@ extern "C" void tenant_vm_test_fail_next_signal_stack_registration() {
 // Deliberately intercept only TenantVm.cpp's own carrier setup. A link-wide
 // --wrap=sigaltstack also hits libasan's startup hook and aborts the process.
 extern "C" int tenant_vm_test_carrier_sigaltstack(const stack_t* ss, stack_t* old_ss) {
+    stack_t current{};
+    const int query_status = sigaltstack(nullptr, &current);
+    if (std::getenv("TENANT_VM_TEST_TRACE_PRIOR_ALTSTACK") != nullptr) {
+        static std::atomic<bool> printed{false};
+        if (!printed.exchange(true, std::memory_order_acq_rel))
+            std::fprintf(stderr, "CARRIER_PRIOR_ALTSTACK query=%d flags=%d bytes=%zu enabled=%d\n",
+                query_status, query_status == 0 ? current.ss_flags : -1,
+                query_status == 0 ? current.ss_size : std::size_t{0},
+                query_status == 0 && !(current.ss_flags & SS_DISABLE));
+    }
+    // Probe whether replacing a pre-existing, runtime-owned alternate stack triggers
+    // the intermittent default-ASan SIGSEGV. Only enabled in private diagnostic CI.
+    if (std::getenv("TENANT_VM_TEST_REUSE_PRIOR_ALTSTACK") != nullptr &&
+        query_status == 0 && !(current.ss_flags & SS_DISABLE))
+        return 0;
     if (ss && !(ss->ss_flags & SS_DISABLE) &&
         fail_signal_stack_registration.exchange(false, std::memory_order_acq_rel)) {
         errno = ENOMEM;
