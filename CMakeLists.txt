@@ -1078,6 +1078,65 @@ if(BUILD_TESTING)
     set_tests_properties(native_compile_time_borrow_escape_admission
         PROPERTIES TIMEOUT 90)
 
+    # Supplemental real compiler frontend unit: reject invalid linked method
+    # slots before call-site resolution; not a substitute for executed guests.
+    add_executable(oreslang-native-static-dispatch-resolver-test
+        tests/native_static_dispatch_resolver_test.cpp
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp)
+    target_include_directories(oreslang-native-static-dispatch-resolver-test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-static-dispatch-resolver-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-static-dispatch-resolver-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_static_dispatch_resolver_ir_integrity
+        COMMAND oreslang-native-static-dispatch-resolver-test)
+    set_tests_properties(native_static_dispatch_resolver_ir_integrity
+        PROPERTIES TIMEOUT 20)
+
+    # Compile the real post-checked native scalar specialization planner with
+    # the project C++17 standard; reject forged generic identities and ABI.
+    add_executable(oreslang-native-scalar-specialization-plan-test
+        tests/native_scalar_specialization_plan_test.cpp)
+    target_include_directories(oreslang-native-scalar-specialization-plan-test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-scalar-specialization-plan-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-scalar-specialization-plan-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_scalar_i64_specialization_plan
+        COMMAND oreslang-native-scalar-specialization-plan-test)
+    set_tests_properties(native_scalar_i64_specialization_plan PROPERTIES TIMEOUT 20)
+
+    # Not a predicate-only proof: source -> actual LLVM compiler -> IR with
+    # one canonical generic implementation -> Clang -> executed native guest.
+    if(ORE_CLANG)
+        add_test(NAME native_scalar_i64_specialization_guest
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_scalar_generic_source_execution.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}")
+        set_tests_properties(native_scalar_i64_specialization_guest PROPERTIES TIMEOUT 180)
+    endif()
+
+    # Direct nominal calls are compiler-bound before linking; prove this
+    # against emitted IR and executed O0/O2 AttoLang guests (not host models).
+    # The independent Rust predicate tests reject function-pointer regressions.
+    set(ORE_STATIC_DISPATCH_BIN "${CMAKE_CURRENT_BINARY_DIR}/oreslang-static-dispatch-aot${CMAKE_EXECUTABLE_SUFFIX}")
+    set(ORE_STATIC_DISPATCH_PREDICATES_BIN "${CMAKE_CURRENT_BINARY_DIR}/oreslang-static-dispatch-predicates${CMAKE_EXECUTABLE_SUFFIX}")
+    add_custom_command(OUTPUT "${ORE_STATIC_DISPATCH_BIN}" "${ORE_STATIC_DISPATCH_PREDICATES_BIN}"
+        COMMAND "${ORE_BORROW_RUSTC}" --edition=2021 -D warnings
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_static_dispatch_aot.rs" -o "${ORE_STATIC_DISPATCH_BIN}"
+        COMMAND "${ORE_BORROW_RUSTC}" --edition=2021 -D warnings --test
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_static_dispatch_aot.rs" -o "${ORE_STATIC_DISPATCH_PREDICATES_BIN}"
+        DEPENDS tests/native_static_dispatch_aot.rs VERBATIM)
+    add_custom_target(oreslang-static-dispatch-aot-build ALL
+        DEPENDS "${ORE_STATIC_DISPATCH_BIN}" "${ORE_STATIC_DISPATCH_PREDICATES_BIN}")
+    add_test(NAME native_static_dispatch_aot
+        COMMAND "${ORE_STATIC_DISPATCH_BIN}" "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}")
+    add_test(NAME native_static_dispatch_predicates
+        COMMAND "${ORE_STATIC_DISPATCH_PREDICATES_BIN}")
+    set_tests_properties(native_static_dispatch_aot native_static_dispatch_predicates
+        PROPERTIES TIMEOUT 90)
+
     add_test(NAME native_shared_borrow_contract
         COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-borrow-alias-matrix"
             --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}"
@@ -1424,6 +1483,27 @@ if(BUILD_TESTING)
     # expressions (ARM_RESULT); do forms lower to structured statement CFG
     # where arm returns retain FUNCTION_RETURN semantics. Async suspension,
     # replay-unsafe subjects, duplicate cases, and nb dispatch stay fail-closed.
+    # Java-compatible eager scalar |> lowering and fail-closed actor pipe.
+    oreslang_contract_test(native_scalar_value_pipeline_call_ir
+        scalar-pipeline-run.ores --ir "call")
+    oreslang_contract_test(native_scalar_value_pipeline_named_ir
+        scalar-pipeline-named-run.ores --ir "call")
+    oreslang_contract_test(native_scalar_value_pipeline_bad_arity
+        scalar-pipeline-arity-reject.ores --diagnostic "call arity mismatch")
+    oreslang_contract_test(native_scalar_value_pipeline_bad_type
+        scalar-pipeline-type-reject.ores --diagnostic "requires int, got bool")
+    oreslang_contract_test(native_scalar_value_pipeline_noncallable
+        scalar-pipeline-noncallable-reject.ores --diagnostic "native scalar pipeline stage must be a named function")
+    oreslang_contract_test(native_scalar_value_pipeline_budget
+        scalar-pipeline-budget-reject.ores --diagnostic "native scalar pipeline exceeds 64 stages")
+    oreslang_contract_test(native_actor_pipe_rejects_untyped_edges
+        actor-pipe-untyped-reject.ores --diagnostic "actor pipe expressions require typed roles")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_scalar_value_pipeline_call_runtime
+            scalar-pipeline-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_scalar_value_pipeline_named_runtime
+            scalar-pipeline-named-run.ores --run 42 --clang "${ORE_CLANG}")
+    endif()
     oreslang_contract_test(native_value_match_arm_result
         dispatch-value-match-run.ores --ir "ternary.merge")
     # Direct signed-minimum literal remains valid; nested unary negation
@@ -1500,7 +1580,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_float_fraction_unavailable numeric-floating-fraction-reject.ores
         --diagnostic "native floating-point/decimal literal unsupported")
     oreslang_contract_test(native_integer_remainder_unavailable numeric-remainder-unsupported.ores
-        --diagnostic "native remainder requires a nonzero signed integer literal divisor")
+        --diagnostic "'%' is reserved")
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_typed_effects using-pure-constant.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_unknown_effect using-unknown-effect.ores --diagnostic "unknown function effect")
@@ -4376,6 +4456,22 @@ if(BUILD_TESTING AND ORE_CLANG)
     else()
         add_test(NAME native_no_gc_ir_audit_unit COMMAND "${CMAKE_COMMAND}" -E false)
     endif()
+    # Exact canonical AttoNATS source -> LLVM IR/no-GC audit -> Clang O0/O2
+    # -> real native guest execution. Distinct from host-only policy tests.
+    # Authenticated actor-owned routing is a separate acceptance gate.
+    if(ORE_NO_GC_RUSTC)
+        add_test(NAME native_atto_nats_pretokenized_string_aot
+            COMMAND bash
+                "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-atto-nats-string-aot.sh"
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}"
+                "${ORE_NO_GC_IR_AUDIT}")
+    else()
+        add_test(NAME native_atto_nats_pretokenized_string_aot
+            COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
+    set_tests_properties(native_atto_nats_pretokenized_string_aot
+        PROPERTIES TIMEOUT 180)
+
     add_test(NAME native_aot_driver
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" aot-driver
             "${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh"
