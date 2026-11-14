@@ -1,0 +1,23 @@
+// Actual native .ores fixture: signed i64 shifts used by ODB1 little-endian packing.
+// Must compile to LLVM IR, be linked by Clang, and EXIT ZERO on all assertions.
+// This is scalar shift parity, NOT full ODB1 List/Result/stdio guest support.
+pub fnc main(): int {
+  let int number = 65535;
+  let int hi = number >> 8;
+  let int lo = number - hi * 256;
+  if (hi != 255) { return 1; } fi
+  if (lo != 255) { return 2; } fi
+  if ((1 + 2 << 3) != 24) { return 3; } fi
+  if ((256 >> 4 + 4) != 1) { return 4; } fi
+  if ((1024 >> 2 >> 2) != 64) { return 5; } fi
+  if ((-1 >> 1) != -1) { return 6; } fi
+  if ((-1 >>> 1) != 9223372036854775807) { return 7; } fi
+  if ((-9223372036854775808 >>> 63) != 1) { return 8; } fi
+  if ((1 << 63) != -9223372036854775808) { return 9; } fi
+  if ((-1 >>> 0) != -1) { return 10; } fi
+  if ((1 << 0) != 1) { return 11; } fi
+  if ((-9223372036854775808 >> 63) != -1) { return 12; } fi
+  let int dynamic_count = 8;
+  if ((65535 >> dynamic_count) != 255) { return 13; } fi
+  return 0;
+}
