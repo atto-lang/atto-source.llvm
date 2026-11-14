@@ -14,6 +14,35 @@
 #include <unistd.h>
 
 #define CYCLES 4096u
+/* These linker wrappers intercept direct allocator references from the
+ * production ActorArena.c object. They do NOT cover arbitrary libc internals,
+ * foreign modules or the full AttoLang compiled guest runtime. */
+static volatile sig_atomic_t admitted_actor_turn;
+static size_t startup_callocs;
+static size_t physical_frees;
+void* __real_calloc(size_t, size_t);
+void* __real_malloc(size_t);
+void* __real_realloc(void*, size_t);
+void __real_free(void*);
+void* __wrap_calloc(size_t count, size_t bytes) {
+    if (admitted_actor_turn) abort();
+    void* p = __real_calloc(count, bytes);
+    if (p) ++startup_callocs;
+    return p;
+}
+void* __wrap_malloc(size_t bytes) {
+    if (admitted_actor_turn) abort();
+    return __real_malloc(bytes);
+}
+void* __wrap_realloc(void* memory, size_t bytes) {
+    if (admitted_actor_turn) abort();
+    return __real_realloc(memory, bytes);
+}
+void __wrap_free(void* memory) {
+    if (admitted_actor_turn) abort();
+    if (memory) ++physical_frees;
+    __real_free(memory);
+}
 #define CHECK(ok, why) do { if (!(ok)) { \
     fprintf(stderr, "ACTOR_ARENA_LIFECYCLE_FAIL: %s at line %d\n", why, __LINE__); \
     return 1; \
@@ -35,14 +64,17 @@ static int start_actor(Actor* actor, uint64_t owner, uint64_t marker) {
     CHECK(actor->arena != NULL, "actor arena creation");
     CHECK(!ores_actor_arena_is_prefaulted(actor->arena), "unexpected prefault");
     CHECK(ores_actor_arena_prefault(actor->arena), "startup prefault");
+    admitted_actor_turn = 1;
     OresArenaTurn turn = ores_actor_arena_enter_realtime(actor->arena, owner, 1u);
     actor->anchor = ores_actor_arena_alloc(actor->arena, turn, sizeof(marker));
     ores_actor_arena_write(actor->arena, turn, actor->anchor, 0u, &marker, sizeof(marker));
     ores_actor_arena_leave(actor->arena, turn);
+    admitted_actor_turn = 0;
     return 0;
 }
 
 static int actor_turn(Actor* actor, uint64_t iteration) {
+    admitted_actor_turn = 1;
     OresArenaTurn turn = ores_actor_arena_enter_realtime(
         actor->arena, actor->owner, actor->incarnation);
     uint64_t observed = 0;
@@ -69,6 +101,7 @@ static int actor_turn(Actor* actor, uint64_t iteration) {
     actor->last_dropped = temporary;
     ores_actor_arena_drop(actor->arena, turn, temporary);
     ores_actor_arena_leave(actor->arena, turn);
+    admitted_actor_turn = 0;
     return 0;
 }
 
@@ -102,10 +135,12 @@ int main(void) {
     }
     CHECK(rejects_handle(&first, second.anchor), "foreign actor handle admitted");
     CHECK(rejects_handle(&first, first.last_dropped), "stale generation admitted");
+    admitted_actor_turn = 1;
     OresArenaTurn turn = ores_actor_arena_enter_realtime(
         first.arena, first.owner, first.incarnation);
     OresArenaLoan loan = ores_actor_arena_borrow(first.arena, turn, first.anchor);
     ores_actor_arena_leave(first.arena, turn);
+    admitted_actor_turn = 0;
     ores_actor_arena_retire(first.arena);
     CHECK(!ores_actor_arena_try_destroy(first.arena),
           "retirement freed arena while loan was outstanding");
@@ -114,6 +149,8 @@ int main(void) {
     CHECK(!actor_turn(&second, CYCLES), "sibling actor corrupted by retirement");
     ores_actor_arena_retire(second.arena);
     CHECK(ores_actor_arena_try_destroy(second.arena), "second arena not reclaimed");
-    puts("LLVM_ACTOR_ARENA_HOST_LIFECYCLE_PASS|turns=8193|actors=2|negative=2|native_guest=NO|zero_gc_certified=NO");
+    CHECK(startup_callocs == 10u, "native arena startup allocation count");
+    CHECK(physical_frees == 10u, "unbalanced actor physical reclamation");
+    puts("LLVM_ACTOR_ARENA_HOST_LIFECYCLE_PASS|turns=8193|actors=2|negative=2|startup_callocs=10|physical_frees=10|turn_allocations=0|native_guest=NO|zero_gc_certified=NO");
     return 0;
 }
