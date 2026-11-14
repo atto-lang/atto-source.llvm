@@ -207,6 +207,11 @@ public:
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
         if (!(state_->identity == caller)) throw std::logic_error("foreign device identity");
+        // Generation zero is an unbound/sentinel allocation: never mint a
+        // command ticket for it, even on the single-buffer path. Paired
+        // commands already require nonzero generations in claim_pair().
+        if (state_->identity.allocation_generation == 0)
+            throw std::invalid_argument("zero GPU allocation generation cannot submit work");
         if (state_->status != Status::Idle || state_->paired)
             throw std::logic_error("buffer not idle or belongs to GPU pair");
         if (state_->sequence == std::numeric_limits<std::uint64_t>::max())

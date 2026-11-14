@@ -54,6 +54,22 @@ int main() {
     check(module.actors.size() == 1);
     check(module.actors.front().max_actor_threads == oreslang::MaxActorThreads::LOW);
 
+    // No native supervisor source/CONTROL lowering exists. Explicitly
+    // reject each nominal composition form before an ordinary actor/class
+    // fallback or native LLVM IR emission can claim executable parity.
+    for (const auto* source : {
+        "define supervisor S1 as on_panic(f: Failure): void { return; } end",
+        "pub define supervisor S1 as end",
+        "define pub supervisor S1 as end",
+        "define supervisor actor S1 as end",
+        "define supervisor S1 extends Actor as end",
+        "define supervisor S1 implements Observer as end",
+        "define supervisor S1 with RestartPolicy as end",
+        "define module Work as define supervisor S1 as end end"
+    }) {
+        denied(source, "NATIVE_SUPERVISOR_UNSUPPORTED");
+    }
+
     for (const auto* tier : {"MEDIUM", "HIGH"}) {
         denied(std::string(canonical_enum)
                    + "@ActorMaxThreads(MaxActorThreads." + tier + ")\n"
