@@ -14,6 +14,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <new>
 #include <pthread.h>
 #include <stdexcept>
 #include <sys/mman.h>
@@ -205,6 +206,14 @@ struct Carrier {
     // A partial unprotect failure leaves unknown extra PROT_NONE pages on this stack.
     // Never execute another guest on this carrier: keep the process and other carriers alive.
     bool quota_guard_quarantined = false;
+    // A retired carrier never schedules again. The watchdog owns joining, unmapping
+    // and bounded replacement; the worker owns signalling retirement.
+    std::atomic<bool> retire_requested{false};
+    std::atomic<bool> start_allowed{false}; // publish pthread_t before the new worker can schedule
+    bool retired_joined = false;             // watchdog only
+    bool replacement_permanent = false;      // watchdog only
+    std::uint32_t replacement_attempts = 0; // watchdog only
+    std::uint64_t replacement_retry_at_ns = 0; // watchdog only
     std::uintptr_t stack_floor = 0; // lowest address this turn may use: the top of whichever guard applies
     void* signal_stack = nullptr;
 
@@ -401,6 +410,10 @@ struct TenantVmHost::Core {
     std::atomic<std::uint64_t> queued_bytes{0};
     std::atomic<std::uint64_t> actor_restarts{0};
     std::atomic<std::uint64_t> stack_quota_misses{0};
+    std::atomic<std::uint64_t> carrier_replacements{0};
+    std::atomic<std::uint64_t> carrier_replacement_failures{0};
+    std::atomic<std::uint32_t> unavailable_carriers{0};
+    std::atomic<bool> capacity_exhausted{false};
 
     // A min-heap on the time, of actors waiting to run again after a restart.
     struct Backoff {
@@ -458,6 +471,9 @@ struct TenantVmHost::Core {
     }
 
     void carrier_main(Carrier* c) {
+        // pthread_create can start this thread before it publishes c->thread. Wait
+        // for the creator's release so an interrupt can never see an unset pthread_t.
+        while (!c->start_allowed.load(std::memory_order_acquire)) std::this_thread::yield();
         t_carrier = c;
         stack_t alt{};
         alt.ss_sp = c->signal_stack;
@@ -483,6 +499,13 @@ struct TenantVmHost::Core {
                 ready_hint.store(ready_vms.size(), std::memory_order_relaxed);
             }
             run_one_turn(c, vm);
+            if (c->quota_guard_quarantined) {
+                // The turn's mailbox/result accounting is complete at this point. Do not take
+                // more work on a stack with uncertain protection: the watchdog replaces it.
+                unavailable_carriers.fetch_add(1, std::memory_order_acq_rel);
+                c->retire_requested.store(true, std::memory_order_release);
+                return;
+            }
         }
     }
 
@@ -1261,6 +1284,7 @@ struct TenantVmHost::Core {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
             const std::uint64_t now = now_ns();
             release_backoffs(now);
+            recover_retired_carriers();
             for (auto& owned : carriers) {
                 Carrier& c = *owned;
                 const std::uint64_t seq = c.turn_seq.load(std::memory_order_seq_cst);
@@ -1307,16 +1331,133 @@ struct TenantVmHost::Core {
         }
     }
 
+    // Carrier slots are stable for the lifetime of Core. Only the watchdog replaces an
+    // exited carrier, and all public interrupt paths inspect the published turn_seq before
+    // touching c->thread. A newly created thread waits for start_allowed to be released.
+    void release_carrier_stack(Carrier* c) {
+        if (c->stack) munmap(c->stack, kCarrierGuardBytes + limits.carrier_stack_bytes);
+        if (c->signal_stack) munmap(c->signal_stack, kSignalStackBytes);
+        c->stack = nullptr;
+        c->signal_stack = nullptr;
+        c->stack_guard_low = nullptr;
+        c->stack_floor = 0;
+        c->quota_guard_low = 0;
+    }
+
+    bool allocate_carrier_stack(Carrier* c) {
+        const std::size_t total = kCarrierGuardBytes + limits.carrier_stack_bytes;
+        void* stack = mmap(nullptr, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (stack == MAP_FAILED) return false;
+        void* signal_stack = mmap(nullptr, kSignalStackBytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (signal_stack == MAP_FAILED) {
+            munmap(stack, total);
+            return false;
+        }
+        if (mprotect(stack, kCarrierGuardBytes, PROT_NONE) != 0) {
+            munmap(signal_stack, kSignalStackBytes);
+            munmap(stack, total);
+            return false;
+        }
+        c->stack = stack;
+        c->signal_stack = signal_stack;
+        c->stack_guard_low = static_cast<std::uint8_t*>(stack);
+        c->stack_floor = reinterpret_cast<std::uintptr_t>(stack) + kCarrierGuardBytes;
+        c->quota_guard_low = 0;
+        c->quota_guard_quarantined = false;
+        c->start_allowed.store(false, std::memory_order_relaxed);
+        return true;
+    }
+
+    bool launch_carrier(Carrier* c) {
+        pthread_attr_t attributes;
+        if (pthread_attr_init(&attributes) != 0) return false;
+        const int attr_status = pthread_attr_setstack(&attributes,
+            static_cast<std::uint8_t*>(c->stack) + kCarrierGuardBytes, limits.carrier_stack_bytes);
+        if (attr_status != 0) {
+            pthread_attr_destroy(&attributes);
+            return false;
+        }
+        struct Start { Core* core; Carrier* carrier; };
+        auto* start = new (std::nothrow) Start{this, c};
+        if (!start) {
+            pthread_attr_destroy(&attributes);
+            return false;
+        }
+        const int rc = pthread_create(&c->thread, &attributes, [](void* raw) -> void* {
+            auto* s = static_cast<Start*>(raw);
+            Core* core = s->core;
+            Carrier* carrier = s->carrier;
+            delete s;
+            core->carrier_main(carrier);
+            return nullptr;
+        }, start);
+        pthread_attr_destroy(&attributes);
+        if (rc != 0) {
+            delete start;
+            return false;
+        }
+        c->started = true;
+        return true;
+    }
+
+    // A failed replacement is retried with bounded backoff. If every slot is permanently
+    // unavailable, fail all live VMs so callers receive a terminal result instead of hanging.
+    void recover_retired_carriers() {
+        for (auto& owned : carriers) {
+            Carrier* c = owned.get();
+            if (!c->retire_requested.load(std::memory_order_acquire)) continue;
+            if (!c->retired_joined) {
+                if (c->started) pthread_join(c->thread, nullptr);
+                c->started = false;
+                release_carrier_stack(c);
+                c->retired_joined = true;
+            }
+            if (c->replacement_permanent || now_ns() < c->replacement_retry_at_ns) continue;
+            ++c->replacement_attempts;
+            const bool allocated = allocate_carrier_stack(c);
+            // Keep retire_requested set until a runnable replacement exists. Its gate stays
+            // closed while the counters and slot state are published.
+            const bool launched = allocated && launch_carrier(c);
+            if (launched) {
+                c->retired_joined = false;
+                c->replacement_attempts = 0;
+                c->replacement_retry_at_ns = 0;
+                c->retire_requested.store(false, std::memory_order_release);
+                carrier_replacements.fetch_add(1, std::memory_order_relaxed);
+                unavailable_carriers.fetch_sub(1, std::memory_order_acq_rel);
+                c->start_allowed.store(true, std::memory_order_release);
+                continue;
+            }
+            release_carrier_stack(c);
+            carrier_replacement_failures.fetch_add(1, std::memory_order_relaxed);
+            // Three attempts per slot, separated by 10 and 100 ms. We never spin on OOM.
+            if (c->replacement_attempts >= 3) c->replacement_permanent = true;
+            else c->replacement_retry_at_ns = now_ns() +
+                (c->replacement_attempts == 1 ? 10'000'000ULL : 100'000'000ULL);
+        }
+        if (unavailable_carriers.load(std::memory_order_acquire) != carriers.size()) return;
+        for (const auto& carrier : carriers)
+            if (!carrier->replacement_permanent) return; // a bounded retry is still scheduled
+        if (capacity_exhausted.exchange(true, std::memory_order_acq_rel)) return;
+        std::vector<std::shared_ptr<Vm>> to_fail;
+        {
+            std::lock_guard<std::mutex> lock(registry_mutex);
+            for (auto& entry : by_generation) to_fail.push_back(entry.second);
+        }
+        for (auto& vm : to_fail) fail(vm, FailReason::HostClosed, 0);
+    }
+
     void stop_carriers() {
         {
             std::lock_guard<std::mutex> lock(ready_mutex);
             stopping = true;
         }
         ready_cv.notify_all();
+        for (auto& carrier : carriers) carrier->start_allowed.store(true, std::memory_order_release);
         for (auto& carrier : carriers) {
             if (carrier->started) pthread_join(carrier->thread, nullptr);
-            if (carrier->stack) munmap(carrier->stack, kCarrierGuardBytes + limits.carrier_stack_bytes);
-            if (carrier->signal_stack) munmap(carrier->signal_stack, kSignalStackBytes);
+            carrier->started = false;
+            release_carrier_stack(carrier.get());
         }
     }
 
@@ -1368,40 +1509,16 @@ TenantVmHost::TenantVmHost(HostLimits limits) : core_(std::make_shared<Core>(lim
     for (std::uint32_t i = 0; i < limits.carriers; ++i) {
         auto carrier = std::make_unique<Carrier>();
         carrier->core = core;
-        const std::size_t total = kCarrierGuardBytes + limits.carrier_stack_bytes;
-        void* stack = mmap(nullptr, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-        void* signal_stack = mmap(nullptr, kSignalStackBytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-        carrier->stack = stack == MAP_FAILED ? nullptr : stack;
-        carrier->signal_stack = signal_stack == MAP_FAILED ? nullptr : signal_stack;
-        carrier->stack_guard_low = static_cast<std::uint8_t*>(carrier->stack);
-        carrier->stack_floor = reinterpret_cast<std::uintptr_t>(carrier->stack) + kCarrierGuardBytes;
         core->carriers.push_back(std::move(carrier));
-        if (stack == MAP_FAILED || signal_stack == MAP_FAILED || mprotect(stack, kCarrierGuardBytes, PROT_NONE) != 0)
+        if (!core->allocate_carrier_stack(core->carriers.back().get()))
             give_up("TenantVmHost: carrier stack");
     }
-    // Every Carrier exists before any thread can scan the array.
-    for (auto& carrier : core->carriers) {
-        pthread_attr_t attributes;
-        pthread_attr_init(&attributes);
-        pthread_attr_setstack(&attributes, static_cast<std::uint8_t*>(carrier->stack) + kCarrierGuardBytes,
-                              limits.carrier_stack_bytes);
-        struct Start { Core* core; Carrier* carrier; };
-        auto* start = new Start{core, carrier.get()};
-        const int rc = pthread_create(&carrier->thread, &attributes, [](void* raw) -> void* {
-            auto* s = static_cast<Start*>(raw);
-            Core* c = s->core;
-            Carrier* self = s->carrier;
-            delete s;
-            c->carrier_main(self);
-            return nullptr;
-        }, start);
-        pthread_attr_destroy(&attributes);
-        if (rc != 0) {
-            delete start;
-            give_up("TenantVmHost: carrier thread");
-        }
-        carrier->started = true;
-    }
+    // All slots must exist before a worker can scan them. Publish each pthread_t before
+    // releasing any start gate, including in the partial-construction failure path.
+    for (auto& carrier : core->carriers)
+        if (!core->launch_carrier(carrier.get())) give_up("TenantVmHost: carrier thread");
+    for (auto& carrier : core->carriers)
+        carrier->start_allowed.store(true, std::memory_order_release);
     core->watchdog = std::thread([core] { core->watchdog_main(); });
 }
 
@@ -1444,6 +1561,7 @@ VmOpenResult TenantVmHost::open(VmSpec spec) {
     {
         std::lock_guard<std::mutex> lock(core_->registry_mutex);
         // An id stays taken until its cage is gone, so a restart can never overlap the old VM.
+        if (core_->capacity_exhausted.load(std::memory_order_acquire)) return refuse(Status::HostClosed);
         if (core_->by_id.count(vm->spec.tenant_id)) return refuse(Status::DuplicateTenant);
         if (core_->by_id.size() >= core_->limits.max_vms) return refuse(Status::TenantQuota);
         if (vm->spec.limits.heap_bytes > core_->limits.max_admitted_heap_bytes - core_->admitted_heap)
@@ -1586,6 +1704,9 @@ HostStats TenantVmHost::stats() const {
     out.queued_bytes = core_->queued_bytes.load();
     out.actor_restarts = core_->actor_restarts.load();
     out.stack_quota_misses = core_->stack_quota_misses.load();
+    out.carrier_replacements = core_->carrier_replacements.load();
+    out.carrier_replacement_failures = core_->carrier_replacement_failures.load();
+    out.unavailable_carriers = core_->unavailable_carriers.load();
     return out;
 }
 
