@@ -5,6 +5,43 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Standalone native IR ABI test: hand-authored source-free LLVM IR links with
+# the real C telemetry runtime and returns 42. This is NOT Atto compiler IR.
+# Limit the fixture to its pinned x86_64 Linux triple and a local Clang driver.
+function(atto_add_static_source_log_ir_abi_test target test_name)
+  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR
+     NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
+    return()
+  endif()
+  find_program(ATTO_SOURCE_LOG_IR_CLANG NAMES clang clang-20 clang-19 clang-18 clang-17)
+  if(NOT ATTO_SOURCE_LOG_IR_CLANG)
+    return()
+  endif()
+  set(atto_ir_object "${CMAKE_CURRENT_BINARY_DIR}/${target}.o")
+  add_custom_command(OUTPUT "${atto_ir_object}"
+    COMMAND "${ATTO_SOURCE_LOG_IR_CLANG}" -x ir -O1 -c
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_static_source_log_ir_abi_v1.ll"
+      -o "${atto_ir_object}"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_static_source_log_ir_abi_v1.ll"
+    VERBATIM)
+  set_source_files_properties("${atto_ir_object}" PROPERTIES
+    GENERATED TRUE EXTERNAL_OBJECT TRUE)
+  add_executable(${target}
+    tests/native_static_source_log_ir_abi_harness_v1.c
+    src/main/cpp/oreslang/runtime/NativeTelemetrySpan.c
+    "${atto_ir_object}")
+  target_include_directories(${target} PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  set_target_properties(${target} PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  target_compile_options(${target} PRIVATE
+    $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+  add_test(NAME ${test_name} COMMAND ${target})
+  set_tests_properties(${test_name} PROPERTIES
+    PASS_REGULAR_EXPRESSION "LLVM_STATIC_SOURCE_LOG_IR_ABI_LINK_HOST_PASS"
+    TIMEOUT 20)
+endfunction()
+
 # Source identity cold-path admission can be tested without an LLVM SDK.
 # This is HOST-ONLY, not compiler-inserted Atto guest instrumentation.
 option(ATTO_SOURCE_IDS_HOST_ONLY
@@ -47,6 +84,9 @@ if(ATTO_SOURCE_IDS_HOST_ONLY)
   endif()
   add_test(NAME source_log_manifest_host_only
     COMMAND atto_source_log_manifest_host_test)
+  atto_add_static_source_log_ir_abi_test(
+    atto_static_source_log_ir_link_host_test
+    source_free_static_log_ir_link_host_only)
 
   # C11 host-native ring verification; no LLVM SDK or guest compiler needed.
   add_executable(atto_static_log_ring_v1_host_test
@@ -265,6 +305,9 @@ if(BUILD_TESTING)
         $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME native_source_log_manifest_admission
         COMMAND oreslang-native-source-log-manifest-test)
+    atto_add_static_source_log_ir_abi_test(
+        oreslang-native-static-source-log-ir-link-test
+        source_free_native_static_log_ir_link_host_only)
 
     add_test(NAME native_source_routine_id_compiler_ir
         COMMAND oreslang-llvmc --selftest-source-routine-ir)
