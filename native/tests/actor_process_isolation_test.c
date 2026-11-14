@@ -39,6 +39,10 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[1], "code17")) return 17;
         if (!strcmp(argv[1], "segv")) { raise(SIGSEGV); return 90; }
         if (!strcmp(argv[1], "abort")) { abort(); return 90; }
+        if (!strcmp(argv[1], "bus")) { raise(SIGBUS); return 90; }
+        if (!strcmp(argv[1], "illegal")) { raise(SIGILL); return 90; }
+        if (!strcmp(argv[1], "floating")) { raise(SIGFPE); return 90; }
+        if (!strcmp(argv[1], "kill")) { raise(SIGKILL); return 90; }
         if (!strcmp(argv[1], "slow-clean")) {
             struct timespec wait = {0, 160000000L};
             (void)nanosleep(&wait, NULL);
@@ -72,6 +76,14 @@ int main(int argc, char **argv) {
     assert(n.kind == ATTO_ACTOR_EXIT_CODE && n.exit_code == 17);
     n = run(exe, "abort", 5000);
     assert(n.kind == ATTO_ACTOR_EXIT_SIGNAL && n.signal_number == SIGABRT);
+    n = run(exe, "bus", 5000);
+    assert(n.kind == ATTO_ACTOR_EXIT_SIGNAL && n.signal_number == SIGBUS);
+    n = run(exe, "illegal", 5000);
+    assert(n.kind == ATTO_ACTOR_EXIT_SIGNAL && n.signal_number == SIGILL);
+    n = run(exe, "floating", 5000);
+    assert(n.kind == ATTO_ACTOR_EXIT_SIGNAL && n.signal_number == SIGFPE);
+    n = run(exe, "kill", 5000);
+    assert(n.kind == ATTO_ACTOR_EXIT_SIGNAL && n.signal_number == SIGKILL);
     n = run(exe, "hang", 60);
     assert(n.kind == ATTO_ACTOR_EXIT_TIMEOUT);
     assert(setenv("TEST_SECRET_MUST_NOT_LEAK", "private", 1) == 0);
