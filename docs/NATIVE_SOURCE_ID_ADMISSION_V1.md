@@ -275,3 +275,30 @@ floor are independently **executed and passing** locally, including exact
 Git-blob verification. The whole compiler-to-guest proof remains an
 **unexecuted acceptance gate**. Missing actor/JIT/W3C/OTLP tests remain
 blocking for any larger tracing parity or hard-real-time claim.
+
+
+### Physical manifest/source identity admission (post-audit hardening)
+
+`NativeSourceLogPathsV1.hpp` is a backend-owned, standalone C++17
+cold-path validator. With `--source-log-ids` enabled the ordinary CLI
+now requires both source and manifest to resolve to *the literal physical,
+package-relative paths* supplied to the compiler. It rejects symlink
+aliases, `..` and `./` spellings, absolute paths, nonregular files, missing
+inputs, and source/manifest hardlink aliasing. The regular-file source
+reader then independently binds the opened file identity and read budget.
+This strict path mode is deliberately opt-in and does not change normal
+source import/symlink behavior.
+
+`tests/native_source_log_paths_v1_test.cpp` exercises one positive path
+and 11 negative cases, and is registered for host-only and full SDK
+CTest on Linux. The exact production header Git blob
+`2f10ce88259792ebf2783c69b852d33f6f469295` and test blob
+`8f545d533b700fe0d4df67b6e1b1c84147b89c71`
+were independently reconstructed and SHA-verified. Both GCC C++17 -O2
+and Clang C++17 -O1 ASan+UBSan passed
+`LLVM_SOURCE_LOG_PATHS_HOST_PASS:11` with `-Werror -UNDEBUG`.
+
+This test proves ordinary path admission decisions, not atomic
+filesystem snapshots against privileged concurrent mutation or approved
+private-source export. The compiler SDK and actual Atto linked guest
+remained unexecuted at the time of this report.
