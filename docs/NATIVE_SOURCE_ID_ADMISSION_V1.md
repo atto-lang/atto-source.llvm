@@ -148,3 +148,20 @@ host-only/full-LLVM configurations.
 These are pthread host-carrier tests, **not** Atto actor-message execution,
 actor carrier migration, JIT generation or bounded hard-real-time proof.
 
+
+
+### Deterministic 50,000-operation native runtime model
+
+Added `tests/native_static_log_model_v1_test.c` (Git blob
+`09730e88e630a0f22b727ac8b8154ec4263b18b9`), a deterministic
+50,000-operation FIFO reference model for recording toggles, invalid
+fixed-size source IDs/messages, capped queues, drops, drains and
+stale/empty pending counts. The **exact committed test** passed with
+GCC C11 -O2 and Clang C11 -O1 ASan+UBSan, `-Werror -UNDEBUG`.
+The exact production C runtime/header blobs were also verified.
+The test has independent full-LLVM and host-only CTest registrations.
+
+A fresh local **CMake/CTest 3/3 PASS** comprised the literal ring,
+8 × 1,500 carrier isolation and 50,000-operation model. This verifies
+native **host runtime behavior only**; LLVM compiler IR, actual linked
+Atto guest object, actor scheduler migration and OTLP remain untested.
