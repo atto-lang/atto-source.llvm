@@ -4,6 +4,10 @@ on:
     paths:
       - 'src/main/cpp/oreslang/runtime/ActorArena.c'
       - 'src/main/cpp/oreslang/runtime/ActorArena.h'
+      - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c'
+      - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h'
+      - 'tests/actor_owned_heap_lifecycle_test.cpp'
+      - 'scripts/test-source-actor-heap-carrier-v1.sh'
       - 'tests/actor_arena_lifecycle_stress_v1.c'
       - 'scripts/test-actor-arena-lifecycle-v1.sh'
       - 'scripts/test-actor-arena-guest-churn-v1.sh'
@@ -16,6 +20,10 @@ on:
     paths:
       - 'src/main/cpp/oreslang/runtime/ActorArena.c'
       - 'src/main/cpp/oreslang/runtime/ActorArena.h'
+      - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c'
+      - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h'
+      - 'tests/actor_owned_heap_lifecycle_test.cpp'
+      - 'scripts/test-source-actor-heap-carrier-v1.sh'
       - 'tests/actor_arena_lifecycle_stress_v1.c'
       - 'scripts/test-actor-arena-lifecycle-v1.sh'
       - 'scripts/test-actor-arena-guest-churn-v1.sh'
@@ -125,4 +133,38 @@ jobs:
         with:
           name: atto-actor-heap-guest-churn-candidate
           path: ${{ runner.temp }}/actor-arena-guest-churn-v1-receipts.txt
+          if-no-files-found: warn
+
+  compiler-source-actor-heap-carrier:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout immutable unprivileged source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Execute original compiler heap lifecycle with carrier hardening
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          CLANG: /usr/bin/clang
+          CLANGXX: /usr/bin/clang++
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          command -v /usr/bin/clang
+          command -v /usr/bin/clang++
+          bash -n scripts/test-source-actor-heap-carrier-v1.sh
+          bash scripts/test-source-actor-heap-carrier-v1.sh | tee "$RUNNER_TEMP/compiler-heap-carrier-receipts.txt"
+          grep -Fqx 'SOURCE_ACTOR_HEAP_CARRIER_HOST_MATRIX_PASS|levels=O0_O2|negative_each=12|cross_carrier_stolen_token=REJECTED|migration_between_turns=ALLOWED|guest=NOT_EXECUTED' "$RUNNER_TEMP/compiler-heap-carrier-receipts.txt"
+          test "$(grep -c '^SOURCE_ACTOR_HEAP_CARRIER_HOST_PASS|' "$RUNNER_TEMP/compiler-heap-carrier-receipts.txt")" = 2
+      - name: Retain compiler backend host receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: compiler-source-actor-heap-carrier-host-only
+          path: ${{ runner.temp }}/compiler-heap-carrier-receipts.txt
           if-no-files-found: warn
