@@ -5226,16 +5226,20 @@ endif()
 
 # Host-only GPU actor turn/fence/supervisor composition. This is not a
 # GPU provider, source actor lowering, or physical GPU execution test.
+if(BUILD_TESTING)
     find_package(Threads REQUIRED)
     add_executable(oreslang-gpu-actor-host-bridge-v0-test
         tests/gpu_actor_host_turn_bridge_v0_test.cpp)
     target_include_directories(oreslang-gpu-actor-host-bridge-v0-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-gpu-actor-host-bridge-v0-test PRIVATE cxx_std_17)
     target_compile_options(oreslang-gpu-actor-host-bridge-v0-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
     target_link_libraries(oreslang-gpu-actor-host-bridge-v0-test PRIVATE Threads::Threads)
     add_test(NAME native_gpu_actor_host_turn_fence_control_v0
         COMMAND oreslang-gpu-actor-host-bridge-v0-test)
     set_tests_properties(native_gpu_actor_host_turn_fence_control_v0 PROPERTIES TIMEOUT 30)
+endif()
 
 # Dependency-free, executable import/source admission boundary. This test
 # compiles the production SourceInput.hpp with the host C++ compiler.
