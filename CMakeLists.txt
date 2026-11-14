@@ -5815,10 +5815,13 @@ endif()
 # Host-only logical HTTP RequestLocal: independent of native pthread TLS.
 # Real actor scheduler and cancellation are exercised; .atto compiler
 # lowering and true Task continuation migration are separate release gates.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
     add_executable(oreslang-request-context-local-v1-test
         tests/native_request_context_local_v1_test.cpp
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
     target_include_directories(oreslang-request-context-local-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-request-context-local-v1-test PRIVATE cxx_std_17)
     target_compile_options(oreslang-request-context-local-v1-test PRIVATE
         "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>"
@@ -5828,12 +5831,15 @@ endif()
         COMMAND oreslang-request-context-local-v1-test)
     set_tests_properties(native_request_context_local_host_only
         PROPERTIES TIMEOUT 30)
+endif()
 
 
+if(BUILD_TESTING)
     add_executable(oreslang-native-proxy-arena-pages-test
         tests/native_proxy_request_slab_arena_pages_test.cpp
         src/main/cpp/oreslang/runtime/ActorArena.c)
     target_include_directories(oreslang-native-proxy-arena-pages-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-native-proxy-arena-pages-test PRIVATE c_std_11 cxx_std_20)
     target_compile_options(oreslang-native-proxy-arena-pages-test PRIVATE
         $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Wpedantic -Werror>
@@ -5842,12 +5848,16 @@ endif()
         COMMAND oreslang-native-proxy-arena-pages-test)
     set_tests_properties(native_proxy_slab_arena_pages_and_zeroization
         PROPERTIES TIMEOUT 30)
+endif()
 
 # Counted physical callback permits and slab/generation-bound drain receipts.
 # Host-only proof: no guest lowering, real epoll integration, or I/O transport.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
     add_executable(oreslang-native-proxy-transport-gate-test
         tests/native_proxy_transport_gate_test.cpp)
     target_include_directories(oreslang-native-proxy-transport-gate-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-native-proxy-transport-gate-test PRIVATE
         Threads::Threads)
     target_compile_features(oreslang-native-proxy-transport-gate-test PRIVATE
@@ -5858,10 +5868,12 @@ endif()
         COMMAND oreslang-native-proxy-transport-gate-test)
     set_tests_properties(native_proxy_transport_callback_gate_races
         PROPERTIES TIMEOUT 20)
+endif()
 
 # Linux-only host epoll callback ownership proof with a real socketpair.
 # The bridge wraps the checked-in native epoll reactor rather than mocking it.
 if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Threads REQUIRED)
     add_executable(oreslang-native-epoll-transport-bridge-test
         tests/native_epoll_transport_bridge_test.cpp)
     target_include_directories(oreslang-native-epoll-transport-bridge-test
@@ -5897,6 +5909,7 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_executable(oreslang-native-epoll-bridge-lifetime-test
         tests/native_epoll_bridge_lifetime_test.cpp)
     target_include_directories(oreslang-native-epoll-bridge-lifetime-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-native-epoll-bridge-lifetime-test PRIVATE
         Threads::Threads)
     target_compile_features(oreslang-native-epoll-bridge-lifetime-test PRIVATE
@@ -5907,14 +5920,17 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND oreslang-native-epoll-bridge-lifetime-test)
     set_tests_properties(native_epoll_bridge_external_handoff_failstop
         PROPERTIES TIMEOUT 20)
+endif()
 
 # Focused Linux epoll actor-owned FD lifetime contract without LLVM frontend or
 # the full VM bootstrap. Compiles the REAL reactor/manager + exact callback
 # ledger, never the lightweight external-adapter mock.
 if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Threads REQUIRED)
     add_executable(oreslang-native-actor-nio-fd-lease-test
         tests/native_actor_nio_fd_lease_test.cpp)
     target_include_directories(oreslang-native-actor-nio-fd-lease-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-native-actor-nio-fd-lease-test PRIVATE
         Threads::Threads)
     target_compile_features(oreslang-native-actor-nio-fd-lease-test
@@ -5925,55 +5941,76 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND oreslang-native-actor-nio-fd-lease-test)
     set_tests_properties(native_actor_nio_fd_lease_exclusive_rearm
         PROPERTIES TIMEOUT 20)
+endif()
 
 
 # Stacked OresVM actor resource-retirement acceptance gate.
 # Accounting only: physical external I/O retirement must be signaled by its adapter.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
     add_executable(oreslang-native-oresvm-resource-retirement-test
         tests/native_oresvm_resource_retirement_test.cpp)
     target_include_directories(oreslang-native-oresvm-resource-retirement-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-native-oresvm-resource-retirement-test PRIVATE cxx_std_17)
     target_link_libraries(oreslang-native-oresvm-resource-retirement-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-native-oresvm-resource-retirement-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME native_oresvm_actor_resource_retirement
         COMMAND oreslang-native-oresvm-resource-retirement-test)
     set_tests_properties(native_oresvm_actor_resource_retirement PROPERTIES TIMEOUT 30)
+endif()
 
 
 # Allocation-free bounded pool primitive, host-only (NOT compiled .atto guest).
 # Keep separate from native guest compiler/actor parity CI claims.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
     add_executable(oreslang-native-fixed-buffer-pool-test
         tests/native_fixed_buffer_pool_test.cpp)
     target_include_directories(oreslang-native-fixed-buffer-pool-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-native-fixed-buffer-pool-test PRIVATE Threads::Threads)
     target_compile_features(oreslang-native-fixed-buffer-pool-test PRIVATE cxx_std_20)
     target_compile_options(oreslang-native-fixed-buffer-pool-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME native_fixed_buffer_pool_host_only
         COMMAND oreslang-native-fixed-buffer-pool-test)
     set_tests_properties(native_fixed_buffer_pool_host_only PROPERTIES TIMEOUT 30)
+endif()
 
 
 # Separate host-only atomically published buffer-lease mailbox data lane.
 # No source guest, scheduler CONTROL or actor sandbox admission claim.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
     add_executable(oreslang-native-fixed-buffer-mailbox-test
         tests/native_fixed_buffer_mailbox_test.cpp)
     target_include_directories(oreslang-native-fixed-buffer-mailbox-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-native-fixed-buffer-mailbox-test PRIVATE Threads::Threads)
     target_compile_features(oreslang-native-fixed-buffer-mailbox-test PRIVATE cxx_std_20)
     target_compile_options(oreslang-native-fixed-buffer-mailbox-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME native_fixed_buffer_mailbox_host_only
         COMMAND oreslang-native-fixed-buffer-mailbox-test)
     set_tests_properties(native_fixed_buffer_mailbox_host_only PROPERTIES TIMEOUT 30)
+endif()
 
 
 # Physical actor resource registry loan/handoff bridge for pooled messages.
 # HOST ONLY: registry tickets can allocate and do not certify guest AOT.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
     add_executable(oreslang-native-fixed-buffer-registry-mailbox-test
         tests/native_fixed_buffer_registry_mailbox_test.cpp)
     target_include_directories(oreslang-native-fixed-buffer-registry-mailbox-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-native-fixed-buffer-registry-mailbox-test PRIVATE Threads::Threads)
     target_compile_features(oreslang-native-fixed-buffer-registry-mailbox-test PRIVATE cxx_std_20)
     target_compile_options(oreslang-native-fixed-buffer-registry-mailbox-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME native_fixed_buffer_registry_mailbox_host_only
         COMMAND oreslang-native-fixed-buffer-registry-mailbox-test)
     set_tests_properties(native_fixed_buffer_registry_mailbox_host_only PROPERTIES TIMEOUT 30)
+endif()
