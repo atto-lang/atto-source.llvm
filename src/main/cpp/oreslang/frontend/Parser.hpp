@@ -172,6 +172,19 @@ struct ActorSpawnBinding {
     std::size_t offset = 0;
 };
 
+// First intentionally restricted native actor churn loop: one constant-bounded
+// scalar counter and ONE scoped actor spawn followed by mandatory synchronous
+// stop/join on every iteration. This does not admit send/await, escape,
+// early-return, exception or suspension across the actor's lifetime. Actor
+// identities are runtime-allocated afresh on each trip through the LLVM CFG.
+struct BoundedActorChurnLoop {
+    std::string counter;
+    std::int64_t initial = 0;
+    std::int64_t upper_bound = 0;
+    ActorSpawnBinding worker;
+};
+
+
 struct SourceTaskI64Binding {
     std::string name;
     std::unique_ptr<Expression> result;
@@ -330,6 +343,7 @@ struct Function {
     std::string name;
     std::vector<GenericParameter> generic_parameters;
     std::unique_ptr<ScalarWhileLoop> scalar_while;
+    std::unique_ptr<BoundedActorChurnLoop> bounded_actor_churn;
     std::vector<Parameter> parameters;
     std::vector<LocalBinding> locals;
     std::vector<Statement> statements;
