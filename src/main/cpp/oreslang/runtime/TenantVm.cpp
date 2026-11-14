@@ -1233,7 +1233,8 @@ struct TenantVmHost::Core {
     }
 
     void fail(const std::shared_ptr<Vm>& vm, FailReason reason, std::uint64_t fault_offset) {
-        std::deque<Mail> doomed;
+        // Failure may itself be caused by exhausted memory. Never construct a temporary
+        // deque or grow a collection while fulfilling admitted mailbox promises.
         {
             std::lock_guard<std::mutex> lock(vm->mutex);
             const Phase phase = vm->current_phase();
@@ -1242,21 +1243,23 @@ struct TenantVmHost::Core {
             vm->terminal.reason = reason;
             vm->terminal.fault_offset = fault_offset;
             for (auto& actor : vm->actors) {
-                for (auto& mail : actor->mailbox) {
+                while (!actor->mailbox.empty()) {
+                    Mail& mail = actor->mailbox.front();
                     refund_mail_locked(*vm, mail.bytes.size());
-                    doomed.push_back(std::move(mail));
+                    // Completing a standard std::promise is bounded work and does not
+                    // invoke user callbacks. The phase is already Failed; awakened callers
+                    // cannot admit new turns while this mutex is held.
+                    if (mail.has_promise) {
+                        TurnResult r;
+                        r.status = Status::TenantFailed;
+                        mail.promise.set_value(std::move(r));
+                    }
+                    actor->mailbox.pop_front();
                 }
-                actor->mailbox.clear();
                 actor->queued = false;
             }
             vm->ready.clear();
             vm->inflight = 0;
-        }
-        for (auto& mail : doomed) {
-            if (!mail.has_promise) continue;
-            TurnResult r;
-            r.status = Status::TenantFailed;
-            mail.promise.set_value(std::move(r));
         }
         interrupt_carriers(vm->generation);
         maybe_retire(vm);
@@ -1458,12 +1461,25 @@ struct TenantVmHost::Core {
         for (const auto& carrier : carriers)
             if (!carrier->replacement_permanent) return; // a bounded retry is still scheduled
         if (capacity_exhausted.exchange(true, std::memory_order_acq_rel)) return;
-        std::vector<std::shared_ptr<Vm>> to_fail;
-        {
-            std::lock_guard<std::mutex> lock(registry_mutex);
-            for (auto& entry : by_generation) to_fail.push_back(entry.second);
+        // This is the resource-exhaustion path: copying the registry into a vector
+        // could throw bad_alloc on the watchdog thread and terminate the process.
+        // Each pass picks an active VM without allocation, then marks it failed outside
+        // registry_mutex. Once Failed, it is never selected again, even if still running.
+        for (;;) {
+            std::shared_ptr<Vm> target;
+            {
+                std::lock_guard<std::mutex> lock(registry_mutex);
+                for (const auto& entry : by_generation) {
+                    const Phase phase = entry.second->current_phase();
+                    if (phase == Phase::Running || phase == Phase::Quiescing) {
+                        target = entry.second;
+                        break;
+                    }
+                }
+            }
+            if (!target) break;
+            fail(target, FailReason::HostClosed, 0);
         }
-        for (auto& vm : to_fail) fail(vm, FailReason::HostClosed, 0);
     }
 
     void stop_carriers() {
@@ -1542,12 +1558,16 @@ TenantVmHost::TenantVmHost(HostLimits limits) : core_(std::make_shared<Core>(lim
 }
 
 TenantVmHost::~TenantVmHost() {
-    std::vector<std::shared_ptr<Vm>> remaining;
-    {
-        std::lock_guard<std::mutex> lock(core_->registry_mutex);
-        for (auto& entry : core_->by_generation) remaining.push_back(entry.second);
-    }
-    for (auto& vm : remaining) {
+    // Destruction must not allocate: it is often invoked during memory pressure.
+    // Hold each VM alive across its closure, but never copy the whole registry into
+    // a vector whose growth could throw from this implicitly noexcept destructor.
+    for (;;) {
+        std::shared_ptr<Vm> vm;
+        {
+            std::lock_guard<std::mutex> lock(core_->registry_mutex);
+            if (core_->by_generation.empty()) break;
+            vm = core_->by_generation.begin()->second;
+        }
         core_->fail(vm, FailReason::HostClosed, 0);
         vm->closed.wait();
     }
