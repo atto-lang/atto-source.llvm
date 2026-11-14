@@ -115,4 +115,67 @@ for name in 167-quic-varint-rfc9000 168-http3-frame-rfc9114; do
   fi
   echo "PASS ASan/UBSan native-AOT $name"
 done
+
+# Output atomicity and source preservation are security gates, not conveniences.
+cat > "$work/alias-source.atto" <<'ATTO'
+pub fnc main(): int { return 42; }
+ATTO
+cp "$work/alias-source.atto" "$work/source-baseline"
+if target/release/atto-llvm "$work/alias-source.atto" -o "$work/alias-source.atto" --emit-llvm >"$work/alias.log" 2>&1; then
+  echo "FAIL: --emit-llvm overwrote source" >&2; exit 1
+fi
+grep -q E_OUTPUT_SOURCE "$work/alias.log"
+cmp "$work/alias-source.atto" "$work/source-baseline"
+if target/release/atto-llvm "$work/alias-source.atto" -o "$work/alias-source.atto" >"$work/alias.log" 2>&1; then
+  echo "FAIL: native output overwrote source" >&2; exit 1
+fi
+grep -q E_OUTPUT_SOURCE "$work/alias.log"
+cmp "$work/alias-source.atto" "$work/source-baseline"
+
+ln -s "$work/alias-source.atto" "$work/source-symlink.ll"
+ln "$work/alias-source.atto" "$work/source-hardlink.ll"
+for alias in source-symlink.ll source-hardlink.ll; do
+  if target/release/atto-llvm "$work/alias-source.atto" -o "$work/$alias" --emit-llvm >"$work/alias.log" 2>&1; then
+    echo "FAIL: emitted IR through source alias $alias" >&2; exit 1
+  fi
+  grep -q E_OUTPUT_SOURCE "$work/alias.log"
+  cmp "$work/alias-source.atto" "$work/source-baseline"
+done
+echo "PASS output path alias and hardlink/symlink protection"
+
+printf 'PREVIOUS_KNOWN_GOOD_BINARY\n' > "$work/previous.exe"
+cp "$work/previous.exe" "$work/previous-baseline"
+if target/release/atto-llvm "$work/unknown.atto" -o "$work/previous.exe" >"$work/negative.log" 2>&1; then
+  echo "FAIL: malformed input accepted with prior artifact" >&2; exit 1
+fi
+grep -q E_UNBOUND "$work/negative.log"
+cmp "$work/previous.exe" "$work/previous-baseline"
+
+mkdir "$work/fakebin"
+cat > "$work/fakebin/clang" <<'SH'
+#!/bin/sh
+exit 27
+SH
+chmod +x "$work/fakebin/clang"
+if PATH="$work/fakebin:$PATH" target/release/atto-llvm "$work/alias-source.atto" -o "$work/previous.exe" >"$work/clang.log" 2>&1; then
+  echo "FAIL: failed clang returned success" >&2; exit 1
+fi
+grep -q E_CLANG "$work/clang.log"
+cmp "$work/previous.exe" "$work/previous-baseline"
+
+# A successful publish must replace the old artifact atomically, whether
+# emitting LLVM IR or invoking clang. No staged temporary files may remain.
+target/release/atto-llvm "$work/alias-source.atto" -o "$work/previous.exe" --emit-llvm
+grep -q 'define i32 @main' "$work/previous.exe"
+target/release/atto-llvm "$work/alias-source.atto" -o "$work/previous.exe"
+set +e
+timeout 10s "$work/previous.exe"
+publish_status=$?
+set -e
+test "$publish_status" = 42
+if find "$work" -type f -name '*.atto-stage-*.tmp' | grep -q .; then
+  echo "FAIL: temporary compiler artifacts leaked" >&2; exit 1
+fi
+echo "PASS atomic output, failure preservation, and cleanup"
+
 echo "PASS LLVM_NATIVE_AOT_SCALAR_GUEST cases=$total toolchain=clang no_guest_vm=1 zero_gc_scalar=1"
