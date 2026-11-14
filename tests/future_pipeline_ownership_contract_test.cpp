@@ -153,28 +153,23 @@ int main() {
             true));
     }, "output requires Send");
 
-    // Flatten exactly one freshly-created checked Future.
-    auto flattened = plan(
+    // A value-pipeline stage is not an explicit flatten operation. Even a
+    // fresh checked child Future must preserve the wrapper and therefore cannot
+    // be admitted by this scalar pipeline plan.
+    auto implicit_flatten = plan(
         9,
         PipelineInputOwnership::ConsumedUpstreamOwnedPayload,
         scalar(),
         scalar(),
         true);
-    flattened.flattens_future = true;
-    flattened.produced_future_ownership =
+    implicit_flatten.flattens_future = true;
+    implicit_flatten.produced_future_ownership =
         PipelineStageFutureOwnership::OwnedStageResult;
-    flattened.produced_future_provenance =
+    implicit_flatten.produced_future_provenance =
         PipelineStageFutureProvenance::FreshCheckedProducer;
-    validate_future_pipeline_plan(flattened);
-
-    auto forwarded = flattened;
-    forwarded.declaration_identity = 10;
-    forwarded.pipeline_node_identity = 10010;
-    forwarded.produced_future_provenance =
-        PipelineStageFutureProvenance::BorrowedOrForwarded;
     rejected([&] {
-        validate_future_pipeline_plan(forwarded);
-    }, "fresh checked stage-created Future");
+        validate_future_pipeline_plan(implicit_flatten);
+    }, "implicit Future pipeline flattening is forbidden");
 
     auto scalar_claims_future = plan(
         11,
@@ -188,10 +183,54 @@ int main() {
         PipelineStageFutureProvenance::FreshCheckedProducer;
     rejected([&] {
         validate_future_pipeline_plan(scalar_claims_future);
-    }, "scalar Future pipeline stage cannot own");
+    }, "non-flattening Future pipeline stage cannot own");
+
+    // Compiler-owned proof metadata must reject malformed enum encodings.
+    // A stale/unknown input mode previously fell through to Send-only checks,
+    // bypassing the borrowed input's Send + Share requirement.
+    auto malformed_input = plan(
+        12, PipelineInputOwnership::ConsumedUpstreamOwnedPayload,
+        boxed(scalar()), scalar(), true);
+    malformed_input.input_ownership =
+        static_cast<PipelineInputOwnership>(0xff);
+    rejected([&] {
+        validate_future_pipeline_plan(malformed_input);
+    }, "unknown input ownership");
+    // Direct callers of the trait helper must not bypass the plan-level gate.
+    rejected([&] {
+        require_pipeline_input_traits(
+            static_cast<PipelineInputOwnership>(0xff), boxed(scalar()));
+    }, "unknown input ownership");
+    rejected([&] {
+        (void)publish_future_pipeline_plan(malformed_input, admission(malformed_input));
+    }, "unknown input ownership");
+
+    auto malformed_provenance = plan(
+        13, PipelineInputOwnership::ConsumedUpstreamOwnedPayload,
+        scalar(), scalar(), true);
+    malformed_provenance.effect_provenance =
+        static_cast<PipelineEffectProvenance>(0xff);
+    rejected([&] {
+        validate_future_pipeline_plan(malformed_provenance);
+    }, "unknown effect provenance");
+
+    auto malformed_future_ownership = plan(
+        14, PipelineInputOwnership::ConsumedUpstreamOwnedPayload,
+        scalar(), scalar(), true);
+    malformed_future_ownership.produced_future_ownership =
+        static_cast<PipelineStageFutureOwnership>(0xff);
+    rejected([&] {
+        validate_future_pipeline_plan(malformed_future_ownership);
+    }, "unknown deferred Future ownership");
 
     // Unknown upstream effect provenance survives both rt take and later edges.
     const FunctionEffects none{};
+    auto malformed_summary = pipeline_root_effects(none, false);
+    malformed_summary.provenance =
+        static_cast<PipelineEffectProvenance>(0xff);
+    rejected([&] {
+        (void)malformed_summary.extend(none);
+    }, "unknown provenance");
     const auto opaque = pipeline_root_effects(none, false);
     assert(opaque.provenance ==
         PipelineEffectProvenance::UpstreamFutureUnknown);

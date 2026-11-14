@@ -1,0 +1,39 @@
+{
+  "schema": "attolang.gpu-actor-first-kernel-evidence/0",
+  "date": "2026-11-10",
+  "sourceRepo": "ores-truffle-oreslang/oreslang-source.llvm",
+  "sourceHeadAtMirror": "079d92b5d23f9bd4372537f8d04dd2e407a22371",
+  "scope": "native OpenCL probe C++ compilation, OpenCL C 1.2 kernel syntax, and hardware availability negative gate. No AttoLang guest actor.",
+  "blobs": {
+    "tests/atto_gpu_physical_saxpy_probe.cpp": "42bfa5bbc04bc23a19978314b3083eb02aca25d3",
+    "tests/fixtures/gpu_actor_saxpy_f32_v0.cl": "90f830d7c7e154464d9ad906a654826254adc3b8",
+    "tests/gpu_actor_saxpy_hardware_gate.sh": "23b8ce5f04b2e2ceaf57789cc4f31b35302d508d"
+  },
+  "carrierRepo": "scintilla-run/scintilla-run-e2e",
+  "carrierHead": "b1fe0aa97df123e9168f2d61d34698e9ecd5875d",
+  "runId": 42908695106,
+  "runUrl": "https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42908695106",
+  "executedSteps": {
+    "verifySourceBlobs": "passed",
+    "nativeCppCompile": "passed",
+    "openClKernelSyntaxCompile": "passed",
+    "hardwareGate": "executed_NO_GPU"
+  },
+  "hardwareResult": {
+    "physicalGpuExecuted": false,
+    "openClRuntimeAvailable": false,
+    "probeError": "GPU_PHYSICAL_PROBE_FAILED: OpenCL ICD runtime missing; no CPU fallback",
+    "gate": "GPU_ACTOR_G1_PHYSICAL_GPU_UNVERIFIED"
+  },
+  "claims": {
+    "kernelSourceValid": true,
+    "nativeProbeCompiles": true,
+    "actorSourceCompiled": false,
+    "physicalGpuVerified": false,
+    "providerAuthenticatedDeviceProof": false,
+    "actorSupervisorRuntimeTested": false,
+    "compilerAndGpuGuestParity": false
+  },
+  "promotion": "NOT_EXECUTED_REAL_GPU",
+  "requiresRealGpuRunner": true
+}
