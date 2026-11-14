@@ -93,7 +93,7 @@ public:
             throw std::invalid_argument("native actor receive identity mismatch");
         if (state_->stopped || state_->active >= state_->limit) return std::nullopt;
         ++state_->active;
-        return std::optional<ReceiveLease>(std::in_place, state_);
+        return std::optional<ReceiveLease>(ReceiveLease(state_));
     }
 
     /** A later force/cancel can revoke graceful teardown, never upgrade it. */
