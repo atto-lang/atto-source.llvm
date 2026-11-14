@@ -67,8 +67,8 @@ public:
  public:
   struct Decision { bool admitted; std::uint64_t retry_after; std::size_t in_window; };
   RestartBudget(std::size_t max,std::uint64_t window,std::uint64_t quarantine,Clock clock)
-   :max_(max),window_(window),quarantine_(quarantine),clock_(std::move(clock)),times_(max){
-   if(max_==0||max_>1024||window_==0||quarantine_==0||!clock_) throw std::invalid_argument("invalid restart budget");
+   :max_(max),window_(window),quarantine_(quarantine),clock_(std::move(clock)),times_(checked_max(max)){
+   if(window_==0||quarantine_==0||!clock_) throw std::invalid_argument("invalid restart budget");
   }
   Decision try_acquire(std::size_t requested=1){
    if(requested==0)throw std::invalid_argument("requested restarts must be positive");
@@ -82,6 +82,12 @@ public:
    return {true,0,size_};
   }
  private:
+  // Validate before allocating the restart ring. A huge, invalid max must
+  // never attempt an unbounded allocation on a supervisor failure path.
+  static std::size_t checked_max(std::size_t max){
+   if(max==0||max>1024) throw std::invalid_argument("invalid restart budget");
+   return max;
+  }
   std::uint64_t checked(){const auto n=clock_();if(has_&&n<last_)throw std::logic_error("monotonic clock regressed");has_=true;last_=n;return n;}
   static std::uint64_t sat_add(std::uint64_t a,std::uint64_t b){return UINT64_MAX-a<b?UINT64_MAX:a+b;}
   std::size_t max_,start_{},size_{}; std::uint64_t window_,quarantine_,blocked_{},last_{}; bool has_{};
