@@ -278,6 +278,43 @@ static void concurrent_allocator_issuance() {
     REQUIRE(arena.try_close());
 }
 
+// A close must never report success while an allocator lease can still
+// be published. Every execution order is valid; false success is not.
+static void concurrent_issue_and_retire() {
+    for (int round = 0; round < 64; ++round) {
+        std::atomic<int> drops{0};
+        FixedBoxArena<Token, 1> arena;
+        UniqueBox<Token> held;
+        std::atomic<bool> start{false};
+        std::atomic<bool> issued{false};
+        std::atomic<bool> closed{false};
+        std::thread issuer([&] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            auto ticket = arena.issue_at(0, &drops);
+            if (ticket.valid()) {
+                REQUIRE(UniqueBox<Token>::adopt(ticket, held));
+                issued.store(true, std::memory_order_release);
+            }
+        });
+        std::thread closer([&] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            closed.store(arena.try_close(), std::memory_order_release);
+        });
+        start.store(true, std::memory_order_release);
+        issuer.join();
+        closer.join();
+        REQUIRE(!closed.load(std::memory_order_acquire) ||
+                !issued.load(std::memory_order_acquire));
+        const bool had_owner = held.is_owned();
+        held.reset();
+        REQUIRE(drops.load(std::memory_order_acquire) == (had_owner ? 1 : 0));
+        REQUIRE(arena.try_close());
+        REQUIRE(!arena.issue_at(0, &drops).valid());
+    }
+}
+
 struct ReentrantToken {
     UniqueBox<ReentrantToken>* owner;
     std::atomic<int>* drops;
@@ -308,6 +345,7 @@ int main() {
     unique_box_lifecycle();
     concurrent_ticket_admission();
     concurrent_allocator_issuance();
+    concurrent_issue_and_retire();
     reentrant_destructor_revocation();
     std::puts("ATTO_NATIVE_ATOMIC_BOX_V1_PASS");
 }
