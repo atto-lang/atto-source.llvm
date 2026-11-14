@@ -5,6 +5,7 @@ on:
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
       - 'src/main/cpp/oreslang/frontend/Parser.hpp'
       - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'src/main/cpp/oreslang/runtime/SourceActorBootstrap.h'
       - 'src/main/cpp/oreslang/runtime/SourceActorBootstrap.c'
       - 'scripts/test-source-actor-bounded-churn-v1.sh'
       - 'tests/fixtures/source-actor-bounded-churn-v1/**'
@@ -14,6 +15,7 @@ on:
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
       - 'src/main/cpp/oreslang/frontend/Parser.hpp'
       - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'src/main/cpp/oreslang/runtime/SourceActorBootstrap.h'
       - 'src/main/cpp/oreslang/runtime/SourceActorBootstrap.c'
       - 'scripts/test-source-actor-bounded-churn-v1.sh'
       - 'tests/fixtures/source-actor-bounded-churn-v1/**'
@@ -74,9 +76,15 @@ jobs:
           bash -n scripts/test-source-actor-bounded-churn-v1.sh
           bash scripts/test-source-actor-bounded-churn-v1.sh |
             tee "$RUNNER_TEMP/source-actor-bounded-churn-receipts.txt"
-          grep -Fqx "SOURCE_ACTOR_BOUNDED_CHURN_MATRIX_EXECUTED|head=$EXPECTED_HEAD|levels=O0_O2|native_executions=12|positive_variants=3|negative_compiler_rejections=10|async_guest=NOT_EXECUTED|zero_gc_certified=NO" \
+          grep -Fqx "SOURCE_ACTOR_BOUNDED_CHURN_MATRIX_EXECUTED|head=$EXPECTED_HEAD|levels=O0_O2|native_executions=14|sanitized_construction_proofs=2|positive_variants=3|negative_compiler_rejections=10|async_guest=NOT_EXECUTED|zero_gc_certified=NO" \
             "$RUNNER_TEMP/source-actor-bounded-churn-receipts.txt"
           test "$(grep -c '^SOURCE_ACTOR_BOUNDED_CHURN_GUEST_EXECUTED|' \
+            "$RUNNER_TEMP/source-actor-bounded-churn-receipts.txt")" = 2
+          for opt in 0 2; do
+            grep -Fqx "SOURCE_ACTOR_CHURN_REAL_CONSTRUCTORS|O$opt|ready=128|physically_joined=128|sanitizers=ASAN_UBSAN|guest=EXECUTED|zero_gc_certified=NO" \
+              "$RUNNER_TEMP/source-actor-bounded-churn-receipts.txt"
+          done
+          test "$(grep -c '^SOURCE_ACTOR_CHURN_REAL_CONSTRUCTORS|' \
             "$RUNNER_TEMP/source-actor-bounded-churn-receipts.txt")" = 2
       - name: Retain verified host-native guest receipts only
         if: always()
