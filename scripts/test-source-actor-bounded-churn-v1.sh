@@ -87,7 +87,7 @@ for opt in 0 2; do
     }
     [[ -s "$work/variant.ll" && ! -s "$work/variant.err" ]] || exit 1
     "$auditor" "$work/variant.ll" >"$work/variant-audit.log"
-    grep -Eq '^actor\\.churn\\.scoped\\.body:' "$work/variant.ll" || exit 1
+    grep -Eq '^actor\.churn\.scoped\.body:' "$work/variant.ll" || exit 1
     variant_native="$work/variant-$opt-$index"
     timeout 120s "$root/scripts/compile-aot.sh" "$root/$rel" "$variant_native" >/dev/null
     [[ -x "$variant_native" && ! -L "$variant_native" ]] || exit 1
