@@ -34,6 +34,17 @@ if(ATTO_SOURCE_IDS_HOST_ONLY)
   endif()
   add_test(NAME source_id_v1_fuzz_host_metadata_only
     COMMAND atto_source_id_v1_fuzz_host_test)
+  add_executable(atto_source_log_manifest_host_test
+    tests/native_source_log_manifest_v1_test.cpp)
+  target_include_directories(atto_source_log_manifest_host_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_features(atto_source_log_manifest_host_test PRIVATE cxx_std_17)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(atto_source_log_manifest_host_test PRIVATE
+      -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+  endif()
+  add_test(NAME source_log_manifest_host_only
+    COMMAND atto_source_log_manifest_host_test)
 
   # C11 host-native ring verification; no LLVM SDK or guest compiler needed.
   add_executable(atto_static_log_ring_v1_host_test
@@ -241,6 +252,16 @@ if(BUILD_TESTING)
     # This runs the actual native Atto scalar parser + LLVM function IR
     # emitter. It proves checked routine metadata only, NOT an inserted
     # guest runtime site, linked AOT binary, JIT, or OTel export.
+    add_executable(oreslang-native-source-log-manifest-test
+        tests/native_source_log_manifest_v1_test.cpp)
+    target_include_directories(oreslang-native-source-log-manifest-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-source-log-manifest-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-source-log-manifest-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_source_log_manifest_admission
+        COMMAND oreslang-native-source-log-manifest-test)
+
     add_test(NAME native_source_routine_id_compiler_ir
         COMMAND oreslang-llvmc --selftest-source-routine-ir)
     set_tests_properties(native_source_routine_id_compiler_ir PROPERTIES
