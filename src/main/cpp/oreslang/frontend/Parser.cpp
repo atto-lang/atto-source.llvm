@@ -2526,14 +2526,17 @@ private:
                 if (token_.text == "if" && !finally_scope) {
                     advance(); statement.kind = Statement::Kind::Conditional;
                     statement.condition = expression();
-                    if (accept(";")) {
+                    const bool then_form = accept(";") ||
+                        token_.text == "then" || token_.text == "do";
+                    if (then_form) {
                         if (!accept("then")) require("do"); statement.then_statements = branch_arm(false, true);
                         if (accept("else")) statement.else_statements = branch_arm(false, true);
+                        require("fi");
                     } else {
                         require("{"); statement.then_statements = branch_arm(false, false); require("}");
                         if (accept("else")) { require("{"); statement.else_statements = branch_arm(false, false); require("}"); }
                     }
-                    require("fi"); actions.push_back(std::move(statement)); continue;
+                    actions.push_back(std::move(statement)); continue;
                 }
                 if (finally_scope && (token_.text == "return" ||
                         token_.text == "break" || token_.text == "continue"))
@@ -2854,7 +2857,8 @@ private:
                 auto condition = expression();
                 if (terminal_try_finally && !native_pure_scalar_tree(*condition))
                     fail("native protected try guard requires a pure nonthrowing bool expression");
-                const bool then_form = accept(";");
+                const bool then_form = accept(";") ||
+                    token_.text == "then" || token_.text == "do";
                 if (then_form) {
                     if (!accept("then")) require("do");
                 } else {
@@ -2897,7 +2901,7 @@ private:
                         return value;
                     }
 
-                    require("fi");
+                    if (then_form) require("fi");
                     if (then_form && value.return_class.empty() && !terminal_try_finally) {
                         if (return_guards_started)
                             fail("native structured statements cannot follow guarded returns");
@@ -2929,7 +2933,7 @@ private:
                         conditional.else_statements = branch_arm(false, then_form);
                         if (!then_form) require("}");
                     } else if (!then_form) require("else");
-                    require("fi");
+                    if (then_form) require("fi");
                     value.statements.push_back(std::move(conditional));
                 }
                 continue;
@@ -3138,7 +3142,11 @@ private:
                     if (value.caught_error_type_test != "ArithmeticOverflowError" &&
                             value.caught_error_type_test != "Error")
                         fail("native ErrorSlot type test supports only ArithmeticOverflowError or Error");
-                    require("{");
+                    const bool then_form = accept(";") ||
+                        token_.text == "then" || token_.text == "do";
+                    if (then_form) {
+                        if (!accept("then")) require("do");
+                    } else require("{");
                     require("return");
                     if (token_.kind != Kind::Integer)
                         fail("native ErrorSlot type-match handler requires an integer literal");
@@ -3148,9 +3156,9 @@ private:
                                 Expression::Kind::Integer)
                         fail("native ErrorSlot type-match handler requires an integer literal");
                     require(";");
-                    require("}");
+                    if (!then_form) require("}");
                     require("else");
-                    require("{");
+                    if (!then_form) require("{");
                     require("return");
                     if (token_.kind != Kind::Integer)
                         fail("native ErrorSlot type-mismatch handler requires an integer literal");
@@ -3159,8 +3167,8 @@ private:
                             value.result->kind != Expression::Kind::Integer)
                         fail("native ErrorSlot type-mismatch handler requires an integer literal");
                     require(";");
-                    require("}");
-                    require("fi");
+                    if (!then_form) require("}");
+                    if (then_form) require("fi");
                 } else {
                     require("return");
                     if (token_.kind != Kind::Integer)
