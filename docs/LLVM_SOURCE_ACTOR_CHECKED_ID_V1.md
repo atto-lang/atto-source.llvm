@@ -84,12 +84,15 @@ At Clang O0 **and** O2 with ASan/UBSan:
   after the checked continuation finishes.
 
 The source-host matrix now requires **288 positive actor lifetimes, 284
-forced address reuses, 64 checked CONTROL continuation resumes, 14
-intentional fail-stop negative executions (including two ID-exhaustion
-rejections), two legacy stale-status checks, and 20 process invocations**
-across O0/O2. The legacy cases explicitly do **not** allocate a replacement
-actor at the same address. All counts are acceptance requirements, not
-recorded execution results.
+forced address reuses, 64 checked CONTROL continuation resumes, 18
+intentional fail-stop negative executions (including four stale checked
+READY/DONE Future admissions, two ID-exhaustion rejections and six legacy
+post-retirement pointer denials), two legacy stale-status checks, and 24
+process invocations** across O0/O2. The legacy cases explicitly do **not**
+allocate a replacement actor at the same address. Checked Future failures
+must reject the stale minted identity *before* running any guest callback,
+even when a replacement actor is live at that same address. All counts are
+acceptance requirements, not recorded execution results.
 
 `tests/fixtures/source-actor-checked-id-v1/` adds `.atto` guest
 fixtures for single-actor send/stop, five actors, checked get_ready
