@@ -13,7 +13,7 @@
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "actor heap check failed at %d\n", __LINE__); return 1; } } while (0)
 
-enum Misuse { WRONG_OWNER, WRONG_EPOCH, FORGED_SLOT, DROP_LOANED, WRITE_LOANED, STALE_SLOT_REUSED, FOREIGN_SLOT, DOUBLE_LOAN_RELEASE, REENTER, CALL_AFTER_RETIRE };
+enum Misuse { WRONG_OWNER, WRONG_EPOCH, FORGED_SLOT, DROP_LOANED, WRITE_LOANED, STALE_SLOT_REUSED, FOREIGN_SLOT, DOUBLE_LOAN_RELEASE, REENTER, CALL_AFTER_RETIRE, CROSS_CARRIER_TOKEN, NESTED_DIFFERENT_HEAP };
 static void invalid_call(enum Misuse which) {
     OresActorI64Heap* heap = ores_actor_i64_heap_open(29, 7, 2);
     OresActorTurn turn = ores_actor_i64_heap_enter(heap, 29, 7);
@@ -56,6 +56,18 @@ static void invalid_call(enum Misuse which) {
     } else if (which == CALL_AFTER_RETIRE) {
         ores_actor_i64_heap_retire(heap);
         (void) ores_actor_i64_heap_new(heap, turn, 6);
+    } else if (which == CROSS_CARRIER_TOKEN) {
+        /* Logical domain/epoch match, but this token was admitted on the
+         * forked child's main carrier, not on the child native thread. */
+        std::thread thief([&] {
+            (void) ores_actor_i64_heap_read(heap, turn, slot);
+        });
+        thief.join();
+    } else if (which == NESTED_DIFFERENT_HEAP) {
+        /* Two actor turns cannot execute simultaneously on one carrier,
+         * even if they have different domain IDs. */
+        OresActorI64Heap* sibling = ores_actor_i64_heap_open(30, 8, 2);
+        (void) ores_actor_i64_heap_enter(sibling, 30, 8);
     }
     /* None of these calls may finish normally. */
 }
@@ -134,6 +146,8 @@ int main(void) {
     CHECK(rejects(DOUBLE_LOAN_RELEASE));
     CHECK(rejects(REENTER));
     CHECK(rejects(CALL_AFTER_RETIRE));
+    CHECK(rejects(CROSS_CARRIER_TOKEN));
+    CHECK(rejects(NESTED_DIFFERENT_HEAP));
 #endif
     return 0;
 }
