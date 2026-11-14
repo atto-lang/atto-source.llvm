@@ -172,8 +172,16 @@ public:
      * NOT enable guest tear_down. The trusted coordinator must explicitly
      * pass true for a verified graceful actor termination.
      */
-    void retire(bool allow_graceful_teardown = false) {
+    // If a group STOP callback must retire actor-owned arenas or deregister
+    // external callbacks before invoking retire(), call seal_stop() FIRST.
+    // This trusted preparation fence is idempotent, and no guest code runs
+    // under the receive monitor. Every retire() seals again defensively.
+    void seal_stop(bool allow_graceful_teardown = false) noexcept {
         if (receives_) receives_->seal_stop(allow_graceful_teardown);
+    }
+
+    void retire(bool allow_graceful_teardown = false) {
+        seal_stop(allow_graceful_teardown);
         resources_->retire();  // closes new resource admissions
         retired_.store(true, std::memory_order_release);
     }
