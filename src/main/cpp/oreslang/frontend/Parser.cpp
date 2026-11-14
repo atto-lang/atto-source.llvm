@@ -698,7 +698,10 @@ public:
         Program program;
         while (token_.text == "import") {
             advance();
-            if (token_.text == "namespace")
+            // Outside the host-only verified-metadata mode, namespace imports stay
+            // fail-closed here; in that mode they are parsed into metadata and
+            // still rejected for compilation below.
+            if (token_.text == "namespace" && !verified_namespace_metadata_only_)
                 fail("native import namespace requires a verified manifest package index and per-provider linker");
             if (token_.text == "contract")
                 fail("native contract imports require a validated cross-unit linker");
