@@ -88,19 +88,19 @@ run_case(comma_body_mtd "${fixtures}/comma_body_methods.atto" 42)
 # Strict native scalar equality enforces identical operand types. The
 # accepted aliases are all lowered to static comparison instructions.
 reject_case(comma_body_trailing
-  "fnc main() -> int :: int x = 5, end\\n"
+  "fnc main() -> int :: int x = 5, end\n"
   "requires item after ','")
 reject_case(comma_body_empty
-  "fnc main() -> int :: int x = 5,, x end\\n"
+  "fnc main() -> int :: int x = 5,, x end\n"
   "empty item")
 
 # The native scalar compiler has no checked lambda closure/tuple stage ABI.
 # Lexical rejection is intentional until this gets real LLVM guest lowering.
 reject_case(comma_lambda_not_lowered
-  "fnc main() -> int :: val int x = 5, x |> |n| => int -> n + 1 end\\n"
+  "fnc main() -> int :: val int x = 5, x |> |n| => int -> n + 1 end\n"
   "unsupported Oreslang token")
 reject_case(typed_inline_lambda_not_lowered
-  "fnc main(): int { val f = || => int -> 42; return f(); }\\n"
+  "fnc main(): int { val f = || => int -> 42; return f(); }\n"
   "unsupported Oreslang token")
 
 reject_case(equality_alias_mixed_bool_int
