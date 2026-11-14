@@ -1,5 +1,6 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/types/InvertedProductionSourceMir.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ModuleLoader.hpp"
@@ -436,6 +437,27 @@ int main(int argc, char** argv) {
             admitted_provider_bits);
         source_module = ast.module;
         source_namespace = ast.namespace_name;
+
+        if (ast.inverted_main) {
+            // Bounded production two-i64 stack owner only; no escaping
+            // handles, async/actor lifetime, or target/RT guarantees.
+            if (experimental_owned_int || experimental_rt_scalar_loop ||
+                    wasm32_target || cortex_m_target || native_hard_rt_profile ||
+                    rt_check_only || rt_report_seen || rt_entry_seen ||
+                    tree_shake || !tree_shake_roots.empty() ||
+                    constraint_descriptors_only || library_profile_seen ||
+                    allocator_provider_seen)
+                throw std::runtime_error(
+                    "production inverted i64 slice requires plain host compilation without extra owner, RT or target flags");
+            const auto verified = oreslang::dop::mir::verify_production_inverted_i64(ast);
+            const auto llvm_ir = oreslang::dop::mir::emit_native_i64_pair_ir(
+                verified.mir, verified.operands);
+            std::cout << llvm_ir;
+            std::cout.flush();
+            if (coreLog) coreLog->dump(stderr);
+            return 0;
+        }
+
 
         // A enabled telemetry scope currently calls CLOCK_MONOTONIC on a
         // native carrier. It has not been subjected to a proven WCET/time
