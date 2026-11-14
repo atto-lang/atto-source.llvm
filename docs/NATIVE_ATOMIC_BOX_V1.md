@@ -176,6 +176,9 @@ The wrapper rejects foreign threads, wrong domain or epoch, slot reuse
 while occupied, reentrant live callback mutation, and retirement with
 live slots. Host tests pass under independent exact-SHA carrier proof:
 https://github.com/honeypot-r-us-test/hnpt-lambdas/actions/runs/43649903676
+The wrapper itself also passes optimized, ASan+UBSan and TSan builds in
+https://github.com/honeypot-r-us-test/hnpt-lambdas/actions/runs/43650409937,
+with independent exact-source SHA checks before compilation.
 
 **Security boundary:** Identifiers passed into this wrapper are values,
 not proof of supervisor authority by themselves. The scheduler must
