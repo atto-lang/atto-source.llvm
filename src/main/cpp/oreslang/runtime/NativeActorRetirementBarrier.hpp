@@ -3,6 +3,7 @@
 #include "oreslang/runtime/ActorGroupLifecycle.hpp"
 #include "oreslang/runtime/ActorResourceRegistry.hpp"
 #include "oreslang/runtime/NativeSourceCleanupGate.hpp"
+#include "oreslang/runtime/NativeActorReceiveFence.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -145,14 +146,18 @@ public:
             std::shared_ptr<ActorResourceRegistry> resources,
             NativeActorGroup::RuntimeFinalizer finalizer,
             NativeActorResourceQuarantine& quarantine,
-            std::shared_ptr<NativeSourceCleanupGate> cleanup = {})
+            std::shared_ptr<NativeSourceCleanupGate> cleanup = {},
+            std::shared_ptr<NativeActorReceiveFence> receives = {})
         : resources_(std::move(resources)),
           finalizer_(std::move(finalizer)), quarantine_(quarantine),
-          cleanup_(std::move(cleanup)) {
+          cleanup_(std::move(cleanup)), receives_(std::move(receives)) {
         if (!resources_) throw std::invalid_argument("actor registry required");
         if (cleanup_ && !cleanup_->belongs_to(resources_->actor_id(),
                                               resources_->incarnation()))
             throw std::invalid_argument("source cleanup receipt actor/incarnation mismatch");
+        if (receives_ && (receives_->actor_id() != resources_->actor_id()
+                || receives_->incarnation() != resources_->incarnation()))
+            throw std::invalid_argument("receive fence actor/incarnation mismatch");
     }
 
     NativeActorRetirementBarrier(const NativeActorRetirementBarrier&) = delete;
@@ -185,6 +190,14 @@ public:
         // to detach AND for its single-writer execution lease to quiesce
         // before running any native resource destructor.
         if (!finalizer_.ready_for_resource_reclamation()) return Poll::not_admitted;
+
+        // Host/scheduler dispatch may eventually admit multiple concurrent
+        // receive invocations on separate logical stacks. Even if the actor
+        // group has no active carrier, a suspended receive still pins its
+        // generation; do not invoke native resource closers until ALL of
+        // those explicitly registered invocation leases have been released.
+        // An unconnected source compiler must not claim this gate as proof.
+        if (receives_ && !receives_->ready_for_reclamation()) return Poll::pending;
 
         // Optional source-continuation receipt. A logical cancellation is not
         // physical cleanup: do not run ANY native resource closer while the
@@ -230,6 +243,7 @@ private:
     NativeActorGroup::RuntimeFinalizer finalizer_;
     NativeActorResourceQuarantine& quarantine_;
     std::shared_ptr<NativeSourceCleanupGate> cleanup_;
+    std::shared_ptr<NativeActorReceiveFence> receives_;
     std::atomic<bool> retired_{false};
     std::atomic<bool> polling_{false};
     std::atomic<Poll> terminal_{Poll::not_retired};
