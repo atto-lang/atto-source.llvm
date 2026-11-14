@@ -152,4 +152,65 @@ int main() {
     reader.join();
     reject([&] { (void)registry.at<std::uint32_t>(racingGrant, owner); });
     reject([&] { (void)racingPointer.load(owner); });
+    // Trust downgrade / actor retirement must invalidate every cached cursor,
+    // not just reject future lookups. Reincarnation gets a distinct epoch.
+    const ActorHeapIdentity fencedActor{12, 13, 14};
+    const ActorHeapIdentity nextIncarnation{12, 13, 15};
+    const ActorHeapIdentity siblingActor{12, 16, 14};
+    std::array<std::uint32_t, 2> fencedBacking{{101, 202}};
+    std::array<std::uint32_t, 1> siblingBacking{{303}};
+    const auto fencedGrant = issue(NativeRegionRegistry::Trust::Trusted,
+        fencedActor, 88, 1, fencedBacking.data(), sizeof(fencedBacking),
+        TrustedPointerWindow::Mode::ReadWrite);
+    const auto siblingGrant = issue(NativeRegionRegistry::Trust::Trusted,
+        siblingActor, 89, 1, siblingBacking.data(), sizeof(siblingBacking),
+        TrustedPointerWindow::Mode::ReadOnly);
+    auto stalePointer = registry.at<std::uint32_t>(fencedGrant, fencedActor);
+    if (stalePointer.load(fencedActor) != 101)
+        throw std::runtime_error("fence test precondition failed");
+    registry.fence_actor(fencedActor);
+    registry.fence_actor(fencedActor); // Idempotent retirement.
+    reject([&] { (void)stalePointer.load(fencedActor); });
+    reject([&] { stalePointer.store(fencedActor, 22); });
+    reject([&] { (void)registry.at<std::uint32_t>(fencedGrant, fencedActor); });
+    reject([&] { (void)issue(NativeRegionRegistry::Trust::Trusted,
+        fencedActor, 90, 1, fencedBacking.data(), sizeof(fencedBacking),
+        TrustedPointerWindow::Mode::ReadOnly); });
+    if (registry.at<std::uint32_t>(siblingGrant, siblingActor).load(siblingActor) != 303)
+        throw std::runtime_error("actor fence revoked an unrelated sibling");
+    const auto restartedGrant = issue(NativeRegionRegistry::Trust::Trusted,
+        nextIncarnation, 91, 1, fencedBacking.data(), sizeof(fencedBacking),
+        TrustedPointerWindow::Mode::ReadOnly);
+    if (registry.at<std::uint32_t>(restartedGrant, nextIncarnation).load(nextIncarnation) != 101)
+        throw std::runtime_error("new incarnation could not obtain independent grant");
+    reject([&] { (void)registry.at<std::uint32_t>(restartedGrant, fencedActor); });
+    registry.revoke(restartedGrant);
+    registry.revoke(siblingGrant);
+
+    // A self-fence inside an FFI scope must not announce completed retirement
+    // while the callback still holds a mutable raw address.
+    const ActorHeapIdentity callbackActor{21, 22, 23};
+    std::uint32_t callbackBacking = 404;
+    const auto callbackGrant = issue(NativeRegionRegistry::Trust::Trusted,
+        callbackActor, 92, 1, &callbackBacking, sizeof(callbackBacking),
+        TrustedPointerWindow::Mode::ReadWrite);
+    auto callbackPointer = registry.at<std::uint32_t>(callbackGrant, callbackActor);
+    bool deferredFence = false;
+    const auto callbackStatus = callbackPointer.with_ffi_address(callbackActor,
+        [&](std::uint32_t* raw) {
+            try { registry.fence_actor(callbackActor); }
+            catch (const std::logic_error&) { deferredFence = true; }
+            if (!deferredFence || *raw != 404)
+                throw std::runtime_error("active FFI pointer was prematurely retired");
+            return 7;
+        });
+    if (callbackStatus != 7 || !deferredFence)
+        throw std::runtime_error("self-fence did not defer correctly");
+    reject([&] { (void)callbackPointer.load(callbackActor); });
+    reject([&] { (void)registry.at<std::uint32_t>(callbackGrant, callbackActor); });
+    registry.fence_actor(callbackActor); // Retire after callback quiescence.
+    reject([&] { (void)issue(NativeRegionRegistry::Trust::Trusted,
+        callbackActor, 93, 1, &callbackBacking, sizeof(callbackBacking),
+        TrustedPointerWindow::Mode::ReadWrite); });
+
 }
