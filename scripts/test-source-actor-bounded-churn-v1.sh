@@ -183,4 +183,4 @@ for opt in 0 2; do
     "$(sha256sum "$compiler" | cut -d' ' -f1)" \
     "$(sha256sum "$artifact" | cut -d' ' -f1)"
 done
-echo "SOURCE_ACTOR_BOUNDED_CHURN_MATRIX_EXECUTED|head=$EXPECTED_HEAD|levels=O0_O2|native_executions=12|positive_variants=3|negative_compiler_rejections=10|async_guest=NOT_EXECUTED|zero_gc_certified=NO"
+echo "SOURCE_ACTOR_BOUNDED_CHURN_MATRIX_EXECUTED|head=$EXPECTED_HEAD|levels=O0_O2|native_executions=14|sanitized_construction_proofs=2|positive_variants=3|negative_compiler_rejections=10|async_guest=NOT_EXECUTED|zero_gc_certified=NO"
