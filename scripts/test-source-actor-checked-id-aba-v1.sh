@@ -83,7 +83,7 @@ for opt in 0 2; do
     cat "$work/pos.err" >&2
     exit 1
   }
-  for mode in stale-send stale-stop stale-join; do
+  for mode in stale-send stale-stop stale-join stale-await-ready stale-await-done; do
     rc=0
     ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
       timeout 45s "$bin" "$mode" >"$work/$mode.out" 2>"$work/$mode.err" || rc=$?
@@ -93,7 +93,7 @@ for opt in 0 2; do
       cat "$work/$mode.out" "$work/$mode.err" >&2
       exit 1
     fi
-    if grep -Eq 'ERROR: AddressSanitizer|runtime error:|UndefinedBehaviorSanitizer|LeakSanitizer|SOURCE_ACTOR_CHECKED_ID_INVARIANT_FAILED' "$work/$mode.err"; then
+    if grep -Eq 'ERROR: AddressSanitizer|runtime error:|UndefinedBehaviorSanitizer|LeakSanitizer|SOURCE_ACTOR_CHECKED_ID_INVARIANT_FAILED|SOURCE_ACTOR_STALE_AWAIT_CONTINUATION_EXECUTED' "$work/$mode.err"; then
       echo "SOURCE_ACTOR_CHECKED_ID_UNEXPECTED_SANITIZER_FAILURE|O$opt|mode=$mode" >&2
       cat "$work/$mode.err" >&2
       exit 1
@@ -199,4 +199,4 @@ for opt in 0 2; do
   printf 'SOURCE_ACTOR_CHECKED_ID_NATIVE_PASS|head=%s|O%s|actors=128|same_address_reuses=127|negative=3|asan_ubsan=EXECUTED|native_sha256=%s|atto_guest=NO\n' \
     "$EXPECTED_HEAD" "$opt" "$(sha256sum "$bin" | cut -d' ' -f1)"
 done
-echo "SOURCE_ACTOR_CHECKED_ID_NATIVE_MATRIX_PASS|head=$EXPECTED_HEAD|levels=O0_O2|positive_actors=288|forced_address_reuses=284|death_tests=14|overflow_rejections=2|legacy_death_tests=6|legacy_status_rejections=2|checked_control_resumes=64|native_processes=20|checked_id=64_BIT_VALUE|legacy_pointer_ABA=OPEN|async_await=EXECUTED"
+echo "SOURCE_ACTOR_CHECKED_ID_NATIVE_MATRIX_PASS|head=$EXPECTED_HEAD|levels=O0_O2|positive_actors=288|forced_address_reuses=284|death_tests=18|checked_stale_await_rejections=4|overflow_rejections=2|legacy_death_tests=6|legacy_status_rejections=2|checked_control_resumes=64|native_processes=24|checked_id=64_BIT_VALUE|legacy_pointer_ABA=OPEN|async_await=EXECUTED"
