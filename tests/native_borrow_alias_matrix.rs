@@ -106,6 +106,8 @@ fn source(kind: &str, owners: &[usize], modes: usize) -> String {
     )
 }
 
+const SHARED_CORPUS_CASES: usize = 166;
+
 fn main() {
     let mut compiler = None;
     let mut clang = None;
@@ -181,8 +183,8 @@ fn main() {
         }
         assert_eq!(
             cases.len(),
-            162,
-            "shared corpus must contain all 162 vectors"
+            SHARED_CORPUS_CASES,
+            "shared corpus must contain all 162 generated vectors and 4 heap projection regressions"
         );
     } else {
         for kind in ["int", "bool", "class"] {
@@ -284,7 +286,7 @@ fn main() {
         }
     }
     if from_corpus {
-        assert_eq!(accepted + rejected, 162);
+        assert_eq!(accepted + rejected, SHARED_CORPUS_CASES);
     } else {
         assert_eq!((accepted, rejected), (60, 84));
     }
