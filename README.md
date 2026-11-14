@@ -1,30 +1,28 @@
 # atto-source.llvm
 
-LLVM-based AttoLang compiler and native runtime for high-performance and real-time systems.
+Native LLVM backend for AttoLang. The current draft implements a **real compiled scalar subset**, using the shared checked frontend and direct LLVM IR generation. It does not execute guest code inside a Rust interpreter or WebAssembly engine.
 
-## Scope
+## Quick start
 
-This repository is the AttoLang ecosystem home for:
+Requires Rust 1.85.1 and LLVM/Clang (verified on Clang 18.1.3, Linux x86-64).
 
-- LLVM lowering, ownership-aware runtime semantics, native actor isolation, and target-specific code generation.
-- Compatibility with the [canonical language specification](https://github.com/atto-lang/atto-spec) where applicable.
-- Evidence-based tests, benchmark results, and cross-backend conformance reporting.
+```sh
+cargo build --offline --release --bin atto-llvm
+target/release/atto-llvm tests/fixtures/167-quic-varint-rfc9000.atto -o /tmp/native-atto
+/tmp/native-atto
+echo $? # 42 means its 308 Atto checks passed
+```
 
-## Architecture and compatibility
+Use `--emit-llvm` after `-o output.ll` to inspect the generated LLVM IR. See [Native AOT implementation and limitations](docs/native-aot.md) for admitted types, explicit unsupported diagnostics, toolchain provenance and security scope.
 
-AttoLang is designed around actors, explicit ownership, and portable concurrency semantics. Backend-specific optimizations must not silently change the shared language contract. Runtime capabilities, target restrictions, and unsupported features should be documented explicitly.
+## Verified native execution
 
-## Building and testing
+[Exact-tree private alternate-runner AOT and sanitizer run](https://github.com/athlet-o/athleto-e2e/actions/runs/43649930185) passed 1,255 pure native `.atto` QUIC/HTTP/3 codec checks, four compiler unit tests, checked signed add/sub/mul/neg overflow traps, actual direct `atto-llvm` → ELF output, and ASan/UBSan smoke tests. The source snapshot's exact Git tree is `d02b401e5c7a3a524c4a70db8db8520c6ae408ee`, with a pinned 16-blob frontend copied from `atto-source.rs@860137bcdc50684ab6cb6aa8f89932506b3beec4`.
 
-Consult the checked-in source tree and CI workflows for verified commands and supported targets. Add target-specific build instructions and exact-head execution results as they become available; do not treat a passing host-unit test as proof of guest-language conformance.
+Conformance receipt: [`contracts/native-llvm-aot-v1.json`](contracts/native-llvm-aot-v1.json). Tests are real *native machine-code* execution on Linux x86-64. The admitted scalar profile has no guest heap or guest GC.
 
-## Project status
+## Not yet implemented
 
-This README describes the repository's intended responsibilities. Feature support and release readiness must be established from implementation, tests, and CI evidence rather than this description alone.
+Actor-owned heaps and stacks, supervisor lifecycle, a full-AOT actor runtime, real QUIC/TLS/UDP, QPACK, HTTP/3 client/server loopback, Windows/macOS/embedded profiles, and the full language lowering are not implemented. Browser/Node WASM, JVM/GraalVM and .NET are independently tested only when their own backends execute; identical `.atto` source files do not prove runtime parity.
 
-## Related repositories
-
-- [AttoLang organization](https://github.com/atto-lang)
-- [Language specification](https://github.com/atto-lang/atto-spec)
-- [Platform conformance](https://github.com/atto-lang/atto-platform-conformance)
-- [Commercial infrastructure](https://github.com/atto-co)
+The proposed 11-operation actor-safe transport boundary is in `contracts/http3-host-abi-v1.json`. This is an ABI specification **not** a network engine. Keep the PR draft until actual actor and network interoperability evidence exists.
