@@ -102,7 +102,7 @@ if result.returncode != 42:
 PY
 }
 
-for fixture in positive-column-get.atto positive-column-bounded.atto positive-production-erase-swap.atto positive-immutable-column-swap.atto positive-detached-snapshot.atto; do
+for fixture in positive-column-get.atto positive-column-bounded.atto positive-production-erase-swap.atto positive-immutable-column-swap.atto positive-detached-snapshot.atto positive-detached-snapshot-second-field.atto; do
     "$compiler" "$fixtures/$fixture" > "$tmp/guest.ll"
     audit_ir "$tmp/guest.ll"
     for required in '; typed MIR, experimental local i64 pair LLVM IR' \
@@ -239,7 +239,8 @@ for item in \
     'negative-unbound-snapshot|production inverted return must read the local owner or detached snapshot' \
     'negative-duplicate-snapshot|production inverted main admits only one detached snapshot' \
     'negative-snapshot-oob|outside current length' \
-    'negative-snapshot-class-alias|native inverted class requires typed one-level SoA ownership'; do
+    'negative-snapshot-class-alias|native inverted class requires typed one-level SoA ownership' \
+    'negative-snapshot-field-mutation|production inverted operation must target the local owner'; do
     name="${item%%|*}"; diagnostic="${item#*|}"
     if "$compiler" "$fixtures/$name.atto" > "$tmp/unsafe.ll" 2> "$tmp/error.txt"; then
         echo "FAIL: production compiler admitted unsafe snapshot $name" >&2
@@ -267,4 +268,4 @@ for option in --profile=native-hard-rt --target=wasm32 \
         exit 1
     fi
 done
-printf 'PASS: production .atto -> typed MIR -> no-GC-screened IR, 12 native exit-42 (O0/O2), 4 bounds signals, 9 source rejects, 5 mode rejects, known-GC denied (linked/FFI audit still unproven)\n'
+printf 'PASS: production .atto -> typed MIR -> no-GC-screened IR, 14 native exit-42 (O0/O2), 4 bounds signals, 10 source rejects, 5 mode rejects, known-GC denied (linked/FFI audit still unproven)\n'
