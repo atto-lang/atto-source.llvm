@@ -33,6 +33,14 @@ The actual supported guest subset is: top-level functions with `int`, `bool`, an
 
 It verifies identical LLVM IR emissions, ELF64 native outputs, return code 42, invalid source rejection, checked arithmetic traps, and ASan/UBSan smoke coverage. All fixtures are SHA-identical to the conformance source. The private alternate runner `athlet-o/athleto-e2e` can build an exact Git tree mirror using Git blob/tree APIs and its own GitHub Actions minutes—**no cross-organization token or secret**.
 
+## Artifact safety hardening
+
+The command-line compiler now writes LLVM IR and native binaries through an exclusive `create_new` staging file in the output directory, then publishes by atomic rename only after successful completion. It refuses output paths that alias the input `.atto` file (including symbolic and hard links). Failed source validation, missing Clang, nonzero Clang exit, and invalid native output preserve any previously published artifact. Staging files are cleaned up on failure.
+
+For the currently admitted **Linux x86-64** native profile, the compiler verifies the output starts with an ELF64 little-endian x86-64 header and has executable permissions; an external compiler wrapper returning zero without generating a real ELF no longer counts as success. This is an artifact sanity check, **not** a cryptographic proof of compiler authenticity or defense against hostile, concurrently mutated filesystem directories.
+
+The hardened runner executed 1,255 real native `.atto` guest checks and adversarial output tests: https://github.com/athlet-o/athleto-e2e/actions/runs/43651073559. Exact source snapshot `ec2c04024b10f0dc1005c90fa73c6e741615df39`, full-tree SHA `bf71ea154bf87bb80c7534678e716d5daa94f455`; the current test script's source blob was `da04534fbbaf5a59420343c9e0306ea4329c0ff2`. Immutable current evidence lives in `contracts/native-llvm-aot-hardening-v1.json`; the original 1,255-case compiler proof in `contracts/native-llvm-aot-v1.json` is preserved as historical evidence.
+
 ## Outstanding gates
 
 No actual HTTP/3 client/server, QPACK parser, TLS1.3/QUIC transport provider, stream I/O, actor mailbox or per-actor arena/stack runtime has been implemented here. Full-AOT **scalar** proof does not imply full-actor AOT or five-backend semantic parity. Before claiming production networking, implement the ABI, actor-owned handles and buffers, TLS certificate validation, ALPN `h3`, QPACK, streaming, cancellation, fail-closed unsupported features, and independent network interoperability tests.
