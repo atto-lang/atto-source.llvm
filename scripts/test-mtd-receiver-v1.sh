@@ -15,28 +15,32 @@ fixtures="$repo_root/tests/mtd-receiver-v1"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-"$compiler" "$fixtures/positive-local-class.atto" > "$tmp/main.ll" 2> "$tmp/compile.err"
-if [[ ! -s "$tmp/main.ll" ]]; then
-  echo "native receiver fixture generated no LLVM IR" >&2
-  exit 1
-fi
-
-# Exercise both optimization and safety configurations. Running only Clang
-# once is insufficient proof that receiver borrowing survives optimizations.
-for opt in 0 2; do
-  args=(-O"$opt")
-  if [[ $sanitized == "yes" ]]; then
-    args+=(-fsanitize=address,undefined -fno-omit-frame-pointer)
-  fi
-  "$clang" "${args[@]}" "$tmp/main.ll" -o "$tmp/main-$opt"
-  set +e
-  "$tmp/main-$opt"
-  code=$?
-  set -e
-  if [[ $code -ne 42 ]]; then
-    echo "expected native receiver exit=42 at O$opt sanitized=$sanitized, got=$code" >&2
+# Compile two distinct guest programs: a local class with receiver mtd and
+# two separate actor identities with their own native on_message handlers.
+# The native actor subset is not yet equivalent to Java's arbitrary actor mtd.
+for guest in positive-local-class.atto positive-two-actors-forward.atto; do
+  "$compiler" "$fixtures/$guest" > "$tmp/main.ll" 2> "$tmp/compile.err"
+  if [[ ! -s "$tmp/main.ll" ]]; then
+    echo "native receiver/actor fixture $guest generated no LLVM IR" >&2
     exit 1
   fi
+
+  # Exercise both optimization and safety configurations.
+  for opt in 0 2; do
+    args=(-O"$opt")
+    if [[ $sanitized == "yes" ]]; then
+      args+=(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    fi
+    "$clang" "${args[@]}" "$tmp/main.ll" -o "$tmp/main-$opt"
+    set +e
+    "$tmp/main-$opt"
+    code=$?
+    set -e
+    if [[ $code -ne 42 ]]; then
+      echo "expected guest $guest exit=42 at O$opt sanitized=$sanitized, got=$code" >&2
+      exit 1
+    fi
+  done
 done
 
 check_negative() {
@@ -57,4 +61,10 @@ check_negative negative-duplicate-self.atto NATIVE_MTD_DUPLICATE_SELF
 check_negative negative-duplicate-slot.atto NATIVE_MTD_DUPLICATE_SLOT
 check_negative negative-lifecycle-spoof.atto NATIVE_MTD_RESERVED_MEMBER
 check_negative negative-immutable-owner-call.atto immut
-echo "PASS: native mtd receiver guest exit=42 at O0/O2 and six fail-closed compiler cases; sanitized=$sanitized"
+check_negative negative-actor-forward-missing.atto NATIVE_ACTOR_FORWARD_UNRESOLVED
+check_negative negative-actor-forward-duplicate.atto NATIVE_ACTOR_FORWARD_DUPLICATE
+check_negative negative-actor-forward-class.atto NATIVE_ACTOR_FORWARD_KIND
+check_negative negative-actor-forward-namespace.atto NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED
+check_negative negative-actor-forward-public.atto NATIVE_ACTOR_FORWARD_PUBLIC_UNSUPPORTED
+check_negative negative-actor-forward-isoactor.atto NATIVE_ACTOR_FORWARD_KIND_UNSUPPORTED
+echo "PASS: two native guest fixtures (O0/O2) and twelve fail-closed cases; sanitized=$sanitized"
