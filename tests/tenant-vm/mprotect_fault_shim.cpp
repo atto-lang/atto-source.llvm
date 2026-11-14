@@ -5,12 +5,30 @@
 #include <cstddef>
 #include <sys/mman.h>
 #include <signal.h>
+#include <pthread.h>
 
 namespace {
 std::atomic<bool> fail_install{false};
 std::atomic<bool> fail_restore{false};
 std::atomic<int> fail_carrier_allocations{0};
 std::atomic<bool> fail_signal_stack_registration{false};
+std::atomic<int> recovered_sigtrap_was_blocked{-1};
+}
+
+// Observe only the test-linked original carrier *after* siglongjmp. The test
+// deliberately blocks SIGTRAP before creating the worker. -1 means no recovery,
+// -2 means pthread_sigmask failed, 0 indicates an incorrectly unblocked SIGTRAP.
+extern "C" void tenant_vm_test_reset_recovery_mask() {
+    recovered_sigtrap_was_blocked.store(-1, std::memory_order_release);
+}
+extern "C" int tenant_vm_test_recovery_mask_status() {
+    return recovered_sigtrap_was_blocked.load(std::memory_order_acquire);
+}
+extern "C" void tenant_vm_test_record_recovery_mask() {
+    sigset_t current{};
+    const int status = pthread_sigmask(SIG_SETMASK, nullptr, &current);
+    const int blocked = status == 0 ? sigismember(&current, SIGTRAP) : -2;
+    recovered_sigtrap_was_blocked.store(blocked, std::memory_order_release);
 }
 
 extern "C" void tenant_vm_test_fail_next_guard_install() {
