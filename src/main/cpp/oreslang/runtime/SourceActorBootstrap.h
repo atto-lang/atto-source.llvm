@@ -35,6 +35,9 @@ void oreslang_source_actor_test_hold_initialization(int hold);
 int oreslang_source_actor_test_initialization_entered(void);
 void oreslang_source_actor_test_hold_readiness_publication(int hold);
 int oreslang_source_actor_test_readiness_publication_entered(void);
+/* Test-only observation that the trusted-main readiness barrier reached its
+ * condition-variable wait while constructor publication is held. */
+int oreslang_source_actor_test_ready_waiter_blocked(void);
 #endif
 
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
