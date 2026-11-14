@@ -1,0 +1,9 @@
+import fnc is_odd from "./parity";
+
+pub fnc square(int x): int { return x * x; }
+pub fnc twice(int x): int { return x + x; }
+pub fnc is_even(int n): int {
+  if n == 0 then return 1; fi
+  return is_odd(n - 1);
+}
+fnc hidden(int x): int { return x; }
