@@ -1484,7 +1484,7 @@ void guard_restore_failure_quarantines_carrier_without_process_abort() {
         CHECK_EQ(host.stats().stack_quota_misses, round);
         const TurnResult after = host.call(a.actor, words({RESTART_ADD, 0})).get();
         CHECK_STATUS(after.status, Status::Ok);
-        if (after.status == Status::Ok) CHECK_EQ(word(after.payload), std::int64_t{round * 3});
+        if (after.status == Status::Ok) CHECK_EQ(word(after.payload), static_cast<std::int64_t>(round * 3));
         CHECK(host.snapshot(small.handle).phase == Phase::Running);
         CHECK(host.snapshot(large.handle).phase == Phase::Running);
     }
