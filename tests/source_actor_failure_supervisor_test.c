@@ -103,6 +103,9 @@ int main(void) {
     /* B is healthy; normal stop is still distinct from a failure. */
     oreslang_source_actor_stop(b);
     CHECK(oreslang_source_actor_test_terminal_notices() == 2);
+    CHECK(oreslang_source_actor_test_panic_notices() == 1);
+    CHECK(oreslang_source_actor_test_stopped_notices() == 1);
+    CHECK(oreslang_source_actor_test_last_panic_code() == ORES_SOURCE_ACTOR_FAILURE_FRAME);
     puts("SOURCE_ACTOR_FAILURE_SUPERVISOR_PASS A=failed_1_success_1_last_9 B=42 notices=2 finalized=2");
     return 0;
 }
