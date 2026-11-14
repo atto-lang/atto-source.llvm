@@ -475,6 +475,52 @@ static void two_overlapping_receives_pin_actual_native_done_barrier() {
             "second DONE reclaimed native resource twice");
 }
 
+// A resource registry for actor A must never be coupled to actor B's DONE
+// capability, even if that foreign group has already completed shutdown.
+static void foreign_finalizer_cannot_acknowledge_another_actor_registry() {
+    NativeActorResourceQuarantine quarantine(1);
+    auto registry = std::make_shared<ActorResourceRegistry>(52, 7);
+
+    NativeActorGroup otherActorGroup(418, 1);
+    auto otherActor = otherActorGroup.adopt(418, 53, 7, [] {});
+    require(otherActorGroup.mark_ready(otherActor), "foreign actor ready");
+    bool foreignIdRejected = false;
+    try {
+        NativeActorRetirementBarrier invalid(
+            registry, otherActorGroup.runtime_finalizer(otherActor), quarantine);
+    } catch (const std::invalid_argument&) {
+        foreignIdRejected = true;
+    }
+    require(foreignIdRejected,
+            "native retirement barrier accepted finalizer from foreign actor");
+
+    NativeActorGroup otherIncarnationGroup(419, 1);
+    auto otherIncarnation = otherIncarnationGroup.adopt(419, 52, 8, [] {});
+    require(otherIncarnationGroup.mark_ready(otherIncarnation),
+            "foreign incarnation ready");
+    bool foreignGenerationRejected = false;
+    try {
+        NativeActorRetirementBarrier invalid(
+            registry, otherIncarnationGroup.runtime_finalizer(otherIncarnation),
+            quarantine);
+    } catch (const std::invalid_argument&) {
+        foreignGenerationRejected = true;
+    }
+    require(foreignGenerationRejected,
+            "native retirement barrier accepted finalizer from stale incarnation");
+
+    // Close both unrelated groups normally. A failed constructor must not
+    // consume or damage its foreign finalizer capability.
+    otherActorGroup.close();
+    otherIncarnationGroup.close();
+    require(otherActorGroup.runtime_finalizer(otherActor).finalized(),
+            "unrelated actor failed physical finalization");
+    require(otherIncarnationGroup.runtime_finalizer(otherIncarnation).finalized(),
+            "unrelated incarnation failed physical finalization");
+    otherActor.get_done().get();
+    otherIncarnation.get_done().get();
+}
+
 static void foreign_receive_fence_cannot_complete_another_actor() {
     NativeActorResourceQuarantine quarantine(1);
     NativeActorGroup group(413, 1);
@@ -763,6 +809,7 @@ static void abortive_group_stop_seals_receive_before_any_native_reclaim() {
 }
 
 int main() {
+    foreign_finalizer_cannot_acknowledge_another_actor_registry();
     abortive_group_stop_seals_receive_before_any_native_reclaim();
     serial_actor_receive_capacity_retains_suspended_identity();
     concurrent_host_receivers_join_native_resource_retirement();
