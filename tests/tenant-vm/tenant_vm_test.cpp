@@ -1381,6 +1381,39 @@ void stack_quotas_switch_between_vms() {
     CHECK(host.snapshot(small.handle).phase == Phase::Running);
 }
 
+// Exercise guard transitions that overlap by one page or by most of the guard. A guard
+// accidentally reopened during old->new relocation lets the deep guest run too far.
+void overlapping_stack_quotas_preserve_entire_guard() {
+    HostLimits limits;
+    limits.carriers = 1;
+    TenantVmHost host(limits);
+    auto small = host.open(stack_spec("overlap-small", 512 << 10));
+    auto adjacent = host.open(stack_spec("overlap-adjacent", (512 << 10) + 4096));
+    auto shifted = host.open(stack_spec("overlap-shifted", (512 << 10) + (256 << 10)));
+    auto unbounded = host.open(stack_spec("overlap-unbounded", 0));
+    REQUIRE_OK(small);
+    REQUIRE_OK(adjacent);
+    REQUIRE_OK(shifted);
+    REQUIRE_OK(unbounded);
+    auto a = host.spawn_actor(small.handle, KIND_RESTARTABLE);
+    auto b = host.spawn_actor(adjacent.handle, KIND_RESTARTABLE);
+    auto c = host.spawn_actor(shifted.handle, KIND_RESTARTABLE);
+    auto d = host.spawn_actor(unbounded.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(a);
+    REQUIRE_OK(b);
+    REQUIRE_OK(c);
+    REQUIRE_OK(d);
+    for (int i = 0; i < 12; ++i) {
+        CHECK_STATUS(host.call(a.actor, words({RESTART_RECURSE_N, 300})).get().status, Status::Ok);
+        CHECK_STATUS(host.call(b.actor, words({RESTART_RECURSE_N, 700})).get().status, Status::ActorRestarted);
+        CHECK_STATUS(host.call(c.actor, words({RESTART_RECURSE_N, 900})).get().status, Status::ActorRestarted);
+        CHECK_STATUS(host.call(b.actor, words({RESTART_RECURSE_N, 300})).get().status, Status::Ok);
+        CHECK_STATUS(host.call(a.actor, words({RESTART_RECURSE_N, 700})).get().status, Status::ActorRestarted);
+        CHECK_STATUS(host.call(d.actor, words({RESTART_RECURSE_N, 900})).get().status, Status::Ok);
+    }
+    CHECK(host.stats().stack_quota_misses == 0);
+}
+
 // A quota must leave room for host calls, and fit in the carrier's stack with its guard.
 void stack_quota_limits_are_checked() {
     TenantVmHost host;
@@ -1528,6 +1561,7 @@ const Case cases[] = {
     {"restart_limits_are_checked", restart_limits_are_checked},
     {"an_actor_stack_quota_sets_its_depth", an_actor_stack_quota_sets_its_depth},
     {"stack_quotas_switch_between_vms", stack_quotas_switch_between_vms},
+    {"overlapping_stack_quotas_preserve_entire_guard", overlapping_stack_quotas_preserve_entire_guard},
     {"stack_quota_limits_are_checked", stack_quota_limits_are_checked},
     {"a_restart_waits_before_the_next_turn", a_restart_waits_before_the_next_turn},
     {"an_unconfined_fault_still_fails_the_vm", an_unconfined_fault_still_fails_the_vm},
