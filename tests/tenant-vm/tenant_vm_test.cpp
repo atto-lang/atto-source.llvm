@@ -1421,6 +1421,66 @@ void overlapping_stack_quotas_preserve_entire_guard() {
     CHECK(host.stats().stack_quota_misses == 0);
 }
 
+#if defined(TENANT_VM_TEST_MPROTECT)
+extern "C" void tenant_vm_test_fail_next_guard_install();
+extern "C" void tenant_vm_test_fail_next_guard_restore();
+
+// The real runtime, not a copied model, must refuse a guest before its first instruction
+// when the OS cannot install the 1 MiB quota guard.
+void guard_install_failure_refuses_guest_and_preserves_other_actors() {
+    HostLimits limits;
+    limits.carriers = 1;
+    TenantVmHost host(limits);
+    auto vm = host.open(stack_spec("install-failure", 512 << 10));
+    REQUIRE_OK(vm);
+    auto actor = host.spawn_actor(vm.handle, KIND_RESTARTABLE);
+    auto sibling = host.spawn_actor(vm.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(actor);
+    REQUIRE_OK(sibling);
+    tenant_vm_test_fail_next_guard_install();
+    const TurnResult failed = host.call(actor.actor, words({RESTART_ADD, 7})).get();
+    CHECK_STATUS(failed.status, Status::ActorRestarted);
+    CHECK_REASON(failed.failure, FailReason::StackOverflow);
+    CHECK_EQ(host.stats().stack_quota_misses, std::uint64_t{1});
+    const TurnResult recovered = host.call(actor.actor, words({RESTART_ADD, 0})).get();
+    CHECK_STATUS(recovered.status, Status::Ok);
+    if (recovered.status == Status::Ok) CHECK_EQ(word(recovered.payload), std::int64_t{0});
+    const TurnResult good = host.call(sibling.actor, words({RESTART_ADD, 9})).get();
+    CHECK_STATUS(good.status, Status::Ok);
+    if (good.status == Status::Ok) CHECK_EQ(word(good.payload), std::int64_t{9});
+    CHECK(host.snapshot(vm.handle).phase == Phase::Running);
+}
+
+// A failed old-only unprotect used to abort the entire process. It must instead quarantine
+// this carrier stack and reject every later guest turn on it, while leaving the host alive.
+void guard_restore_failure_quarantines_carrier_without_process_abort() {
+    HostLimits limits;
+    limits.carriers = 1;
+    TenantVmHost host(limits);
+    auto small = host.open(stack_spec("restore-small", 512 << 10));
+    auto large = host.open(stack_spec("restore-large", 4 << 20));
+    REQUIRE_OK(small);
+    REQUIRE_OK(large);
+    auto a = host.spawn_actor(small.handle, KIND_RESTARTABLE);
+    auto b = host.spawn_actor(large.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(a);
+    REQUIRE_OK(b);
+    const TurnResult first = host.call(a.actor, words({RESTART_ADD, 3})).get();
+    CHECK_STATUS(first.status, Status::Ok);
+    tenant_vm_test_fail_next_guard_restore();
+    const TurnResult rejected = host.call(b.actor, words({RESTART_ADD, 11})).get();
+    CHECK_STATUS(rejected.status, Status::ActorRestarted);
+    CHECK_REASON(rejected.failure, FailReason::StackOverflow);
+    CHECK_EQ(host.stats().stack_quota_misses, std::uint64_t{1});
+    const TurnResult after = host.call(a.actor, words({RESTART_ADD, 0})).get();
+    CHECK_STATUS(after.status, Status::ActorRestarted);
+    CHECK_REASON(after.failure, FailReason::StackOverflow);
+    CHECK(host.stats().stack_quota_misses >= std::uint64_t{2});
+    CHECK(host.snapshot(small.handle).phase == Phase::Running);
+    CHECK(host.snapshot(large.handle).phase == Phase::Running);
+}
+#endif
+
 // A quota must leave room for host calls, and fit in the carrier's stack with its guard.
 void stack_quota_limits_are_checked() {
     TenantVmHost host;
@@ -1569,6 +1629,10 @@ const Case cases[] = {
     {"an_actor_stack_quota_sets_its_depth", an_actor_stack_quota_sets_its_depth},
     {"stack_quotas_switch_between_vms", stack_quotas_switch_between_vms},
     {"overlapping_stack_quotas_preserve_entire_guard", overlapping_stack_quotas_preserve_entire_guard},
+#if defined(TENANT_VM_TEST_MPROTECT)
+    {"guard_install_failure_refuses_guest_and_preserves_other_actors", guard_install_failure_refuses_guest_and_preserves_other_actors},
+    {"guard_restore_failure_quarantines_carrier_without_process_abort", guard_restore_failure_quarantines_carrier_without_process_abort},
+#endif
     {"stack_quota_limits_are_checked", stack_quota_limits_are_checked},
     {"a_restart_waits_before_the_next_turn", a_restart_waits_before_the_next_turn},
     {"an_unconfined_fault_still_fails_the_vm", an_unconfined_fault_still_fails_the_vm},

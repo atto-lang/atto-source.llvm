@@ -47,8 +47,10 @@ VMs that share a quota cost no system call per turn. Running past the quota is a
 at least 320 KiB, and must fit within the carrier's stack together with its guard. If guard placement cannot be completed, the turn is **rejected before guest execution** as a stack
 quota failure; `stack_quota_misses` counts rejected turns, not unbounded execution. On a quota
 switch, old-only pages may be restored, but pages shared by the old and new guards remain protected.
-An unrecoverable failure restoring an old mapping aborts the host rather than running another tenant
-with uncertain page protections.
+If restoring old-only pages fails, the affected carrier is quarantined: all later guest turns
+on that carrier are rejected without aborting the host. Other carriers remain available, and
+its mapping is discarded during host teardown. An installation failure is not a carrier
+quarantine: after rejecting that turn the carrier can retry a later actor safely.
 
 Host calls run on the guest's stack, and a guest chooses how deep that is, so each host call checks for
 256 KiB of remaining stack before leaving guest mode. A shortage counts as out of carrier stack, like any other overflow. Carrier stacks must

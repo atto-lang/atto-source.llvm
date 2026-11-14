@@ -20,6 +20,13 @@ target_compile_options(tenant_vm_guests PRIVATE -O1 -fno-stack-protector -Wno-in
     -Wno-gnu-designator -Wno-c99-designator -fno-sanitize=all)
 
 add_executable(tenant_vm_test tenant_vm_test.cpp "${ROOT}/src/main/cpp/oreslang/runtime/TenantVm.cpp")
+# Linux-only linker fault injection; original runtime source is not preprocessed or rewritten.
+# Wrap only references from the test-linked native objects, never host libc globally.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(tenant_vm_test PRIVATE mprotect_fault_shim.cpp)
+    target_compile_definitions(tenant_vm_test PRIVATE TENANT_VM_TEST_MPROTECT=1)
+    target_link_options(tenant_vm_test PRIVATE "LINKER:--wrap=mprotect")
+endif()
 target_link_libraries(tenant_vm_test PRIVATE tenant_vm_guests Threads::Threads)
 if(NOT TENANT_VM_SANITIZE AND NOT TENANT_VM_TSAN)
     target_compile_definitions(tenant_vm_test PRIVATE TENANT_VM_TIMING_ASSERTS)
