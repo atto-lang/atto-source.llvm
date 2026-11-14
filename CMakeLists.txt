@@ -309,6 +309,7 @@ if(BUILD_TESTING)
         tests/native_telemetry_span_runtime_test.c
         src/main/cpp/oreslang/runtime/NativeTelemetrySpan.c)
     target_include_directories(oreslang-native-telemetry-span-runtime-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     set_target_properties(oreslang-native-telemetry-span-runtime-test PROPERTIES
         C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
     target_compile_options(oreslang-native-telemetry-span-runtime-test PRIVATE
@@ -336,6 +337,7 @@ if(BUILD_TESTING)
             COMMAND oreslang-native-telemetry-cross-carrier-test)
         set_tests_properties(native_telemetry_cross_carrier_nonforgeability
             PROPERTIES TIMEOUT 20)
+    endif()
 
     # Fail-closed host-level type resolver checks; these do not claim guest
     # Option/Result/trap native parity without compiler-backed .ores execution.
