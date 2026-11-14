@@ -158,17 +158,39 @@ fn check_intermediate_overflow(
     ])?;
     require_success(&format!("{name} link"), &linked)?;
     let result = call(&executable, &[])?;
-    // Require the compiler's expected nonzero status, not SIGSEGV/SIGILL or
-    // any arbitrary crash: a signal-based failure is not a checked-i64 proof.
-    if result.status.code() != Some(1) || !result.stdout.is_empty() {
+    // Standalone native i64 code lowers signed overflow to llvm.trap (main's
+    // contract; only isolate-entry mode returns a recoverable status). A bare
+    // signal is not a checked-i64 proof, so a trap counts only when the emitted
+    // IR structurally contains the checked-overflow intrinsic and llvm.trap AND
+    // the process died by the trap signal itself (SIGTRAP from AArch64 brk,
+    // SIGILL from x86 ud2) -- never SIGSEGV or another crash. The legacy
+    // checked failure status 1 is still accepted.
+    let ir_text = String::from_utf8_lossy(&compiled.stdout);
+    let checked_trap_ir = ir_text.contains(".with.overflow.i64") && ir_text.contains("@llvm.trap");
+    let trap_signal = trap_signal_of(&result);
+    let legacy_status = result.status.code() == Some(1);
+    if !result.stdout.is_empty() || !(legacy_status || (checked_trap_ir && trap_signal.is_some())) {
         return Err(format!(
-            "{name}: signed64 overflow did not return checked failure code 1, got {:?}",
-            result.status.code()
+            "{name}: signed64 overflow was not a checked failure (status {:?}, signal {:?}, checked-trap IR {})",
+            result.status.code(), trap_signal, checked_trap_ir
         ));
     }
-    println!("GUEST_OVERFLOW_TRAP {name} observed_status={:?}", result.status.code());
+    println!("GUEST_OVERFLOW_TRAP {name} observed_status={:?} trap_signal={:?}",
+        result.status.code(), trap_signal);
     Ok(())
 }
+/// The deliberate trap signals only: SIGILL (4, x86 ud2) or SIGTRAP (5, AArch64 brk).
+#[cfg(unix)]
+fn trap_signal_of(output: &Output) -> Option<i32> {
+    use std::os::unix::process::ExitStatusExt;
+    output.status.signal().filter(|s| *s == 4 || *s == 5)
+}
+
+#[cfg(not(unix))]
+fn trap_signal_of(_output: &Output) -> Option<i32> {
+    None
+}
+
 fn run() -> Result<(), String> {
     let mut args = env::args_os().skip(1);
     let compiler = checked_binary(
