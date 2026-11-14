@@ -27,3 +27,5 @@ jobs:
           clang --version | head -n 1
       - name: Build native LLVM emitter and execute real Atto fixtures
         run: bash ci/test_native_aot.sh
+      - name: Verify historical native ELF artifacts and scope
+        run: python3 -m unittest discover -s tests -p 'test_llvm_aot_receipt.py' -v
