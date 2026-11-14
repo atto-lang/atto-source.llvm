@@ -37,8 +37,14 @@ registered actor** under `group.mutex`. In particular:
 The above replaces allocator-address authority on **all compiler-emitted
 source actor paths** in this branch: spawn, send, stop, READY and DONE.
 The original pointer ABI remains for historical C host tests and explicit
-compatibility; it **still has malloc-address ABA** and must be audited,
-deprecated or removed before making general untrusted actor/FFI claims.
+compatibility; it **still has malloc-address ABA**. This draft additionally
+guards legacy `ready_status`, `send`, `request_stop` and `join_done`
+with `group.mutex`-protected live allocation membership **before field
+access**, preventing a common fully-expired pointer dereference when the
+address has *not* been reused. These checks are **not sufficient** when a
+later actor occupies the same address: such an old pointer can still alias a
+new actor. The legacy pointer ABI must be deprecated or removed before
+making general untrusted actor/FFI claims.
 
 This is a trusted compiler/runtime ABI, **not a cryptographically unforgeable
 bearer token**. An actor ID must not be accepted from attacker-controlled
@@ -77,10 +83,13 @@ At Clang O0 **and** O2 with ASan/UBSan:
   against the already sealed actor. Physical reclamation occurs only
   after the checked continuation finishes.
 
-The source-host matrix thus requires **288 real actor lifetimes, 284 forced
-address reuses, 64 checked CONTROL continuation resumes, eight fail-stop
-negative executions and two ID-exhaustion rejections**, across O0/O2.
-These are acceptance requirements, not reported execution results.
+The source-host matrix now requires **288 positive actor lifetimes, 284
+forced address reuses, 64 checked CONTROL continuation resumes, 14
+intentional fail-stop negative executions (including two ID-exhaustion
+rejections), two legacy stale-status checks, and 20 process invocations**
+across O0/O2. The legacy cases explicitly do **not** allocate a replacement
+actor at the same address. All counts are acceptance requirements, not
+recorded execution results.
 
 `tests/fixtures/source-actor-checked-id-v1/` adds `.atto` guest
 fixtures for single-actor send/stop, five actors, checked get_ready
