@@ -76,7 +76,7 @@ jobs:
           bash -n scripts/test-source-actor-bounded-churn-v1.sh
           bash scripts/test-source-actor-bounded-churn-v1.sh |
             tee "$RUNNER_TEMP/source-actor-bounded-churn-receipts.txt"
-          grep -Fqx "SOURCE_ACTOR_BOUNDED_CHURN_MATRIX_EXECUTED|head=$EXPECTED_HEAD|levels=O0_O2|native_executions=14|sanitized_construction_proofs=2|positive_variants=3|negative_compiler_rejections=10|async_guest=NOT_EXECUTED|zero_gc_certified=NO" \
+          grep -Fqx "SOURCE_ACTOR_BOUNDED_CHURN_MATRIX_EXECUTED|head=$EXPECTED_HEAD|levels=O0_O2|native_executions=14|sanitized_construction_proofs=2|positive_variants=3|negative_compiler_rejections=12|async_guest=NOT_EXECUTED|zero_gc_certified=NO" \
             "$RUNNER_TEMP/source-actor-bounded-churn-receipts.txt"
           test "$(grep -c '^SOURCE_ACTOR_BOUNDED_CHURN_GUEST_EXECUTED|' \
             "$RUNNER_TEMP/source-actor-bounded-churn-receipts.txt")" = 2
