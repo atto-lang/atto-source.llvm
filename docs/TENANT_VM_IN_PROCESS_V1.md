@@ -47,10 +47,19 @@ VMs that share a quota cost no system call per turn. Running past the quota is a
 at least 320 KiB, and must fit within the carrier's stack together with its guard. If guard placement cannot be completed, the turn is **rejected before guest execution** as a stack
 quota failure; `stack_quota_misses` counts rejected turns, not unbounded execution. On a quota
 switch, old-only pages may be restored, but pages shared by the old and new guards remain protected.
-If restoring old-only pages fails, the affected carrier is quarantined: all later guest turns
-on that carrier are rejected without aborting the host. Other carriers remain available, and
-its mapping is discarded during host teardown. An installation failure is not a carrier
-quarantine: after rejecting that turn the carrier can retry a later actor safely.
+If restoring old-only pages fails, the failed turn is rejected before guest execution.
+The affected carrier is retired immediately after finishing its turn accounting: it never
+accepts another actor. The watchdog joins that thread, unmaps both its stack and alternate
+signal stack, and starts a new carrier in the same stable pool slot. The new pthread_t is
+published before its start gate opens. Guard-installation failure alone rejects the turn
+without retiring the carrier.
+
+A replacement may fail (for example, because the OS refuses a fresh stack mapping).
+The watchdog retries at 10 ms and 100 ms, for at most three attempts, while reporting
+`unavailable_carriers`, `carrier_replacements`, and `carrier_replacement_failures`.
+A permanently unavailable slot reduces capacity explicitly; if every slot is permanently
+unavailable, the host fails all live VMs, resolves pending calls, and rejects new VM opens
+with `HostClosed`. It never runs guest code on an uncertain stack mapping.
 
 Host calls run on the guest's stack, and a guest chooses how deep that is, so each host call checks for
 256 KiB of remaining stack before leaving guest mode. A shortage counts as out of carrier stack, like any other overflow. Carrier stacks must
