@@ -117,6 +117,7 @@ public:
             std::lock_guard<std::mutex> lock(mu_);
             auto it = entries_.find(grant.slot);
             if (it == entries_.end() || grant.registry_id != registry_id_ || it->second.retiring ||
+                fenced_actors_.count(actor_key(caller)) ||
                 it->second.grant.provenance != grant.provenance ||
                 it->second.grant.owner != grant.owner || caller != grant.owner)
                 throw std::logic_error("invalid, retiring or foreign native grant");
