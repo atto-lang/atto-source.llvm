@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <deque>
+#include <utility>
 #include <functional>
 #include <mutex>
 #include <stdexcept>
@@ -20,34 +20,48 @@ public:
   std::vector<Event> recent;
   std::array<std::uint64_t,(std::size_t)EventKind::Count> counters{};
  };
- ActorReliabilityKernel(std::size_t cap,Clock clock):cap_(cap),clock_(std::move(clock)){
-  if(cap_==0||cap_>65536||!clock_) throw std::invalid_argument("invalid reliability kernel");
+ // Reserve event storage at construction. Recording failures must not
+ // allocate for every event or when evicting a ring entry.
+ ActorReliabilityKernel(std::size_t cap,Clock clock)
+   :cap_(checked_capacity(cap)),clock_(std::move(clock)),ring_(cap_){
+  if(!clock_) throw std::invalid_argument("invalid reliability kernel");
  }
  void record(EventKind kind,std::uint64_t actor,std::uint64_t incarnation){
   if(incarnation==0) throw std::invalid_argument("invalid incarnation");
+  const auto i=(std::size_t)kind;
+  if(i>=counters_.size()) throw std::invalid_argument("invalid event kind");
   std::lock_guard<std::mutex> g(mu_);
   std::uint64_t now{};
   try { now=clock_(); }
-  catch(const std::exception&){ dropped_observer_events_=sat_inc(dropped_observer_events_); return; }
+  catch(...){ dropped_observer_events_=sat_inc(dropped_observer_events_); return; }
   if(has_time_&&now<last_time_){
    clock_regressions_=sat_inc(clock_regressions_);
    dropped_observer_events_=sat_inc(dropped_observer_events_);
    return;
   }
   has_time_=true; last_time_=now;
-  const auto i=(std::size_t)kind;
-  if(i>=counters_.size()) throw std::invalid_argument("invalid event kind");
   if(sequence_exhausted_){dropped_observer_events_=sat_inc(dropped_observer_events_);return;}
   const auto seq=next_;
   if(next_==UINT64_MAX)sequence_exhausted_=true; else ++next_;
   counters_[i]=sat_inc(counters_[i]);
-  if(recent_.size()==cap_){recent_.pop_front();overwritten_=sat_inc(overwritten_);}
-  recent_.push_back({seq,now,kind,actor,incarnation});
+  if(size_==cap_) overwritten_=sat_inc(overwritten_);
+  else ++size_;
+  ring_[write_] = {seq,now,kind,actor,incarnation};
+  write_=(write_+1)%cap_;
  }
  Snapshot snapshot()const{
   std::lock_guard<std::mutex> g(mu_);
-  return {next_,overwritten_,dropped_observer_events_,clock_regressions_,
-          std::vector<Event>(recent_.begin(),recent_.end()),counters_};
+  Snapshot result{};
+  result.next=next_;
+  result.overwritten=overwritten_;
+  result.dropped_observer_events=dropped_observer_events_;
+  result.clock_regressions=clock_regressions_;
+  result.counters=counters_;
+  result.recent.reserve(size_);
+  const std::size_t oldest = size_==cap_ ? write_ : 0;
+  for(std::size_t i=0;i<size_;++i)
+   result.recent.push_back(ring_[(oldest+i)%cap_]);
+  return result;
  }
  class RestartBudget final {
  public:
@@ -82,7 +96,8 @@ public:
   Admission admit(std::size_t q,bool control){
    std::lock_guard<std::mutex> g(mu_); if(q>cap_)throw std::invalid_argument("queue depth");
    if(control)return Admission::ControlAccept;
-   if(shed_&&q<=low_)shed_=false; if(!shed_&&q>=high_)shed_=true;
+   if(shed_&&q<=low_)shed_=false;
+   if(!shed_&&q>=high_)shed_=true;
    return shed_?Admission::Shed:Admission::Accept;
   }
  private: std::size_t cap_,high_,low_; bool shed_{}; std::mutex mu_;
@@ -106,7 +121,12 @@ public:
  };
 private:
  static std::uint64_t sat_inc(std::uint64_t v){return v==UINT64_MAX?UINT64_MAX:v+1;}
- std::size_t cap_; Clock clock_; mutable std::mutex mu_; std::deque<Event> recent_;
+ static std::size_t checked_capacity(std::size_t cap){
+  if(cap==0||cap>65536) throw std::invalid_argument("invalid reliability kernel");
+  return cap;
+ }
+ std::size_t cap_; Clock clock_; std::vector<Event> ring_; mutable std::mutex mu_;
+ std::size_t size_{},write_{};
  std::array<std::uint64_t,(std::size_t)EventKind::Count> counters_{};
  std::uint64_t next_{},overwritten_{},dropped_observer_events_{},clock_regressions_{},last_time_{};
  bool has_time_{},sequence_exhausted_{};
