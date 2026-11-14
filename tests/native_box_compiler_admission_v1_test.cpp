@@ -70,8 +70,8 @@ int main() {
     reject(plan({"box"}, {{E::Initialize,"box"},{E::ThreadMove,"box"}}));
     reject(plan({"box"}, {{E::Initialize,"box"},{E::ActorSend,"box"}}));
     reject(plan({"box"}, {{E::Initialize,"box"},{E::Suspend,"box"}}));
-    reject(plan({"box"}, {{E::Initialize,"box"},{E::BorrowRead,"box","",5},
-                          {E::TakeInto,"box","other"}}));
+    reject(plan({"box","other"}, {{E::Initialize,"box"},{E::BorrowRead,"box","",5},
+                                  {E::TakeInto,"box","other"}}));
     reject(plan({"box"}, {{E::Initialize,"box"},{E::BorrowWrite,"box","",5},
                           {E::Read,"box"}}));
     reject(plan({"box"}, {{E::Initialize,"box"},{E::BorrowRead,"box","",5},
