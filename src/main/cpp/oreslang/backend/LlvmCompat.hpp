@@ -1,7 +1,8 @@
 #pragma once
-// LLVM 19-23 abstraction for pointer and lifetime intrinsics.
+// LLVM 14-23 compatibility for native pointers, lifetimes, and intrinsics.
 // The language/ABI does not depend on which LLVM API spells these operations.
 #include <cstdint>
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Intrinsics.h"
@@ -19,7 +20,7 @@ inline llvm::Type* native_pointer_type(llvm::LLVMContext& context, llvm::Type* p
 
 inline void native_lifetime_start(llvm::IRBuilder<>& builder, llvm::Value* ptr,
                                   std::uint64_t bytes) {
-#if LLVM_VERSION_MAJOR >= 23
+#if LLVM_VERSION_MAJOR >= 22
     (void)bytes;
     builder.CreateLifetimeStart(ptr);
 #else
@@ -29,7 +30,7 @@ inline void native_lifetime_start(llvm::IRBuilder<>& builder, llvm::Value* ptr,
 }
 inline void native_lifetime_end(llvm::IRBuilder<>& builder, llvm::Value* ptr,
                                 std::uint64_t bytes) {
-#if LLVM_VERSION_MAJOR >= 23
+#if LLVM_VERSION_MAJOR >= 22
     (void)bytes;
     builder.CreateLifetimeEnd(ptr);
 #else
@@ -38,11 +39,16 @@ inline void native_lifetime_end(llvm::IRBuilder<>& builder, llvm::Value* ptr,
 #endif
 }
 
-inline llvm::Function* native_trap(llvm::Module& module) {
+inline llvm::Function* native_intrinsic(
+        llvm::Module* module, llvm::Intrinsic::ID id,
+        llvm::ArrayRef<llvm::Type*> overloads = {}) {
 #if LLVM_VERSION_MAJOR >= 20
-    return llvm::Intrinsic::getOrInsertDeclaration(&module, llvm::Intrinsic::trap);
+    return llvm::Intrinsic::getOrInsertDeclaration(module, id, overloads);
 #else
-    return llvm::Intrinsic::getDeclaration(&module, llvm::Intrinsic::trap);
+    return llvm::Intrinsic::getDeclaration(module, id, overloads);
 #endif
+}
+inline llvm::Function* native_trap(llvm::Module& module) {
+    return native_intrinsic(&module, llvm::Intrinsic::trap);
 }
 }  // namespace oreslang
