@@ -757,7 +757,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool cortex_m_target,
                                   bool bounded_allocator_provider,
                                   const std::string& isolate_entry,
-                                  const std::vector<CheckedSourceRoutineV1>& checked_routines) {
+                                  const std::vector<CheckedSourceRoutineV1>& checked_routines,
+                                  const std::vector<CheckedLogSiteV1>& checked_sites) {
     // Every compiler retains its own frontend and source map. This optional
     // LLVM-owned admission binds reviewed static IDs to the native typed
     // source function selector; no source ID is synthesized at runtime.
@@ -786,6 +787,63 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 throw std::runtime_error("checked source routine registry missing a native callable");
             }
         }
+    }
+    // Every lexical log.info literal is an actual compiler-owned site.
+    // The temporary selector+literal key is only an exact admission witness;
+    // source-controlled site_id is the persistent identity. Multiple calls
+    // to the same literal in one routine are ambiguous in this v1 slice.
+    auto log_key = [&](const std::string& symbol, std::size_t arity,
+                       const std::string& message) {
+        return native_function_slot(symbol, arity) + '\x1f' + message;
+    };
+    std::unordered_set<std::string> emitted_log_keys;
+    std::function<void(const Function&, const Statement&)> scan_log_site;
+    scan_log_site = [&](const Function& fn, const Statement& stmt) {
+        if (stmt.kind == Statement::Kind::TelemetryLogInfo) {
+            if (!emitted_log_keys.insert(log_key(
+                    fn.name, fn.parameters.size(), stmt.telemetry_operation)).second)
+                throw std::runtime_error("ambiguous repeated native log.info literal requires explicit site locator");
+        }
+        for (const auto& child : stmt.then_statements) scan_log_site(fn, child);
+        for (const auto& child : stmt.else_statements) scan_log_site(fn, child);
+    };
+    for (const auto& fn : source.functions) {
+        for (const auto& stmt : fn.statements) scan_log_site(fn, stmt);
+    }
+    if (emitted_log_keys.size() != checked_sites.size()) {
+        throw std::runtime_error("native log.info requires exact source-controlled site ID coverage");
+    }
+    if (checked_sites.size() > 4096) {
+        throw std::runtime_error("native static log site budget exceeded");
+    }
+    std::unordered_map<std::string, CheckedLogSiteV1> native_log_sites;
+    std::unordered_set<std::string> seen_site_ids;
+    for (const auto& site : checked_sites) {
+        telemetry::SourceId rid{}, sid{};
+        if (!telemetry::parse_source_id(
+                site.routine_id, telemetry::SourceKind::Routine, rid) ||
+            !telemetry::parse_source_id(
+                site.site_id, telemetry::SourceKind::Site, sid) ||
+            !seen_site_ids.insert(site.site_id).second) {
+            throw std::runtime_error("invalid or duplicate source-controlled native log site identity");
+        }
+        const auto fn_key = native_function_slot(site.symbol, site.arity);
+        auto parent = routine_source_ids.find(fn_key);
+        if (parent == routine_source_ids.end() ||
+            parent->second != site.routine_id) {
+            throw std::runtime_error("source log site does not belong to checked source routine");
+        }
+        const auto key = log_key(site.symbol, site.arity, site.message);
+        if (!emitted_log_keys.count(key) ||
+            !native_log_sites.emplace(key, site).second) {
+            throw std::runtime_error("stale, conflicting or misbound native static log site");
+        }
+    }
+    if (!checked_sites.empty() &&
+        (wasm32_target || cortex_m_target || !source.actors.empty() ||
+         !source.generators.empty() || !source.classes.empty())) {
+        throw std::runtime_error(
+            "native log.info v1 only supports hosted synchronous scalar AOT");
     }
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
