@@ -94,6 +94,15 @@ reject_case(comma_body_empty
   "fnc main() -> int :: int x = 5,, x end\\n"
   "empty item")
 
+# The native scalar compiler has no checked lambda closure/tuple stage ABI.
+# Lexical rejection is intentional until this gets real LLVM guest lowering.
+reject_case(comma_lambda_not_lowered
+  "fnc main() -> int :: val int x = 5, x |> |n| -> int => n + 1 end\\n"
+  "unsupported Oreslang token")
+reject_case(typed_inline_lambda_not_lowered
+  "fnc main(): int { val f = || -> int => 42; return f(); }\\n"
+  "unsupported Oreslang token")
+
 reject_case(equality_alias_mixed_bool_int
   "fnc main(): int { if 7 !eq true then return 1; else return 0; fi }\n"
   "equality operands require the same scalar type")
