@@ -64,6 +64,9 @@ jobs:
           echo "SOURCE_FREE_RUNNER_CANARY_STEP_B=EXECUTED"
           echo "No source checkout, dependencies, credentials, or cross-org source transfer."
       - name: Compile independent source-free C++17 canary
+        shell: bash
+        run: |
+          set -euo pipefail
           printf '%s\n' '#include <iostream>' 'int main(){std::cout << "SOURCE_FREE_CPP17_EXECUTED" << std::endl;}' > "$RUNNER_TEMP/sourcefree.cpp"
           g++ -std=c++17 -O2 -Wall -Wextra -Werror "$RUNNER_TEMP/sourcefree.cpp" -o "$RUNNER_TEMP/sourcefree"
           "$RUNNER_TEMP/sourcefree" | grep -Fx 'SOURCE_FREE_CPP17_EXECUTED'

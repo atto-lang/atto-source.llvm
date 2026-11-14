@@ -490,6 +490,7 @@ int main(int argc, char** argv) {
                     throw std::runtime_error(
                         "native telemetry using lacks bounded WCET/probe"
                         " budget proof for native-hard-rt profile");
+        }
 
         if (constraint_descriptors_only) {
             for (const auto& descriptor : ast.type_constraint_descriptors) {
