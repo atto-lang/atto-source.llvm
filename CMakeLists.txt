@@ -5,6 +5,29 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Isolated allocation-free binary-pattern compiler primitive verification.
+# Deliberately HOST-ONLY: a compiled C++ plan does not prove .atto LLVM guest
+# parser/typecheck, generated guest AOT IR, or borrow-checker authority.
+option(ORESLANG_AOT_BINARY_PATTERN_HOST_ONLY
+    "Build only C++17 static binary/bit pattern plan regression tests" OFF)
+if(ORESLANG_AOT_BINARY_PATTERN_HOST_ONLY)
+    include(CTest)
+    if(NOT BUILD_TESTING)
+        message(FATAL_ERROR "Binary-pattern host proof requires BUILD_TESTING=ON")
+    endif()
+    add_executable(oreslang-atto-byte-bit-pattern-plan-host-test
+        tests/atto_byte_bit_pattern_plan_test.cpp)
+    target_include_directories(oreslang-atto-byte-bit-pattern-plan-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-atto-byte-bit-pattern-plan-host-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-atto-byte-bit-pattern-plan-host-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_atto_byte_bit_plan_host_only
+        COMMAND oreslang-atto-byte-bit-pattern-plan-host-test)
+    set_tests_properties(native_atto_byte_bit_plan_host_only PROPERTIES TIMEOUT 15)
+    return()
+endif()
+
 # Host-only C++17 .oresi v1 preflight with no LLVM SDK dependency.
 # Tests metadata admission, not the compiler, guest or native linker.
 option(ORESLANG_ORESI_HOST_ONLY
@@ -150,6 +173,18 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Static byte/bit/packet match plan host proof, NOT compiled .atto guest AOT.
+    add_executable(oreslang-atto-byte-bit-pattern-plan-test
+        tests/atto_byte_bit_pattern_plan_test.cpp)
+    target_include_directories(oreslang-atto-byte-bit-pattern-plan-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-atto-byte-bit-pattern-plan-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-atto-byte-bit-pattern-plan-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_atto_byte_bit_plan
+        COMMAND oreslang-atto-byte-bit-pattern-plan-test)
+    set_tests_properties(native_atto_byte_bit_plan PROPERTIES TIMEOUT 15)
+
     # AOT trace policy gate; this does not compile a source-level Atto trace.
     find_package(Threads REQUIRED)
     add_executable(oreslang-native-trace-probe-policy-test
