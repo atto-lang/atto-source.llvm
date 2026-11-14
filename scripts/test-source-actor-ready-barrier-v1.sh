@@ -61,7 +61,7 @@ for opt in 0 2; do
       echo "SOURCE_ACTOR_READY_BARRIER_POSITIVE_FAILED|O$opt" >&2
       exit 1
     }
-  printf '%s\n' 'SOURCE_ACTOR_READY_RACE_POSITIVE|constructors=32|ready_waits=32|joins=32' >"$work/positive.expected"
+  printf '%s\n' 'SOURCE_ACTOR_READY_RACE_POSITIVE|constructors=40|cv_waits=32|fast_ready=8|joins=40' >"$work/positive.expected"
   cmp -s "$work/positive.expected" "$work/positive.out" || {
     cat "$work/positive.out" >&2; exit 1;
   }
@@ -79,9 +79,9 @@ for opt in 0 2; do
       group++; next
     }
     { bad=1 }
-    END { exit (routing==32 && stop==32 && group==32 && !bad ? 0 : 1) }
+    END { exit (routing==40 && stop==40 && group==40 && !bad ? 0 : 1) }
   ' "$work/positive.err" || {
-    echo "SOURCE_ACTOR_READY_BARRIER_NOT_32_PHYSICAL_JOINS|O$opt" >&2
+    echo "SOURCE_ACTOR_READY_BARRIER_NOT_40_PHYSICAL_JOINS|O$opt" >&2
     cat "$work/positive.err" >&2
     exit 1
   }
@@ -107,7 +107,7 @@ for opt in 0 2; do
     fi
   done
   check_source || { echo "SOURCE_ACTOR_READY_BARRIER_SOURCE_DRIFT" >&2; exit 78; }
-  printf 'SOURCE_ACTOR_READY_BARRIER_NATIVE_PASS|head=%s|O%s|constructors=32|cv_waits=32|physical_joins=32|cancel=SIGABRT|carrier=SIGABRT|sanitizers=ASAN_UBSAN|atto_guest=NO|zero_gc_certified=NO\n' \
+  printf 'SOURCE_ACTOR_READY_BARRIER_NATIVE_PASS|head=%s|O%s|constructors=40|cv_waits=32|fast_ready=8|physical_joins=40|cancel=SIGABRT|carrier=SIGABRT|sanitizers=ASAN_UBSAN|atto_guest=NO|zero_gc_certified=NO\n' \
     "$EXPECTED_HEAD" "$opt"
 done
-echo "SOURCE_ACTOR_READY_BARRIER_NATIVE_MATRIX_PASS|head=$EXPECTED_HEAD|levels=O0_O2|native_execs=6|real_ctors=64|real_joins=64|death_tests=4|guest=NOT_EXECUTED"
+echo "SOURCE_ACTOR_READY_BARRIER_NATIVE_MATRIX_PASS|head=$EXPECTED_HEAD|levels=O0_O2|native_execs=6|real_ctors=80|real_joins=80|cv_waits=64|fast_paths=16|death_tests=4|guest=NOT_EXECUTED"
