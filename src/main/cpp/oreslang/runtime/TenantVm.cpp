@@ -1556,6 +1556,12 @@ TenantVmHost::TenantVmHost(HostLimits limits) : core_(std::make_shared<Core>(lim
         if (!core->allocate_carrier_stack(core->carriers.back().get()))
             give_up("TenantVmHost: carrier stack");
     }
+#if defined(TENANT_VM_TEST_MPROTECT)
+    // Diagnostic-only negative control: keep the real mapped/guarded stacks and the
+    // host's lifecycle but do not create any worker or watchdog thread. Valid VM
+    // admission is refused below while this mode is active.
+    if (std::getenv("TENANT_VM_TEST_SKIP_CARRIER_STARTUP") != nullptr) return;
+#endif
     // All slots must exist before a worker can scan them. Publish each pthread_t before
     // releasing any start gate, including in the partial-construction failure path.
     for (auto& carrier : core->carriers)
@@ -1580,7 +1586,7 @@ TenantVmHost::~TenantVmHost() {
         vm->closed.wait();
     }
     core_->watchdog_stop.store(true);
-    core_->watchdog.join();
+    if (core_->watchdog.joinable()) core_->watchdog.join();
     core_->stop_carriers();
 }
 
@@ -1600,6 +1606,10 @@ VmOpenResult TenantVmHost::open(VmSpec spec) {
         (l.actor_stack_bytes && (l.actor_stack_bytes < kHostCallStackBytes + (std::size_t{64} << 10) ||
             std::uint64_t{l.actor_stack_bytes} + kCarrierGuardBytes + kTurnEntryBytes > core_->limits.carrier_stack_bytes)))
         return refuse(Status::InvalidArgument);
+#if defined(TENANT_VM_TEST_MPROTECT)
+    if (std::getenv("TENANT_VM_TEST_SKIP_CARRIER_STARTUP") != nullptr)
+        return refuse(Status::HostClosed);
+#endif
     if (!handlers_are_ours()) return refuse(Status::SignalHandlerLost);
 
     auto vm = std::make_shared<Vm>();
