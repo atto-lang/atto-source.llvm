@@ -83,7 +83,7 @@ public:
 
 enum class OpKind {
     Allocate, Push, ReadField, WriteField, BorrowRead, BorrowWrite,
-    ReleaseRead, ReleaseWrite, EraseSwap, Snapshot, Suspend, Close
+    ReleaseRead, ReleaseWrite, EraseSwap, Snapshot, Suspend, Close, ReadSnapshotField
 };
 
 struct Operation {
@@ -102,6 +102,7 @@ class LinearPlan final {
     std::vector<bool> writers_;
     std::vector<Operation> operations_;
     bool closed_ = false;
+    bool snapshot_ready_ = false;
 
     void open() const {
         if (closed_) throw std::logic_error("closed inverted HIR owner");
@@ -243,9 +244,21 @@ public:
 
     void snapshot(std::size_t index) {
         checked_row(index);
+        if (snapshot_ready_)
+            throw std::logic_error("inverted HIR permits one detached row snapshot");
         for (bool writer : writers_)
             if (writer) throw std::logic_error("inverted snapshot conflicts with mutable loan");
         append(OpKind::Snapshot, layout_.columns(), index);
+        snapshot_ready_ = true;
+    }
+    std::size_t read_snapshot_field(std::string_view field) {
+        const auto col = checked_field(field);
+        if (!snapshot_ready_)
+            throw std::logic_error("inverted detached snapshot not initialized");
+        // This is a value read, NOT a re-resolved dense index: the owning
+        // columns may have changed or the source row may have been deleted.
+        append(OpKind::ReadSnapshotField, col, 0);
+        return col;
     }
 
     void suspend() {
