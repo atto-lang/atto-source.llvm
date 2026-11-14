@@ -235,3 +235,43 @@ replace the still-unexecuted end-to-end Atto parsed source → compiler-generate
 LLVM IR → linked native guest → runtime receipts test. A source-controlled
 manifest is also not cryptographically authenticated provenance, a JIT proof,
 or a native hard-real-time guarantee.
+
+
+### Actual Atto compiler → native linked guest acceptance gate
+
+The full LLVM SDK CMake branch now registers
+`native_log_info_compiler_linked_guest_full_aot` on Linux x86_64 when a
+Clang driver is present. This invokes the **ordinary** `oreslang-llvmc`
+binary on the reviewed source file and `--source-log-ids` JSON manifest,
+assembles the **compiler's own output IR**, compiles the production C
+runtime and a lifecycle-only hook (no competing C `main`), and links a
+native executable. The hook enables recording before the guest main and
+drains from the same native carrier after main returns. Admission requires
+**process exit code 42** plus both expected immutable site IDs and matching
+lexical scope tokens.
+
+Test sources: `tests/native_guest_log_info_full_aot.cmake` and
+`tests/native_guest_log_info_full_aot_hook_v1.c`. The exact hook and
+script Git blobs were independently reconstructed and tested locally with
+synthetic IR standing in for the unavailable full Atto compiler. That
+script-plumbing smoke returned 42 and passed the event assertions, and the
+ABI script/hook SHA matches the checked-in files. **The actual
+`oreslang-llvmc`-emitted linked guest test has NOT BEEN EXECUTED**, because
+the LLVM SDK and source-organization funded runner are unavailable. Do not
+promote the synthetic stand-in to full native AOT compiler evidence.
+
+Suggested first full-SDK proof command:
+
+~~~sh
+cmake -S . -B build-llvm -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-llvm --parallel --target oreslang-llvmc
+ctest --test-dir build-llvm \
+  -R 'native_log_info_compiler_linked_guest_full_aot|native_guest_log_info_verified_llvm_ir' \
+  --output-on-failure
+~~~
+
+The new C++17 manifest parsing test and source-free linked native IR ABI
+floor are independently **executed and passing** locally, including exact
+Git-blob verification. The whole compiler-to-guest proof remains an
+**unexecuted acceptance gate**. Missing actor/JIT/W3C/OTLP tests remain
+blocking for any larger tracing parity or hard-real-time claim.
