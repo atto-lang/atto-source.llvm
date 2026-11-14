@@ -60,6 +60,11 @@ inline VerifiedInvertedSourceI64 verify_production_inverted_i64(
         if (operation.index >
                 static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max()))
             throw std::out_of_range("production inverted row index exceeds signed i64");
+        const bool snapshot_action =
+            operation.kind == InvertedSourceOperation::Kind::Snapshot ||
+            operation.kind == InvertedSourceOperation::Kind::ReturnSnapshotRead;
+        if (!snapshot_action && !operation.snapshot_binding.empty())
+            throw std::invalid_argument("foreign snapshot binding on non-snapshot operation");
         switch (operation.kind) {
             case InvertedSourceOperation::Kind::Push:
                 if (!operation.field.empty() || operation.index != 0 ||
@@ -82,6 +87,7 @@ inline VerifiedInvertedSourceI64 verify_production_inverted_i64(
                 break;
             case InvertedSourceOperation::Kind::Snapshot:
                 if (source.snapshot_name.empty() || snapshot_captured ||
+                        operation.snapshot_binding != source.snapshot_name ||
                         !operation.field.empty() || operation.value != 0 ||
                         operation.values != std::array<std::int64_t, 2>{})
                     throw std::invalid_argument("invalid or duplicate inverted snapshot source metadata");
@@ -106,6 +112,7 @@ inline VerifiedInvertedSourceI64 verify_production_inverted_i64(
                 break;
             case InvertedSourceOperation::Kind::ReturnSnapshotRead:
                 if (!snapshot_captured || source.snapshot_name.empty() ||
+                        operation.snapshot_binding != source.snapshot_name ||
                         operation.index != 0 || operation.value != 0 ||
                         operation.values != std::array<std::int64_t, 2>{})
                     throw std::logic_error("production inverted detached snapshot not initialized");
