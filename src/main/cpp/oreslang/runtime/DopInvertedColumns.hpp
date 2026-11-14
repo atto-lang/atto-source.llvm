@@ -95,6 +95,24 @@ class InvertedColumns {
             if (s.readers[i] || s.writers[i]) return true;
         return false;
     }
+    // Close marks checked operations invalid immediately. An issued host
+    // span may still be in use while a loan survives owner destruction:
+    // writing to its backing before release would introduce a data race.
+    // Reclaim/scrub only after the final loan releases its accounting.
+    static void scrub_if_quiescent(State& s) noexcept {
+        if (!s.closed || any_loans(s)) return;
+        std::apply([](auto&... column) {
+            (std::fill(column.begin(), column.end(),
+                       typename std::decay_t<decltype(column)>::value_type{}), ...);
+        }, s.columns);
+        std::fill(s.row_slots.begin(), s.row_slots.end(), 0);
+        for (Slot& slot : s.slots) {
+            slot.row = 0;
+            slot.generation = 0;
+            slot.live = false;
+        }
+        std::fill(s.free_slots.begin(), s.free_slots.end(), 0);
+    }
     static void invalidate_layout(State& s) {
         if (s.layout_epoch == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("inverted layout epoch exhausted");
@@ -274,6 +292,7 @@ public:
             std::lock_guard<std::mutex> lock(hold->mutex);
             if constexpr (Write) hold->writers[I] = false;
             else --hold->readers[I];
+            scrub_if_quiescent(*hold);
         }
     };
 
@@ -285,28 +304,13 @@ public:
     InvertedColumns(InvertedColumns&&) = delete;
     InvertedColumns& operator=(InvertedColumns&&) = delete;
     ~InvertedColumns() {
-        // Outstanding loans retain the backing state until release. Mark
-        // the owner closed *under the same lock* as all checked reads, then
-        // scrub both live columns and handle metadata in place without
-        // reallocating or disturbing the outstanding loan counters.
-        // Host-only raw spans issued before teardown still have their
-        // backing allocation while the loan lives, but see erased contents.
+        // Revocation is immediate under the owner lock. Outstanding loans
+        // keep the backing storage alive; scrubbing them now could race
+        // an already-issued host-only span. The final Loan::release()
+        // performs the deferred wipe immediately before state reclamation.
         std::lock_guard<std::mutex> lock(state_->mutex);
-        State& s = *state_;
-        s.closed = true;
-        std::apply([](auto&... column) {
-            (std::fill(column.begin(), column.end(),
-                       typename std::decay_t<decltype(column)>::value_type{}), ...);
-        }, s.columns);
-        std::fill(s.row_slots.begin(), s.row_slots.end(), 0);
-        for (Slot& slot : s.slots) {
-            slot.row = 0;
-            slot.generation = 0;
-            slot.live = false;
-        }
-        std::fill(s.free_slots.begin(), s.free_slots.end(), 0);
-        // readers[]/writers[] intentionally survive until each revoked
-        // Loan destructor releases its accounting under this mutex.
+        state_->closed = true;
+        scrub_if_quiescent(*state_);
     }
 
     std::size_t size() const {
