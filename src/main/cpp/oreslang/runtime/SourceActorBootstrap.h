@@ -15,6 +15,8 @@ typedef void (*OresSourceActorInit)(OresActorI64Heap*, uint64_t, uint64_t);
 typedef int64_t (*OresSourceActorMessage)(
     OresActorI64Heap*, uint64_t, uint64_t, int64_t);
 typedef int64_t (*OresSourceActorContinuation)(void* actor);
+typedef uint64_t OresSourceActorId;
+typedef int64_t (*OresSourceActorIdContinuation)(OresSourceActorId actor);
 
 enum {
     ORES_SOURCE_ACTOR_STARTUP_PENDING = 0,
@@ -50,13 +52,11 @@ void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
  * capability or an FFI/untrusted actor interface.
  *
  * All checked operations resolve ID -> live SourceActor under group.mutex.
- * get_ready/get_done Future continuation migration requires a separate typed
- * continuation ABI; DO NOT cast a legacy void* callback to an ID callback.
- * The legacy pointer functions above and below remain compatibility-only
+ * Checked Future continuation callbacks MUST use
+ * OresSourceActorIdContinuation directly: never cast a void* callback to an
+ * integer-ID callback. The legacy pointer functions remain compatibility-only
  * and are not protected from allocation-address ABA.
  */
-typedef uint64_t OresSourceActorId;
-
 OresSourceActorId oreslang_source_actor_spawn_id(
     OresSourceActorInit initializer,
     OresSourceActorMessage on_message,
@@ -75,6 +75,22 @@ void oreslang_source_actor_request_stop_id(OresSourceActorId actor);
  * This consumes the ID's lifetime: all subsequent operations fail closed. */
 void oreslang_source_actor_join_done_id(OresSourceActorId actor);
 void oreslang_source_actor_stop_id(OresSourceActorId actor);
+/* Same root CONTROL Future/continuation lifecycle as the legacy await API,
+ * but the callback's argument is the original minted by-value actor ID.
+ * No C void* -> i64 conversion occurs anywhere in the checked ABI. */
+int oreslang_source_actor_await_ready_id_checked(
+    OresSourceActorId actor,
+    OresSourceActorIdContinuation continuation,
+    uint64_t source_token,
+    int64_t* result);
+int64_t oreslang_source_actor_await_ready_id(
+    OresSourceActorId actor,
+    OresSourceActorIdContinuation continuation,
+    uint64_t source_token);
+int64_t oreslang_source_actor_await_done_id(
+    OresSourceActorId actor,
+    OresSourceActorIdContinuation continuation,
+    uint64_t source_token);
 
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
 /* Deterministic ABA fixture only: hold one *retired* SourceActor allocation
