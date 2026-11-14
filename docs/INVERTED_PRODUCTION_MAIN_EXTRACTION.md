@@ -1,8 +1,9 @@
 # Main-based LLVM inverted i64 production extraction (draft)
 
 ## Scope and provenance
-Source branch: `parity/inverted-production-main-i64-20261104`.
-Base commit: `040058c1750a049be43949c41f61a87d028e6ddc`.
+Snapshot integration branch: `integration/inverted-snapshot-current-main-20261114` ([draft PR #1813](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1813)).
+Current-main parent: [reconciliation PR #1812](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1812), based on `3667b0255269ca30de381077435253f1b40be28f`.
+Historical sources: #1403 and detached-snapshot #1806; all unaffected feature blobs were carried by exact Git SHA.
 Related work: LLVM #1213 (diverged integration), #1385 (separate host dense-index substrate), conformance #249.
 
 This source path admits exactly one `define inverted struct` with two i64
@@ -26,8 +27,9 @@ length and positive live-row metadata; invalid reads trap; final close revokes
 and volatile-scrubs columns, markers and detached snapshot cells. Guest code never obtains
 owner-issued handles or raw host spans. Source-level loans, dynamic
 expressions, non-i64 scalars, nested types, actors, await, imports, hard-RT,
-Wasm, .NET NativeAOT, arbitrary receiver methods and inverted classes are
-unsupported and must fail closed. Multiple snapshots, snapshot aliases,
+Wasm, non-host NativeAOT targets, arbitrary receiver methods and inverted classes
+are unsupported and must fail closed. The proven-to-be-emitted IR path is
+**restricted host-native Clang AOT**, not general cross-target AOT or JIT. Multiple snapshots, snapshot aliases,
 exported snapshot pointers or unbound snapshot returns are rejected.
 
 The `InvertedColumns` checked-handle host reference is **not** the storage
@@ -42,7 +44,8 @@ nonzero executed workflow steps:
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 cmake --build build --parallel 2 --target \
   oreslang-llvmc oreslang-inverted-production-mir-test \
-  oreslang-native-inverted-struct-ast-test
+  oreslang-native-inverted-struct-ast-test \
+  oreslang-no-gc-ir-audit-build
 ctest --test-dir build -R \
   'native_inverted_(production_source_to_native|struct_schema_ast)|inverted_production_source_mir_cpp17' \
   --output-on-failure
