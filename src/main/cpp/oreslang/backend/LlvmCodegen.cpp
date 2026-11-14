@@ -2204,6 +2204,59 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             lower_effect(stmt);
         }
 
+        if (fn.bounded_actor_churn) {
+            // First dynamic actor-CFG slice. Scope the opaque actor ref to
+            // exactly one bounded iteration. Each sourceStop is a trusted,
+            // synchronous stop+join physical-quiescence barrier, so the ref,
+            // actor heap and scheduler group have been retired before the
+            // next loop back-edge can admit another incarnation.
+            if (wasm32_target || cortex_m_target || fn.name != "main" ||
+                    !fn.actor_spawns.empty() || !fn.actor_actions.empty() ||
+                    !fn.ready_await_actor.empty() || !fn.done_await_actor.empty())
+                throw std::runtime_error(
+                    "bounded actor churn requires a native trusted-main lifetime");
+            const auto& loop = *fn.bounded_actor_churn;
+            const auto a = std::find_if(source.actors.begin(), source.actors.end(),
+                [&](const ActorDecl& entry) {
+                    return entry.name == loop.worker.actor_type;
+                });
+            if (a == source.actors.end() || !sourceSpawn.getCallee() ||
+                    !sourceStop.getCallee())
+                throw std::runtime_error(
+                    "bounded actor churn missing verified source-actor runtime");
+            llvm::Value* counter_slot = storage.at(loop.counter);
+            auto* condition = llvm::BasicBlock::Create(
+                context, "actor.churn.condition", function);
+            auto* body = llvm::BasicBlock::Create(
+                context, "actor.churn.scoped.body", function);
+            auto* complete = llvm::BasicBlock::Create(
+                context, "actor.churn.complete", function);
+            builder.CreateBr(condition);
+            builder.SetInsertPoint(condition);
+            llvm::Value* current = builder.CreateLoad(
+                i64, counter_slot, loop.counter + ".current");
+            llvm::Value* active = builder.CreateICmpSLT(
+                current, llvm::ConstantInt::getSigned(i64, loop.upper_bound));
+            builder.CreateCondBr(active, body, complete);
+            builder.SetInsertPoint(body);
+            llvm::Value* ctor = builder.CreatePointerCast(
+                actorInits.at(loop.worker.actor_type), native_ptr);
+            llvm::Value* handler = builder.CreatePointerCast(
+                actorHandlers.at(loop.worker.actor_type), native_ptr);
+            llvm::Value* scoped_actor = builder.CreateCall(
+                sourceSpawn,
+                {ctor, handler, llvm::ConstantInt::get(
+                    i64, a->fields.size() + a->on_message.locals.size())},
+                loop.worker.name + ".scoped.actor.ref");
+            builder.CreateCall(sourceStop, {scoped_actor});
+            llvm::Value* next = builder.CreateAdd(
+                current, llvm::ConstantInt::get(i64, 1),
+                loop.counter + ".checked.next");
+            builder.CreateStore(next, counter_slot);
+            builder.CreateBr(condition);
+            builder.SetInsertPoint(complete);
+        }
+
         /*
          * A lifecycle await splits trusted-main execution at one verified point.
          * get_ready resumes before stop; get_done requests stop first and resumes
