@@ -2743,6 +2743,20 @@ if(BUILD_TESTING)
         COMMAND oreslang-inverted-class-handle-reference-test)
     set_tests_properties(native_inverted_class_handle_reference_contract PROPERTIES TIMEOUT 40)
 
+    # Bounded deterministic differential oracle: 50,000 random insert/update/
+    # swap-erase operations compared against an independent reference model.
+    add_executable(oreslang-inverted-class-handle-fuzz-test
+        tests/inverted_class_handle_fuzz_test.cpp)
+    target_include_directories(oreslang-inverted-class-handle-fuzz-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/support")
+    target_compile_features(oreslang-inverted-class-handle-fuzz-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-inverted-class-handle-fuzz-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-inverted-class-handle-fuzz-test PRIVATE Threads::Threads)
+    add_test(NAME native_inverted_class_handle_differential_50k
+        COMMAND oreslang-inverted-class-handle-fuzz-test)
+    set_tests_properties(native_inverted_class_handle_differential_50k PROPERTIES TIMEOUT 60)
+
     add_executable(oreslang-dop-inverted-columns-test tests/dop_inverted_columns_test.cpp)
     target_include_directories(oreslang-dop-inverted-columns-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-dop-inverted-columns-test PRIVATE cxx_std_20)
