@@ -14,6 +14,8 @@ namespace oreslang::types::overloads {
 inline constexpr std::size_t MaxSameArityCandidates = 128;
 inline constexpr std::size_t MaxOverloadArity = 64;
 
+inline constexpr std::size_t MaxSameArityCandidates = 128;
+inline constexpr std::size_t MaxOverloadArity = 64;
 inline constexpr std::size_t MaxEnumCases = 1024;
 inline constexpr std::size_t MaxEnumPayloadFields = 64;
 
@@ -125,8 +127,11 @@ inline void validateSignatureShape(const Signature& value) {
 // Signature is a public aggregate. Every public policy entrypoint must
 // revalidate caller-built values, not merely trust signature() factory calls.
 // This is shape validation, NOT authentication of a resolved enum symbol ID.
+inline void validateSignatureShape(const Signature& value) {
     if (value.name.empty() || value.arity() > MaxOverloadArity)
         throw std::invalid_argument("invalid nominal enum overload signature shape");
+    for (const Position& position : value.positions) {
+        if (position.id.empty())
             throw std::invalid_argument("empty nominal overload position identity");
         switch (position.kind) {
             case Kind::Primitive:
@@ -137,6 +142,9 @@ inline void validateSignatureShape(const Signature& value) {
                 break;
             default:
                 throw std::invalid_argument("unknown nominal overload position kind");
+        }
+    }
+}
 
 inline PairStatus compare(const Signature& left, const Signature& right) {
     validateSignatureShape(left);
@@ -172,6 +180,7 @@ inline Signature signature(
         }
         if (parameter.first != Kind::Primitive && parameter.first != Kind::Enum)
             throw std::invalid_argument("unknown overload parameter kind");
+        if (parameter.first != Kind::Primitive && parameter.first != Kind::Enum)
             throw std::invalid_argument("unknown nominal overload parameter kind");
         if (parameter.first == Kind::Primitive && !isPrimitive(parameter.second)) {
             throw std::invalid_argument(
@@ -197,6 +206,8 @@ inline std::size_t select(
     const std::vector<Signature>& candidates,
     const std::unordered_map<std::size_t, std::string>& staticEnumProofs) {
     if (candidates.empty()) throw std::invalid_argument("empty overload set");
+    if (candidates.size() > MaxSameArityCandidates)
+        throw std::invalid_argument("nominal enum overload candidate bound exceeded");
     if (candidates.size() > MaxSameArityCandidates)
         throw std::invalid_argument("nominal enum overload candidate bound exceeded");
     for (const Signature& candidate : candidates) validateSignatureShape(candidate);
