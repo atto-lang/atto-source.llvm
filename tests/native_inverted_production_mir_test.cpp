@@ -92,6 +92,42 @@ int main() {
     INVERTED_REQUIRE(ir.find("define i32 @main()") != std::string::npos);
     INVERTED_REQUIRE(ir.find("icmp ult i64") != std::string::npos);
     INVERTED_REQUIRE(ir.find("store volatile i1 false, ptr %alive") != std::string::npos);
+    // The external MIR admission boundary must reject forged metadata even
+    // when its current emitter would ignore it (loans/close have no row).
+    {
+        auto forged = ops;
+        forged.back().index = 1;
+        reject([&]{ (void)Module::verify_external(
+                compiled.mir.layout(), compiled.mir.capacity(), forged); },
+                "non-row instruction has forged row index");
+    }
+    {
+        using oreslang::dop::hir::LinearPlan;
+        LinearPlan plan(compiled.mir.layout(), 3);
+        plan.push(2);
+        plan.borrow_read("x");
+        plan.release_read("x");
+        plan.borrow_write("x");
+        plan.release_write("x");
+        plan.read_runtime_checked(0, "x");
+        plan.close();
+        const auto loan_ir = Module::lower(plan);
+        // Allocate, Push, BorrowRead, ReleaseRead, BorrowWrite,
+        // ReleaseWrite, ReadField, Close
+        INVERTED_REQUIRE(loan_ir.instructions().size() == 8);
+        for (const std::size_t at : {std::size_t{2}, std::size_t{3},
+                                     std::size_t{4}, std::size_t{5},
+                                     std::size_t{7}}) {
+            auto forged = loan_ir.instructions();
+            forged[at].index = 99;
+            reject([&]{ (void)Module::verify_external(
+                    loan_ir.layout(), loan_ir.capacity(), forged); },
+                    "non-row instruction has forged row index");
+        }
+        INVERTED_REQUIRE(Module::verify_external(
+            loan_ir.layout(), loan_ir.capacity(), loan_ir.instructions()
+        ).instructions().size() == 8);
+    }
 
     {
         auto forged = make_source();
