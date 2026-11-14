@@ -181,7 +181,10 @@ struct HostStats {
     std::uint64_t kills_delivered = 0;
     std::uint64_t wild_accesses = 0;  // nonzero means a compiler-path bug, see HostLimits
     std::uint64_t queued_bytes = 0;
-    std::uint64_t stack_quota_misses = 0; // rejected turns: the requested stack guard could not be installed
+    std::uint64_t stack_quota_misses = 0; // rejected turns: requested stack guard could not be installed
+    std::uint64_t carrier_replacements = 0; // successful fixed-slot worker replacements
+    std::uint64_t carrier_replacement_failures = 0; // failed bounded replacement attempts
+    std::uint32_t unavailable_carriers = 0; // retired slots lacking a usable carrier thread
     std::uint64_t actor_restarts = 0;
 };
 
