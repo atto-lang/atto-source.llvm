@@ -20,7 +20,7 @@ for input in top bottom; do
     echo "EXPORT_GUEST_EXECUTED fixture=$input opt=$opt exit=42"
   done
 done
-for input in wrong-kind unknown duplicate invalid-pkg; do
+for input in wrong-kind unknown duplicate invalid-pkg nested-module-reject; do
   if "$compiler" --target=host "$fixtures/$input.atto" > "$tmp/$input.ll" 2> "$tmp/$input.err"; then
     fail "invalid $input was accepted"
   fi
