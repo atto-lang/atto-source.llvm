@@ -61,4 +61,25 @@ for opt in 0 2; do
     fi
     echo "MIR_IR_BOUNDS_TRAP_O$opt"
 done
+
+# Additional deterministic physical-column cases. Every input goes through
+# verified compiler-constructed HIR/MIR (not the .atto parser), real LLVM IR
+# emission, and a fresh Clang native executable at each optimization level.
+for case_name in bulk-reuse tail-delete overwrite; do
+    "$tmp/mir-emitter" "--$case_name" > "$tmp/$case_name.ll"
+    test -s "$tmp/$case_name.ll"
+    grep -Fq 'declare void @llvm.trap()' "$tmp/$case_name.ll"
+    for opt in 0 2; do
+        "$clang" -O"$opt" -x ir "$tmp/$case_name.ll" -o "$tmp/$case_name-$opt"
+        set +e
+        "$tmp/$case_name-$opt"
+        result=$?
+        set -e
+        if [[ "$result" != 42 ]]; then
+            echo "FAIL: $case_name native AOT -O$opt exited $result, expected 42" >&2
+            exit 1
+        fi
+        echo "MIR_IR_NATIVE_$case_name-EXIT_42_O$opt"
+    done
+done
 echo 'CHECKED_MIR_NATIVE_IR_PASS; .atto source parser NOT_EXECUTED'
