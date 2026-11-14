@@ -46,3 +46,257 @@ An actor can settle/retire all requests and still miss an explicit `close()` if 
 The full native scheduler regression deliberately omits `other_slab.close()` after all its pins and requests drain. It destroys that slab **only after** `retire_actor_shard_budget_after_done` succeeds and asserts that both actor and VM quota return to zero. A passing complete native CTest/ASan run is still required; previous isolated checks did not execute this new fallback.
 
 **Private CI policy remains restrictive:** source Java [issue #1501](https://github.com/ores-truffle-oreslang/oreslang-source.java/issues/1501) still has no approved exact destination, and security authority [PR #1724](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/1724) is held; a successful alternative-org *source-free* runner probe does not authorize private-tree copying. Do not mirror these source files until the independent review and immutable carrier contract explicitly cover the destination and this PR.
+
+## Exclusive physical page-claim receipts (PR #891 follow-up)
+
+The native arena's checked `ores_actor_arena_claim_pages` now atomically validates and claims a complete list of physical slot handles while holding its existing arena lock. Every page must name a distinct live allocation in the **same arena**, match its current generation and exact allocated page length, and be free of outstanding arena loans and previous page claims. Invalid or conflicting requests return zero **before changing ownership or writing any bytes**. Successful claims receive an arena-local monotonically increasing nonzero receipt which never wraps back to a previously used value.
+
+`ProxyRequestSlab` takes the complete multi-page claim **before** writing its column or receipt storage, copies the handle list into private bounded storage, and holds the receipt for its entire open lifetime. A second slab cannot zero or consume any overlapping subset of those pages, including a one-page view over a two-page owner. Disjoint pages can be claimed concurrently in the same valid actor turn. C arena `drop` and persistent `borrow` reject claimed slots; `try_destroy` refuses outstanding page claims.
+
+After all slab request receipts have been settled and `live() == 0`, `close()` scrubs **every byte of the charged physical pages**, then presents the original page set and claim receipt to `ores_actor_arena_unclaim_pages`. That release verifies the full group size and every live generation and claim before clearing **any** claim. Partial release, duplicate/replayed release and guessed or stale receipts fail without side effects. The actor-owned wrapper's terminal cleanup remains subject to scheduler-done and external I/O quiescence fences.
+
+**Authority boundary:** this is exclusivity between **trusted slab adapters**. The low-level `ores_actor_arena_read/write` functions remain trusted host entry points and are not yet fully capability-gated by the page claim; a privileged host holding an arena handle and authenticated actor turn can still access bytes. No private arena pointer or page receipt is a guest-visible Oreslang capability. Do not market this as isolation from malicious or buggy trusted host code.
+
+The `native_proxy_slab_arena_pages_and_zeroization` CTest exercises true two-page storage, conflicting whole and subset reservations, untouched sentinels after rejected conflicts, claim replay/partial-release rejection, post-close reuse, disjoint slabs, and final arena destruction. The exact-head workflow includes its strict C++20 and ASan/UBSan builds. **No checked-in test execution is yet proven**: source-organization Actions jobs continue failing with zero recorded steps; the review/CI authorization process must unblock actual runner evidence before merge.
+
+## LLVM-independent native acceptance gate
+
+Use `-DORESLANG_PROXY_SLAB_HOST_ONLY=ON -DBUILD_TESTING=ON` to configure
+a dedicated GCC/Clang C11+C++20 CTest build containing only the checked-in
+host slab, real `ActorArena.c`, and exact-generation native scheduler
+tests. This deliberately avoids a mandatory LLVM development dependency
+for this *host-side* unit-test gate; normal Oreslang compiler builds are
+unchanged. Execute all three registered CTests under both compilers and
+run the direct ASan/UBSan workflow checks as separate required gates.
+The actor test now rejects close while a retired request retains a pending
+completion receipt, proves charges remain stable after rejection, and
+rejects late callbacks after close. Neither these host tests nor the
+standalone host-only CMake option establishes guest `.ores` lowering,
+real HTTP/TCP callback quiescence, JDK25, or GraalVM parity.
+
+
+## Explicit external-callback quiescence admission
+
+The actor-owned native wrapper now requires a trusted host to call
+`confirm_transport_quiescence()` on the correct logical actor turn **after**
+stopping new physical I/O operations and joining any queued callbacks,
+timers and wakers. Merely observing `live()==0`, recycling a ticket, or
+retiring the scheduler does not authorize arena reclamation. Confirmation
+is monotonic and disables subsequent request admission or callback pinning.
+`close()` fails before confirmation; the destructor's scheduler-retired
+cleanup also fail-stops if no confirmation was recorded. An outstanding
+logical request (including a retired request with an unsettled completion
+pin) prevents confirmation. The owning actor test exercises premature close
+while logically empty, premature confirmation while a pin is pending,
+foreign actor confirmation, rejection of admission after confirmation,
+idempotent confirmation, and the terminal cleanup path.
+
+**Trust boundary:** the confirmation call records a trusted host assertion;
+it **does not inspect, join or revoke arbitrary external I/O callbacks**.
+Transport and supervisor implementations must actually quiesce their own
+queues before calling it. A malicious or faulty trusted host could lie, so
+this alone is not evidence of real network callback safety. The guest
+language cannot call this method through actor messages. No native guest
+lowering, live HTTP/TCP integration or Java/GraalVM parity is claimed.
+
+
+## Counted transport callback drain receipt (host integration layer)
+
+`NativeTransportCallbackGate` adds explicit, allocation-free physical callback
+accounting. A trusted I/O adapter **must obtain and retain one move-only
+`Permit` before enqueueing each timer, waker, network callback or completion
+that may touch actor arena memory**. Moving the permit with the asynchronous
+completion envelope keeps it held across carrier migration, and releasing it
+only after the callback's final access decrements the registered in-flight
+count. A 32-bit atomic stop/count word serializes enqueue admission against
+shutdown without a per-callback heap allocation, mutex or busy wait.
+
+Shutdown invokes `stop_admission()`, preventing new permits, and only when
+all registered permits are released can `try_drain()` produce a copyable,
+non-default-constructible `DrainReceipt`. The receipt is bound to the exact
+gate address, actor scheduler domain/slot/generation and globally unique slab
+identity. `ActorOwnedProxyRequestSlab::confirm_transport_quiescence(receipt)`
+checks this binding plus logical `live()==0` on the owning actor lane before
+allowing `close()` or the retired destructor fallback. The old no-argument
+trust-me assertion has been removed. Admission and callback pinning also stop
+when the callback gate begins closing.
+
+`native_proxy_transport_callback_gate_races` tests physical carrier
+completion after logical shutdown, receipt rejection from another slab,
+freeze/admission ordering and move-only permit semantics. Owner-wrapper tests
+exercise premature and foreign confirmation, physical permits retained after
+logical drain, replays, and ordinary close/destructor retirement.
+
+**Scope limit:** the gate only counts callbacks whose transport adapters enroll
+them. It does not automatically intercept epoll/kqueue/IOCP/HTTP callbacks,
+join an external network reactor or prove a real HTTP/TCP shutdown. Any adapter
+not yet wired to this gate remains out of scope; this is a host-side safety
+substrate, not production guest networking or cross-backend conformance.
+
+
+### Lock-free terminal admission hardening
+
+The native callback gate uses one `std::atomic<uint32_t>` rather than a
+mutex: the high bit means `stopped`, and the low 31 bits count admitted
+physical callback permits. Admission is a CAS that fails once shutdown wins;
+shutdown atomically sets the stop bit; each permit's final release decrements
+the count with acquire/release ordering. `try_drain()` and receipt validation
+require exactly the stop bit with zero outstanding permits. The low counter
+cannot overflow into the stop bit, and a racing CAS cannot admit an uncounted
+callback after freeze. The focused test includes 128 two-thread producer vs
+freeze races in addition to a separately blocked in-flight callback. The
+full native actor/repository test matrix remains gated on executing CI.
+
+## Linux epoll callback ownership bridge
+
+`NativeEpollTransportBridge` now wraps the checked-in bounded
+`NativeEpollReactor` and an actor's `NativeTransportCallbackGate`. Each
+accepted nonblocking one-shot `try_watch` acquires a move-only callback permit
+**before** registering with epoll, stores it in a preallocated 64-slot table,
+and transfers it to the terminal `CompletionLease` returned by `try_pop`.
+Readiness, explicit cancellation, and reactor stop all generate terminal
+records; **none releases an arena permit merely on event publication**.
+A caller that forwards completion work to another carrier must move the
+entire lease and keep it until the last actor memory access.
+
+`stop()` closes the transport gate to new callback permits and joins the
+epoll worker. Remaining `stopped` events still require consumption, and
+`try_drain()` cannot succeed until every outstanding watch/completion lease
+has released its permit. Destruction aborts if unconsumed terminal records
+retain permits. No allocation occurs on the bridge's watch/pop/cancel path;
+the Linux reactor's existing startup may create one native worker thread.
+
+`native_epoll_transport_callback_retirement` exercises real Linux
+nonblocking socketpair/epoll readiness, stop with an active watch, cancellation
+with exact terminal delivery, and the drain barrier remaining closed while a
+completion envelope is held. The actor wrapper also exercises request/pin
+rejection as soon as the transport gate is frozen, eliminating a sampled
+`accepting()` check-then-act race: the temporary permit itself is the
+operation's admission linearization point, counted through the native write.
+
+**Not yet complete:** The bridge is a new trusted host adapter, not automatic
+retrofitting of every existing NIO consumer or production HTTP/TCP server.
+Consumers must use this bridge rather than raw reactor methods for actor arena
+traffic and retain leases through cross-thread mailbox handoff. Real guest
+Oreslang compilation/execution and full actor suite are separate acceptance
+gates. All native tests require exact-head CI or direct trusted execution.
+
+## October 24 bounded epoll capacity and shutdown stress evidence
+
+The additional `native_epoll_transport_capacity_stale_shutdown_stress`
+CTest covers 64 simultaneous one-shot epoll watches at the preallocated
+limit, rejection of a 65th watch, exact terminal `stopped` delivery and
+permit retention for every outstanding completion, and generation changes
+when a completed watch slot is reused. It also races transport stop against
+watch admission 96 times and stop against concurrent cancellation 96 times.
+No attempt to reconstruct a terminal record from a naked request ID is
+accepted; the consumer must retain the entire move-only lease.
+
+For the initial audit, the exact source blobs of the checked-in reactor,
+transport gate, bridge and bridge test were reconstructed locally and Git
+blob SHAs matched their PR-tree SHA values. The real socketpair/epoll bridge
+test passed strict GCC 14.2 and Clang 17 builds, both ASan+UBSan variants,
+GCC TSan and 80 repeated optimized runs per compiler. The additional
+capacity/reuse/shutdown stress source blob was likewise compiled with
+GCC/Clang strict C++20, ASan+UBSan and GCC TSan. The test now also
+compares /proc/self/fd counts before and after all readiness and shutdown
+iterations, verifying epoll/eventfd/socket handles are reclaimed. This is real execution of
+the focused native source in a local subset, **not an exact full LLVM source
+tree CMake/CTest or production guest actor runtime test**. Full CI,
+independent review and protected-source provenance remain blocking gates.
+
+## VM-backed actor-owned NIO completion admission
+
+The native VM's existing `NativeEpollReactorManager` now supports a separate
+trusted **C++ actor-owned completion mode** through
+`NativeOresVMActorNio.hpp`. This mode is opt-in, irreversible for one NIO
+backend, and mutually exclusive with the legacy C completion-record mode.
+A legacy `ores_native_nio_try_pop()` cannot consume an actor-owned terminal
+record and silently throw away its callback ownership. Invalid mode mixing
+rejects without touching the completion queue.
+
+`NativeActorNioCallbacks` holds one move-only
+`NativeTransportCallbackGate::Permit` per admitted watch in a fixed
+256-slot ledger (four reactor domains × 64 tickets). A watch is registered
+with the VM's existing native reactor manager **only after** obtaining a
+callback permit, and a short nonparking ledger mutex serializes registration
+against completion consumption. On READY, CANCELLED or STOPPED,
+`vm_nio_actor_try_pop()` returns the original readiness metadata plus a
+process-unique nonwrapping `lease_id` and the source actor domain/slot/
+generation/slab identity. The ledger **retains** its permit until trusted host
+code calls `vm_nio_actor_acknowledge()` after the final physical actor-memory
+access. A forged identity, mismatched ticket, stale lease, duplicate ack, or
+a legacy completion poll cannot refund that permit. Host-only
+`vm_nio_actor_stop()` joins the backend's reactor threads while still
+requiring subsequent consumption and explicit acknowledgment of STOPPED
+records. No guest actor can fabricate this receipt or access the C++ owner
+ledger as a source-level method.
+
+Every VM NIO API call acquires the existing backend retirement pin, so a
+concurrent VM close cannot free the backend during that call. **The host
+must also keep the VM and actor-owned callback gate alive across the entire
+asynchronous operation**, fence producers, stop or cancel watches, pop all
+terminal completions, acknowledge them, and only then retire/close the VM.
+Teardown with unacknowledged actor-owned watches intentionally fail-stops
+instead of dropping callback permits and freeing actor-owned memory.
+
+This is native host/VM readiness integration only, **not** guest Oreslang
+source lowering, a production HTTP request scheduler, or an externally
+validated remote transport. Actor ownership remains a trusted-host API
+boundary. The legacy C NIO behavior is unchanged for backends that select
+legacy mode.
+
+The `native_vm_actor_nio_owned_callbacks` regression exercises a real VM
+and Linux pipe readiness, foreign/forged/duplicate lease rejection,
+cross-carrier acknowledgement, cancellation, STOPPED completion and
+fail-closed legacy mode mixing. Register it in the opt-in host-only and
+ordinary Linux native CMake test matrix, GCC and Clang, plus ASan/UBSan.
+
+
+## Bridge destruction versus externally held completion envelopes
+
+An audit found that `NativeEpollTransportBridge::try_pop()` moves the
+`NativeTransportCallbackGate::Permit` into a downstream completion envelope
+and clears its internal slot. The prior destructor checked only the now-empty
+slot table; it could therefore return while another carrier still possessed an
+external callback permit. The bridge destructor now additionally requires the
+entire associated transport gate to be terminally stopped **and drained**
+(`try_drain()`), failing closed if any callback ownership is still in flight.
+This applies to all registered users of that gate, not just the bridge's own
+slot table. The host must retire all completion envelopes before destroying
+the bridge and must keep the gate alive until the final release.
+
+The focused `native_epoll_bridge_external_handoff_failstop` CTest verifies
+ordinary drained shutdown and uses a separate process with real Linux
+socketpair/epoll readiness to prove that destroying a bridge with a moved-out
+completion envelope terminates with SIGABRT rather than silently succeeding.
+A parent process verifies the expected failure and reports success. The
+regression is registered in the source host-only and normal Linux CMake CTest
+configurations and the exact-head GCC/Clang ASan+UBSan workflow.
+
+**Evidence boundary:** The exact header and test sources were checked against
+Git blob identity and compiled and executed locally with GCC/Clang strict
+C++20, optimized repetition, ASan and UBSan. This is focused host-runtime
+proof only; an executing source CI runner is still required for the complete
+LLVM actor and VM integration suite. No private compiler tree was mirrored.
+
+
+### FD loan lifetime and terminal-envelope identity (October 24, 2026)
+
+The actor-owned VM NIO completion ledger now **retains exclusive ownership of
+its watched FD until terminal completion acknowledgment**, not merely until
+`NativeEpollReactorManager::try_pop()` releases the kernel readiness slot.
+An outstanding delivered completion therefore prevents a second actor, slab,
+or generation from registering that same numeric descriptor through the
+actor-owned interface. Only the exact acknowledged terminal completion can
+release the counted callback permit and make the descriptor eligible again.
+
+The ledger also preserves the original FD and full delivered terminal record.
+Acknowledge refuses altered FD, readiness events, terminal outcome, watch,
+lease identity, or actor owner metadata. The host retains responsibility for
+not closing/recycling the numeric FD before its terminal acknowledgment, and
+for guaranteeing that acknowledgment follows the consumer's **last physical
+access**. This does not make copyable host metadata a guest capability or
+retroactively protect legacy C NIO mode. Native actor-owned VM tests exercise
+rejection of FD reuse before acknowledgment, positive rearm afterward, and
+hostile terminal-envelope modification.
