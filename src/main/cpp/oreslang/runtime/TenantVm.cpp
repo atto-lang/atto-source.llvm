@@ -379,6 +379,7 @@ std::uint64_t heap_class_bytes(int index) { return std::uint64_t{kMinHeapClassBy
 // globally wrap sigaltstack: sanitizers register their own alternate signal stacks.
 #if defined(TENANT_VM_TEST_MPROTECT)
 extern "C" int tenant_vm_test_carrier_sigaltstack(const stack_t*, stack_t*);
+extern "C" bool tenant_vm_test_fail_carrier_altstack_setup();
 extern "C" void tenant_vm_test_record_recovery_mask();
 #endif
 
@@ -478,18 +479,37 @@ struct TenantVmHost::Core {
         // for the creator's release so an interrupt can never see an unset pthread_t.
         while (!c->start_allowed.load(std::memory_order_acquire)) std::this_thread::yield();
         t_carrier = c;
-        stack_t alt{};
-        alt.ss_sp = c->signal_stack;
-        alt.ss_size = kSignalStackBytes;
+        // Sanitizers (including GCC ASan) may have already installed a signal
+        // stack for this very thread. Replacing it strands the sanitizer's
+        // SIGSEGV handler on memory whose lifetime we now control, and repeated
+        // host startup/teardown can crash without ever running guest code.
+        // Reuse an existing, sufficiently large, active alternate stack. Only
+        // install our private stack when this thread has none. Never unmap or
+        // disable an alternate stack owned by another runtime.
+        stack_t existing{};
+        int signal_stack_result = sigaltstack(nullptr, &existing);
 #if defined(TENANT_VM_TEST_MPROTECT)
-        // Diagnostic control only: workers with no guest admission can test whether
-        // installing the custom alternate signal stack triggers ASan instability.
-        const int signal_stack_result =
-            std::getenv("TENANT_VM_TEST_SKIP_ALTSTACK_REGISTRATION") != nullptr ?
-                0 : tenant_vm_test_carrier_sigaltstack(&alt, nullptr);
-#else
-        const int signal_stack_result = sigaltstack(&alt, nullptr);
+        // Fault injection must exercise the carrier startup rejection path even
+        // when ASan provides the existing stack and no install call is needed.
+        if (tenant_vm_test_fail_carrier_altstack_setup()) signal_stack_result = -1;
 #endif
+        if (signal_stack_result == 0) {
+            if (!(existing.ss_flags & SS_DISABLE)) {
+                // A borrowed stack that is too small is unsafe. Reject this
+                // carrier instead of overwriting another runtime's registration.
+                if (existing.ss_sp == nullptr || existing.ss_size < (std::size_t{16} << 10))
+                    signal_stack_result = -1;
+            } else {
+                stack_t alt{};
+                alt.ss_sp = c->signal_stack;
+                alt.ss_size = kSignalStackBytes;
+#if defined(TENANT_VM_TEST_MPROTECT)
+                signal_stack_result = tenant_vm_test_carrier_sigaltstack(&alt, nullptr);
+#else
+                signal_stack_result = sigaltstack(&alt, nullptr);
+#endif
+            }
+        }
         if (signal_stack_result != 0) {
             // This can fail on a replacement worker even when its mmap succeeded.
             // Never abort the process or run a guest without an alternate fault stack.
