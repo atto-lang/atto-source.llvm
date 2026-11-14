@@ -37,17 +37,25 @@ class FixedBoxArena final {
     static constexpr std::uint8_t kLive = 2;
     static constexpr std::uint8_t kDropping = 3;
     static constexpr std::uint8_t kExhausted = 4;
+    static constexpr std::uint64_t kClosed = UINT64_C(1) << 63;
+    static constexpr std::uint64_t kCount = kClosed - 1;
+    static_assert(sizeof(std::size_t) < 8 || Slots < (std::size_t{1} << 63),
+                  "Box arena exceeds admission counter capacity");
 
     struct Slot {
         alignas(T) std::byte storage[sizeof(T)]{};
         std::atomic<std::uint8_t> state{kFree};
         std::atomic<std::uint32_t> generation{1};
+        FixedBoxArena* owner = nullptr; // assigned before arena publication
     };
 
     std::array<Slot, Slots> slots_{};
     std::uint64_t domain_ = next_box_arena_domain.fetch_add(
         1, std::memory_order_relaxed);
-    std::atomic<bool> closing_{false};
+    // High bit fences all future issuance, lower bits count in-flight
+    // allocations (including the gap between admission and construction).
+    // A close with zero live count therefore cannot race an issue.
+    std::atomic<std::uint64_t> lifecycle_{0};
 
     static void drop_slot(void* context, T* value) noexcept {
         if (!context || !value) std::terminate();
@@ -65,15 +73,20 @@ class FixedBoxArena final {
             slot.generation.store(generation + 1, std::memory_order_relaxed);
             slot.state.store(kFree, std::memory_order_release);
         }
+        if (!slot.owner || (slot.owner->lifecycle_.fetch_sub(
+                1, std::memory_order_acq_rel) & kCount) == 0)
+            std::terminate();
     }
 
 public:
     FixedBoxArena() noexcept {
         if (domain_ == 0 || domain_ == std::numeric_limits<std::uint64_t>::max())
             std::terminate(); // no repeated allocation domain identity
+        for (auto& slot : slots_) slot.owner = this;
     }
     ~FixedBoxArena() noexcept {
-        closing_.store(true, std::memory_order_release);
+        if ((lifecycle_.fetch_or(kClosed, std::memory_order_acq_rel) & kCount) != 0)
+            std::terminate(); // cannot destroy with tickets or boxes alive
         for (const auto& slot : slots_) {
             const auto state = slot.state.load(std::memory_order_acquire);
             if (state != kFree && state != kExhausted) std::terminate();
@@ -94,16 +107,25 @@ public:
     UniqueAllocationTicket<T> issue_at(std::size_t index, Args&&... args) noexcept
         requires std::is_nothrow_constructible_v<T, Args...>
     {
-        if (index >= Slots || closing_.load(std::memory_order_acquire))
-            return UniqueAllocationTicket<T>{};
+        if (index >= Slots) return UniqueAllocationTicket<T>{};
+        // The admission lease is acquired *before* touching a slot, and
+        // remains active until the ticket/box's destructor releases it.
+        // A closing bit competes in the SAME CAS modification order.
+        auto state = lifecycle_.load(std::memory_order_acquire);
+        while (true) {
+            if ((state & kClosed) || (state & kCount) >= Slots)
+                return UniqueAllocationTicket<T>{};
+            if (lifecycle_.compare_exchange_weak(state, state + 1,
+                    std::memory_order_acq_rel, std::memory_order_acquire))
+                break;
+        }
         auto& slot = slots_[index];
         std::uint8_t expected = kFree;
         if (!slot.state.compare_exchange_strong(
                 expected, kConstructing, std::memory_order_acq_rel,
-                std::memory_order_acquire))
-            return UniqueAllocationTicket<T>{};
-        if (closing_.load(std::memory_order_acquire)) {
-            slot.state.store(kFree, std::memory_order_release);
+                std::memory_order_acquire)) {
+            if ((lifecycle_.fetch_sub(1, std::memory_order_acq_rel) & kCount) == 0)
+                std::terminate();
             return UniqueAllocationTicket<T>{};
         }
         const auto generation = slot.generation.load(std::memory_order_relaxed);
@@ -116,13 +138,11 @@ public:
     }
 
     bool try_close() noexcept {
-        // One-way admission fence; outstanding boxes may still be released.
-        closing_.store(true, std::memory_order_release);
-        for (const auto& slot : slots_) {
-            const auto state = slot.state.load(std::memory_order_acquire);
-            if (state != kFree && state != kExhausted) return false;
-        }
-        return true;
+        // Linearization point: either the issuer obtained its lease first
+        // (count > 0), or close wins and the issuer cannot obtain a lease.
+        // Retrying after outstanding owners drain is always permitted.
+        return (lifecycle_.fetch_or(kClosed, std::memory_order_acq_rel)
+                    & kCount) == 0;
     }
 };
 
