@@ -771,12 +771,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             !source.classes.empty()) {
             throw std::runtime_error("checked routine source IDs require exact scalar function coverage");
         }
+        std::unordered_set<std::string> unique_routine_ids;
         for (const auto& id : checked_routines) {
             telemetry::SourceId parsed{};
             if (!telemetry::parse_source_id(id.routine_id,
                                             telemetry::SourceKind::Routine, parsed)) {
                 throw std::runtime_error("malformed native checked routine source ID");
             }
+            if (!unique_routine_ids.insert(id.routine_id).second)
+                throw std::runtime_error("duplicate cross-function native routine source ID");
             if (!routine_source_ids.emplace(
                     native_function_slot(id.symbol, id.arity), id.routine_id).second) {
                 throw std::runtime_error("duplicate checked native routine source selector");
@@ -841,9 +844,18 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     }
     if (!checked_sites.empty() &&
         (wasm32_target || cortex_m_target || !source.actors.empty() ||
-         !source.generators.empty() || !source.classes.empty())) {
+         !source.generators.empty() || !source.classes.empty() ||
+         std::any_of(source.functions.begin(), source.functions.end(),
+             [](const Function& fn) {
+                 return fn.async_source_i64 || !fn.source_tasks.empty() ||
+                     !fn.future_pipelines.empty() ||
+                     !fn.ready_await_actor.empty() ||
+                     !fn.done_await_actor.empty() ||
+                     !fn.actor_actions.empty() || !fn.actor_spawns.empty() ||
+                     !fn.actor_field_writes.empty();
+             }))) {
         throw std::runtime_error(
-            "native log.info v1 only supports hosted synchronous scalar AOT");
+            "native log.info v1 only supports hosted non-suspending scalar AOT");
     }
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
