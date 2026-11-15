@@ -125,8 +125,15 @@ public:
 
     std::size_t pending_count() const { return child_failures_.pending_count(); }
     std::size_t reserved_count() const { return child_failures_.reserved_count(); }
-    std::size_t restarts_used() const noexcept { return restarts_used_; }
-    std::size_t restarts_in_window() const noexcept { return restart_count_; }
+    // These counters may be sampled from independent host telemetry threads
+    // while the supervisor holds its exclusive CONTROL turn. Plain size_t
+    // reads would race with consume_restart_slot() and are undefined in C++.
+    std::size_t restarts_used() const noexcept {
+        return restarts_used_.load(std::memory_order_relaxed);
+    }
+    std::size_t restarts_in_window() const noexcept {
+        return restart_count_.load(std::memory_order_relaxed);
+    }
 
     /**
      * At most one CONTROL event per admitted turn. CONTROL takes priority
@@ -281,9 +288,9 @@ private:
     const std::uint64_t restart_window_ticks_;
     std::vector<std::uint64_t> restart_ticks_;
     std::size_t restart_head_ = 0;
-    std::size_t restart_count_ = 0;
+    std::atomic<std::size_t> restart_count_{0};
     std::uint64_t last_restart_tick_ = 0;
-    std::size_t restarts_used_ = 0; // lifetime telemetry; single-writer CONTROL turn
+    std::atomic<std::size_t> restarts_used_{0}; // one CONTROL writer; concurrent host observers
     std::atomic_flag lease_ = ATOMIC_FLAG_INIT;
     // Supervisor logical-turn owned, not a guest ActorRef or public token.
     // Retained on uncertain or throwing STOP effects for explicit reconciliation.
