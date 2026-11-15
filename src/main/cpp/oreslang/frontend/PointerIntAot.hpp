@@ -249,8 +249,9 @@ private:
         const std::size_t offset = token().offset;
         const auto name = identifier();
         if (name == owner_) {
-            if (!live_) reject("read after close", offset);
-            need("."); need("read_at"); need("(");
+            if (!live_) reject("read after close or pointer escape", offset);
+            if (!take(".")) reject("Pointer<int> owner cannot escape as a scalar or handle", offset);
+            need("read_at"); need("(");
             const auto index = index_literal(0, count_ - 1);
             need(")");
             if (!initialized_[index]) reject("read of uninitialized pointer element", offset);
