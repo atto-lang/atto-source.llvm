@@ -25,6 +25,13 @@ done
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 actual_sha=$(git rev-parse --verify HEAD)
+# A receipt from an unrelated or synthetic repo must never claim LLVM source
+# provenance. Do not print or persist credential-bearing remote URLs.
+origin=$(git remote get-url origin 2>/dev/null || true)
+if [[ ! $origin =~ ^(https://([^/?#@]+@)?github[.]com/|git@github[.]com:|ssh://git@github[.]com/)ores-truffle-oreslang/oreslang-source[.]llvm([.]git)?$ ]]; then
+  echo 'FAIL: checkout origin is not the approved LLVM source repository' >&2
+  exit 2
+fi
 if [[ $expected_sha != "$actual_sha" ]]; then
   echo "FAIL: expected HEAD $expected_sha, actual $actual_sha" >&2
   exit 2
@@ -112,6 +119,18 @@ for profile in gcc-release clang-asan-ubsan gcc-tsan; do
     -DCMAKE_C_FLAGS="$flags" -DCMAKE_CXX_FLAGS="$flags" \
     -DCMAKE_EXE_LINKER_FLAGS="$ldflags"
   run_stage "build-$profile" cmake --build "$build" --parallel 2
+  # CTest's suite names alone are not evidence if the host binaries were
+  # replaced by stub commands. Require the four expected native targets.
+  for exe in atto_trusted_pointer_window_host_test \
+             atto_native_region_registry_host_test \
+             atto_native_region_runtime_authority_host_test \
+             atto_native_actor_supervisor_pointer_host_test; do
+    if [[ ! -x "$build/$exe" ]]; then
+      printf '%s\tEXECUTED_FAIL\t%s\n' "required-binary-$profile" "logs/build-$profile.log" >> "$status_file"
+      echo "FAIL: expected native security binary $exe not built for $profile" >&2
+      exit 1
+    fi
+  done
   # CTest's default success for ZERO tests must never certify an empty suite.
   run_stage "enumerate-$profile" ctest --test-dir "$build" -N
   listed="$receipt/logs/enumerate-$profile.log"
