@@ -47,24 +47,25 @@ struct Guard {
     bool generation = false;// slot issuer + generation checked
     bool bounds = false;    // logical row/slot bounds
     bool capacity = false;  // insertion capacity/overflow
+    bool arithmetic = false;// checked i64 receiver computation before commit
 };
 
 inline bool operator==(Guard a, Guard b) noexcept {
     return a.actor == b.actor && a.owner == b.owner &&
            a.generation == b.generation && a.bounds == b.bounds &&
-           a.capacity == b.capacity;
+           a.capacity == b.capacity && a.arithmetic == b.arithmetic;
 }
 
 inline Guard guards_for(Kind kind) {
     switch (kind) {
-        case Kind::Allocate: return {true, false, false, false, false};
-        case Kind::Push: return {true, true, false, false, true};
-        case Kind::CallMoveBy:
+        case Kind::Allocate: return {true, false, false, false, false, false};
+        case Kind::Push: return {true, true, false, false, true, false};
+        case Kind::CallMoveBy: return {true, true, true, true, false, true};
         case Kind::ReadField:
         case Kind::Snapshot:
-        case Kind::EraseSwap: return {true, true, true, true, false};
-        case Kind::ReadSnapshotField: return {true, false, false, false, false};
-        case Kind::Close: return {true, true, false, false, false};
+        case Kind::EraseSwap: return {true, true, true, true, false, false};
+        case Kind::ReadSnapshotField: return {true, false, false, false, false, false};
+        case Kind::Close: return {true, true, false, false, false, false};
         case Kind::Suspend:
         case Kind::ExportHandle: throw std::logic_error(
             "inverted class handle export and suspension are not admitted");
@@ -141,7 +142,8 @@ class VerifiedModule final {
                     break;
                 case Kind::Push:
                     checked_name(op.handle, "local handle");
-                    if (length >= schema.capacity || !issued.insert(op.handle).second)
+                    if (length >= schema.capacity || snapshots.count(op.handle) ||
+                            !issued.insert(op.handle).second)
                         throw std::logic_error("capacity exceeded or handle binding reused");
                     live.insert(op.handle);
                     ++length;
@@ -152,8 +154,9 @@ class VerifiedModule final {
                         throw std::logic_error("invalid mutable inverted class receiver");
                     break;
                 case Kind::ReadField:
-                    if (!live.count(op.handle) ||
-                            (op.field != schema.first_field && op.field != schema.second_field))
+                    if (!live.count(op.handle))
+                        throw std::logic_error("stale inverted class handle used after erase");
+                    if (op.field != schema.first_field && op.field != schema.second_field)
                         throw std::logic_error("invalid inverted class field read");
                     break;
                 case Kind::Snapshot:
