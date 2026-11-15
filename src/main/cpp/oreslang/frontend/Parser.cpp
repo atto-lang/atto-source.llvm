@@ -4333,10 +4333,19 @@ private:
         } depth_guard{expression_depth_};
 
         if (token_.text == "trap") {
-            // Reserved for Option-valued ordinary-error capture. Reject it
-            // before IR generation: accepting a normal value here would erase
-            // the guest failure channel and violate panic/raise precedence.
-            fail("native trap expression unsupported: typed throw effects and cleanup lowering required");
+            const auto offset = token_.offset;
+            advance();
+            auto payload = unary(); // prefix precedence, evaluated once
+            // Only closed, synchronous i64 expressions are admitted. No
+            // source-level ordinary throw is possible in this grammar;
+            // future effects require real exception/cleanup lowering.
+            if (!native_trap_pure_integer(*payload))
+                fail("native trap operand unsupported: only pure integer literals and checked arithmetic are lowered");
+            auto result = make_expression(Expression::Kind::SumConstruct, offset);
+            result->name = "Some";
+            result->trap_origin = true;
+            result->arguments.push_back(std::move(payload));
+            return result;
         }
         if (token_.text == "rt") {
             const auto offset = token_.offset;

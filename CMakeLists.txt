@@ -180,6 +180,30 @@ if(BUILD_TESTING)
     add_test(NAME native_llvm_intrinsic_api_compat
         COMMAND atto-llvm-intrinsic-compat-test)
     set_tests_properties(native_llvm_intrinsic_api_compat PROPERTIES TIMEOUT 15)
+    # Native CUDA CUBIN AOT admission only: host tests with a fake driver,
+    # not evidence of physical-GPU execution or AttoLang guest lowering.
+    add_executable(oreslang-cuda-cubin-aot-test tests/cuda_cubin_aot_test.cpp)
+    target_include_directories(oreslang-cuda-cubin-aot-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-cuda-cubin-aot-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME cuda_cubin_aot_nojit_admission_host_only
+        COMMAND oreslang-cuda-cubin-aot-test)
+    set_tests_properties(cuda_cubin_aot_nojit_admission_host_only
+        PROPERTIES TIMEOUT 20)
+
+    add_executable(oreslang-cuda-cubin-driver-smoke-test
+        tests/cuda_cubin_system_smoke_test.cpp)
+    target_include_directories(oreslang-cuda-cubin-driver-smoke-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-cuda-cubin-driver-smoke-test PRIVATE
+        ${CMAKE_DL_LIBS})
+    target_compile_options(oreslang-cuda-cubin-driver-smoke-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME cuda_cubin_driver_context_gate_host_only
+        COMMAND oreslang-cuda-cubin-driver-smoke-test)
+    set_tests_properties(cuda_cubin_driver_context_gate_host_only
+        PROPERTIES TIMEOUT 20 SKIP_RETURN_CODE 77)
     # SOURCE-FREE LLVM native metadata planner for recursively nested actor
     # pipelines. This is not .atto parsing, LLVM guest execution, actor
     # startup, message transport or supervision parity.
@@ -622,6 +646,37 @@ if(BUILD_TESTING)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/hpc_finance_float_negative_test.cmake")
     set_tests_properties(hpc_finance_source_float_region_fail_closed
         PROPERTIES TIMEOUT 40)
+    # Real compiler gate: currently unsupported native trap/Result effects must
+    # not emit LLVM IR. Do not count rejection as semantic parity.
+    add_test(NAME native_trap_result_option_fail_closed
+        COMMAND "${CMAKE_COMMAND}"
+            "-DORES_TRAP_LLVM_CLI=$<TARGET_FILE:oreslang-llvmc>"
+            "-DORES_TRAP_SHARED_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/trap-three-backend-target.atto"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/trap_option_result_native_source_gate.cmake")
+    set_tests_properties(native_trap_result_option_fail_closed PROPERTIES TIMEOUT 90)
+
+    # Byte-identical shared .atto corpus: admit only the current pure trap
+    # source profile; reject all unlowered ordinary throw/Result/Option cases.
+    # Positive CTest on a compiler is not the same as native runtime parity.
+    add_test(NAME native_caller_trap_canonical_source_gate
+        COMMAND "${CMAKE_COMMAND}"
+            "-DORES_TRAP_LLVM_CLI=$<TARGET_FILE:oreslang-llvmc>"
+            "-DORES_TRAP_CORPUS=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/caller-trap-parity"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/trap_canonical_corpus_source_gate.cmake")
+    set_tests_properties(native_caller_trap_canonical_source_gate PROPERTIES TIMEOUT 150)
+
+    # Native phase-one proof: actual compiler -> audited LLVM IR -> Clang
+    # O0/O2 executable -> real exit 42. Never count this as Result/throw parity.
+    add_test(NAME native_trap_int_aot_guest_O0_O2
+        COMMAND "${CMAKE_COMMAND}"
+            "-DORES_TRAP_LLVM_CLI=$<TARGET_FILE:oreslang-llvmc>"
+            "-DORES_TRAP_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/trap-int-native42.atto"
+            "-DORES_TRAP_AOT_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh"
+            "-DORES_TRAP_AUDITOR=${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit"
+            "-DORES_TRAP_CLANG=clang"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/trap_int_native_aot_execution.cmake")
+    set_tests_properties(native_trap_int_aot_guest_O0_O2 PROPERTIES TIMEOUT 300)
+
 
     # Trusted-host capability admission only; NOT source-level/hostile-native parity.
     find_package(Threads REQUIRED)
@@ -5247,6 +5302,17 @@ if(BUILD_TESTING AND ORE_CLANG)
             DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit-tests")
         add_test(NAME native_no_gc_ir_audit_unit
             COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit-tests")
+        # True native guest execution, not merely source admission or a host
+        # constructor model: compiler IR -> no-GC audit -> Clang O0/O2 -> run.
+        # This remains the restricted nonthrowing Option<int> trap slice.
+        add_test(NAME native_trap_int_guest_aot_o0_o2
+            COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-trap-int-aot.sh"
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}"
+                "${ORE_NO_GC_IR_AUDIT}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/trap-int-native42.atto"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/trap-int-overflow-terminal.atto"
+                "${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh")
+        set_tests_properties(native_trap_int_guest_aot_o0_o2 PROPERTIES TIMEOUT 240)
     else()
         add_test(NAME native_no_gc_ir_audit_unit COMMAND "${CMAKE_COMMAND}" -E false)
     endif()

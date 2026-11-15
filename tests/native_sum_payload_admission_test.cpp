@@ -106,7 +106,48 @@ int main() {
             "fallback type does not match", "Option unwrap_or mismatch");
         require_rejection(fallback("Result<int,String>", Kind::String),
             "fallback type does not match", "Result unwrap_or mismatch");
-        std::cout << "native sum typed payload admission: PASS 17 assertions (host-only)\n";
+        // Real native typed sum resolver: caller-side trap is only a
+        // compiler-proved Some(int), never implicit Result/Option coercion.
+        {
+            auto p = initial("Option<int>", "Some", scalar(Kind::Integer));
+            p.functions.front().locals.front().initializer->trap_origin = true;
+            require_success(std::move(p), "pure int trap admitted into Option<int>");
+        }
+        {
+            auto p = initial("Option<int>", "Some", scalar(Kind::Boolean));
+            p.functions.front().locals.front().initializer->trap_origin = true;
+            require_rejection(std::move(p), "pure i64 expression",
+                "bool is not a proven native trap int payload");
+        }
+        {
+            auto p = initial("Option<String>", "Some", scalar(Kind::String));
+            p.functions.front().locals.front().initializer->trap_origin = true;
+            require_rejection(std::move(p), "pure i64 expression",
+                "string cannot be silently trapped into Option<String>");
+        }
+        {
+            auto p = initial("Result<int,String>", "Some", scalar(Kind::Integer));
+            p.functions.front().locals.front().initializer->trap_origin = true;
+            require_rejection(std::move(p), "exactly Option<int>",
+                "trap never flattens to bare Result");
+        }
+        {
+            auto p = initial("", "Some", scalar(Kind::Integer));
+            p.functions.front().locals.front().initializer->trap_origin = true;
+            require_rejection(std::move(p), "cannot implicitly wrap or erase",
+                "trap cannot inhabit a scalar local");
+        }
+        {
+            auto p = initial("Option<int>", "Some", scalar(Kind::Integer));
+            p.functions.front().locals.front().initializer->trap_origin = true;
+            auto arithmetic = scalar(Kind::Add);
+            arithmetic->left = std::move(p.functions.front().locals.front().initializer);
+            arithmetic->right = scalar(Kind::Integer);
+            p.functions.front().locals.front().initializer = std::move(arithmetic);
+            require_rejection(std::move(p), "not an integer arithmetic operand",
+                "tagged Option cannot silently become i64");
+        }
+        std::cout << "native sum typed payload admission: PASS 23 assertions (host-only)\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "native sum typed payload admission: " << e.what() << '\n';
