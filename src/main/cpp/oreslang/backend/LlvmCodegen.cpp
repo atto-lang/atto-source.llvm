@@ -74,9 +74,14 @@ struct RegionMoveLowering {
 };
 
 llvm::Value* receiver_array_region(const Expression& receiver, const RegionMoveLowering* moves) {
-    if (receiver.kind == Expression::Kind::Field && receiver.left &&
-            moves->class_array_regions)
-        return moves->class_array_regions->at(native_place_key(*receiver.left));
+    if (moves && moves->class_array_regions) {
+        if (receiver.kind == Expression::Kind::Field && receiver.left)
+            return moves->class_array_regions->at(native_place_key(*receiver.left));
+        if (receiver.kind == Expression::Kind::Variable) {
+            auto found = moves->class_array_regions->find(receiver.name);
+            if (found != moves->class_array_regions->end()) return found->second;
+        }
+    }
     return moves->array_region;
 }
 
@@ -386,7 +391,7 @@ llvm::Value* lower_unwidened(const Expression& expr,
                 llvm::Value* handle = builder.CreateLoad(i64,
                     storage.at(expr.left->name), expr.left->name + ".array.handle");
                 return builder.CreateCall(moves->array_length,
-                    {moves->array_region, handle}, expr.left->name + ".size");
+                    {receiver_array_region(*expr.left, moves), handle}, expr.left->name + ".size");
             }
             return builder.CreateLoad(
                 expr.resolved_type == ScalarType::F64 ? builder.getDoubleTy() : i64,
@@ -822,7 +827,11 @@ llvm::Value* lower_unwidened(const Expression& expr,
                 if (!arg.left || (arg.left->kind != Expression::Kind::Variable && arg.left->kind != Expression::Kind::Field) ||
                         (arg.kind != Expression::Kind::Borrow && arg.kind != Expression::Kind::BorrowMut))
                     throw std::runtime_error("collection class argument lacks named borrowed provenance");
-                ordered.push_back(moves->class_array_regions->at(native_place_key(*arg.left)));
+                if (arg.left->kind == Expression::Kind::Variable &&
+                        moves->array_names && moves->array_names->count(arg.left->name))
+                    ordered.push_back(receiver_array_region(*arg.left, moves));
+                else
+                    ordered.push_back(moves->class_array_regions->at(native_place_key(*arg.left)));
             }
             if (owning) {
                 if (!moves->result_destination || !moves->result_region)
@@ -858,6 +867,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         }
     }
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
+    // Hidden native array-region pointers have a host-owned lifetime/allocator
+    // contract. Never silently re-use them in the Wasm or Cortex-M ABIs.
+    if ((wasm32_target || cortex_m_target) &&
+            std::any_of(source.functions.begin(), source.functions.end(),
+                [](const Function& fn) {
+                    return std::any_of(fn.parameters.begin(), fn.parameters.end(),
+                        [](const Parameter& param) { return param.int_array; });
+                }))
+        throw std::runtime_error("native direct Array<f64> borrowing requires host region ABI; target not certified");
     if (wasm_core_f64_entry && !wasm32_target)
         throw std::runtime_error("wasm Core f64 entry requires wasm32 target");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
@@ -1296,7 +1314,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         }
         std::vector<std::size_t> hidden;
         for (std::size_t i = 0; i < fn.parameters.size(); ++i)
-            if (!fn.parameters[i].class_name.empty() && class_has_arrays.at(fn.parameters[i].class_name)) {
+            if (fn.parameters[i].int_array ||
+                    (!fn.parameters[i].class_name.empty() && class_has_arrays.at(fn.parameters[i].class_name))) {
                 hidden.push_back(i);
                 argument_types.push_back(native_ptr);
             }
@@ -1431,6 +1450,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                         static_cast<std::uint64_t>(heap_count))}, "native.owned.region");
         std::unordered_set<std::string> array_names;
         std::unordered_set<std::string> array_field_keys;
+        for (const auto& param : fn.parameters) if (param.int_array) array_names.insert(param.name);
         for (const auto& param : fn.parameters) if (!param.class_name.empty())
             for (const auto& field : record_classes.at(param.class_name)->fields)
                 if (field.int_array) array_field_keys.insert(field_key(param.name, field.name));
