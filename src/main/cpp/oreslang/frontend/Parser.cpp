@@ -837,6 +837,12 @@ public:
                 if (exported) fail("duplicate pub modifier");
                 exported = true;
             }
+            if (token_.text == "macro") {
+                if (exported) fail("NATIVE_MACRO_EXPANDER_REQUIRED: public macro export needs checked module visibility before LLVM IR; runtime fallback is forbidden");
+                advance();
+                macro_declaration();
+                continue;
+            }
             if (token_.text == "singleton")
                 fail("ORES-SINGLETON-UNSUPPORTED: native singleton declarations require exactly-once complete publication, cycle/failure semantics, runtime-derived actor authority for shared state, and five-backend guest execution parity");
             // Java M0 admits compiler-only durable declarations. LLVM has no
@@ -982,6 +988,10 @@ public:
                     if (public_class) fail("duplicate pub modifier");
                     public_class = true;
                 }
+                if (token_.text == "macro") {
+                    fail("NATIVE_MACRO_EXPANDER_REQUIRED: define macro is compile-time-only; "
+                         "native expansion must complete before LLVM IR and runtime fallback is forbidden");
+                }
                 if (token_.text == "singleton")
                     fail("ORES-SINGLETON-UNSUPPORTED: native singleton declarations require exactly-once complete publication, cycle/failure semantics, runtime-derived actor authority for shared state, and five-backend guest execution parity");
                 // Java M0 admits compiler-only durable declarations. LLVM has no
@@ -1028,6 +1038,9 @@ public:
                 } else fail("expected 'class', 'actor', or built-in MaxActorThreads enum");
             } else if (token_.text == "suspend") {
                 program.cooperative_loops.push_back(cooperative_scalar_loop());
+            } else if (macro_invocation_ahead()) {
+                fail("NATIVE_MACRO_EXPANDER_REQUIRED: macro invocation is compile-time syntax; "
+                     "native expansion must complete before LLVM IR and runtime fallback is forbidden");
             } else {
                 program.functions.push_back(function());
             }
@@ -1498,6 +1511,142 @@ private:
     Token peek_next() const {
         Lexer next_lexer = lexer_;
         return next_lexer.next();
+    }
+
+    enum class MacroKind { ConstIntQuote, SyntaxExprIdentity };
+    static constexpr std::size_t kMaxNativeMacroDefinitions = 8;
+    static constexpr std::size_t kMaxNativeMacroExpansions = 128;
+
+    void require_macro(std::string_view token) {
+        if (!accept(token))
+            fail("NATIVE_MACRO_EXPANDER_REQUIRED: unsupported macro signature/body or invocation; expected '" +
+                 std::string(token) + "'; runtime fallback is forbidden");
+    }
+
+    // Only two syntactically closed typed AST forms may cross this boundary.
+    // Macro bodies are checked at declaration even when never invoked.
+    void macro_declaration() {
+        if (macros_.size() >= kMaxNativeMacroDefinitions)
+            fail("NATIVE_MACRO_BUDGET: declaration budget exceeded; runtime fallback is forbidden");
+        const std::string name = identifier();
+        if (name == "quote" || name == "unquote" || name == "eval" ||
+                !macros_.emplace(name, MacroKind::ConstIntQuote).second)
+            fail("NATIVE_MACRO_EXPANDER_REQUIRED: reserved or duplicate macro declaration; runtime fallback is forbidden");
+        require_macro("(");
+        MacroKind kind;
+        if (accept("Const")) {
+            require_macro("<"); require_macro("int"); require_macro(">");
+            kind = MacroKind::ConstIntQuote;
+        } else if (accept("Syntax")) {
+            require_macro("<"); require_macro("Expr"); require_macro(">");
+            kind = MacroKind::SyntaxExprIdentity;
+        } else {
+            fail("NATIVE_MACRO_EXPANDER_REQUIRED: only Const<int> or Syntax<Expr> accepted before LLVM IR; runtime fallback is forbidden");
+        }
+        const std::string parameter = identifier();
+        if (parameter == "quote" || parameter == "unquote" || parameter == "eval")
+            fail("NATIVE_MACRO_EXPANDER_REQUIRED: reserved macro parameter; runtime fallback is forbidden");
+        require_macro(")"); require_macro("->");
+        require_macro("Syntax"); require_macro("<"); require_macro("Expr"); require_macro(">");
+        require_macro("{"); require_macro("return");
+        if (kind == MacroKind::ConstIntQuote) {
+            require_macro("quote"); require_macro("(");
+            if (identifier() != parameter)
+                fail("NATIVE_MACRO_EXPANDER_REQUIRED: Const<int> quote must use exact parameter; runtime fallback is forbidden");
+            require_macro(")");
+        } else if (identifier() != parameter) {
+            fail("NATIVE_MACRO_EXPANDER_REQUIRED: Syntax<Expr> identity must use exact parameter; runtime fallback is forbidden");
+        }
+        require_macro(";"); require_macro("}");
+        macros_.at(name) = kind;
+    }
+
+    // Constant evaluation visits the already parsed expression AST, never
+    // interpolates source text and never executes any host/guest call.
+    std::int64_t macro_const_int(const Expression& value, std::size_t depth = 0,
+                                 std::size_t* visited = nullptr) {
+        std::size_t initial = 0;
+        if (!visited) visited = &initial;
+        if (++*visited > 512)
+            fail("NATIVE_MACRO_BUDGET: constant AST node limit exceeded (512); runtime fallback is forbidden");
+        if (depth > 64)
+            fail("NATIVE_MACRO_BUDGET: constant expression nesting exceeds 64; runtime fallback is forbidden");
+        using K = Expression::Kind;
+        if (value.kind == K::Integer) return value.integer;
+        std::int64_t a = 0, b = 0, out = 0;
+        if (value.kind == K::Negate && value.left) {
+            a = macro_const_int(*value.left, depth + 1, visited);
+            if (__builtin_sub_overflow(std::int64_t{0}, a, &out))
+                fail("NATIVE_MACRO_CONST_OVERFLOW: checked compile-time i64 overflow; runtime fallback is forbidden");
+            return out;
+        }
+        if ((value.kind == K::Add || value.kind == K::Subtract ||
+                value.kind == K::Multiply) && value.left && value.right) {
+            a = macro_const_int(*value.left, depth + 1, visited);
+            b = macro_const_int(*value.right, depth + 1, visited);
+            bool overflow = value.kind == K::Add
+                    ? __builtin_add_overflow(a, b, &out)
+                    : value.kind == K::Subtract
+                    ? __builtin_sub_overflow(a, b, &out)
+                    : __builtin_mul_overflow(a, b, &out);
+            if (overflow)
+                fail("NATIVE_MACRO_CONST_OVERFLOW: checked compile-time i64 overflow; runtime fallback is forbidden");
+            return out;
+        }
+        fail("NATIVE_MACRO_CONST_UNCLOSED: Const<int> needs a closed literal AST; runtime fallback is forbidden");
+    }
+
+    std::unique_ptr<Expression> macro_expression(const std::string& name,
+                                                  std::size_t offset) {
+        const auto it = macros_.find(name);
+        if (it == macros_.end())
+            fail("NATIVE_MACRO_EXPANDER_REQUIRED: undeclared macro invocation before LLVM IR; runtime fallback is forbidden");
+        if (++macro_expansions_ > kMaxNativeMacroExpansions)
+            fail("NATIVE_MACRO_BUDGET: expansion count exceeded; runtime fallback is forbidden");
+        require_macro("!");
+        require_macro("(");
+        const MacroKind kind = it->second;
+        if (kind == MacroKind::ConstIntQuote) {
+            require_macro("const");
+            // Ordinary expressions stop at parser depth 64. A const-input
+            // expression must admit *64 AST edges* as well as its enclosing
+            // macro syntax, so allow a small, bounded parser margin here.
+            // The const evaluator still enforces depth 64 / 512 visits.
+            struct MacroConstParseScope {
+                std::size_t& depth;
+                explicit MacroConstParseScope(std::size_t& value) : depth(value) { ++depth; }
+                ~MacroConstParseScope() { --depth; }
+            };
+            std::unique_ptr<Expression> argument;
+            {
+                MacroConstParseScope scope(macro_const_parse_depth_);
+                argument = expression();
+            }
+            require_macro(")");
+            const std::int64_t constant = macro_const_int(*argument);
+            auto result = make_expression(Expression::Kind::Integer, offset);
+            result->integer = constant;
+            return result;
+        }
+        require_macro("syntax"); require_macro("expr");
+        auto argument = expression();
+        require_macro(")");
+        // Single-use forwarding preserves the caller's AST and ownership
+        // semantics; no new identifier, duplicate, capture, or runtime JIT.
+        return argument;
+    }
+
+    bool macro_invocation_ahead() const {
+        if (token_.kind != Kind::Identifier) return false;
+        Lexer probe = lexer_;
+        Token next = probe.next();
+        std::size_t qualifiers = 0;
+        while (next.text == "." && qualifiers++ < 32) {
+            const Token member = probe.next();
+            if (member.kind != Kind::Identifier) return false;
+            next = probe.next();
+        }
+        return next.text == "!";
     }
 
     void built_in_actor_threads_enum() {
@@ -3734,9 +3883,12 @@ private:
     }
 
     std::unique_ptr<Expression> conditional() {
-        if (++conditional_depth_ > kMaxNativeExpressionDepth) {
+        const std::size_t parser_limit = macro_const_parse_depth_ != 0
+                ? kMaxNativeExpressionDepth + 16 : kMaxNativeExpressionDepth;
+        if (++conditional_depth_ > parser_limit) {
             --conditional_depth_;
-            fail("native conditional expression nesting limit exceeded (64)");
+            fail("native conditional expression nesting limit exceeded ("
+                 + std::to_string(parser_limit) + ")");
         }
         struct ConditionalDepthGuard {
             std::size_t& depth;
@@ -3897,9 +4049,12 @@ private:
     }
 
     std::unique_ptr<Expression> unary() {
-        if (++expression_depth_ > kMaxNativeExpressionDepth) {
+        const std::size_t parser_limit = macro_const_parse_depth_ != 0
+                ? kMaxNativeExpressionDepth + 16 : kMaxNativeExpressionDepth;
+        if (++expression_depth_ > parser_limit) {
             --expression_depth_;
-            fail("native expression nesting limit exceeded (64)");
+            fail("native expression nesting limit exceeded ("
+                 + std::to_string(parser_limit) + ")");
         }
         struct DepthGuard {
             std::size_t& depth;
@@ -4411,6 +4566,7 @@ private:
         else if (sum_variant(token_.text)) { expr->name = token_.text; advance(); }
         else expr->name = identifier();
         if (module_names_.count(expr->name) && accept(".")) expr->name += "." + identifier();
+        if (token_.text == "!") return macro_expression(expr->name, offset);
         if (generic_call_type_arguments_ahead()) {
             require("<");
             expr->type_arguments_present = true;
@@ -4512,6 +4668,10 @@ private:
                 }
             }
             expr = std::move(field);
+            if (token_.text == "!") {
+                fail("NATIVE_MACRO_EXPANDER_REQUIRED: macro invocation is compile-time syntax; "
+                     "native expansion must complete before LLVM IR and runtime fallback is forbidden");
+            }
         }
         return expr;
     }
@@ -6482,6 +6642,8 @@ private:
     Lexer lexer_;
     Token token_;
     std::unordered_set<std::string> module_names_;
+    std::unordered_map<std::string, MacroKind> macros_;
+    std::size_t macro_expansions_ = 0;
     std::unordered_set<std::string> function_import_names_;
     std::string method_scope_;
     std::unordered_set<std::string> class_receivers_;
@@ -6505,6 +6667,7 @@ private:
     std::string extension_method_name_;
     std::size_t extension_offset_ = 0;
     bool actor_threads_enum_seen_ = false;
+    std::size_t macro_const_parse_depth_ = 0;
     std::size_t expression_depth_ = 0;
     std::size_t conditional_depth_ = 0;
 };

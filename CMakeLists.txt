@@ -5753,6 +5753,111 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 20)
 endif()
 
+# Compile the production native parser against explicit v1 macro syntax.
+# Until native expansion exists, every macro declaration/invocation must fail
+# before LLVM IR with the dedicated no-runtime-fallback diagnostic.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-macro-aot-admission-test
+        tests/native_macro_aot_admission_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp
+        src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-native-macro-aot-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_include_directories(oreslang-native-macro-aot-admission-test SYSTEM PRIVATE
+        ${LLVM_INCLUDE_DIRS})
+    target_link_libraries(oreslang-native-macro-aot-admission-test PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_features(oreslang-native-macro-aot-admission-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-macro-aot-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_macro_aot_admission_no_runtime_fallback
+        COMMAND oreslang-native-macro-aot-admission-test)
+    set_tests_properties(native_macro_aot_admission_no_runtime_fallback
+        PROPERTIES TIMEOUT 20)
+
+    # Exercise the actual compiler executable without adding a Python test
+    # dependency. Rejection must exit 1, carry the dedicated diagnostic, and
+    # emit no stdout/partial LLVM IR.
+    foreach(macro_fixture IN ITEMS
+            native-macro-declaration-reject.ores
+            native-macro-invocation-reject.ores)
+        string(REPLACE ".ores" "" macro_case "${macro_fixture}")
+        add_test(NAME "native_${macro_case}_no_ir"
+            COMMAND "${CMAKE_COMMAND}"
+                "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/${macro_fixture}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_macro_reject.cmake")
+        set_tests_properties("native_${macro_case}_no_ir"
+            PROPERTIES TIMEOUT 25)
+    endforeach()
+endif()
+
+# Canonical shared stage-0 .atto negative vectors from common-source #218.
+# These are compiled by the actual production LLVM binary. No source text
+# interpreter, stub, or synthetic return-42 IR may substitute for compiler output.
+if(BUILD_TESTING)
+    foreach(macro_case IN ITEMS
+            overflow-reject wrong-kind-reject dynamic-const-reject unresolved-reject)
+        if(macro_case STREQUAL "overflow-reject")
+            set(macro_diagnostic "NATIVE_MACRO_CONST_OVERFLOW")
+        elseif(macro_case STREQUAL "dynamic-const-reject")
+            # Const<int> cannot read an unresolved runtime variable. Demand
+            # a dedicated compiler-only diagnostic, not an unrelated parse
+            # failure that might accidentally make a negative test pass.
+            set(macro_diagnostic "NATIVE_MACRO_CONST_UNCLOSED")
+        else()
+            set(macro_diagnostic "NATIVE_MACRO_EXPANDER_REQUIRED")
+        endif()
+        add_test(NAME "native_macro_shared_${macro_case}_no_ir"
+            COMMAND "${CMAKE_COMMAND}"
+                "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-macro-scalar-v1/${macro_case}.atto"
+                "-DDIAGNOSTIC=${macro_diagnostic}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_macro_reject.cmake")
+        set_tests_properties("native_macro_shared_${macro_case}_no_ir"
+            PROPERTIES TIMEOUT 25)
+    endforeach()
+endif()
+
+# Real guest-native LLVM proof for the two bounded typed macro AST cases.
+# This invokes the production compiler, then links emitted IR into a host
+# executable using clang; an IR printout alone is not guest execution.
+if(BUILD_TESTING)
+    find_program(ORE_NATIVE_MACRO_CLANG_EXECUTABLE NAMES clang)
+    if(ORE_NATIVE_MACRO_CLANG_EXECUTABLE)
+        foreach(macro_case IN ITEMS const identity)
+            set(macro_fixture
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-macro-${macro_case}-aot.ores")
+            add_test(NAME "native_macro_${macro_case}_linked_guest_aot_42"
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                    "-DFIXTURE=${macro_fixture}"
+                    "-DCLANG=${ORE_NATIVE_MACRO_CLANG_EXECUTABLE}"
+                    "-DSTAGING=${CMAKE_CURRENT_BINARY_DIR}/macro-aot-${macro_case}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_macro_guest_aot.cmake")
+            set_tests_properties("native_macro_${macro_case}_linked_guest_aot_42"
+                PROPERTIES TIMEOUT 90)
+        endforeach()
+
+        # In addition to legacy .ores, run the three exact shared .atto
+        # compiler-plus-Clang guest vectors. All must return native i64 42.
+        foreach(macro_case IN ITEMS literal-42 identity-42 nested-42)
+            set(macro_fixture
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-macro-scalar-v1/${macro_case}.atto")
+            add_test(NAME "native_macro_shared_${macro_case}_linked_guest_aot_42"
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                    "-DFIXTURE=${macro_fixture}"
+                    "-DCLANG=${ORE_NATIVE_MACRO_CLANG_EXECUTABLE}"
+                    "-DSTAGING=${CMAKE_CURRENT_BINARY_DIR}/macro-aot-shared-${macro_case}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_macro_guest_aot.cmake")
+            set_tests_properties("native_macro_shared_${macro_case}_linked_guest_aot_42"
+                PROPERTIES TIMEOUT 90)
+        endforeach()
+    endif()
+endif()
+
 # Compiler-owned singleton admission must remain contextual and fail closed
 # until the shared v1 semantics and lowering are implemented.
 if(BUILD_TESTING)
