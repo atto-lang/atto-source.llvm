@@ -1248,7 +1248,8 @@ if(BUILD_TESTING)
     add_test(NAME native_tensor_span_source_aot
         COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify-tensor-span-source.sh"
             "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
-    set_tests_properties(native_tensor_span_source_aot PROPERTIES TIMEOUT 120)
+    set_tests_properties(native_tensor_span_source_aot PROPERTIES TIMEOUT 120
+        ENVIRONMENT "ORES_NO_GC_IR_AUDIT=${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit")
     # Pinned portable scalar corpus (shared with java/net) and the five-case
     # zero-assert guest set: source -> LLVM IR -> Clang -> OS exit status,
     # plus fail-closed rejection of removed/forbidden source operators.
