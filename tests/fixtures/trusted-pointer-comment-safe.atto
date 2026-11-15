@@ -1,0 +1,5 @@
+/* unsafe NativePointer<int> Pointer<int> RawPointer<int> */
+pub fnc main(): int {
+    // The keywords in comments cannot obtain a native grant.
+    return 42;
+}
