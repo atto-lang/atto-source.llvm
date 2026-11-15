@@ -1,0 +1,37 @@
+// Native AOT actor one_for_one recovery with unchanged bounded quotas.
+// Actor A admits one frame per incarnation. The second DATA turn exhausts
+// that incarnation's cumulative frame admission budget, causing PANIC.
+// Its root supervisor authorizes one fresh A2 under the exact same quota.
+// A2 processes 9; sibling B remains live, handles 42 independently.
+@ActorLifetimeFrameBudget(1)
+@ActorRestartLimit(1)
+define actor RecoverableActor as {
+  let count: int = 0;
+  pub fnc on_message(int n): int {
+    count = count + n;
+    return count;
+  }
+}
+define actor SiblingActor as {
+  let count: int = 0;
+  pub fnc on_message(int n): int {
+    count = count + n;
+    return count;
+  }
+}
+pub fnc main(): int {
+  const a: ActorRef<RecoverableActor> = spawn RecoverableActor();
+  const b: ActorRef<SiblingActor> = spawn SiblingActor();
+  a.send(7);
+  a.flush_blocking();
+  a.send(8);
+  a.flush_blocking();
+  a.recover_blocking();
+  a.send(9);
+  a.flush_blocking();
+  b.send(42);
+  b.flush_blocking();
+  stop a;
+  stop b;
+  return 42;
+}
