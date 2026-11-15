@@ -2075,6 +2075,15 @@ private:
                     parameter.scalar_type = ScalarType::Bool;
                 } else if (accept("string") || accept("String")) {
                     parameter.scalar_type = ScalarType::String;
+                } else if (accept("Array")) {
+                    if (parameter.mode == Parameter::Mode::Value)
+                        fail("native Array<f64> parameters must explicitly borrow; by-value array transfer unsupported");
+                    require("<");
+                    if (!accept_f64_type())
+                        fail("native direct array borrow supports only Array<float>/Array<f64>");
+                    require(">");
+                    parameter.int_array = true;
+                    parameter.array_element_type = ScalarType::F64;
                 } else if (accept_f64_type()) {
                     if (parameter.mode != Parameter::Mode::Value)
                         fail("native f64 parameter must be passed by value, not borrow");
@@ -2189,8 +2198,11 @@ private:
         }
         require("{");
         auto array_effect_ahead = [&] {
-            return peek_next().text == "." && std::any_of(value.locals.begin(), value.locals.end(),
-                [&](const LocalBinding& local) { return local.int_array && local.name == token_.text; });
+            return peek_next().text == "." &&
+                (std::any_of(value.locals.begin(), value.locals.end(),
+                    [&](const LocalBinding& local) { return local.int_array && local.name == token_.text; }) ||
+                 std::any_of(value.parameters.begin(), value.parameters.end(),
+                    [&](const Parameter& param) { return param.int_array && param.name == token_.text; }));
         };
         auto source_task_local = [&]() {
             if (!(token_.text == "let" && peek_next().text == "Task"))
@@ -5229,7 +5241,8 @@ private:
             // or wasm32 Core scalar entry ABI after source resolution.
             const bool has_f64_function_abi = fn.return_type == ScalarType::F64 ||
                 std::any_of(fn.parameters.begin(), fn.parameters.end(),
-                    [](const Parameter& p) { return p.scalar_type == ScalarType::F64; });
+                    [](const Parameter& p) { return p.scalar_type == ScalarType::F64 ||
+                        (p.int_array && p.array_element_type == ScalarType::F64); });
             if (has_f64_function_abi) {
                 // Doubles travel in LLVM double formals, which the generic i64
                 // slot, actor message and continuation ABIs cannot represent.
@@ -5253,7 +5266,7 @@ private:
                 signature.parameter_generic_types.push_back(param.generic_type);
                 signature.parameter_scalar_types.push_back(param.scalar_type);
                 signature.parameter_is_scalar.push_back(
-                    param.class_name.empty() && param.generic_type.empty() && param.sum_type.empty());
+                    !param.int_array && param.class_name.empty() && param.generic_type.empty() && param.sum_type.empty());
             }
             signature.return_type = fn.return_type;
             signature.returns_void = fn.returns_void;
@@ -5773,8 +5786,11 @@ private:
             };
             for (const auto& parameter : fn.parameters) class_scalars(parameter.name, parameter.class_name);
             for (const auto& binding : fn.locals) class_scalars(binding.name, binding.class_name);
-            for (const auto& param : fn.parameters)
+            for (const auto& param : fn.parameters) {
                 scalar_types.emplace(param.name, param.scalar_type);
+                if (param.int_array)
+                    scalar_types.emplace(param.name + ".$element", param.array_element_type);
+            }
 
             auto require_scalar = [&](const Expression& expr, ScalarType expected,
                                       const char* where, const TypeMap& env) {
