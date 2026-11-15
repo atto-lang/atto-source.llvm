@@ -144,6 +144,9 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
         case Expression::Kind::String:
             add_effect(facts, FunctionEffect::Alloc);
             break;
+        case Expression::Kind::ToText:
+            add_effect(facts, FunctionEffect::Alloc);
+            break;
         case Expression::Kind::Console:
             add_effect(facts, FunctionEffect::Io);
             break;
@@ -204,6 +207,8 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
         case Expression::Kind::GreaterEqual:
         case Expression::Kind::LogicalAnd:
         case Expression::Kind::LogicalOr:
+        case Expression::Kind::Floating:
+        case Expression::Kind::Divide:
         case Expression::Kind::LogicalXor:
         case Expression::Kind::Conditional:
             // These scalar operators are not explicit ownership transfers.

@@ -104,6 +104,7 @@ void resolve_native_methods(Program& program) {
             if (stmt.branch_local) {
                 expression(stmt.branch_local->initializer.get());
                 if (!stmt.branch_local->class_name.empty()) owners.emplace(stmt.branch_local->name, stmt.branch_local->class_name);
+                if (stmt.branch_local->int_array) arrays.insert_or_assign(stmt.branch_local->name, stmt.branch_local.get());
             }
             const auto saved = owners;
             for (auto& arm : stmt.then_statements) statement(arm);

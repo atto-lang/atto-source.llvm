@@ -325,15 +325,19 @@ private:
                 fail(current, "native imported module binding conflicts with containing module");
             const auto& target = *units[selected];
             if (imported.selected_function) {
-                const auto found = target.functions.find(imported.selected_module);
-                bool exported = false;
-                if (found != target.functions.end())
-                    for (const auto& arity : found->second) exported = exported || arity.second;
+                // Java selects public free functions directly, whether or not
+                // the target file wraps them in a module declaration.
+                const auto family = target.functions.find(imported.selected_module);
+                const bool exported = family != target.functions.end() &&
+                    std::any_of(family->second.begin(), family->second.end(),
+                        [](const auto& slot) { return slot.second; });
                 if (!exported)
                     fail(current, "unknown or private imported function '" + imported.selected_module + "'");
                 if (current.functions.count(imported.local_name))
                     fail(current, "imported function conflicts with local function '" + imported.local_name + "'");
-                current.function_imports.emplace(imported.local_name, std::make_pair(selected, imported.selected_module));
+                if (!current.function_imports.emplace(imported.local_name,
+                        std::make_pair(selected, imported.selected_module)).second)
+                    fail(current, "duplicate imported function binding '" + imported.local_name + "'");
                 continue;
             }
             if (imported.selected_class) {
@@ -382,7 +386,9 @@ private:
         } else if (!unit.functions.count(member)) {
             const auto imported = unit.function_imports.find(member);
             if (imported != unit.function_imports.end()) {
-                target = units[imported->second.first].get(); member = imported->second.second; external = true;
+                target = units[imported->second.first].get();
+                member = imported->second.second;
+                external = true;
             }
         }
         const auto function = target->functions.find(member);
@@ -433,6 +439,8 @@ private:
     }
     void qualify_function(const Unit& unit, Function& fn) {
         binding_name(unit, fn.name);
+        if (unit.function_imports.count(fn.name))
+            fail(unit, "native imported function binding cannot be redefined: '" + fn.name + "'");
         if (!fn.return_class.empty()) fn.return_class = class_type(unit, fn.return_class);
         if (!fn.method_owner.empty()) fn.method_owner = class_type(unit, fn.method_owner);
         for (auto& parameter : fn.parameters) {
