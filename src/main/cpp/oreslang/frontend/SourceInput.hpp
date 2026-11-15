@@ -198,10 +198,18 @@ inline std::string read_regular_source(
 
 // Reject malformed Unicode (overlong encodings, surrogates, truncated input and
 // code points above U+10FFFF) and binary NUL before native parser admission.
+// Keep the original diagnostic category but identify the offending byte.
+// Never echo untrusted source bytes into compiler diagnostics.
+inline std::runtime_error ores_invalid_source_byte(
+    const char* category, std::size_t offset) {
+    return std::runtime_error(std::string(category) + " at byte offset " +
+                              std::to_string(offset));
+}
+
 inline void require_valid_source_utf8(std::string_view source) {
     for (std::size_t i = 0; i < source.size();) {
         const auto lead = static_cast<unsigned char>(source[i]);
-        if (lead == 0) throw std::runtime_error("native source contains NUL byte");
+        if (lead == 0) throw ores_invalid_source_byte("native source contains NUL byte", i);
         if (lead <= 0x7f) { ++i; continue; }
 
         std::size_t continuation_count = 0;
@@ -218,16 +226,16 @@ inline void require_valid_source_utf8(std::string_view source) {
             if (lead == 0xf0) min_first = 0x90;
             if (lead == 0xf4) max_first = 0x8f;
         } else {
-            throw std::runtime_error("native source is not valid UTF-8");
+            throw ores_invalid_source_byte("native source is not valid UTF-8", i);
         }
         if (source.size() - i <= continuation_count) {
-            throw std::runtime_error("native source is not valid UTF-8");
+            throw ores_invalid_source_byte("native source is not valid UTF-8", i);
         }
         for (std::size_t j = 1; j <= continuation_count; ++j) {
             const auto byte = static_cast<unsigned char>(source[i + j]);
             if (byte < (j == 1 ? min_first : 0x80) ||
                 byte > (j == 1 ? max_first : 0xbf)) {
-                throw std::runtime_error("native source is not valid UTF-8");
+                throw ores_invalid_source_byte("native source is not valid UTF-8", i + j);
             }
         }
         i += continuation_count + 1;
