@@ -7,7 +7,9 @@ using namespace oreslang;
 #define CHECK(x) do { if (!(x)) { std::fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#x); return false; } } while (0)
 
 static std::unique_ptr<Expression> expr(Expression::Kind kind) {
-    return std::make_unique<Expression>(Expression{kind});
+    auto e = std::make_unique<Expression>();
+    e->kind = kind;
+    return e;
 }
 static std::unique_ptr<Expression> variable(const std::string& name) {
     auto e=expr(Expression::Kind::Variable); e->name=name; return e;
