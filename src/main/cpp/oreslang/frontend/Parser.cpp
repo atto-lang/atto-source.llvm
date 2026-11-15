@@ -2478,29 +2478,83 @@ private:
             // Never accept an uncertified realtime property as a mere annotation.
             fail("native requires clause awaits verified WCET/allocation/blocking analysis");
         }
-        // End-delimited class methods use the same Function / hidden-receiver
-        // representation as braced methods. Until general structured-body
-        // lowering is shared, permit only an empty/return-only void body or
-        // one scalar terminal return; reject every other statement.
-        // This is not an alternate arity or method ABI.
+        // Arrow/:: is an expression-sequence body, not an alternate ABI.
+        // Represent intermediate expressions in compiler-owned ANF locals and
+        // the terminal expression in the existing checked Function.result.
+        // This subset supports fnc, routine, class methods and extensions;
+        // unsupported complex local types still fail closed.
         if (token_.text == "::") {
-            if (owner.empty()) fail("native '::' body requires a class method");
             if (!arrow_return_type)
-                fail("native '::' method requires '->' return syntax");
+                fail("native '::' body requires '->' return syntax");
             require("::");
-            if (value.returns_void) {
+            bool terminal = false;
+            while (token_.text != "end") {
+                if (token_.kind == Kind::End)
+                    fail("unterminated native comma expression body");
+                if (token_.text == ",")
+                    fail("native comma expression body contains an empty item");
                 if (accept("return")) {
-                    if (!accept(";") && token_.text != "end")
-                        fail("native end-delimited void method requires terminal return");
+                    if (value.returns_void) {
+                        if (token_.text != "end") require(";");
+                    } else {
+                        value.result = expression();
+                        accept(";");
+                    }
+                    terminal = true;
+                } else {
+                    bool local = token_.text == "int" || token_.text == "bool"
+                        || token_.text == "string" || token_.text == "String"
+                        || token_.text == "const" || token_.text == "val"
+                        || token_.text == "let";
+                    if (local) {
+                        LocalBinding binding;
+                        binding.offset = token_.offset;
+                        if (token_.text == "const" || token_.text == "val" || token_.text == "let") {
+                            const std::string mode(token_.text);
+                            advance();
+                            binding.owner_mutable = mode != "const";
+                            binding.assignable = mode == "let";
+                        }
+                        if (accept("int")) binding.scalar_type = ScalarType::I64;
+                        else if (accept("bool")) binding.scalar_type = ScalarType::Bool;
+                        else if (accept("string") || accept("String"))
+                            binding.scalar_type = ScalarType::String;
+                        else fail("native comma body local requires checked scalar type");
+                        binding.name = identifier();
+                        require("=");
+                        binding.initializer = expression();
+                        value.locals.push_back(std::move(binding));
+                        if (!accept(","))
+                            fail("native comma body local must be followed by ',' and an expression");
+                        if (token_.text == "," || token_.text == "end")
+                            fail("native comma expression body requires item after ','");
+                        continue;
+                    }
+                    auto evaluated = expression();
+                    if (accept(",")) {
+                        if (token_.text == "," || token_.text == "end")
+                            fail("native comma expression body requires item after ','");
+                        LocalBinding discarded;
+                        discarded.name = "$effect" + std::to_string(value.locals.size());
+                        discarded.initializer = std::move(evaluated);
+                        value.locals.push_back(std::move(discarded));
+                        continue;
+                    }
+                    if (value.returns_void) {
+                        LocalBinding discarded;
+                        discarded.name = "$effect" + std::to_string(value.locals.size());
+                        discarded.initializer = std::move(evaluated);
+                        value.locals.push_back(std::move(discarded));
+                    } else {
+                        value.result = std::move(evaluated);
+                    }
+                    terminal = true;
                 }
-            } else {
-                require("return");
-                value.result = expression();
-                if (!accept(";") && token_.text != "end")
-                    fail("native end-delimited method requires terminal return");
+                if (token_.text != "end")
+                    fail("native comma expression body requires a single terminal result");
             }
-            if (token_.text != "end")
-                fail("native end-delimited method supports only one terminal return");
+            if (!value.returns_void && !terminal)
+                fail("native non-void comma expression body requires a result");
             require("end");
             return value;
         }
@@ -4349,6 +4403,19 @@ private:
 
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
+
+        // FAT_ARROW annotates the inline lambda's result type, but native
+        // closure frames and typed capture ownership are not lowered yet.
+        // Fail specifically here rather than allowing a logical-or token to
+        // masquerade as a value at the beginning of an expression.
+        if (token_.text == "||") {
+            // The native lexer deliberately does not yet combine => into
+            // a single token; matching it as a lookahead symbol would miss
+            // every typed inline lambda. A leading || cannot be a valid
+            // binary logical-or expression, so reject it unconditionally.
+            fail("NATIVE_LAMBDA_CLOSURE_UNSUPPORTED: => Type -> lambda requires "
+                 "native closure and ownership lowering");
+        }
 
         // nb is a nonblocking channel/select modifier. It is never permission
         // for suspension inside an otherwise synchronous match/switch.
