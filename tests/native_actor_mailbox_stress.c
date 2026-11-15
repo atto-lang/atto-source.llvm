@@ -84,9 +84,19 @@ int main(void) {
     for (int t = 0; t < PRODUCERS; ++t) {
         assert(pthread_join(threads[t], NULL) == 0);
     }
+    /* The bounded native profile admits 32 actors, never a 33rd. */
+    int32_t extra_handles[32 - ACTORS];
+    for (int i = ACTORS; i < 32; ++i) {
+        extra_handles[i - ACTORS] = atto_actor_spawn(i % ACTORS);
+        assert(extra_handles[i - ACTORS] > 0);
+    }
+    assert(atto_actor_spawn(0) == 0);
     /* Close admission and drain all accepted messages before destroying
      * any actor-private arena or stack. No fake sleeps for completion. */
     atto_actor_finish();
+    for (int i = 0; i < 32 - ACTORS; ++i) {
+        assert(atto_actor_send(extra_handles[i], 1) == -1);
+    }
     for (int t = 0; t < ACTORS; ++t) {
         int got = atomic_load(&counters[t]);
         if (got != (PRODUCERS * PER_PRODUCER / ACTORS)) {
