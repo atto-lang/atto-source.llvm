@@ -25,6 +25,15 @@ case "$lto_mode" in
 esac
 source_dir="$(cd "$(dirname "$1")" && pwd -P)"
 source_file="$source_dir/$(basename "$1")"
+# Optional fail-closed scalar-only closed-world check; legacy AOT behavior
+# remains unchanged unless explicitly requested by the caller.
+aot_admission="${ORESLANG_LLVM_AOT_PROFILE:-off}"
+compiler_aot_args=()
+case "$aot_admission" in
+  off) ;;
+  sealed-scalar-v1) compiler_aot_args=(--aot-profile=sealed-scalar-v1) ;;
+  *) echo 'ORESLANG_LLVM_AOT_PROFILE must be off or sealed-scalar-v1.' >&2; exit 64 ;;
+esac
 output_dir="$(cd "$(dirname "$2")" && pwd -P)"
 output_file="$output_dir/$(basename "$2")"
 [[ ! -d "$output_file" ]] || { echo 'Output must be a file, not a directory.' >&2; exit 64; }
@@ -74,7 +83,7 @@ ORES_LTO_MAIN
     exit 69
   fi
 fi
-"$compiler" --target=host "$source_file" > "$work/program.ll"
+"$compiler" "${compiler_aot_args[@]}" --target=host "$source_file" > "$work/program.ll"
 # Known tracing-GC IR screen; not a complete linked-image/FFI collector proof.
 "$auditor" "$work/program.ll" >/dev/null
 runtime_sources=()

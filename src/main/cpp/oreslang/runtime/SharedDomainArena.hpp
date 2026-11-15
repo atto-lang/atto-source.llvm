@@ -1,5 +1,7 @@
 #pragma once
 // Trusted host substrate; guest never receives native pointers or these C++ tokens.
+// Grants bind both actor identity and incarnation: numeric actor ID reuse never
+// transfers shared-region authority to a replacement actor.
 // SHARED actors keep their own ActorArena; this is an explicitly shared region.
 #include <array>
 #include <atomic>
@@ -27,9 +29,11 @@ public:
         std::shared_lock<std::shared_mutex> read_;
         std::unique_lock<std::shared_mutex> write_;
         bool exclusive_;
-        Lease(SharedDomainArena& arena, std::uint64_t actor, Grant grant, bool exclusive)
+        Lease(SharedDomainArena& arena, std::uint64_t actor, std::uint64_t incarnation,
+              Grant grant, bool exclusive)
             : arena_(&arena), exclusive_(exclusive) {
-            if (!actor) throw std::logic_error("shared region actor identity required");
+            if (!actor || !incarnation)
+                throw std::logic_error("shared region actor identity and incarnation required");
             // Actor carrier threads must not park behind another actor's
             // critical lease. Admission is fail-fast; the scheduler may
             // resubmit a turn after the owner releases its lease.
@@ -40,7 +44,7 @@ public:
                 read_ = std::shared_lock<std::shared_mutex>(arena.mutex_, std::try_to_lock);
                 if (!read_.owns_lock()) throw std::logic_error("shared region busy");
             }
-            arena.validate_grant(grant, actor, exclusive_);
+            arena.validate_grant(grant, actor, incarnation, exclusive_);
         }
         void require_live(bool write = false) const {
             if (!arena_ || arena_->closing_.load(std::memory_order_acquire) ||
@@ -112,18 +116,21 @@ public:
         for (auto& s : slots_) scrub(s.data);
     }
 
-    Grant grant(std::uint64_t actor, bool allow_read, bool allow_write) {
+    Grant grant(std::uint64_t actor, std::uint64_t incarnation,
+                bool allow_read, bool allow_write) {
         // Like actor lease admission, membership grants may not park a CONTROL
         // carrier behind a guest-held critical lease.
         std::unique_lock lock(mutex_, std::try_to_lock);
         if (!lock.owns_lock()) throw std::logic_error("shared region busy");
-        if (closing_.load(std::memory_order_acquire) || !actor || (!allow_read && !allow_write))
+        if (closing_.load(std::memory_order_acquire) || !actor || !incarnation
+            || (!allow_read && !allow_write))
             throw std::logic_error("invalid shared region grant");
         for (std::size_t i = 0; i < Members; ++i) {
             auto& m = members_[i];
             if (!m.active && m.generation != 0) {
                 m.active = true;
                 m.actor = actor;
+                m.incarnation = incarnation;
                 m.read = allow_read || allow_write;
                 m.write = allow_write;
                 return {identity_, m.generation, i};
@@ -136,17 +143,22 @@ public:
     bool try_revoke(Grant grant) {
         std::unique_lock lock(mutex_, std::try_to_lock);
         if (!lock.owns_lock()) return false;
-        validate_grant(grant, 0, false);
+        validate_grant(grant, 0, 0, false);
         auto& m = members_[grant.member];
         m.active = false;
         m.actor = 0;
+        m.incarnation = 0;
         m.read = m.write = false;
         m.generation = m.generation == std::numeric_limits<std::uint64_t>::max()
             ? 0 : m.generation + 1;
         return true;
     }
-    Lease read(std::uint64_t actor, Grant grant) { return Lease(*this, actor, grant, false); }
-    Lease write(std::uint64_t actor, Grant grant) { return Lease(*this, actor, grant, true); }
+    Lease read(std::uint64_t actor, std::uint64_t incarnation, Grant grant) {
+        return Lease(*this, actor, incarnation, grant, false);
+    }
+    Lease write(std::uint64_t actor, std::uint64_t incarnation, Grant grant) {
+        return Lease(*this, actor, incarnation, grant, true);
+    }
 
     // Supervisor CONTROL path only: never block a carrier waiting for loans.
     // Returning false means existing readers/writers have not yet quiesced.
@@ -165,6 +177,7 @@ public:
         for (auto& member : members_) {
             member.active = false;
             member.actor = 0;
+            member.incarnation = 0;
             member.read = member.write = false;
             member.generation = member.generation == std::numeric_limits<std::uint64_t>::max()
                 ? 0 : member.generation + 1;
@@ -174,7 +187,10 @@ public:
     }
 private:
     struct Slot { std::array<std::byte, SlotBytes> data{}; std::uint64_t generation = 1; std::size_t length = 0; bool live = false; };
-    struct Member { std::uint64_t actor = 0, generation = 1; bool active = false, read = false, write = false; };
+    struct Member {
+        std::uint64_t actor = 0, incarnation = 0, generation = 1;
+        bool active = false, read = false, write = false;
+    };
     inline static std::atomic<std::uint64_t> next_identity_{1};
     const std::uint64_t identity_;
     std::shared_mutex mutex_;
@@ -186,13 +202,16 @@ private:
         volatile unsigned char* p = reinterpret_cast<volatile unsigned char*>(data.data());
         for (std::size_t i = 0; i < N; ++i) p[i] = 0;
     }
-    void validate_grant(Grant grant, std::uint64_t actor, bool writer) const {
+    void validate_grant(Grant grant, std::uint64_t actor,
+                        std::uint64_t incarnation, bool writer) const {
         if (closing_.load(std::memory_order_acquire) ||
             grant.domain != identity_ || grant.member >= Members)
             throw std::logic_error("foreign or retired shared region grant");
         const auto& m = members_[grant.member];
         if (!m.active || m.generation != grant.generation || !m.actor ||
-            !m.read || (actor != 0 && m.actor != actor) || (writer && !m.write))
+            !m.read || (actor != 0 &&
+            (m.actor != actor || m.incarnation != incarnation)) ||
+            (writer && !m.write))
             throw std::logic_error("stale or insufficient shared region grant");
     }
 };
