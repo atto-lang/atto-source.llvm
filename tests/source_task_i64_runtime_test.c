@@ -1,4 +1,5 @@
 #include "oreslang/runtime/SourceTaskRuntime.h"
+#include "oreslang/runtime/NativeActorScheduler.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -56,6 +57,31 @@ static int64_t producer(void) {
     atomic_store_explicit(
         &carrier_await_status, status, memory_order_release);
     return 41;
+}
+
+typedef struct {
+    OresNativeActorScheduler* scheduler;
+    OresNativeActorRef actor;
+    _Atomic int invoked;
+    _Atomic int status;
+} ActorPoolFallbackProbe;
+
+static void attempt_actor_task_on_native_carrier(
+        void* raw, size_t actor_index, uint64_t payload) {
+    ActorPoolFallbackProbe* probe = (ActorPoolFallbackProbe*)raw;
+    assert(actor_index == 0 && payload == 1);
+    assert(ores_native_actor_scheduler_in_any_actor_turn());
+    assert(ores_native_actor_scheduler_is_current_actor(
+        probe->scheduler, probe->actor));
+
+    /* The scalar legacy ABI must not create its separate synthetic actor
+     * scheduler when called from a genuine actor's admitted turn. */
+    void* task = (void*)1;
+    int status = oreslang_source_task_start_i64_checked(
+        simple_producer, &task);
+    assert(task == NULL);
+    atomic_store_explicit(&probe->status, status, memory_order_release);
+    atomic_store_explicit(&probe->invoked, 1, memory_order_release);
 }
 
 int main(void) {
@@ -144,6 +170,30 @@ int main(void) {
             context.status == ORES_SOURCE_TASK_INVALID);
     }
 
+    assert(oreslang_source_task_runtime_shutdown() == 1);
+
+    /* A native actor callback is not permitted to escape to the singleton
+     * legacy Task<int> worker pool. Outside the callback, no actor carrier
+     * identity may leak onto this host thread. */
+    assert(!ores_native_actor_scheduler_in_any_actor_turn());
+    ActorPoolFallbackProbe probe = {0};
+    OresNativeActorScheduler* actor_scheduler =
+        ores_native_actor_scheduler_open(
+            1, 4, 1, attempt_actor_task_on_native_carrier, &probe);
+    assert(actor_scheduler != NULL);
+    probe.scheduler = actor_scheduler;
+    probe.actor = ores_native_actor_scheduler_spawn(actor_scheduler, 0);
+    assert(probe.actor.scheduler_domain != 0);
+    assert(ores_native_actor_scheduler_try_send(
+        actor_scheduler, probe.actor, 1) == ORES_NATIVE_SEND_ACCEPTED);
+    assert(ores_native_actor_scheduler_drain(actor_scheduler));
+    assert(atomic_load_explicit(&probe.invoked, memory_order_acquire) == 1);
+    assert(atomic_load_explicit(&probe.status, memory_order_acquire)
+        == ORES_SOURCE_TASK_ACTOR_POOL_UNSUPPORTED);
+    assert(ores_native_actor_scheduler_stop(actor_scheduler, probe.actor));
+    ores_native_actor_scheduler_retire(actor_scheduler);
+    assert(ores_native_actor_scheduler_try_destroy(actor_scheduler));
+    assert(!ores_native_actor_scheduler_in_any_actor_turn());
     assert(oreslang_source_task_runtime_shutdown() == 1);
     return 0;
 }

@@ -1,0 +1,66 @@
+name: Actor state native guest E2E candidate (exact-head LLVM)
+
+on:
+  pull_request:
+    paths:
+      - 'tests/fixtures/actor-state-e2e-v1/**'
+      - 'scripts/test-actor-state-guest-e2e-v1.sh'
+      - '.github/workflows/actor-state-guest-e2e-v1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  actor-native-aot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact unprivileged source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Verify source head and script syntax
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --no-ext-diff --quiet HEAD --
+          test -z "$(git ls-files --others --exclude-standard)"
+          bash -n scripts/test-actor-state-guest-e2e-v1.sh
+          printf 'HEAD=%s\nTREE=%s\nSTATUS=NOT_CERTIFIED\n' "$EXPECTED_HEAD" "$(git rev-parse 'HEAD^{tree}')" > "$RUNNER_TEMP/actor-guest-source.txt"
+      - name: Install native compiler prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang llvm-dev python3
+      - name: Build exact-head LLVM compiler and no-GC auditor
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --parallel 2
+          test -x build/oreslang-llvmc
+          test -x build/oreslang-no-gc-ir-audit
+      - name: Execute O0/O2 native actor guests and rejection probe
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          bash scripts/test-actor-state-guest-e2e-v1.sh 2>&1 | tee "$RUNNER_TEMP/actor-guest-execution.log"
+      - name: Retain logs as unverified evidence candidates
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: actor-guest-llvm-unverified
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/actor-guest-source.txt
+            ${{ runner.temp }}/actor-guest-execution.log

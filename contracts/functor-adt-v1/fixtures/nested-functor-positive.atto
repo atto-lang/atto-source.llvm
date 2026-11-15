@@ -1,0 +1,53 @@
+// FNV1: Nested functors preserve constructors, error types, and dormant variants.
+fnc emit(bool yes): void {
+  if yes; then stdio.stdout.write("1"); else stdio.stdout.write("0"); fi
+  return;
+}
+fnc map_nested(Option<Result<int,String>> input): Option<Result<int,String>> {
+  return input.map((Result<int,String> inner) -> inner.map((int n) -> n + 1));
+}
+fnc map_nested_reverse(Result<Option<int>,String> input): Result<Option<int>,String> {
+  return input.map((Option<int> inner) -> inner.map((int n) -> n + 2));
+}
+pub fnc main(): void {
+  stdio.stdout.write("FNV1:");
+  val Option<Result<int,String>> some_ok = Some(Ok(41));
+  emit(map_nested(some_ok).unwrap().unwrap() eq 42);
+  val Option<Result<int,String>> some_err = Some(Err("bad"));
+  emit(map_nested(some_err).unwrap().is_err());
+  val Option<Result<int,String>> none = None;
+  emit(map_nested(none).is_none());
+  val Result<Option<int>,String> ok_some = Ok(Some(5));
+  emit(map_nested_reverse(ok_some).unwrap().unwrap() eq 7);
+  val Result<Option<int>,String> ok_none = Ok(None);
+  emit(map_nested_reverse(ok_none).unwrap().is_none());
+  val Result<Option<int>,String> err = Err("outer");
+  emit(map_nested_reverse(err).is_err());
+
+  val Option<Result<int,String>> opt_ok = Some(Ok(9));
+  emit(opt_ok.transpose().unwrap().unwrap() eq 9);
+  val Option<Result<int,String>> opt_err = Some(Err("failure"));
+  emit(opt_err.transpose().is_err());
+  val Option<Result<int,String>> opt_none = None;
+  emit(opt_none.transpose().unwrap().is_none());
+
+  val Result<Option<int>,String> result_some = Ok(Some(11));
+  emit(result_some.transpose().unwrap().unwrap() eq 11);
+  val Result<Option<int>,String> result_none = Ok(None);
+  emit(result_none.transpose().is_none());
+  val Result<Option<int>,String> result_err = Err("error");
+  emit(result_err.transpose().unwrap().is_err());
+
+  val Result<Result<int,String>,String> nested_ok = Ok(Ok(13));
+  emit(nested_ok.flatten().unwrap() eq 13);
+  val Result<Result<int,String>,String> nested_err = Ok(Err("inner"));
+  emit(nested_err.flatten().is_err());
+  val Result<Result<int,String>,String> outer_err = Err("outer");
+  emit(outer_err.flatten().is_err());
+
+  val Option<Option<int>> original = Some(Some(17));
+  val Option<Option<int>> still_nested = original.map((Option<int> inner) -> inner);
+  emit(still_nested.unwrap().unwrap() eq 17);
+  stdio.stdout.write(":END");
+  return;
+}

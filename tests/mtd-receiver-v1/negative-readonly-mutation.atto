@@ -1,0 +1,7 @@
+// Readonly loan cannot write a field.
+define class Point as let int x = 40; end
+pub mtd (self: Point) illegal_write(): void {
+  self.x = 42;
+  return;
+}
+pub fnc main(): int { return 0; }
