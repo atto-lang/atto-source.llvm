@@ -177,6 +177,9 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
         case Expression::Kind::Add:
             if (expr->resolved_type == ScalarType::String) add_effect(facts, FunctionEffect::Alloc);
             break;
+        case Expression::Kind::BitXor:
+            break;
+        case Expression::Kind::Modulo:
         case Expression::Kind::Remainder: {
             // Qualify only a proven literal divisor. Keep the analyzer's
             // -1 proof conservative until it shares the code generator's

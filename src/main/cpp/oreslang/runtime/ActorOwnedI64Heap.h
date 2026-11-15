@@ -6,8 +6,13 @@ extern "C" {
 
 /* Native actor heap experimental ABI. Actor IDs and enter tokens MUST remain
  * private to the scheduler, not exposed as forgeable guest-language values.
- * One actor turn runs at a time. This does not require stable carrier threads
- * and it does not use a tracing garbage collector. */
+ * One actor turn runs at a time. Each admitted OresActorTurn is bound to its
+ * physical carrier for the duration of that turn, even when the domain/epoch
+ * fields of the token are known to another thread. An actor may migrate to a
+ * different carrier only after leave and a fresh enter. Cross-turn loans
+ * may be released without re-entering a turn, preserving async quiescence.
+ * This native scalar heap does not use a tracing garbage collector; neither
+ * the guest compiler nor transitive process closure is certified by that fact. */
 typedef struct OresActorI64Heap OresActorI64Heap;
 typedef struct { uint64_t domain, epoch; } OresActorTurn;
 typedef struct { uint64_t domain, index, generation; } OresActorSlot;

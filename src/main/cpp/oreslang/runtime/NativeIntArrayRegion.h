@@ -105,6 +105,15 @@ void oreslang_int_array_reserve(OresNativeIntArrayRegion* region, OresNativeIntA
 void oreslang_int_array_add(OresNativeIntArrayRegion* region, OresNativeIntArrayHandle handle, int64_t value);
 uint64_t oreslang_int_array_length(OresNativeIntArrayRegion* region, OresNativeIntArrayHandle handle);
 int64_t oreslang_int_array_get(OresNativeIntArrayRegion* region, OresNativeIntArrayHandle handle, uint64_t index);
+/* Safe owned scalar copy: maps to Some(value) iff the signed index is within
+ * bounds; 0 maps to None. Always validates region/handle first, even on a miss.
+ * Missing indices leave *out_value unchanged, including when index < 0.
+ * This is a host ABI primitive, not a source-language ReadLoan/Option lowering.
+ * Invalid/stale/foreign ownership or null out_value still aborts. No raw
+ * element pointers escape; caller controls the lifetime of the copy.
+ */
+int oreslang_int_array_try_get_copy(OresNativeIntArrayRegion* region,
+    OresNativeIntArrayHandle handle, int64_t index, int64_t* out_value);
 void oreslang_int_array_set(OresNativeIntArrayRegion* region, OresNativeIntArrayHandle handle, uint64_t index, int64_t value);
 void oreslang_int_array_drop(OresNativeIntArrayRegion* region, OresNativeIntArrayHandle handle);
 void oreslang_int_array_region_close(OresNativeIntArrayRegion* region);

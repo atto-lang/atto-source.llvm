@@ -1,0 +1,4 @@
+namespace foo;
+define state on actor Counter as {
+    let int count : 0;
+}
