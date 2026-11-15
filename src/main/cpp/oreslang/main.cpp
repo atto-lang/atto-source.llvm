@@ -198,10 +198,12 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
 // complete guest AOT, whole-program no-GC, WCET, or linker/FFI reachability.
 // Reuse the same compiler-maintained expression/statement scanner as the
 // hard-RT analysis; never trust source-text keyword scans as a graph oracle.
-static void require_sealed_scalar_aot_graph(const oreslang::Program& program) {
+static void require_sealed_scalar_aot_graph(const oreslang::Program& program,
+                                             bool allow_class_fields = false) {
     using namespace oreslang;
     namespace detail = oreslang::realtime_detail;
-    if (!program.actors.empty() || !program.classes.empty() ||
+    if (!program.actors.empty() ||
+        (!allow_class_fields && !program.classes.empty()) ||
         !program.generators.empty() || !program.cooperative_loops.empty() ||
         !program.imports.empty() || !program.contracts.empty() ||
         !program.type_only_declarations.empty() || !program.sum_types.empty() ||
@@ -209,6 +211,46 @@ static void require_sealed_scalar_aot_graph(const oreslang::Program& program) {
         throw std::runtime_error(
             "sealed scalar AOT rejects non-scalar declarations until their "
             "dispatch, initialization, continuation and drop roots are verified");
+
+    // Only immutable literal scalar class fields are admitted in this
+    // subprofile; no method dispatch, owned arrays, mutable state, nested
+    // aggregates or unmodeled constructor side effects.
+    std::unordered_set<std::string> admitted_classes;
+    if (allow_class_fields) {
+        if (program.classes.size() > 32)
+            throw std::runtime_error("sealed class-field AOT class limit exceeded");
+        for (const auto& cls : program.classes) {
+            if (!admitted_classes.insert(cls.name).second)
+                throw std::runtime_error("sealed class-field AOT duplicate nominal class");
+            if (!cls.methods.empty() || cls.explicit_constructor ||
+                !cls.constructor_parameters.empty() ||
+                !cls.constructor_parameter_types.empty())
+                throw std::runtime_error(
+                    "sealed class-field AOT rejects methods or parameterized constructors");
+            if (cls.fields.empty() || cls.fields.size() > 16)
+                throw std::runtime_error("sealed class-field AOT requires 1-16 static fields");
+            for (const auto& field : cls.fields) {
+                const auto* initial = field.initializer_expression.get();
+                if (!field.final_field || field.mutable_referent || field.int_array ||
+                    !field.class_name.empty() || !field.sum_type.empty() ||
+                    field.constructor_argument || field.scalar_type == ScalarType::String ||
+                    !initial ||
+                    (initial->kind != Expression::Kind::Integer &&
+                     initial->kind != Expression::Kind::Boolean) ||
+                    // A literal is a leaf in the checked AST. The kind alone
+                    // is not an authorization to ignore future child edges.
+                    initial->left || initial->right || initial->condition ||
+                    initial->condition_lhs || initial->condition_rhs ||
+                    initial->when_true || initial->when_false ||
+                    !initial->arguments.empty() ||
+                    !initial->argument_names.empty() ||
+                    initial->type_arguments_present ||
+                    !initial->type_arguments.empty())
+                    throw std::runtime_error(
+                        "sealed class fields require immutable literal scalar defaults");
+            }
+        }
+    }
 
     if (program.functions.empty() ||
         program.functions.size() > detail::kMaxRealtimeFunctions)
@@ -251,13 +293,163 @@ static void require_sealed_scalar_aot_graph(const oreslang::Program& program) {
                 throw std::runtime_error(
                     "sealed scalar AOT rejects non-scalar or borrowed parameter ABI");
 
+        // Every class instance is born as a fresh local stack owner. The
+        // shared type/ownership validator has already verified public reads.
+        // Reject any captured, borrowed, moved or returned class instance.
+        for (const auto& local : function.locals) {
+            if (!local.class_name.empty()) {
+                if (!allow_class_fields || !admitted_classes.count(local.class_name) ||
+                    !local.new_class || local.record_view || local.move_class ||
+                    !local.move_source.empty() || local.initializer ||
+                    !local.constructor_arguments.empty() || local.heap_owned ||
+                    local.int_array || !local.sum_type.empty() ||
+                    local.owner_mutable || local.field_mutable)
+                    throw std::runtime_error(
+                        "sealed class-field AOT requires a fresh stack-only class local");
+            } else if (local.new_class || local.record_view || local.move_class ||
+                       !local.move_source.empty()) {
+                throw std::runtime_error(
+                    "sealed class-field AOT rejects unmodeled local ownership");
+            }
+        }
+
+        // Independently pin each class-field read to a known stack-local
+        // owner and public literal class layout. Effect bits alone do not
+        // establish field identity: a future expression kind must not get
+        // implicit AOT admission merely by reporting StateRead.
+        std::unordered_map<std::string, const ClassDecl*> owned_locals;
+        std::unordered_set<std::string> local_names;
+        for (const auto& local : function.locals) {
+            if (!local_names.insert(local.name).second)
+                throw std::runtime_error(
+                    "sealed AOT rejects duplicate local binding identities");
+            if (local.class_name.empty()) continue;
+            const auto cls = std::find_if(
+                program.classes.begin(), program.classes.end(),
+                [&](const ClassDecl& candidate) {
+                    return candidate.name == local.class_name;
+                });
+            if (cls == program.classes.end())
+                throw std::runtime_error(
+                    "sealed class-field AOT rejects unknown local class layout");
+            if (!owned_locals.emplace(local.name, &*cls).second)
+                throw std::runtime_error(
+                    "sealed class-field AOT rejects duplicate local class ownership");
+        }
+        const auto verify_expression = [&](const auto& self,
+                                          const Expression* expr) -> void {
+            if (!expr) return;
+            if (expr->kind == Expression::Kind::Field) {
+                if (!allow_class_fields || !expr->left ||
+                    expr->left->kind != Expression::Kind::Variable)
+                    throw std::runtime_error(
+                        "sealed class-field AOT rejects unverified field receiver");
+                const auto owner = owned_locals.find(expr->left->name);
+                if (owner == owned_locals.end())
+                    throw std::runtime_error(
+                        "sealed class-field AOT rejects nonlocal field receiver");
+                const auto& fields = owner->second->fields;
+                const auto field = std::find_if(
+                    fields.begin(), fields.end(),
+                    [&](const ClassField& candidate) {
+                        return candidate.name == expr->name;
+                    });
+                if (field == fields.end() || !field->public_member)
+                    throw std::runtime_error(
+                        "sealed class-field AOT rejects unregistered or private field");
+            }
+            self(self, expr->left.get());
+            self(self, expr->right.get());
+            self(self, expr->condition.get());
+            self(self, expr->condition_lhs.get());
+            self(self, expr->condition_rhs.get());
+            self(self, expr->when_true.get());
+            self(self, expr->when_false.get());
+            for (const auto& argument : expr->arguments)
+                self(self, argument.get());
+        };
+        const auto verify_statement = [&](const auto& self,
+                                         const Statement& statement) -> void {
+            // This list is explicit: a new AST statement kind must never
+            // inherit admission by relying on a stale effect scanner.
+            switch (statement.kind) {
+                case Statement::Kind::Call:
+                case Statement::Kind::Conditional:
+                case Statement::Kind::ScopedLocal:
+                case Statement::Kind::Return:
+                    break;
+                case Statement::Kind::FieldWrite:
+                case Statement::Kind::ScalarWrite:
+                case Statement::Kind::Defer:
+                case Statement::Kind::ArrayCommitFilled:
+                case Statement::Kind::ForEach:
+                case Statement::Kind::ForIndex:
+                default:
+                    throw std::runtime_error(
+                        "sealed AOT rejects unmodeled or mutating statement kinds");
+            }
+            if (statement.branch_local) {
+                if (owned_locals.count(statement.branch_local->name))
+                    throw std::runtime_error(
+                        "sealed class-field AOT rejects shadowed class owner");
+                if (!statement.branch_local->class_name.empty() ||
+                    statement.branch_local->new_class ||
+                    statement.branch_local->record_view ||
+                    statement.branch_local->move_class ||
+                    !statement.branch_local->move_source.empty() ||
+                    statement.branch_local->heap_owned ||
+                    statement.branch_local->int_array ||
+                    !statement.branch_local->sum_type.empty() ||
+                    !statement.branch_local->constructor_arguments.empty())
+                    throw std::runtime_error(
+                        "sealed class-field AOT rejects unverified scoped class owners");
+                verify_expression(verify_expression,
+                                  statement.branch_local->initializer.get());
+                for (const auto& argument :
+                     statement.branch_local->constructor_arguments)
+                    verify_expression(verify_expression, argument.get());
+            }
+            verify_expression(verify_expression, statement.expression.get());
+            verify_expression(verify_expression, statement.condition.get());
+            verify_expression(verify_expression, statement.condition_lhs.get());
+            verify_expression(verify_expression, statement.condition_rhs.get());
+            verify_expression(verify_expression, statement.loop_step.get());
+            verify_expression(verify_expression,
+                              statement.array_commit_length.get());
+            for (const auto& value : statement.array_commit_values)
+                verify_expression(verify_expression, value.get());
+            for (const auto& child : statement.then_statements)
+                self(self, child);
+            for (const auto& child : statement.else_statements)
+                self(self, child);
+        };
+        for (const auto& local : function.locals) {
+            verify_expression(verify_expression, local.initializer.get());
+            for (const auto& argument : local.constructor_arguments)
+                verify_expression(verify_expression, argument.get());
+        }
+        for (const auto& statement : function.statements)
+            verify_statement(verify_statement, statement);
+        for (const auto& guard : function.early_returns) {
+            verify_expression(verify_expression, guard.condition.get());
+            verify_expression(verify_expression, guard.lhs.get());
+            verify_expression(verify_expression, guard.rhs.get());
+            verify_expression(verify_expression, guard.result.get());
+        }
+        verify_expression(verify_expression, function.result.get());
+
         const auto facts = detail::direct_facts(function, remaining_edges, &program);
+        // Only typechecked scalar field reads add an admissible effect.
+        // Allocation, mutation, unknown bits, IO, suspension and FFI reject.
+        const std::uint32_t permitted_effect_bits = allow_class_fields
+            ? static_cast<std::uint32_t>(FunctionEffect::StateRead) : 0u;
         if (facts.call_budget_exceeded || !facts.bounded_calls ||
             !facts.bounded_cleanup || facts.unsupported_runtime ||
             facts.unqualified_copy_or_share || facts.unmodeled_expression ||
-            facts.effects.bits != 0u)
+            !facts.effects.valid() ||
+            (facts.effects.bits & ~permitted_effect_bits) != 0u)
             throw std::runtime_error(
-                "sealed scalar AOT requires fully modeled pure scalar effects and calls");
+                "sealed AOT requires fully modeled statically admitted effects and calls");
         if (facts.calls.size() > remaining_edges)
             throw std::runtime_error("sealed scalar AOT call graph edge budget exceeded");
         remaining_edges -= facts.calls.size();
@@ -290,6 +482,7 @@ int main(int argc, char** argv) {
     std::string rt_report_path;
     bool tree_shake = false;
     bool sealed_scalar_aot = false;
+    bool sealed_class_fields_aot = false;
     bool isolate_entry_seen = false;
     std::string isolate_entry;
     std::vector<std::string> tree_shake_roots;
@@ -330,15 +523,18 @@ int main(int argc, char** argv) {
                 return 2;
             }
         } else if (arg.rfind("--aot-profile=", 0) == 0) {
-            if (sealed_scalar_aot) {
+            if (sealed_scalar_aot || sealed_class_fields_aot) {
                 std::cerr << "duplicate AOT profile option\n"; return 2;
             }
             const std::string profile = arg.substr(std::string_view("--aot-profile=").size());
-            if (profile != "sealed-scalar-v1") {
-                std::cerr << "unsupported AOT profile (expected sealed-scalar-v1)\n";
+            if (profile == "sealed-scalar-v1") {
+                sealed_scalar_aot = true;
+            } else if (profile == "sealed-class-fields-v1") {
+                sealed_class_fields_aot = true;
+            } else {
+                std::cerr << "unsupported AOT profile (expected sealed-scalar-v1 or sealed-class-fields-v1)\n";
                 return 2;
             }
-            sealed_scalar_aot = true;
         } else if (arg.rfind("--profile=", 0) == 0) {
             if (profile_seen) { std::cerr << "duplicate profile option\n"; return 2; }
             profile_seen = true;
@@ -460,7 +656,7 @@ int main(int argc, char** argv) {
                 oreslang::frontend::CoreProviderRequirement::Allocator)
             : 0u;
 
-    if (sealed_scalar_aot &&
+    if ((sealed_scalar_aot || sealed_class_fields_aot) &&
         (wasm32_target || cortex_m_target || experimental_owned_int ||
          experimental_rt_scalar_loop || native_hard_rt_profile || rt_check_only ||
          rt_entry_seen || rt_report_seen || tree_shake ||
@@ -503,7 +699,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--aot-profile=sealed-scalar-v1] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--aot-profile=sealed-scalar-v1|sealed-class-fields-v1] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -561,6 +757,7 @@ int main(int argc, char** argv) {
         // Strict admission happens on the fully resolved and ownership-checked
         // Program, before any executable LLVM IR or sidecar is emitted.
         if (sealed_scalar_aot) require_sealed_scalar_aot_graph(ast);
+        if (sealed_class_fields_aot) require_sealed_scalar_aot_graph(ast, true);
 
         // A enabled telemetry scope currently calls CLOCK_MONOTONIC on a
         // native carrier. It has not been subjected to a proven WCET/time
