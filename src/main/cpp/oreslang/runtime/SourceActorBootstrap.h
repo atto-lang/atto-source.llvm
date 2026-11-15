@@ -83,6 +83,15 @@ void* oreslang_source_actor_spawn_budgeted(OresSourceActorInit initializer,
  * host error; a typed guest overload result still needs compiler lowering.
  */
 void oreslang_source_actor_send(void* actor, int64_t payload);
+/* Trusted-main bounded-mailbox completion barrier. Wait for the accepted
+ * snapshot captured at entry to finish physical DATA callbacks (a failed
+ * callback is still completed, never a successful result). It does not seal
+ * the mailbox or convert actor-local failures into process aborts.
+ * Returns 0 when a prior terminal seal prevents the snapshot from completing.
+ * Must not be invoked on an actor carrier; this blocking sync API is not
+ * actor-method suspension or a general async Promise/Task.
+ */
+int oreslang_source_actor_flush_blocking(void* actor);
 
 /*
  * Compiler/runtime stop phases. request_stop is nonblocking and only asks the
