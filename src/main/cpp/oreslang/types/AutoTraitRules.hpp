@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <set>
 #include <stdexcept>
 #include <vector>
@@ -31,13 +32,11 @@ struct AutoType {
     std::vector<AutoType> parameters;
     std::set<AutoTrait> dyn_bounds;
     bool shareable_domain = false;
-    // Nominal auto traits require a complete instantiated layout proof.
-    // Opaque/imported/unresolved nominal provenance fails closed.
+    // Only compiler-verified, complete, instantiated nominal layouts may set
+    // this. An opaque/FFI/user-supplied proof fails closed.
     bool complete_nominal_layout = false;
     std::set<AutoTrait> negative;
 };
-
-inline Capabilities infer_auto_traits(const AutoType& type);
 
 inline const AutoType& exactly_one(const AutoType& type) {
     if (type.parameters.size() != 1)
@@ -45,78 +44,92 @@ inline const AutoType& exactly_one(const AutoType& type) {
     return type.parameters.front();
 }
 
-inline bool all_have(const std::vector<AutoType>& values, AutoTrait trait) {
-    for (const auto& value : values)
-        if (!infer_auto_traits(value).has(trait)) return false;
-    return true;
-}
-
 inline Capabilities apply_negative(Capabilities caps, const std::set<AutoTrait>& negative) {
     if (negative.count(AutoTrait::Send)) caps.send = false;
     if (negative.count(AutoTrait::Sync)) caps.sync = false;
     if (negative.count(AutoTrait::Share)) caps.share = false;
-    // A cross-actor shared alias must also satisfy Send and Sync.
-    // Preserve this invariant after negative-trait erasure, including for
-    // dyn and nominal types whose bounds may be contradictory.
     caps.share = caps.share && caps.send && caps.sync;
     return caps;
 }
 
-/**
- * Backend-independent Send/Sync/Share composition. Share is intentionally
- * separate from Send: moving a unique owner never grants shared actor-domain
- * aliases to its backing allocation.
- */
-inline Capabilities infer_auto_traits(const AutoType& type) {
+namespace detail {
+// Untrusted nested type graphs may not consume unbounded stack or CPU.
+// Budget spans the *whole* proof rather than restarting at each nested field.
+inline constexpr std::size_t kTypeDepth = 128;
+inline constexpr std::size_t kTypeNodes = 4096;
+
+inline Capabilities infer(const AutoType& type, std::size_t depth,
+                          std::size_t& remaining) {
+    if (depth >= kTypeDepth || remaining == 0) return {};
+    --remaining;
+
     Capabilities caps;
     switch (type.kind) {
     case AutoTypeKind::Scalar:
+        // A fabricated "scalar" with hidden Rc/borrowed metadata must never
+        // bypass the transitive proof, nor may it carry dyn trait assertions.
+        if (!type.parameters.empty() || !type.dyn_bounds.empty() ||
+                type.complete_nominal_layout) return {};
         caps = {true, true, true};
         break;
-    case AutoTypeKind::Nominal:
-        if (!type.complete_nominal_layout) {
-            caps = {false, false, false};
-            break;
+
+    case AutoTypeKind::Nominal: {
+        if (!type.complete_nominal_layout || !type.dyn_bounds.empty()) return {};
+        bool send = true, sync = true, share = true;
+        for (const auto& argument : type.parameters) {
+            const auto child = infer(argument, depth + 1, remaining);
+            send = send && child.send;
+            sync = sync && child.sync;
+            share = share && child.share;
         }
-        caps = {
-            all_have(type.parameters, AutoTrait::Send),
-            all_have(type.parameters, AutoTrait::Sync),
-            type.shareable_domain && all_have(type.parameters, AutoTrait::Share)
-        };
-        break;
-    case AutoTypeKind::Box: {
-        const auto nested = infer_auto_traits(exactly_one(type));
-        caps = {nested.send, nested.sync, false};
+        caps = {send, sync, type.shareable_domain && share};
         break;
     }
+
+    case AutoTypeKind::Box: {
+        if (type.parameters.size() != 1 || !type.dyn_bounds.empty()) return {};
+        const auto child = infer(type.parameters.front(), depth + 1, remaining);
+        caps = {child.send, child.sync, false};
+        break;
+    }
+
     case AutoTypeKind::Arc:
     case AutoTypeKind::Weak: {
-        const auto nested = infer_auto_traits(exactly_one(type));
-        const bool concurrent =
-            type.shareable_domain && nested.send && nested.sync;
-        caps = {concurrent, concurrent, concurrent && nested.share};
+        if (type.parameters.size() != 1 || !type.dyn_bounds.empty()) return {};
+        const auto child = infer(type.parameters.front(), depth + 1, remaining);
+        const bool concurrent = type.shareable_domain && child.send && child.sync;
+        caps = {concurrent, concurrent, concurrent && child.share};
         break;
     }
+
     case AutoTypeKind::Rc:
-        (void)exactly_one(type);
+        if (type.parameters.size() != 1 || !type.dyn_bounds.empty()) return {};
         caps = {false, false, false};
         break;
+
     case AutoTypeKind::RefCell: {
-        const auto nested = infer_auto_traits(exactly_one(type));
-        caps = {nested.send, false, false};
+        if (type.parameters.size() != 1 || !type.dyn_bounds.empty()) return {};
+        const auto child = infer(type.parameters.front(), depth + 1, remaining);
+        caps = {child.send, false, false};
         break;
     }
+
     case AutoTypeKind::Mutex: {
-        const auto nested = infer_auto_traits(exactly_one(type));
-        caps = {nested.send, nested.send, false};
+        if (type.parameters.size() != 1 || !type.dyn_bounds.empty()) return {};
+        const auto child = infer(type.parameters.front(), depth + 1, remaining);
+        caps = {child.send, child.send, false};
         break;
     }
+
     case AutoTypeKind::RwLock: {
-        const auto nested = infer_auto_traits(exactly_one(type));
-        caps = {nested.send, nested.send && nested.sync, false};
+        if (type.parameters.size() != 1 || !type.dyn_bounds.empty()) return {};
+        const auto child = infer(type.parameters.front(), depth + 1, remaining);
+        caps = {child.send, child.send && child.sync, false};
         break;
     }
+
     case AutoTypeKind::Dyn:
+        if (!type.parameters.empty() || type.complete_nominal_layout) return {};
         caps = {
             type.dyn_bounds.count(AutoTrait::Send) != 0,
             type.dyn_bounds.count(AutoTrait::Sync) != 0,
@@ -125,6 +138,28 @@ inline Capabilities infer_auto_traits(const AutoType& type) {
         break;
     }
     return apply_negative(caps, type.negative);
+}
+} // namespace detail
+
+/**
+ * Backend-independent *abstract* Send/Sync/Share composition.
+ * This alone is NOT permission to emit guest Atomic/Box/Arc instructions:
+ * the compiler must independently prove intrinsic identity and target
+ * runtime/allocator ABI readiness. See SendSyncContract.hpp.
+ */
+inline Capabilities infer_auto_traits(const AutoType& type) {
+    std::size_t remaining = detail::kTypeNodes;
+    return detail::infer(type, 0, remaining);
+}
+
+// Aggregate helper for compiler callers. Use one global visit budget across
+// every field; no independent per-child budget reset.
+inline bool all_have(const std::vector<AutoType>& values, AutoTrait trait) {
+    std::size_t remaining = detail::kTypeNodes;
+    for (const auto& value : values) {
+        if (!detail::infer(value, 0, remaining).has(trait)) return false;
+    }
+    return true;
 }
 
 } // namespace oreslang::types

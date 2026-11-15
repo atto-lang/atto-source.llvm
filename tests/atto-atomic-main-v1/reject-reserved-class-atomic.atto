@@ -1,0 +1,3 @@
+define class Atomic as
+end
+fnc main(): int { return 42; }

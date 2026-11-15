@@ -1,0 +1,5 @@
+fnc main(): int {
+    val Atomic<int> counter = Atomic<int>(7);
+    return counter.load();
+    counter.store(17);
+}

@@ -45,7 +45,8 @@ struct Expression {
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
         Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field,
-        ShiftLeft, ShiftRight, ShiftUnsignedRight
+        ShiftLeft, ShiftRight, ShiftUnsignedRight,
+        NativeAtomicCall // exactly one compiler-owned Atomic<int> stack owner
     };
     Kind kind;
     std::size_t offset = 0;
@@ -70,6 +71,8 @@ struct Expression {
     std::vector<GenericTypeArgument> type_arguments;
     bool type_arguments_present = false;
     mutable std::string sum_type;
+    // Compiler-verified atomic ordering; never a guest scalar/opaque handle.
+    std::string atomic_order = "seq_cst";
 };
 
 struct Parameter {
@@ -89,6 +92,8 @@ struct LocalBinding {
     std::unique_ptr<Expression> initializer;
     bool heap_owned = false;
     bool int_array = false; // non-Copy owned i64-slot array local, no escape
+    bool native_atomic_i64 = false; // unique stack-owned Atomic<int>, never passed as i64
+    std::int64_t native_atomic_initial = 0;
     ScalarType array_element_type = ScalarType::I64; // int value or checked immutable String handle
     std::string array_record_class;
     bool record_view = false; // class-valued initializer: leaf view or uniquely owned array-containing call result

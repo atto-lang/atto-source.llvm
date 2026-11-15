@@ -1,0 +1,5 @@
+fnc main(): int {
+    val Atomic<bool> flag = Atomic<bool>(false);
+    val bool bad = flag.fetch_add(true, #seq_cst);
+    return 42;
+}

@@ -1,0 +1,2 @@
+declare type Arc = int;
+fnc main(): int { return 42; }

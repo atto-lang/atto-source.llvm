@@ -1,0 +1,5 @@
+fnc main(): int {
+    val Atomic<int> counter = Atomic<int>(40);
+    val bool accepted = counter.compare_exchange(40, 42, #acq_rel, #acquire);
+    return counter.load(#seq_cst);
+}

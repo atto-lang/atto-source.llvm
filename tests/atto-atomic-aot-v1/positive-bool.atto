@@ -1,0 +1,7 @@
+fnc main(): int {
+    val Atomic<bool> flag = Atomic<bool>(false);
+    flag.store(true, #release);
+    val bool previous = flag.swap(false, #acq_rel);
+    val bool did_set = flag.compare_exchange(false, true, #seq_cst, #acquire);
+    return 42;
+}

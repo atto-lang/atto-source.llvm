@@ -1,0 +1,2 @@
+define type Weak = int;
+fnc main(): int { return 42; }

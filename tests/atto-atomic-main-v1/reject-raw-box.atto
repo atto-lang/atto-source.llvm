@@ -1,0 +1,4 @@
+fnc main(): int {
+    val Box<int> box = Box<int>(42);
+    return 42;
+}

@@ -1,0 +1,4 @@
+fnc main(): int {
+    val Box<int> unsafe = Box<int>(7);
+    return 42;
+}
