@@ -56,6 +56,7 @@ typedef struct {
     unsigned control_is_failure;
     unsigned spawned, retired;
     uint64_t generation;
+    uint64_t resource_loans; /* exact-incarnation external physical resources */
     uint64_t accepted_user_messages;
     uint64_t processed_user_messages;
     uint64_t abandoned_user_messages;
@@ -112,6 +113,7 @@ struct OresNativeActorScheduler {
     uint64_t next_execution;
     uint64_t reserved_executions;
     uint64_t reserved_wakes; /* future accepted/execution credits */
+    uint64_t resource_loans; /* external resources across all actor lanes */
     uint64_t accepted, rejected, completed, control_completed, wakes_completed;
     int retired;
     int priority_inheritance_enabled;
@@ -199,7 +201,7 @@ static void publish_terminal_locked(
     ActorLane* lane = &s->actors[actor_index];
     if (!lane->spawned || lane->terminal_valid
             || !lane->retired || lane->active || lane->queued || lane->has_control
-            || lane->wake_live || lane->wake_ready)
+            || lane->wake_live || lane->wake_ready || lane->resource_loans)
         return;
     if (ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED)
         return;
@@ -383,7 +385,8 @@ static void spin_for_work(OresNativeActorScheduler* s, uint64_t epoch,
 }
 static void maybe_finish_stopped_locked(OresNativeActorScheduler* s, size_t i) {
     ActorLane* lane = &s->actors[i];
-    if (!lane->retired || lane->active || lane_has_work(lane) || lane->wake_live)
+    if (!lane->retired || lane->active || lane_has_work(lane)
+            || lane->wake_live || lane->resource_loans)
         return;
     if (ores_execution_phase(&lane->authority) == ORES_EXEC_STOPPING
             && !ores_execution_retired(&lane->authority, lane->generation))
@@ -1454,6 +1457,37 @@ int ores_native_actor_scheduler_stop_sealed(OresNativeActorScheduler* s,
     unlock(s);
     return ok;
 }
+int ores_native_actor_scheduler_retain_resource(
+        OresNativeActorScheduler* s, OresNativeActorRef actor) {
+    if (!s) return 0;
+    lock(s);
+    int ok = matching(s, actor) && !s->retired
+        && !s->actors[actor.actor_slot].retired
+        && s->actors[actor.actor_slot].resource_loans != UINT64_MAX
+        && s->resource_loans != UINT64_MAX;
+    if (ok) {
+        ++s->actors[actor.actor_slot].resource_loans;
+        ++s->resource_loans;
+    }
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_release_resource(
+        OresNativeActorScheduler* s, OresNativeActorRef actor) {
+    if (!s) return 0;
+    lock(s);
+    int ok = matching(s, actor)
+        && s->actors[actor.actor_slot].resource_loans != 0
+        && s->resource_loans != 0;
+    if (ok) {
+        --s->actors[actor.actor_slot].resource_loans;
+        --s->resource_loans;
+        maybe_finish_stopped_locked(s, (size_t)actor.actor_slot);
+        pthread_cond_broadcast(&s->drained);
+    }
+    unlock(s);
+    return ok;
+}
 int ores_native_actor_scheduler_poll_ready(OresNativeActorScheduler* s,
                                            OresNativeActorRef actor) {
     if (!s) return 0;
@@ -1492,6 +1526,7 @@ int ores_native_actor_scheduler_wait_done(OresNativeActorScheduler* s,
     }
     ActorLane* lane = &s->actors[actor.actor_slot];
     while (lane_has_work(lane) || lane->active || lane->wake_live
+        || lane->resource_loans
         || ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED
         || !lane->terminal_valid) {
         if (pthread_cond_wait(&s->drained, &s->lock) != 0) abort();
@@ -1520,6 +1555,46 @@ void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
 }
 int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* s) {
     return s && executing == s;
+}
+/* A pair of native actor generations must remain live across the entire
+ * bounded host commit. Ordinary STOP, sealed STOP and global retirement
+ * all arbitrate using this same lifecycle lock. The callback is restricted
+ * to allocation-free bookkeeping and must never reenter scheduler APIs. */
+int ores_native_actor_scheduler_commit_if_both_live_v1(
+        OresNativeActorScheduler* s, OresNativeActorRef sender,
+        OresNativeActorRef recipient, OresNativeActorBoundedCommitV1 commit,
+        void* opaque) {
+    if (!s || !commit) return 0;
+    lock(s);
+    int live = !s->retired && matching(s, sender) && matching(s, recipient);
+    if (live) {
+        ActorLane* from = &s->actors[sender.actor_slot];
+        ActorLane* to = &s->actors[recipient.actor_slot];
+        live = !from->retired && !to->retired;
+        if (live) {
+            const OresExecutionPhase from_phase =
+                ores_execution_phase(&from->authority);
+            const OresExecutionPhase to_phase =
+                ores_execution_phase(&to->authority);
+            live = (from_phase == ORES_EXEC_READY ||
+                    from_phase == ORES_EXEC_RUNNING ||
+                    from_phase == ORES_EXEC_SUSPENDED)
+                && (to_phase == ORES_EXEC_READY ||
+                    to_phase == ORES_EXEC_RUNNING ||
+                    to_phase == ORES_EXEC_SUSPENDED);
+        }
+    }
+    const int accepted = live ? (commit(opaque) != 0) : 0;
+    unlock(s);
+    return accepted;
+}
+int ores_native_actor_scheduler_in_any_actor_turn(void) {
+    /* executing is installed only during a scheduler-owned callback and
+     * cleared before leaving it, including CONTROL and WAKE callbacks.
+     * A synthetic SourceTask worker is not exempt from this fence. */
+    return executing != NULL
+        && executing_actor.scheduler_domain != 0
+        && executing_claim.carrier != 0;
 }
 /* Actor-specific authority, not merely membership in the same worker pool. */
 int ores_native_actor_scheduler_is_current_actor(
@@ -1577,7 +1652,7 @@ int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* s) {
 int ores_native_actor_scheduler_drain(OresNativeActorScheduler* s) {
     if (!s || executing == s) return 0;
     lock(s);
-    while (s->outstanding)
+    while (s->outstanding || s->resource_loans)
         if (pthread_cond_wait(&s->drained, &s->lock) != 0) abort();
     unlock(s);
     return 1;
@@ -1585,7 +1660,8 @@ int ores_native_actor_scheduler_drain(OresNativeActorScheduler* s) {
 int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
     if (!s || executing == s) return 0;
     lock(s);
-    int ready = s->retired && !s->outstanding && !s->reserved_wakes;
+    int ready = s->retired && !s->outstanding && !s->reserved_wakes
+        && !s->resource_loans;
     if (ready) {
         for (size_t i = 0; i < s->actor_count; ++i) {
             ActorLane* lane = &s->actors[i];

@@ -109,6 +109,16 @@ int ores_native_actor_scheduler_stop(
  * lifecycle CONTROL. Queued DATA is abandoned with terminal accounting. */
 int ores_native_actor_scheduler_stop_sealed(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+/*
+ * Trusted runtime external-resource loan. Retain linearizes against STOP under
+ * the scheduler lock; a successful retain delays terminal publication and
+ * get_done until the exact incarnation releases it. Release remains valid
+ * after STOP but stale/recycled ActorRefs fail closed.
+ */
+int ores_native_actor_scheduler_retain_resource(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+int ores_native_actor_scheduler_release_resource(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
 /* Nonblocking host readiness/termination observations. Source-level
  * get_ready()/get_done() must return futures when compiler lowering exists.
  */
@@ -263,6 +273,24 @@ int ores_native_actor_scheduler_drain(OresNativeActorScheduler* scheduler);
 /* Whether this OS thread is currently executing a callback from scheduler.
  * Only intended for immediate deadlock prevention in VM teardown. */
 int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* scheduler);
+/*
+ * Trusted-host bounded, nonallocating commit. Both exact actor generations
+ * must be READY/RUNNING/SUSPENDED and not stopping or retired, serialized
+ * under the SAME scheduler lifecycle mutex used by STOP/retirement.
+ * The callback MUST NOT allocate, suspend, lock other mutexes, call a
+ * scheduler API, run guest code or destructors, or block the carrier.
+ * This is NOT a guest ABI, transport for functions, or a generic executor.
+ */
+typedef int (*OresNativeActorBoundedCommitV1)(void* opaque);
+int ores_native_actor_scheduler_commit_if_both_live_v1(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef sender,
+    OresNativeActorRef recipient, OresNativeActorBoundedCommitV1 commit,
+    void* opaque);
+/* Trusted host-only guard: true during ANY native actor scheduler callback,
+ * regardless of which scheduler owns the carrier. This does not grant actor
+ * authority; callers use it to reject unsafe fallback to foreign/root pools.
+ * Returns zero on external producer threads and between actor turns. */
+int ores_native_actor_scheduler_in_any_actor_turn(void);
 /* Exact live actor identity for trusted callback/FFI bridges only. */
 int ores_native_actor_scheduler_is_current_actor(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);

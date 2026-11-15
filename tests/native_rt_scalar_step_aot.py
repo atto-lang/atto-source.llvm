@@ -41,6 +41,14 @@ def main():
         assert "define void @oreslang_rt_scalar_frame_cancel" in accepted.stdout
         assert "define void @oreslang_rt_scalar_frame_init" in accepted.stdout
         assert "define i64 @oreslang_rt_scalar_frame_result" in accepted.stdout
+        # Generated IR contract: the source loop has a single source-bound
+        # branch and a precomputed dispatch endpoint, NOT a fuel predicate
+        # executed on every committed backedge.
+        assert "dispatch.batch.stop" in accepted.stdout, "missing batched endpoint"
+        assert "loop.batch.exit" in accepted.stdout, "missing batch exit"
+        assert "loop.fuel" not in accepted.stdout, "per-backedge fuel test regressed"
+        assert "fuel.remaining" not in accepted.stdout, "per-iteration fuel decrement regressed"
+        assert "counter.valid" in accepted.stdout, "corrupted frame counter guard missing"
         llvm_ir = out / "guest.ll"
         llvm_ir.write_text(accepted.stdout)
         exe = out / "run-guest"

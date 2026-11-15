@@ -13,6 +13,16 @@ esac
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 compiler="${ORESLANG_LLVMC:-$root/build/oreslang-llvmc}"
 clang="${CLANG:-clang}"
+# Strict opt-in: this only optimizes the currently admitted *single source* IR.
+# Cross-Oreslang-module LTO requires a future multi-unit compiler driver.
+lto_mode="${ORESLANG_AOT_LTO:-off}"
+lto_flags=()
+case "$lto_mode" in
+  off) ;;
+  full) lto_flags=(-flto -fuse-ld=lld) ;;
+  thin) lto_flags=(-flto=thin -fuse-ld=lld) ;;
+  *) echo 'ORESLANG_AOT_LTO must be off, full or thin.' >&2; exit 64 ;;
+esac
 source_dir="$(cd "$(dirname "$1")" && pwd -P)"
 source_file="$source_dir/$(basename "$1")"
 output_dir="$(cd "$(dirname "$2")" && pwd -P)"
@@ -33,6 +43,37 @@ fi
 # Build beside the output so publication is atomic and errors preserve old output.
 work="$(mktemp -d "$output_dir/.ores-aot.XXXXXX")"
 trap 'rm -rf -- "$work"' EXIT
+# Check real cross-module linking, not just acceptance of an LTO flag.
+# This synthetic LLVM IR canary is NOT a claim of Oreslang module support.
+if [[ "$lto_mode" != off ]]; then
+  cat > "$work/lto-helper.ll" <<'ORES_LTO_HELPER'
+define i32 @ores_lto_helper(i32 %x) {
+entry:
+  %r = add i32 %x, 1
+  ret i32 %r
+}
+ORES_LTO_HELPER
+  cat > "$work/lto-main.ll" <<'ORES_LTO_MAIN'
+declare i32 @ores_lto_helper(i32)
+define i32 @main() {
+entry:
+  %result = call i32 @ores_lto_helper(i32 41)
+  %is_correct = icmp eq i32 %result, 42
+  %status = select i1 %is_correct, i32 0, i32 1
+  ret i32 %status
+}
+ORES_LTO_MAIN
+  if ! "$clang" -O2 "${lto_flags[@]}" -x ir "$work/lto-helper.ll" "$work/lto-main.ll" -o "$work/lto-probe" >"$work/lto-probe.log" 2>&1; then
+    cat "$work/lto-probe.log" >&2
+    echo "Requested $lto_mode LTO cannot link two LLVM IR units with this toolchain." >&2
+    exit 69
+  fi
+  if ! "$work/lto-probe" >"$work/lto-execution.log" 2>&1; then
+    cat "$work/lto-execution.log" >&2
+    echo "Requested $lto_mode LTO canary did not execute correctly on the host." >&2
+    exit 69
+  fi
+fi
 "$compiler" --target=host "$source_file" > "$work/program.ll"
 # Known tracing-GC IR screen; not a complete linked-image/FFI collector proof.
 "$auditor" "$work/program.ll" >/dev/null

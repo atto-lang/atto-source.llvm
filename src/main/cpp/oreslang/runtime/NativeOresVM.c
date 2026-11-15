@@ -43,7 +43,9 @@ static int valid_domain(enum OresNativeVMDomain domain) {
     return domain >= ORES_NATIVE_VM_MAIN && domain < ORES_NATIVE_VM_DOMAIN_COUNT;
 }
 
-OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config) {
+static OresNativeVM* open_vm_internal(
+        const OresNativeVMConfig* config,
+        const OresNativeVMWakeConfig* wakes) {
     if (!config) return NULL;
     OresNativeVM* vm = (OresNativeVM*)calloc(1, sizeof(*vm));
     if (!vm) return NULL;
@@ -64,14 +66,16 @@ OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config) {
     }
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
         const OresNativeVMDomainConfig* p = &config->domains[i];
+        const OresNativeActorWakeFn on_wake =
+            wakes ? wakes->domains[i] : NULL;
         size_t workers = p->carrier_workers ? p->carrier_workers : 5;
         /* Validate all host callbacks and slot/capacity budgets before use.
          * NativeActorScheduler additionally enforces its allocation limits. */
         if (!p->on_message || !p->actor_slots || !p->mailbox_capacity
             || workers > 128) goto failed;
-        vm->schedulers[i] = ores_native_actor_scheduler_open_typed_control(
+        vm->schedulers[i] = ores_native_actor_scheduler_open_with_wakes(
             p->actor_slots, p->mailbox_capacity, workers,
-            p->on_message, p->on_control, p->on_failure, p->context);
+            p->on_message, p->on_control, p->on_failure, on_wake, p->context);
         if (!vm->schedulers[i]) goto failed;
         vm->supervisors[i] = (OresVMSupervisorRegistration*)calloc(
             p->actor_slots, sizeof(*vm->supervisors[i]));
@@ -97,6 +101,16 @@ failed:
         free(vm->supervisors[i]);
     free(vm);
     return NULL;
+}
+
+OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config) {
+    return open_vm_internal(config, NULL);
+}
+
+OresNativeVM* ores_native_vm_open_with_wakes(
+        const OresNativeVMConfig* config,
+        const OresNativeVMWakeConfig* wakes) {
+    return config && wakes ? open_vm_internal(config, wakes) : NULL;
 }
 
 static void control_lock(OresNativeVM* vm);
@@ -391,6 +405,83 @@ int ores_native_vm_stop_sealed(
     return vm_stop(vm, domain, ref, 1);
 }
 
+int ores_native_vm_actor_resource_retain(
+        OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef ref) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_retain_resource(
+            vm->schedulers[domain], ref);
+}
+
+int ores_native_vm_actor_resource_release(
+        OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef ref) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_release_resource(
+            vm->schedulers[domain], ref);
+}
+
+int ores_native_vm_actor_reserve_wake(
+        OresNativeVM* vm, enum OresNativeVMDomain domain,
+        OresNativeActorRef producer, OresNativeActorRef target,
+        uint64_t continuation_slot, uint64_t continuation_generation,
+        uint64_t code_generation, uint64_t descriptor_generation,
+        OresNativeWakeTicket* out) {
+    if (out) *out = (OresNativeWakeTicket){0};
+    /* This VM surface deliberately does not expose the scheduler's internal
+     * cross-scheduler target mode. A separate authenticated bridge is required
+     * before a continuation may target another scheduler/domain. */
+    return vm && valid_domain(domain) && out
+        && producer.scheduler_domain != 0
+        && target.scheduler_domain == producer.scheduler_domain
+        && ores_native_actor_scheduler_reserve_wake(
+            vm->schedulers[domain], producer, target,
+            continuation_slot, continuation_generation,
+            code_generation, descriptor_generation, out);
+}
+int ores_native_vm_actor_transfer_wake(
+        OresNativeVM* vm, enum OresNativeVMDomain domain,
+        OresNativeWakeTicket ticket) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_transfer_wake(
+            vm->schedulers[domain], ticket);
+}
+int ores_native_vm_actor_cancel_wake(
+        OresNativeVM* vm, enum OresNativeVMDomain domain,
+        OresNativeWakeTicket ticket) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_cancel_wake(
+            vm->schedulers[domain], ticket);
+}
+int ores_native_vm_actor_abort_transferred_wake(
+        OresNativeVM* vm, enum OresNativeVMDomain domain,
+        OresNativeWakeTicket ticket) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_abort_transferred_wake(
+            vm->schedulers[domain], ticket);
+}
+OresNativeWakePublishStatus ores_native_vm_actor_publish_wake(
+        OresNativeVM* vm, enum OresNativeVMDomain domain,
+        OresNativeWakeTicket ticket, OresNativeWakeOutcome outcome) {
+    return vm && valid_domain(domain)
+        ? ores_native_actor_scheduler_publish_wake(
+            vm->schedulers[domain], ticket, outcome)
+        : ORES_NATIVE_WAKE_INVALID;
+}
+int ores_native_vm_actor_is_current_wake(
+        OresNativeVM* vm, enum OresNativeVMDomain domain,
+        OresNativeWakeTicket ticket) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_is_current_wake(
+            vm->schedulers[domain], ticket);
+}
+size_t ores_native_vm_actor_outstanding_wake_loans(
+        OresNativeVM* vm, enum OresNativeVMDomain domain,
+        OresNativeActorRef producer) {
+    return vm && valid_domain(domain)
+        ? ores_native_actor_scheduler_outstanding_wake_loans(
+            vm->schedulers[domain], producer)
+        : 0;
+}
+
 int ores_native_vm_poll_done(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef ref) {
     return vm && valid_domain(domain)
@@ -672,6 +763,10 @@ int ores_native_vm_close(OresNativeVM* vm) {
     vm->nio_destroy = NULL;
     control_unlock(vm);
     if (nio_backend) nio_destroy(nio_backend);
+
+    /* No callback can synchronously join or destroy its own scheduler. */
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
+        if (!ores_native_actor_scheduler_drain(vm->schedulers[i])) return 0;
 
     /* Caller-owned API/producer fence is required before memory reclamation. */
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)

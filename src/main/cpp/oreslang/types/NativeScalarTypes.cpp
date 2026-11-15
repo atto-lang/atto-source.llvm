@@ -184,6 +184,10 @@ void validate_native_scalar_types(const Program& program) {
                 if (left.kind == Kind::String && right.kind == Kind::String) return left;
                 return join(*e.left, left, *e.right, right, e.offset, "addition requires int, f64 or string");
             }
+            case E::Modulo: case E::BitXor:
+                require(expression(*e.left, locals), scalar(false), e.offset, "arithmetic requires int");
+                require(expression(*e.right, locals), scalar(false), e.offset, "arithmetic requires int");
+                return scalar(false);
             case E::ShiftLeft: case E::ShiftRight: case E::ShiftUnsignedRight:
                 require(expression(*e.left, locals), scalar(false), e.offset,
                         "shift left operand requires int");
@@ -313,7 +317,15 @@ void validate_native_scalar_types(const Program& program) {
         std::function<void(const std::vector<Statement>&, Locals&)> statements;
         statements = [&](const std::vector<Statement>& items, Locals& scope) {
             for (const auto& item : items) {
-                if (item.kind == Statement::Kind::ForIndex) {
+                if (item.kind == Statement::Kind::UsingTelemetrySpan) {
+                    // Compiler-owned AOT tracing token is not a scalar,
+                    // class, field receiver or guest-visible local. Recurse
+                    // through its lexical body under a child type scope
+                    // without inventing a type for the opaque alias. Other
+                    // admission passes enforce nonescape and affine safety.
+                    Locals body = scope;
+                    statements(item.then_statements, body);
+                } else if (item.kind == Statement::Kind::ForIndex) {
                     require(expression(*item.branch_local->initializer, scope), scalar(false), item.offset, "index initializer requires int");
                     Locals body = scope; body.emplace(item.branch_local->name, scalar(false));
                     require(expression(*item.condition, body), scalar(true), item.offset, "index condition requires bool");
