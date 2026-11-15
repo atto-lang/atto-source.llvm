@@ -1,0 +1,6 @@
+// Must reject: nested constructors with Unknown slots cannot publish a transpose ABI.
+fnc invalid(): void {
+  val nested = Ok(None);
+  val transposed = nested.transpose();
+  return;
+}
