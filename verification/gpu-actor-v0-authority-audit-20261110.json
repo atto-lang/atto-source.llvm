@@ -1,0 +1,65 @@
+{
+  "schema": "attolang.gpu-actor-v0-privileged-authority-audit/1",
+  "recordedAt": "2026-11-10",
+  "source": {
+    "repo": "ores-truffle-oreslang/oreslang-source.llvm",
+    "branch": "audit/gpu-opencl-v0-authority-boundary-20261110",
+    "stackedOnPr": 1669,
+    "blobs": {
+      "src/main/cpp/oreslang/runtime/GpuActorHostTurnBridgeV0.hpp": "75a15383c3f7ca2d098aa10e7d71b950c7653b66",
+      "tests/gpu_actor_host_turn_bridge_v0_test.cpp": "785c4f84d68e8d9743f2ae6251e0da85d8e2b0cb",
+      "tests/gpu_actor_v0_completion_authority_negative.cpp": "8a24bd5f48938403958b013f93afaeff8c97d463",
+      "tests/cmake/GpuActorV0CompletionAuthorityGate.cmake": "6f646cfeeaf2557204a4d09f03684fd4197bf3ef",
+      "CMakeLists.txt": "855004eba014805f2dd2902edfc3b41de7c44776"
+    }
+  },
+  "finding": {
+    "id": "GPU-V0-UNPROVEN-BOOL-ENTRYPOINT",
+    "severity": "high",
+    "status": "mitigated-native-ordinary-build",
+    "before": "any native translation unit including HostTurnBridgeV0.hpp could directly invoke Boolean finish/release acknowledgements",
+    "mitigation": "private-by-default host provider proof methods, friend GpuActorQuarantineRegistryV1, explicit test-only legacy seam, compile-negative CTest",
+    "scopeLimit": "C++ private access is compile-time and does not defend hostile native binaries or malicious trusted provider implementations"
+  },
+  "carrier": {
+    "repo": "scintilla-run/scintilla-run-e2e",
+    "branch": "carrier/gpu-opencl-v0-authority-20261110",
+    "head": "532e7991fcf6e72a2be2ab9d10b81b982102ca9d",
+    "runId": 42953785708,
+    "jobId": 130303966836,
+    "url": "https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42953785708",
+    "exactBlobIdentityChecked": true,
+    "tokenFreeCrossOrgMirror": true,
+    "gccAsanUbsan": "PASS",
+    "clangStrict": "PASS",
+    "v2MockAssertionsEachCompiler": 128,
+    "v1HostAssertionsEachCompiler": 6329,
+    "v0HostAssertionsEachCompiler": 6257,
+    "logicalActors": 1024,
+    "mockActorTurns": 4096,
+    "preexistingOpenClG3Provider": "PASS_GCC_ASAN_UBSAN",
+    "negativeCompileGcc": "PASS_PRIVATE_ACCESS_DENIED",
+    "negativeCompileClang": "PASS_PRIVATE_ACCESS_DENIED",
+    "standaloneCMakeGateGcc": "PASS",
+    "standaloneCMakeGateClang": "PASS",
+    "fullRepositoryCMakeCTest": "NOT_EXECUTED"
+  },
+  "physicalGpu": {
+    "probeAttempted": true,
+    "probeCompiled": true,
+    "outcome": "GPU_ACTOR_V2_NO_GPU_RUNTIME",
+    "exitCode": 77,
+    "actualGpuEvent": false,
+    "cpuFallback": false
+  },
+  "remainingBlockers": [
+    "trusted native V1 provider can fabricate local event claims; physical provider trust not independently attested",
+    "test-only V0 macro remains build-selectable; forbid it in production",
+    "process-crash durable supervisor quarantine unimplemented",
+    "supervised recovery worker for potentially blocking clFinish unimplemented",
+    "physical GPU kernel and compiled AttoLang actor guest remain NOT_EXECUTED",
+    "full compiler CMake/CTest and five-backend parity remain unverified"
+  ],
+  "releaseReady": false,
+  "draftOnly": true
+}

@@ -86,6 +86,10 @@ private:
         std::size_t link_count = 0;
         std::uint64_t generation = 1;
         bool live = false;
+        // Intrusive construction-order links; NodeCapacity is the null index.
+        // Reuse does not leave historical slot entries that could double-drop.
+        std::size_t older = NodeCapacity;
+        std::size_t newer = NodeCapacity;
     };
 
     const ActorHeapIdentity owner_;
@@ -94,6 +98,8 @@ private:
     std::array<Slot, NodeCapacity> slots_{};
     std::size_t active_nodes_ = 0;
     std::size_t active_edges_ = 0;
+    std::size_t oldest_ = NodeCapacity;
+    std::size_t newest_ = NodeCapacity;
     bool retired_ = false;
     bool dropping_ = false;
 
@@ -107,6 +113,21 @@ private:
         require_owner(requester);
         if (borrow_gate_.sealed() || dropping_)
             throw std::logic_error("actor graph heap is retiring or executing destructor glue");
+    }
+
+    // Only trusted host buffers OUTSIDE this actor's private heap object may
+    // enter a byte-copy boundary. A pointer into slots, metadata or the
+    // owner/borrow gate would expose private data or corrupt allocator state.
+    // Valid requests do not allocate; zero-byte copies remain no-ops.
+    void require_external_span(const void* buffer, std::size_t bytes) const {
+        if (!bytes) return;
+        if (!buffer) throw std::invalid_argument("null actor graph host buffer");
+        const auto start = reinterpret_cast<std::uintptr_t>(buffer);
+        const auto owned = reinterpret_cast<std::uintptr_t>(this);
+        const auto max = std::numeric_limits<std::uintptr_t>::max();
+        if (bytes > max - start || sizeof(*this) > max - owned ||
+                (start < owned + sizeof(*this) && owned < start + bytes))
+            throw std::invalid_argument("actor graph host buffer aliases private heap or wraps");
     }
 
     Slot& require_node(Handle id) {
@@ -124,21 +145,52 @@ private:
         return *ref;
     }
 
+    void append_construction_order(std::size_t index) noexcept {
+        Slot& slot = slots_[index];
+        slot.older = newest_;
+        slot.newer = NodeCapacity;
+        if (newest_ == NodeCapacity) oldest_ = index;
+        else slots_[newest_].newer = index;
+        newest_ = index;
+    }
+
+    void detach_construction_order(std::size_t index) noexcept {
+        Slot& slot = slots_[index];
+        if (slot.older == NodeCapacity) oldest_ = slot.newer;
+        else slots_[slot.older].newer = slot.newer;
+        if (slot.newer == NodeCapacity) newest_ = slot.older;
+        else slots_[slot.newer].older = slot.older;
+        slot.older = NodeCapacity;
+        slot.newer = NodeCapacity;
+    }
+
     void erase_all() noexcept {
         // Revoke every public handle BEFORE any destructor can observe it.
-        // Destructor glue must not reenter this arena or follow weak links.
+        // Drop in reverse *successful construction* order, not physical
+        // slot order: free-slot reuse must never reorder or double-drop owners.
+        // The intrusive list requires no allocations and preserves the
+        // O(NodeCapacity) actor retirement bound, including graph cycles.
         retired_ = true;
         dropping_ = true;
-        for (auto& slot : slots_) {
+        for (std::size_t index = newest_; index != NodeCapacity;) {
+            Slot& slot = slots_[index];
+            const std::size_t previous = slot.older;
             auto* drop = slot.drop;
             slot.drop = nullptr;
             const bool was_live = slot.live;
             slot.live = false;
             if (was_live && drop) drop(slot.payload.data());
+            index = previous;
+        }
+        oldest_ = newest_ = NodeCapacity;
+        for (auto& slot : slots_) {
+            slot.drop = nullptr;
+            slot.live = false;
             std::fill(slot.payload.begin(), slot.payload.end(), std::byte{0});
             slot.links.fill(LocalLinkRef{});
             slot.length = 0;
             slot.link_count = 0;
+            slot.older = slot.newer = NodeCapacity;
             if (slot.generation < std::numeric_limits<std::uint64_t>::max())
                 ++slot.generation;
         }
@@ -197,6 +249,7 @@ public:
         require_open_access(actor);
         if (length > NodeBytes || (length && bytes == nullptr))
             throw std::invalid_argument("invalid actor graph payload");
+        require_external_span(bytes, length);
         for (std::size_t i = 0; i < NodeCapacity; ++i) {
             Slot& slot = slots_[i];
             if (slot.live || slot.generation == std::numeric_limits<std::uint64_t>::max())
@@ -208,6 +261,7 @@ public:
             slot.link_count = 0;
             slot.drop = nullptr;
             slot.live = true;
+            append_construction_order(i);
             ++active_nodes_;
             return Handle{heap_id_, static_cast<std::uint32_t>(i), slot.generation};
         }
@@ -242,6 +296,7 @@ public:
                 static_cast<T*>(address)->~T();
             };
             slot.live = true;
+            append_construction_order(i);
             ++active_nodes_;
             return Handle{heap_id_, static_cast<std::uint32_t>(i), slot.generation};
         }
@@ -255,6 +310,7 @@ public:
         if (slot.drop) throw std::logic_error("owned objects are not raw byte payloads");
         if (capacity < slot.length || (slot.length && destination == nullptr))
             throw std::invalid_argument("output buffer too small");
+        require_external_span(destination, slot.length);
         if (slot.length) std::memcpy(destination, slot.payload.data(), slot.length);
         return slot.length;
     }
@@ -265,6 +321,7 @@ public:
         if (slot.drop) throw std::logic_error("owned objects cannot be overwritten as bytes");
         if (length > NodeBytes || (length && !bytes))
             throw std::invalid_argument("invalid actor graph payload");
+        require_external_span(bytes, length);
         std::fill(slot.payload.begin(), slot.payload.end(), std::byte{0});
         if (length) std::memcpy(slot.payload.data(), bytes, length);
         slot.length = length;
@@ -317,6 +374,7 @@ public:
         }
         active_edges_ -= deleted.link_count;
         auto* drop = deleted.drop;
+        detach_construction_order(id.slot);
         deleted.drop = nullptr;
         deleted.live = false;
         ++deleted.generation;

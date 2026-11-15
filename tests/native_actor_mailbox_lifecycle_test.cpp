@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <stdexcept>
+#include <optional>
 #include <utility>
 
 using oreslang::runtime::NativeActorGroup;
@@ -29,7 +30,16 @@ int main() {
     CHECK(inbox.snapshot() == 2);
     CHECK(actor.outstanding_resource_loans() == 2);
 
-    auto checked_out = inbox.try_receive();
+    // A bound inbox may only dequeue under a real generation-fenced
+    // NativeActorGroup user turn; raw receive is forbidden.
+    bool raw_denied = false;
+    try { (void)inbox.try_receive(); }
+    catch (const std::logic_error&) { raw_denied = true; }
+    CHECK(raw_denied);
+    std::optional<Inbox::Delivery> checked_out;
+    CHECK(inbox.dispatch_next(group, actor, [&](Inbox::Delivery& receipt) {
+        checked_out.emplace(std::move(receipt));
+    }) == Inbox::Dispatch::User);
     CHECK(checked_out);
     CHECK(checked_out->lane() == Lane::Urgent);
     CHECK(checked_out->sequence() == 2);
