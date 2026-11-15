@@ -13,6 +13,7 @@
 #include <limits>
 #include <functional>
 #include <cctype>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -316,12 +317,13 @@ public:
         }
         // Contiguous comparison/logical operators are single tokens, matching
         // the Java/Graal precedence grammar.
-        // %, ^ and ^^ were removed from AttoLang: reject at the token
-        // boundary instead of silently reviving legacy precedence.
-        if (ch == '%' || ch == '^')
+        // % and single ^ were removed from AttoLang: reject at the token
+        // boundary instead of silently reviving legacy precedence. ^^ (xor)
+        // stays a contiguous operator token, as on main.
+        if (ch == '%' || (ch == '^' && source_.substr(at_, 2) != "^^"))
             throw std::runtime_error("removed AttoLang source operator at byte " +
                 std::to_string(start));
-        for (std::string_view op : {"->", "::", "|>", "==", "!=", "<=", ">=", "&&", "||"}) {
+        for (std::string_view op : {"->", "::", "|>", "==", "!=", "<=", ">=", "&&", "||", "^^"}) {
             if (source_.substr(at_, 2) == op) {
                 at_ += 2;
                 return {Kind::Symbol, source_.substr(start, 2), start};
@@ -4493,15 +4495,16 @@ private:
             std::string literal(token_.text);
             // Java's lexer admits digit separators in floating literals.
             literal.erase(std::remove(literal.begin(), literal.end(), '_'), literal.end());
-            double number = 0.0;
-            const auto parsed = std::from_chars(literal.data(),
-                literal.data() + literal.size(), number, std::chars_format::general);
-            if (parsed.ptr != literal.data() + literal.size())
+            // libc++ 19 has no floating std::from_chars, so use the C-locale
+            // strtod (the compiler never calls setlocale) on a token already
+            // restricted to decimal digits, '.', and an exponent. strtod is
+            // correctly rounded; Java rounds an out-of-range literal to
+            // infinity or zero, which strtod's ERANGE results match.
+            if (literal.empty() || literal.find_first_not_of("0123456789.eE+-") != std::string::npos)
                 fail("native f64 literal is malformed");
-            // Java rounds an out-of-range literal to infinity or zero.
-            if (parsed.ec == std::errc::result_out_of_range)
-                number = std::strtod(literal.c_str(), nullptr);
-            else if (parsed.ec != std::errc{})
+            char* parsed_end = nullptr;
+            const double number = std::strtod(literal.c_str(), &parsed_end);
+            if (parsed_end != literal.c_str() + literal.size())
                 fail("native f64 literal is malformed");
             auto expr = make_expression(Expression::Kind::Floating, offset);
             expr->floating = number;

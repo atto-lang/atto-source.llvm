@@ -163,6 +163,37 @@ positive scoped_f64_mutation 'pub fnc main(): int {
   return 86;
 }'
 positive integer_control 'pub fnc main(): int { return 42; }'
+# Numerical M1 scalar prerequisites (from #1236): these do NOT execute
+# num.atto's imported f64 List/Result/test-harness library.
+positive num_m1_negative_domain 'pub fnc main(): int {
+  val f64 negative = 0.0 - 1.0;
+  if negative < 0.0; then return 42; fi
+  return 86;
+}'
+positive num_m1_tiny_magnitude 'pub fnc main(): int {
+  val f64 tiny = 1.0e-100;
+  if tiny > 0.0; then
+    if tiny < 1.0e-99; then return 42; fi
+  fi
+  return 86;
+}'
+positive num_m1_huge_magnitude 'pub fnc main(): int {
+  val f64 huge = 1.0e300;
+  if huge > 1.0e299; then
+    if huge < 1.0e301; then return 42; fi
+  fi
+  return 86;
+}'
+positive num_m1_overflow_infinity 'pub fnc main(): int {
+  val f64 overflowed = 1.0e308 * 1.0e308;
+  if overflowed > 1.0e308; then return 42; fi
+  return 86;
+}'
+positive num_m1_scalar_reduction_seed 'pub fnc main(): int {
+  val f64 reduced = 1.0 + 2.0 + 3.0 + 4.0;
+  if reduced == 10.0; then return 42; fi
+  return 86;
+}'
 positive f64_abi_gradient 'fnc gradient(f64 weight, f64 x, f64 target): f64 {
   return 2.0 * (weight * x + 1.0 - target) * x;
 }
@@ -393,7 +424,6 @@ positive f64_literal_scoped_assignment 'pub fnc main(): int {
 
 # Removed source operators must fail lexically, before producing LLVM IR.
 negative removed_percent 'pub fnc main(): int { return 5 % 3; }' 'removed AttoLang source operator'
-negative removed_double_caret 'pub fnc main(): int { return true ^^ false; }' 'removed AttoLang source operator'
 negative removed_single_caret 'pub fnc main(): int { return 5 ^ 3; }' 'removed AttoLang source operator'
 # Source must fail before IR whenever a numeric conversion is implicit.
 negative implicit_f64_binding 'pub fnc main(): int {
@@ -435,6 +465,6 @@ negative f64_shift_unsigned 'pub fnc main(): int {
   val int value = 8.0 >>> 1;
   return value;
 }' 'native shift operands require int'
-[[ "$pass" -eq 42 && "$reject" -eq 24 ]] ||
+[[ "$pass" -eq 47 && "$reject" -eq 23 ]] ||
   { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
-echo "NATIVE_F64_SCALAR_GUESTS_PASS=42; NEGATIVE_NO_IR_PASS=24"
+echo "NATIVE_F64_SCALAR_GUESTS_PASS=47; NEGATIVE_NO_IR_PASS=23"

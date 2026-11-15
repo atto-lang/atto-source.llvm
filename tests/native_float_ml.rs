@@ -106,7 +106,6 @@ fn main() {
         ("decimal_suffix", "val float x = 1.5d; stdio.stdout.println(x);", "decimal literal unsupported"),
         ("f32_requires_binary32", "val f32 x = 1.0; stdio.stdout.println(x);", "native f32 requires binary32 lowering"),
         ("removed_percent", "let int a = 7; let int b = 2; stdio.stdout.println(a % b);", "removed AttoLang source operator"),
-        ("removed_double_caret", "stdio.stdout.println(true ^^ false);", "removed AttoLang source operator"),
         ("removed_single_caret", "stdio.stdout.println(5 ^ 3);", "removed AttoLang source operator"),
         ("implicit_float_binding", "val float x = 1; stdio.stdout.println(x);", "requires f64, got int"),
         ("mixed_numeric_arithmetic", "stdio.stdout.println(1.0 + 1);", "requires explicit numeric conversion"),

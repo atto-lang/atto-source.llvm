@@ -10,7 +10,7 @@
 
 namespace oreslang {
 inline std::string native_sum_name(NativeSumType::Kind kind, ScalarType value, ScalarType error = ScalarType::I64) {
-    auto name = [](ScalarType t) { return t == ScalarType::String ? "String" : t == ScalarType::Bool ? "bool" : "int"; };
+    auto name = [](ScalarType t) { return t == ScalarType::F64 ? "float" : t == ScalarType::String ? "String" : t == ScalarType::Bool ? "bool" : "int"; };
     return std::string(kind == NativeSumType::Kind::Option ? "Option<" : "Result<") + name(value) +
         (kind == NativeSumType::Kind::Result ? std::string(",") + name(error) : "") + ">";
 }
@@ -40,7 +40,9 @@ inline void resolve_native_sums(Program& program) {
     // The recursive functor rules never authorize native nested payload ABI.
     std::unordered_set<std::string> admitted_sum_names;
     const auto is_scalar = [](ScalarType kind) {
-        return kind == ScalarType::I64 || kind == ScalarType::Bool || kind == ScalarType::String;
+        // f64 is a direct IEEE binary64 scalar payload (no owned storage).
+        return kind == ScalarType::I64 || kind == ScalarType::Bool ||
+            kind == ScalarType::String || kind == ScalarType::F64;
     };
     for (const auto& sum : program.sum_types) {
         if ((sum.kind != NativeSumType::Kind::Option && sum.kind != NativeSumType::Kind::Result) ||

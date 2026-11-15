@@ -11,7 +11,7 @@ and method values, `Array<float>`, `Option<float>`, `Result<float, E>`.
 | `val float x = 1;`, float parameter, field, return or element given an int | Rejected: no implicit conversion |
 | `1 + 2.5`, `x < 1`, `c ? 1 : 2.5` | Rejected: mixed numeric operands require explicit conversion |
 | `1 / 2` | Real division, `0.5`. `1 / 0` is `Infinity`; the result never assigns to `int` |
-| `5.5 % 2`, `5 % 3`, `^`, `^^` | Removed source operators; lexical error before IR |
+| `5.5 % 2`, `5 % 3`, `^` | Removed source operators; lexical error before IR (`^^` is xor and keeps main's handling) |
 | `2 == 2.0` | Rejected: mixed int/f64 equality |
 | `1.0e400`, `1.0e-400`, `1_000.5` | Infinity, zero and `1000.5`, as Java's lexer rounds them |
 | `<`, `==` with NaN or signed zero | IEEE `fcmp`. See the divergence below |
