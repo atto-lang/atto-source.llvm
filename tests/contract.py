@@ -122,7 +122,10 @@ def main():
     # Native optimizer and sanitizer matrices require actual Clang execution.
     # Without --run they must fail, not yield a false-green compile-only gate.
     parser.add_argument("--opt-level", choices=("0", "1", "2", "3"))
-    parser.add_argument("--sanitize", choices=("address,undefined",))
+    # Clang's -fsanitize at a pre-generated IR boundary can link sanitizer
+    # runtimes without adding memory-access instrumentation. This is only an
+    # executable toolchain/link smoke, never ASan/UBSan coverage evidence.
+    parser.add_argument("--sanitizer-runtime-smoke", action="store_true")
     parser.add_argument("--target")
     parser.add_argument("--native-runtime")
     parser.add_argument("--experimental-owned-int", action="store_true")
@@ -146,8 +149,8 @@ def main():
             "--no-main-link cannot request successful execution")
     require(args.opt_level is None or (args.run is not None and bool(args.clang)),
             "--opt-level requires an executable --run and --clang")
-    require(args.sanitize is None or (args.run is not None and bool(args.clang)),
-            "--sanitize requires an executable --run and --clang")
+    require(not args.sanitizer_runtime_smoke or (args.run is not None and bool(args.clang)),
+            "--sanitizer-runtime-smoke requires an executable --run and --clang")
     require(args.native_runtime is None or args.run is not None,
             "--native-runtime requires --run")
     require(not args.verify_object or bool(args.clang),
@@ -284,7 +287,7 @@ def main():
         clang_cmd = [args.clang]
         if args.opt_level is not None:
             clang_cmd.append("-O" + args.opt_level)
-        if args.sanitize is not None:
+        if args.sanitizer_runtime_smoke:
             clang_cmd.extend(["-fsanitize=address,undefined",
                               "-fno-omit-frame-pointer"])
         clang_cmd.extend(["-x", "ir", "-"])
