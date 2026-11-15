@@ -38,6 +38,7 @@ typedef struct SourceActor {
      * recycled into an unrelated actor within the same source program. */
     struct SourceActor* replacement;
     int restart_decided;
+    int restart_settled;
     int tombstone;
     /* Accepted guest DATA snapshot and waiters are guarded by group.mutex.
      * Physical callbacks signal this preinitialized condition after their
@@ -735,6 +736,10 @@ static void source_supervisor_notice(
             remaining = original->restart_remaining - 1;
         }
     }
+    if (original && original->restart_decided && !approved) {
+        original->restart_settled = 1;
+        ensure(pthread_cond_broadcast(&group.supervisor_progress) == 0);
+    }
     group_unlock();
     if (approved) {
         SourceActor* fresh = (SourceActor*)
@@ -747,6 +752,7 @@ static void source_supervisor_notice(
             && original->ref.actor_slot == failure.child.actor_slot
             && original->replacement == NULL);
         original->replacement = fresh;
+        original->restart_settled = 1;
         ensure(pthread_cond_broadcast(&group.supervisor_progress) == 0);
         group_unlock();
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
@@ -876,6 +882,7 @@ void* oreslang_source_actor_spawn_supervised_budgeted(
     instance->fields_count = fields;
     instance->replacement = NULL;
     instance->restart_decided = 0;
+    instance->restart_settled = 0;
     instance->tombstone = 0;
     instance->admitted_sends = 0;
     instance->flush_waiters = 0;
