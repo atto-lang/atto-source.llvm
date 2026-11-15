@@ -1,0 +1,9 @@
+// Independent LLVM decrement fixture.
+define module attoxp_counter_decrement as
+  pub fnc decrement(int current): int {
+    return current - 1;
+  }
+  pub fnc main(): int {
+    return decrement(42);
+  }
+end

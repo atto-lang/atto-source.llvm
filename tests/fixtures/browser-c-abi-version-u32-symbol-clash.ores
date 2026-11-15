@@ -1,0 +1,3 @@
+@CExportU32("ores_browser_abi_version")
+pub fnc browser_native_abi_v1(): int { return 1; }
+pub fnc ores_browser_abi_version(): int { return 1; }

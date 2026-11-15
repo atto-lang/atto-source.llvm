@@ -1,0 +1,5 @@
+// Must compile but trap at runtime: Java/Graal rejects distance -1.
+pub fnc main(): int {
+  let int invalid = -1;
+  return 255 >> invalid;
+}

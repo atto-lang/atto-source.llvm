@@ -1,0 +1,74 @@
+name: Native LLVM ODB1 bitshift guest parity
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'src/main/cpp/oreslang/types/OwnershipChecker.cpp'
+      - 'tests/fixtures/odb1-bitshift-*.atto'
+      - 'tests/native_odb1_bitshift_source_execution.sh'
+      - 'tests/native_odb1_shift_host_oracle.cpp'
+      - '.github/workflows/native-odb1-bitshift-guest-parity.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  real-llvm-guest-shift:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact source and script syntax
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          bash -n tests/native_odb1_bitshift_source_execution.sh
+          echo "LLVM_ODB1_SOURCE_HEAD=$EXPECTED_HEAD"
+          echo "LLVM_ODB1_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Install native LLVM compiler toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang llvm-dev cmake ninja-build
+          llvm-config --version
+          clang --version | head -1
+      - name: Verify 19 signed-i64 reference vectors with Clang, GCC and sanitizers (HOST ONLY)
+        run: |
+          set -euo pipefail
+          for compiler in clang++ g++; do
+            "$compiler" -std=c++17 -O2 -Wall -Wextra -Wpedantic \
+              -Wconversion -Werror tests/native_odb1_shift_host_oracle.cpp \
+              -o "$RUNNER_TEMP/odb1-shift-oracle"
+            "$RUNNER_TEMP/odb1-shift-oracle"
+          done
+          clang++ -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/native_odb1_shift_host_oracle.cpp \
+            -o "$RUNNER_TEMP/odb1-shift-oracle-sanitized"
+          ASAN_OPTIONS=detect_leaks=1 "$RUNNER_TEMP/odb1-shift-oracle-sanitized"
+      - name: Build actual oreslang-llvmc from this checkout
+        run: |
+          set -euo pipefail
+          cmake -G Ninja -S . -B "$RUNNER_TEMP/odb1-bitshift-build" \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+            -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build "$RUNNER_TEMP/odb1-bitshift-build" \
+            --target oreslang-llvmc --parallel 2
+          test -x "$RUNNER_TEMP/odb1-bitshift-build/oreslang-llvmc"
+          sha256sum "$RUNNER_TEMP/odb1-bitshift-build/oreslang-llvmc"
+      - name: Compile LLVM IR, link and execute real Oreslang guests
+        env:
+          ORESLANG_LLVMC: ${{ runner.temp }}/odb1-bitshift-build/oreslang-llvmc
+          CLANG: clang
+        run: |
+          set -euo pipefail
+          bash tests/native_odb1_bitshift_source_execution.sh
+      - name: No broad parity claim
+        run: echo 'Only native scalar i64 shifts were executed; full ODB1 List/Result/stdio guest and five-backend parity remain unverified.'

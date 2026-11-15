@@ -1,0 +1,10 @@
+define class OresModelMeta as
+  pub let int hidden = 42;
+end
+fnc read_oresllm(OresModelMeta *cfg): int {
+  return cfg.hidden;
+}
+pub fnc main(): int {
+  let OresModelMeta cfg = new OresModelMeta();
+  return read_oresllm(rt borrow cfg);
+}

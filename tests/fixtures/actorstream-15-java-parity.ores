@@ -1,0 +1,84 @@
+// Production actor pipeline feature gate: 15 actual compiled actors.
+// Source + 13 Transform stages + Sink. Signed i64 payload, 14 forward
+// and 14 backward messages, bounded one-flow scheduler admission.
+define enum Signal as
+    Data: int = 1
+    Result: int = 2
+end
+define pattern PipeMessages as
+    Signal.Data
+    Signal.Result
+end
+define actor Source as
+    receive(ActorMail<PipeMessages> mail): void {
+        match mail.value over
+            on Signal.Data n -> {
+                self.forward(Signal.Data(n));
+            }
+            on Signal.Result n -> {
+                if n == 32 then
+                    stdio.stdout.write("PIPE_15_RESULT_32");
+                else
+                    stdio.stdout.write("PIPE_15_WRONG_RESULT");
+                fi
+                self.end();
+            }
+        end
+        return;
+    }
+end
+define actor Transform as
+    receive(ActorMail<PipeMessages> mail): void {
+        match mail.value over
+            on Signal.Data n -> {
+                self.forward(Signal.Data(n + 1));
+            }
+            on Signal.Result n -> {
+                self.backward(Signal.Result(n + 1));
+                self.end();
+            }
+        end
+        return;
+    }
+end
+define actor Sink as
+    receive(ActorMail<PipeMessages> mail): void {
+        match mail.value over
+            on Signal.Data n -> {
+                self.backward(Signal.Result(n + 1));
+                self.end();
+            }
+            on Signal.Result n -> {
+                self.end();
+            }
+        end
+        return;
+    }
+end
+
+pub fnc make_actor_pipeline(): ActorStream {
+    return ActorUtils::pipe(
+        spawn Source(),
+        spawn Transform(),
+        spawn Transform(),
+        spawn Transform(),
+        spawn Transform(),
+        spawn Transform(),
+        spawn Transform(),
+        spawn Transform(),
+        spawn Transform(),
+        spawn Transform(),
+        spawn Transform(),
+        spawn Transform(),
+        spawn Transform(),
+        spawn Transform(),
+        spawn Sink()
+    );
+}
+
+pub async routine main(): void {
+    val route = make_actor_pipeline();
+    route.send(Signal.Data(5));
+    await route.get_done();
+    return;
+}
