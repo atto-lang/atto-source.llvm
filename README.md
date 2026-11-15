@@ -45,6 +45,10 @@ The guarded actor-state subset admits `critical-read |s| -> s.field` and one pur
 
 [Exact-tree native LLVM target-syntax runner](https://github.com/athlet-o/athleto-e2e/actions/runs/43666674489) passed 6 actor guest fixtures ×20 native ELF executions, 15 negative actor compiler fixtures, the existing 8,000-message stress and 1,255 scalar protocol fixtures. See [target syntax and guarded-state scope](docs/native-mtd-critical.md) and the immutable [target-syntax AOT receipt](contracts/native-llvm-target-mtd-v1.json).
 
+### Native actor security audit: bounded nominal types and sealed public state
+
+The [LLVM nominal and sealed-state hardening run](https://github.com/athlet-o/athleto-e2e/actions/runs/43669072054) passed the exact-tree private runner with 120 native actor guest executions, **19** negative actor fixtures, 8,000 concurrent mailbox messages, ASan/UBSan and 1,255 protocol cases. The compiler now rejects out-of-bounds nominal type indices with `E_TYPE_INDEX`, forbids `pub` actor-state fields in the target profile, and revalidates receiver `mtd` signatures after the production reparse. The immutable [audit receipt](contracts/native-llvm-nominal-sealed-hardening-v1.json) pins the executed 69-file source tree and its scope.
+
 ## Not yet implemented
 
 General-purpose state callback effects and lifetimes, concurrent reader/writer scheduling, borrow checking across suspension, supervisor panic CONTROL, typed `send` Result, per-actor cancellation/close and child spawning, work-stealing scheduler, full language AOT, QUIC/TLS/UDP, QPACK, HTTP/3 client/server loopback, and Windows/macOS/embedded profiles remain unimplemented. Browser/Node standalone WASM, JVM/GraalVM and .NET must each execute their own backend tests; byte-identical source does not establish parity.
