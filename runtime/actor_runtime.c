@@ -116,11 +116,9 @@ int32_t atto_actor_spawn(int32_t type_id) {
     }
     pthread_attr_t attr;
     int rc = pthread_attr_init(&attr);
-    if (rc == 0) rc = pthread_attr_setstacksize(&attr, ATTO_STACK_BYTES);
-    if (rc == 0) rc = pthread_create(&actor->thread, &attr, actor_worker, actor);
-    if (rc == 0 || rc == EINVAL) { /* pthread_attr_init always ran if set failed */
-        pthread_attr_destroy(&attr);
-    } else if (rc != 0) {
+    if (rc == 0) {
+        rc = pthread_attr_setstacksize(&attr, ATTO_STACK_BYTES);
+        if (rc == 0) rc = pthread_create(&actor->thread, &attr, actor_worker, actor);
         pthread_attr_destroy(&attr);
     }
     if (rc != 0) {
