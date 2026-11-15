@@ -766,10 +766,23 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // provenance. No guest log-site or dynamic instrumentation is implied.
     std::unordered_map<std::string, std::string> routine_source_ids;
     if (!checked_routines.empty()) {
+        // ModuleLoader may flatten imports into an independently renamed
+        // callable and clear the Program.imports list. Without per-unit
+        // provenance, a manifest for root.atto must never certify imported
+        // function bodies as if they originated in root.atto. Fail closed on
+        // both direct imports and compiler-qualified/imported symbols.
+        const bool has_cross_unit_callables = std::any_of(
+            source.functions.begin(), source.functions.end(),
+            [](const Function& fn) {
+                return fn.name.find('.') != std::string::npos ||
+                    fn.name.rfind("__ores_module_", 0) == 0;
+            });
         if (checked_routines.size() != source.functions.size() ||
+            !source.imports.empty() || has_cross_unit_callables ||
             !source.actors.empty() || !source.generators.empty() ||
             !source.classes.empty()) {
-            throw std::runtime_error("checked routine source IDs require exact scalar function coverage");
+            throw std::runtime_error(
+                "checked source IDs require exact single-unit scalar function coverage");
         }
         std::unordered_set<std::string> unique_routine_ids;
         for (const auto& id : checked_routines) {
