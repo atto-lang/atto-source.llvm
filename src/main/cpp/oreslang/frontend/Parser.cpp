@@ -3941,6 +3941,8 @@ private:
                         advance(); // mut
                         advance(); // borrow
                         require("!");
+                        if (token_.text == "mut")
+                            fail("duplicate mutable borrow qualifier");
                         auto result = make_expression(Expression::Kind::BorrowMut, start);
                         result->left = unary();
                         return result;
@@ -3957,6 +3959,8 @@ private:
                     // the attached bang: borrow! mut value.
                     const bool canonical_mutable_borrow =
                             operation == "borrow" && accept("mut");
+                    if (canonical_mutable_borrow && token_.text == "mut")
+                        fail("duplicate mutable borrow qualifier");
                     auto result = make_expression(
                         operation == "copy" ? Expression::Kind::Copy :
                         operation == "take" ? Expression::Kind::Take :
