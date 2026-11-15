@@ -69,6 +69,6 @@ The executed source was Git tree `f40cb5044af7ffb55cbd05dd7024cc7963d6042d` at `
 
 ## Release blockers and next implementation steps
 
-This is not yet the complete actor runtime. Implement `declare actor` and explicit `mtd` lowering with namespace/type resolution, sealed state access using only critical callbacks, ownership/borrow checking across suspension, a bounded cooperative work-stealing scheduler, native supervision and CONTROL priority on panic, typed `send` Results, explicit cancellation/close and actor-child lifecycle.
+This is not yet the complete actor runtime. The **target-syntax scalar subset** for `declare actor`, out-of-line `mtd`, and guarded `critical-read` / `critical-write` now has its own [native execution tests and scope](native-mtd-critical.md). The remaining gates are general-purpose critical callback effects and state lifetime/borrow checking across suspension, true concurrent reader access where appropriate, cooperative work-stealing, native supervision and priority CONTROL on panic, typed `send` Results, explicit cancellation/close and child lifecycle.
 
 Only after those are verified should the existing native `.atto` HTTP3 modules be wired to a real QUIC/TLS provider, QPACK decoder, actor-owned connections and client/server interoperability. Java/Graal, .NET and independent WASM backend runtime parity remain unverified.
