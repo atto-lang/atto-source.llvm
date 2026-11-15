@@ -1,0 +1,9 @@
+fnc illegal(borrow mut Array<float> data): int {
+  data.add(1.0);
+  return 0;
+}
+pub routine main(): int {
+  let mut Array<float> data = new Array<float>();
+  data.add(0.0);
+  return illegal(rt mut borrow data);
+}
