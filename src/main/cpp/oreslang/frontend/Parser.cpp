@@ -917,27 +917,52 @@ public:
                     program.functions.push_back(std::move(fn));
                     continue;
                 }
-                if (accept("ActorFrameBudget")) {
-                    // A resource-budget attribute, not a test-only guest hook.
-                    // Zero is a valid deny-all setting and must cause a
-                    // recoverable actor-local frame admission failure.
-                    require("(");
-                    if (token_.kind != Kind::Integer)
-                        fail("@ActorFrameBudget requires a literal 0..16");
-                    const std::string budget_literal(token_.text);
-                    if (budget_literal.size() > 2 ||
-                        !std::all_of(budget_literal.begin(), budget_literal.end(),
-                                     [](char c) { return c >= '0' && c <= '9'; }))
-                        fail("@ActorFrameBudget requires a literal 0..16");
-                    const unsigned budget = static_cast<unsigned>(std::stoul(budget_literal));
-                    if (budget > 16)
-                        fail("@ActorFrameBudget exceeds native actor frame limit (16)");
-                    advance();
-                    require(")");
+                if (token_.text == "ActorFrameBudget"
+                        || token_.text == "ActorLifetimeFrameBudget"
+                        || token_.text == "ActorRestartLimit") {
+                    std::uint32_t frame_budget = 16;
+                    std::uint32_t lifetime_budget = 0;
+                    std::uint32_t restart_limit = 0;
+                    std::unordered_set<std::string> seen;
+                    do {
+                        const std::string attr = identifier();
+                        if (attr != "ActorFrameBudget"
+                                && attr != "ActorLifetimeFrameBudget"
+                                && attr != "ActorRestartLimit")
+                            fail("unsupported stacked actor resource attribute");
+                        if (!seen.insert(attr).second)
+                            fail("duplicate actor resource attribute");
+                        require("(");
+                        if (token_.kind != Kind::Integer)
+                            fail("actor resource attribute requires a bounded decimal literal");
+                        const std::string literal(token_.text);
+                        if (literal.empty() || literal.size() > 2
+                            || !std::all_of(literal.begin(), literal.end(),
+                               [](char c) { return c >= '0' && c <= '9'; }))
+                            fail("actor resource attribute requires a bounded decimal literal");
+                        const unsigned budget = static_cast<unsigned>(std::stoul(literal));
+                        advance();
+                        require(")");
+                        if (attr == "ActorFrameBudget") {
+                            if (budget > 16)
+                                fail("@ActorFrameBudget exceeds native actor frame limit (16)");
+                            frame_budget = budget;
+                        } else if (attr == "ActorLifetimeFrameBudget") {
+                            if (budget < 1 || budget > 64)
+                                fail("@ActorLifetimeFrameBudget requires 1..64");
+                            lifetime_budget = budget;
+                        } else {
+                            if (budget > 4)
+                                fail("@ActorRestartLimit requires 0..4");
+                            restart_limit = budget;
+                        }
+                    } while (accept("@"));
                     require("define");
                     require("actor");
                     auto actor = actor_declaration();
-                    actor.frame_budget = budget;
+                    actor.frame_budget = frame_budget;
+                    actor.lifetime_frame_budget = lifetime_budget;
+                    actor.restart_limit = restart_limit;
                     program.actors.push_back(std::move(actor));
                 } else {
                     const MaxActorThreads cap = actor_max_threads_attribute();
