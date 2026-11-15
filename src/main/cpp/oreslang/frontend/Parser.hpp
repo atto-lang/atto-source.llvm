@@ -409,6 +409,9 @@ enum class MaxActorThreads : std::uint8_t { LOW = 1, MEDIUM = 2, HIGH = 3 };
 
 struct ActorDecl {
     std::string name;
+    // Contract metadata: native scalar actor transport is always int-only.
+    // Explicit 'sends' remains rejected until transitive effects exist.
+    bool declared_receives_i64 = false;
     std::vector<LocalBinding> fields; // bounded, actor-confined integer slots
     Function on_message; // exactly one synchronous pub on_message(int): int
     std::size_t offset = 0;
