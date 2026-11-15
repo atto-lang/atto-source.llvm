@@ -1305,7 +1305,8 @@ if(BUILD_TESTING)
         target_compile_options(oreslang-native-ownership-bang-aliases-test PRIVATE
             $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
         add_test(NAME native_ownership_bang_aliases_parser_and_checker
-            COMMAND oreslang-native-ownership-bang-aliases-test)
+            COMMAND oreslang-native-ownership-bang-aliases-test
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/ownership-bang-v1")
         set_tests_properties(native_ownership_bang_aliases_parser_and_checker
             PROPERTIES TIMEOUT 30)
 
