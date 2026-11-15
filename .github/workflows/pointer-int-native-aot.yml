@@ -44,7 +44,7 @@ jobs:
           test "$(git hash-object src/main/cpp/oreslang/backend/PointerIntCodegen.hpp)" = b461987568ae2cf4b51831105c583929b40c3d9c
           test "$(git hash-object tests/pointer_int_hir_admission.cpp)" = 4170a8ba49e1199dfca1bfaf6e701aae2637286b
           test ! -e src/main/cpp/oreslang/frontend/PointerIntAot.hpp
-          test "$(git hash-object tests/pointer_int_native_e2e.py)" = c33e9de3c03eb6072f882ee2893c13f3114bd453
+          test "$(git hash-object tests/pointer_int_native_e2e.py)" = e9f104ba81e6bcc4e4e88f088cebd24e1ebba0a7
           test "$(git hash-object src/main/cpp/oreslang/main.cpp)" = 12951e0c289458d135381089247916a83559240f
           git rev-parse HEAD HEAD^{tree}
           git status --porcelain
