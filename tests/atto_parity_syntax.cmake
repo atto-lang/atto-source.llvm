@@ -81,6 +81,9 @@ run_case(expect_err "${fixtures}/expect_err.atto" nonzero)
 run_case(import_fnc "${fixtures}/import_fnc/main.atto" 0)
 run_case(attolang_equality "${fixtures}/attolang_equality.atto" 0)
 run_case(do_ifnot_unless "${fixtures}/do_ifnot_unless.atto" 7)
+run_case(do_ifnot_loop_break "${fixtures}/do_ifnot_loop_break.atto" 3)
+run_case(do_unless_loop_break "${fixtures}/do_unless_loop_break.atto" 4)
+run_case(do_ifnot_nested_loops "${fixtures}/do_ifnot_nested_loops.atto" 2)
 
 # Strict native scalar equality enforces identical operand types. The
 # accepted aliases are all lowered to static comparison instructions.
@@ -121,9 +124,6 @@ reject_case(stdout_unknown_member
 reject_case(ifnot_break_requires_native_continuation
   "pub fnc main(): int { do ifnot false then break; fi return 0; }\n"
   "native break/continue in conditional arms requires verified loop continuation lowering")
-reject_case(unless_loop_requires_native_continuation
-  "pub fnc main(): int { loop { do unless false then break; fi } return 0; }\n"
-  "native realtime source loop requires verified LLVM continuation lowering")
 reject_case(unless_value_break_not_an_expression
   "pub fnc main(): int { return unless true then break else 7 fi; }\n"
   "value if/ifnot/unless branch must produce a value")
