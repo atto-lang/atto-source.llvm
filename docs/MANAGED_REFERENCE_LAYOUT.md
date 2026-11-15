@@ -145,6 +145,118 @@ reservation and stricter placement. Benchmark both before declaring either
 faster; don't allocate a 32-GiB virtual cage for every tiny actor.
 
 
+
+## Compiler-facing actor object fields (next native slice)
+
+The compiler analysis layer now also has
+`types/ManagedRefLayoutPlan.hpp`, a fail-closed physical-layout selector
+for **already-proven logical reference kinds**. Given authenticated actor
+heap and lifetime evidence, it selects 4-byte actor offsets, or an 8-byte
+native64 representation when the proven arena exceeds the compressed range
+or the caller deliberately requests native64. It rejects absent actor
+ownership/lifetime proof, invalid alignment and unsupported 32-bit actor
+lowering. Cross-actor capabilities, explicitly shared regions and FFI
+pointers stay separate physical categories; opaque capabilities never
+guess a native pointer width. Typed dense-row indices require their own
+row-identity/generation evidence.
+
+### Checked native LLVM lowering primitive
+
+`backend/ManagedRefLowering.hpp` now emits a verified LLVM control-flow
+fragment for a physical 32-bit `Ref<T>` field. It loads `i32`, checks
+non-null, invokes a **trusted original-generation validator** bound to
+the actor arena base/span and the exact stored bits, zero-extends the
+encoded offset to `i64`, shifts by 3, and checks requested access size,
+8-byte base alignment, bounds and 64-bit address wrap. Invalid paths
+emit a real `llvm.trap`; successful paths perform the native read/write
+through a non-`inbounds` byte GEP.
+
+The validator must authenticate the original allocation generation and
+current actor-heap incarnation. A guest-provided boolean or a newly
+reconstructed proof from the current offset is **not sufficient**. Input
+object field addresses also require compiler-authenticated source object
+ownership. The result pointer is ephemeral: it must not survive `await`,
+actor migration, retirement, an FFI call, or a new actor turn. Each
+resume must reload the admitted actor heap descriptor.
+
+Tests: `native_compact32_llvm_checked_load_store` verifies the actual
+generated module and expected LLVM instructions; when a compatible
+Clang is installed, `native_compact32_llvm_executable_e2e` compiles
+that IR to a native binary and executes live read/write plus death tests
+for stale-generation, retired, null, foreign arena and too-small-span
+paths. These are compiler IR tests, **not** arbitrary Oreslang
+source-program `Ref<T>` execution.
+
+The source AST/HIR frontend still does not admit general `Ref<T>`
+class fields. Compiler ownership/borrow proof wiring, persistent
+object arena allocation, generation proof acquisition, and scheduler
+resume-time base binding remain implementation gates. Never reinterpret
+existing `i64` or opaque `Array<int>` handles as these fields.
+
+This policy is a compiler-side building block, not yet wired to native
+Oreslang `Ref<T>` HIR or LLVM `getelementptr`/load/store emission.
+`native_compiler_managed_ref_layout_admission` tests both positive
+selection and negative proof boundaries; it is included in the target-ABI
+sanitizer matrix.
+
+
+The native `ActorCompactFieldStore<Bytes, Nodes, LinksPerNode>` now
+demonstrates real, 4-byte object-field storage with an actor-owned region.
+Each object contains a conventional i64 payload and a contiguous array of
+`CompressedActorRef` fields; a **separate trusted ledger** records the
+*original* generational `ActorOwnedHeap::Handle` and node identity of each
+linked target. Linking, unlinking, following, cycle creation, byte-offset
+reuse and actor retirement have independent CTest/ASan/UBSan regressions.
+
+This is an intentionally bounded **compiler-target/runtime proof**, not a
+claim that arbitrary Oreslang classes or `Ref<T>` currently use compact
+fields. The current LLVM source frontend only supports scalar i64 class
+fields and opaque `Array<int>` handles. Those must remain their existing
+widths. Never reinterpret an i64 value, `ActorRef<T>`, external handle,
+`Future<T>`, native pointer, shared-region address or Java JVM object
+as a compressed actor-local reference.
+
+### Required compiler lowering to follow
+
+1. Add a distinct logical managed-reference kind to typed HIR, and prove
+   owner actor, lifetime, borrow/exclusive access, and locality before
+   choosing a physical representation. Do not expose storage width in
+   source syntax. The native host ABI and message wire layout stay unchanged.
+2. Emit LLVM **i32** fields/loads/stores for admitted actor-local references.
+   Keep full heap/generation proofs out of the object in a trusted ledger
+   until compile-time ownership establishes the proof statically.
+3. At dereference, validate the original target proof or its statically
+   established lifetime; only then decode using the authenticated current
+   actor heap base: `base + ((i32_ref - 1) << 3)`. Guard null, arithmetic
+   overflow, bounds, lifetime, and base-domain consistency before GEP/load.
+   Do not introduce unchecked `inbounds` pointer arithmetic for a forged ref.
+4. Pass a stable actor-heap domain/base descriptor with the admitted actor
+   turn; never infer it from a worker thread ID. Resume on a new carrier
+   must reload the **same actor heap** descriptor after scheduler admission.
+5. If lifetime/region proof is unavailable, fail closed or use a separately
+   validated opaque handle/native64 layout. Never pair an old compressed
+   offset with a newly minted generation proof: that permits ABA.
+6. Include ref mode, alignment shift, and arena ABI generation in closed-world
+   layout fingerprints and hot-reload migration checks. A code generation
+   switch is not permission to reinterpret already-populated objects.
+
+Because the current reference ledger stores full handles out-of-line, it
+**does not establish lower total memory use or faster execution yet**; it
+proves narrow physical object-field layout and safety behavior. A later
+compiler pass may remove redundant ledger entries where deterministic
+ownership proves all aliases remain valid. Measure total private RSS and
+p99 latency against native64 at equivalent application throughput.
+
+### Validation
+
+`native_actor_compressed32_object_fields` is a CTest target.
+`scripts/verify-target-abi-dop.sh` also compiles and runs that fixture
+with ASan/UBSan using g++ and clang++ on the x86-64/ARM64 runner matrix.
+Passing source repository CI, including the real compiler path, is still
+required for production claims.
+
+## Next lowering work
+
 The header-level representation is the substrate. Compiler lowering should
 next introduce a logical managed-reference type in HIR, select physical
 storage after ownership/layout analysis, and emit decode operations only at
@@ -171,3 +283,25 @@ This does not make offset bits alone a capability. The independently verified
 actor identity, object-start, generation and turn/borrow constraints remain
 mandatory at every runtime/LLVM dereference boundary.
 
+
+## Measured memory cost of checked compact fields (November 2026)
+
+The 50% RAM goal is not met by compressing the field alone. Measured with
+`sizeof` for `ActorCompactFieldStore` on arm64 macOS (1,024 nodes, 4 links each):
+
+| Per edge | Bytes |
+| --- | --- |
+| Raw 64-bit pointer | 8 |
+| Compact field in the object | 4 |
+| Out-of-line proof, `std::optional<Node>` | 48 |
+| Compact field plus proof | 52 |
+
+So an edge that needs a runtime proof costs about 6.5 times a raw pointer. Compact
+fields only save memory where the ledger entry is removed, which means the borrow
+checker statically proves the target's lifetime (`lifetime_proven` through a
+static borrow rather than through the ledger). Reducing the proof to a smaller
+generation word would also help, but must not reconstruct a proof from the offset.
+
+Until that elision exists, do not claim RAM savings for this store. Dense 32-bit
+indices with one generation per row, rather than per edge, are the cheaper option
+for table-shaped data.
