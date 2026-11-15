@@ -27,6 +27,7 @@ struct LocalOwnership {
     bool int_array = false; // Non-copy lexical array; no borrows or escapes.
     bool record_view = false; // readonly materialized value, not an incoming loan
     bool mutable_owner = false; // lexical let mut or exclusive borrowed parameter
+    bool assignable = false; // lexical slot replacement, not referent mutation
     std::size_t shared_loans = 0;
     bool exclusive_loan = false;
     std::string class_name;
@@ -350,6 +351,12 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
+        case Expression::Kind::Remainder:
+        case Expression::Kind::ShiftLeft:
+        case Expression::Kind::ShiftRight:
+        case Expression::Kind::ShiftUnsignedRight:
+        case Expression::Kind::Modulo:
+        case Expression::Kind::BitXor:
         case Expression::Kind::Equal:
         case Expression::Kind::NotEqual:
         case Expression::Kind::Less:
@@ -435,6 +442,12 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
+        case Expression::Kind::Remainder:
+        case Expression::Kind::ShiftLeft:
+        case Expression::Kind::ShiftRight:
+        case Expression::Kind::ShiftUnsignedRight:
+        case Expression::Kind::Modulo:
+        case Expression::Kind::BitXor:
         case Expression::Kind::Equal:
         case Expression::Kind::NotEqual:
         case Expression::Kind::Less:
@@ -506,6 +519,12 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
+        case Expression::Kind::Remainder:
+        case Expression::Kind::ShiftLeft:
+        case Expression::Kind::ShiftRight:
+        case Expression::Kind::ShiftUnsignedRight:
+        case Expression::Kind::Modulo:
+        case Expression::Kind::BitXor:
         case Expression::Kind::Equal:
         case Expression::Kind::NotEqual:
         case Expression::Kind::Less:
@@ -535,7 +554,15 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
 
 } // namespace
 
-void validate_i64_ownership(const Program& program) {
+void validate_i64_ownership(Program& program) {
+    // A re-validation attempt must revoke every stale lowering authorization
+    // before checking anything. Failed ownership admission therefore cannot
+    // leave executable Future-pipeline authority from an earlier pass.
+    for (auto& function : program.functions)
+        for (auto& pipeline : function.future_pipelines) {
+            pipeline.ownership_admitted = false;
+            pipeline.ownership_authority_fingerprint = 0;
+        }
     Functions functions;
     for (const auto& function : program.functions)
         functions.emplace(native_function_slot(function.name, function.parameters.size()), &function);
@@ -641,10 +668,12 @@ void validate_i64_ownership(const Program& program) {
             }
             LocalOwnership entry;
             entry.mode = param.mode;
-            // Native by-value scalar parameters occupy independently owned,
-            // mutable stack slots; borrowed parameters retain caller loans.
-            // Do not silently confer that mutability on const local bindings.
+            // By-value scalar parameters own data that may be lent exclusively;
+            // their identifiers remain read-only. Borrowed parameters retain
+            // caller loans. Const locals do not gain referent mutability.
             entry.mutable_owner = param.mode == Mode::Value;
+            // Parameter bindings are val slots even for exclusive loans.
+            // Referent capability does not grant identifier reassignment.
             entry.class_name = param.class_name;
             if (!param.class_name.empty()) {
                 entry.mutable_paths = layouts.mutable_paths(param.class_name);
@@ -656,11 +685,27 @@ void validate_i64_ownership(const Program& program) {
             }
             locals.emplace(param.name, std::move(entry));
         }
+        for (const auto& pipeline : function.future_pipelines) {
+            if (pipeline.plans.empty() ||
+                    pipeline.plans.front().input_ownership !=
+                        types::pipeline_root_ownership(pipeline.root_consumed))
+                throw std::runtime_error(
+                    "ownership violation: Future pipeline root ownership proof "
+                    "does not match source rt take shape");
+            for (std::size_t i = 1; i < pipeline.plans.size(); ++i)
+                if (pipeline.plans[i].input_ownership !=
+                        types::PipelineInputOwnership::OwnedPipelineValue)
+                    throw std::runtime_error(
+                        "ownership violation: Future pipeline internal edge "
+                        "lost pipeline-owned authority");
+            types::validate_future_pipeline_chain(pipeline.plans);
+        }
         for (const auto& binding : function.locals) {
             LocalOwnership entry;
             entry.heap_owned = binding.heap_owned;
             entry.int_array = binding.int_array;
             entry.mutable_owner = binding.owner_mutable;
+            entry.assignable = binding.assignable;
             entry.class_name = binding.class_name;
             if (binding.int_array) {
                 if (!binding.owner_mutable || binding.heap_owned || binding.initializer)
@@ -670,6 +715,38 @@ void validate_i64_ownership(const Program& program) {
                 const auto& call = *binding.initializer;
                 array_owner(*call.left, locals, true);
                 for (const auto& arg : call.arguments) check_value(*arg, locals, functions);
+            } else if (!binding.task_await_name.empty()) {
+                if (binding.scalar_type != ScalarType::I64 ||
+                        binding.initializer)
+                    throw std::runtime_error(
+                        "ownership violation: invalid Task<int> await result binding");
+                const bool task_exists = std::any_of(
+                    function.source_tasks.begin(), function.source_tasks.end(),
+                    [&](const SourceTaskI64Binding& task) {
+                        return task.name == binding.task_await_name &&
+                            task.awaited;
+                    });
+                if (!task_exists)
+                    throw std::runtime_error(
+                        "ownership violation: Task<int> await lost producer provenance");
+                // Capture-free producer transfers no caller owner or borrow.
+                // The awaited scalar becomes an ordinary owned stack value.
+            } else if (!binding.future_await_name.empty()) {
+                if (binding.scalar_type != ScalarType::I64 ||
+                        binding.initializer)
+                    throw std::runtime_error(
+                        "ownership violation: invalid Future<int> await result binding");
+                const auto future = std::find_if(
+                    function.future_pipelines.begin(),
+                    function.future_pipelines.end(),
+                    [&](const SourceFuturePipelineI64Binding& pipeline) {
+                        return pipeline.name == binding.future_await_name &&
+                            pipeline.awaited;
+                    });
+                if (future == function.future_pipelines.end())
+                    throw std::runtime_error(
+                        "ownership violation: Future<int> await lost pipeline provenance");
+                types::validate_future_pipeline_chain(future->plans);
             } else if (binding.record_view) {
                 check_value(*binding.initializer, locals, functions);
                 const bool owning = !class_arrays.at(binding.class_name).empty();
@@ -810,6 +887,9 @@ void validate_i64_ownership(const Program& program) {
         std::function<void(const Statement&, Locals&)> check_effect;
         auto scoped_entry = [&](const LocalBinding& binding) {
             LocalOwnership entry;
+            entry.int_array = binding.int_array;
+            entry.mutable_owner = binding.owner_mutable;
+            entry.assignable = binding.assignable;
             entry.class_name = binding.class_name;
             if (!binding.class_name.empty()) {
                 if (!class_fields.count(binding.class_name))
@@ -830,6 +910,33 @@ void validate_i64_ownership(const Program& program) {
                 state.erase(action.branch_local->name);
         };
         check_effect = [&](const Statement& stmt, Locals& state) {
+            if (stmt.kind == Statement::Kind::ScalarWrite) {
+                const auto found = state.find(stmt.receiver);
+                if (found == state.end()) throw std::runtime_error("assignment requires a visible scalar slot");
+                auto writable = [&]() {
+                    const auto& target = state.at(stmt.receiver);
+                    return target.assignable && !target.heap_owned && !target.int_array && target.class_name.empty() &&
+                        target.shared_loans == 0 && !target.exclusive_loan;
+                };
+                if (!state.at(stmt.receiver).assignable)
+                    throw std::runtime_error("E_IMMUTABLE_REBIND: cannot reassign fixed scalar binding");
+                if (!writable()) throw std::runtime_error("assignment requires an unloaned mutable scalar slot");
+                check_value(*stmt.expression, state, functions);
+                if (!writable()) throw std::runtime_error("assignment cannot publish through an active loan");
+                state.at(stmt.receiver).moved = false;
+                return;
+            }
+            if (stmt.kind == Statement::Kind::UsingTelemetrySpan) {
+                // Token is compiler-owned and unrepresentable in Locals.
+                // Do not permit a borrowed/moved owner to cross this
+                // unverified non-suspending cleanup boundary.
+                Locals inside = state;
+                scoped_effects(stmt.then_statements, inside);
+                if (!same_affine_state(state, inside))
+                    throw std::runtime_error(
+                        "native telemetry scope requires unchanged affine ownership at exit");
+                return;
+            }
             if (stmt.kind == Statement::Kind::Conditional) {
                 if (stmt.condition) check_value(*stmt.condition, state, functions);
                 else { check_pure_guard(*stmt.condition_lhs, state, functions); check_pure_guard(*stmt.condition_rhs, state, functions); }
@@ -893,7 +1000,7 @@ void validate_i64_ownership(const Program& program) {
                 if (state.count(local.name))
                     throw std::runtime_error("ownership violation: branch local shadows live owner at byte " +
                         std::to_string(local.offset));
-                check_value(*local.initializer, state, functions);
+                if (local.initializer) check_value(*local.initializer, state, functions);
                 state.emplace(local.name, scoped_entry(local));
                 return;
             }
@@ -973,6 +1080,9 @@ void validate_i64_ownership(const Program& program) {
                     check_call(call, state, functions);
                 } else if (call.kind == Expression::Kind::Console) {
                     check_value(call, state, functions);
+                } else if (call.kind == Expression::Kind::SumAccess && (call.name == "expect" || call.name == "unwrap")) {
+                    // Discarded panic-on-absent extraction, e.g. `failure.expect("msg");`.
+                    check_value(call, state, functions);
                 } else {
                     throw std::runtime_error("invalid native call statement");
                 }
@@ -1016,6 +1126,8 @@ void validate_i64_ownership(const Program& program) {
                 continue;
             }
             check_effect(stmt, locals);
+            if (stmt.kind == Statement::Kind::ScopedLocal)
+                root_names.insert(stmt.branch_local->name);
         }
         // Actor sends transfer scalar payloads in lexical send/stop order.
         // Do not let the backend load moved locals or leak raw borrow pointers.
@@ -1309,6 +1421,35 @@ void validate_i64_ownership(const Program& program) {
         ownership::verify(cfg);
 
     }
+
+    // Publication is compilation-unit atomic. First validate every ownership
+    // admission without mutating any pipeline authority. Only after all chains
+    // succeed do we mark them executable for LLVM lowering.
+    for (const auto& function : program.functions) {
+        for (const auto& pipeline : function.future_pipelines) {
+            std::vector<types::FuturePipelineOwnershipAdmission> admissions;
+            admissions.reserve(pipeline.plans.size());
+            for (const auto& plan : pipeline.plans) {
+                types::FuturePipelineOwnershipAdmission admission;
+                admission.declaration_identity = plan.declaration_identity;
+                admission.pipeline_node_identity = plan.pipeline_node_identity;
+                admission.input_ownership = plan.input_ownership;
+                admission.admitted = true;
+                admissions.push_back(admission);
+            }
+            if (!types::publish_future_pipeline_chain(
+                    pipeline.plans, admissions).has_value())
+                throw std::runtime_error(
+                    "ownership violation: Future pipeline proof publication "
+                    "failed closed");
+        }
+    }
+    for (auto& function : program.functions)
+        for (auto& pipeline : function.future_pipelines) {
+            pipeline.ownership_authority_fingerprint =
+                future_pipeline_authority_fingerprint(pipeline);
+            pipeline.ownership_admitted = true;
+        }
 }
 
 } // namespace oreslang

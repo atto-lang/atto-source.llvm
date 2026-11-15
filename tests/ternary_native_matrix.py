@@ -78,12 +78,12 @@ fnc select_false(borrow mut Pair p): int {
 }
 fnc choose(borrow mut Pair p): int {
   return true
-    ? select_true(rt borrow mut p)
-    : select_false(rt borrow mut p);
+    ? select_true(rt mut borrow p)
+    : select_false(rt mut borrow p);
 }
 pub fnc main(): int {
   let mut Pair p = new Pair();
-  choose(rt borrow mut p);
+  choose(rt mut borrow p);
   return p.first;
 }
 """, 10),

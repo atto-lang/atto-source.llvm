@@ -13,6 +13,16 @@ PAIR = (
 )
 
 POSITIVE = {
+    "atto-neq-and-bang-eq-alias": ("""
+pub fnc main(): int {
+  return (3 eq 3 && 3 neq 4 && 3 !eq 5) ? 42 : 7;
+}
+""", 42),
+    "atto-neq-alias-comment-isolation": ("""
+pub fnc main(): int {
+  return (3 eq 3 && 3 !eq /* alias in block comment: !eq */ 4) ? 42 : 7;
+}
+""", 42),
     "bool-return-call": ("""
 fnc yes(): bool {
   return true;
@@ -93,15 +103,15 @@ fnc miss(borrow mut Pair p): void {
 }
 fnc choose(borrow mut Pair p): int {
   if (ready()) {
-    hit(rt borrow mut p);
+    hit(rt mut borrow p);
   } else {
-    miss(rt borrow mut p);
+    miss(rt mut borrow p);
   } fi
   return p.first;
 }
 pub fnc main(): int {
   let mut Pair p = new Pair();
-  return choose(rt borrow mut p);
+  return choose(rt mut borrow p);
 }
 """, 42),
     "bool-if-guard": ("""
@@ -121,11 +131,11 @@ fnc touch(borrow mut Pair p): bool {
   return true;
 }
 fnc probe(borrow mut Pair p): bool {
-  return false && touch(rt borrow mut p);
+  return false && touch(rt mut borrow p);
 }
 pub fnc main(): int {
   let mut Pair p = new Pair();
-  probe(rt borrow mut p);
+  probe(rt mut borrow p);
   return p.first;
 }
 """, 1),
@@ -135,11 +145,11 @@ fnc touch(borrow mut Pair p): bool {
   return false;
 }
 fnc probe(borrow mut Pair p): bool {
-  return true || touch(rt borrow mut p);
+  return true || touch(rt mut borrow p);
 }
 pub fnc main(): int {
   let mut Pair p = new Pair();
-  probe(rt borrow mut p);
+  probe(rt mut borrow p);
   return p.first;
 }
 """, 1),
@@ -149,17 +159,32 @@ fnc touch(borrow mut Pair p): bool {
   return true;
 }
 fnc probe(borrow mut Pair p): bool {
-  return false ^^ touch(rt borrow mut p);
+  return Xor(false, touch(rt mut borrow p));
 }
 pub fnc main(): int {
   let mut Pair p = new Pair();
-  probe(rt borrow mut p);
+  probe(rt mut borrow p);
   return p.first;
 }
 """, 42),
 }
 
 NEGATIVE = {
+    "atto-reject-spaced-bang-eq-alias": ("""
+pub fnc main(): int {
+  return (3 ! eq 4) ? 42 : 7;
+}
+""", None),
+    "atto-reject-neq-identifier-prefix": ("""
+pub fnc main(): int {
+  return (3 !equivalent 4) ? 42 : 7;
+}
+""", None),
+    "atto-reject-cross-type-word-equality": ("""
+pub fnc main(): int {
+  return (true eq 1) ? 42 : 7;
+}
+""", "equality operands require the same scalar type"),
     "reject-int-ternary-condition": ("""
 pub fnc main(): int {
   return 1 ? 42 : 7;
@@ -215,7 +240,7 @@ pub fnc main(): bool {
 fnc borrowed(borrow mut bool first, borrow mut bool second): int { return 0; }
 pub fnc main(): int {
   val flag: bool = false;
-  return borrowed(rt borrow mut flag, rt borrow mut flag);
+  return borrowed(rt mut borrow flag, rt mut borrow flag);
 }
 """, "conflicting active native borrow"),
     "reject-hidden-call-in-declared-effects-arm": ("""
@@ -249,7 +274,7 @@ def execute(cmd):
 
 
 def compile_and_run(root, name, source, expected, compiler, clang, sanitize):
-    src = root / (name + ".ores")
+    src = root / (name + (".atto" if name.startswith("atto-") else ".ores"))
     src.write_text(source, encoding="utf-8")
     produced = execute([compiler, "--tree-shake", str(src)])
     if "define class" in source:
@@ -291,12 +316,14 @@ def main():
             compile_and_run(root, name, source, expected, a.compiler, a.clang, a.sanitize)
 
         for name, (source, diagnostic) in NEGATIVE.items():
-            src = root / (name + ".ores")
+            src = root / (name + (".atto" if name.startswith("atto-") else ".ores"))
             src.write_text(source, encoding="utf-8")
             rejected = execute([a.compiler, str(src)])
             assert rejected.returncode != 0 and not rejected.stdout, (
                 name, rejected.returncode, rejected.stdout)
-            assert diagnostic in rejected.stderr, (name, diagnostic, rejected.stderr)
+            assert rejected.stderr.strip(), (name, "empty rejection diagnostic")
+            if diagnostic is not None:
+                assert diagnostic in rejected.stderr, (name, diagnostic, rejected.stderr)
 
     print(
         "PASS:",

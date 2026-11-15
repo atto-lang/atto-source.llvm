@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 #include "oreslang/types/FunctionEffects.hpp"
+#include "oreslang/types/FuturePipelineContract.hpp"
 #include "oreslang/types/NativeHasFutureContract.hpp"
 
 namespace oreslang {
@@ -39,11 +40,12 @@ struct Expression {
     enum class Kind {
         Integer, Boolean, String, Console, Variable,
         Negate, LogicalNot,
-        Add, Subtract, Multiply,
+        Add, Subtract, Multiply, Remainder, Modulo, BitXor,
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
-        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field
+        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field,
+        ShiftLeft, ShiftRight, ShiftUnsignedRight
     };
     Kind kind;
     std::size_t offset = 0;
@@ -68,7 +70,31 @@ struct Expression {
     std::vector<GenericTypeArgument> type_arguments;
     bool type_arguments_present = false;
     mutable std::string sum_type;
+    // Records a compiler-produced caller-side trap; never collapse this to
+    // an ordinary Some constructor without independently proving its operand.
+    bool trap_origin = false;
 };
+
+// Phase-one native trap supports only total integer-expression structure.
+// Arithmetic overflow remains a terminal panic. This predicate deliberately
+// rejects calls, variables, dereferences, nested sums, host/actor effects,
+// suspension and all non-integer values until effect and cleanup IR is proven.
+inline bool native_trap_pure_integer(const Expression& e, std::size_t depth = 0) {
+    if (depth > 64) return false;
+    switch (e.kind) {
+        case Expression::Kind::Integer: return true;
+        case Expression::Kind::Negate:
+            return e.left && native_trap_pure_integer(*e.left, depth + 1);
+        case Expression::Kind::Add:
+        case Expression::Kind::Subtract:
+        case Expression::Kind::Multiply:
+            return e.left && e.right &&
+                native_trap_pure_integer(*e.left, depth + 1) &&
+                native_trap_pure_integer(*e.right, depth + 1);
+        default: return false;
+    }
+}
+
 
 struct Parameter {
     enum class Mode { Value, Borrow, BorrowMut };
@@ -100,8 +126,16 @@ struct LocalBinding {
     bool owner_mutable = false; // explicit let mut; required for exclusive class loan
     bool field_mutable = false; // actor-owned fields only
     ScalarType scalar_type = ScalarType::I64;
+    std::string pending_type_alias; // transparent compile-time alias identity
     std::size_t offset = 0;
     std::string sum_type;
+    // Nonempty only for the first capture-free source Task<int> slice.
+    // The binding receives the result of exactly one scheduler-owned Task await.
+    std::string task_await_name;
+    // Nonempty only for the first checked Future<int> pipeline slice. The
+    // binding receives the result of exactly one scheduler-owned Future await.
+    std::string future_await_name;
+    bool assignable = false; // mutable lexical slot, distinct from referent capability
 };
 
 struct ClassField {
@@ -161,6 +195,92 @@ struct ActorSpawnBinding {
     SourceType declared_type;
     std::size_t offset = 0;
 };
+
+struct SourceTaskI64Binding {
+    std::string name;
+    std::unique_ptr<Expression> result;
+    std::size_t offset = 0;
+    bool awaited = false;
+};
+
+struct SourceFuturePipelineI64Binding {
+    std::string name;
+    std::string producer_function;
+    std::vector<std::string> stages;
+    std::vector<types::FuturePipelinePlan> plans;
+    std::size_t offset = 0;
+    bool root_consumed = false;
+    bool awaited = false;
+    // Set only after the complete ownership pass succeeds for the compilation
+    // unit. Codegen must never consume a merely type-staged plan.
+    bool ownership_admitted = false;
+    // Deterministic compiler-only snapshot of the exact producer/stage/plan
+    // shape authorized by ownership. Any post-admission rewrite must change
+    // this value and therefore lose lowering authority.
+    std::uint64_t ownership_authority_fingerprint = 0;
+};
+
+inline std::uint64_t future_pipeline_authority_fingerprint(
+        const SourceFuturePipelineI64Binding& pipeline) noexcept {
+    // FNV-1a is used only as a compact stale-proof detector inside one
+    // compilation. This is not a cryptographic capability or persisted ABI.
+    std::uint64_t hash = UINT64_C(1469598103934665603);
+    const auto byte = [&](std::uint8_t value) {
+        hash ^= value;
+        hash *= UINT64_C(1099511628211);
+    };
+    const auto u64 = [&](std::uint64_t value) {
+        for (unsigned shift = 0; shift < 64; shift += 8)
+            byte(static_cast<std::uint8_t>(value >> shift));
+    };
+    const auto text = [&](std::string_view value) {
+        u64(static_cast<std::uint64_t>(value.size()));
+        for (unsigned char ch : value) byte(ch);
+    };
+
+    const auto auto_type = [&](const auto& self,
+                               const types::AutoType& type) -> void {
+        byte(static_cast<std::uint8_t>(type.kind));
+        byte(type.shareable_domain ? 1u : 0u);
+        byte(type.complete_nominal_layout ? 1u : 0u);
+        u64(static_cast<std::uint64_t>(type.parameters.size()));
+        for (const auto& parameter : type.parameters)
+            self(self, parameter);
+        u64(static_cast<std::uint64_t>(type.dyn_bounds.size()));
+        for (const auto trait : type.dyn_bounds)
+            byte(static_cast<std::uint8_t>(trait));
+        u64(static_cast<std::uint64_t>(type.negative.size()));
+        for (const auto trait : type.negative)
+            byte(static_cast<std::uint8_t>(trait));
+    };
+
+    text(pipeline.name);
+    text(pipeline.producer_function);
+    u64(static_cast<std::uint64_t>(pipeline.offset));
+    byte(pipeline.root_consumed ? 1u : 0u);
+    byte(pipeline.awaited ? 1u : 0u);
+    u64(static_cast<std::uint64_t>(pipeline.stages.size()));
+    for (const auto& stage : pipeline.stages) text(stage);
+    u64(static_cast<std::uint64_t>(pipeline.plans.size()));
+    for (const auto& plan : pipeline.plans) {
+        u64(plan.declaration_identity);
+        u64(plan.pipeline_node_identity);
+        auto_type(auto_type, plan.input_type);
+        auto_type(auto_type, plan.output_type);
+        u64(static_cast<std::uint64_t>(plan.prior_effects.bits));
+        u64(static_cast<std::uint64_t>(plan.stage_effects.bits));
+        u64(static_cast<std::uint64_t>(plan.cumulative_effects.bits));
+        byte(static_cast<std::uint8_t>(plan.effect_provenance));
+        byte(static_cast<std::uint8_t>(plan.input_ownership));
+        byte(static_cast<std::uint8_t>(plan.produced_future_ownership));
+        byte(static_cast<std::uint8_t>(plan.produced_future_provenance));
+        byte(plan.flattens_future ? 1u : 0u);
+        byte(plan.root_stage ? 1u : 0u);
+    }
+    // Reserve zero for "never authorized".
+    return hash == 0 ? UINT64_C(1) : hash;
+}
+
 struct ActorSend {
     std::string reference;
     std::unique_ptr<Expression> payload;
@@ -181,7 +301,7 @@ struct ActorFieldWrite {
 };
 
 struct Statement {
-    enum class Kind { Call, FieldWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return };
+    enum class Kind { Call, FieldWrite, ScalarWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return, UsingTelemetrySpan };
     Kind kind;
     // Scoped scalar or readonly leaf record. ForEach uses an implicit element
     // binding (no initializer); expression is its named array source and
@@ -190,6 +310,9 @@ struct Statement {
     std::unique_ptr<Expression> expression;
     std::string receiver;
     std::string field;
+    // UsingTelemetrySpan: literal operation name, alias is compile-time-only;
+    // no guest-visible pointer, dynamic handle or actor message transfer.
+    std::string telemetry_operation;
     // ForIndex: branch_local initializer, condition and checked next value.
     std::unique_ptr<Expression> loop_step;
     // Dedicated compiler intrinsic, never lowered as a guest-callable
@@ -236,6 +359,13 @@ struct Function {
     std::vector<Statement> statements;
     std::vector<GuardedReturn> early_returns;
     std::vector<ActorSpawnBinding> actor_spawns;
+    // First executable source Task slice: one capture-free Task<int> in trusted
+    // zero-argument main, submitted before ordinary locals and awaited once.
+    std::vector<SourceTaskI64Binding> source_tasks;
+    // First executable Future-aware value-pipeline slice. Async producers are
+    // compiled as scheduler work; sync unary stages execute on that carrier.
+    std::vector<SourceFuturePipelineI64Binding> future_pipelines;
+    bool async_source_i64 = false;
     /* Restricted lifecycle-await slice: exactly one actor lifecycle suspension. */
     std::string ready_await_actor;
     std::size_t ready_await_offset = 0;
@@ -266,6 +396,9 @@ struct Function {
     bool exported = false;
     std::string method_owner; // compiler-owned class method privilege, never source syntax
     bool native_internal = false; // linker-owned private imported implementation
+    // Explicit compiler-owned host C u32 trampoline, never the guest i64 ABI.
+    // Only the browser v1 ABI version symbol is admitted in the first slice.
+    std::string c_export_u32_symbol;
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
     std::string return_sum;
@@ -294,6 +427,32 @@ struct ModuleContract {
     std::vector<ContractMethod> methods;
 };
 
+// Compiler-only type declarations. Neither traits nor interfaces nor
+// transparent scalar aliases create runtime values, LLVM globals or
+// constructors. The native scalar backend records the distinct source kinds
+// without claiming full generic/typeclass or cross-unit linker support.
+struct TypeOnlyDecl {
+    enum class Kind { Alias, Trait, Interface };
+    struct Constraint {
+        enum class Kind { MinInclusive, MaxInclusive };
+        Kind kind = Kind::MinInclusive;
+        std::int64_t value = 0;
+    };
+    struct Method {
+        std::string name;
+        std::vector<std::string> parameter_types;
+        std::string return_type;
+    };
+    Kind kind = Kind::Alias;
+    std::string name;
+    std::string module_name; // empty for root; captured at declaration site
+    bool exported = false;
+    std::string alias_target; // native v1 accepts int/bool or another alias
+    std::vector<Constraint> constraints; // canonical min then max, compiler-only
+    std::vector<std::string> parents;
+    std::vector<Method> methods;
+};
+
 // First AOT-only resumable source slice. No owned borrows, calls, FFI,
 // lexical cleanup or actor scheduler integration is admitted yet.
 // The host supplies a zeroed, single-owner two-i64 continuation frame.
@@ -304,22 +463,59 @@ struct CooperativeScalarLoop {
     std::size_t offset = 0;
 };
 
+// Native generator v1 deliberately starts with a value-only, zero-capture
+// Iterator<int> activation. Each activation is represented by a caller-owned,
+// pinned frame in LLVM IR; no native stack or tracing-GC object survives a pull.
+struct ScalarGenerator {
+    std::string name;
+    std::vector<std::int64_t> yields;
+    std::size_t offset = 0;
+    bool exported = false;
+};
+
 struct ModuleImport {
     bool selected_class = false;
+    // `import fnc name [as alias] from "path";` binds one pub function by name.
+    bool selected_function = false;
     std::string selected_module;
     std::string local_name;
     std::string path;
     std::size_t offset = 0;
 };
 
+// Syntax-only namespace import. No host, AOT or guest namespace authority is
+// obtained from a parsed source string. The backend must reject this record
+// until a verified v2 package manifest/lockfile graph supplies immutable
+// source ownership, pins and typed physical-provider resolution.
+struct NamespaceImportSyntax {
+    std::string namespace_name;
+    std::string local_name;
+    std::string package_selector;
+    std::size_t offset = 0;
+};
+
+struct TypeConstraintDescriptor {
+    std::string schema_id;
+    std::string qualified_type_name;
+    std::string representation;
+    std::string canonical;
+    std::string fingerprint;
+    bool validation_required = true;
+};
+
 struct Program {
     std::vector<ModuleImport> imports;
+    std::vector<NamespaceImportSyntax> namespace_imports;
     std::vector<CooperativeScalarLoop> cooperative_loops;
+    std::vector<ScalarGenerator> generators;
+    std::string namespace_name;
     std::string module;
     std::vector<ClassDecl> classes;
     std::vector<ActorDecl> actors;
     std::vector<Function> functions;
     std::vector<ModuleContract> contracts;
+    std::vector<TypeOnlyDecl> type_only_declarations;
+    std::vector<TypeConstraintDescriptor> type_constraint_descriptors;
     std::vector<std::string> conforms;
     std::vector<NativeSumType> sum_types;
 };
@@ -336,6 +532,10 @@ Program parse_program(std::string_view source, bool experimental_owned_int = fal
 // resolve_and_validate_program must run after all module names are resolved.
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int = false,
                                  bool experimental_rt_scalar_loop = false);
+// HOST-ONLY preparatory AST: caller must supply already authenticated frozen
+// source bytes, and only the verified package graph may consume the result.
+// Unlike parse_program(), this must never authorize IR or guest execution.
+Program parse_verified_namespace_source_unresolved(std::string_view authenticated_source);
 void resolve_and_validate_program(Program& program);
 
 } // namespace oreslang

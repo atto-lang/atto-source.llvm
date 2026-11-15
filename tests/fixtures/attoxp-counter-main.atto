@@ -1,0 +1,15 @@
+// AttoXP counter LLVM guest. Pure scalar arithmetic, no C ABI FFI.
+define module attoxp_counter_main as
+  pub fnc increment(int current): int {
+    return current + 1;
+  }
+  pub fnc decrement(int current): int {
+    return current - 1;
+  }
+  pub fnc reset(int current): int {
+    return current - current;
+  }
+  pub fnc main(): int {
+    return increment(increment(reset(9) + 40));
+  }
+end

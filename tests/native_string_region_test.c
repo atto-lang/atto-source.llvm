@@ -12,7 +12,10 @@ int main(void) {
         int64_t a = ores_string_literal("a\0b", 3);
         int64_t b = ores_string_literal("c", 1);
         assert(a > 0 && b > a);
-        assert(ores_string_concat(a, b) > b);
+        int64_t joined = ores_string_concat(a, b);
+        assert(joined > b);
+        int64_t expected_joined = ores_string_literal("a\0bc", 4);
+        assert(expected_joined > joined && ores_string_equal(joined, expected_joined) == 1);
         int64_t same = ores_string_literal("a\0b", 3);
         assert(same != a && ores_string_equal(a, same) == 1);
         assert(ores_string_equal(a, b) == 0);
