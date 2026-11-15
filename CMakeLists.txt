@@ -2058,6 +2058,16 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_ownership_cfg_exact_once_field_destruction
         COMMAND oreslang-ownership-drop-plan-test)
+    # Actor graph heap host drop-glue order. This is not guest-source lowering.
+    add_executable(oreslang-actor-graph-reverse-drop-test
+        tests/actor_graph_reverse_drop_test.cpp)
+    target_include_directories(oreslang-actor-graph-reverse-drop-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-graph-reverse-drop-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-actor-graph-reverse-drop-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_graph_reverse_destructor_order
+        COMMAND oreslang-actor-graph-reverse-drop-test)
     add_executable(oreslang-target-abi-test tests/target_abi_test.cpp)
     target_include_directories(oreslang-target-abi-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-target-abi-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
