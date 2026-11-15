@@ -1579,6 +1579,19 @@ if(BUILD_TESTING)
         set_tests_properties(native_source_class_methods_${mode} PROPERTIES TIMEOUT 120)
     endforeach()
 
+    # Real .atto compiler -> LLVM IR -> native OS process, plus negative
+    # no-IR compiler admissions. This test must run, not merely exist in git.
+    add_test(NAME native_mtd_receiver_v1
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-mtd-receiver-v1.sh"
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}")
+    set_tests_properties(native_mtd_receiver_v1 PROPERTIES TIMEOUT 120)
+    if(APPLE OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME native_mtd_receiver_v1_sanitized
+            COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-mtd-receiver-v1.sh"
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}" --sanitize)
+        set_tests_properties(native_mtd_receiver_v1_sanitized PROPERTIES TIMEOUT 180)
+    endif()
+
     foreach(mode IN ITEMS release sanitizer)
         set(native_bool_extra)
         if(mode STREQUAL "sanitizer")

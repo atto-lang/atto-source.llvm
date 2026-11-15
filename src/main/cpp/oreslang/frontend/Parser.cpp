@@ -715,6 +715,8 @@ public:
 
     Program parse() {
         Program program;
+        if (token_.text == "use" && peek_next().text == "namespace")
+            fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native actor namespace header needs typed module/linker identity");
         while (token_.text == "import") {
             advance();
             // Outside the host-only verified-metadata mode, namespace imports stay
@@ -850,7 +852,7 @@ public:
             if (token_.text == "activity" || token_.text == "workflow")
                 fail("DURABLE_M0_BACKEND_UNSUPPORTED: LLVM requires typed durable manifest and replay lowering");
             if (token_.text == "mtd") {
-                program.functions.push_back(extension_method(exported));
+                parse_receiver_mtd(program, exported);
                 continue;
             }
             if (token_.text == "type" || token_.text == "trait" ||
@@ -929,6 +931,14 @@ public:
                 program.generators.push_back(std::move(generator));
                 continue;
             }
+            // A receiver-first mtd is a declaration, not a standalone function.
+            // Preserve the previous define mtd name on Alias form separately.
+            if (token_.text == "mtd" ||
+                    (token_.text == "pub" && peek_next().text == "mtd")) {
+                const bool method_exported = accept("pub");
+                parse_receiver_mtd(program, method_exported);
+                continue;
+            }
             bool public_class = token_.text == "pub" && peek_next().text == "define";
             if (public_class) advance();
             if (accept("@")) {
@@ -999,7 +1009,7 @@ public:
                 if (token_.text == "activity" || token_.text == "workflow")
                     fail("DURABLE_M0_BACKEND_UNSUPPORTED: LLVM requires typed durable manifest and replay lowering");
                 if (token_.text == "mtd") {
-                    program.functions.push_back(extension_method(public_class));
+                    parse_receiver_mtd(program, public_class);
                     continue;
                 }
                 if (token_.text == "type" || token_.text == "trait" ||
@@ -1047,6 +1057,7 @@ public:
         }
         for (auto& method : methods_) program.functions.push_back(std::move(method));
         if (wrapped_module) require("end");
+        validate_actor_forwards(program);
         if (token_.kind != Kind::End) fail("unexpected trailing source");
         // The package-local host graph is not connected to an authenticated
         // v2 manifest/source loader and native codegen yet. Namespace AST
@@ -1284,6 +1295,25 @@ private:
             exported = prefix_public || postfix_public;
         }
 
+        // A declared actor is only a same-source compile-time identity. It
+        // must resolve to exactly one real native actor, and never creates
+        // mailbox storage, a runtime actor or a foreign type capability.
+        // Exported forward signatures cannot be enforced by this native actor
+        // ABI, which has no actor visibility field, so reject them for now.
+        if (!already_defined && accept("actor")) {
+            if (exported)
+                fail("NATIVE_ACTOR_FORWARD_PUBLIC_UNSUPPORTED: native actor forward visibility needs an actor export ABI");
+            const std::string name = nominal_declaration_name();
+            if (token_.text == "<")
+                fail("NATIVE_ACTOR_FORWARD_GENERIC_UNSUPPORTED: native actor generics require typed specialization");
+            require(";");
+            if (!actor_forwards_.emplace(name, program.module).second)
+                fail("NATIVE_ACTOR_FORWARD_DUPLICATE: duplicate actor forward '" + name + "'");
+            return;
+        }
+        if (!already_defined && token_.text == "isoactor")
+            fail("NATIVE_ACTOR_FORWARD_KIND_UNSUPPORTED: private isoactor needs isolated actor heap/lifecycle lowering");
+
         TypeOnlyDecl decl;
         decl.module_name = program.module;
         decl.exported = exported;
@@ -1376,6 +1406,26 @@ private:
         if (program.type_only_declarations.size() >= 1024)
             fail("TYPE_ONLY_DECL_BUDGET: maximum 1024 type-only declarations");
         program.type_only_declarations.push_back(std::move(decl));
+    }
+
+    void validate_actor_forwards(const Program& program) const {
+        std::unordered_set<std::string> declared;
+        for (const auto& actor : program.actors) {
+            if (!declared.insert(actor.name).second)
+                fail("NATIVE_ACTOR_DUPLICATE_DEFINITION: duplicate actor '" + actor.name + "'");
+        }
+        for (const auto& forward : actor_forwards_) {
+            const std::string& name = forward.first;
+            if (forward.second != program.module)
+                fail("NATIVE_ACTOR_FORWARD_SCOPE: actor forward crosses a module boundary");
+            // Reject collisions even if an actor of this name also exists:
+            // no parser-order resolution between class and actor symbols.
+            for (const auto& cls : program.classes)
+                if (cls.name == name)
+                    fail("NATIVE_ACTOR_FORWARD_KIND: actor forward collides with class '" + name + "'");
+            if (!declared.count(name))
+                fail("NATIVE_ACTOR_FORWARD_UNRESOLVED: actor forward has no same-source definition '" + name + "'");
+        }
     }
 
     struct ForwardType {
@@ -2220,6 +2270,72 @@ private:
         return "$mtd$" + receiver + "$" + method;
     }
 
+    void parse_receiver_mtd(Program& program, bool exported) {
+        // Legacy named-alias extensions remain supported but do not grant
+        // class ownership or mutation. This canonical spelling is restricted
+        // to an ordinary class already declared in this same source unit.
+        if (peek_next().text != "(") {
+            program.functions.push_back(extension_method(exported));
+            return;
+        }
+
+        require("mtd");
+        require("(");
+        // Canonical AttoLang syntax is type-first: mtd (Foo self) method().
+        // Keep self-first forms for the existing class-method migration.
+        bool mutable_receiver = false;
+        std::string owner;
+        if (token_.text == "self" || token_.text == "mut") {
+            mutable_receiver = accept("mut");
+            require("self");
+            require(":");
+            owner = identifier();
+        } else {
+            owner = identifier();
+            mutable_receiver = accept("mut");
+            require("self");
+        }
+        require(")");
+        auto found = std::find_if(program.classes.begin(), program.classes.end(),
+            [&](const ClassDecl& cls) { return cls.name == owner; });
+        if (found == program.classes.end()) {
+            // A declaration-only actor with type-first methods is valid
+            // AttoLang, but cannot yet be represented by native on_message
+            // class slots. Reject for missing backend lowering, not grammar.
+            if (actor_forwards_.count(owner))
+                fail("NATIVE_ACTOR_MTD_BACKEND_UNSUPPORTED: declaration-only actor receiver needs typed mailbox method lowering");
+            const bool actor_target = std::any_of(program.actors.begin(), program.actors.end(),
+                [&](const ActorDecl& actor) { return actor.name == owner; });
+            if (actor_target)
+                fail("NATIVE_MTD_ACTOR_STATE_SEALED: external receiver methods cannot extend an already defined actor's sealed state");
+            fail("NATIVE_MTD_LOCAL_CLASS_REQUIRED: typed receiver must name an already declared ordinary local class");
+        }
+        const bool prior_active = external_class_receiver_active_;
+        const bool prior_mutable = external_class_receiver_mutable_;
+        external_class_receiver_active_ = true;
+        external_class_receiver_mutable_ = mutable_receiver;
+        Function method = function(owner, exported);
+        external_class_receiver_active_ = prior_active;
+        external_class_receiver_mutable_ = prior_mutable;
+        const std::string name = method.name.substr(owner.size() + 1);
+        // A declaration outside the nominal class is never an alternate
+        // constructor or actor/lifecycle authority.
+        if (name == "new" || name == "constructor" ||
+            name == "init" || name == "on_start")
+            fail("NATIVE_MTD_RESERVED_MEMBER: external receiver methods cannot be constructors, factories or lifecycle hooks");
+        ClassMethod signature;
+        signature.name = method.name.substr(owner.size() + 1);
+        signature.arity = native_source_value_arity(method.parameters.size(), true);
+        signature.public_member = exported;
+        signature.mutable_receiver =
+            method.parameters.front().mode == Parameter::Mode::BorrowMut;
+        for (const auto& prior : found->methods)
+            if (prior.name == signature.name && prior.arity == signature.arity)
+                fail("NATIVE_MTD_DUPLICATE_SLOT: duplicate receiver method name/arity");
+        found->methods.push_back(std::move(signature));
+        methods_.push_back(std::move(method));
+    }
+
     Function extension_method(bool exported) {
         extension_offset_ = token_.offset;
         require("mtd");
@@ -2358,7 +2474,13 @@ private:
         }
         if (!owner.empty()) {
             Parameter receiver;
-            receiver.name = "self"; receiver.class_name = owner; receiver.mode = Parameter::Mode::Borrow;
+            receiver.name = "self"; receiver.class_name = owner;
+            receiver.mode = external_class_receiver_mutable_
+                ? Parameter::Mode::BorrowMut : Parameter::Mode::Borrow;
+            if (external_class_receiver_active_ &&
+                    (token_.text == "self" ||
+                    (token_.text == "mut" && peek_next().text == "self")))
+                fail("NATIVE_MTD_DUPLICATE_SELF: receiver is already declared in mtd header");
             if (accept("mut")) {
                 require("self");
                 receiver.mode = Parameter::Mode::BorrowMut;
@@ -6704,6 +6826,7 @@ private:
     }
 
     std::unordered_map<std::string, ForwardType> forwards_;
+    std::unordered_map<std::string, std::string> actor_forwards_;
     std::unordered_map<std::string, ScalarAlias> defined_type_aliases_;
     std::string_view source_;
     Lexer lexer_;
@@ -6728,6 +6851,8 @@ private:
         std::unordered_map<std::string, std::unordered_set<std::size_t>>> extension_methods_;
     std::unordered_set<std::string> extension_public_slots_;
     bool extension_header_active_ = false;
+    bool external_class_receiver_active_ = false;
+    bool external_class_receiver_mutable_ = false;
     // Inside a native actor on_message body: `self.field` names the actor field.
     bool actor_handler_active_ = false;
     std::string extension_receiver_alias_;
