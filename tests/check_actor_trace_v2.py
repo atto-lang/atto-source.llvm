@@ -74,8 +74,8 @@ def verify_trace(receipt, contract=None):
     require(not (prod["subject"] == "compiled_atto_guest"
                  and prod["emission"] == "reconstructed_after_quiescence"),
             "post-hoc reconstructed history cannot claim compiled guest instrumentation")
-    require(not (prod["subject"] == "reference_model" and prod["backend"] != "reference"),
-            "reference model must identify itself as reference")
+    require((prod["backend"] == "reference") == (prod["subject"] == "reference_model"),
+            "reference backend and reference_model subject must agree")
     events = receipt["events"]
     require(type(events) is list, "events must be an array")
     require(0 < len(events) <= contract["max_events"], "event budget exceeded or vacuous trace")
@@ -84,7 +84,8 @@ def verify_trace(receipt, contract=None):
     seen_message_ids = set()
     counts = {"spawns": 0, "admitted": 0, "completed": 0,
               "discarded": 0, "control_dispatches": 0,
-              "parallel_receives_witnessed": False, "parallel_reads_witnessed": False}
+              "parallel_receives_witnessed": False, "parallel_reads_witnessed": False,
+              "cross_actor_overlap_witnessed": False}
 
     for i, event in enumerate(events):
         require(type(event) is dict, f"event {i} not an object")
@@ -147,6 +148,12 @@ def verify_trace(receipt, contract=None):
             require(not a["serial"] or not a["active"], "serial actor ran parallel receiver")
             require(len(a["active"]) < contract["max_active_receivers_per_actor"],
                     "active receiver budget exceeded")
+            # Distinct serial actors may execute simultaneously on different
+            # carriers. This does NOT imply a single actor supports
+            # overlapping receiver turns.
+            if any(other_id != actor_id and other["active"]
+                   for other_id, other in actors.items()):
+                counts["cross_actor_overlap_witnessed"] = True
             a["ready"].pop(0)
             a["active"][rid] = msg
             if len(a["active"]) > 1:
@@ -200,10 +207,41 @@ def verify_trace(receipt, contract=None):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("trace", nargs="+", type=Path)
+    ap.add_argument("--require-backend", choices=[
+        "java", "llvm", "net", "rust", "wasm", "forge", "attomq", "reference"])
+    ap.add_argument("--require-subject", choices=[
+        "compiled_atto_guest", "runtime_host", "reference_model"])
+    ap.add_argument("--require-emission", choices=[
+        "online_linearization_points", "reconstructed_after_quiescence"])
+    ap.add_argument("--require-parallel-receives", action="store_true")
+    ap.add_argument("--require-cross-actor-overlap", action="store_true")
+    ap.add_argument("--require-parallel-reads", action="store_true")
+    ap.add_argument("--min-admitted", type=int, default=0)
+    ap.add_argument("--min-control-dispatches", type=int, default=0)
     args = ap.parse_args(argv)
     try:
+        require(0 <= args.min_admitted <= 100000 and 0 <= args.min_control_dispatches <= 100000,
+                "invalid minimum witness counts")
         for trace in args.trace:
-            counts = verify_trace(load_json(trace))
+            receipt = load_json(trace)
+            producer = receipt.get("producer") if type(receipt) is dict else None
+            for key, expected in (("backend", args.require_backend),
+                                  ("subject", args.require_subject),
+                                  ("emission", args.require_emission)):
+                if expected is not None:
+                    require(type(producer) is dict and producer.get(key) == expected,
+                            f"required {key} evidence tier mismatch")
+            counts = verify_trace(receipt)
+            require(counts["admitted"] >= args.min_admitted,
+                    "too few observed DATA admissions")
+            require(counts["control_dispatches"] >= args.min_control_dispatches,
+                    "too few observed CONTROL dispatches")
+            require(not args.require_parallel_receives or counts["parallel_receives_witnessed"],
+                    "no overlapping receiver turns observed")
+            require(not args.require_cross_actor_overlap or counts["cross_actor_overlap_witnessed"],
+                    "no overlapping turns of distinct actors observed")
+            require(not args.require_parallel_reads or counts["parallel_reads_witnessed"],
+                    "no overlapping critical readers observed")
             print("ACTOR_TRACE_V2_PASS", trace, json.dumps(counts, sort_keys=True))
     except (TraceViolation, OSError, TypeError, KeyError) as exc:
         print(f"ACTOR_TRACE_V2_REJECTED: {exc}", file=sys.stderr)
