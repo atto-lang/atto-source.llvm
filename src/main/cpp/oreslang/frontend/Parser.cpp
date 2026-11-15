@@ -4299,21 +4299,21 @@ private:
     std::unique_ptr<Expression> product() {
         auto left = unary();
         while (token_.text == "*" || token_.text == "/" || token_.text == "%") {
-            // '%' is no longer an Oreslang source operator. Keep this
-            // rejection at the operator boundary, before producing AST/IR.
-            // Named Integer.rem/mod are separate, typed callable contracts.
-            if (token_.text == "%")
-                fail("noncanonical '%' source operator; use named Integer.rem/mod when supported");
-            // Java int/int division has a floating result. The current
-            // shipping native i64 frontend cannot silently truncate it.
+            // Java defines int/int division as a FLOAT result; this native
+            // source compiler lowers expressions only to signed i64. Reject
+            // at the operator before either lowering or emitting partial IR.
             if (token_.text == "/")
                 fail("native floating division unsupported: int/int yields float in Java; "
                      "LLVM float typing and zero-divisor semantics are not implemented");
+            if (token_.text == "%")
+                fail("'%' is reserved and is not AttoLang source syntax; "
+                     "use Integer.rem(a, b) or Integer.mod(a, b)");
             const auto offset = token_.offset;
             advance();
+            auto right = unary();
             auto expr = make_expression(Expression::Kind::Multiply, offset);
             expr->left = std::move(left);
-            expr->right = unary();
+            expr->right = std::move(right);
             left = std::move(expr);
         }
         return left;

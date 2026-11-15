@@ -95,7 +95,7 @@ def main():
                     rejected.stderr.startswith(b"oreslang-llvmc: "),
                     "unexpected LLVM negative outcome (crash/noisy IR/no diagnostic): "+expr)
             if "%" in expr:
-                require(b"noncanonical '%' source operator" in rejected.stderr,
+                require(b"'%' is reserved" in rejected.stderr,
                         "legacy percent rejection used unrelated compiler error: "+expr)
     print(json.dumps({"kind":"native-llvm-compiled-os-exit-subset",
                       "source_corpus_blob":BLOB,"source_corpus_sha256":BYTES_SHA256,
