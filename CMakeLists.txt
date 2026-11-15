@@ -1878,7 +1878,8 @@ if(BUILD_TESTING)
     if(ORE_CLANG)
         oreslang_contract_test(native_logical_borrow_take_accept
             logical-borrow-compiler-v1/owned-take-positive.atto
-            --ir "define" --run 0 --stdout "42" --clang "${ORE_CLANG}")
+            --ir "define" --run 0 --stdout "42" --clang "${ORE_CLANG}"
+            --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeStringRegion.c")
     endif()
     oreslang_contract_test(native_logical_borrow_use_after_take_reject
         logical-borrow-compiler-v1/use-after-take-reject.atto
