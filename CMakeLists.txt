@@ -2946,6 +2946,21 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-bounded-actor-port-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-bounded-actor-port-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_actor_port_bounded_owned_transport COMMAND oreslang-bounded-actor-port-test)
+    # Independent multicore transport proof: sends are move-only,
+    # saturated admission cannot consume a producer's payload, and only
+    # receiver acknowledgement refunds queue/checked-out resource credits.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-bounded-actor-port-concurrency-test
+        tests/bounded_actor_port_concurrency_test.cpp)
+    target_include_directories(oreslang-bounded-actor-port-concurrency-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-bounded-actor-port-concurrency-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-bounded-actor-port-concurrency-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_port_owned_transport_concurrency
+        COMMAND oreslang-bounded-actor-port-concurrency-test)
+    set_tests_properties(native_actor_port_owned_transport_concurrency
+        PROPERTIES TIMEOUT 60)
     # Bounded-port mailbox ledger, physical ownership and supervisor CONTROL
     # transport tests; host primitives only, not guest compiler parity.
     target_link_libraries(oreslang-bounded-actor-port-test PRIVATE Threads::Threads)
@@ -5733,6 +5748,28 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 20)
 endif()
 
+# Compiler-owned singleton admission must remain contextual and fail closed
+# until the shared v1 semantics and lowering are implemented.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-singleton-admission-test
+        tests/native_singleton_admission_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp
+        src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-native-singleton-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_include_directories(oreslang-native-singleton-admission-test SYSTEM PRIVATE
+        ${LLVM_INCLUDE_DIRS})
+    target_link_libraries(oreslang-native-singleton-admission-test PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_features(oreslang-native-singleton-admission-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-singleton-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_singleton_admission
+        COMMAND oreslang-native-singleton-admission-test)
+    set_tests_properties(native_singleton_admission PROPERTIES TIMEOUT 20)
+endif()
+
 # Host-only GPU actor turn/fence/supervisor composition. This is not a
 # GPU provider, source actor lowering, or physical GPU execution test.
 if(BUILD_TESTING)
@@ -5748,6 +5785,52 @@ if(BUILD_TESTING)
     add_test(NAME native_gpu_actor_host_turn_fence_control_v0
         COMMAND oreslang-gpu-actor-host-bridge-v0-test)
     set_tests_properties(native_gpu_actor_host_turn_fence_control_v0 PROPERTIES TIMEOUT 30)
+endif()
+
+# V1 opaque host provider event identity and bounded actor quarantine. This
+# test uses an injected MOCK port; no physical GPU execution is implied.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-gpu-actor-provider-bridge-v1-test
+        tests/gpu_actor_provider_bridge_v1_test.cpp)
+    target_include_directories(oreslang-gpu-actor-provider-bridge-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-gpu-actor-provider-bridge-v1-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-gpu-actor-provider-bridge-v1-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    target_link_libraries(oreslang-gpu-actor-provider-bridge-v1-test PRIVATE Threads::Threads)
+    add_test(NAME native_gpu_actor_provider_bridge_v1_host_mock
+        COMMAND oreslang-gpu-actor-provider-bridge-v1-test)
+    set_tests_properties(native_gpu_actor_provider_bridge_v1_host_mock PROPERTIES TIMEOUT 30)
+endif()
+
+# V2 OpenCL actor adapter integration: the first target uses an injected
+# fake Api, the second REQUIRES a real GPU. A CPU OpenCL device cannot pass.
+# A physical probe returning 77 reports GPU_NOT_EXECUTED, not success.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-gpu-actor-opencl-v2-host-test
+        tests/gpu_actor_opencl_provider_v2_test.cpp)
+    target_include_directories(oreslang-gpu-actor-opencl-v2-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-gpu-actor-opencl-v2-host-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-gpu-actor-opencl-v2-host-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    target_link_libraries(oreslang-gpu-actor-opencl-v2-host-test PRIVATE Threads::Threads dl)
+    add_test(NAME native_gpu_actor_opencl_v2_host_mock
+        COMMAND oreslang-gpu-actor-opencl-v2-host-test)
+    set_tests_properties(native_gpu_actor_opencl_v2_host_mock PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-gpu-actor-opencl-v2-physical-probe
+        tests/gpu_actor_opencl_v2_physical_probe.cpp)
+    target_include_directories(oreslang-gpu-actor-opencl-v2-physical-probe PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-gpu-actor-opencl-v2-physical-probe PRIVATE cxx_std_17)
+    target_compile_options(oreslang-gpu-actor-opencl-v2-physical-probe PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    target_link_libraries(oreslang-gpu-actor-opencl-v2-physical-probe PRIVATE Threads::Threads dl)
+    # Explicit physical GPU gate is run separately on GPU-capable runners.
+    # Do NOT mark SKIP_RETURN_CODE=77: skipped CTest is NOT hardware proof.
 endif()
 
 # Dependency-free, executable import/source admission boundary. This test
@@ -6304,6 +6387,22 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 60)
 endif()
 
+# Opt-in shared polling/execution host substrate. Not source-actor qualification.
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  find_package(Threads REQUIRED)
+  add_executable(ores-shared-reactor-pool-test tests/shared_reactor_pool_test.cpp)
+  target_include_directories(ores-shared-reactor-pool-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime")
+  target_compile_features(ores-shared-reactor-pool-test PRIVATE cxx_std_17)
+  target_compile_options(ores-shared-reactor-pool-test PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+  target_link_libraries(ores-shared-reactor-pool-test PRIVATE Threads::Threads)
+  add_test(NAME shared_reactor_pool_host COMMAND ores-shared-reactor-pool-test)
+  set_tests_properties(shared_reactor_pool_host PROPERTIES TIMEOUT 30)
+  add_executable(ores-shared-worker-layout-benchmark tests/shared_worker_layout_benchmark.cpp)
+  target_compile_features(ores-shared-worker-layout-benchmark PRIVATE cxx_std_17)
+  target_link_libraries(ores-shared-worker-layout-benchmark PRIVATE Threads::Threads)
+endif()
+
 # Host-only logical HTTP RequestLocal: independent of native pthread TLS.
 # Real actor scheduler and cancellation are exercised; .atto compiler
 # lowering and true Task continuation migration are separate release gates.
@@ -6451,6 +6550,83 @@ if(BUILD_TESTING)
     add_test(NAME native_oresvm_actor_resource_retirement
         COMMAND oreslang-native-oresvm-resource-retirement-test)
     set_tests_properties(native_oresvm_actor_resource_retirement PROPERTIES TIMEOUT 30)
+endif()
+
+# Host-only persistence sidecar model: NOT .ores actor source execution or durable storage.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-batch-persistence-contract-test
+        tests/native_batch_persistence_test.cpp)
+    target_include_directories(oreslang-native-batch-persistence-contract-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-batch-persistence-contract-test PRIVATE cxx_std_17)
+    find_package(Threads REQUIRED)
+    target_link_libraries(oreslang-native-batch-persistence-contract-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-batch-persistence-contract-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_batch_persistence_host_only_contract
+        COMMAND oreslang-native-batch-persistence-contract-test)
+    set_tests_properties(native_batch_persistence_host_only_contract PROPERTIES TIMEOUT 30)
+endif()
+
+
+# REAL SQLite WAL/FULL host provider. The test executes native C++ and SQLite,
+# but is not compiler-generated Oreslang guest execution.
+if(BUILD_TESTING AND UNIX)
+    find_package(SQLite3 QUIET)
+    if(SQLite3_FOUND)
+        add_executable(oreslang-native-sqlite-persistence-test
+            tests/native_sqlite_persistence_test.cpp)
+        target_include_directories(oreslang-native-sqlite-persistence-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime")
+        target_compile_features(oreslang-native-sqlite-persistence-test PRIVATE cxx_std_17)
+        target_compile_options(oreslang-native-sqlite-persistence-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        target_link_libraries(oreslang-native-sqlite-persistence-test PRIVATE SQLite::SQLite3)
+        add_test(NAME native_sqlite_wal_actor_state_crash_recovery_host_only
+            COMMAND oreslang-native-sqlite-persistence-test)
+        set_tests_properties(native_sqlite_wal_actor_state_crash_recovery_host_only
+            PROPERTIES TIMEOUT 60)
+    endif()
+endif()
+
+
+# Native actor-owned memory + durable storage reactivation HOST INTEGRATION.
+# Executes real OwnedHeap and SQLite; does not run compiler-generated .ores guests.
+if(BUILD_TESTING AND UNIX)
+    find_package(SQLite3 QUIET)
+    if(SQLite3_FOUND)
+        add_executable(oreslang-actor-arena-persistence-restart-test
+            tests/native_actor_arena_persistence_reactivation_test.cpp)
+        target_include_directories(oreslang-actor-arena-persistence-restart-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features(oreslang-actor-arena-persistence-restart-test PRIVATE cxx_std_17)
+        target_compile_options(oreslang-actor-arena-persistence-restart-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        target_link_libraries(oreslang-actor-arena-persistence-restart-test PRIVATE SQLite::SQLite3)
+        add_test(NAME native_actor_arena_sqlite_reactivation_host_only
+            COMMAND oreslang-actor-arena-persistence-restart-test)
+        set_tests_properties(native_actor_arena_sqlite_reactivation_host_only PROPERTIES TIMEOUT 45)
+    endif()
+endif()
+
+# Native v2 durable logical-command host-only conformance: real WAL/FULL and SIGKILL.
+# This does not compile an AttoLang/Oreslang guest actor.
+if(BUILD_TESTING AND UNIX)
+    find_package(SQLite3 QUIET)
+    if(SQLite3_FOUND)
+        add_executable(oreslang-native-command-v2-sqlite-test
+            tests/native_command_persistence_v2_test.cpp)
+        target_include_directories(oreslang-native-command-v2-sqlite-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime")
+        target_compile_features(oreslang-native-command-v2-sqlite-test PRIVATE cxx_std_17)
+        target_compile_options(oreslang-native-command-v2-sqlite-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        target_link_libraries(oreslang-native-command-v2-sqlite-test PRIVATE SQLite::SQLite3)
+        add_test(NAME native_v2_sqlite_command_epoch_retry_crash_host_only
+            COMMAND oreslang-native-command-v2-sqlite-test)
+        set_tests_properties(native_v2_sqlite_command_epoch_retry_crash_host_only
+            PROPERTIES TIMEOUT 60)
+    endif()
 endif()
 
 
