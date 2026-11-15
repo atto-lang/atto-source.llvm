@@ -3618,6 +3618,20 @@ private:
                                                value.actor_flushes.size() - 1});
                 continue;
             }
+            if (action->kind == Expression::Kind::Field
+                    && action->name == "recover_blocking" && accept("(")) {
+                if (!action->left || action->left->kind != Expression::Kind::Variable)
+                    fail("native actor recover_blocking requires direct ActorRef");
+                if (!value.done_await_actor.empty() || !value.ready_await_actor.empty())
+                    fail("native actor recover_blocking with lifecycle await requires continuation lowering");
+                const std::string reference = action->left->name;
+                require(")");
+                require(";");
+                value.actor_recovers.push_back(reference);
+                value.actor_actions.push_back({ActorAction::Kind::RecoverBlocking,
+                                               value.actor_recovers.size() - 1});
+                continue;
+            }
             if (action->kind == Expression::Kind::Field && action->name == "send"
                     && accept("(")) {
                 if (!value.done_await_actor.empty())
@@ -4461,7 +4475,8 @@ private:
                 && field->left->kind == Expression::Kind::Variable
                 && class_receivers_.count(field->left->name);
             const bool actor_action =
-                (field->name == "send" || field->name == "flush_blocking")
+                (field->name == "send" || field->name == "flush_blocking"
+                    || field->name == "recover_blocking")
                 && !named_class_receiver;
             if (!actor_action && accept("(")) {
                 field->kind = Expression::Kind::ArrayCall;
@@ -5842,6 +5857,7 @@ private:
                 check_statement_names(stmt, params);
             // Validate effects in lexical order. In particular, a send after
             // stop must not pass by consulting the all-spawns reference map.
+            std::unordered_set<std::string> recovered_actors;
             for (const auto& action : fn.actor_actions) {
                 if (action.kind == ActorAction::Kind::Send) {
                     const auto& send = fn.actor_sends.at(action.index);
@@ -5856,11 +5872,27 @@ private:
                         throw std::runtime_error("unknown actor flush_blocking receiver '" + ref + "'");
                     if (!live_actors.count(ref))
                         throw std::runtime_error("actor flush_blocking after stop '" + ref + "'");
+                } else if (action.kind == ActorAction::Kind::RecoverBlocking) {
+                    const auto& ref = fn.actor_recovers.at(action.index);
+                    const auto it = references.find(ref);
+                    if (it == references.end() || !live_actors.count(ref))
+                        throw std::runtime_error("unknown or stopped actor recovery receiver '" + ref + "'");
+                    if (it->second->restart_limit == 0)
+                        throw std::runtime_error("actor recovery requires explicit @ActorRestartLimit");
+                    if (!recovered_actors.insert(ref).second)
+                        throw std::runtime_error("duplicate source actor recovery '" + ref + "'");
                 } else {
                     const auto& stop = fn.actor_stops.at(action.index);
                     if (!live_actors.erase(stop))
                         throw std::runtime_error("invalid or repeated actor stop '" + stop + "'");
                 }
+            }
+            for (const auto& spawn : fn.actor_spawns) {
+                const auto it = references.find(spawn.name);
+                if (it != references.end() && it->second->restart_limit != 0
+                    && !recovered_actors.count(spawn.name))
+                    throw std::runtime_error(
+                        "restart-enabled actor must consume recovery before STOP '" + spawn.name + "'");
             }
             if (!fn.done_await_actor.empty() && live_actors.count(fn.done_await_actor))
                 throw std::runtime_error("await get_done requires stop before await");
