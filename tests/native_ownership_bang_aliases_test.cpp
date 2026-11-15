@@ -35,6 +35,8 @@ static std::string git_blob_sha(const std::string& bytes) {
 static std::string read_fixture(const std::string& root, const std::string& filename) {
     static const std::map<std::string, std::string_view> reviewed_pins{
         {"borrow-call-accept.atto", "8cf245cbd24dc158f50bb010cbdcf09e1e826c10"},
+        {"borrow-mut-canonical-native.atto", "494a17d0ab6ceee9c1f44584d33d1f9023042a81"},
+        {"borrow-mut-compatible-native.atto", "716cf4867e88e192dccc0493bfaebe2fd3eea76c"},
         {"take-after-use-reject.atto", "7757036e704fc334842cac8254863139d85d2935"},
         {"borrow-escape-reject.atto", "0c5d993b9c95d586ac2cb4018ce0df24856a36ae"},
         {"share-class-reject.atto", "3368f59e356003118e281fa73461e4185936e849"},
@@ -169,6 +171,8 @@ int main(int argc, char** argv) {
     // Git blob in this compiler-owned checker: ordinary CTest source reads
     // alone are not a provenance assertion.
     for (const char* name : {"borrow-call-accept.atto",
+                             "borrow-mut-canonical-native.atto",
+                             "borrow-mut-compatible-native.atto",
                              "take-after-use-reject.atto",
                              "borrow-escape-reject.atto",
                              "share-class-reject.atto",
@@ -244,6 +248,13 @@ int main(int argc, char** argv) {
         }
         throw std::runtime_error("native ownership violation accepted");
     };
+    // Both syntaxes must reach the real ownership checker before native
+    // Clang O0/O2 execution gates can claim a mutable loan contract.
+    for (const char* fixture : {"borrow-mut-canonical-native.atto", "borrow-mut-compatible-native.atto"}) {
+        const auto program = oreslang::parse_program(read_fixture(root, fixture));
+        if (program.functions.size() != 3)
+            throw std::runtime_error("mutable borrow guest admission missing");
+    }
     semantic_reject(read_fixture(root, "take-after-use-reject.atto"), "moved");
     semantic_reject(read_fixture(root, "borrow-escape-reject.atto"), "borrowed reference");
     semantic_reject(read_fixture(root, "share-class-reject.atto"), "non-Copy");
