@@ -20,6 +20,17 @@ fn t(tk: Tok, pos: Pos) -> Token { Token { tok: tk, pos } }
 fn error(code: &str, message: impl AsRef<str>) -> String {
     format!("{code}: {}", message.as_ref())
 }
+/// Confirm that the independently reparsed executable method has exactly the
+/// signature validated by the nominal target header. Never infer an ABI from
+/// a matching name and arity alone.
+fn scalar_named_type(name: &str) -> Option<Type> {
+    match name {
+        "int" => Some(Type::Int),
+        "bool" | "boolean" => Some(Type::Bool),
+        "void" => Some(Type::Void),
+        _ => None,
+    }
+}
 fn locate_pos(tokens: &[Token], pos: Pos) -> Result<usize, String> {
     tokens.iter().position(|x| x.pos.line == pos.line && x.pos.col == pos.col)
         .ok_or_else(|| error("E_INTERNAL", "target header position lost"))
@@ -215,8 +226,16 @@ fn parse_one_receiver(tokens: &[Token], start: usize, end: usize,
         return Err(error("E_INTERNAL","native target method did not reparse"));
     }
     let method=p.actors[0].methods[0].clone();
-    if method.name != head.name || method.params.len()!=head.arity {
-        return Err(error("E_SIGNATURE","target receiver does not match executable method"));
+    if method.name != head.name || method.params.len()!=head.arity
+        || method.ret != scalar_named_type(&head.return_type)
+            .ok_or_else(|| error("E_UNSUPPORTED_NATIVE_TYPE",
+                "receiver return is not an admitted primitive type"))?
+        || method.params.iter().zip(&head.params).any(|(got, expected)|
+            got.name != expected.name || Some(got.ty) !=
+                scalar_named_type(&expected.type_name))
+        || method.is_static {
+        return Err(error("E_SIGNATURE",
+            "target receiver name, parameters, types or return mismatch"));
     }
     Ok(method)
 }
@@ -261,6 +280,13 @@ pub fn lower(tokens: &[Token]) -> Result<Program,String> {
     // Only primitive fields and payloads can be reused without relocating
     // its locally indexed Named types into the linked Program type table.
     for actor in &program.actors {
+        // Actor state is sealed even if the legacy concrete parser accepts
+        // a 'pub' field. Target-native syntax must not export state via an
+        // accidental public field descriptor.
+        if actor.fields.iter().any(|field| field.public) {
+            return Err(error("E_SEALED",
+                "target actor state cannot be declared public"));
+        }
         if actor.fields.iter().any(|field|
             !matches!(field.ty,Type::Int|Type::Bool))
             || actor.receive.as_ref().is_some_and(|r|
