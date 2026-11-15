@@ -96,16 +96,28 @@ static bool same_operand_tree(const Expression* a, const Expression* b) {
     if (!a || !b) return a == b;
     if (a->kind != b->kind || a->integer != b->integer ||
         a->boolean != b->boolean || a->name != b->name ||
-        a->arguments.size() != b->arguments.size())
+        a->sum_type != b->sum_type ||
+        a->arguments.size() != b->arguments.size() ||
+        a->argument_names != b->argument_names ||
+        a->type_arguments_present != b->type_arguments_present ||
+        a->type_arguments.size() != b->type_arguments.size())
         return false;
     if (!same_operand_tree(a->left.get(), b->left.get()) ||
         !same_operand_tree(a->right.get(), b->right.get()) ||
         !same_operand_tree(a->condition.get(), b->condition.get()) ||
+        !same_operand_tree(a->condition_lhs.get(), b->condition_lhs.get()) ||
+        !same_operand_tree(a->condition_rhs.get(), b->condition_rhs.get()) ||
         !same_operand_tree(a->when_true.get(), b->when_true.get()) ||
         !same_operand_tree(a->when_false.get(), b->when_false.get()))
         return false;
     for (std::size_t i = 0; i < a->arguments.size(); ++i) {
         if (!same_operand_tree(a->arguments[i].get(), b->arguments[i].get()))
+            return false;
+    }
+    for (std::size_t i = 0; i < a->type_arguments.size(); ++i) {
+        const auto& x = a->type_arguments[i];
+        const auto& y = b->type_arguments[i];
+        if (x.name != y.name || x.type != y.type || x.infer != y.infer)
             return false;
     }
     return true;
