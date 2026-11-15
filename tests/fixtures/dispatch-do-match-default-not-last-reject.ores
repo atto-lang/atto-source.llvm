@@ -1,0 +1,7 @@
+pub fnc main(): int {
+    do match 2 over
+        default -> { return 42; }
+        on 2 -> { return 0; }
+    end
+    return 0;
+}
