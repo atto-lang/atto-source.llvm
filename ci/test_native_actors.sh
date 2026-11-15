@@ -79,13 +79,27 @@ for case in tests/actors/fail/*.atto; do
         exit 1
     fi
     test ! -e "$work/$name.exe"
-    if ! grep -E 'E_(PRIVATE|TYPE|UNSUPPORTED|EXPECTED|PARSE|SYNTAX|UNBOUND|ISOLATION)' "$work/negative"; then
+    if ! grep -E 'E_(PRIVATE|TYPE|TOPLEVEL|RESERVED|UNSUPPORTED|EXPECTED|PARSE|SYNTAX|UNBOUND|ISOLATION)' "$work/negative"; then
         echo "FAIL missing diagnostic in actor negative: $name" >&2
         cat "$work/negative" >&2
         exit 1
     fi
     echo "PASS fail-closed actor negative $name"
 done
+
+# Independent C ABI contention gate: the same real runtime, with C mock
+# callbacks, is stressed by four producer threads and eight actor workers.
+# This complements (does not replace) compiled .atto guest execution above.
+clang -std=c11 -O1 -g -pthread -fsanitize=address,undefined \
+  -fno-omit-frame-pointer -Wall -Wextra -Werror \
+  runtime/actor_runtime.c tests/native_actor_mailbox_stress.c \
+  -o "$work/mailbox_stress.exe"
+for iteration in $(seq 1 5); do
+    ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+        timeout 20s "$work/mailbox_stress.exe" > "$work/mailbox_output"
+    grep -q 'PASS C actor mailbox concurrency 1600 messages' "$work/mailbox_output"
+done
+echo "PASS 5x 1600 C ABI concurrent sends, FIFO per actor, stale refs and deterministic drain"
 
 # Compile both LLVM IR and the native C runtime under sanitizers. Two
 # independently initialized actor arenas/threads must have no UB/memory bugs.
