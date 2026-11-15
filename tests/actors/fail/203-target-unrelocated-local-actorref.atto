@@ -1,0 +1,12 @@
+// expect-reject: E_TYPE_INDEX
+// Native linked Atto code must fail closed, never produce a guest artifact.
+use namespace workers;
+declare actor Worker;
+define actor Worker as
+    receive(ActorMail<int> mail): void { return; }
+end
+mtd (Worker self) identity(int value): int { return value; }
+pub fnc main(): int {
+    val cap: ActorRef<Worker> = spawn Worker();
+    return 0;
+}
