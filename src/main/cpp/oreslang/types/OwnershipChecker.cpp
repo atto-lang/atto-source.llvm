@@ -24,7 +24,8 @@ struct LocalOwnership {
     Mode mode = Mode::Value;
     bool moved = false;
     bool heap_owned = false; // Experimental region slots cannot transfer ownership yet.
-    bool int_array = false; // Non-copy lexical array; no borrows or escapes.
+    bool int_array = false; // Affine array owner or call-scoped array loan, never copyable.
+    ScalarType array_element_type = ScalarType::I64;
     bool record_view = false; // readonly materialized value, not an incoming loan
     bool mutable_owner = false; // lexical let mut or exclusive borrowed parameter
     bool assignable = false; // lexical slot replacement, not referent mutation
@@ -161,8 +162,8 @@ Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
     if (root->kind != Expression::Kind::Variable)
         reject(expr, "native borrow requires an addressable named int parameter");
     LocalOwnership& source = local(*root, locals);
-    if (source.int_array)
-        reject(expr, "ownership violation: native Array<int> cannot be borrowed or escaped");
+    // Direct Array<f64> loans are allowed only through the matching
+    // checked array formal. The caller retains ownership and handles cleanup.
     // A borrowed parameter has a caller-held lifetime and already carries
     // provenance to addressable i64 storage. A nested call can temporarily
     // reborrow that same storage, but it cannot strengthen a shared borrow
@@ -253,7 +254,9 @@ void check_call(const Expression& expr, Locals& locals, const Functions& functio
             // freeze the whole owner, preventing sibling-alias escape.
             const std::string actual_class =
                 loan.projected_scalar_field ? std::string{} : !loan.projected_class.empty() ? loan.projected_class : source.class_name;
-            if (actual_class != parameter.class_name)
+            if (actual_class != parameter.class_name ||
+                    parameter.int_array != (source.int_array && !loan.projected_scalar_field) ||
+                    (parameter.int_array && source.array_element_type != parameter.array_element_type))
                 reject(argument, "ownership violation: borrowed argument type mismatch");
             loans.push_back(std::move(loan));
         }
@@ -265,9 +268,11 @@ void check_call(const Expression& expr, Locals& locals, const Functions& functio
 void check_value(const Expression& expr, Locals& locals, const Functions& functions) {
     switch (expr.kind) {
         case Expression::Kind::Integer:
+        case Expression::Kind::Floating:
         case Expression::Kind::Boolean:
         case Expression::Kind::String:
             return;
+        case Expression::Kind::ToText:
         case Expression::Kind::Console:
             check_value(*expr.left, locals, functions);
             return;
@@ -351,6 +356,7 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
+        case Expression::Kind::Divide:
         case Expression::Kind::Remainder:
         case Expression::Kind::ShiftLeft:
         case Expression::Kind::ShiftRight:
@@ -427,6 +433,7 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
 void check_pure_guard(const Expression& expr, Locals& locals, const Functions& functions) {
     switch (expr.kind) {
         case Expression::Kind::Integer:
+        case Expression::Kind::Floating:
         case Expression::Kind::Boolean:
         case Expression::Kind::String:
         case Expression::Kind::Variable:
@@ -442,6 +449,7 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
+        case Expression::Kind::Divide:
         case Expression::Kind::Remainder:
         case Expression::Kind::ShiftLeft:
         case Expression::Kind::ShiftRight:
@@ -477,6 +485,7 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut:
         case Expression::Kind::ArrayCall:
+        case Expression::Kind::ToText:
         case Expression::Kind::Console:
             reject(expr, "native guarded condition must be pure and cannot move, call or borrow");
     }
@@ -490,8 +499,11 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
                                    const Functions& functions) {
     switch (expr.kind) {
         case Expression::Kind::String:
+        case Expression::Kind::ToText:
         case Expression::Kind::Console:
             reject(expr, "native caught throw cannot own string region effects");
+        case Expression::Kind::Floating:
+            reject(expr, "native caught throw accepts int only, not f64");
         case Expression::Kind::Integer:
         case Expression::Kind::Boolean:
             return;
@@ -519,6 +531,7 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
+        case Expression::Kind::Divide:
         case Expression::Kind::Remainder:
         case Expression::Kind::ShiftLeft:
         case Expression::Kind::ShiftRight:
@@ -675,6 +688,11 @@ void validate_i64_ownership(Program& program) {
             // Parameter bindings are val slots even for exclusive loans.
             // Referent capability does not grant identifier reassignment.
             entry.class_name = param.class_name;
+            entry.int_array = param.int_array;
+            entry.array_element_type = param.array_element_type;
+            if (param.int_array && (param.mode == Mode::Value ||
+                    param.array_element_type != ScalarType::F64))
+                throw std::runtime_error("ownership violation: direct array formal requires checked f64 borrowing");
             if (!param.class_name.empty()) {
                 entry.mutable_paths = layouts.mutable_paths(param.class_name);
                 entry.subobjects = layouts.at(param.class_name).subobjects;
@@ -704,6 +722,7 @@ void validate_i64_ownership(Program& program) {
             LocalOwnership entry;
             entry.heap_owned = binding.heap_owned;
             entry.int_array = binding.int_array;
+            entry.array_element_type = binding.array_element_type;
             entry.mutable_owner = binding.owner_mutable;
             entry.assignable = binding.assignable;
             entry.class_name = binding.class_name;
@@ -713,7 +732,12 @@ void validate_i64_ownership(Program& program) {
             } else if (binding.name.rfind("$effect", 0) == 0 && binding.initializer &&
                     binding.initializer->kind == Expression::Kind::ArrayCall) {
                 const auto& call = *binding.initializer;
-                array_owner(*call.left, locals, true);
+                const auto& owner = array_owner(*call.left, locals, true);
+                // Top-level array effects are lowered through synthetic
+                // $effect locals rather than structured call statements.
+                // Keep the same no-resize rule in both paths.
+                if (owner.int_array && owner.mode != Mode::Value && call.name == "add")
+                    reject(call, "ownership violation: cannot resize borrowed Array<f64> handle");
                 for (const auto& arg : call.arguments) check_value(*arg, locals, functions);
             } else if (!binding.task_await_name.empty()) {
                 if (binding.scalar_type != ScalarType::I64 ||
@@ -768,7 +792,7 @@ void validate_i64_ownership(Program& program) {
                 std::function<void(const Expression&)> validate_scalar;
                 validate_scalar = [&](const Expression& expr) {
                     using K = Expression::Kind;
-                    if (expr.kind == K::Integer || expr.kind == K::Boolean || expr.kind == K::String) return;
+                    if (expr.kind == K::Integer || expr.kind == K::Floating || expr.kind == K::Boolean || expr.kind == K::String) return;
                     if (expr.kind == K::SumConstruct) {
                         for (const auto& arg : expr.arguments) validate_scalar(*arg);
                         return;
@@ -789,7 +813,7 @@ void validate_i64_ownership(Program& program) {
                         validate_scalar(*expr.left); return;
                     }
                     if ((expr.kind == K::Add || expr.kind == K::Subtract ||
-                            expr.kind == K::Multiply || expr.kind == K::Equal ||
+                            expr.kind == K::Multiply || expr.kind == K::Divide || expr.kind == K::Equal ||
                             expr.kind == K::NotEqual || expr.kind == K::Less ||
                             expr.kind == K::LessEqual || expr.kind == K::Greater ||
                             expr.kind == K::GreaterEqual || expr.kind == K::LogicalAnd ||
@@ -884,10 +908,12 @@ void validate_i64_ownership(Program& program) {
         std::unordered_set<std::string> root_names;
         for (const auto& item : locals) root_names.insert(item.first);
         std::unordered_map<std::string, unsigned> iteration_loans;
+        std::vector<Locals> loop_entrances;
         std::function<void(const Statement&, Locals&)> check_effect;
         auto scoped_entry = [&](const LocalBinding& binding) {
             LocalOwnership entry;
             entry.int_array = binding.int_array;
+            entry.array_element_type = binding.array_element_type;
             entry.mutable_owner = binding.owner_mutable;
             entry.assignable = binding.assignable;
             entry.class_name = binding.class_name;
@@ -915,7 +941,12 @@ void validate_i64_ownership(Program& program) {
                 if (found == state.end()) throw std::runtime_error("assignment requires a visible scalar slot");
                 auto writable = [&]() {
                     const auto& target = state.at(stmt.receiver);
-                    return target.assignable && !target.heap_owned && !target.int_array && target.class_name.empty() &&
+                    // Rebinding an immutable leaf record copies fields into the
+                    // slot, so no owner is retired and no alias can observe it.
+                    const bool replaceable = target.class_name.empty() ||
+                        (target.class_array_fields.empty() && target.mutable_paths.empty() &&
+                         !layouts.at(target.class_name).owns_arrays);
+                    return target.assignable && !target.heap_owned && !target.int_array && replaceable &&
                         target.shared_loans == 0 && !target.exclusive_loan;
                 };
                 if (!writable()) throw std::runtime_error("assignment requires an unloaned mutable scalar slot");
@@ -933,6 +964,19 @@ void validate_i64_ownership(Program& program) {
                 if (!same_affine_state(state, inside))
                     throw std::runtime_error(
                         "native telemetry scope requires unchanged affine ownership at exit");
+                return;
+            }
+            if (stmt.kind == Statement::Kind::Break || stmt.kind == Statement::Kind::Continue) {
+                // Both jumps land on the loop's own edges, so outer owners and
+                // loans must already match the state at loop entry.
+                if (loop_entrances.empty()) throw std::runtime_error("break/continue requires an enclosing loop");
+                Locals outer;
+                for (const auto& entry : loop_entrances.back()) {
+                    const auto found = state.find(entry.first);
+                    if (found != state.end()) outer.emplace(entry.first, found->second);
+                }
+                if (!same_affine_state(loop_entrances.back(), outer))
+                    throw std::runtime_error("ownership violation: break/continue must preserve outer owners and loans");
                 return;
             }
             if (stmt.kind == Statement::Kind::Conditional) {
@@ -966,7 +1010,9 @@ void validate_i64_ownership(Program& program) {
                 Locals body = entrance;
                 check_value(*stmt.condition, body, functions);
                 if (!same_affine_state(entrance, body)) throw std::runtime_error("index condition must preserve ownership");
+                loop_entrances.push_back(entrance);
                 scoped_effects(stmt.then_statements, body);
+                loop_entrances.pop_back();
                 check_value(*stmt.loop_step, body, functions);
                 if (!same_affine_state(entrance, body))
                     throw std::runtime_error("ownership violation: index back-edge must preserve outer owners and loans");
@@ -983,7 +1029,9 @@ void validate_i64_ownership(Program& program) {
                 const auto& iterator = *stmt.branch_local;
                 if (!body.emplace(iterator.name, scoped_entry(iterator)).second)
                     throw std::runtime_error("native for-of element shadows live owner");
+                loop_entrances.push_back(entrance);
                 scoped_effects(stmt.then_statements, body);
+                loop_entrances.pop_back();
                 body.erase(iterator.name);
                 if (!same_affine_state(entrance, body))
                     throw std::runtime_error("ownership violation: for-of back-edge must preserve outer owners and loans");
@@ -1073,6 +1121,9 @@ void validate_i64_ownership(Program& program) {
                                               call.name == "set" ? 2 : 0;
                     if (!arity || call.arguments.size() != arity)
                         reject(call, "native Array<int> effect supports only add(value) or set(index,value)");
+                    if (array_owner(*call.left, state, false).mode != Mode::Value &&
+                            call.name == "add")
+                        reject(call, "ownership violation: cannot resize borrowed Array<f64> handle");
                     for (const auto& arg : call.arguments) check_value(*arg, state, functions);
                 } else if (call.kind == Expression::Kind::Call) {
                     check_call(call, state, functions);

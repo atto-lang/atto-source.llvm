@@ -34,7 +34,7 @@ def main():
             return run([compiler] + (["--experimental-rt-scalar-loop"] if gated else []) + [str(path)])
         denied = compile_source(fixture, False)
         assert denied.returncode != 0 and not denied.stdout.strip(), "default loop gate reopened"
-        assert "requires verified LLVM continuation lowering" in denied.stderr, denied.stderr
+        assert "assignment requires an unloaned mutable scalar slot" in denied.stderr, denied.stderr
         accepted = compile_source(fixture)
         assert accepted.returncode == 0, accepted.stderr
         assert "define i32 @oreslang_rt_scalar_frame_step" in accepted.stdout, "not compiled guest step"

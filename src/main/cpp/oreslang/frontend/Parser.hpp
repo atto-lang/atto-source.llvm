@@ -15,7 +15,7 @@ namespace oreslang {
 // Deliberately restricted native scalar expression AST. The source type system
 // distinguishes int and bool even though the initial same-module ABI canonicalizes
 // both into i64 slots/results; bool values are always normalized to 0 or 1.
-enum class ScalarType { I64, Bool, String };
+enum class ScalarType { I64, Bool, String, F64 };
 
 // Sum payloads are values, never untyped integer handles or class pointers.
 struct NativeSumType {
@@ -38,20 +38,25 @@ struct GenericParameter {
 
 struct Expression {
     enum class Kind {
-        Integer, Boolean, String, Console, Variable,
+        Integer, Floating, Boolean, String, Console, Variable,
         Negate, LogicalNot,
-        Add, Subtract, Multiply, Remainder, Modulo, BitXor,
+        Add, Subtract, Multiply, Divide, Remainder, Modulo, BitXor,
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
         Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field,
-        ShiftLeft, ShiftRight, ShiftUnsignedRight
+        ToText, ShiftLeft, ShiftRight, ShiftUnsignedRight // scalar text and shift operators
     };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
+    double floating = 0.0; // typed source f64, never an i64 carrier
     bool boolean = false;
     mutable ScalarType resolved_type = ScalarType::I64;
+    // Only the explicitly real int/int division operator sets this marker
+    // to preserve its f64 result. No assignment, parameter or mixed-operand
+    // context may implicitly promote int to f64.
+    mutable bool widen_to_f64 = false;
     mutable std::string resolved_class;
     std::string name;
     std::unique_ptr<Expression> left;
@@ -80,6 +85,10 @@ struct Parameter {
     std::string pending_type_alias;
     ScalarType scalar_type = ScalarType::I64;
     Mode mode = Mode::Value;
+    // Native direct Array<f64> is an affine, call-scoped reference to a
+    // caller-owned handle; its hidden region travels alongside the loan.
+    bool int_array = false;
+    ScalarType array_element_type = ScalarType::I64;
     std::string sum_type;
 };
 
@@ -277,7 +286,7 @@ struct ActorFieldWrite {
 };
 
 struct Statement {
-    enum class Kind { Call, FieldWrite, ScalarWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return, UsingTelemetrySpan };
+    enum class Kind { Call, FieldWrite, ScalarWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return, UsingTelemetrySpan, Break, Continue };
     Kind kind;
     // Scoped scalar or readonly leaf record. ForEach uses an implicit element
     // binding (no initializer); expression is its named array source and
