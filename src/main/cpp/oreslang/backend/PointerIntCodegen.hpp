@@ -3,6 +3,7 @@
 // initialized-element proofs and immutable scalar values were authorized by
 // the standard OwnershipChecker stage. No local lexer/parser is linked here.
 #include "oreslang/types/PointerIntHIR.hpp"
+#include "oreslang/types/PointerIntOwnership.hpp"
 #include <functional>
 #include <stdexcept>
 #include <string>
@@ -24,6 +25,9 @@ namespace oreslang::pointer_int_aot {
 inline std::string emit_verified_ir(const Plan& plan) {
     if (!plan.ownership_admitted)
         throw std::runtime_error("Pointer<int> LLVM backend refuses unadmitted typed ownership HIR");
+    // Defense in depth: an optimizer cannot use a stale ownership-admitted
+    // bit after altering pointer indexes, initialization, effects or returns.
+    verify_plan(plan);
     llvm::LLVMContext context;
     llvm::Module module("atto.pointer.int.aot.m1", context);
     llvm::IRBuilder<> builder(context);
