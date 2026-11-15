@@ -1,0 +1,24 @@
+// Executable native guest proof candidate: AttoLang equality and inequality.
+// All operators lower to the native static scalar comparison path.
+fnc same(int left, int right): bool {
+  return left eq right;
+}
+
+fnc different(int left, int right): bool {
+  return left neq right;
+}
+
+fnc different_alias(int left, int right): bool {
+  return left !eq right;
+}
+
+fnc main(): void {
+  stdio.stdout.println(same(7, 7));
+  stdio.stdout.println(same(7, 8));
+  stdio.stdout.println(different(7, 8));
+  stdio.stdout.println(different_alias(7, 8));
+  stdio.stdout.println(different_alias(7, 7));
+  stdio.stdout.println((7 + 1) !eq 8);
+  stdio.stdout.println((7 + 1) !eq 9);
+  return;
+}
