@@ -84,6 +84,15 @@ if(ATTO_SOURCE_IDS_HOST_ONLY)
   endif()
   add_test(NAME source_log_manifest_host_only
     COMMAND atto_source_log_manifest_host_test)
+  add_executable(atto_native_telemetry_literal_host_test
+    tests/native_telemetry_literal_v1_test.cpp)
+  target_include_directories(atto_native_telemetry_literal_host_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_features(atto_native_telemetry_literal_host_test PRIVATE cxx_std_17)
+  target_compile_options(atto_native_telemetry_literal_host_test PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+  add_test(NAME native_telemetry_literal_10k_host_only
+    COMMAND atto_native_telemetry_literal_host_test)
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_executable(atto_source_log_paths_host_test
       tests/native_source_log_paths_v1_test.cpp)
@@ -316,6 +325,15 @@ if(BUILD_TESTING)
         $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME native_source_log_manifest_admission
         COMMAND oreslang-native-source-log-manifest-test)
+    add_executable(oreslang-native-telemetry-literal-test
+        tests/native_telemetry_literal_v1_test.cpp)
+    target_include_directories(oreslang-native-telemetry-literal-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-telemetry-literal-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-telemetry-literal-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_telemetry_literal_10k_sdk
+        COMMAND oreslang-native-telemetry-literal-test)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_executable(oreslang-native-source-log-paths-test
             tests/native_source_log_paths_v1_test.cpp)
