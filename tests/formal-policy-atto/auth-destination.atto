@@ -1,0 +1,13 @@
+// Pure guest projection: host-side resolver, socket and TLS SNI stay authoritative.
+fnc auth_accept(bool lexical_url, bool tls_required, bool public_dns,
+                bool socket_pinned, bool no_redirect): bool {
+  return lexical_url && tls_required && public_dns && socket_pinned && no_redirect;
+}
+pub fnc main(): int {
+  return auth_accept(true, true, true, true, true) &&
+    !auth_accept(false, true, true, true, true) &&
+    !auth_accept(true, false, true, true, true) &&
+    !auth_accept(true, true, false, true, true) &&
+    !auth_accept(true, true, true, false, true) &&
+    !auth_accept(true, true, true, true, false) ? 0 : 1;
+}
