@@ -6407,6 +6407,95 @@ if(BUILD_TESTING AND UNIX)
         PROPERTIES TIMEOUT 30)
 endif()
 
+# Byte-identical 50-program Java/JS/LLVM scalar floor. The host manifest gate
+# never reports backend parity: only the second test executes a native guest.
+# The LLVM compiler must lower each unchanged program to IR, and Clang must
+# link and execute all 50 .atto programs. Parser-only tests do not qualify.
+if(BUILD_TESTING AND UNIX)
+    find_program(ATTO_SCALAR50_CLANG NAMES clang)
+    set(ATTO_EXPECTED_SOURCE_SHA "" CACHE STRING
+        "Optional exact checked-out source SHA for the AttoLang native parity receipt")
+    add_test(NAME atto_shared_scalar50_manifest_host_only
+        COMMAND "${CMAKE_COMMAND}"
+          "-DMODE=validate"
+          "-DCORPUS=${CMAKE_CURRENT_SOURCE_DIR}/contracts/atto-parity-v1/shared-scalar50-v1.tsv"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_shared_scalar50_native.cmake")
+    set_tests_properties(atto_shared_scalar50_manifest_host_only
+        PROPERTIES TIMEOUT 15 LABELS "host-only;parity-candidate")
+    add_test(NAME atto_shared_scalar50_native_guest
+        COMMAND "${CMAKE_COMMAND}"
+          "-DMODE=native"
+          "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+          "-DEXPECTED_SOURCE_SHA=${ATTO_EXPECTED_SOURCE_SHA}"
+          "-DCORPUS=${CMAKE_CURRENT_SOURCE_DIR}/contracts/atto-parity-v1/shared-scalar50-v1.tsv"
+          "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+          "-DCLANG=${ATTO_SCALAR50_CLANG}"
+          "-DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/atto-shared-scalar50-native"
+          "-DREPORT=${CMAKE_CURRENT_BINARY_DIR}/atto-shared-scalar50-native/llvm-scalar50-native-receipt.json"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_shared_scalar50_native.cmake")
+    set_tests_properties(atto_shared_scalar50_native_guest
+        PROPERTIES TIMEOUT 600 LABELS "native-guest;source-execution;atto-parity"
+        RUN_SERIAL TRUE)
+endif()
+
+
+# Full-width checked-i64 JS->LLVM parity candidates. 37 source expressions
+# must compare at full i64 width inside compiled .atto guests; thirteen
+# overflow cases must lower to a checked intrinsic and execute a real trap.
+# The manifest-only admission test is NOT native execution.
+if(BUILD_TESTING AND UNIX)
+    add_test(NAME atto_checked_i64_manifest_host_only
+        COMMAND "${CMAKE_COMMAND}" "-DMODE=validate"
+          "-DCORPUS=${CMAKE_CURRENT_SOURCE_DIR}/contracts/atto-parity-v1/js-checked-i64-candidates.json"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_checked_i64_native.cmake")
+    set_tests_properties(atto_checked_i64_manifest_host_only
+        PROPERTIES TIMEOUT 15 LABELS "host-only;checked-i64-candidate")
+    add_test(NAME atto_checked_i64_native_guest
+        COMMAND "${CMAKE_COMMAND}" "-DMODE=native"
+          "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+          "-DEXPECTED_SOURCE_SHA=${ATTO_EXPECTED_SOURCE_SHA}"
+          "-DCORPUS=${CMAKE_CURRENT_SOURCE_DIR}/contracts/atto-parity-v1/js-checked-i64-candidates.json"
+          "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+          "-DCLANG=${ATTO_SCALAR50_CLANG}"
+          "-DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/atto-checked-i64-native"
+          "-DREPORT=${CMAKE_CURRENT_BINARY_DIR}/atto-checked-i64-native/llvm-checked-i64-native-receipt.json"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_checked_i64_native.cmake")
+    set_tests_properties(atto_checked_i64_native_guest
+        PROPERTIES TIMEOUT 900 LABELS "native-guest;checked-i64;atto-parity"
+        RUN_SERIAL TRUE)
+endif()
+
+
+# Direct original-source checked-i64 parity. The LLVM native C wrapper is i32
+# and limits OS exit status; only the exported @__oreslang_guest_main() is i64.
+# Keep the original source bytes completely unchanged, compile emitted IR to
+# an ELF object, rename the i32 OS main via objcopy and invoke the i64 guest
+# symbol from a fixed C oracle. No AttoLang expression rewrite is permitted.
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_program(ATTO_NATIVE_OBJCOPY NAMES objcopy llvm-objcopy)
+    add_test(NAME atto_i64_original_manifest_host_only
+        COMMAND "${CMAKE_COMMAND}" "-DMODE=validate"
+          "-DCORPUS=${CMAKE_CURRENT_SOURCE_DIR}/contracts/atto-parity-v1/js-checked-i64-candidates.json"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_i64_original_native.cmake")
+    set_tests_properties(atto_i64_original_manifest_host_only
+        PROPERTIES TIMEOUT 20 LABELS "host-only;original-source-i64")
+    add_test(NAME atto_i64_original_native_guest
+        COMMAND "${CMAKE_COMMAND}" "-DMODE=native"
+          "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+          "-DEXPECTED_SOURCE_SHA=${ATTO_EXPECTED_SOURCE_SHA}"
+          "-DCORPUS=${CMAKE_CURRENT_SOURCE_DIR}/contracts/atto-parity-v1/js-checked-i64-candidates.json"
+          "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+          "-DCLANG=${ATTO_SCALAR50_CLANG}"
+          "-DOBJCOPY=${ATTO_NATIVE_OBJCOPY}"
+          "-DSHIM=${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_i64_original_guest_probe.c"
+          "-DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/atto-i64-original-native"
+          "-DREPORT=${CMAKE_CURRENT_BINARY_DIR}/atto-i64-original-native/llvm-original-i64-native-receipt.json"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_i64_original_native.cmake")
+    set_tests_properties(atto_i64_original_native_guest
+        PROPERTIES TIMEOUT 900 LABELS "native-guest;original-source-i64;atto-parity"
+        RUN_SERIAL TRUE)
+endif()
+
 
 if(BUILD_TESTING)
     add_executable(oreslang-native-proxy-arena-pages-test
