@@ -162,6 +162,8 @@ Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
     if (root->kind != Expression::Kind::Variable)
         reject(expr, "native borrow requires an addressable named int parameter");
     LocalOwnership& source = local(*root, locals);
+    if (source.native_box_i64 || root->native_box_read)
+        reject(expr, "ATTO_BOX_MAIN_V1_REJECT: borrowed Box<int> reference requires typed borrow lowering");
     if (source.int_array)
         reject(expr, "ownership violation: native Array<int> cannot be borrowed or escaped");
     // A borrowed parameter has a caller-held lifetime and already carries
@@ -320,6 +322,8 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             check_value(*expr.left, locals, functions);
             return;
         case Expression::Kind::Take: {
+            if (expr.left && expr.left->native_box_read)
+                reject(expr, "ATTO_BOX_MAIN_V1_REJECT: taking Box<int>.get() is not a Box move");
             // The bounded class subset has only trivially destructible i64
             // fields. Lowering a field take as a load is valid only because
             // checker state invalidates that place until an explicit write.
