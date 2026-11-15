@@ -1,0 +1,3 @@
+// 48: max-i64-delta
+// Candidate scalar exactness fixture; no compiler-backed execution claimed.
+pub fnc main(): int { return 9223372036854775807 - 9223372036854775765; }
