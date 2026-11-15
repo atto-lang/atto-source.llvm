@@ -142,6 +142,55 @@ int main(void) {
     check(ores_native_actor_mailbox_try_enter(probe)==0);
     check(ores_native_actor_mailbox_try_destroy(probe)==1);
 
-    puts("NATIVE_ACTOR_FIFO_MAILBOX_PASS fifo=12 max_active=1 capacity=1 retire_wake=1 try_admission=1");
+    /* Graceful shutdown: queued tickets finish, late tickets do not enter. */
+    OresNativeActorMailbox* draining=ores_native_actor_mailbox_open(3);
+    check(draining != NULL);
+    check(ores_native_actor_mailbox_enter(draining)==1);
+    int delivered_before=atomic_load(&finished);
+    ThreadArgs admitted={draining,&active,&max_active,&finished,&order_index,NULL,0};
+    pthread_t admitted_thread;
+    check(pthread_create(&admitted_thread,NULL,worker,&admitted)==0);
+    wait_for_pending(draining,2);
+    check(ores_native_actor_mailbox_begin_drain(draining)==1);
+    check(ores_native_actor_mailbox_begin_drain(draining)==0);
+    check(ores_native_actor_mailbox_try_destroy(draining)==0);
+    atomic_int late_entered=1;
+    TryArgs late={draining,&late_entered};
+    pthread_t late_thread;
+    check(pthread_create(&late_thread,NULL,try_worker,&late)==0);
+    check(pthread_join(late_thread,NULL)==0);
+    check(atomic_load(&late_entered)==0);
+    check(ores_native_actor_mailbox_rejected(draining)==1);
+    ores_native_actor_mailbox_leave(draining);
+    check(pthread_join(admitted_thread,NULL)==0);
+    check(atomic_load(&finished)==delivered_before+1);
+    check(ores_native_actor_mailbox_pending(draining)==0);
+    check(ores_native_actor_mailbox_try_enter(draining)==0);
+    check(ores_native_actor_mailbox_try_destroy(draining)==1);
+
+    /* An idle mailbox completes drain synchronously and cannot be revived. */
+    OresNativeActorMailbox* idle=ores_native_actor_mailbox_open(1);
+    check(idle != NULL);
+    check(ores_native_actor_mailbox_begin_drain(idle)==1);
+    check(ores_native_actor_mailbox_enter(idle)==0);
+    check(ores_native_actor_mailbox_try_destroy(idle)==1);
+
+    /* Abort overrides graceful drain, cancelling an already queued ticket. */
+    OresNativeActorMailbox* aborted=ores_native_actor_mailbox_open(2);
+    check(aborted != NULL);
+    check(ores_native_actor_mailbox_enter(aborted)==1);
+    int before_abort=atomic_load(&finished);
+    ThreadArgs cancelled={aborted,&active,&max_active,&finished,&order_index,NULL,0};
+    pthread_t cancelled_thread;
+    check(pthread_create(&cancelled_thread,NULL,worker,&cancelled)==0);
+    wait_for_pending(aborted,2);
+    check(ores_native_actor_mailbox_begin_drain(aborted)==1);
+    ores_native_actor_mailbox_retire(aborted);
+    ores_native_actor_mailbox_leave(aborted);
+    check(pthread_join(cancelled_thread,NULL)==0);
+    check(atomic_load(&finished)==before_abort);
+    check(ores_native_actor_mailbox_try_destroy(aborted)==1);
+
+    puts("NATIVE_ACTOR_FIFO_MAILBOX_PASS fifo=12 max_active=1 capacity=1 retire_wake=1 try_admission=1 graceful_drain=1 abort_precedence=1");
     return 0;
 }
