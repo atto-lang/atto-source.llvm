@@ -6,8 +6,8 @@ export CARGO_NET_OFFLINE=true
 test "$(git hash-object frontend/src/check.rs)" = "18c9b7e3e9696bfdd56fa5130f52a9a71a796c43"
 test "$(git hash-object tests/actors/pass/180-two-types-state.atto)" = "31a7248917db4fad90069af7d2c236d7a257dfa0"
 test "$(git hash-object tests/actors/pass/181-same-type-separate-state.atto)" = "08b2d59fb772886508eda38ff03de2c61e1dfd5a"
-test "$(git hash-object tests/actors/pass/182-method-and-fifo.atto)" = "19676cfde16e8efa02651150dc2a0dfc29df26a2"
-test "$(git hash-object tests/actors/pass/183-bool-mail.atto)" = "ab7153186084c27b428c6131371fb538caea8655"
+test "$(git hash-object tests/actors/pass/182-method-and-fifo.atto)" = "fd6c08535705b52972427afc940476a8ebfb6e46"
+test "$(git hash-object tests/actors/pass/183-bool-mail.atto)" = "bcbf4c0a4e72abca113a0cda21c9333cd467da2a"
 
 # The host runtime is built as C11, but the guest actor handlers are LLVM
 # machine code compiled from .atto, not interpreted or simulated C handlers.
