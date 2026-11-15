@@ -1,0 +1,3 @@
+// Trusted status is never itself a raw memory grant.
+unsafe fnc read_native(): int { return 0; }
+pub fnc main(): int { return 42; }
