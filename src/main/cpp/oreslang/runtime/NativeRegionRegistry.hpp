@@ -90,6 +90,8 @@ private:
         if (!owner.runtime || !owner.epoch)
             throw std::invalid_argument("invalid native grant actor identity");
         std::lock_guard<std::mutex> lock(mu_);
+        if (authority_bound_ && owner.runtime != authority_runtime_)
+            throw std::logic_error("native region runtime differs from bound broker");
         if (fenced_actors_.count(actor_key(owner)))
             throw std::logic_error("actor incarnation is fenced from native grants");
         if (next_slot_ == std::numeric_limits<std::uint64_t>::max() ||
