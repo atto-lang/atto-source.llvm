@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <exception>
+#include <functional>
 #include <string>
 #include <string_view>
 
@@ -251,11 +252,14 @@ pub fnc main(): int { return 42; }
     // executable LLVM IR. This is not a nested-recursion depth check.
     const std::string identity_def =
         "define macro identity(Syntax<Expr> value) -> Syntax<Expr> { return value; }";
-    std::string uses;
-    for (int i = 0; i < 128; ++i) {
-        if (!uses.empty()) uses += "+";
-        uses += "identity!(syntax expr 1)";
-    }
+    // Build the sum as a balanced tree: a flat left-deep chain of 128 terms
+    // would trip main's native expression depth limit (64) before the
+    // macro call-site budget is reached.
+    std::function<std::string(int)> balanced = [&](int count) -> std::string {
+        if (count == 1) return "identity!(syntax expr 1)";
+        return "(" + balanced(count / 2) + "+" + balanced(count - count / 2) + ")";
+    };
+    const std::string uses = balanced(128);
     {
         auto program = parse_program(
             identity_def + "pub fnc main(): int { return " + uses + "; }");
@@ -263,7 +267,7 @@ pub fnc main(): int { return 42; }
         check(program.functions.front().result != nullptr);
     }
     denied(identity_def + "pub fnc main(): int { return "
-                   + uses + "+identity!(syntax expr 1); }");
+                   + balanced(129) + "; }");
 
     // The closed-constant evaluator admits AST depth 64 inclusive and rejects
     // depth 65 with NATIVE_MACRO_BUDGET. The macro-input parser must allow the

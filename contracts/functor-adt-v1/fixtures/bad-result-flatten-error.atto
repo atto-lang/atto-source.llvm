@@ -1,0 +1,4 @@
+// Must reject: flatten cannot change the Result error ADT parameter.
+fnc wrong(Result<Result<int,String>,bool> value): Result<int,bool> {
+  return value.flatten();
+}

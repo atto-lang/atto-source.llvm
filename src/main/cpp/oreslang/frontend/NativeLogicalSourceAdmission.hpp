@@ -23,6 +23,27 @@ inline bool marker_present(const fs::path& candidate) {
     return status.type() != fs::file_type::not_found;
 }
 
+// Same search as root_for_entry, but returns the *spelled* directory. Lexical
+// ownership checks must compare like with like: a spelled candidate such as
+// /var/... (macOS: /var -> /private/var) is never lexically under a canonical root.
+inline fs::path spelled_root_for_entry(const fs::path& entry) {
+    const auto absolute = fs::absolute(entry).lexically_normal();
+    for (auto dir = absolute.parent_path(); !dir.empty();) {
+        if (marker_present(dir / ".atto.pkg.toml") || marker_present(dir / ".ores.pkg.toml"))
+            return dir;
+        const auto parent = dir.parent_path();
+        if (parent.empty() || parent == dir) break;
+        dir = parent;
+    }
+    return absolute.parent_path();
+}
+
+inline bool lexically_under(const fs::path& absolute, const fs::path& root) {
+    const auto relative = absolute.lexically_relative(root);
+    return !relative.empty() && relative != fs::path(".") &&
+        !relative.is_absolute() && *relative.begin() != fs::path("..");
+}
+
 inline fs::path root_for_entry(const fs::path& entry) {
     const auto absolute = fs::absolute(entry).lexically_normal();
     for (auto dir = absolute.parent_path(); !dir.empty();) {
@@ -121,8 +142,22 @@ inline fs::path checked_relative_source_path(const fs::path& original,
     return relative;
 }
 
-inline void no_symlink_components(const fs::path& original, const fs::path& root) {
-    const auto relative = checked_relative_source_path(original, root);
+inline void no_symlink_components(const fs::path& original, const fs::path& root_in) {
+    // A canonical root (e.g. /private/var/...) and a spelled candidate (/var/...)
+    // name the same directory through a host-level symlink above the project.
+    // Re-spell the root as the candidate's own ancestor that IS that directory,
+    // then check every component below it. Components inside the root are never
+    // skipped, so in-project symlink aliases are still denied.
+    fs::path root = root_in;
+    const auto absolute = fs::absolute(original).lexically_normal();
+    if (!lexically_under(absolute, root)) {
+        for (auto a = absolute.parent_path(); !a.empty(); a = a.parent_path()) {
+            std::error_code eq_error;
+            if (fs::equivalent(a, root_in, eq_error) && !eq_error) { root = a; break; }
+            if (a == a.root_path()) break;
+        }
+    }
+    const auto relative = checked_relative_source_path(absolute, root);
     auto next = root;
     for (const auto& component : relative) {
         next /= component;
@@ -141,7 +176,8 @@ inline void no_symlink_components(const fs::path& original, const fs::path& root
 class NativeLogicalSourceAdmission {
 public:
     explicit NativeLogicalSourceAdmission(const std::filesystem::path& entry)
-        : root_(logical_source_detail::root_for_entry(entry)) {}
+        : root_(logical_source_detail::root_for_entry(entry)),
+          spelled_root_(logical_source_detail::spelled_root_for_entry(entry)) {}
 
     const std::filesystem::path& root() const { return root_; }
 
@@ -149,7 +185,10 @@ public:
                       const SourceIdentity& identity) {
         namespace fs = std::filesystem;
         const auto absolute = fs::absolute(path).lexically_normal();
-        logical_source_detail::no_symlink_components(absolute, root_);
+        // Imports resolved through canonical() arrive spelled canonically; others
+        // keep the entry's spelling. Check components against the matching root.
+        logical_source_detail::no_symlink_components(absolute,
+            logical_source_detail::lexically_under(absolute, spelled_root_) ? spelled_root_ : root_);
         const auto physical = fs::canonical(absolute);
         if (!logical_source_detail::under(root_, physical))
             throw std::runtime_error("native source escapes project ownership root");
@@ -189,6 +228,7 @@ private:
         SourceIdentity identity;
     };
     std::filesystem::path root_;
+    std::filesystem::path spelled_root_;
     std::vector<Entry> entries_;
 };
 

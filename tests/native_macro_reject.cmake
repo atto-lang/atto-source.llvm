@@ -19,7 +19,7 @@ endif()
 if(NOT DEFINED DIAGNOSTIC)
     set(DIAGNOSTIC "NATIVE_MACRO_EXPANDER_REQUIRED")
 endif()
-if(NOT DIAGNOSTIC STREQUAL "ANY")
+if(NOT "${DIAGNOSTIC}" STREQUAL "ANY")
     string(FIND "${stderr_text}" "${DIAGNOSTIC}" diagnostic_index)
     if(diagnostic_index EQUAL -1)
         message(FATAL_ERROR

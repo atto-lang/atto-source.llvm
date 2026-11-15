@@ -47,6 +47,15 @@ inline void reject_nested_package(const fs::path& root, const fs::path& path) {
 }
 
 inline void validate_manifest(const std::string& manifest_bytes) {
+    // Defense in depth: the public resolver takes a caller-supplied reader,
+    // whose byte limit may differ from the bundled 64 KiB file reader.
+    // Refuse oversized text before constructing streams or running regexes.
+    if (manifest_bytes.size() > 64u * 1024u)
+        throw std::runtime_error("native package manifest exceeds 64 KiB");
+    // NUL cannot occur in a TOML text manifest. Different consumers must
+    // never disagree because one treats a truncated C-string as the file.
+    if (manifest_bytes.find('\0') != std::string::npos)
+        throw std::runtime_error("native package manifest contains NUL byte");
     if (manifest_bytes.find("\"\"\"") != std::string::npos ||
             manifest_bytes.find("'''") != std::string::npos)
         throw std::runtime_error("native package manifest multiline TOML requires full parser");
@@ -102,11 +111,14 @@ inline void validate_manifest(const std::string& manifest_bytes) {
 }
 
 /**
- * Resolve only the two admitted native source extensions. Canonical .atto
- * importers select .atto exclusively for extensionless imports. Legacy .ores
- * importers retain ambiguity rejection for .atto/.ores twins until conformance
- * migration policy is settled. Inspect directory entries (not only target
- * existence), including dangling symlinks and same-inode aliases.
+ * Java-compatible native source extension policy:
+ *   - explicit .atto / .ores stays authoritative;
+ *   - implicit imports select an existing .atto entry before legacy .ores;
+ *   - a nonregular/dangling/symlinked .atto entry NEVER triggers .ores fallback.
+ *
+ * This is a lexical leaf-admission check, not a descriptor-pinned security
+ * boundary against concurrent filesystem mutation. The loader must keep its
+ * source-identity and descriptor checks; separately harden no-follow opens.
  */
 inline bool is_atto_source(const fs::path& candidate) {
     auto suffix = candidate.extension().string();
@@ -119,6 +131,14 @@ inline bool is_atto_source(const fs::path& candidate) {
 // Descriptor-pinned reads are still required against concurrent mutations.
 inline void reject_atto_symlink_components(const fs::path& candidate) {
     auto current = fs::absolute(candidate).lexically_normal();
+    bool has_package = false;
+    for (auto p = current.parent_path(); !p.empty(); p = p.parent_path()) {
+        if (exists_marker(p / ".atto.pkg.toml") || exists_marker(p / ".ores.pkg.toml")) {
+            has_package = true;
+            break;
+        }
+        if (p == p.root_path()) break;
+    }
     for (;;) {
         std::error_code error;
         const auto info = fs::symlink_status(current, error);
@@ -126,6 +146,15 @@ inline void reject_atto_symlink_components(const fs::path& candidate) {
             throw std::runtime_error("symlinked AttoLang source path is not allowed");
         if (error && error != std::errc::no_such_file_or_directory)
             throw std::runtime_error("cannot inspect AttoLang source path");
+        // Only components inside the owning package carry source authority.
+        // Stop at the package root: host ancestors such as macOS /var -> /private/var
+        // or /tmp are system symlinks, not attacker-controlled source aliases.
+        // Without any manifest, only the leaf entry itself is checked.
+        if (!has_package) break;
+        if (current != fs::absolute(candidate).lexically_normal() &&
+                (exists_marker(current / ".atto.pkg.toml") ||
+                 exists_marker(current / ".ores.pkg.toml")))
+            break;
         if (current == current.root_path()) break;
         const auto parent = current.parent_path();
         if (parent.empty() || parent == current) break;
@@ -133,8 +162,24 @@ inline void reject_atto_symlink_components(const fs::path& candidate) {
     }
 }
 
+inline void require_regular_atto_leaf_if_present(const fs::path& path) {
+    std::error_code error;
+    const auto status = fs::symlink_status(path, error);
+    if (error) {
+        if (error == std::errc::no_such_file_or_directory) return;
+        throw std::runtime_error("cannot safely inspect canonical .atto source entry");
+    }
+    if (status.type() == fs::file_type::not_found) return;
+    if (status.type() != fs::file_type::regular)
+        throw std::runtime_error(
+            "canonical .atto source entry must be a regular non-symlink file");
+}
+
 inline fs::path resolve_native_source_suffix(
         fs::path candidate, bool canonical_atto_importer = false) {
+    // Main's Java-compatible policy applies to every importer: an existing
+    // .atto entry wins over .ores, and an invalid .atto never falls back.
+    (void)canonical_atto_importer;
     auto extension = candidate.extension().string();
     for (char& value : extension)
         value = static_cast<char>(std::tolower(static_cast<unsigned char>(value)));
@@ -142,27 +187,20 @@ inline fs::path resolve_native_source_suffix(
         if (extension != ".atto" && extension != ".ores")
             throw std::runtime_error(
                 "native module source must use .atto or legacy .ores extension");
+        if (extension == ".atto") require_regular_atto_leaf_if_present(candidate);
         return candidate;
     }
     fs::path modern = candidate;
     modern += ".atto";
     fs::path legacy = candidate;
     legacy += ".ores";
-    // Canonical .atto importers never need to probe for a legacy sibling:
-    // selection is unconditional, including when that sibling is missing,
-    // symlinked, unreadable, or otherwise attacker-controlled.
-    if (canonical_atto_importer) return modern;
-    const bool has_modern = exists_marker(modern);
-    const bool has_legacy = exists_marker(legacy);
-    // Legacy importers retain the ambiguity rejection until the shared
-    // migration policy is ratified; no implicit downgrade for .atto.
-    if (has_modern && has_legacy)
-        throw std::runtime_error(
-            "ambiguous native source import: both .atto and .ores exist; use explicit extension");
-    if (has_modern) return modern;
-    if (has_legacy) return legacy;
-    // Allow the caller's canonical-resolution path to produce its normal
-    // missing-file diagnostic. Never search unrelated extension types.
+    if (exists_marker(modern)) {
+        require_regular_atto_leaf_if_present(modern);
+        return modern;
+    }
+    if (exists_marker(legacy)) return legacy;
+    // Let canonical admission report the missing source. Never search other
+    // file types, and never downgrade an existing (even invalid) .atto entry.
     return modern;
 }
 
@@ -276,9 +314,14 @@ inline std::filesystem::path resolve_project_root_import(
                         symlink_error)
                     throw std::runtime_error("canonical .atto.pkg.toml manifest cannot be a symlink");
             }
+            // Never canonicalize away a mutable manifest symlink, even if it
+            // currently points to a regular file in the same directory.
+            // The marker is a package authority, not a relocatable alias.
             std::error_code regular_error;
-            if (!fs::is_regular_file(manifest, regular_error) || regular_error)
-                throw std::runtime_error("native package manifest must be a regular file");
+            const auto marker_status = fs::symlink_status(manifest, regular_error);
+            if (regular_error || marker_status.type() != fs::file_type::regular)
+                throw std::runtime_error(
+                    "native package manifest must be a regular non-symlink file");
             const auto physical_manifest = fs::canonical(manifest, error);
             if (error)
                 throw std::runtime_error("cannot resolve native package manifest");
@@ -316,6 +359,11 @@ inline std::filesystem::path resolve_project_root_import(
     if (error)
         throw std::runtime_error("cannot resolve native project-root import");
     reject_nested_package(physical_root, target);
+    // A canonical path may still identify a directory or other non-file.
+    // Never hand it to the native source loader as an executable import.
+    std::error_code leaf_error;
+    if (!fs::is_regular_file(target, leaf_error) || leaf_error)
+        throw std::runtime_error("native project-root import source must be a regular file");
     return target;
 }
 
