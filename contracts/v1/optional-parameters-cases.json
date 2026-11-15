@@ -1,0 +1,1912 @@
+{
+  "version": 2,
+  "note": "Reference-only contract tests, not parser/compiler runtime: supplied None and omission differ; lexical call-item origins are preserved. Adversarial forged type metadata, absence masquerading as a rest pack, and labeled spread are rejected.",
+  "parameters": [
+    {
+      "name": "a",
+      "type": "int"
+    },
+    {
+      "name": "b",
+      "type": "string",
+      "optional": true
+    },
+    {
+      "name": "c",
+      "type": "bool"
+    }
+  ],
+  "accepts": [
+    {
+      "id": "all-positional",
+      "target": "fnc",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "expr": "\"\"",
+          "value_type": "string"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "slots": [
+        "3",
+        "Some(\"\")",
+        "true"
+      ]
+    },
+    {
+      "id": "omit-interior-named",
+      "target": "fnc",
+      "args": [
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true"
+      ]
+    },
+    {
+      "id": "omit-interior-mixed",
+      "target": "fnc",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true"
+      ]
+    },
+    {
+      "id": "reorder-named",
+      "target": "fnc",
+      "args": [
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true"
+      ]
+    },
+    {
+      "id": "named-all-reordered",
+      "target": "fnc",
+      "args": [
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "label": "b",
+          "expr": "\"\"",
+          "value_type": "string"
+        },
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        }
+      ],
+      "slots": [
+        "3",
+        "Some(\"\")",
+        "true"
+      ]
+    },
+    {
+      "id": "mixed-supplied-b",
+      "target": "fnc",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "expr": "\"\"",
+          "value_type": "string"
+        },
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "slots": [
+        "3",
+        "Some(\"\")",
+        "true"
+      ]
+    },
+    {
+      "id": "explicit-option-none",
+      "target": "fnc",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "label": "b",
+          "expr": "None",
+          "value_type": "Option<string>"
+        },
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true"
+      ]
+    },
+    {
+      "id": "explicit-option-some",
+      "target": "fnc",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "label": "b",
+          "expr": "Some(\"x\")",
+          "value_type": "Option<string>"
+        },
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "slots": [
+        "3",
+        "Some(\"x\")",
+        "true"
+      ]
+    },
+    {
+      "id": "constructor-omit-interior",
+      "target": "constructor",
+      "args": [
+        {
+          "label": "a",
+          "expr": "7",
+          "value_type": "int"
+        },
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "slots": [
+        "7",
+        "None",
+        "true"
+      ],
+      "call_item_index_by_evaluated_source": [
+        0,
+        1
+      ]
+    },
+    {
+      "id": "side-effect-order",
+      "target": "fnc",
+      "args": [
+        {
+          "label": "c",
+          "expr": "effect_c()",
+          "value_type": "bool"
+        },
+        {
+          "label": "a",
+          "expr": "effect_a()",
+          "value_type": "int"
+        }
+      ],
+      "slots": [
+        "effect_a()",
+        "None",
+        "effect_c()"
+      ],
+      "call_item_index_by_evaluated_source": [
+        0,
+        1
+      ]
+    },
+    {
+      "id": "explicit-omit-middle",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "kind": "omit"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true"
+      ],
+      "statuses": [
+        "provided",
+        "explicit_omit",
+        "provided"
+      ],
+      "evaluation_order": [
+        "3",
+        "true"
+      ],
+      "call_item_index_by_evaluated_source": [
+        0,
+        2
+      ]
+    },
+    {
+      "id": "named-omit-middle",
+      "args": [
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "label": "b",
+          "kind": "omit"
+        },
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true"
+      ],
+      "statuses": [
+        "provided",
+        "explicit_omit",
+        "provided"
+      ],
+      "call_item_index_by_evaluated_source": [
+        0,
+        2
+      ]
+    },
+    {
+      "id": "explicit-none-is-supplied",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "expr": "None",
+          "value_type": "Option<string>"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true"
+      ],
+      "statuses": [
+        "provided",
+        "explicit_none",
+        "provided"
+      ],
+      "evaluation_order": [
+        "3",
+        "None",
+        "true"
+      ],
+      "call_item_index_by_evaluated_source": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "id": "variadic-zero",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "kind": "omit"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true",
+        []
+      ],
+      "statuses": [
+        "provided",
+        "explicit_omit",
+        "provided",
+        "rest_empty"
+      ]
+    },
+    {
+      "id": "variadic-many",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "kind": "omit"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "expr": "\"x\"",
+          "value_type": "string"
+        },
+        {
+          "expr": "\"y\"",
+          "value_type": "string"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true",
+        [
+          "\"x\"",
+          "\"y\""
+        ]
+      ],
+      "statuses": [
+        "provided",
+        "explicit_omit",
+        "provided",
+        "rest_values"
+      ],
+      "call_item_index_by_evaluated_source": [
+        0,
+        2,
+        3,
+        4
+      ]
+    },
+    {
+      "id": "rest-trailing-spread",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "kind": "omit"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "kind": "spread",
+          "expr": "items",
+          "value_type": "List<string>"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true",
+        [
+          "...items"
+        ]
+      ],
+      "statuses": [
+        "provided",
+        "explicit_omit",
+        "provided",
+        "rest_spread"
+      ],
+      "evaluation_order": [
+        "3",
+        "true",
+        "items"
+      ],
+      "call_item_index_by_evaluated_source": [
+        0,
+        2,
+        3
+      ]
+    },
+    {
+      "id": "rest-named-pack",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "label": "tags",
+          "kind": "pack",
+          "expr": "items",
+          "value_type": "List<string>"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true",
+        [
+          "...items"
+        ]
+      ],
+      "statuses": [
+        "provided",
+        "implicit_omit",
+        "provided",
+        "rest_pack"
+      ],
+      "evaluation_order": [
+        "3",
+        "true",
+        "items"
+      ]
+    },
+    {
+      "id": "required-Option-None",
+      "parameters": [
+        {
+          "name": "x",
+          "type": "Option<string>"
+        }
+      ],
+      "args": [
+        {
+          "expr": "None",
+          "value_type": "Option<string>"
+        }
+      ],
+      "slots": [
+        "None"
+      ],
+      "statuses": [
+        "explicit_none"
+      ]
+    },
+    {
+      "id": "underscore-middle-equivalent",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "kind": "underscore"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true"
+      ],
+      "statuses": [
+        "provided",
+        "explicit_omit",
+        "provided"
+      ],
+      "evaluation_order": [
+        "3",
+        "true"
+      ],
+      "call_item_index_by_evaluated_source": [
+        0,
+        2
+      ]
+    },
+    {
+      "id": "underscore-named-omission",
+      "args": [
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "label": "b",
+          "kind": "underscore"
+        },
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true"
+      ],
+      "statuses": [
+        "provided",
+        "explicit_omit",
+        "provided"
+      ],
+      "evaluation_order": [
+        "true",
+        "3"
+      ],
+      "call_item_index_by_evaluated_source": [
+        0,
+        2
+      ]
+    },
+    {
+      "id": "underscore-in-variadic-fixed-prefix",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "kind": "underscore"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "kind": "spread",
+          "expr": "items",
+          "value_type": "List<string>"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true",
+        [
+          "...items"
+        ]
+      ],
+      "statuses": [
+        "provided",
+        "explicit_omit",
+        "provided",
+        "rest_spread"
+      ],
+      "evaluation_order": [
+        "3",
+        "true",
+        "items"
+      ],
+      "call_item_index_by_evaluated_source": [
+        0,
+        2,
+        3
+      ]
+    },
+    {
+      "id": "two-named-omissions-reordered",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "label": "b",
+          "kind": "underscore"
+        },
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "label": "a",
+          "kind": "omit"
+        }
+      ],
+      "slots": [
+        "None",
+        "None",
+        "true",
+        []
+      ],
+      "statuses": [
+        "explicit_omit",
+        "explicit_omit",
+        "provided",
+        "rest_empty"
+      ],
+      "evaluation_order": [
+        "true"
+      ],
+      "call_item_index_by_evaluated_source": [
+        1
+      ],
+      "omission_bindings": [
+        [
+          0,
+          1
+        ],
+        [
+          2,
+          0
+        ]
+      ]
+    },
+    {
+      "id": "two-positional-omissions-and-rest",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "kind": "underscore"
+        },
+        {
+          "kind": "omit"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "expr": "\"x\"",
+          "value_type": "string"
+        }
+      ],
+      "slots": [
+        "None",
+        "None",
+        "true",
+        [
+          "\"x\""
+        ]
+      ],
+      "statuses": [
+        "explicit_omit",
+        "explicit_omit",
+        "provided",
+        "rest_values"
+      ],
+      "evaluation_order": [
+        "true",
+        "\"x\""
+      ],
+      "call_item_index_by_evaluated_source": [
+        2,
+        3
+      ],
+      "omission_bindings": [
+        [
+          0,
+          0
+        ],
+        [
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "id": "explicit-none-and-syntactic-omit-are-not-identical",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        }
+      ],
+      "args": [
+        {
+          "expr": "None",
+          "value_type": "Option<string>"
+        },
+        {
+          "kind": "omit"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "slots": [
+        "None",
+        "None",
+        "true"
+      ],
+      "statuses": [
+        "explicit_none",
+        "explicit_omit",
+        "provided"
+      ],
+      "evaluation_order": [
+        "None",
+        "true"
+      ],
+      "call_item_index_by_evaluated_source": [
+        0,
+        2
+      ],
+      "omission_bindings": [
+        [
+          1,
+          1
+        ]
+      ]
+    }
+  ],
+  "rejects": [
+    {
+      "id": "positional-cannot-skip-middle",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "error": "type mismatch"
+    },
+    {
+      "id": "required-last-missing",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        }
+      ],
+      "error": "missing"
+    },
+    {
+      "id": "no-args",
+      "args": [],
+      "error": "missing"
+    },
+    {
+      "id": "duplicate-label",
+      "args": [
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "label": "a",
+          "expr": "4",
+          "value_type": "int"
+        },
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "error": "duplicate"
+    },
+    {
+      "id": "positional-label-collision",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "label": "a",
+          "expr": "4",
+          "value_type": "int"
+        },
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "error": "duplicate"
+    },
+    {
+      "id": "unknown-label",
+      "args": [
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "label": "d",
+          "expr": "1",
+          "value_type": "int"
+        }
+      ],
+      "error": "unknown"
+    },
+    {
+      "id": "positional-after-named",
+      "args": [
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "expr": "3",
+          "value_type": "int"
+        }
+      ],
+      "error": "positional-after-named"
+    },
+    {
+      "id": "excess-positional",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "expr": "\"\"",
+          "value_type": "string"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "expr": "9",
+          "value_type": "int"
+        }
+      ],
+      "error": "extra"
+    },
+    {
+      "id": "omit-required-both",
+      "args": [
+        {
+          "label": "b",
+          "expr": "\"\"",
+          "value_type": "string"
+        }
+      ],
+      "error": "missing"
+    },
+    {
+      "id": "duplicate-interior",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "expr": "\"\"",
+          "value_type": "string"
+        },
+        {
+          "label": "b",
+          "expr": "\"extra\"",
+          "value_type": "string"
+        },
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "error": "duplicate"
+    },
+    {
+      "id": "reject-omit-required",
+      "args": [
+        {
+          "kind": "omit"
+        },
+        {
+          "expr": "\"x\"",
+          "value_type": "string"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "error": "required"
+    },
+    {
+      "id": "reject-void-literal",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "expr": "void",
+          "value_type": "void"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "error": "void"
+    },
+    {
+      "id": "reject-null-literal",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "expr": "null",
+          "value_type": "null"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "error": "null"
+    },
+    {
+      "id": "reject-none-required-string",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string"
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        }
+      ],
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "expr": "None",
+          "value_type": "Option<string>"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "error": "type mismatch"
+    },
+    {
+      "id": "reject-rest-omit",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "label": "tags",
+          "kind": "omit"
+        }
+      ],
+      "error": "rest"
+    },
+    {
+      "id": "reject-variadic-nonfinal",
+      "parameters": [
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        },
+        {
+          "name": "a",
+          "type": "int"
+        }
+      ],
+      "args": [],
+      "error": "final"
+    },
+    {
+      "id": "reject-rest-spread-after-named",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "kind": "spread",
+          "expr": "items",
+          "value_type": "List<string>"
+        }
+      ],
+      "error": "positional-after-named"
+    },
+    {
+      "id": "reject-rest-wrong-pack",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "label": "tags",
+          "kind": "pack",
+          "expr": "items",
+          "value_type": "List<int>"
+        }
+      ],
+      "error": "type mismatch"
+    },
+    {
+      "id": "reject-rest-pack-duplicate",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "label": "tags",
+          "kind": "pack",
+          "expr": "items",
+          "value_type": "List<string>"
+        },
+        {
+          "label": "tags",
+          "kind": "pack",
+          "expr": "again",
+          "value_type": "List<string>"
+        }
+      ],
+      "error": "duplicate"
+    },
+    {
+      "id": "reject-rest-named-none",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "label": "tags",
+          "expr": "None",
+          "value_type": "Option<string>"
+        }
+      ],
+      "error": "rest"
+    },
+    {
+      "id": "reject-spread-fixed-runtime",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "kind": "spread",
+          "expr": "items",
+          "value_type": "List<string>"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "error": "fixed"
+    },
+    {
+      "id": "reject-optional-rest",
+      "parameters": [
+        {
+          "name": "items",
+          "type": "string",
+          "rest": true,
+          "optional": true
+        }
+      ],
+      "args": [],
+      "error": "optional"
+    },
+    {
+      "id": "reject-underscore-required",
+      "args": [
+        {
+          "kind": "underscore"
+        },
+        {
+          "expr": "\"x\"",
+          "value_type": "string"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "error": "required"
+    },
+    {
+      "id": "reject-underscore-rest",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "label": "tags",
+          "kind": "underscore"
+        }
+      ],
+      "error": "rest"
+    },
+    {
+      "id": "reject-underscore-as-expression",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "expr": "_",
+          "value_type": "string"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "error": "not a value"
+    },
+    {
+      "id": "reject-malformed-underscore-omission",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "kind": "underscore",
+          "expr": "from_value"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "error": "malformed underscore"
+    },
+    {
+      "id": "reject-omit-payload-side-effect",
+      "error": "omit marker cannot carry a value",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "kind": "omit",
+          "expr": "effect()",
+          "value_type": "string"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ]
+    },
+    {
+      "id": "reject-omit-masquerading-as-None",
+      "error": "omit marker cannot carry a value",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "kind": "omit",
+          "expr": "None"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ]
+    },
+    {
+      "id": "reject-typed-underscore-payload",
+      "error": "underscore omission cannot carry a typed value",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "kind": "underscore",
+          "expr": "_",
+          "value_type": "string"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ]
+    },
+    {
+      "id": "reject-named-omit-payload",
+      "error": "omit marker cannot carry a value",
+      "args": [
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "label": "b",
+          "kind": "omit",
+          "expr": "effect()"
+        },
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        }
+      ]
+    },
+    {
+      "id": "reject-forged-none-as-string",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "expr": "None",
+          "value_type": "string"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "error": "None requires a typed Option"
+    },
+    {
+      "id": "reject-forged-none-as-int",
+      "parameters": [
+        {
+          "name": "id",
+          "type": "int"
+        }
+      ],
+      "args": [
+        {
+          "expr": "None",
+          "value_type": "int"
+        }
+      ],
+      "error": "None requires a typed Option"
+    },
+    {
+      "id": "reject-fake-none-as-list-pack",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "label": "tags",
+          "kind": "pack",
+          "expr": "None",
+          "value_type": "List<string>"
+        }
+      ],
+      "error": "rest pack requires a real collection"
+    },
+    {
+      "id": "reject-fake-void-as-list-spread",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "kind": "omit"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "kind": "spread",
+          "expr": "void",
+          "value_type": "List<string>"
+        }
+      ],
+      "error": "rest pack requires a real collection"
+    },
+    {
+      "id": "reject-named-spread-not-pack",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "label": "tags",
+          "kind": "spread",
+          "expr": "values",
+          "value_type": "List<string>"
+        }
+      ],
+      "error": "named spread is not"
+    },
+    {
+      "id": "reject-unlabeled-pack",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "kind": "omit"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "kind": "pack",
+          "expr": "values",
+          "value_type": "List<string>"
+        }
+      ],
+      "error": "rest pack must be named"
+    }
+  ],
+  "overloads": [
+    {
+      "id": "ordinary-distinct",
+      "signatures": [
+        [
+          false
+        ],
+        [
+          false,
+          false
+        ]
+      ],
+      "admit": true
+    },
+    {
+      "id": "nonoverlap",
+      "signatures": [
+        [
+          false
+        ],
+        [
+          false,
+          true,
+          false
+        ]
+      ],
+      "admit": true
+    },
+    {
+      "id": "overlap-simple",
+      "signatures": [
+        [
+          false
+        ],
+        [
+          false,
+          true
+        ]
+      ],
+      "admit": false
+    },
+    {
+      "id": "overlap-interior",
+      "signatures": [
+        [
+          false,
+          false
+        ],
+        [
+          false,
+          true,
+          false
+        ]
+      ],
+      "admit": false
+    },
+    {
+      "id": "same-arity",
+      "signatures": [
+        [
+          false,
+          false
+        ],
+        [
+          false,
+          false
+        ]
+      ],
+      "admit": false
+    },
+    {
+      "id": "separated-intervals",
+      "signatures": [
+        [
+          false,
+          false,
+          false
+        ],
+        [
+          false
+        ]
+      ],
+      "admit": true
+    },
+    {
+      "id": "rest-alone",
+      "signatures": [
+        [
+          false,
+          {
+            "rest": true
+          }
+        ]
+      ],
+      "admit": true
+    },
+    {
+      "id": "rest-versus-fixed",
+      "signatures": [
+        [
+          false,
+          {
+            "rest": true
+          }
+        ],
+        [
+          false,
+          false
+        ]
+      ],
+      "admit": false
+    }
+  ]
+}

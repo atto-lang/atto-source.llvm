@@ -1,0 +1,9 @@
+guest-scalar	llvm	execution
+async-carrier-progress	llvm	execution
+cancellation-backpressure	llvm	execution
+inverted-index	llvm	execution
+ownership-task	llvm	execution
+export-bindings	llvm	execution
+generator-cleanup	llvm	execution
+supervisor-generation	llvm	execution
+negative-admission	llvm	rejection

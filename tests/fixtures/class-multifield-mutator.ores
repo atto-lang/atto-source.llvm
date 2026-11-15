@@ -8,6 +8,6 @@ fnc damage(borrow mut Player player): void {
 }
 pub fnc main(): int {
   let mut Player player = new Player();
-  damage(rt borrow mut player);
+  damage(rt mut borrow player);
   return player.health - player.stamina + 32;
 }

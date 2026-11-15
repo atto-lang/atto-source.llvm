@@ -1,4 +1,6 @@
 #include "oreslang/runtime/MessagePackWireV2.hpp"
+#include <algorithm>
+#include <vector>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -96,10 +98,117 @@ static void negatives() {
     });
 }
 
+
+
+static void deterministicWireMutationAudit() {
+    // Exhaustive single-byte bit flips and all strict truncation prefixes of
+    // a valid, schema-bound actor DATA envelope. The decoder may reject an
+    // altered payload, or accept it only if it remains a canonical frame.
+    using namespace oreslang::wire;
+    const std::string id = "demo.MutationAudit.v1";
+    const Shape shape = Shape::list(Shape::string());
+    const auto original = encode(id, shape,
+        Value(Value::Items{Value("alpha"), Value("beta")}));
+
+    for (std::size_t length = 0; length < original.size(); ++length) {
+        const std::vector<unsigned char> prefix(original.begin(),
+                                                original.begin() + length);
+        rejection("truncated valid envelope", [&] {
+            (void)decode(id, shape, prefix);
+        });
+    }
+    for (std::size_t i = 0; i < original.size(); ++i) {
+        for (unsigned int bit = 0; bit < 8; ++bit) {
+            auto corrupted = original;
+            corrupted[i] ^= static_cast<unsigned char>(1u << bit);
+            try {
+                const auto decoded = decode(id, shape, corrupted);
+                const auto canonical = encode(id, shape, decoded);
+                if (canonical != corrupted)
+                    throw std::runtime_error("accepted noncanonical bit-flipped envelope");
+            } catch (const std::invalid_argument&) {
+                // Invalid format, version, ID, shape, UTF-8, or length is
+                // rejected before exposing partially decoded actor data.
+            }
+        }
+    }
+
+    // Fixed-seed hostile byte arrays exercise truncation, header and length
+    // paths without flaky randomness or network access. Every successful
+    // decode must be canonical under an independent re-encode.
+    std::uint32_t state = 0x4d534732u;
+    for (std::size_t caseNo = 0; caseNo < 4096; ++caseNo) {
+        state = state * 1664525u + 1013904223u;
+        std::vector<unsigned char> bytes(state % 257);
+        for (auto& byte : bytes) {
+            state = state * 1664525u + 1013904223u;
+            byte = static_cast<unsigned char>(state >> 24);
+        }
+        try {
+            const auto decoded = decode(id, shape, bytes);
+            if (encode(id, shape, decoded) != bytes)
+                throw std::runtime_error("accepted noncanonical malformed envelope");
+        } catch (const std::invalid_argument&) {
+            // All error paths must be bounded and memory-safe.
+        }
+    }
+
+    const std::vector<unsigned char> oversized(kMaxBytes + 1, 0);
+    rejection("oversized mutated input", [&] {
+        (void)decode(id, shape, oversized);
+    });
+}
+
+static void ownedDecodeAndEncodeSnapshot() {
+    using namespace oreslang::wire;
+    const Shape shape = Shape::list(Shape::string());
+    const std::string id = "demo.OwnedActorData.v1";
+    Value sender(Value::Items{Value("before"), Value("stable")});
+    const auto original = sender;
+    auto bytes = encode(id, shape, sender);
+
+    // The sender remains owned and mutable after the synchronous encoding
+    // borrow. Its later changes must never alter the staged mailbox bytes.
+    std::get<Value::Items>(sender.payload)[0] = Value("after");
+    if (!(decode(id, shape, bytes) == original))
+        throw std::runtime_error("encoded actor snapshot aliases sender state");
+
+    // Once decoded, the receiver's graph must not alias its input byte
+    // buffer, the original sender graph, or the sender's updated graph.
+    Value receiver = decode(id, shape, bytes);
+    std::fill(bytes.begin(), bytes.end(), 0);
+    if (!(receiver == original))
+        throw std::runtime_error("receiver retains borrowed wire bytes");
+
+    std::get<Value::Items>(receiver.payload)[1] = Value("receiver");
+    if (!(std::get<Value::Items>(sender.payload)[1] == Value("stable")))
+        throw std::runtime_error("receiver mutation aliases sender");
+
+    // Staging errors are atomic with respect to the caller's value: an
+    // invalid schema/shape must not move, mutate, or destroy sender data.
+    const Value beforeFailure = sender;
+    rejection("schema validation before ownership commit", [&] {
+        (void)encode("", shape, sender);
+    });
+    rejection("shape validation before ownership commit", [&] {
+        (void)encode(id, Shape::integer(), sender);
+    });
+    if (!(sender == beforeFailure))
+        throw std::runtime_error("failed encode destroyed sender ownership");
+
+    // Hostile/oversized input must fail before decoding into a receiver.
+    const std::vector<unsigned char> oversized(kMaxBytes + 1, 0);
+    rejection("oversized actor DATA envelope", [&] {
+        (void)decode(id, shape, oversized);
+    });
+}
+
 int main(int argc, char** argv) {
     try {
         if (argc==2 && std::string(argv[1])=="--negative") {
             negatives();
+            ownedDecodeAndEncodeSnapshot();
+            deterministicWireMutationAudit();
             std::cout<<"PASS MessagePack v2 hostile binary cases\n";
             return 0;
         }
