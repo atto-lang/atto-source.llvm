@@ -291,3 +291,42 @@ finalizers or prove concurrent mutable methods on the same actor.
 No across-actor Box transfer, Arc/Weak, unsafe untrusted allocation,
 full backend parity, or hard-real-time WCET proof is claimed. Keep the
 integration PR draft until these gates are independently verified.
+
+
+## 2026-11-14: reconciled real LLVM compiler exact-source proof
+
+The **actual main LLVM compiler** (not a mock/stub atomic backend) was
+rebuilt from 58 byte-for-byte Git-SHA-verified source files at the
+current integration PR #1826 head and tested independently at:
+
+https://github.com/honeypot-r-us-test/hnpt-lambdas/actions/runs/43668122170
+
+The proof executes native AOT for both positive \`.atto\` scalar
+\`Atomic<int>\` fixtures (exit code 42), checks \`atomicrmw add\`,
+atomic load/store IR, and verifies the full negative admission corpus
+(including reserved intrinsic identities and unsupported Wasm32 and
+Cortex-M targets). This is a *focused real compiler build*, not a full
+2,000+-file source repository mirror or global CTest pass.
+
+**Toolchain discovery**: the carrier initially linked the compiler
+against the LLVM 22 CMake SDK while its PATH resolved unversioned
+\`llvm-config\` and \`clang\` to LLVM/Clang 21. Lifetime intrinsics
+have a different IR signature in LLVM 22, so the LLVM 21 verifier
+correctly rejected the new IR. The resolved workflow pins
+\`llvm-22-dev\`, \`clang-22\`, \`llvm-config\` and \`llvm-as\` to
+major 22, and the source fixture checks the consuming Clang's major
+version before execution. The LLVM 22 \`getOrInsertDeclaration\`
+and lifetime builder API compatibility fix is in this integration PR.
+The successful run verifies both real LLVM compiler output and
+native execution without disabling lifetime markers or IR validation.
+
+Separately, the actor scheduler Box host adapter and exact-once
+16-supervisor retirement race test passed optimized, ASan/UBSan and
+TSan with 24 source Git blobs in:
+https://github.com/honeypot-r-us-test/hnpt-lambdas/actions/runs/43666864892
+
+**Merge gate remains closed**: \`Box<T>\` guest AST/HIR/MIR lowering,
+deterministic compiled-path drops on exception/cancellation, full
+sealed actor state integration, same-actor concurrent receivers, and
+cross-backend parity have not been implemented or proven by these
+host and restricted Atomic AOT fixtures.
