@@ -347,4 +347,41 @@ int main() {
     CHECK(!concurrentStop.stop_quarantined());
 
     return 0;
+    // Independent host telemetry threads must be able to sample restart
+    // counts while the supervisor's single CONTROL writer mutates them.
+    // Without atomic counters this is a C++ data race, even though CONTROL
+    // dispatch itself correctly remains single-flight.
+    SupervisorControlTurn concurrentMetrics(1, 64, 100);
+    Hooks metricsHooks;
+    metricsHooks.next = SupervisorControlTurn::Decision::Restart;
+    std::atomic<bool> sampling{true};
+    std::atomic<bool> invalidMetric{false};
+    std::vector<std::thread> metricReaders;
+    for (int reader = 0; reader < 4; ++reader) {
+        metricReaders.emplace_back([&] {
+            std::size_t lastUsed = 0;
+            while (sampling.load(std::memory_order_acquire)) {
+                const std::size_t used = concurrentMetrics.restarts_used();
+                const std::size_t window = concurrentMetrics.restarts_in_window();
+                if (used < lastUsed || used > 3000 || window > 64)
+                    invalidMetric.store(true, std::memory_order_relaxed);
+                lastUsed = used;
+            }
+        });
+    }
+    for (std::uint64_t i = 1; i <= 3000; ++i) {
+        Key child{"metrics-child", i};
+        concurrentMetrics.reserve_child(child);
+        CHECK(concurrentMetrics.publish_child(child, Kind::Panic, "panic"));
+        CHECK(concurrentMetrics.admit_turn(metricsHooks, false, i)
+                == SupervisorControlTurn::Admitted::Control);
+    }
+    sampling.store(false, std::memory_order_release);
+    for (auto& reader : metricReaders) reader.join();
+    CHECK(!invalidMetric.load(std::memory_order_relaxed));
+    CHECK(concurrentMetrics.restarts_used() <= 3000);
+    CHECK(concurrentMetrics.restarts_in_window() <= 64);
+    CHECK(concurrentMetrics.reserved_count() == 0);
+
+
 }
