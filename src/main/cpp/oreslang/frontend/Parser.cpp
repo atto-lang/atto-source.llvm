@@ -42,6 +42,7 @@ bool identifier_start(char ch) {
 }
 bool identifier_part(char ch) { return identifier_start(ch) || digit(ch); }
 
+inline constexpr std::size_t kMaxNativeBlockCommentNesting = 128;
 inline constexpr std::size_t kMaxNativeTemplateNesting = 32;
 inline constexpr std::size_t kMaxNativeTemplateBraceNesting = 256;
 inline constexpr std::size_t kMaxNativeTemplateInterpolations = 1024;
@@ -70,6 +71,8 @@ std::size_t skip_template_block_comment(std::string_view source, std::size_t at,
     std::size_t depth = 1;
     while (at < source.size()) {
         if (source.substr(at, 2) == "/*") {
+            if (depth >= kMaxNativeBlockCommentNesting)
+                template_error("block comment nesting exceeds 128", origin);
             ++depth;
             at += 2;
         } else if (source.substr(at, 2) == "*/") {
@@ -184,7 +187,13 @@ public:
                         throw std::runtime_error("unterminated block comment at byte "
                                                  + std::to_string(start));
                     }
-                    if (source_.substr(at_, 2) == "/*") { at_ += 2; ++depth; }
+                    if (source_.substr(at_, 2) == "/*") {
+                        if (depth >= kMaxNativeBlockCommentNesting)
+                            throw std::runtime_error("block comment nesting exceeds 128 at byte "
+                                                     + std::to_string(start));
+                        at_ += 2;
+                        ++depth;
+                    }
                     else if (source_.substr(at_, 2) == "*/") { at_ += 2; --depth; }
                     else ++at_;
                 }
@@ -278,6 +287,27 @@ public:
                         std::to_string(start) + ")");
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
+        }
+        // !eq is an atomic AttoLang inequality token. Never split it into
+        // unary ! and identifier eq, and never consume the prefix of !eqname.
+        // Legacy != remains supported until an explicit, versioned .ores
+        // compatibility migration; no source-profile switch is invented here.
+        if (source_.substr(at_, 3) == "!eq" &&
+                (at_ + 3 == source_.size() ||
+                 !identifier_part(source_[at_ + 3]))) {
+            at_ += 3;
+            return {Kind::Symbol, source_.substr(start, 3), start};
+        }
+        // AttoLang's contiguous !eq alias is a single inequality token.
+        // Normalize it to the same static 'neq' operator used by the native
+        // equality CFG; never consume a prefix of an identifier (!equal).
+        // This lexer has already skipped comments and quoted source.
+        if (source_.substr(at_, 3) == "!eq") {
+            const auto end = at_ + 3;
+            if (end == source_.size() || !identifier_part(source_[end])) {
+                at_ = end;
+                return {Kind::Identifier, "neq", start};
+            }
         }
         // AttoLang's contiguous !eq inequality alias is a single token.
         // The identifier boundary matters: "!equation" is NOT "!eq" + "uation".
@@ -674,10 +704,12 @@ bool native_reserved_io_callable_name(std::string_view name) {
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
-                    bool experimental_rt_scalar_loop)
+                    bool experimental_rt_scalar_loop,
+                    bool verified_namespace_metadata_only = false)
         : source_(source), lexer_(source), token_(lexer_.next()),
           experimental_owned_int_(experimental_owned_int),
-          experimental_rt_scalar_loop_(experimental_rt_scalar_loop) {
+          experimental_rt_scalar_loop_(experimental_rt_scalar_loop),
+          verified_namespace_metadata_only_(verified_namespace_metadata_only) {
         reject_unlowered_with_update();
     }
 
@@ -685,8 +717,51 @@ public:
         Program program;
         while (token_.text == "import") {
             advance();
+            // Outside the host-only verified-metadata mode, namespace imports stay
+            // fail-closed here; in that mode they are parsed into metadata and
+            // still rejected for compilation below.
+            if (token_.text == "namespace" && !verified_namespace_metadata_only_)
+                fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native import namespace requires a verified "
+                     "manifest package index and per-provider linker");
             if (token_.text == "contract")
                 fail("native contract imports require a validated cross-unit linker");
+            if (accept("namespace")) {
+                // Parse namespace syntax into a separate AST family. A source
+                // spelling must never be interpreted as an existing module
+                // path or package-owner proof by the old module loader.
+                NamespaceImportSyntax selected;
+                selected.offset = token_.offset;
+                selected.namespace_name = identifier();
+                selected.local_name = accept("as")
+                    ? identifier() : selected.namespace_name;
+                if (!module_names_.insert(selected.local_name).second)
+                    fail("duplicate imported namespace binding '" + selected.local_name + "'");
+                require("from");
+                if (token_.kind != Kind::String)
+                    fail("native namespace import requires a quoted package selector");
+                selected.package_selector = std::string(token_.text);
+                if (selected.package_selector.empty()
+                        || selected.package_selector.size() > 128)
+                    fail("native namespace package selector exceeds 128 bytes");
+                const auto& selector = selected.package_selector;
+                if (selector != "+/") {
+                    if (!((selector.front() >= 'A' && selector.front() <= 'Z')
+                            || (selector.front() >= 'a' && selector.front() <= 'z')))
+                        fail("invalid native namespace package alias");
+                    for (unsigned char ch : selector)
+                        if (!((ch >= 'A' && ch <= 'Z')
+                                || (ch >= 'a' && ch <= 'z')
+                                || (ch >= '0' && ch <= '9')
+                                || ch == '_' || ch == '-'))
+                            fail("invalid native namespace package alias");
+                }
+                advance();
+                require(";");
+                program.namespace_imports.push_back(std::move(selected));
+                if (program.namespace_imports.size() > 32)
+                    fail("native namespace import limit exceeded (32)");
+                continue;
+            }
             if (accept("fnc")) {
                 // Java-compatible named function import: `import fnc a, b from "p";`
                 // or `import fnc a as b from "p";`. One import record per name;
@@ -762,6 +837,8 @@ public:
                 if (exported) fail("duplicate pub modifier");
                 exported = true;
             }
+            if (token_.text == "singleton")
+                fail("ORES-SINGLETON-UNSUPPORTED: native singleton declarations require exactly-once complete publication, cycle/failure semantics, runtime-derived actor authority for shared state, and five-backend guest execution parity");
             // Java M0 admits compiler-only durable declarations. LLVM has no
             // typed history state, command-manifest or replay ABI yet.
             if (token_.text == "activity" || token_.text == "workflow")
@@ -905,6 +982,8 @@ public:
                     if (public_class) fail("duplicate pub modifier");
                     public_class = true;
                 }
+                if (token_.text == "singleton")
+                    fail("ORES-SINGLETON-UNSUPPORTED: native singleton declarations require exactly-once complete publication, cycle/failure semantics, runtime-derived actor authority for shared state, and five-backend guest execution parity");
                 // Java M0 admits compiler-only durable declarations. LLVM has no
                 // typed history state, command-manifest or replay ABI yet.
                 if (token_.text == "activity" || token_.text == "workflow")
@@ -956,8 +1035,13 @@ public:
         for (auto& method : methods_) program.functions.push_back(std::move(method));
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
+        // The package-local host graph is not connected to an authenticated
+        // v2 manifest/source loader and native codegen yet. Namespace AST
+        // imports must not silently enter the existing relative module linker.
+        if (!verified_namespace_metadata_only_ && !program.namespace_imports.empty())
+            fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native namespace imports require verified v2 package manifests and cross-unit lowering");
         validate_type_only_declarations(program);
-        if (!program.namespace_name.empty() &&
+        if (!verified_namespace_metadata_only_ && !program.namespace_name.empty() &&
                 (!program.functions.empty() || !program.classes.empty() ||
                  !program.actors.empty() || !program.contracts.empty() ||
                  !program.cooperative_loops.empty() || !program.generators.empty())) {
@@ -1569,7 +1653,7 @@ private:
         param.name = identifier();
         method.parameters.push_back(std::move(param));
         require(")");
-        require(":");
+        require_return_separator();
         require("int");
         require("{");
         actor_handler_active_ = true;
@@ -1957,7 +2041,7 @@ private:
         require("fnc");
         loop.name = identifier();
         require("("); require(")");
-        require(":"); require("void");
+        require_return_separator(); require("void");
         require("{");
         require("val");
         loop.variable = identifier();
@@ -4488,6 +4572,12 @@ private:
         if (!accept(text)) fail("expected '" + std::string(text) + "'");
     }
 
+    // Canonical callable signatures accept `: T` or `-> T` (same rule as main's
+    // arrow_return_type handling for named functions).
+    void require_return_separator() {
+        if (!accept(":")) require("->");
+    }
+
     void array_element(LocalBinding& binding) {
         if (accept("String") || accept("string")) binding.array_element_type = ScalarType::String;
         else if (!accept("int")) binding.array_record_class = type_identifier();
@@ -6368,6 +6458,8 @@ private:
     std::vector<Function> methods_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
+    // Restricted host-only AST pass, never set by the ordinary CLI parser.
+    bool verified_namespace_metadata_only_ = false;
     // Type-only declarations retain source alias identity until checked
     // catalog validation and extension-call rewriting complete.
     std::unordered_map<std::string, std::string> scalar_alias_targets_;
@@ -6531,6 +6623,14 @@ void resolve_future_pipeline_contracts(Program& program) {
 
 } // namespace
 
+Program parse_verified_namespace_source_unresolved(
+        std::string_view authenticated_source) {
+    // Precondition: independently pinned physical source snapshot. Preserve
+    // unresolved imports for the verified namespace graph to authorize.
+    // Never run resolve_and_validate_program or emit IR here.
+    return Parser(authenticated_source, false, false, true).parse();
+}
+
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int,
                       bool experimental_rt_scalar_loop) {
     Program program = Parser(source, experimental_owned_int,
@@ -6544,6 +6644,16 @@ Program parse_unresolved_program(std::string_view source, bool experimental_owne
 }
 
 void resolve_and_validate_program(Program& program) {
+    // A host-only, parsed namespace AST is not a codegen authorization.
+    // Prevent callers of the general validator from taking a parsed v2
+    // namespace source around the default frontend's executable gate.
+    if (!program.namespace_imports.empty() ||
+            (!program.namespace_name.empty() &&
+                (!program.functions.empty() || !program.classes.empty() ||
+                 !program.actors.empty() || !program.contracts.empty() ||
+                 !program.cooperative_loops.empty() || !program.generators.empty())))
+        throw std::runtime_error(
+            "NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: verified namespace AST requires typed cross-unit lowering");
     if (!program.imports.empty())
         throw std::runtime_error("native imports require filesystem module resolution");
     resolve_native_methods(program);

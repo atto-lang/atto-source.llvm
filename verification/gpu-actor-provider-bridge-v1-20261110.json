@@ -1,0 +1,96 @@
+{
+  "schema": "attolang.gpu-actor-provider-bridge-evidence/1",
+  "recordedAt": "2026-11-10",
+  "repo": "ores-truffle-oreslang/oreslang-source.llvm",
+  "branch": "feat/gpu-actor-provider-port-v1-20261110",
+  "stackedOn": "ores-truffle-oreslang/oreslang-source.llvm#1650",
+  "scope": "source-authenticated local provider event handles and bounded actor quarantine, host mocked; no GPU guest/device execution",
+  "sourceBlobs": {
+    "src/main/cpp/oreslang/runtime/GpuActorProviderBridgeV1.hpp": "67ba38101d602e63ea8c126bc023f51d146daaa4",
+    "tests/gpu_actor_provider_bridge_v1_test.cpp": "ab847cd09d64b714ada72a15409eeda7b64c8566",
+    "src/main/cpp/oreslang/runtime/GpuActorHostTurnBridgeV0.hpp": "e2787e95da1dff46e7abb36793436e55d183df97",
+    "src/main/cpp/oreslang/runtime/GpuBufferFence.hpp": "1316dc2be8c19ef23a19dcb7e907455bba633afc",
+    "src/main/cpp/oreslang/runtime/NativeActorTurnCredits.hpp": "ad47b278fc74d1bfcdc5554a102cd01531c374b1",
+    "src/main/cpp/oreslang/runtime/SupervisorFailureLane.hpp": "f2e0557c938285886f5dfeb5b3c5448336a8bbd8"
+  },
+  "carrier": {
+    "repo": "scintilla-run/scintilla-run-e2e",
+    "branch": "carrier/gpu-provider-bridge-v1-20261110",
+    "head": "bf5b415e84239d176bbd98fc3bb08cc65cd85caa",
+    "runId": 42925139986,
+    "jobId": 130209609920,
+    "url": "https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42925139986",
+    "exactSourceBlobs": true,
+    "gccAsanUbsan": "passed",
+    "clang": "passed",
+    "checksPerCompiler": 6329,
+    "logicalActors": 1024,
+    "mockedTurns": 4096
+  },
+  "securityTests": [
+    "cross-provider-forged-event",
+    "stale-turn-replay",
+    "actor-generation-check",
+    "ambiguous-submit",
+    "definitive-no-enqueue",
+    "malformed-provider-receipt-quarantine",
+    "async-enqueue-cancellation-race",
+    "actor-destructor-quarantine",
+    "bounded-admission-capacity",
+    "release-requires-provider-ack",
+    "device-loss-cohort",
+    "cross-tenant-isolation",
+    "graceful-retirement",
+    "process-root-registry-retention-after-supervisor-handle-loss",
+    "orphaned-buffer-release-then-root-unpin",
+    "graceful-provider-release-excludes-concurrent-actor-turn",
+    "cancellation-racing-provider-buffer-release",
+    "no-overlapping-provider-release",
+    "single-owner-unknown-enqueue-reconciliation",
+    "malformed-reconciliation-escalates-to-host-failure",
+    "provider-release-exception-retry",
+    "failed-actor-admission-root-rollback"
+  ],
+  "promotion": {
+    "realGpu": false,
+    "physicalEventAuthenticated": false,
+    "actualDeviceAllocations": false,
+    "providerDriverObserved": false,
+    "compiledAttoGuest": false,
+    "actualKernelDispatch": false,
+    "fullCmakeCtest": false,
+    "fiveBackendParity": false
+  },
+  "limitations": [
+    "native provider remains trusted and can return false completion",
+    "legacy v0 trusted Boolean methods remain present",
+    "no real device runtime adapter",
+    "process-root only: process crash, device reset and process restart recovery not implemented",
+    "a native provider can still falsely report completion; no actual device event authenticated"
+  ],
+  "releaseReady": false,
+  "reviewRequired": true,
+  "processRoot": {
+    "globalRegistryLimit": 256,
+    "retainOrphanedRegistryUntilReleased": true,
+    "rootRecoveryCallbackTested": true,
+    "processCrashDurability": false,
+    "realGpuQuiescenceProof": false
+  },
+  "raceHardening": {
+    "retirementReservesExclusivePhaseBeforeProviderRelease": true,
+    "concurrentSubmissionRejected": true,
+    "cancellationCanAbortGracefulRetirement": true,
+    "realPhysicalEventProof": false
+  },
+  "audit": {
+    "type": "manual-source-review-and-executed-adversarial-regression",
+    "fixedFindings": 5,
+    "compilers": [
+      "g++ strict Werror ASan UBSan",
+      "clang++ strict Werror"
+    ],
+    "hostChecksPerCompiler": 6329,
+    "physicalDeviceExecuted": false
+  }
+}
