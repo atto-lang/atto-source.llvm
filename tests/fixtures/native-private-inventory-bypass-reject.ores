@@ -1,0 +1,15 @@
+// Encapsulation rejection: a borrower must not reach private state fields
+// and bypass the owning class operations. This is a negative compiler oracle.
+define class Inventory as
+  let int available = 10;
+  let int reserved = 0;
+end
+
+fnc bypass(borrow mut Inventory state): int {
+  return state.available;
+}
+
+pub fnc main(): int {
+  let mut Inventory state = new Inventory();
+  return bypass(rt mut borrow state);
+}

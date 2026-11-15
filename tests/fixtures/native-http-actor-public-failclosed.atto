@@ -1,0 +1,2 @@
+define pub serial http actor Endpoint as
+end

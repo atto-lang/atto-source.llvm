@@ -1,0 +1,6 @@
+fnc add(int first, int second): int {
+    return first + second;
+}
+pub fnc main(): int {
+    return 40 |> add(second: 2);
+}
