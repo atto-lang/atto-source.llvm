@@ -148,6 +148,20 @@ static void reject(std::string_view input) {
     throw std::runtime_error("unexpected ownership spelling acceptance: " + std::string(input));
 }
 
+static void reject_with_diagnostic(std::string_view source,
+                                   std::string_view diagnostic) {
+    try {
+        oreslang::Program holder;
+        (void)parsed(source, holder);
+    } catch (const std::exception& error) {
+        if (std::string_view(error.what()).find(diagnostic) != std::string_view::npos)
+            return;
+        throw std::runtime_error("wrong ownership error for " + std::string(source) +
+                                 ": " + error.what());
+    }
+    throw std::runtime_error("missing ownership rejection for " + std::string(source));
+}
+
 int main(int argc, char** argv) {
     if (argc != 2) throw std::runtime_error("expected canonical .atto fixture directory");
     const std::string root(argv[1]);
@@ -200,6 +214,15 @@ int main(int argc, char** argv) {
                                "mut borrow!", "borrow! mut", "borrow!mut",
                                "borrow! mut mut foo", "mut borrow! mut foo"}) {
         reject(invalid);
+    }
+    // A catch-all parser error is not adequate evidence for duplicate-mut
+    // rejection: assert the dedicated category on each ownership spelling.
+    for (std::string_view invalid : {"borrow! mut mut foo",
+                                     "borrow!mut mut foo",
+                                     "mut borrow! mut foo",
+                                     "rt borrow mut mut foo",
+                                     "rt mut borrow mut foo"}) {
+        reject_with_diagnostic(invalid, "duplicate mutable borrow qualifier");
     }
     // Production parser+ownership checker against exact checked-in .atto
     // fixtures. CTest must execute this; source-only fixture presence is not
