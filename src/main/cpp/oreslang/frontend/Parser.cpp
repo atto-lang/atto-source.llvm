@@ -3804,74 +3804,17 @@ private:
                 require("try");
                 require("{");
                 if (token_.text == "defer" || token_.text == "throw") {
-                    // First typed-i64 exceptional CFG: one unconditional throw,
-                    // LIFO scoped field cleanups, and a local catch. No await,
-                    // exception-producing calls or nested try are admitted.
-                    if (value.returns_void || !value.statements.empty() ||
-                            !value.actor_actions.empty())
-                        fail("native caught throw requires a single terminal int try scope");
-                    // No partially inferred effect set can masquerade as a
-                    // complete exception/cleanup summary at this boundary.
-                    if (value.has_declared_effects)
-                        throw std::runtime_error(
-                            "native caught throw effect-qualified function unsupported at byte " +
-                            std::to_string(token_.offset));
-                    while (accept("defer")) {
-                        if (value.caught_throw_defers.size() == 8)
-                            fail("native caught throw defer limit exceeded (8)");
-                        Statement deferred;
-                        deferred.kind = Statement::Kind::FieldWrite;
-                        deferred.offset = token_.offset;
-                        auto target = primary();
-                        if (target->kind != Expression::Kind::Field ||
-                                !target->left ||
-                                target->left->kind != Expression::Kind::Variable)
-                            fail("native caught throw defer requires named class field write");
-                        deferred.receiver = target->left->name;
-                        deferred.field = target->name;
-                        require("=");
-                        deferred.expression = expression();
-                        if (!native_pure_scalar_tree(*deferred.expression))
-                            fail("native caught throw defer requires nonthrowing scalar/field expression");
-                        require(";");
-                        value.caught_throw_defers.push_back(std::move(deferred));
-                    }
-                    require("throw");
-                    value.caught_throw_value = expression();
-                    if (!native_pure_scalar_tree(*value.caught_throw_value))
-                        fail("native caught throw requires nonthrowing int payload");
-                    require(";");
-                    require("}");
-                    require("catch");
-                    require("(");
-                    value.catch_binding = identifier();
-                    for (const auto& param : value.parameters)
-                        if (param.name == value.catch_binding)
-                            fail("native caught throw binding shadows parameter");
-                    for (const auto& local : value.locals)
-                        if (local.name == value.catch_binding)
-                            fail("native caught throw binding shadows local owner");
-                    require(")");
-                    require("{");
-                    require("return");
-                    value.result = expression();
-                    if (!native_pure_scalar_tree(*value.result))
-                        fail("native caught throw catch return requires nonthrowing scalar/field read");
-                    require(";");
-                    require("}");
-                    require("finally");
-                    require("{");
-                    auto cleanup = branch_arm(true, false);
-                    require("}");
-                    for (auto it = cleanup.rbegin(); it != cleanup.rend(); ++it) {
-                        if (it->kind != Statement::Kind::FieldWrite ||
-                                !native_pure_scalar_tree(*it->expression))
-                            fail("native caught throw finally requires nonthrowing field write");
-                        it->kind = Statement::Kind::Defer;
-                        value.statements.push_back(std::move(*it));
-                    }
-                    require("}");
-                    return value;
+                    // Guest exceptional operands must be owned, non-null
+                    // canonical std/error.Error values. The historical i64
+                    // payload path has no nominal Error proof or typed unwind.
+                    // Reject before building exceptional IR; catch does not
+                    // grant permission to throw an arbitrary scalar. Throw
+                    // directly: fail() maps a current `throw` token to main's
+                    // generic exceptional-control boundary diagnostic.
+                    throw std::runtime_error(
+                        "native caught throw requires canonical std/error.Error; "
+                        "typed exceptional lowering unsupported at byte " +
+                        std::to_string(token_.offset));
                 }
                 continue;
             }
