@@ -5,7 +5,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
+#include <mutex>
 #include <stdexcept>
+#include <tuple>
 
 namespace oreslang::runtime {
 
@@ -40,7 +43,18 @@ public:
     void admit_spawned(OresNativeActorRef ref, Admission admission) {
         if (!ores_native_actor_scheduler_poll_ready(scheduler_, ref))
             throw std::logic_error("native pointer actor ref is not live/issued by scheduler");
-        authority_.admit_actor(identity(ref), admission);
+        const auto actor = identity(ref);
+        std::lock_guard<std::mutex> lock(admission_mu_);
+        const auto key = std::make_pair(actor.actor, actor.epoch);
+        const auto [it, inserted] = admitted_refs_.emplace(key, ref);
+        if (!inserted)
+            throw std::logic_error("native pointer actor ref already registered");
+        try {
+            authority_.admit_actor(actor, admission);
+        } catch (...) {
+            admitted_refs_.erase(it);
+            throw;
+        }
     }
 
     // Host code in an authenticated scheduler callback is allowed to request
@@ -82,6 +96,7 @@ public:
         if (ores_native_actor_scheduler_in_any_actor_turn())
             throw std::logic_error("blocking native pointer retirement forbidden on actor carrier");
         const auto actor = identity(ref);
+        require_admitted_ref(ref);
         // A STOP from another subsystem may already have sealed the mailbox.
         // Still fence the authenticated incarnation to prevent stale cursors.
         (void)ores_native_actor_scheduler_stop_sealed(scheduler_, ref);
@@ -93,6 +108,7 @@ public:
     void revoke_terminal(OresNativeActorRef ref) {
         if (ores_native_actor_scheduler_in_any_actor_turn())
             throw std::logic_error("native pointer terminal revoke forbidden on actor carrier");
+        require_admitted_ref(ref);
         if (!ores_native_actor_scheduler_poll_done(scheduler_, ref))
             throw std::logic_error("native pointer actor is not terminal");
         authority_.retire_actor(identity(ref));
@@ -103,6 +119,17 @@ private:
         if (!ref.scheduler_domain || !ref.generation)
             throw std::logic_error("invalid native scheduler actor ref");
         return ActorHeapIdentity{runtime_id_, ref.actor_slot, ref.generation};
+    }
+
+    void require_admitted_ref(OresNativeActorRef ref) const {
+        const auto actor = identity(ref);
+        std::lock_guard<std::mutex> lock(admission_mu_);
+        const auto it = admitted_refs_.find({actor.actor, actor.epoch});
+        if (it == admitted_refs_.end() ||
+            it->second.scheduler_domain != ref.scheduler_domain ||
+            it->second.actor_slot != ref.actor_slot ||
+            it->second.generation != ref.generation)
+            throw std::logic_error("native pointer retirement requires admitted exact scheduler ref");
     }
 
     void require_current_live(OresNativeActorRef ref) const {
@@ -116,6 +143,10 @@ private:
     const std::uint64_t runtime_id_;
     NativeRegionRegistry regions_;
     NativeRegionRuntimeAuthority authority_;
+    mutable std::mutex admission_mu_;
+    // Retain exact scheduler-domain witnesses until bridge shutdown. This
+    // forbids a forged/stale reference from retiring an unrelated actor.
+    std::map<std::pair<std::uint64_t, std::uint64_t>, OresNativeActorRef> admitted_refs_;
 };
 
 } // namespace oreslang::runtime
