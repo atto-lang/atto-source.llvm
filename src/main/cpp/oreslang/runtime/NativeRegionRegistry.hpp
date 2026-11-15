@@ -51,6 +51,19 @@ private:
     std::unordered_map<std::uint64_t, Entry> entries_;
     std::uint64_t next_slot_ = 1;
     std::uint64_t next_generation_ = 1;
+    // Exactly one privileged broker binds the registry for its lifetime.
+    // Do not allow a new broker to re-admit retired actor epochs.
+    bool authority_bound_ = false;
+    std::uint64_t authority_runtime_ = 0;
+    void bind_runtime_authority(std::uint64_t runtime) {
+        if (runtime == 0)
+            throw std::invalid_argument("native registry cannot bind zero runtime");
+        std::lock_guard<std::mutex> lock(mu_);
+        if (authority_bound_)
+            throw std::logic_error("native region registry authority already bound");
+        authority_runtime_ = runtime;
+        authority_bound_ = true;
+    }
     // A fenced actor incarnation must never be allowed to mint fresh native
     // grants in this registry, even after its old bytes are reclaimed.
     using ActorKey = std::tuple<std::uint64_t, std::uint64_t, std::uint64_t>;
