@@ -1595,6 +1595,50 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
+    # Actual LLVM IR -> Clang -> native guest execution of shared-source i64 candidates.
+    # These CTests must fail (never skip) when the compiler/lowerer lacks parity.
+    oreslang_contract_test(native_six_backend_i64_40
+        six-backend-i64/40-wide-i64-difference.ores
+        --run 42 --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_six_backend_i64_40 PROPERTIES TIMEOUT 90)
+    oreslang_contract_test(native_six_backend_i64_41
+        six-backend-i64/41-min-i64-successor.ores
+        --run 42 --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_six_backend_i64_41 PROPERTIES TIMEOUT 90)
+    oreslang_contract_test(native_six_backend_i64_42
+        six-backend-i64/42-max-i64-predecessor.ores
+        --run 42 --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_six_backend_i64_42 PROPERTIES TIMEOUT 90)
+    oreslang_contract_test(native_six_backend_i64_43
+        six-backend-i64/43-wide-checked-product.ores
+        --run 42 --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_six_backend_i64_43 PROPERTIES TIMEOUT 90)
+    oreslang_contract_test(native_six_backend_i64_44
+        six-backend-i64/44-double-negative-product.ores
+        --run 42 --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_six_backend_i64_44 PROPERTIES TIMEOUT 90)
+    oreslang_contract_test(native_six_backend_i64_45
+        six-backend-i64/45-grouped-negation.ores
+        --run 42 --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_six_backend_i64_45 PROPERTIES TIMEOUT 90)
+    oreslang_contract_test(native_six_backend_i64_46
+        six-backend-i64/46-named-bitxor.ores
+        --run 42 --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_six_backend_i64_46 PROPERTIES TIMEOUT 90)
+    oreslang_contract_test(native_six_backend_i64_47
+        six-backend-i64/47-mantissa-precision-product.ores
+        --run 42 --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_six_backend_i64_47 PROPERTIES TIMEOUT 90)
+    oreslang_contract_test(native_six_backend_i64_48
+        six-backend-i64/48-max-i64-delta.ores
+        --run 42 --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_six_backend_i64_48 PROPERTIES TIMEOUT 90)
+    oreslang_contract_test(native_six_backend_i64_49
+        six-backend-i64/49-signed-boundary-product.ores
+        --run 42 --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_six_backend_i64_49 PROPERTIES TIMEOUT 90)
+
+
     # HTTP actor source lowering is not verified on LLVM. These compiler-
     # negative fixtures must exercise the real oreslang-llvmc, not a host model.
     oreslang_contract_test(native_http_actor_serial_alias_failclosed
