@@ -163,6 +163,28 @@ void validate_native_scalar_types(const Program& program) {
                 return scalar(false);
             case E::ArrayCall: {
                 const auto owner = expression(*e.left, locals);
+                // The parser admits String.contains_literal(String) as a pure,
+                // checked scalar call that reuses the ArrayCall node; type it
+                // here as bool instead of treating the String as an array.
+                if (e.name == "contains_literal" && owner.kind != Kind::Array) {
+                    require(owner, scalar(ScalarType::String), e.offset,
+                            "String.contains_literal requires a String receiver");
+                    if (e.arguments.size() != 1)
+                        fail(e.offset, "String.contains_literal requires exactly one String argument");
+                    require(expression(*e.arguments[0], locals), scalar(ScalarType::String),
+                            e.arguments[0]->offset, "String.contains_literal requires a String needle");
+                    return scalar(true);
+                }
+                // String.split_literal(String) yields one owned Array<String>.
+                if (e.name == "split_literal" && owner.kind != Kind::Array) {
+                    require(owner, scalar(ScalarType::String), e.offset,
+                            "String.split_literal requires a String receiver");
+                    if (e.arguments.size() != 1)
+                        fail(e.offset, "String.split_literal requires exactly one String delimiter");
+                    require(expression(*e.arguments[0], locals), scalar(ScalarType::String),
+                            e.arguments[0]->offset, "String.split_literal requires a String delimiter");
+                    return Type{Kind::Array, "String"};
+                }
                 if (owner.kind != Kind::Array) fail(e.offset, "array receiver");
                 const Type element = owner.name == "String" ? scalar(ScalarType::String) : owner.name == "int" ? scalar(false)
                     : Type{Kind::Class, immutable_record(owner.name).name};
