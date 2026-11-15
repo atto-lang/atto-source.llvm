@@ -1,0 +1,12 @@
+fnc add(int n) -> int ::
+  int x = 5,
+  x + n
+end
+
+routine twice(int n) -> int ::
+  n * 2
+end
+
+fnc main() -> int ::
+  add(twice(18) + 1)
+end
