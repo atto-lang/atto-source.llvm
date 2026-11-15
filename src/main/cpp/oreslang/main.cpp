@@ -197,6 +197,8 @@ int main(int argc, char** argv) {
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
     bool wasm32_target = false;
+    bool wasm_core_f64_entry = false;
+    bool wasm_core_abi_seen = false;
     bool cortex_m_target = false;
     bool target_seen = false;
     bool native_hard_rt_profile = false;
@@ -309,6 +311,16 @@ int main(int argc, char** argv) {
             const std::string root = arg.substr(18);
             if (root.empty()) { std::cerr << "empty tree-shake root\n"; return 2; }
             tree_shake_roots.push_back(root);
+        } else if (arg.rfind("--wasm-core-abi=", 0) == 0) {
+            if (wasm_core_abi_seen) {
+                std::cerr << "duplicate wasm-core-abi option\n"; return 2;
+            }
+            wasm_core_abi_seen = true;
+            const std::string abi = arg.substr(std::string_view("--wasm-core-abi=").size());
+            if (abi != "f64") {
+                std::cerr << "unsupported wasm Core scalar ABI (expected f64)\n"; return 2;
+            }
+            wasm_core_f64_entry = true;
         } else if (arg.rfind("--target=", 0) == 0) {
             if (target_seen) { std::cerr << "duplicate target option\n"; return 2; }
             target_seen = true;
@@ -344,6 +356,10 @@ int main(int argc, char** argv) {
     // This is intentionally fail-closed until effect/capability closure can
     // prove additional combinations.
     const bool freestanding_library_target = wasm32_target || cortex_m_target;
+    if (wasm_core_f64_entry && !wasm32_target) {
+        std::cerr << "wasm Core f64 entry ABI requires --target=wasm32\n";
+        return 2;
+    }
     if (!library_profile.has_value()) {
         library_profile =
             oreslang::frontend::default_library_profile(freestanding_library_target);
@@ -378,7 +394,7 @@ int main(int argc, char** argv) {
             (tree_shake || !tree_shake_roots.empty() || native_hard_rt_profile ||
              rt_check_only || rt_entry_seen || rt_report_seen ||
              experimental_owned_int || experimental_rt_scalar_loop ||
-             target_seen || allocator_provider_seen)) {
+             target_seen || allocator_provider_seen || wasm_core_f64_entry)) {
         std::cerr << "constraint-descriptors is a metadata-only mode and cannot be combined with execution/codegen options\n";
         return 2;
     }
@@ -408,7 +424,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--wasm-core-abi=f64] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -460,6 +476,22 @@ int main(int argc, char** argv) {
             path, text, source_identity, experimental_owned_int,
             experimental_rt_scalar_loop, !wasm32_target && !cortex_m_target,
             admitted_provider_bits);
+        // Do not infer a floating process entry from the source return type.
+        const auto main_entry = std::find_if(ast.functions.begin(), ast.functions.end(),
+            [](const oreslang::Function& fn) { return fn.name == "main"; });
+        if (main_entry != ast.functions.end()) {
+            const bool returns_f64 = main_entry->return_type == oreslang::ScalarType::F64;
+            const bool f64_param = std::any_of(main_entry->parameters.begin(), main_entry->parameters.end(),
+                [](const oreslang::Parameter& p) { return p.scalar_type == oreslang::ScalarType::F64; });
+            if (f64_param || (returns_f64 && !wasm_core_f64_entry))
+                throw std::runtime_error("native main does not admit f64 process ABI");
+            if (wasm_core_f64_entry && (!returns_f64 || main_entry->returns_void ||
+                    !main_entry->parameters.empty() || !main_entry->return_class.empty() ||
+                    !main_entry->return_sum.empty()))
+                throw std::runtime_error("wasm Core f64 entry requires exact main(): f64");
+        } else if (wasm_core_f64_entry) {
+            throw std::runtime_error("wasm Core f64 entry requires exact main(): f64");
+        }
         source_module = ast.module;
         source_namespace = ast.namespace_name;
 
@@ -799,7 +831,7 @@ int main(int argc, char** argv) {
             // so unsupported target features cannot hide in unreachable code.
             (void)oreslang::emit_verified_llvm_ir(
                 ast, wasm32_target, cortex_m_target,
-                bounded_allocator_provider);
+                bounded_allocator_provider, wasm_core_f64_entry);
 
             // The shipped pass is deliberately function-only. Richer Program
             // owners have hidden semantic/ABI roots that are not represented
@@ -811,7 +843,7 @@ int main(int argc, char** argv) {
         }
         std::cout << oreslang::emit_verified_llvm_ir(
                 ast, wasm32_target, cortex_m_target,
-                bounded_allocator_provider, isolate_entry);
+                bounded_allocator_provider, isolate_entry, wasm_core_f64_entry);
         std::cout.flush();
         if (coreLog) coreLog->dump(stderr);
         return 0;

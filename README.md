@@ -305,13 +305,7 @@ A native executable regression fixture lives at
 existing integer-only subset (forward function call and signed i64 addition)
 and must return exit code 42.
 
-This is source-extension admission only. LLVM currently does **not** lower
-floating-point values, floating division, contiguous numerical arrays, or
-tensor kernels. The numerical-library fixtures using `float`, `List<float>`,
-dot products, reductions and matrix multiplication remain unsupported here
-and must fail closed rather than silently map to i64. See the existing
-`native_float_division_unavailable` contract. Java/LLVM numerical parity is
-not claimed by this fixture.
+This is source-extension admission only.
 
 ## Repository ownership and migration (2026-11-08)
 
@@ -323,3 +317,11 @@ not claimed by this fixture.
 - **Proposed first migration:** transfer this *existing repository identity* to `atto-lang/oreslang-source.llvm` retaining its name and history, **only after** individual source/target owner and independent security approvals. No direct transfer to `atto-co` is authorized in the current migration wave. A future product carve-out requires separate approval.
 
 **Maintainer cutover instructions:** coordinate under [migration issue #26](https://github.com/ores-truffle-oreslang/.github/issues/26) and the private [migration runbook draft #25](https://github.com/ores-truffle-oreslang/.github/pull/25); check stable repository numeric ID, exact head SHA/tree, branch protection/rulesets, reviewers, GitHub Apps, secrets, deploys, dependencies, releases, packages, Pages and remote URLs. Transfer using an approved GitHub ownership operation rather than mirroring private source; validate the unchanged ID/tree and rerun exact-head CI at destination. **`steps=[]` or `steps=null` means `NOT_EXECUTED`; host-only tests do not establish native AttoLang guest parity.** Do not combine transfer with forced `.ores`→`.atto` syntax changes, repo renames, CI policy relaxation or AOT/zero-GC claims.
+## Native floating point
+
+`float`/`f64` values, Java numeric widening, real division, float class fields,
+`Array<float>`, `Option<float>` and `Result<float, E>` now compile and execute.
+Scalar ML guests that train with analytic gradients run natively and match Java
+stdout byte for byte. `List<float>`, lambdas, `f32`, `decimal` and tensor kernels
+remain unsupported and fail closed. See [native floating point](docs/NATIVE_FLOAT.md)
+for semantics, limits and the known divergences from Java.

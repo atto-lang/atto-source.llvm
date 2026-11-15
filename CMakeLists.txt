@@ -1671,6 +1671,38 @@ if(BUILD_TESTING)
             PROPERTIES TIMEOUT 60)
     endif()
 
+    # Canonical Oreslang stdio.stdout.println native guest contract used
+    # by ORIE. Source -> IR -> native runtime link -> piped process execution.
+    # Negative cases reject before IR; no host fallback is permitted.
+    find_program(ORE_ORIE_STDOUT_BASH bash)
+    if(ORE_ORIE_STDOUT_BASH AND ORE_RT_AOT_CLANG)
+        add_test(NAME native_orie_stdout_alias
+            COMMAND "${ORE_ORIE_STDOUT_BASH}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_orie_stdout_alias.sh"
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_RT_AOT_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(native_orie_stdout_alias PROPERTIES TIMEOUT 180
+            ENVIRONMENT "ORES_NO_GC_IR_AUDIT=${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit")
+        # Native LLVM f64 scalar local/comparison/arithmetic guests (exit 42),
+        # plus negative no-coercion/no-IR source cases. No Array<f64> claim.
+        add_test(NAME native_f64_scalar_e2e
+            COMMAND "${ORE_ORIE_STDOUT_BASH}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_f64_lexical_gate.sh"
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_RT_AOT_CLANG}")
+        # The real f64 compiler ABI gate now compiles/links 42 native guests
+        # and separately checks 24 rejected sources with no emitted IR.
+        set_tests_properties(native_f64_scalar_e2e PROPERTIES TIMEOUT 300)
+        # Real LLVM compiler source->IR wasm32 f64 entry gate. This test
+        # does not claim Clang-linking, browser Worker execution or release.
+        add_test(NAME wasm_core_f64_entry_source_gate
+            COMMAND "${ORE_ORIE_STDOUT_BASH}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm_f64_entry_gate.sh"
+                "$<TARGET_FILE:oreslang-llvmc>")
+        set_tests_properties(wasm_core_f64_entry_source_gate PROPERTIES TIMEOUT 90)
+    endif()
+
     # Pure host resolver security test for canonical +/ project-root imports.
     # This does not claim pkg:/bare-path resolution or full TOML semantics.
     add_executable(oreslang-native-project-root-import-test
@@ -1854,13 +1886,13 @@ if(BUILD_TESTING)
     # heap-owned continuations exist. The harness rejects any partial LLVM IR.
     oreslang_contract_test(native_rt_while_loop_failclosed
         native-rt-while-reject.ores
-        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+        --ir "for.index.header")
     oreslang_contract_test(native_rt_for_loop_failclosed
         native-rt-for-reject.ores
-        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+        --ir "for.index.header")
     oreslang_contract_test(native_rt_unbounded_loop_failclosed
         native-rt-loop-reject.ores
-        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+        --ir "for.index.header")
     oreslang_contract_test(native_rt_cooperate_failclosed
         native-rt-cooperate-reject.ores
         --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
@@ -1869,13 +1901,13 @@ if(BUILD_TESTING)
         --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
     oreslang_contract_test(native_rt_nested_while_failclosed
         native-rt-nested-while-reject.ores
-        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+        --ir "for.index.header")
     oreslang_contract_test(native_rt_nested_for_failclosed
         native-rt-nested-for-reject.ores
-        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+        --ir "for.index.header")
     oreslang_contract_test(native_rt_nested_loop_failclosed
         native-rt-nested-loop-reject.ores
-        --diagnostic "native realtime source loop requires verified LLVM continuation lowering")
+        --ir "for.index.header")
     oreslang_contract_test(native_rt_nested_cooperate_failclosed
         native-rt-nested-cooperate-reject.ores
         --diagnostic "native rt cooperate requires verified heap-owned continuation lowering")
@@ -2190,15 +2222,15 @@ if(BUILD_TESTING)
     # Java '/' produces a float even for int/int. Until native float lowering
     # exists, reject '/' and '%' before IR rather than silently emitting i64.
     oreslang_contract_test(native_float_division_unavailable numeric-division-float-reject.ores
-        --diagnostic "native floating division unsupported")
+        --diagnostic "native function return requires int, got f64")
     oreslang_contract_test(native_float_division_precedence_unavailable numeric-division-precedence-reject.ores
-        --diagnostic "native floating division unsupported")
+        --diagnostic "requires explicit numeric conversion")
     oreslang_contract_test(native_decimal_suffix_unavailable numeric-decimal-suffix-reject.ores
         --diagnostic "native floating-point/decimal literal unsupported")
     oreslang_contract_test(native_float_exponent_unavailable numeric-floating-exponent-reject.ores
-        --diagnostic "native floating-point/decimal literal unsupported")
+        --diagnostic "native function return requires int, got f64")
     oreslang_contract_test(native_float_fraction_unavailable numeric-floating-fraction-reject.ores
-        --diagnostic "native floating-point/decimal literal unsupported")
+        --diagnostic "native function return requires int, got f64")
     oreslang_contract_test(native_integer_remainder_unavailable numeric-remainder-unsupported.ores
         --diagnostic "'%' is reserved")
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
@@ -3679,6 +3711,27 @@ if(BUILD_TESTING)
         endif()
         set_tests_properties(native_class_string_parity_${mode} PROPERTIES TIMEOUT 180)
     endforeach()
+    # Float source executes natively and matches Java stdout byte for byte.
+    if(ORE_STRUCTURAL_RUSTC AND ORE_CLANG)
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-float-ml"
+            COMMAND "${ORE_STRUCTURAL_RUSTC}" --edition=2021 -D warnings
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_float_ml.rs"
+                -o "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-float-ml"
+            DEPENDS tests/native_float_ml.rs
+            VERBATIM)
+        add_custom_target(oreslang-native-float-ml-bin ALL
+            DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-float-ml")
+        add_test(NAME native_float_ml
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-float-ml"
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-float")
+        set_tests_properties(native_float_ml PROPERTIES TIMEOUT 240
+            ENVIRONMENT "ORES_NO_GC_IR_AUDIT=${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit")
+    else()
+        add_test(NAME native_float_ml COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
     # Unary + now lowers as an int-only identity under the existing typed
     # scalar checker. Verify guest compilation, real AOT execution, and
     # fail-closed type/range/recursion rejection without Python tooling.
