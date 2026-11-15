@@ -1,6 +1,7 @@
 #include "oreslang/frontend/Parser.hpp"
 #include <openssl/sha.h>
 
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <map>
@@ -41,7 +42,23 @@ static std::string read_fixture(const std::string& root, const std::string& file
     const auto pin = reviewed_pins.find(filename);
     if (pin == reviewed_pins.end())
         throw std::runtime_error("unreviewed native ownership fixture");
-    std::ifstream file(root + "/" + filename, std::ios::binary | std::ios::ate);
+    // Preserve the path's source-tree provenance, not merely its bytes:
+    // ifstream follows symlinks silently. Only checked-in regular files may
+    // act as a regression oracle, and no traversal through a linked fixture
+    // directory is permitted.
+    namespace fs = std::filesystem;
+    const fs::path directory(root);
+    if (!fs::is_directory(fs::symlink_status(directory)))
+        throw std::runtime_error("invalid native ownership fixture directory");
+    for (fs::path part = directory; !part.empty(); part = part.parent_path()) {
+        if (fs::is_symlink(fs::symlink_status(part)))
+            throw std::runtime_error("symlinked native ownership fixture directory");
+        if (part == part.root_path()) break;
+    }
+    const fs::path candidate = directory / filename;
+    if (!fs::is_regular_file(fs::symlink_status(candidate)))
+        throw std::runtime_error("symlinked/nonregular native ownership fixture: " + filename);
+    std::ifstream file(candidate, std::ios::binary | std::ios::ate);
     if (!file) throw std::runtime_error("missing native ownership fixture: " + filename);
     const auto count = file.tellg();
     if (count <= 0 || count > 8192)
