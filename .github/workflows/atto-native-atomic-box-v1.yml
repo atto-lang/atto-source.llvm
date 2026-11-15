@@ -119,6 +119,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq llvm-dev clang cmake
+          sudo apt-get install -y -qq "clang-$(llvm-config --version | cut -d. -f1)"
       - name: Compile the real Atto LLVM main compiler and execute Atomic guest AOT fixtures
         run: |
           set -euo pipefail
