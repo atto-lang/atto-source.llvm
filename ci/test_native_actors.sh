@@ -26,6 +26,8 @@ expected = {
     "181-same-type-separate-state.atto": (2, False),
     "182-method-and-fifo.atto": (4, True),
     "183-bool-mail.atto": (2, True),
+    "187-namespace-two-receivers.atto": (2, False),
+    "188-critical-read-write.atto": (2, False),
 }
 files = list(Path("tests/actors/pass").glob("*.atto"))
 assert {x.name for x in files} == set(expected), "unexpected actor pass fixture set"
@@ -79,8 +81,14 @@ for case in tests/actors/fail/*.atto; do
         exit 1
     fi
     test ! -e "$work/$name.exe"
-    if ! grep -E 'E_(PRIVATE|TYPE|TOPLEVEL|RESERVED|UNSUPPORTED|EXPECTED|PARSE|SYNTAX|UNBOUND|ISOLATION)' "$work/negative"; then
+    if ! grep -E 'E_(PRIVATE|TYPE|TOPLEVEL|RESERVED|UNSUPPORTED|EXPECTED|PARSE|SYNTAX|UNBOUND|ISOLATION|READONLY|SEALED|BORROW|ESCAPE|UNLINKED|DUPLICATE|MUTABILITY)' "$work/negative"; then
         echo "FAIL missing diagnostic in actor negative: $name" >&2
+        cat "$work/negative" >&2
+        exit 1
+    fi
+    expected="$(sed -n 's|^// expect-reject: ||p' "$case" | head -n 1)"
+    if [ -n "$expected" ] && ! grep -Fq "$expected" "$work/negative"; then
+        echo "FAIL actor diagnostic $name: wanted $expected" >&2
         cat "$work/negative" >&2
         exit 1
     fi
