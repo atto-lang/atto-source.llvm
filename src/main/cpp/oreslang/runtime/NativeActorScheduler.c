@@ -1034,8 +1034,10 @@ OresNativeActorRef ores_native_actor_scheduler_spawn(
     unlock(s);
     return ref;
 }
-OresNativeSendStatus ores_native_actor_scheduler_try_send(
-    OresNativeActorScheduler* s, OresNativeActorRef actor, uint64_t payload) {
+static OresNativeSendStatus try_send_impl(
+    OresNativeActorScheduler* s, OresNativeActorRef actor, uint64_t payload,
+    uint64_t* out_sequence) {
+    if (out_sequence) *out_sequence = 0;
     if (!s) return ORES_NATIVE_SEND_INVALID_REF;
     lock(s);
     OresNativeSendStatus status;
@@ -1058,6 +1060,11 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
              * fails; a stop that wins first is always rejected. */
             if (enqueue_locked(s, (size_t)actor.actor_slot, payload)) {
                 status = ORES_NATIVE_SEND_ACCEPTED;
+                /* Minted by enqueue_locked under this same scheduler lock;
+                 * no callback can complete before the transport binds its
+                 * descriptor to this accepted mail sequence. */
+                if (out_sequence)
+                    *out_sequence = lane->accepted_user_messages;
             } else {
                 /* enqueue_locked already counted this rejected admission. */
                 counted_in_enqueue = 1;
@@ -1070,6 +1077,16 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
         s->rejected++;
     unlock(s);
     return status;
+}
+OresNativeSendStatus ores_native_actor_scheduler_try_send(
+    OresNativeActorScheduler* s, OresNativeActorRef actor, uint64_t payload) {
+    return try_send_impl(s, actor, payload, NULL);
+}
+OresNativeSendStatus ores_native_actor_scheduler_try_send_receipted(
+    OresNativeActorScheduler* s, OresNativeActorRef actor, uint64_t payload,
+    uint64_t* out_sequence) {
+    if (!out_sequence) return ORES_NATIVE_SEND_INVALID_REF;
+    return try_send_impl(s, actor, payload, out_sequence);
 }
 int ores_native_actor_scheduler_send(OresNativeActorScheduler* s,
                                      OresNativeActorRef actor, uint64_t payload) {
