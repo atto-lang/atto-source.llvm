@@ -204,6 +204,18 @@ public:
             // Existing nb-select recognition is intentionally unchanged
             // until native select lowering supports that grammar.
             const auto first = source_.substr(start, at_ - start);
+            // Pointer is a compiler-known nominal builtin, not a user class
+            // or scalar name. Do not erase <T>, silently treat it as i64, or
+            // emit LLVM before region/provenance and drop checks exist.
+            // Lexing keeps quoted strings and comments opaque, so this
+            // cannot reject a harmless occurrence in documentation or data.
+            if (first == "Pointer") {
+                throw std::runtime_error(
+                    "native Pointer<T> full-AOT lowering unsupported: requires "
+                    "typed region/generation provenance, bounds, ownership and "
+                    "deterministic cleanup before LLVM IR (at byte " +
+                    std::to_string(start) + ")");
+            }
             if (first == "nb" && source_.substr(at_, 7) == "-select") {
                 const auto end = at_ + 7;
                 if (end == source_.size() ||
@@ -295,7 +307,7 @@ public:
         // Admit '@' as a TOKEN only so existing parameter-local @Default guards
         // can issue their specific fail-closed diagnostic instead of a generic
         // unsupported-token error. No annotation execution is enabled.
-        if (std::string_view("(){},:;+-*/%=.<>@?!").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*/%=.<>@?!&").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -3343,6 +3355,12 @@ private:
             ~DepthGuard() { --depth; }
         } depth_guard{expression_depth_};
 
+        if (token_.text == "&" || token_.text == "*") {
+            // '&' address-of and unary '*' dereference are never AttoLang
+            // pointer syntax. Preserve binary '*' multiplication and '&&'.
+            fail("native pointer syntax forbids unary '&' address-of and "
+                 "unary '*' dereference; use checked Pointer<T> methods");
+        }
         if (token_.text == "trap") {
             // Reserved for Option-valued ordinary-error capture. Reject it
             // before IR generation: accepting a normal value here would erase
