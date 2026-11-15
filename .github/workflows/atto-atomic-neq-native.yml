@@ -1,0 +1,55 @@
+name: AttoLang atomic neq LLVM native execution candidate
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'tests/atto-atomic-neq/**'
+      - 'tests/atto_atomic_neq_native.sh'
+      - '.github/workflows/atto-atomic-neq-native.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  real-llvm-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact head/tree
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD:tests/atto-atomic-neq/positive.atto)" = 0e69c04a8a15c3da924183656da10ab7dcdeb9bd
+          echo "ATTO_EQ_NEQ_NATIVE_SOURCE_TREE=$(git rev-parse HEAD^{tree})"
+      - name: Install LLVM dev, CMake and Clang
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang llvm-dev cmake ninja-build
+      - name: Build real guest compiler from exact PR head
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -G Ninja -S . -B "$RUNNER_TEMP/atto-neq-build" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build "$RUNNER_TEMP/atto-neq-build" --target oreslang-llvmc --parallel 2
+          test -x "$RUNNER_TEMP/atto-neq-build/oreslang-llvmc"
+          sha256sum "$RUNNER_TEMP/atto-neq-build/oreslang-llvmc"
+      - name: Execute AttoLang operator guests natively O0 and O2
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tests/atto_atomic_neq_native.sh
+          bash tests/atto_atomic_neq_native.sh "$RUNNER_TEMP/atto-neq-build/oreslang-llvmc" clang
+          echo 'ATTO_EQ_NEQ_LLVM_REAL_GUEST_PROOF_EXECUTED'
+      - name: Evidence boundary
+        run: |
+          echo 'Host/compiler logs and executed steps must still be independently verified at exact head.'
+          echo 'This workflow does not prove full Erlang/OTP parity or any other backend.'
