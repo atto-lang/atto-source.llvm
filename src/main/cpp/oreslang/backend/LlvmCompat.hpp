@@ -19,7 +19,7 @@ inline llvm::Type* native_pointer_type(llvm::LLVMContext& context, llvm::Type* p
 
 inline void native_lifetime_start(llvm::IRBuilder<>& builder, llvm::Value* ptr,
                                   std::uint64_t bytes) {
-#if LLVM_VERSION_MAJOR >= 23
+#if LLVM_VERSION_MAJOR >= 22
     (void)bytes;
     builder.CreateLifetimeStart(ptr);
 #else
@@ -29,12 +29,24 @@ inline void native_lifetime_start(llvm::IRBuilder<>& builder, llvm::Value* ptr,
 }
 inline void native_lifetime_end(llvm::IRBuilder<>& builder, llvm::Value* ptr,
                                 std::uint64_t bytes) {
-#if LLVM_VERSION_MAJOR >= 23
+#if LLVM_VERSION_MAJOR >= 22
     (void)bytes;
     builder.CreateLifetimeEnd(ptr);
 #else
     builder.CreateLifetimeEnd(ptr, llvm::ConstantInt::get(
         llvm::Type::getInt64Ty(builder.getContext()), bytes));
+#endif
+}
+
+// LLVM 20+ renamed the intrinsic declaration API. Keep every compiler
+// intrinsic on this shim to preserve LLVM 19/20/22/23 source portability.
+inline llvm::Function* native_intrinsic_declaration(
+        llvm::Module* module, llvm::Intrinsic::ID kind,
+        llvm::ArrayRef<llvm::Type*> types = {}) {
+#if LLVM_VERSION_MAJOR >= 20
+    return llvm::Intrinsic::getOrInsertDeclaration(module, kind, types);
+#else
+    return llvm::Intrinsic::getDeclaration(module, kind, types);
 #endif
 }
 
