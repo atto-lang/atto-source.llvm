@@ -136,7 +136,7 @@ llvm::Value* checked_signed_arithmetic(llvm::IRBuilder<>& builder,
     // trap is the current failure ABI; typed actor errors remain separate.
     auto* module = builder.GetInsertBlock()->getModule();
     auto* parent = builder.GetInsertBlock()->getParent();
-    auto* intrinsic = llvm::Intrinsic::getDeclaration(module, operation, {left->getType()});
+    auto* intrinsic = native_intrinsic_declaration(module, operation, {left->getType()});
     auto* pair = builder.CreateCall(intrinsic, {left, right}, name + ".checked");
     auto* value = builder.CreateExtractValue(pair, {0}, name + ".value");
     auto* overflow = builder.CreateExtractValue(pair, {1}, name + ".overflow");
@@ -144,7 +144,7 @@ llvm::Value* checked_signed_arithmetic(llvm::IRBuilder<>& builder,
     auto* proceed = llvm::BasicBlock::Create(builder.getContext(), name + ".ok", parent);
     builder.CreateCondBr(overflow, failed, proceed);
     builder.SetInsertPoint(failed);
-    builder.CreateCall(llvm::Intrinsic::getDeclaration(module, llvm::Intrinsic::trap));
+    builder.CreateCall(native_intrinsic_declaration(module, llvm::Intrinsic::trap));
     builder.CreateUnreachable();
     builder.SetInsertPoint(proceed);
     return value;
@@ -507,7 +507,7 @@ llvm::Value* lower(const Expression& expr,
             // Native target currently uses a trap for typed runtime errors.
             // This is fail-closed rather than Java's exception-class parity.
             builder.CreateCall(
-                llvm::Intrinsic::getDeclaration(module, llvm::Intrinsic::trap));
+                native_intrinsic_declaration(module, llvm::Intrinsic::trap));
             builder.CreateUnreachable();
             builder.SetInsertPoint(valid);
             if (expr.kind == Expression::Kind::ShiftLeft)
@@ -531,7 +531,7 @@ llvm::Value* lower(const Expression& expr,
             builder.CreateCondBr(builder.CreateICmpEQ(right, llvm::ConstantInt::get(i64, 0), "rem.zero"),
                 failed, proceed);
             builder.SetInsertPoint(failed);
-            builder.CreateCall(llvm::Intrinsic::getDeclaration(module, llvm::Intrinsic::trap));
+            builder.CreateCall(native_intrinsic_declaration(module, llvm::Intrinsic::trap));
             builder.CreateUnreachable();
             builder.SetInsertPoint(proceed);
             // Any value modulo -1 is 0, including INT64_MIN, but LLVM srem INT64_MIN, -1
@@ -3278,7 +3278,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             value, llvm::ConstantInt::get(i64, UINT32_MAX));
         b.CreateCondBr(in_range, accepted, rejected);
         b.SetInsertPoint(rejected);
-        b.CreateCall(llvm::Intrinsic::getDeclaration(
+        b.CreateCall(native_intrinsic_declaration(
             &module, llvm::Intrinsic::trap));
         b.CreateUnreachable();
         b.SetInsertPoint(accepted);
@@ -3430,7 +3430,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                         : (expr.kind == K::Multiply)
                             ? llvm::Intrinsic::smul_with_overflow
                             : llvm::Intrinsic::sadd_with_overflow;
-                    auto* intrinsic = llvm::Intrinsic::getDeclaration(
+                    auto* intrinsic = native_intrinsic_declaration(
                         &module, op, {i64});
                     auto* pair = b.CreateCall(intrinsic, {lhs, rhs},
                                                "isolate.arithmetic.checked");
