@@ -885,6 +885,7 @@ void validate_i64_ownership(Program& program) {
         for (const auto& item : locals) root_names.insert(item.first);
         std::unordered_map<std::string, unsigned> iteration_loans;
         std::function<void(const Statement&, Locals&)> check_effect;
+        std::size_t scalar_loop_depth = 0;
         auto scoped_entry = [&](const LocalBinding& binding) {
             LocalOwnership entry;
             entry.int_array = binding.int_array;
@@ -910,6 +911,26 @@ void validate_i64_ownership(Program& program) {
                 state.erase(action.branch_local->name);
         };
         check_effect = [&](const Statement& stmt, Locals& state) {
+            if (stmt.kind == Statement::Kind::Break ||
+                    stmt.kind == Statement::Kind::Continue) {
+                if (!scalar_loop_depth)
+                    throw std::runtime_error("ownership violation: break/continue outside native scalar loop");
+                return;
+            }
+            if (stmt.kind == Statement::Kind::Loop) {
+                if (++scalar_loop_depth > 16)
+                    throw std::runtime_error("ownership violation: native scalar loop nesting limit");
+                struct Depth {
+                    std::size_t& n;
+                    ~Depth() { --n; }
+                } scoped_depth{scalar_loop_depth};
+                Locals body = state;
+                scoped_effects(stmt.then_statements, body);
+                if (!same_affine_state(state, body))
+                    throw std::runtime_error(
+                        "ownership violation: scalar loop backedge changes affine ownership/loans");
+                return;
+            }
             if (stmt.kind == Statement::Kind::ScalarWrite) {
                 const auto found = state.find(stmt.receiver);
                 if (found == state.end()) throw std::runtime_error("assignment requires a visible scalar slot");
