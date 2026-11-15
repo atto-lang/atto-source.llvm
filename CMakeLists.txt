@@ -28,6 +28,13 @@ option(ATTO_NATIVE_POINTER_HOST_ONLY
 if(ATTO_NATIVE_POINTER_HOST_ONLY)
   include(CTest)
   find_package(Threads REQUIRED)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME atto_native_pointer_verifier_source_free_selftest
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_pointer_verifier_selftest.py"
+      "${CMAKE_CURRENT_SOURCE_DIR}/scripts/native-pointer-exact-head-verify.sh")
+  set_tests_properties(atto_native_pointer_verifier_source_free_selftest
+    PROPERTIES TIMEOUT 90)
   foreach(name IN ITEMS trusted_pointer_window native_region_registry native_region_runtime_authority)
     add_executable(atto_${name}_host_test tests/${name}_test.cpp)
     target_include_directories(atto_${name}_host_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
