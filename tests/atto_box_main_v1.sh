@@ -5,7 +5,7 @@ compiler="${1:-./build/oreslang-llvmc}"
 command -v clang >/dev/null
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-for name in return-get scalar-copy; do
+for name in return-get scalar-copy return-early return-fallthrough; do
   "$compiler" --experimental-owned-int "tests/atto-box-main-v1/$name.atto" > "$tmp/$name.ll"
   grep -q 'oreslang_owned_i64_region_new' "$tmp/$name.ll"
   grep -q 'oreslang_owned_i64_region_read' "$tmp/$name.ll"
