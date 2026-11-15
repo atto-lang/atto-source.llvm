@@ -439,6 +439,45 @@ bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
     return false;
 }
 
+// First native loop-continuation island: the loop owns no new lexical
+// resources or actor effects, and every backedge sees the same stack slots.
+// No calls, class/array ownership, defer, throw, suspension, or scoped locals
+// can enter this CFG until path-sensitive drop/borrow proofs are available.
+bool native_scalar_loop_body(const std::vector<Statement>& body,
+                             std::size_t depth = 1) {
+    if (depth > 16 || body.empty() || body.size() > 16) return false;
+    for (const auto& stmt : body) {
+        switch (stmt.kind) {
+            case Statement::Kind::Break:
+            case Statement::Kind::Continue:
+                break;
+            case Statement::Kind::ScalarWrite:
+                if (stmt.receiver.empty() || !stmt.expression ||
+                        !native_pure_scalar_tree(*stmt.expression))
+                    return false;
+                break;
+            case Statement::Kind::Conditional:
+                if (!stmt.condition ||
+                        !native_pure_scalar_tree(*stmt.condition))
+                    return false;
+                if (!stmt.then_statements.empty() &&
+                        !native_scalar_loop_body(stmt.then_statements, depth + 1))
+                    return false;
+                if (!stmt.else_statements.empty() &&
+                        !native_scalar_loop_body(stmt.else_statements, depth + 1))
+                    return false;
+                break;
+            case Statement::Kind::Loop:
+                if (!native_scalar_loop_body(stmt.then_statements, depth + 1))
+                    return false;
+                break;
+            default:
+                return false;
+        }
+    }
+    return true;
+}
+
 bool native_capture_free_task_tree(
         const Expression& expr, std::size_t depth = 1) {
     require_expression_depth(depth, expr.offset);
@@ -2741,6 +2780,8 @@ private:
         std::function<Statement()> using_telemetry_span;
         std::unordered_set<std::string> active_trace_aliases;
         std::function<Statement()> foreach_statement;
+        std::function<Statement()> scalar_loop_statement;
+        std::size_t scalar_loop_depth = 0;
         auto scoped_local = [&]() {
             Statement statement; statement.kind = Statement::Kind::ScopedLocal;
             statement.offset = token_.offset;
@@ -2822,6 +2863,42 @@ private:
             class_receivers_ = receivers;
             require("}"); return loop;
         };
+        scalar_loop_statement = [&]() -> Statement {
+            Statement stmt;
+            stmt.kind = Statement::Kind::Loop;
+            stmt.offset = token_.offset;
+            require("loop"); require("{");
+            if (++scalar_loop_depth > 16)
+                fail("native scalar loop nesting exceeds 16");
+            struct LoopDepth {
+                std::size_t& depth;
+                ~LoopDepth() { --depth; }
+            } scoped_depth{scalar_loop_depth};
+            stmt.then_statements = branch_arm(false, false);
+            require("}");
+            if (!native_scalar_loop_body(stmt.then_statements))
+                fail("native scalar loop requires pure scalar writes and structured loop control; owner, call, suspension and cleanup are unsupported");
+            const auto check_scalar_writes = [&](const auto& self,
+                    const std::vector<Statement>& body) -> void {
+                for (const auto& item : body) {
+                    if (item.kind == Statement::Kind::ScalarWrite) {
+                        const auto local = std::find_if(value.locals.begin(), value.locals.end(),
+                            [&](const LocalBinding& binding) { return binding.name == item.receiver; });
+                        if (local == value.locals.end() || !local->owner_mutable ||
+                                local->heap_owned || local->int_array ||
+                                !local->class_name.empty() ||
+                                local->scalar_type != ScalarType::I64)
+                            fail("native scalar loop writes require a mutable lexical int, not an owner or parameter");
+                    }
+                    if (!item.then_statements.empty())
+                        self(self, item.then_statements);
+                    if (!item.else_statements.empty())
+                        self(self, item.else_statements);
+                }
+            };
+            check_scalar_writes(check_scalar_writes, stmt.then_statements);
+            return stmt;
+        };
         // Only a syntactically proven terminal failure path may be emitted as a
         // guard. Never allow a fall-through branch to reach guarded code.
         std::function<bool(const std::vector<Statement>&)> guard_failure_exits;
@@ -2850,6 +2927,10 @@ private:
                 }
                 if (token_.text == "for" && !finally_scope) {
                     actions.push_back(foreach_statement()); continue;
+                }
+                if (token_.text == "loop" && !finally_scope) {
+                    actions.push_back(scalar_loop_statement());
+                    continue;
                 }
                 if (token_.text == "while" || token_.text == "for" ||
                         token_.text == "loop") {
@@ -2936,6 +3017,14 @@ private:
                     }
                     // The native migration parser still requires 'fi' after brace forms.
                     require("fi"); actions.push_back(std::move(statement)); continue;
+                }
+                if ((token_.text == "break" || token_.text == "continue") &&
+                        scalar_loop_depth > 0 && !finally_scope) {
+                    statement.kind = token_.text == "break"
+                        ? Statement::Kind::Break : Statement::Kind::Continue;
+                    advance(); require(";");
+                    actions.push_back(std::move(statement));
+                    continue;
                 }
                 if (token_.text == "break" || token_.text == "continue")
                     fail("native break/continue in conditional arms requires verified loop continuation lowering");
@@ -3233,8 +3322,13 @@ private:
                     fail("native for-of cannot enter protected/return-guard scope");
                 value.statements.push_back(foreach_statement()); continue;
             }
-            if (token_.text == "while" || token_.text == "for" ||
-                    token_.text == "loop") {
+            if (token_.text == "loop") {
+                if (terminal_try_finally || return_guards_started)
+                    fail("native scalar loops cannot enter protected or return-guard scope");
+                value.statements.push_back(scalar_loop_statement());
+                continue;
+            }
+            if (token_.text == "while" || token_.text == "for") {
                 fail("native realtime source loop requires verified LLVM continuation lowering");
             }
             if (token_.text == "try") {
