@@ -33,15 +33,19 @@ private:
     using ActorKey = std::tuple<std::uint64_t, std::uint64_t>;
     NativeRegionRegistry& regions_;
     const std::uint64_t runtime_id_;
+    const std::size_t maximum_incarnations_;
     std::mutex mu_;
     // Retired entries remain tombstoned until registry/process retirement:
     // no same-incarnation privilege re-admission after cancellation/restart.
     std::map<ActorKey, State> actors_;
 
     explicit NativeRegionRuntimeAuthority(NativeRegionRegistry& regions,
-                                           std::uint64_t runtime_id)
-        : regions_(regions), runtime_id_(runtime_id) {
-        if (!runtime_id) throw std::invalid_argument("native broker runtime id is zero");
+                                           std::uint64_t runtime_id,
+                                           std::size_t maximum_incarnations = 65536)
+        : regions_(regions), runtime_id_(runtime_id),
+          maximum_incarnations_(maximum_incarnations) {
+        if (!runtime_id || !maximum_incarnations)
+            throw std::invalid_argument("native broker runtime id/capacity is zero");
     }
     static ActorKey key(ActorHeapIdentity actor) noexcept {
         return {actor.actor, actor.epoch};
@@ -60,6 +64,10 @@ private:
             admission != Admission::TrustedNative)
             throw std::logic_error("invalid native actor trust category");
         std::lock_guard<std::mutex> lock(mu_);
+        // Tombstones are intentionally permanent until broker retirement.
+        // Bound total admitted epochs; never reclaim a terminal epoch early.
+        if (actors_.size() >= maximum_incarnations_ && !actors_.count(key(actor)))
+            throw std::length_error("native broker actor-incarnation budget exhausted");
         const auto state = admission == Admission::TrustedNative
                                ? State::TrustedNative : State::Untrusted;
         if (!actors_.emplace(key(actor), state).second)
