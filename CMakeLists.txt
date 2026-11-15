@@ -262,6 +262,9 @@ if(ATTO_ACTOR_LOGICAL_FRAMES_HOST_ONLY)
     add_test(NAME native_source_actor_one_for_one_restart_host
         COMMAND atto-native-source-actor-restart-host-test)
     set_tests_properties(native_source_actor_one_for_one_restart_host PROPERTIES TIMEOUT 30)
+    add_test(NAME native_source_actor_restart_budget_exhausted_host
+        COMMAND atto-native-source-actor-restart-host-test --exhaust)
+    set_tests_properties(native_source_actor_restart_budget_exhausted_host PROPERTIES TIMEOUT 30)
     return()
 endif()
 
@@ -405,6 +408,9 @@ if(BUILD_TESTING)
     add_test(NAME native_source_actor_one_for_one_restart_e2e
         COMMAND oreslang-native-source-actor-restart-test)
     set_tests_properties(native_source_actor_one_for_one_restart_e2e PROPERTIES TIMEOUT 30)
+    add_test(NAME native_source_actor_restart_budget_exhausted_e2e
+        COMMAND oreslang-native-source-actor-restart-test --exhaust)
+    set_tests_properties(native_source_actor_restart_budget_exhausted_e2e PROPERTIES TIMEOUT 30)
     # AOT trace policy gate; this does not compile a source-level Atto trace.
     find_package(Threads REQUIRED)
     add_executable(oreslang-native-trace-probe-policy-test
