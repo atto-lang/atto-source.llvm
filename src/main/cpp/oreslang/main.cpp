@@ -1,6 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
-#include "oreslang/frontend/PointerIntAot.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ModuleLoader.hpp"
@@ -427,11 +426,10 @@ int main(int argc, char** argv) {
             throw std::runtime_error("native-hard-rt profile rejects experimental owned heap lowering");
 
         if (experimental_pointer_int_aot) {
-            // This source profile is deliberately independent of the main
-            // language parser: a closed-world, typed, nonescaping stack
-            // specialization with no actor/scheduler/import/FFI capability.
-            // Any unrecognized syntax is rejected BEFORE any LLVM text
-            // escapes to stdout. Never silently enable for regular sources.
+            // Pointer M2a now enters the same canonical native lexer,
+            // typed Program HIR, shared ownership checker and LLVM emitter.
+            // Its admitted grammar remains a closed-world nonescaping stack
+            // specialization until full Pointer<T> lowering is verified.
             if (wasm32_target || cortex_m_target || tenant_vm_guest ||
                     experimental_owned_int || experimental_rt_scalar_loop ||
                     bounded_allocator_provider || tree_shake ||
@@ -442,7 +440,10 @@ int main(int argc, char** argv) {
                     "Pointer<int> AOT M1 requires isolated --target=host "
                     "without ownership, scheduler, RT, tree shaking or allocator overrides");
             }
-            const auto ir = oreslang::pointer_int_aot::compile(text);
+            // Normal native frontend Program -> ownership checker -> LLVM
+            // emission, not the M1 standalone source-to-IR shortcut.
+            auto ast = oreslang::parse_program(text, false, false, true);
+            const auto ir = oreslang::emit_verified_llvm_ir(ast);
             std::cout << ir;
             std::cout.flush();
             return 0;
