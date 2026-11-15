@@ -32,12 +32,21 @@ integration PR #1825. The public AttoLang pointer syntax and effects remain
    purges registered mapping metadata only after the fence returns.
    `revoke_terminal(ref)` is a separate idempotent path for the exact
    scheduler-verified terminal reference, e.g. after panic/raise escalation.
+   `fence_stopped_actors()` is an external HOST maintenance operation that
+   detects scheduler-origin STOP (including panic/cancellation) and fences
+   grants before memory reclamation. It is not an automatic scheduler hook:
+   the production host must invoke this operation before freeing actor RAM.
    Neither is callable from an actor scheduler carrier, which could deadlock
    waiting for its own FFI callback.
 6. Synchronous native FFI raw-address scopes must quiesce before backing
    storage is freed. A same-thread callback retirement defers and throws:
    it is NOT terminal success. The broker stays `Retiring` until a retry
-   completes and then transitions to `Retired`. Incomplete teardown
+   completes and then transitions to `Retired`. Every approved RAM mapping
+   retains one exact-generation native scheduler external-resource loan, which
+   prevents terminal DONE and scheduler destruction before pointer quiescence.
+   Only after successful window revocation does mapping cleanup release that
+   loan; failed registration rolls back a newly retained loan. Destruction
+   with un-released mappings fails-stop. Incomplete teardown
    fails-stop at broker destruction rather than silently freeing backing
    memory. Async DMA or foreign callbacks need a separate completion-pin
    protocol before production release.
@@ -58,12 +67,14 @@ integration PR #1825. The public AttoLang pointer syntax and effects remain
   established.
 - Only the current live actor callback may request a registered region.
 - On STOP, permission loss, cancellation, panic, raise, hot-reload restart or
-  supervisor retirement: seal DATA admission, call `stop_and_revoke` or
+  supervisor retirement: seal DATA admission, call `stop_and_revoke`,
+  `fence_stopped_actors` from an external maintenance turn or
   `revoke_terminal`, retry deferred FFI fences, wait for scheduler DONE
   from an external host thread, and *then* release/scrub backing allocations.
 - Globally retire the scheduler and drain before `try_destroy`. The bridge
   must not outlive its scheduler or be destroyed while native grants remain.
-- **Not yet wired:** automatic callbacks for every scheduler termination mode;
+- **Not yet wired:** mandatory host integration invoking the maintenance fence
+  on every scheduler termination mode (or an equivalent automatic callback);
   audited trust/code-domain authentication; asynchronous FFI and DMA pin
   accounting; allocation-catalog physical alias detection across mappings
   or separate registries; source-level checked unsafe effects and compiler
