@@ -7304,6 +7304,16 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 60)
 endif()
 
+# Root effect policy forward-port (#273); host substrate only.
+if(BUILD_TESTING)
+    add_executable(oreslang-root-failure-boundary-test tests/root_failure_boundary_test.cpp)
+    target_include_directories(oreslang-root-failure-boundary-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-root-failure-boundary-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-root-failure-boundary-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_nonactor_root_failure_boundary COMMAND oreslang-root-failure-boundary-test)
+endif()
+
 # #769: host-only synchronous logical snapshot of typed failure ancestry.
 if(BUILD_TESTING)
     find_package(Threads REQUIRED)
