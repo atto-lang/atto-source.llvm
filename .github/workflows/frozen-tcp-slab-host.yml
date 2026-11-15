@@ -1,0 +1,38 @@
+name: Frozen TCP slab native host sanitizer evidence
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/FrozenTcpSlab.hpp'
+      - 'tests/frozen_tcp_slab_test.cpp'
+      - 'scripts/test-frozen-tcp-slab-host-sanitizers.sh'
+      - '.github/workflows/frozen-tcp-slab-host.yml'
+      - 'src/main/cpp/oreslang/runtime/ActorSharedTcpPool.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorHttpAgent.hpp'
+      - 'tests/actor_shared_tcp_pool_test.cpp'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-host-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact PR head (not GitHub synthetic merge)
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          git diff --quiet
+          echo "SOURCE_HEAD=$EXPECTED"
+          echo "SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: GCC address/undefined sanitizer test (NOT guest TCP)
+        run: bash scripts/test-frozen-tcp-slab-host-sanitizers.sh
+      - name: GCC ThreadSanitizer foreign-owner pin release stress
+        env:
+          SANITIZER_MODE: thread
+        run: bash scripts/test-frozen-tcp-slab-host-sanitizers.sh

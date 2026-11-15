@@ -1,0 +1,2 @@
+// The static namespace operator is never a dynamic ActorRef connection.
+pub fnc main(): int { return Actor::connect(reader_ref, writer_ref); }

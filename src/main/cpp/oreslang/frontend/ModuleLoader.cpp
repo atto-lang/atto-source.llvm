@@ -1,6 +1,7 @@
 #include "oreslang/frontend/ModuleLoader.hpp"
 #include "oreslang/frontend/CoreLibrarySources.hpp"
 #include "oreslang/frontend/ProjectRootImport.hpp"
+#include "oreslang/types/NativeSumTypes.hpp"
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -27,6 +28,8 @@ struct Unit {
     bool core_closure_complete = false;
     std::unordered_map<std::string, std::size_t> dependencies;
     std::unordered_map<std::string, std::pair<std::size_t, std::string>> class_imports;
+    // local name -> (unit index, pub function name) from `import fnc`.
+    std::unordered_map<std::string, std::pair<std::size_t, std::string>> function_imports;
     // Declaration identities stay immutable while ASTs are moved/qualified.
     std::unordered_map<std::string, std::unordered_map<std::size_t, bool>> functions;
     std::unordered_set<std::string> classes;
@@ -48,6 +51,14 @@ public:
         read_bytes = text.size();
         visit(fs::canonical(path), std::move(text), identity, 0, false,
               frontend::CompilerLibraryTier::Core, root_provider_bits);
+        // Defense in depth: the old module linker must never silently ignore
+        // namespace AST records if a future parser starts admitting them.
+        // Authenticated package-source ownership and typed namespace call
+        // lowering have not been connected to this executable path.
+        for (const auto& unit : units) {
+            if (!unit->program.namespace_imports.empty())
+                fail(*unit, "NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native loader requires verified v2 namespace package linking");
+        }
         if (units.front()->program.imports.empty()) {
             auto root = std::move(units.front()->program);
             resolve_and_validate_program(root);
@@ -74,8 +85,8 @@ public:
             if (index && !unit.program.actors.empty())
                 fail(unit, "native imported actor declarations require typed module actor placement lowering");
             for (const auto& type : unit.program.sum_types) {
-                bool found = false; for (const auto& existing : linked.sum_types) if (existing.name == type.name) found = true;
-                if (!found) linked.sum_types.push_back(type);
+                try { merge_native_sum_descriptor(linked.sum_types, type); }
+                catch (const std::runtime_error& error) { fail(unit, error.what()); }
             }
             for (auto& fn : unit.program.functions) {
                 qualify_function(unit, fn);
@@ -151,6 +162,11 @@ private:
             auto& arities = unit->functions[fn.name];
             arities.emplace(fn.parameters.size(), fn.exported);
         }
+        // The native compiler has no once-only startup barrier. Reject the
+        // reserved lifecycle hook even for a standalone source file, before
+        // the no-import fast path can compile it as an ordinary callable.
+        if (unit->functions.count("init"))
+            fail(*unit, "native module init hook requires once-only reachable initialization lowering");
         for (const auto& cls : unit->program.classes) {
             unit->classes.insert(cls.name); unit->class_exports.emplace(cls.name, cls.exported);
             unit->constructor_exports.emplace(cls.name, !cls.explicit_constructor || cls.constructor_exported);
@@ -308,6 +324,18 @@ private:
             if (imported.local_name == current.program.module)
                 fail(current, "native imported module binding conflicts with containing module");
             const auto& target = *units[selected];
+            if (imported.selected_function) {
+                const auto found = target.functions.find(imported.selected_module);
+                bool exported = false;
+                if (found != target.functions.end())
+                    for (const auto& arity : found->second) exported = exported || arity.second;
+                if (!exported)
+                    fail(current, "unknown or private imported function '" + imported.selected_module + "'");
+                if (current.functions.count(imported.local_name))
+                    fail(current, "imported function conflicts with local function '" + imported.local_name + "'");
+                current.function_imports.emplace(imported.local_name, std::make_pair(selected, imported.selected_module));
+                continue;
+            }
             if (imported.selected_class) {
                 const auto cls = target.class_exports.find(imported.selected_module);
                 if (cls == target.class_exports.end() || !cls->second)
@@ -329,7 +357,7 @@ private:
         return index;
     }
     static void binding_name(const Unit& unit, const std::string& name) {
-        if (unit.dependencies.count(name) || unit.class_imports.count(name))
+        if (unit.dependencies.count(name) || unit.class_imports.count(name) || unit.function_imports.count(name))
             fail(unit, "native module import binding cannot be shadowed: '" + name + "'");
     }
     void expression(const Unit& unit, Expression* expr) {
@@ -351,10 +379,16 @@ private:
             const auto binding = unit.dependencies.find(expr->name.substr(0, dot));
             if (binding == unit.dependencies.end()) fail(unit, "unknown native module binding");
             target = units[binding->second].get(); member = expr->name.substr(dot + 1); external = true;
+        } else if (!unit.functions.count(member)) {
+            const auto imported = unit.function_imports.find(member);
+            if (imported != unit.function_imports.end()) {
+                target = units[imported->second.first].get(); member = imported->second.second; external = true;
+            }
         }
         const auto function = target->functions.find(member);
         if (function == target->functions.end() || !function->second.count(expr->arguments.size()))
-            fail(unit, "unknown function or wrong call arity '" + expr->name + "'");
+            fail(unit, "unknown function or wrong call arity '" + expr->name +
+                (function == target->functions.end() ? "': unknown function" : "': call arity mismatch"));
         if (external && !function->second.at(expr->arguments.size()))
             fail(unit, "imported function is private: '" + expr->name + "'");
         expr->name = target->prefix + member;
@@ -424,5 +458,18 @@ Program load_native_program(const std::string& path, std::string source, SourceI
                             std::uint32_t admitted_provider_bits) {
     return Loader(owned, scalar_loop, host, admitted_provider_bits)
         .run(path, std::move(source), identity);
+}
+frontend::VerifiedNamespaceSourceSnapshotV2 admit_native_namespace_sources_v2(
+    const std::filesystem::path& trusted_physical_root,
+    const std::vector<std::string>& approved_members,
+    std::string_view approved_manifest_sha256,
+    std::string_view approved_sources_sha256,
+    const frontend::NamespaceSha256& trusted_sha256) {
+    // Only the future authenticated package/lock host may provide these
+    // arguments. This host preparatory API does not bypass the executable
+    // native module loader's fail-closed namespace import gate.
+    return frontend::load_verified_namespace_source_snapshot_v2(
+        trusted_physical_root, approved_members, approved_manifest_sha256,
+        approved_sources_sha256, trusted_sha256);
 }
 } // namespace oreslang
