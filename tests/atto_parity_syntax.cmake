@@ -80,6 +80,7 @@ run_case(expect_ok "${fixtures}/expect_ok.atto" 42)
 run_case(expect_err "${fixtures}/expect_err.atto" nonzero)
 run_case(import_fnc "${fixtures}/import_fnc/main.atto" 0)
 run_case(attolang_equality "${fixtures}/attolang_equality.atto" 0)
+run_case(do_ifnot_unless "${fixtures}/do_ifnot_unless.atto" 7)
 
 # Strict native scalar equality enforces identical operand types. The
 # accepted aliases are all lowered to static comparison instructions.
@@ -117,6 +118,19 @@ reject_case(stdout_write_two_args
 reject_case(stdout_unknown_member
   "fnc main(): void {\n  stdio.stdout.flush(\"a\");\n  return;\n}\n"
   "unsupported native stdio.stdout operation")
+reject_case(ifnot_break_requires_native_continuation
+  "pub fnc main(): int { do ifnot false then break; fi return 0; }\\n"
+  "native break/continue in conditional arms requires verified loop continuation lowering")
+reject_case(unless_loop_requires_native_continuation
+  "pub fnc main(): int { loop { do unless false then break; fi } return 0; }\\n"
+  "native realtime source loop requires verified LLVM continuation lowering")
+reject_case(unless_value_break_not_an_expression
+  "pub fnc main(): int { return unless true then break else 7 fi; }\\n"
+  "value if/ifnot/unless branch must produce a value")
+reject_case(ifnot_missing_else_value
+  "pub fnc main(): int { return ifnot false then 7 fi; }\\n"
+  "expected 'else'")
+
 reject_case(if_semicolon_requires_then
   "fnc main(): int {\n  if 1 == 1; return 1; fi\n  return 0;\n}\n"
   "expected 'then'")
