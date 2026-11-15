@@ -72,6 +72,13 @@ uint64_t oreslang_source_actor_test_last_panic_code(void);
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
                                   OresSourceActorMessage on_message,
                                   uint64_t fields);
+/* The compiler emits the bounded per-actor frame budget as an exact ABI
+ * parameter, not a guest mutable pointer. Zero refuses all receiver
+ * frames; 1..16 bound nested synchronous frames per physical turn. */
+void* oreslang_source_actor_spawn_budgeted(OresSourceActorInit initializer,
+                                           OresSourceActorMessage on_message,
+                                           uint64_t fields,
+                                           uint64_t max_frames);
 /* Nonblocking bounded one-way send. Overload currently fails closed with a
  * host error; a typed guest overload result still needs compiler lowering.
  */
