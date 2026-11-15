@@ -154,12 +154,21 @@ impl Mutation {
     }
 }
 
-struct Args { compiler: PathBuf, clang: PathBuf, fixture: PathBuf, harness: PathBuf }
+struct Args { compiler: PathBuf, clang: PathBuf, fixture: PathBuf, harness: PathBuf, sanitize: bool }
 impl Args {
     fn parse() -> Result<Self, String> {
+        Self::parse_from(env::args().skip(1))
+    }
+    fn parse_from<I: IntoIterator<Item=String>>(args: I) -> Result<Self, String> {
         let (mut compiler, mut clang, mut fixture, mut harness) = (None, None, None, None);
-        let mut input = env::args().skip(1);
+        let mut sanitize = false;
+        let mut input = args.into_iter();
         while let Some(key) = input.next() {
+            if key == "--sanitize" {
+                ensure(!sanitize, "duplicate --sanitize switch")?;
+                sanitize = true;
+                continue;
+            }
             let value = PathBuf::from(input.next().ok_or_else(|| format!("missing {key} value"))?);
             match key.as_str() {
                 "--compiler" if compiler.is_none() => compiler = Some(value),
@@ -174,6 +183,7 @@ impl Args {
             clang: clang.ok_or("missing --clang")?,
             fixture: fixture.ok_or("missing --fixture")?,
             harness: harness.ok_or("missing --harness")?,
+            sanitize,
         })
     }
 }
@@ -184,14 +194,22 @@ fn compile(args: &Args, work: &Path, source: &Path, gated: bool, id: &str)
     if gated { command.arg("--experimental-rt-scalar-loop"); }
     run(command.arg(source), work, id)
 }
-fn link(args: &Args, work: &Path, ir: &Path, binary: &Path, optimization: &str, id: &str)
-    -> Result<(), String>
+fn link(args: &Args, work: &Path, ir: &Path, binary: &Path, optimization: &str,
+    sanitize: bool, id: &str) -> Result<(), String>
 {
     let mut command = Command::new(&args.clang);
-    let output = run(command.args([
+    command.args([
         "-std=c11", optimization, "-DNDEBUG", "-Wall", "-Wextra",
         "-Werror", "-Wno-error=override-module", "-pedantic",
-    ]).arg(&args.harness).arg("-x").arg("ir").arg(ir).arg("-o").arg(binary), work, id)?;
+    ]);
+    if sanitize {
+        // Instrument both the real compiler-generated guest and native oracle.
+        // Keep this an explicit CTest gate, not an unverified sanitizer claim.
+        command.args(["-fsanitize=address,undefined", "-fno-omit-frame-pointer",
+                      "-fno-sanitize-recover=all", "-g"]);
+    }
+    let output = run(command.arg(&args.harness).arg("-x").arg("ir")
+        .arg(ir).arg("-o").arg(binary), work, id)?;
     check_success(&output, id)
 }
 
@@ -230,10 +248,23 @@ fn verify() -> Result<(), String> {
     for opt in ["-O0", "-O2", "-O3"] {
         let id = format!("guest-{}", &opt[1..]);
         let binary = work.join(&id);
-        link(&args, work, &ir, &binary, opt, &format!("{id}-build"))?;
+        link(&args, work, &ir, &binary, opt, false, &format!("{id}-build"))?;
         let outcome = run(&mut Command::new(&binary), work, &format!("{id}-run"))?;
         check_success(&outcome, &id)?;
         check_tokens(&outcome.stdout, &receipts, &id)?;
+    }
+
+    if args.sanitize {
+        let binary = work.join("guest-asan-ubsan");
+        link(&args, work, &ir, &binary, "-O1", true, "sanitizers-build")?;
+        let mut command = Command::new(&binary);
+        command.env("ASAN_OPTIONS",
+            "detect_leaks=1:halt_on_error=1:handle_sigill=0:handle_sigtrap=0");
+        command.env("UBSAN_OPTIONS", "halt_on_error=1:print_stacktrace=1");
+        let outcome = run(&mut command, work, "sanitizers-run")?;
+        check_success(&outcome, "ASan/UBSan linked guest")?;
+        check_tokens(&outcome.stdout, &receipts, "ASan/UBSan linked guest")?;
+        println!("SCALAR_FRAME_AOT_ASAN_UBSAN_PASS");
     }
 
     for mutation in Mutation::ALL {
@@ -243,7 +274,7 @@ fn verify() -> Result<(), String> {
         let binary = work.join(format!("{name}.exe"));
         fs::write(&mutated_ir, changed).map_err(|e| format!("{name} write: {e}"))?;
         // A mutant that fails to compile MUST NOT count as a killed mutant.
-        link(&args, work, &mutated_ir, &binary, "-O2", &format!("{name}-build"))?;
+        link(&args, work, &mutated_ir, &binary, "-O2", false, &format!("{name}-build"))?;
         let outcome = run(&mut Command::new(&binary), work, &format!("{name}-run"))?;
         ensure(!outcome.ok, format!("{name}: mutant unexpectedly passed"))?;
         ensure(outcome.stderr.contains("frame check failed at ")
@@ -341,6 +372,25 @@ mod tests {
         assert_eq!(unique_replace("a b", "a", "c", "case").unwrap(), "c b");
         assert!(unique_replace("a a", "a", "c", "case").is_err());
         assert!(unique_replace("a b", "missing", "c", "case").is_err());
+    }
+    #[test]
+    fn parser_accepts_sanitizer_only_once() {
+        let args = ["--sanitize", "--compiler", "compiler", "--clang", "clang",
+                    "--fixture", "fixture", "--harness", "harness"];
+        let parsed = Args::parse_from(args.iter().map(|x| x.to_string())).unwrap();
+        assert!(parsed.sanitize);
+        assert!(Args::parse_from(args.iter().copied().chain(["--sanitize"])
+            .map(|x| x.to_string())).is_err());
+        assert!(Args::parse_from(args.iter().copied().chain(["--extra", "true"])
+            .map(|x| x.to_string())).is_err());
+        assert!(Args::parse_from(args[..7].iter().map(|x| x.to_string())).is_err());
+    }
+    #[test]
+    fn parser_defaults_to_unsanitized_normal_run() {
+        let args = ["--compiler", "compiler", "--clang", "clang",
+                    "--fixture", "fixture", "--harness", "harness"];
+        let parsed = Args::parse_from(args.iter().map(|x| x.to_string())).unwrap();
+        assert!(!parsed.sanitize);
     }
     #[test]
     fn cancellation_mutant_must_fail_cancellation_oracle() {
