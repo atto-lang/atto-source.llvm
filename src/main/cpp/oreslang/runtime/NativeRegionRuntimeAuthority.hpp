@@ -3,6 +3,7 @@
 #include "oreslang/runtime/NativeRegionRegistry.hpp"
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <map>
 #include <mutex>
 #include <stdexcept>
@@ -29,7 +30,7 @@ public:
     enum class Admission { Untrusted, TrustedNative };
 
 private:
-    enum class State { Untrusted, TrustedNative, Retired };
+    enum class State { Untrusted, TrustedNative, Retiring, Retired };
     using ActorKey = std::tuple<std::uint64_t, std::uint64_t>;
     NativeRegionRegistry& regions_;
     const std::uint64_t runtime_id_;
@@ -115,12 +116,31 @@ private:
             const auto it = actors_.find(key(actor));
             if (it == actors_.end())
                 throw std::logic_error("unadmitted actor cannot request native retirement");
-            it->second = State::Retired;
+            // A deferred FFI fence or allocation failure cannot be reported
+            // as successful terminal cleanup. Retiring still denies grants.
+            it->second = State::Retiring;
         }
         regions_.fence_actor(actor);
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            actors_.at(key(actor)) = State::Retired;
+        }
+    }
+
+    bool shutdown_quiescent() {
+        std::lock_guard<std::mutex> lock(mu_);
+        for (const auto& actor : actors_)
+            if (actor.second != State::Retired) return false;
+        return true;
     }
 
 public:
+    // The native allocator must never outlive an unfinished broker retirement
+    // and free still-leased regions. Fail-stop rather than silently unmapping
+    // while FFI callbacks might hold a raw address.
+    ~NativeRegionRuntimeAuthority() noexcept {
+        if (!shutdown_quiescent()) std::terminate();
+    }
     NativeRegionRuntimeAuthority(const NativeRegionRuntimeAuthority&) = delete;
     NativeRegionRuntimeAuthority& operator=(const NativeRegionRuntimeAuthority&) = delete;
     // The owning native supervisor must quiesce/revoke actors *before*
