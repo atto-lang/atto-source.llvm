@@ -1,0 +1,5 @@
+// A version-only C export must not permit another guest symbol to leak
+// into the native shared library with accidental external linkage.
+@CExportU32("ores_browser_abi_version")
+pub fnc browser_native_abi_v1(): int { return 1; }
+pub fnc unexpected_guest_export(): int { return 2; }

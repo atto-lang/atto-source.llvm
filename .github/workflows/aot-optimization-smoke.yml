@@ -1,0 +1,142 @@
+name: LLVM native host and AttoLang O0/O2 guest parity
+on:
+  pull_request:
+    paths:
+      - scripts/compile-aot.sh
+      - scripts/test-compile-aot-optimization.sh
+      - scripts/test-compile-aot-guest-parity.sh
+      - scripts/test-compile-aot-guest-parity-contract.sh
+      - scripts/test-dispatch-guest-v1.sh
+      - 'contracts/dispatch-v1/**'
+      - contracts/atto-parity-v1/add.atto
+      - tests/fixtures/numerics-atto-main.atto
+      - .github/workflows/aot-optimization-smoke.yml
+  push:
+    paths:
+      - scripts/compile-aot.sh
+      - scripts/test-compile-aot-optimization.sh
+      - scripts/test-compile-aot-guest-parity.sh
+      - scripts/test-compile-aot-guest-parity-contract.sh
+      - scripts/test-dispatch-guest-v1.sh
+      - 'contracts/dispatch-v1/**'
+      - contracts/atto-parity-v1/add.atto
+      - tests/fixtures/numerics-atto-main.atto
+      - .github/workflows/aot-optimization-smoke.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  clang-native-pipeline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Verify exact HEAD
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+      - name: Run synthetic host-only Clang smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/compile-aot.sh
+          bash -n scripts/test-compile-aot-optimization.sh
+          bash -n scripts/test-compile-aot-guest-parity-contract.sh
+          bash scripts/test-compile-aot-optimization.sh
+          # Separate synthetic negative control; never certify AttoLang guest execution.
+          bash scripts/test-compile-aot-guest-parity-contract.sh
+
+  compiler-backed-atto-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Pin source HEAD and Git tree
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          echo "ATTO_LLVM_HEAD=$EXPECTED_HEAD" >> "$GITHUB_STEP_SUMMARY"
+          echo "ATTO_LLVM_TREE=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_STEP_SUMMARY"
+      - name: Install LLVM 19 toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-19 llvm-19-dev cmake ninja-build
+          /usr/bin/clang-19 --version
+      - name: Build source-owned oreslang-llvmc and mandatory no-GC IR auditor
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B "$RUNNER_TEMP/atto-llvm-compiler" -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DLLVM_DIR=/usr/lib/llvm-19/lib/cmake/llvm
+          cmake --build "$RUNNER_TEMP/atto-llvm-compiler" --target oreslang-llvmc --parallel 2
+          test -x "$RUNNER_TEMP/atto-llvm-compiler/oreslang-llvmc"
+          sha256sum "$RUNNER_TEMP/atto-llvm-compiler/oreslang-llvmc"
+          # BUILD_TESTING=OFF does not define the CMake audit target. Compile
+          # and test the audited Rust source directly; never skip this gate.
+          command -v rustc
+          rustc --edition=2021 -D warnings scripts/audit_no_gc_ir.rs -o "$RUNNER_TEMP/atto-llvm-compiler/oreslang-no-gc-ir-audit"
+          rustc --edition=2021 -D warnings --test scripts/audit_no_gc_ir.rs -o "$RUNNER_TEMP/atto-llvm-compiler/oreslang-no-gc-ir-audit-tests"
+          "$RUNNER_TEMP/atto-llvm-compiler/oreslang-no-gc-ir-audit-tests" --test-threads=1
+          test -x "$RUNNER_TEMP/atto-llvm-compiler/oreslang-no-gc-ir-audit"
+          sha256sum "$RUNNER_TEMP/atto-llvm-compiler/oreslang-no-gc-ir-audit"
+      - name: Execute real AttoLang O0/O2 native guests
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          ORESLANG_LLVMC: ${{ runner.temp }}/atto-llvm-compiler/oreslang-llvmc
+          ORES_NO_GC_IR_AUDIT: ${{ runner.temp }}/atto-llvm-compiler/oreslang-no-gc-ir-audit
+          CLANG: /usr/bin/clang-19
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/test-compile-aot-guest-parity.sh
+          bash scripts/test-compile-aot-guest-parity.sh | tee "$RUNNER_TEMP/atto-llvm-guest-receipts.txt"
+          grep -Fqx "ATTO_LLVM_GUEST_MATRIX_PASS|head=$EXPECTED_HEAD|fixtures=2|executions=4|negative_no_artifact=2|synthetic_ir=NO" "$RUNNER_TEMP/atto-llvm-guest-receipts.txt"
+      - name: Execute real checked-dispatch native guest O0/O2 matrix
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          ORESLANG_LLVMC: ${{ runner.temp }}/atto-llvm-compiler/oreslang-llvmc
+          ORES_NO_GC_IR_AUDIT: ${{ runner.temp }}/atto-llvm-compiler/oreslang-no-gc-ir-audit
+          CLANG: /usr/bin/clang-19
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/test-dispatch-guest-v1.sh
+          bash scripts/test-dispatch-guest-v1.sh | tee "$RUNNER_TEMP/atto-llvm-dispatch-receipts.txt"
+          grep -Fqx "DISPATCH_LLVM_CORPUS_SHA_PINNED|head=$EXPECTED_HEAD|blobs=7" "$RUNNER_TEMP/atto-llvm-dispatch-receipts.txt"
+          grep -Fqx 'DISPATCH_LLVM_V1_MATRIX=EXECUTED_DIRECT_AND_INSTANCE_ONLY;VIRTUAL_AND_STATIC=NOT_IMPLEMENTED' "$RUNNER_TEMP/atto-llvm-dispatch-receipts.txt"
+          test "$(grep -c '^DISPATCH_LLVM_NATIVE_GUEST_PASS|' "$RUNNER_TEMP/atto-llvm-dispatch-receipts.txt")" = 4
+          test "$(grep -c '^DISPATCH_LLVM_FAIL_CLOSED|' "$RUNNER_TEMP/atto-llvm-dispatch-receipts.txt")" = 6
+          test "$(grep -Ec '^DISPATCH_LLVM_FAIL_CLOSED[|].*[|]no_ir=TRUE[|]no_binary=TRUE[|]' "$RUNNER_TEMP/atto-llvm-dispatch-receipts.txt")" = 6
+          # The executable guest must have succeeded at BOTH O-levels for EACH
+          # positive fixture. Duplicated receipts from one O-level are invalid.
+          for case_name in direct_call_42 instance_call_42; do
+            for level in 0 2; do
+              test "$(grep -Ec "^DISPATCH_LLVM_NATIVE_GUEST_PASS[|]case=$case_name[|]O$level[|]head=$EXPECTED_HEAD[|]" "$RUNNER_TEMP/atto-llvm-dispatch-receipts.txt")" = 1
+            done
+          done
+      - name: Retain guest receipts separately from host-only smoke
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: source-owned-llvm-atto-o0-o2-guests
+          path: |
+            ${{ runner.temp }}/atto-llvm-guest-receipts.txt
+            ${{ runner.temp }}/atto-llvm-dispatch-receipts.txt
+          if-no-files-found: warn
