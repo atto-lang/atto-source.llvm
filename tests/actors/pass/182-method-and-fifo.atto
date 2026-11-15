@@ -15,10 +15,10 @@ define actor Worker as
 end
 
 pub fnc main(): int {
-    val actor = spawn Worker();
-    actor.send(1);
-    actor.send(2);
-    actor.send(3);
-    actor.send(4);
+    val worker = spawn Worker();
+    worker.send(1);
+    worker.send(2);
+    worker.send(3);
+    worker.send(4);
     return 0;
 }
