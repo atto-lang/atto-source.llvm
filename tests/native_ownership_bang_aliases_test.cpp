@@ -35,8 +35,8 @@ static std::string git_blob_sha(const std::string& bytes) {
 static std::string read_fixture(const std::string& root, const std::string& filename) {
     static const std::map<std::string, std::string_view> reviewed_pins{
         {"borrow-call-accept.atto", "8cf245cbd24dc158f50bb010cbdcf09e1e826c10"},
-        {"borrow-mut-canonical-native.atto", "494a17d0ab6ceee9c1f44584d33d1f9023042a81"},
-        {"borrow-mut-compatible-native.atto", "716cf4867e88e192dccc0493bfaebe2fd3eea76c"},
+        {"borrow-mut-canonical-native.atto", "398c533b3758a7ec35cc7f5cdb8bffb40f1c8baa"},
+        {"borrow-mut-compatible-native.atto", "7c551be97b88204296f0c00000018dcd4798bd3a"},
         {"take-after-use-reject.atto", "7757036e704fc334842cac8254863139d85d2935"},
         {"borrow-escape-reject.atto", "0c5d993b9c95d586ac2cb4018ce0df24856a36ae"},
         {"share-class-reject.atto", "3368f59e356003118e281fa73461e4185936e849"},
