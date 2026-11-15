@@ -58,6 +58,26 @@ The two committed C++ files were compiled and run using GCC/Clang with
 - Clang `-O1 -fsanitize=address`: passed
 - Clang `-O1 -fsanitize=undefined`: passed
 
+### Second-field rollback and concurrent slot-reuse hardening
+
+`tests/inverted_class_handle_adversarial_test.cpp` proves that `move_by`
+does not partially commit a successful first-field addition when the second
+field overflows or underflows. It also runs 12,000 concurrent slot reuse
+operations while a reader repeatedly checks the deleted capability and a
+live survivor. All stale handles must fail closed, and the surviving handle
+must continue to identify the same values.
+
+The committed adversarial source has exact Git blob ID
+`6f7b828a2ac97de9290d105991479eac07496ab5`.
+It was compiled and **actually executed successfully** in a local Linux
+environment with GCC and Clang C++17 at `-O0/-O2` and GCC at `-O1` with
+ASan, UBSan and TSan (7 passing executions). This is a host reference
+regression, not a compiled `.atto` guest or a remote CI receipt.
+
+The GitHub Actions matrix and CTest both include the adversarial target.
+The source-owned Actions runs are reported separately: a zero-step job
+failure is always `NOT_EXECUTED`, never passed or a compiler test failure.
+
 ### Model-based differential hardening
 
 `tests/inverted_class_handle_fuzz_test.cpp` executes 50,000 deterministic
