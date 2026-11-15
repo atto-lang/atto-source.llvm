@@ -110,6 +110,8 @@ def main():
     negatives = {
         "actor-frame-budget-over-limit-reject.atto":
             "@ActorFrameBudget exceeds native actor frame limit (16)",
+        "actor-restart-limit-over-bound-reject.atto":
+            "@ActorRestartLimit requires 0..4",
         "source-actor-pipe-unlowered-reject.ores":
             "NATIVE_ACTOR_PIPE_UNSUPPORTED: typed actor pipe requires guest port, mailbox and supervisor lowering",
         "source-actor-transform-pipe-unlowered-reject.ores":
