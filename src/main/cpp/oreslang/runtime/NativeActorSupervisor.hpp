@@ -10,6 +10,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <tuple>
+#include <vector>
 
 namespace oreslang::runtime {
 
@@ -156,6 +157,39 @@ public:
         (void)ores_native_actor_scheduler_stop_sealed(scheduler_, ref);
         authority_.retire_actor(actor);
         forget_mapped_regions(actor);
+    }
+
+    // External host maintenance tick: recognize STOP initiated through the
+    // ordinary scheduler API, panic paths, global retirement, or other code
+    // that did not directly call stop_and_revoke(). The host MUST invoke this
+    // before reclaiming actor memory, and repeat until all stopped admitted
+    // actors have quiesced. It may block on in-flight synchronous FFI, so it
+    // cannot execute on any actor carrier. This is NOT automatic scheduling:
+    // production hosts must explicitly install this lifecycle integration.
+    std::size_t fence_stopped_actors() {
+        if (ores_native_actor_scheduler_in_any_actor_turn())
+            throw std::logic_error(
+                "native pointer maintenance cannot run on an actor carrier");
+        std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mu_);
+        std::vector<OresNativeActorRef> stopped;
+        {
+            std::lock_guard<std::mutex> lock(admission_mu_);
+            for (const auto& entry : admitted_refs_) {
+                if (!ores_native_actor_scheduler_poll_ready(scheduler_, entry.second))
+                    stopped.push_back(entry.second);
+            }
+        }
+        std::size_t newly_quiesced = 0;
+        for (const auto& ref : stopped) {
+            const auto actor = identity(ref);
+            if (authority_.actor_quiescent(actor)) continue;
+            // If an FFI callback cannot quiesce, this throws: the host MUST
+            // retry later, and may not release arena backing bytes meantime.
+            authority_.retire_actor(actor);
+            forget_mapped_regions(actor);
+            ++newly_quiesced;
+        }
+        return newly_quiesced;
     }
 
     // Caller has already observed a terminal ref (panic, raise escalation or
