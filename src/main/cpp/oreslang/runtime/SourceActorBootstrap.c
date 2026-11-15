@@ -1425,6 +1425,57 @@ void oreslang_source_actor_join_done(void* opaque) {
     group_unlock();
 }
 
+void* oreslang_source_actor_recover_blocking(void* opaque) {
+    SourceActor* previous = (SourceActor*)opaque;
+    if (!previous) return NULL;
+    group_lock();
+    /* This is a consuming trusted-main bridge. A nonfailed actor, forged
+     * reference, duplicate recovery request, or retired incarnation cannot
+     * be restarted by simply calling a runtime symbol. */
+    int eligible = group.vm && previous->magic == SOURCE_ACTOR_MAGIC
+        && !previous->tombstone
+        && previous->restart_remaining != 0
+        && atomic_load_explicit(&previous->logical_frame_failed,
+                                memory_order_acquire)
+        && atomic_load_explicit(&previous->stop_requested,
+                                memory_order_acquire)
+        && !atomic_load_explicit(&previous->join_started,
+                                 memory_order_acquire)
+        && previous->ref.actor_slot < group.next_slot
+        && group.actors[previous->ref.actor_slot] == previous;
+    if (eligible) {
+        OresNativeExecutionContext carrier = {0};
+        eligible = !ores_native_vm_current_execution_context(
+            group.vm, ORES_NATIVE_VM_MAIN, &carrier);
+    }
+    group_unlock();
+    if (!eligible) return NULL;
+
+    /* Physical DONE, heap retirement, frame scrubbing, host finalization,
+     * registered root CONTROL publication. No guest carrier parks here.
+     * Root's CONTROL callback decides policy and creates a fresh child,
+     * which cannot see any of the previous incarnation's owned storage. */
+    oreslang_source_actor_join_done(previous);
+    group_lock();
+    const size_t old_slot = (size_t)previous->ref.actor_slot;
+    ensure(old_slot < group.next_slot && group.retired[old_slot] == previous);
+    while (!previous->restart_settled)
+        ensure(pthread_cond_wait(
+            &group.supervisor_progress, &group.mutex) == 0);
+    SourceActor* fresh = previous->replacement;
+    if (fresh) {
+        ensure(fresh != previous && fresh->id != previous->id
+            && fresh->ref.scheduler_domain == previous->ref.scheduler_domain
+            && fresh->ref.actor_slot != previous->ref.actor_slot
+            && group.actors[fresh->ref.actor_slot] == fresh
+            && fresh->lifetime_frame_admissions == 0
+            && fresh->frame_budget == previous->frame_budget
+            && fresh->lifetime_frame_budget == previous->lifetime_frame_budget);
+    }
+    group_unlock();
+    return fresh;
+}
+
 void oreslang_source_actor_stop(void* opaque) {
     /*
      * Preserve synchronous stop for source paths that do not await get_done.
