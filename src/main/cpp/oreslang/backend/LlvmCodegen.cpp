@@ -802,6 +802,28 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             if (!routine_source_ids.count(native_function_slot(fn.name, fn.parameters.size()))) {
                 throw std::runtime_error("checked source routine registry missing a native callable");
             }
+            // The v1 manifest spells signatures as name(int,...):int.
+            // Name/arity matching alone is insufficient: bool, String,
+            // borrows and void methods can have the same selector. Never
+            // associate such a different typed ABI with a reviewed rid_.
+            const bool exact_int_parameters = std::all_of(
+                fn.parameters.begin(), fn.parameters.end(),
+                [](const Parameter& param) {
+                    return param.mode == Parameter::Mode::Value &&
+                        param.scalar_type == ScalarType::I64 &&
+                        param.class_name.empty() &&
+                        param.generic_type.empty() &&
+                        param.pending_type_alias.empty() &&
+                        param.sum_type.empty();
+                });
+            if (fn.returns_void || fn.return_type != ScalarType::I64 ||
+                !fn.return_class.empty() || !fn.return_sum.empty() ||
+                !fn.pending_return_type_alias.empty() ||
+                !fn.generic_parameters.empty() || !fn.method_owner.empty() ||
+                !exact_int_parameters) {
+                throw std::runtime_error(
+                    "checked source routine manifest requires exact int-only callable signature");
+            }
         }
     }
     // Every lexical log.info literal is an actual compiler-owned site.
