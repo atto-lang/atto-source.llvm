@@ -74,6 +74,29 @@ function(reject_case name text needle)
   set(failures ${failures} PARENT_SCOPE)
 endfunction()
 
+# Verify target-specific fail-closed admission before LLVM IR can be emitted.
+# Profile checks must not count a generic parse failure as a valid rejection:
+# the emitted diagnostic must name the unsupported safety proof.
+function(reject_target_case name text needle)
+  set(dir "${work}/${name}")
+  file(MAKE_DIRECTORY "${dir}")
+  file(WRITE "${dir}/main.atto" "${text}")
+  execute_process(
+    COMMAND "${BUILD}/oreslang-llvmc" ${ARGN} "${dir}/main.atto"
+    RESULT_VARIABLE status OUTPUT_VARIABLE stdout ERROR_VARIABLE stderr)
+  if(status EQUAL 0 OR NOT stdout STREQUAL "")
+    fail_case("${name}: target compiler admitted prohibited loop")
+  else()
+    string(FIND "${stderr}" "${needle}" at)
+    if(at EQUAL -1)
+      fail_case("${name}: expected target admission diagnostic '${needle}', got ${stderr}")
+    else()
+      message(STATUS "PASS ${name}")
+    endif()
+  endif()
+  set(failures ${failures} PARENT_SCOPE)
+endfunction()
+
 run_case(if_then "${fixtures}/if_then.atto" 0)
 run_case(stdout_write "${fixtures}/stdout_write.atto" 0)
 run_case(expect_ok "${fixtures}/expect_ok.atto" 42)
@@ -127,6 +150,22 @@ reject_case(scalar_loop_rejects_host_effects
 reject_case(scalar_loop_rejects_owned_resources
   "pub fnc main(): int { loop { let int inner = 1; break; } return 0; }\n"
   "native scalar loop requires pure scalar writes and structured loop control")
+
+reject_case(scalar_loop_rejects_early_return
+  "pub fnc main(): int { loop { do ifnot false then return 4; fi } return 0; }\\n"
+  "native scalar loop requires pure scalar writes and structured loop control")
+reject_case(scalar_loop_rejects_unscoped_continue
+  "pub fnc main(): int { do ifnot false then continue; fi return 0; }\\n"
+  "native break/continue in conditional arms requires verified loop continuation lowering")
+reject_target_case(scalar_loop_denied_hard_rt
+  "pub fnc main(): int { loop { break; } return 0; }\\n"
+  "requires WCET/termination" "--profile=native-hard-rt")
+reject_target_case(scalar_loop_denied_wasm32
+  "pub fnc main(): int { loop { break; } return 0; }\\n"
+  "requires WCET/termination" "--target=wasm32")
+reject_target_case(scalar_loop_denied_cortex_m
+  "pub fnc main(): int { loop { break; } return 0; }\\n"
+  "requires WCET/termination" "--target=thumbv7m-none-eabi")
 
 reject_case(ifnot_break_requires_native_continuation
   "pub fnc main(): int { do ifnot false then break; fi return 0; }\n"
