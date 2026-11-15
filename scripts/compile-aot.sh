@@ -32,7 +32,8 @@ compiler_aot_args=()
 case "$aot_admission" in
   off) ;;
   sealed-scalar-v1) compiler_aot_args=(--aot-profile=sealed-scalar-v1) ;;
-  *) echo 'ORESLANG_LLVM_AOT_PROFILE must be off or sealed-scalar-v1.' >&2; exit 64 ;;
+  sealed-class-fields-v1) compiler_aot_args=(--aot-profile=sealed-class-fields-v1) ;;
+  *) echo 'ORESLANG_LLVM_AOT_PROFILE must be off, sealed-scalar-v1 or sealed-class-fields-v1.' >&2; exit 64 ;;
 esac
 output_dir="$(cd "$(dirname "$2")" && pwd -P)"
 output_file="$output_dir/$(basename "$2")"
@@ -122,6 +123,18 @@ if grep -Eq 'declare .*@oreslang_source_task_(start_i64|await_i64|runtime_shutdo
   if [[ "$scheduler_linked" == 0 ]]; then
     runtime_sources+=("$scheduler_source")
   fi
+fi
+# Full guest AOT + zero-tracing-GC requires a closed *linked* runtime graph,
+# not merely an LLVM IR screen. Preserve the existing string, record, array,
+# actor and Task runtime code for the ordinary AOT profile; none is yet
+# certified as a transitive bounded, deterministic zero-GC sealed dependency.
+# Each native runtime must eventually bring source ownership/drop proofs,
+# actor cancellation/restart quiescence, an FFI symbol audit and guest receipts.
+# Reject after discovering runtime imports but BEFORE invoking Clang or
+# publishing an output. Never treat future native services as implicitly safe.
+if [[ "$aot_admission" != off ]] && (( ${#runtime_sources[@]} > 0 )); then
+  echo 'sealed AOT refuses unchecked native runtime dependency; require a certified zero-GC link closure' >&2
+  exit 65
 fi
 if (( ${#runtime_sources[@]} )); then
   "$clang" "-O${opt_level}" -x ir "$work/program.ll" -x c -std=c11 \
