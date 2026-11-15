@@ -5605,7 +5605,7 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_supervisor_control_overflow_lossless
         COMMAND oreslang-native-supervisor-control-overflow-test)
-    set_tests_properties(native_supervisor_control_overflow_characterization PROPERTIES TIMEOUT 20)
+    set_tests_properties(native_supervisor_control_overflow_lossless PROPERTIES TIMEOUT 20)
 
     add_executable(oreslang-native-actor-exclusive-control-test
         tests/native_actor_exclusive_control_test.c
