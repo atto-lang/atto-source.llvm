@@ -2789,6 +2789,20 @@ private:
             }
             return false;
         };
+        // Match the independent Java binder's ISO-control rejection.
+        // Decoded native UTF-8 strings can contain U+0080..U+009F as
+        // C2 80..9F even when the source used a printable \\u escape.
+        const auto invalid_telemetry_controls = [](std::string_view text) {
+            for (std::size_t i = 0; i < text.size(); ++i) {
+                const auto byte = static_cast<unsigned char>(text[i]);
+                if (byte < 32 || byte == 127) return true;
+                if (byte == 0xc2 && i + 1 < text.size()) {
+                    const auto next = static_cast<unsigned char>(text[i + 1]);
+                    if (next >= 0x80 && next <= 0x9f) return true;
+                }
+            }
+            return false;
+        };
         // First native guest log slice: the message must be a source literal,
         // not an expression whose to_string could park or run arbitrary code.
         // Codegen requires a separately bound static (rid,sid) manifest row.
@@ -2802,10 +2816,7 @@ private:
             event.telemetry_operation = string_literal(token_.text);
             if (event.telemetry_operation.empty() ||
                 event.telemetry_operation.size() > 96 ||
-                std::any_of(event.telemetry_operation.begin(),
-                            event.telemetry_operation.end(), [](unsigned char c) {
-                                return c < 32 || c == 127;
-                            })) {
+                invalid_telemetry_controls(event.telemetry_operation)) {
                 fail("native log.info literal must be 1..96 bytes without control characters");
             }
             advance();
@@ -3086,10 +3097,7 @@ private:
                 fail("native using telemetry.span requires one literal operation name");
             scope.telemetry_operation = string_literal(token_.text);
             if (scope.telemetry_operation.empty() || scope.telemetry_operation.size() > 256 ||
-                std::any_of(scope.telemetry_operation.begin(),
-                            scope.telemetry_operation.end(), [](unsigned char c) {
-                                return c < 32 || c == 127;
-                            }))
+                invalid_telemetry_controls(scope.telemetry_operation))
                 fail("native telemetry span name requires 1..256 UTF-8 bytes without control characters");
             advance();
             require(")"); require("as");
