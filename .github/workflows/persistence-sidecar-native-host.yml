@@ -1,0 +1,120 @@
+name: LLVM persistence sidecar host contract (NOT guest parity)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/NativeBatchPersistence.hpp'
+      - 'tests/native_batch_persistence_test.cpp'
+      - 'tests/native_sqlite_persistence_test.cpp'
+      - 'tests/native_command_persistence_v2_test.cpp'
+      - 'src/main/cpp/oreslang/runtime/SqliteCommandPersistenceV2.hpp'
+      - 'tests/native_actor_arena_persistence_reactivation_test.cpp'
+      - 'tests/native_event_sourced_fenced_recovery_test.cpp'
+      - 'tests/native_durable_command_inbox_test.cpp'
+      - 'src/main/cpp/oreslang/runtime/ActorOwnedHeap.hpp'
+      - 'src/main/cpp/oreslang/runtime/SqliteBatchPersistence.hpp'
+      - 'CMakeLists.txt'
+      - '.github/workflows/persistence-sidecar-native-host.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  host-native-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and execute native host persistence tests under ASan/UBSan
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O1 -g -pthread -Wall -Wextra -Werror -pedantic \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp tests/native_batch_persistence_test.cpp \
+            -o /tmp/oreslang-native-batch-persistence-test
+          ASAN_OPTIONS=detect_leaks=1 /tmp/oreslang-native-batch-persistence-test
+      - name: Independent Clang compilation and execution
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O1 -g -pthread -Wall -Wextra -Werror -pedantic \
+            -Isrc/main/cpp tests/native_batch_persistence_test.cpp \
+            -o /tmp/oreslang-native-batch-persistence-clang
+          /tmp/oreslang-native-batch-persistence-clang
+      - name: Build and execute REAL SQLite WAL/FULL recovery tests under ASan/UBSan
+        run: |
+          set -euo pipefail
+          pkg-config --exists sqlite3
+          pkg-config --modversion sqlite3
+          g++ -std=c++17 -O1 -g -pthread -Wall -Wextra -Werror -pedantic \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp/oreslang/runtime tests/native_sqlite_persistence_test.cpp \
+            -lsqlite3 -o /tmp/oreslang-sqlite-recovery-test
+          ASAN_OPTIONS=detect_leaks=1 /tmp/oreslang-sqlite-recovery-test
+      - name: Independent Clang real SQLite execution
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O2 -pthread -Wall -Wextra -Werror -pedantic \
+            -Isrc/main/cpp/oreslang/runtime tests/native_sqlite_persistence_test.cpp \
+            -lsqlite3 -o /tmp/oreslang-sqlite-recovery-clang
+          /tmp/oreslang-sqlite-recovery-clang
+      - name: Actor-owned heap -> SQLite -> fresh heap (GCC sanitizers)
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O1 -g -pthread -Wall -Wextra -Werror -pedantic \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp tests/native_actor_arena_persistence_reactivation_test.cpp \
+            -lsqlite3 -o /tmp/oreslang-actor-arena-restore
+          ASAN_OPTIONS=detect_leaks=1 /tmp/oreslang-actor-arena-restore
+      - name: Actor-owned heap -> SQLite -> fresh heap (Clang)
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O2 -pthread -Wall -Wextra -Werror -pedantic \
+            -Isrc/main/cpp tests/native_actor_arena_persistence_reactivation_test.cpp \
+            -lsqlite3 -o /tmp/oreslang-actor-arena-restore-clang
+          /tmp/oreslang-actor-arena-restore-clang
+      - name: Native host event journal fork/crash/fenced recovery (GCC ASan/UBSan)
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O1 -g -pthread -Wall -Wextra -Werror -pedantic \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp tests/native_event_sourced_fenced_recovery_test.cpp \
+            -lsqlite3 -o /tmp/atto-native-event-journal
+          ASAN_OPTIONS=detect_leaks=1 /tmp/atto-native-event-journal
+      - name: Independent Clang native host crash recovery
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O2 -pthread -Wall -Wextra -Werror -pedantic \
+            -Isrc/main/cpp tests/native_event_sourced_fenced_recovery_test.cpp \
+            -lsqlite3 -o /tmp/atto-native-event-journal-clang
+          /tmp/atto-native-event-journal-clang
+      - name: Native host transactional command inbox (GCC ASan/UBSan)
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O1 -g -pthread -Wall -Wextra -Werror -pedantic \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp tests/native_durable_command_inbox_test.cpp \
+            -lsqlite3 -o /tmp/atto-native-command-inbox
+          ASAN_OPTIONS=detect_leaks=1 /tmp/atto-native-command-inbox
+      - name: Clang native host transaction rollback and cross-epoch reply
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O2 -pthread -Wall -Wextra -Werror -pedantic \
+            -Isrc/main/cpp tests/native_durable_command_inbox_test.cpp \
+            -lsqlite3 -o /tmp/atto-native-command-inbox-clang
+          /tmp/atto-native-command-inbox-clang
+
+      - name: Real native v2 logical-command SQLite parity — GCC ASan/UBSan
+        run: |
+          set -euo pipefail
+          pkg-config --exists sqlite3
+          g++ -std=c++17 -O1 -g -pthread -Wall -Wextra -Werror -pedantic \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp/oreslang/runtime tests/native_command_persistence_v2_test.cpp \
+            -lsqlite3 -o /tmp/oreslang-native-command-v2-gcc
+          ASAN_OPTIONS=detect_leaks=1 /tmp/oreslang-native-command-v2-gcc
+      - name: Independent native v2 SQLite execution — Clang ASan/UBSan
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O1 -g -pthread -Wall -Wextra -Werror -pedantic \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp/oreslang/runtime tests/native_command_persistence_v2_test.cpp \
+            -lsqlite3 -o /tmp/oreslang-native-command-v2-clang
+          ASAN_OPTIONS=detect_leaks=1 /tmp/oreslang-native-command-v2-clang

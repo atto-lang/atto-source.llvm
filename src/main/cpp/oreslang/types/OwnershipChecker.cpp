@@ -352,6 +352,11 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
         case Expression::Kind::Remainder:
+        case Expression::Kind::ShiftLeft:
+        case Expression::Kind::ShiftRight:
+        case Expression::Kind::ShiftUnsignedRight:
+        case Expression::Kind::Modulo:
+        case Expression::Kind::BitXor:
         case Expression::Kind::Equal:
         case Expression::Kind::NotEqual:
         case Expression::Kind::Less:
@@ -438,6 +443,11 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
         case Expression::Kind::Remainder:
+        case Expression::Kind::ShiftLeft:
+        case Expression::Kind::ShiftRight:
+        case Expression::Kind::ShiftUnsignedRight:
+        case Expression::Kind::Modulo:
+        case Expression::Kind::BitXor:
         case Expression::Kind::Equal:
         case Expression::Kind::NotEqual:
         case Expression::Kind::Less:
@@ -510,6 +520,11 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
         case Expression::Kind::Remainder:
+        case Expression::Kind::ShiftLeft:
+        case Expression::Kind::ShiftRight:
+        case Expression::Kind::ShiftUnsignedRight:
+        case Expression::Kind::Modulo:
+        case Expression::Kind::BitXor:
         case Expression::Kind::Equal:
         case Expression::Kind::NotEqual:
         case Expression::Kind::Less:
@@ -903,10 +918,23 @@ void validate_i64_ownership(Program& program) {
                     return target.assignable && !target.heap_owned && !target.int_array && target.class_name.empty() &&
                         target.shared_loans == 0 && !target.exclusive_loan;
                 };
+                if (!state.at(stmt.receiver).assignable)
+                    throw std::runtime_error("E_IMMUTABLE_REBIND: cannot reassign fixed scalar binding");
                 if (!writable()) throw std::runtime_error("assignment requires an unloaned mutable scalar slot");
                 check_value(*stmt.expression, state, functions);
                 if (!writable()) throw std::runtime_error("assignment cannot publish through an active loan");
                 state.at(stmt.receiver).moved = false;
+                return;
+            }
+            if (stmt.kind == Statement::Kind::UsingTelemetrySpan) {
+                // Token is compiler-owned and unrepresentable in Locals.
+                // Do not permit a borrowed/moved owner to cross this
+                // unverified non-suspending cleanup boundary.
+                Locals inside = state;
+                scoped_effects(stmt.then_statements, inside);
+                if (!same_affine_state(state, inside))
+                    throw std::runtime_error(
+                        "native telemetry scope requires unchanged affine ownership at exit");
                 return;
             }
             if (stmt.kind == Statement::Kind::Conditional) {
