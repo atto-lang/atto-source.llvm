@@ -1,0 +1,29 @@
+// Two same-file actor forwards resolve to two distinct native actor heaps.
+declare actor Foo1;
+declare actor Foo2;
+
+define actor Foo1 as {
+  let total: int = 0;
+  pub on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+
+define actor Foo2 as {
+  let doubled: int = 0;
+  pub on_message(int n): int {
+    doubled = doubled + n + n;
+    return doubled;
+  }
+}
+
+pub fnc main(): int {
+  const one = spawn Foo1();
+  const two = spawn Foo2();
+  one.send(1);
+  two.send(2);
+  stop one;
+  stop two;
+  return 42;
+}

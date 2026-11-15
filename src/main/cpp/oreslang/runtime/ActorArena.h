@@ -32,6 +32,30 @@ void ores_actor_arena_read(OresActorArena*, OresArenaTurn, OresArenaHandle, size
                            void* out, size_t bytes);
 void ores_actor_arena_write(OresActorArena*, OresArenaTurn, OresArenaHandle, size_t offset,
                             const void* src, size_t bytes);
+/* Trusted actor-turn preflight, without mutation or raw pointer export.
+ * Returns 1 only if every page belongs to THIS arena, is live at the exact
+ * generation, has the requested length, and names a distinct physical slot.
+ * Invalid page vectors return 0 before callers touch any backing words.
+ * The caller must already hold a valid physical arena turn; misuse of turn
+ * authority retains the existing fail-stop rule. This is not an exclusive
+ * reservation against separately created host views. */
+int ores_actor_arena_validate_pages(OresActorArena*, OresArenaTurn,
+                                    const OresArenaHandle* pages,
+                                    size_t count, size_t page_bytes);
+/* Atomic all-or-none trusted-host page claim. Nonzero tokens are unique
+ * within one arena lifetime and never wrap; zero rejects invalid, borrowed,
+ * aliased or already-claimed pages without changing their ownership state.
+ * This fences competing logical slabs, not every trusted raw arena reader.
+ * The caller must hold the currently authenticated physical arena turn. */
+uint64_t ores_actor_arena_claim_pages(OresActorArena*, OresArenaTurn,
+                                      const OresArenaHandle* pages,
+                                      size_t count, size_t page_bytes);
+/* Exactly-once release of an entire claim, during its owning arena turn.
+ * Return zero for stale/mismatched receipts without altering any claim.
+ * The caller MUST first quiesce logical request receipts and scrub all pages. */
+int ores_actor_arena_unclaim_pages(OresActorArena*, OresArenaTurn,
+                                   const OresArenaHandle* pages,
+                                   size_t count, uint64_t claim);
 void ores_actor_arena_drop(OresActorArena*, OresArenaTurn, OresArenaHandle);
 OresArenaLoan ores_actor_arena_borrow(OresActorArena*, OresArenaTurn, OresArenaHandle);
 void ores_actor_arena_release(OresActorArena*, OresArenaLoan);

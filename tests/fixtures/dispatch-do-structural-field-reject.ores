@@ -1,0 +1,7 @@
+pub fnc main(): int {
+    do match 2 over
+        on structural ~(status: 2) -> { return 42; }
+        default -> { return 0; }
+    end
+    return 0;
+}

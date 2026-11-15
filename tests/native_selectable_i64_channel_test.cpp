@@ -216,6 +216,87 @@ static void freeing_capacity_wakes_pending_write_case() {
     assert(committed.has_value() && *committed == 8);
 }
 
+static void pending_buffered_writers_admit_in_subscription_order() {
+    using Channel = NativeSelectableI64Channel<1, 4>;
+    Channel channel;
+    assert(channel.try_write(0));
+
+    NativeSelectArbiter<1> first_select;
+    NativeSelectArbiter<1> second_select;
+    auto first = first_select.register_case(0);
+    auto second = second_select.register_case(0);
+    int first_callbacks = 0;
+    int second_callbacks = 0;
+
+    auto first_wait = bind_write(channel, first, 1, first_callbacks);
+    first.arm([first_wait] { (void)first_wait.close(); });
+    auto second_wait = bind_write(channel, second, 2, second_callbacks);
+    second.arm([second_wait] { (void)second_wait.close(); });
+
+    assert(channel.pending_writers() == 2);
+    assert(!first_select.winner().has_value());
+    assert(!second_select.winner().has_value());
+
+    auto seed = channel.try_read();
+    assert(seed.has_value() && *seed == 0);
+
+    assert(first_select.winner().has_value() &&
+           *first_select.winner() == 0);
+    assert(!second_select.winner().has_value());
+    assert(first_callbacks == 1);
+    assert(second_callbacks == 1);
+    assert(channel.pending_writers() == 1);
+
+    auto first_value = channel.try_read();
+    assert(first_value.has_value() && *first_value == 1);
+
+    assert(second_select.winner().has_value() &&
+           *second_select.winner() == 0);
+    assert(second_callbacks == 2);
+    assert(channel.pending_writers() == 0);
+
+    auto second_value = channel.try_read();
+    assert(second_value.has_value() && *second_value == 2);
+    assert(!channel.try_read().has_value());
+}
+
+static void cancelling_older_writer_allows_later_writer_without_ghost_delivery() {
+    using Channel = NativeSelectableI64Channel<1, 4>;
+    Channel channel;
+    assert(channel.try_write(0));
+
+    NativeSelectArbiter<1> older_select;
+    NativeSelectArbiter<1> later_select;
+    auto older = older_select.register_case(0);
+    auto later = later_select.register_case(0);
+    int older_callbacks = 0;
+    int later_callbacks = 0;
+
+    auto older_wait = bind_write(channel, older, 1, older_callbacks);
+    older.arm([older_wait] { (void)older_wait.close(); });
+    auto later_wait = bind_write(channel, later, 2, later_callbacks);
+    later.arm([later_wait] { (void)later_wait.close(); });
+
+    assert(channel.pending_writers() == 2);
+    assert(older_select.cancel());
+    assert(channel.pending_writers() == 1);
+    assert(older_callbacks == 0);
+
+    auto seed = channel.try_read();
+    assert(seed.has_value() && *seed == 0);
+
+    assert(!older_select.winner().has_value());
+    assert(later_select.winner().has_value() &&
+           *later_select.winner() == 0);
+    assert(later_callbacks == 1);
+    assert(channel.pending_writers() == 0);
+
+    auto value = channel.try_read();
+    assert(value.has_value() && *value == 2);
+    assert(!channel.try_read().has_value());
+    assert(older_callbacks == 0);
+}
+
 static void cancellation_detaches_channel_waiter() {
     using Channel = NativeSelectableI64Channel<1, 4>;
     Channel channel;
@@ -532,6 +613,8 @@ int main() {
     losing_write_never_publishes();
     delayed_readiness_wakes_one_select_case();
     freeing_capacity_wakes_pending_write_case();
+    pending_buffered_writers_admit_in_subscription_order();
+    cancelling_older_writer_allows_later_writer_without_ghost_delivery();
     cancellation_detaches_channel_waiter();
     stale_post_commit_notification_cannot_consume_for_loser();
     close_wakes_pending_read_with_eof();
