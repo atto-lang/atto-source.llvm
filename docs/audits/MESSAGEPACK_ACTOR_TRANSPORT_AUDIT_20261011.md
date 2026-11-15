@@ -5,6 +5,8 @@
 executed component evidence and remaining production **release blockers**.
 Neither draft certifies end-to-end actor-message wire transport.
 
+> **Subsequent design direction (2026-10-15):** This audit records the legacy MessagePack-v2-everywhere source actor transport. The proposed target separates local `Sendable` actor/supervisor messages from explicit format-qualified network `Serializable<Format>`. See [the boundary migration contract](../traits/SENDABLE_SERIALIZABLE_BOUNDARIES_V1.md). None of the old codec release gates may be relaxed until the alternate local transfer is independently implemented and verified.
+
 ## Invariants
 
 - Source-level `ActorRef.send(value)` requires (a) a declared actor message

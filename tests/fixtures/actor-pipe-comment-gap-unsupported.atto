@@ -1,0 +1,4 @@
+// Tokens separated by comments must still match the reserved factory.
+pub fnc main(): int {
+  return Actor /* comment */ . /* another */ pipe(Reader(), Writer());
+}

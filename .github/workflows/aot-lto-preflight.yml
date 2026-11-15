@@ -1,0 +1,16 @@
+name: aot-lto-preflight
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Run bounded standalone preflight tests (not performance benchmarks)
+        run: bash tests/test_aot_lto_driver.sh
+      - name: Run actual Clang and LLD integration with synthetic LLVM IR
+        run: bash tests/test_aot_lto_real_toolchain.sh
