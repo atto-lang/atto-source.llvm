@@ -83,4 +83,11 @@ class IsolateVM final {
     std::array<std::int64_t, ORES_ISOLATE_I64_SLOTS> guest_globals{};
 };
 
+// Canonical AttoLang name for the existing, host-owned tenant execution unit.
+// Historical IsolateVM remains the source/ABI spelling; neither type
+// authorizes untrusted native guest code or changes physical isolation.
+using TenantVM = IsolateVM;
+using TenantVMConfig = IsolateConfig;
+using TenantVMPhase = IsolatePhase;
+
 } // namespace oreslang::runtime

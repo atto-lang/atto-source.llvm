@@ -13,6 +13,9 @@ namespace oreslang::types::overloads {
 
 inline constexpr std::size_t MaxSameArityCandidates = 128;
 inline constexpr std::size_t MaxOverloadArity = 64;
+
+inline constexpr std::size_t MaxSameArityCandidates = 128;
+inline constexpr std::size_t MaxOverloadArity = 64;
 inline constexpr std::size_t MaxEnumCases = 1024;
 inline constexpr std::size_t MaxEnumPayloadFields = 64;
 
@@ -72,6 +75,55 @@ struct Signature {
 
 enum class PairStatus { DistinctArity, DistinctEnums, Same, InvalidSameArity };
 
+// Signature is a public aggregate; callers can bypass signature(). Recheck
+// bounds and canonical shape before any pairwise quadratic proof work.
+// Eligibility of enum IDs still requires the compiler's trusted registry.
+inline void validateSignatureShape(const Signature& value) {
+    if (value.name.empty())
+        throw std::invalid_argument("callable name cannot be empty");
+    if (value.arity() > MaxOverloadArity)
+        throw std::invalid_argument("nominal enum overload arity bound exceeded");
+    for (const Position& position : value.positions) {
+        if (position.id.empty())
+            throw std::invalid_argument("empty overload position identity");
+        if (position.kind == Kind::Primitive) {
+            if (!isPrimitive(position.id) || position.id == "String")
+                throw std::invalid_argument("unsupported or noncanonical overload primitive identity");
+        } else if (position.kind == Kind::Enum) {
+            // All aggregate-built keys must obey the same ABI identity grammar
+            // as Java Position and the native selector foundation.
+            if (position.id.size() > 1024
+                    || position.id.find("::::") != std::string::npos)
+                throw std::invalid_argument("invalid nominal enum identity");
+            const std::size_t separator = position.id.rfind("::");
+            if (separator == std::string::npos || separator == 0
+                    || separator + 2 >= position.id.size())
+                throw std::invalid_argument("unqualified nominal enum identity");
+            const auto letter = [](unsigned char c) {
+                return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+            };
+            const auto digit = [](unsigned char c) {
+                return c >= '0' && c <= '9';
+            };
+            for (unsigned char ch : position.id) {
+                if (!letter(ch) && !digit(ch) && ch != '_' && ch != '.'
+                        && ch != '/' && ch != '-' && ch != ':')
+                    throw std::invalid_argument("invalid enum identity character");
+            }
+            const auto first = static_cast<unsigned char>(position.id[separator + 2]);
+            if (!letter(first) && first != '_')
+                throw std::invalid_argument("invalid enum declaration identifier");
+            for (std::size_t k = separator + 3; k < position.id.size(); ++k) {
+                const auto ch = static_cast<unsigned char>(position.id[k]);
+                if (!letter(ch) && !digit(ch) && ch != '_')
+                    throw std::invalid_argument("invalid enum declaration identifier");
+            }
+        } else {
+            throw std::invalid_argument("unknown overload parameter kind");
+        }
+    }
+}
+
 // Signature is a public aggregate. Every public policy entrypoint must
 // revalidate caller-built values, not merely trust signature() factory calls.
 // This is shape validation, NOT authentication of a resolved enum symbol ID.
@@ -127,6 +179,8 @@ inline Signature signature(
             throw std::invalid_argument("parameter has no statically resolved type ID");
         }
         if (parameter.first != Kind::Primitive && parameter.first != Kind::Enum)
+            throw std::invalid_argument("unknown overload parameter kind");
+        if (parameter.first != Kind::Primitive && parameter.first != Kind::Enum)
             throw std::invalid_argument("unknown nominal overload parameter kind");
         if (parameter.first == Kind::Primitive && !isPrimitive(parameter.second)) {
             throw std::invalid_argument(
@@ -142,6 +196,7 @@ inline Signature signature(
         if (parameter.first == Kind::Primitive && id == "String") id = "string";
         result.positions.push_back(Position{parameter.first, std::move(id)});
     }
+    validateSignatureShape(result);
     return result;
 }
 
@@ -153,8 +208,11 @@ inline std::size_t select(
     if (candidates.empty()) throw std::invalid_argument("empty overload set");
     if (candidates.size() > MaxSameArityCandidates)
         throw std::invalid_argument("nominal enum overload candidate bound exceeded");
+    if (candidates.size() > MaxSameArityCandidates)
+        throw std::invalid_argument("nominal enum overload candidate bound exceeded");
     for (const Signature& candidate : candidates) validateSignatureShape(candidate);
     for (std::size_t i = 0; i < candidates.size(); ++i) {
+        validateSignatureShape(candidates[i]);
         if (candidates[i].name != candidates.front().name
             || candidates[i].arity() != candidates.front().arity())
             throw std::invalid_argument("mixed-name/arity overload family");
