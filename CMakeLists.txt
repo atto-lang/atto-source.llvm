@@ -2162,6 +2162,8 @@ if(BUILD_TESTING)
         --diagnostic "oreslang-llvmc:")
 
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
+    oreslang_contract_test(canonical_arrow_entrypoint canonical-arrow-main.ores
+        --run 42 --clang "${ORE_CLANG}")
     add_test(NAME native_named_call_lexical_ir_order
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" named-call-order
           "$<TARGET_FILE:oreslang-llvmc>"

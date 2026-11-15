@@ -1640,7 +1640,7 @@ private:
         param.name = identifier();
         method.parameters.push_back(std::move(param));
         require(")");
-        require(":");
+        require_return_separator();
         require("int");
         require("{");
         actor_handler_active_ = true;
@@ -2028,7 +2028,7 @@ private:
         require("fnc");
         loop.name = identifier();
         require("("); require(")");
-        require(":"); require("void");
+        require_return_separator(); require("void");
         require("{");
         require("val");
         loop.variable = identifier();
@@ -4557,6 +4557,12 @@ private:
 
     void require(std::string_view text) {
         if (!accept(text)) fail("expected '" + std::string(text) + "'");
+    }
+
+    // Canonical callable signatures accept `: T` or `-> T` (same rule as main's
+    // arrow_return_type handling for named functions).
+    void require_return_separator() {
+        if (!accept(":")) require("->");
     }
 
     void array_element(LocalBinding& binding) {
