@@ -10,6 +10,9 @@ option(ATTO_FAILURE_OBSERVER_HOST_ONLY
   "Build the actor failure observer preallocated-ring host test only" OFF)
 if(ATTO_FAILURE_OBSERVER_HOST_ONLY)
   include(CTest)
+  if(NOT BUILD_TESTING)
+    message(FATAL_ERROR "Native failure observer and supervisor CONTROL host proofs require BUILD_TESTING=ON")
+  endif()
   find_package(Threads REQUIRED)
   add_executable(oreslang-native-actor-failure-observer-host-test
     tests/actor_reliability_fault_observer_test.cpp)
