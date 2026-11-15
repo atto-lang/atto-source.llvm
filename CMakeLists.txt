@@ -6417,6 +6417,56 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 60)
 endif()
 
+# Host-only POSIX pthread reference for proposed portable Thread API.
+# This is not guest source lowering, TaskLocal or ActorLocal support.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-thread-v1-test
+        tests/native_thread_v1_test.c
+        src/main/cpp/oreslang/runtime/NativeThreadV1.c)
+    set_target_properties(oreslang-native-thread-v1-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS OFF)
+    target_compile_definitions(oreslang-native-thread-v1-test PRIVATE
+        ORES_NATIVE_THREAD_TEST_ID_EXHAUSTION=1)
+    target_include_directories(oreslang-native-thread-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-thread-v1-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-thread-v1-test PRIVATE Threads::Threads)
+    add_test(NAME native_thread_context_tls_join_host_only
+        COMMAND oreslang-native-thread-v1-test)
+    set_tests_properties(native_thread_context_tls_join_host_only PROPERTIES TIMEOUT 20)
+endif()
+
+# Header-only typed Thread capture admission model, not guest AST integration.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-thread-capture-admission-test
+        tests/native_thread_capture_admission_test.cpp)
+    target_include_directories(oreslang-native-thread-capture-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-thread-capture-admission-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-thread-capture-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_thread_capture_admission_model_only
+        COMMAND oreslang-native-thread-capture-admission-test)
+endif()
+
+# Bounded host-only join/reaper model: not Task/Future guest lowering.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-thread-join-reaper-test
+        tests/native_thread_join_reaper_v1_test.cpp
+        src/main/cpp/oreslang/runtime/NativeThreadV1.c)
+    target_include_directories(oreslang-native-thread-join-reaper-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-thread-join-reaper-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-thread-join-reaper-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-thread-join-reaper-test PRIVATE Threads::Threads)
+    add_test(NAME native_thread_join_reaper_host_only
+        COMMAND oreslang-native-thread-join-reaper-test)
+endif()
+
 # Opt-in shared polling/execution host substrate. Not source-actor qualification.
 if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
   find_package(Threads REQUIRED)
