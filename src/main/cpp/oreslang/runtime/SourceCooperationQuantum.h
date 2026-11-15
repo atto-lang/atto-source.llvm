@@ -27,17 +27,17 @@ template <typename Clock = std::chrono::steady_clock>
 class BasicSourceCooperationQuantum final {
 public:
     using time_point = typename Clock::time_point;
-    static constexpr std::uint32_t kLoopCheckInterval = 64;
+    static constexpr std::uint32_t kLoopCheckInterval = 128;
     static constexpr std::uint32_t kMaxBackedgesPerDispatch = 512;
     static constexpr auto kSoftDispatchQuantum = std::chrono::milliseconds(2);
 
-    // Keep the established 64-step default for Java/LLVM parity. A
-    // compiler-verified 128/256/512 option batches ordinary soft polls; the
-    // hard 512-backedge no-yield handoff rule is NEVER diluted by an option.
+    // Default 128-backedge soft-poll boundary. A compiler-verified 256/512
+    // option batches ordinary soft polls further; the hard 512-backedge
+    // no-yield handoff rule is NEVER diluted by an option.
     explicit BasicSourceCooperationQuantum(std::uint32_t interval = kLoopCheckInterval)
         : lastCooperate_(Clock::now()), dispatchStarted_(lastCooperate_),
           loopCheckInterval_(interval) {
-        if (interval != 64 && interval != 128 && interval != 256 && interval != 512)
+        if (interval != 128 && interval != 256 && interval != 512)
             throw std::invalid_argument("unsupported cooperation interval");
     }
 
@@ -50,9 +50,9 @@ public:
     BasicSourceCooperationQuantum& operator=(BasicSourceCooperationQuantum&&) = delete;
 
     // Calling this after await restarts *only* the per-dispatch fairness
-    // counter/clock. A watchdog or overdue cooperation request survives
-    // suspension and carrier migration until an actual legal handoff calls
-    // recordedCooperate(). Erasing debt here would lose critical-exit wakeup.
+    // counter/clock and invalidates any stale boundary ticket. A watchdog or
+    // overdue cooperation request survives suspension and carrier migration
+    // until an actual legal handoff calls recordedCooperate().
     void beginDispatch() noexcept {
         // A caller may resume a task after its 512-backedge cap while the
         // no-yield scope was still live. Latch debt before resetting the
@@ -61,17 +61,20 @@ public:
             backedges_ >= kMaxBackedgesPerDispatch;
         dispatchStarted_ = Clock::now();
         backedges_ = 0;
+        checkPhase_ = 0;
+        checkDue_ = false;
     }
 
-    // One cheap integer counter/bit-mask on the committed loop backedge.
-    // No wall-clock sampling and no scheduler/FFI calls here.
+    // Cheap reduction accounting only: no clock, callback or scheduler read.
+    // The separate phase wraps independently of the saturating total, so even
+    // an astronomically long no-yield scope cannot disable future polls.
+    // The slow path is eligible only once per configured interval of
+    // committed backedges, including AFTER exceeding the 512-backedge budget.
     bool completedBackedgeNeedsCheck() noexcept {
         backedges_ = detail::saturatingBackedgeSuccessor(backedges_);
-        // Only the power-of-two boundary is a soft poll. In particular, do
-        // NOT call the slow path on every backedge after the 512-unit cap.
-        // Once overdue, pendingHandoff_ is drained by the mandatory
-        // no-yield-scope exit hook, not by spinning on each later backedge.
-        return (backedges_ & (loopCheckInterval_ - 1)) == 0;
+        checkPhase_ = (checkPhase_ + 1) & (loopCheckInterval_ - 1);
+        checkDue_ = (checkPhase_ == 0);
+        return checkDue_;
     }
 
     // Cold path: independent watchdog request, reduction cap, or active
@@ -79,6 +82,12 @@ public:
     // compiler-proven post-commit heap continuation and no live no-yield loans.
     // A watchdog never interrupts or rewinds an executing native stack.
     bool shouldCooperateAtCheck(bool watchdogRequested = false) noexcept {
+        // An accidental eager caller must not bypass batching (even when a
+        // supervisor has requested cancellation) or sample the clock on
+        // every backedge. Consume the boundary ticket exactly once.
+        if (!checkDue_)
+            return false;
+        checkDue_ = false;
         // A prior overdue signal stays pending across an unyieldable region.
         // Avoid repeated clock reads even at later batched poll boundaries.
         if (pendingHandoff_ || watchdogRequested ||
@@ -128,6 +137,8 @@ private:
     time_point dispatchStarted_;
     std::uint64_t backedges_ = 0;
     std::uint32_t loopCheckInterval_;
+    std::uint32_t checkPhase_ = 0;
+    bool checkDue_ = false;
     bool pendingHandoff_ = false;
 };
 

@@ -9,8 +9,10 @@ handoff, or an enforced untrusted logical fuel quota.
 - A committed bounded backedge increments a saturating 64-bit counter and
   tests a power-of-two mask. This inexpensive counter/mask **does occur on each
   backedge**. Monotonic-clock, watchdog and scheduler slow-path checks do not.
-- Default interval stays 64 for Java parity. Verified callers may select
-  128, 256 or 512; arbitrary intervals (for example 100) are rejected.
+- Default interval is main's 128-backedge boundary. Verified callers may
+  select 256 or 512; finer (64) or arbitrary intervals (for example 100) are
+  rejected. Each boundary issues a one-shot slow-path ticket: an eager caller
+  cannot sample the clock or answer twice for the same boundary.
 - At the 512-backedge per-dispatch fairness cap, a mandatory batched poll sets
   a sticky pending-handoff request. Later backedges remain batched rather than
   entering the slow path on every iteration.
@@ -40,16 +42,17 @@ require independent coverage or fail-closed rejection.
 
 ## Tests and evidence
 
-The native host tests check 64/128/256/512 boundaries, 512-cap latch,
+The native host tests check 128/256/512 boundaries, one-shot tickets, 512-cap latch,
 no post-cap per-edge slow polling, watchdog latching, debt survival across an
 unrelated await/dispatch reset, once-only true handoff acknowledgement,
 elapsed time, overflow, and await-versus-cooperate behavior.
 
 The opt-in **source-compiled** `.ores` scalar-frame harness also exercises
 fuel 0/1/2/63/64/65/127/128/129/255/256/257/511/512 as compiled machine
-code, checks cancellation/resumption without state replay, and applies two
+code, checks cancellation/resumption without state replay, and applies
 negative mutations directly to the compiler-emitted LLVM IR: raising the
-512-unit cap and eliding the per-backedge fuel decrement. The mutated IR must
+512-unit cap (Linux, via the trap children) and eliding the dispatch fuel
+charge into the batch endpoint. The mutated IR must
 still compile as optimized native code but must fail the real guest oracle.
 These tests prove bounded scalar continuation only; they do **not** imply
 general `.atto` actor-loop checkpoints or `critical` lowering. The same test runs as a distinct
@@ -62,10 +65,12 @@ compiler-backed .atto guest and negative mutation receipts, before readiness.
 Both experimental LLVM emitter paths now derive the **512** maximum dispatch
 allowance from `runtime::SourceCooperationQuantum::kMaxBackedgesPerDispatch`,
 rather than maintaining unrelated compiler literals. The opt-in scalar-frame
-lowering performs a **cheap exact fuel decrement at every committed backedge**.
+lowering (main's batched design) charges the whole dispatch allowance **once**
+into a precomputed `dispatch.batch.stop` endpoint; the hot loop has a single
+source-bound branch and no per-backedge fuel predicate.
 Its native ABI returns once the host-selected quantum expires (64/128/256/512).
 The runtime/host can then perform its expensive scheduler/watchdog check once
-per dispatch. The emitted `loop.check`, `loop.fuel`, and `loop.commit`
+per dispatch. The emitted `loop.check` and `loop.commit`
 blocks have **no slow-path host calls**; a Python structural guard inspects
 the real compiler-produced LLVM IR and kills a deliberately inserted
 per-backedge call mutation.
@@ -79,8 +84,9 @@ of 384 reductions is not refilled across three 128-step dispatches. The quota
 in that example is **host owned**. It is NOT enforced by the experimental
 24-byte guest frame: a malicious host could still supply more fuel.
 
-Two intentionally weakened generated-IR programs must independently compile
-and then **fail** the native guest oracle (512 cap -> 4096, fuel charge 1 -> 0).
+Intentionally weakened generated-IR programs must independently compile
+and then **fail** the native guest oracle (fuel charge -> constant 1000
+endpoint everywhere; 512 cap -> 4096 on Linux).
 Three further structural IR mutants must fail the hot-CFG/no-slow-call oracle.
 No source-level `critical`, opaque FFI, `defer`, nested loop, general actor,
 or `rt cooperate` execution is admitted by this scalar-only path.

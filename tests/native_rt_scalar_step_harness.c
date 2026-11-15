@@ -51,6 +51,12 @@ static void require_guest_trap(int scenario) {
                 frame.state = 99;
                 (void)oreslang_rt_scalar_frame_step(&frame, 1); break;
         case 7: (void)oreslang_rt_scalar_frame_step(NULL, 1); break;
+        case 8: oreslang_rt_scalar_frame_init(&frame);
+                frame.counter = UINT64_MAX; /* signed -1: before source initial */
+                (void)oreslang_rt_scalar_frame_step(&frame, 1); break;
+        case 9: oreslang_rt_scalar_frame_init(&frame);
+                frame.counter = 1001; /* past source's exclusive bound */
+                (void)oreslang_rt_scalar_frame_step(&frame, 1); break;
         default: _Exit(99);
         }
         _Exit(0); /* An invalid operation returning constitutes a failure. */
@@ -266,6 +272,28 @@ static void require_cancelled_peer_is_isolated(void) {
     free(cancel);
 }
 
+/* Real compiler-generated guest step: a short/long quantum must commit
+ * exactly its permitted number of effects. In particular, boundary 127/128
+ * and 511/512 never overrun, duplicate or erase the heap continuation. */
+static void require_batch_fuel_boundary_matrix(void) {
+    ScalarFrame *frame = calloc(1, sizeof(*frame));
+    CHECK(frame != NULL);
+    oreslang_rt_scalar_frame_init(frame);
+    static const uint64_t fuel[] = {0, 1, 126, 1, 128, 255, 1, 0, 488};
+    static const uint64_t after[] = {0, 1, 127, 128, 256, 511, 512, 512, 1000};
+    for (size_t i = 0; i < sizeof(fuel) / sizeof(fuel[0]); ++i) {
+        const int status = oreslang_rt_scalar_frame_step(frame, fuel[i]);
+        CHECK(frame->counter == after[i]);
+        CHECK(status == (after[i] == 1000 ? 0 : 1));
+        CHECK(frame->state == (after[i] == 1000 ? 2 : 1));
+    }
+    CHECK(oreslang_rt_scalar_frame_result(frame) == 1000);
+    CHECK(oreslang_rt_scalar_frame_step(frame, 0) == 0);
+    CHECK(oreslang_rt_scalar_frame_step(frame, 512) == 0);
+    CHECK(frame->counter == 1000 && frame->state == 2);
+    free(frame);
+}
+
 int main(void) {
     // Test real, independent HEAP frame ownership; no C/LLVM stack frame
     // survives an explicit guest yield. Host owns dispatch serially.
@@ -312,9 +340,10 @@ int main(void) {
     CHECK(oreslang_rt_scalar_frame_step(a, 512) == 0);
     CHECK(a->counter == 1000);
 #ifdef __linux__
-    for (int scenario = 0; scenario != 8; ++scenario)
+    for (int scenario = 0; scenario != 10; ++scenario)
         require_guest_trap(scenario);
 #endif
+    require_batch_fuel_boundary_matrix();
     require_compiled_fuel_boundaries();
     require_compiled_batched_quanta();
     require_host_owned_lifetime_quota_boundary();

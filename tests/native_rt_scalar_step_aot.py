@@ -7,6 +7,7 @@ import argparse
 import pathlib
 import re
 import subprocess
+import sys
 import tempfile
 
 def run(command, **kwargs):
@@ -17,17 +18,19 @@ def run(command, **kwargs):
 def require_generated_loop_contract(ir):
     """Inspect the actual opt-in compiler's pre-optimization native IR.
 
-    Only scalar .ores frames are admitted here. Backedge budget charging is
-    cheap and exact on every committed effect; costly host scheduler/clock
-    work MUST remain outside the compiled loop, not happen per iteration.
+    Only scalar .ores frames are admitted here. Hard fuel is charged once per
+    dispatch into a precomputed batch endpoint (main's batched lowering);
+    costly host scheduler/clock work MUST remain outside the compiled loop.
     This structural receipt complements, never replaces, native execution.
     """
-    marker = "define i32 @oreslang_rt_scalar_frame_step("
-    if ir.count(marker) != 1:
+    header = re.search(r"define i32 @oreslang_rt_scalar_frame_step\(ptr (%[\w.]+), i64 (%[\w.]+)\)", ir)
+    if header is None or ir.count("define i32 @oreslang_rt_scalar_frame_step(") != 1:
         raise AssertionError("missing or duplicate compiled step symbol")
-    step = ir.split(marker, 1)[1].split("\n}", 1)[0]
-    if not step or "\n}" not in ir.split(marker, 1)[1]:
+    fuel_param = header.group(2)
+    rest = ir[header.end():]
+    if "\n}" not in rest:
         raise AssertionError("malformed emitted step function")
+    step = rest.split("\n}", 1)[0]
     blocks = {}
     current = None
     for line in step.splitlines():
@@ -39,13 +42,13 @@ def require_generated_loop_contract(ir):
             blocks[current] = []
         elif current is not None:
             blocks[current].append(line)
-    needed = ("loop.check", "loop.fuel", "loop.commit", "cooperate")
+    needed = ("counter.valid", "loop.check", "loop.commit", "loop.batch.exit", "cooperate")
     if any(name not in blocks for name in needed):
         raise AssertionError("missing compiler-generated bounded-loop CFG blocks")
     commit = "\n".join(blocks["loop.commit"])
-    fuel = "\n".join(blocks["loop.fuel"])
-    hot = "\n".join(blocks[name] for name in
-                    ("loop.check", "loop.fuel", "loop.commit"))
+    check = "\n".join(blocks["loop.check"])
+    endpoint = "\n".join(blocks["counter.valid"])
+    hot = check + "\n" + commit
     # Never invoke a scheduler, watchdog, clock, allocation or host FFI from
     # a compiled scalar backedge. The only hot work is bounded arithmetic,
     # branch and committed frame effects.
@@ -53,12 +56,13 @@ def require_generated_loop_contract(ir):
         raise AssertionError("expensive slow path in compiler-generated loop")
     if not re.search(r"store i64 [^\n]+", commit):
         raise AssertionError("missing committed guest frame store")
-    if not re.search(r"%fuel\.remaining = sub i64 [^,\n]+, 1\b", commit):
-        raise AssertionError("missing exact hard-fuel decrement on backedge")
     if "br label %loop.check" not in commit:
         raise AssertionError("missing compiled bounded-loop backedge")
-    if "br i1 " not in fuel:
-        raise AssertionError("missing hard-fuel branch")
+    if "%dispatch.batch.stop" not in check:
+        raise AssertionError("loop bound does not use the batched dispatch endpoint")
+    # The whole dispatch allowance is charged exactly once, before the loop.
+    if not re.search(r"%dispatch\.end\.by\.fuel = add i64 %[\w.]+, " + re.escape(fuel_param) + r"\b", endpoint):
+        raise AssertionError("missing exact hard-fuel charge into the batch endpoint")
     if len(re.findall(r"icmp ule i64 [^,\n]+, 512\b", step)) != 1:
         raise AssertionError("missing exact 512-unit native admission cap")
 
@@ -67,14 +71,14 @@ def prove_structural_guard_catches_mutations(ir):
     """These are *structural* mutations, separate from executable mutants."""
     cap = re.sub(r"icmp ule i64 ([^,\n]+), 512\b",
                  r"icmp ule i64 \g<1>, 4096", ir, count=1)
-    missing_charge = re.sub(r"(%fuel\.remaining = sub i64 [^,\n]+), 1\b",
-                            r"\g<1>, 0", ir, count=1)
+    missing_charge = re.sub(r"(%dispatch\.end\.by\.fuel = add i64 %[\w.]+), %[\w.]+",
+                            r"\g<1>, 1000", ir, count=1)
     # A third mutation simulates accidental expensive host polling on every
     # edge. This is deliberately not compiled; structural rejection is the
     # evidence category, rather than falsely claiming a killed native guest.
-    injected_slow_path = ir.replace(
-        "loop.commit:", "loop.commit:\n  call void @untrusted_slow_poll()",
-        1)
+    injected_slow_path = re.sub(r"^loop\.commit:([^\n]*)",
+                                r"loop.commit:\g<1>\n  call void @untrusted_slow_poll()",
+                                ir, count=1, flags=re.MULTILINE)
     for label, mutated in (("fuel-cap", cap),
                            ("hard-fuel", missing_charge),
                            ("every-edge-slow-poll", injected_slow_path)):
@@ -133,6 +137,19 @@ def main():
             raise AssertionError("native AOT assertion failed")
         if not ("define i64 @oreslang_rt_scalar_frame_result" in accepted.stdout):
             raise AssertionError("native AOT assertion failed")
+        # Generated IR contract: the source loop has a single source-bound
+        # branch and a precomputed dispatch endpoint, NOT a fuel predicate
+        # executed on every committed backedge.
+        if "dispatch.batch.stop" not in accepted.stdout:
+            raise AssertionError("missing batched endpoint")
+        if "loop.batch.exit" not in accepted.stdout:
+            raise AssertionError("missing batch exit")
+        if "loop.fuel" in accepted.stdout:
+            raise AssertionError("per-backedge fuel test regressed")
+        if "fuel.remaining" in accepted.stdout:
+            raise AssertionError("per-iteration fuel decrement regressed")
+        if "counter.valid" not in accepted.stdout:
+            raise AssertionError("corrupted frame counter guard missing")
         require_generated_loop_contract(accepted.stdout)
         prove_structural_guard_catches_mutations(accepted.stdout)
         llvm_ir = out / "guest.ll"
@@ -191,15 +208,18 @@ def main():
 
         killed_mutants = [
             require_killed_guest_mutant(
+                "charge-elision",
+                r"^(\s*%dispatch\.end\.by\.fuel = add i64 %[\w.]+, )%[\w.]+(\s*)$",
+                r"\g<1>1000\g<2>"),
+        ]
+        # The harness exercises the forbidden 513-unit dispatch only through
+        # its Linux fork/trap children, so the cap mutant is killable there.
+        if sys.platform.startswith("linux"):
+            killed_mutants.append(require_killed_guest_mutant(
                 "fuel-cap",
                 r"^(\s*%[\w.]+ = icmp ule i64 [^,\n]+, )512(\s*)$",
-                r"\g<1>4096\g<2>"),
-            require_killed_guest_mutant(
-                "charge-elision",
-                r"^(\s*%fuel\.remaining = sub i64 [^,\n]+, )1(\s*)$",
-                r"\g<1>0\g<2>"),
-        ]
-        if not (len(killed_mutants) == 2):
+                r"\g<1>4096\g<2>"))
+        if not (len(killed_mutants) == (2 if sys.platform.startswith("linux") else 1)):
             raise AssertionError("native AOT assertion failed")
 
         for i, (original, replacement) in enumerate(cases):
@@ -213,7 +233,7 @@ def main():
         missing = run([compiler, "--experimental-rt-scalar-loop", "--target=wasm32", str(fixture)])
         if not (missing.returncode != 0 and not missing.stdout.strip()):
             raise AssertionError("native AOT assertion failed")
-        print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: compiled 64/128/256/512 batching, host lifetime quota, 3 peer frames, 2 killed native IR mutations, 3 killed structural mutations, negatives")
+        print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: compiled 64/128/256/512 dispatch quanta, host lifetime quota, 3 peer frames, killed native IR mutations, 3 killed structural mutations, negatives")
 
 if __name__ == "__main__":
     main()

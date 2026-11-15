@@ -57,13 +57,18 @@ static void reduction_fast_path() {
     Quantum q;
     q.beginDispatch();
     require(FakeClock::reads.load() == 2);
-    for (int i = 1; i <= 512; ++i) {
+    std::uint64_t polls = 0;
+    for (int i = 1; i <= 4096; ++i) {
         const bool checkDue = q.completedBackedgeNeedsCheck();
-        require(checkDue == (i % 64 == 0));
-        if (checkDue) require(q.shouldCooperateAtCheck() == (i == 512));
+        require(checkDue == (i % 128 == 0));
+        if (checkDue) {
+            ++polls;
+            require(q.shouldCooperateAtCheck() == (i >= 512));
+        }
     }
-    require(FakeClock::reads.load() == 9);
-    require(q.completedBackedgesThisDispatch() == 512);
+    require(polls == 32);
+    require(FakeClock::reads.load() == 5); // only first 3 polls read time
+    require(q.completedBackedgesThisDispatch() == 4096);
 }
 
 static void overdue_no_yield_region_latches_handoff_without_per_edge_polls() {
@@ -72,7 +77,7 @@ static void overdue_no_yield_region_latches_handoff_without_per_edge_polls() {
     q.beginDispatch();
     for (int i = 1; i <= 512; ++i) {
         const bool due = q.completedBackedgeNeedsCheck();
-        require(due == (i % 64 == 0));
+        require(due == (i % 128 == 0));
         if (due) require(q.shouldCooperateAtCheck() == (i == 512));
     }
     // The critical section was still held when the 512-cap was reached.
@@ -80,12 +85,12 @@ static void overdue_no_yield_region_latches_handoff_without_per_edge_polls() {
     require(q.pendingHandoffOnNoYieldExit());
     for (int i = 513; i <= 1025; ++i) {
         const bool due = q.completedBackedgeNeedsCheck();
-        require(due == (i % 64 == 0));
+        require(due == (i % 128 == 0));
         if (due) require(q.shouldCooperateAtCheck());
         require(q.pendingHandoffOnNoYieldExit());
     }
     require(q.completedBackedgesThisDispatch() == 1025);
-    require(FakeClock::reads.load() == 9); // 2 start + only seven early slow polls
+    require(FakeClock::reads.load() == 5); // 2 start + only three early slow polls
     // The caller must invoke pendingHandoffOnNoYieldExit() when the guard is
     // finally dropped, even if the exit is between two batch boundaries.
     q.recordedCooperate();
@@ -120,13 +125,17 @@ static void configurable_soft_poll_interval_preserves_hard_cap() {
     bool rejected = false;
     try { Quantum bad(100); } catch (const std::invalid_argument&) { rejected = true; }
     require(rejected);
+    // Main's 128-backedge boundary is the floor: no finer soft polling.
+    rejected = false;
+    try { Quantum bad(64); } catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected);
 }
 
 // When a compiler-proven no-yield scope defers all scheduler polling, its
 // mandatory exit check must still notice a 512-edge hard-cap violation.
 // This protects against codegen accidentally assuming the slow poll ran.
 static void long_unpolled_no_yield_scope_preserves_cap_debt() {
-    for (std::uint32_t interval : {64u, 128u, 256u, 512u}) {
+    for (std::uint32_t interval : {128u, 256u, 512u}) {
         reset_clock();
         Quantum q(interval);
         q.beginDispatch();
@@ -145,11 +154,29 @@ static void long_unpolled_no_yield_scope_preserves_cap_debt() {
     }
 }
 
+static void overdue_no_yield_region_checks_only_at_next_boundary() {
+    reset_clock();
+    Quantum q;
+    q.beginDispatch();
+    for (int i = 1; i < 512; ++i)
+        require(q.completedBackedgeNeedsCheck() == (i % 128 == 0));
+    require(q.completedBackedgeNeedsCheck());
+    require(q.shouldCooperateAtCheck());
+    // An overdue no-yield scope still must not invoke the slow scheduler
+    // path for each new iteration; first subsequent poll is at 640.
+    for (int i = 513; i < 640; ++i)
+        require(!q.completedBackedgeNeedsCheck());
+    require(q.completedBackedgeNeedsCheck());
+    require(q.shouldCooperateAtCheck());
+    require(q.completedBackedgesThisDispatch() == 640);
+    require(FakeClock::reads.load() == 2);
+}
+
 static void timer_slow_path() {
     reset_clock();
     Quantum q;
     q.beginDispatch();
-    for (int i = 0; i < 63; ++i) require(!q.completedBackedgeNeedsCheck());
+    for (int i = 0; i < 127; ++i) require(!q.completedBackedgeNeedsCheck());
     FakeClock::nanos.store(2'050'000);
     require(FakeClock::reads.load() == 2);
     require(q.completedBackedgeNeedsCheck());
@@ -162,21 +189,22 @@ static void independent_watchdog_requests_next_safe_boundary() {
     reset_clock();
     Quantum q;
     q.beginDispatch();
-    for (int i = 0; i < 63; ++i)
+    for (int i = 0; i < 127; ++i)
         require(!q.completedBackedgeNeedsCheck());
     require(q.completedBackedgeNeedsCheck());
     require(FakeClock::reads.load() == 2);
     require(q.shouldCooperateAtCheck(true));
     require(q.pendingHandoffOnNoYieldExit());
     require(FakeClock::reads.load() == 2); // watchdog request needs no clock read
-    require(q.shouldCooperateAtCheck(false)); // request stays sticky until handoff
-    require(FakeClock::reads.load() == 2);
+    require(!q.shouldCooperateAtCheck(false)); // one-shot ticket: no second answer
+    require(FakeClock::reads.load() == 2); // no second clock read for same ticket
+    require(q.pendingHandoffOnNoYieldExit()); // debt stays sticky until handoff
     q.recordedCooperate();
     require(!q.pendingHandoffOnNoYieldExit());
 }
 
 static void overdue_debt_survives_unrelated_await_and_dispatch_reset() {
-    for (std::uint32_t interval : {64u, 128u, 256u, 512u}) {
+    for (std::uint32_t interval : {128u, 256u, 512u}) {
         reset_clock();
         Quantum q(interval);
         q.beginDispatch();
@@ -241,6 +269,46 @@ static void over_cap_reset_latches_debt_without_expensive_poll() {
     require(!q.pendingHandoffOnNoYieldExit());
 }
 
+static void direct_slow_path_calls_cannot_skip_sampling_policy() {
+    reset_clock();
+    Quantum q;
+    q.beginDispatch();
+    FakeClock::nanos.store(200'000'000); // overdue in wall-clock time
+    std::uint64_t observed = 0;
+    // Adversarial eager caller invokes the expensive API EVERY iteration.
+    // The API itself must enforce periodicity, including watchdog requests
+    // and already exhausted reduction budgets.
+    for (int i = 1; i <= 100000; ++i) {
+        const bool due = q.completedBackedgeNeedsCheck();
+        require(due == (i % 128 == 0));
+        const bool permitted = q.shouldCooperateAtCheck(true);
+        require(permitted == due);
+        if (permitted) ++observed;
+        require(!q.shouldCooperateAtCheck(true)); // one-shot ticket
+    }
+    require(observed == 100000 / 128);
+    require(q.completedBackedgesThisDispatch() == 100000);
+    require(FakeClock::reads.load() == 2); // watchdog fast return, no clock
+    q.beginDispatch();
+    require(!q.shouldCooperateAtCheck(true)); // reset invalidates stale ticket
+}
+static void time_poll_without_due_ticket_never_samples_clock() {
+    reset_clock();
+    Quantum q;
+    q.beginDispatch();
+    const int baseline = FakeClock::reads.load();
+    for (int i = 1; i < 128; ++i) {
+        require(!q.completedBackedgeNeedsCheck());
+        require(!q.shouldCooperateAtCheck());
+    }
+    require(FakeClock::reads.load() == baseline);
+    require(q.completedBackedgeNeedsCheck());
+    require(!q.shouldCooperateAtCheck());
+    require(FakeClock::reads.load() == baseline + 1);
+    require(!q.shouldCooperateAtCheck());
+    require(FakeClock::reads.load() == baseline + 1);
+}
+
 static void await_is_not_cooperate() {
     reset_clock();
     Quantum q;
@@ -249,7 +317,7 @@ static void await_is_not_cooperate() {
     FakeClock::nanos.store(30'000'000'000LL);
     q.beginDispatch();
     require(q.timeSinceLastCooperate() == std::chrono::seconds(30));
-    for (int i = 0; i < 64; ++i) q.completedBackedgeNeedsCheck();
+    for (int i = 0; i < 128; ++i) q.completedBackedgeNeedsCheck();
     require(!q.shouldCooperateAtCheck());
     q.recordedCooperate();
     require(q.timeSinceLastCooperate() == std::chrono::nanoseconds::zero());
@@ -279,13 +347,16 @@ int main() {
     reduction_fast_path();
     configurable_soft_poll_interval_preserves_hard_cap();
     overdue_no_yield_region_latches_handoff_without_per_edge_polls();
+    overdue_no_yield_region_checks_only_at_next_boundary();
     long_unpolled_no_yield_scope_preserves_cap_debt();
     timer_slow_path();
     independent_watchdog_requests_next_safe_boundary();
+    direct_slow_path_calls_cannot_skip_sampling_policy();
+    time_poll_without_due_ticket_never_samples_clock();
     overdue_debt_survives_unrelated_await_and_dispatch_reset();
     watchdog_debt_survives_dispatch_reset();
     over_cap_reset_latches_debt_without_expensive_poll();
     await_is_not_cooperate();
     repeated_dispatches_keep_task_context();
-    std::cout << "native quantum 64/128/256/512 sticky pending: PASS (host-only, no guest await parity)\n";
+    std::cout << "native quantum 128/256/512 batched, 512 cap, 2ms, one-shot ticket, sticky pending: PASS (host-only, no guest await parity)\n";
 }
