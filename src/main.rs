@@ -5,13 +5,15 @@ use std::io::{Read as IoRead, Write as IoWrite};
 use std::process::{Command, Stdio};
 
 use atto_compiler::ast::{BinOp, Type};
-use atto_compiler::check::{self, TExpr, TFunc, TProgram, TStmt, TE};
+use atto_compiler::check::{self, Import, TExpr, TFunc, TProgram, TStmt, TE};
 
 fn scalar_type(t: Type) -> Result<&'static str, String> {
     match t {
         Type::Int => Ok("i64"),
         Type::Bool => Ok("i1"),
         Type::Void => Ok("void"),
+        // A generation checked capability, never an address or raw state pointer.
+        Type::ActorRef(_) => Ok("i32"),
         _ => Err(format!("E_UNSUPPORTED_NATIVE_TYPE: {}", t.name())),
     }
 }
@@ -79,6 +81,20 @@ impl<'a> FunctionEmitter<'a> {
         self.label(&okay);
         self.instr(format!("%{result} = extractvalue {{ i64, i1 }} %{pair}, 0"));
         format!("%{result}")
+    }
+
+    fn checked_actor_result(&mut self, result: &str, ty: &str, bad: &str) {
+        let is_bad = self.id("actor_fail");
+        let rejected = self.id("actor_rejected");
+        let admitted = self.id("actor_admitted");
+        self.instr(format!("%{is_bad} = icmp eq {ty} {result}, {bad}"));
+        self.instr(format!("br i1 %{is_bad}, label %{rejected}, label %{admitted}"));
+        self.terminated = true;
+        self.label(&rejected);
+        self.instr("call void @llvm.trap()");
+        self.instr("unreachable");
+        self.terminated = true;
+        self.label(&admitted);
     }
 
     fn expr(&mut self, expr: &TE) -> Result<String, String> {
@@ -168,6 +184,81 @@ impl<'a> FunctionEmitter<'a> {
                     Ok(format!("%{tmp}"))
                 }
             }
+            TExpr::Spawn(actor_type) => {
+                if self.program.actors.is_empty() {
+                    return Err("E_UNSUPPORTED_NATIVE_ACTOR: no actor table".into());
+                }
+                let result = self.id("actor_ref");
+                self.instr(format!("%{result} = call i32 @atto_actor_spawn(i32 {actor_type})"));
+                self.checked_actor_result(&format!("%{result}"), "i32", "0");
+                Ok(format!("%{result}"))
+            }
+            TExpr::Send { target, value } => {
+                let target_ref = self.expr(target)?;
+                let payload = self.expr(value)?;
+                let promoted = match value.ty {
+                    Type::Int => payload,
+                    Type::Bool => {
+                        let widened = self.id("mail_bool");
+                        self.instr(format!("%{widened} = zext i1 {payload} to i64"));
+                        format!("%{widened}")
+                    }
+                    _ => return Err("E_UNSUPPORTED_NATIVE_MAIL: only int/bool".into()),
+                };
+                let status = self.id("send_status");
+                self.instr(format!(
+                    "%{status} = call i32 @atto_actor_send(i32 {target_ref}, i64 {promoted})"
+                ));
+                self.checked_actor_result(&format!("%{status}"), "i32", "-1");
+                // A full mailbox (-2) also fails closed; no silently lost mail.
+                let full = self.id("send_full");
+                let trapped = self.id("send_trap");
+                let accepted = self.id("send_ok");
+                self.instr(format!("%{full} = icmp ne i32 %{status}, 0"));
+                self.instr(format!("br i1 %{full}, label %{trapped}, label %{accepted}"));
+                self.terminated = true;
+                self.label(&trapped);
+                self.instr("call void @llvm.trap()");
+                self.instr("unreachable");
+                self.terminated = true;
+                self.label(&accepted);
+                Ok(String::new())
+            }
+            TExpr::GlobalGet(slot) => {
+                let typ = *self.program.globals.get(*slot as usize)
+                    .ok_or("E_INTERNAL: actor state slot outside typed layout")?;
+                let raw = self.id("state");
+                self.instr(format!("%{raw} = call i64 @atto_actor_state_load(i32 {slot})"));
+                match typ {
+                    Type::Int => Ok(format!("%{raw}")),
+                    Type::Bool => {
+                        let boolean = self.id("state_bool");
+                        self.instr(format!("%{boolean} = icmp ne i64 %{raw}, 0"));
+                        Ok(format!("%{boolean}"))
+                    }
+                    _ => Err("E_UNSUPPORTED_NATIVE_STATE: only int/bool fields".into()),
+                }
+            }
+            TExpr::Print { value, newline } => {
+                if self.program.actors.is_empty() {
+                    return Err("E_UNSUPPORTED_NATIVE_PRINT: requires actor bootstrap".into());
+                }
+                let v = self.expr(value)?;
+                let as_int = match value.ty {
+                    Type::Int => v,
+                    Type::Bool => {
+                        let tmp = self.id("print_bool");
+                        self.instr(format!("%{tmp} = zext i1 {v} to i64"));
+                        format!("%{tmp}")
+                    }
+                    _ => return Err("E_UNSUPPORTED_NATIVE_PRINT: only int/bool".into()),
+                };
+                self.instr(format!(
+                    "call void @atto_actor_print_i64(i64 {as_int}, i32 {})",
+                    i32::from(*newline)
+                ));
+                Ok(String::new())
+            }
             TExpr::Ternary(cond, yes, no) => {
                 let cv = self.expr(cond)?;
                 let yes_label = self.id("tern_yes");
@@ -213,6 +304,23 @@ impl<'a> FunctionEmitter<'a> {
                 let ty = scalar_type(*self.slots.get(idx).ok_or("E_INTERNAL: bad set slot")?)?;
                 let x = self.expr(value)?;
                 self.instr(format!("store {ty} {x}, ptr %local{idx}"));
+            }
+            TStmt::GlobalSet(slot, value) => {
+                let typ = *self.program.globals.get(*slot as usize)
+                    .ok_or("E_INTERNAL: actor state index invalid")?;
+                let v = self.expr(value)?;
+                let as_int = match typ {
+                    Type::Int => v,
+                    Type::Bool => {
+                        let tmp = self.id("store_bool");
+                        self.instr(format!("%{tmp} = zext i1 {v} to i64"));
+                        format!("%{tmp}")
+                    }
+                    _ => return Err("E_UNSUPPORTED_NATIVE_STATE: only int/bool".into()),
+                };
+                self.instr(format!(
+                    "call void @atto_actor_state_store(i32 {slot}, i64 {as_int})"
+                ));
             }
             TStmt::Expr(expr) => {
                 let _ = self.expr(expr)?;
