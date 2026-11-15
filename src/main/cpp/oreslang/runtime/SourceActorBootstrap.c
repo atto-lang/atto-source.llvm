@@ -1306,8 +1306,10 @@ void oreslang_source_actor_join_done(void* opaque) {
      */
     ores_actor_i64_heap_retire(instance->heap);
     ensure(ores_actor_i64_heap_try_destroy(instance->heap));
+    instance->heap = NULL;
     /* Physical STOP acknowledgement gates both heap and logical-frame free. */
     ensure(ores_logical_frames_v1_close(instance->logical_frames));
+    instance->logical_frames = NULL;
 
     /* The VM requires a trusted resource-finalization receipt *after* the
      * physical actor DONE and both actor-owned allocations are gone. Only
@@ -1356,24 +1358,32 @@ void oreslang_source_actor_join_done(void* opaque) {
         ensure(pthread_cond_wait(&instance->callback_completed, &group.mutex) == 0);
     ensure(pthread_cond_destroy(&instance->callback_completed) == 0);
     group.actors[slot] = NULL;
-    instance->magic = 0;
-    free(instance);
+    if (failure_code != 0 && instance->restart_remaining != 0) {
+        /* Preserve only metadata for rejecting stale ActorRef pointers and
+         * returning a supervisor-selected replacement. The actor-owned heap
+         * and all logical frames were destroyed before terminal CONTROL. */
+        instance->tombstone = 1;
+        group.retired[slot] = instance;
+    } else {
+        instance->magic = 0;
+        free(instance);
+    }
     ensure(group.live > 0);
     group.live--;
 
     if (group.live == 0) {
-        /* Publication is not delivery. Ensure all authenticated priority
-         * CONTROL callbacks have actually executed before destroying the
-         * supervisor pool and dropping the audit receipt. */
+        /* An outstanding final CONTROL callback may authorize and create
+         * a new actor. Release group.mutex while waiting: the callback must
+         * acquire it to spawn and publish its decision. A finite spin while
+         * holding this mutex would deadlock the supervisor. */
         uint64_t published = atomic_load_explicit(
             &group.terminal_published, memory_order_acquire);
-        unsigned spins = 0;
         while (atomic_load_explicit(
-                   &group.terminal_notices, memory_order_acquire) < published
-               && spins++ < 1000000)
-            sched_yield();
-        ensure(atomic_load_explicit(
-            &group.terminal_notices, memory_order_acquire) == published);
+                   &group.terminal_notices, memory_order_acquire) < published)
+            ensure(pthread_cond_wait(
+                &group.supervisor_progress, &group.mutex) == 0);
+    }
+    if (group.live == 0) {
         ensure(group.pending_ready == NULL && group.pending_done == NULL);
         ensure(ores_native_execution_context_store_live(group.executions) == 0);
         ensure(ores_native_continuation_store_live(group.continuations) == 0);
@@ -1391,6 +1401,17 @@ void oreslang_source_actor_join_done(void* opaque) {
             "SOURCE_ACTOR_GROUP_VERIFIED active=0 slots=%zu peak=%zu carriers=%u\n",
             group.next_slot, group.peak, SOURCE_GROUP_CARRIERS);
 #endif
+        /* Old opaque handles are kept as bounded tombstones until no guest
+         * actor remains. No address is recycled while the group is live. */
+        for (size_t i = 0; i < group.next_slot; ++i) {
+            SourceActor* retired = group.retired[i];
+            if (!retired) continue;
+            ensure(retired->tombstone && retired->heap == NULL
+                && retired->logical_frames == NULL);
+            retired->magic = 0;
+            free(retired);
+            group.retired[i] = NULL;
+        }
         group.next_slot = 0;
         group.peak = 0;
     }
