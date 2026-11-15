@@ -70,7 +70,31 @@ struct Expression {
     std::vector<GenericTypeArgument> type_arguments;
     bool type_arguments_present = false;
     mutable std::string sum_type;
+    // Records a compiler-produced caller-side trap; never collapse this to
+    // an ordinary Some constructor without independently proving its operand.
+    bool trap_origin = false;
 };
+
+// Phase-one native trap supports only total integer-expression structure.
+// Arithmetic overflow remains a terminal panic. This predicate deliberately
+// rejects calls, variables, dereferences, nested sums, host/actor effects,
+// suspension and all non-integer values until effect and cleanup IR is proven.
+inline bool native_trap_pure_integer(const Expression& e, std::size_t depth = 0) {
+    if (depth > 64) return false;
+    switch (e.kind) {
+        case Expression::Kind::Integer: return true;
+        case Expression::Kind::Negate:
+            return e.left && native_trap_pure_integer(*e.left, depth + 1);
+        case Expression::Kind::Add:
+        case Expression::Kind::Subtract:
+        case Expression::Kind::Multiply:
+            return e.left && e.right &&
+                native_trap_pure_integer(*e.left, depth + 1) &&
+                native_trap_pure_integer(*e.right, depth + 1);
+        default: return false;
+    }
+}
+
 
 struct Parameter {
     enum class Mode { Value, Borrow, BorrowMut };
