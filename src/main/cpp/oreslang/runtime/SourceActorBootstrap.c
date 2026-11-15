@@ -691,12 +691,74 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
  * and the typed, runtime-issued terminal envelope cross this boundary.
  * Policy-driven automatic restart is a separate compiler/runtime milestone.
  */
+/* A root supervisor CONTROL turn authorizes a bounded one-for-one restart.
+ * It never publishes a synthetic guest success and never restarts a STOPPED
+ * child. The replacement is a fresh physical slot, actor ID, private heap,
+ * logical-frame store and mailbox. We leave the mutex before spawn: a worker
+ * may concurrently publish the new incarnation's initialization CONTROL.
+ *
+ * No root callback blocks waiting for a carrier or for guest execution.
+ * The old actor must already have physical DONE and host finalization before
+ * NativeOresVM can publish this authenticated terminal envelope. */
 static void source_supervisor_notice(
         void* raw, size_t parent_slot, OresNativeActorTerminalFailure failure) {
     ensure(raw == &group && parent_slot == SOURCE_GROUP_ROOT_SLOT);
     ensure(failure.child.scheduler_domain == group.root_ref.scheduler_domain
         && failure.child.actor_slot < SOURCE_GROUP_ROOT_SLOT
         && failure.child.generation != 0 && failure.correlation != 0);
+
+    SourceActor* original = NULL;
+    OresSourceActorInit constructor = NULL;
+    OresSourceActorMessage receiver = NULL;
+    uint64_t fields = 0, depth = 0, lifetime = 0, remaining = 0;
+    int approved = 0;
+    group_lock();
+    const size_t slot = (size_t)failure.child.actor_slot;
+    original = group.actors[slot] ? group.actors[slot] : group.retired[slot];
+    if (original && original->magic == SOURCE_ACTOR_MAGIC
+        && original->ref.scheduler_domain == failure.child.scheduler_domain
+        && original->ref.actor_slot == failure.child.actor_slot
+        && original->ref.generation == failure.child.generation
+        && original->id == failure.correlation
+        && failure.kind == ORES_NATIVE_CONTROL_PANIC
+        && failure.failure_code == ORES_SOURCE_ACTOR_FAILURE_FRAME
+        && original->restart_remaining != 0
+        && !original->restart_decided) {
+        original->restart_decided = 1;
+        if (group.next_slot < SOURCE_GROUP_ROOT_SLOT) {
+            approved = 1;
+            constructor = original->constructor;
+            receiver = original->on_message;
+            fields = original->fields_count;
+            depth = original->frame_budget;
+            lifetime = original->lifetime_frame_budget;
+            remaining = original->restart_remaining - 1;
+        }
+    }
+    group_unlock();
+    if (approved) {
+        SourceActor* fresh = (SourceActor*)
+            oreslang_source_actor_spawn_supervised_budgeted(
+                constructor, receiver, fields, depth, lifetime, remaining);
+        /* The original actor is a bounded tombstone, not a live mailbox.
+         * Do not migrate its state or preserve any old borrow or pointer. */
+        group_lock();
+        ensure(original && original->magic == SOURCE_ACTOR_MAGIC
+            && original->ref.actor_slot == failure.child.actor_slot
+            && original->replacement == NULL);
+        original->replacement = fresh;
+        ensure(pthread_cond_broadcast(&group.supervisor_progress) == 0);
+        group_unlock();
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+        fprintf(stderr,
+            "SOURCE_ACTOR_ONE_FOR_ONE_RESTART_VERIFIED old_slot=%llu new_slot=%llu old_generation=%llu new_generation=%llu remaining=%llu\n",
+            (unsigned long long)failure.child.actor_slot,
+            (unsigned long long)fresh->ref.actor_slot,
+            (unsigned long long)failure.child.generation,
+            (unsigned long long)fresh->ref.generation,
+            (unsigned long long)remaining);
+#endif
+    }
     if (failure.kind == ORES_NATIVE_CONTROL_PANIC) {
         ensure(failure.failure_code != 0);
         atomic_store_explicit(&group.last_panic_code,
@@ -709,7 +771,10 @@ static void source_supervisor_notice(
         atomic_fetch_add_explicit(
             &group.terminal_stopped_notices, 1, memory_order_release);
     }
+    group_lock();
     atomic_fetch_add_explicit(&group.terminal_notices, 1, memory_order_release);
+    ensure(pthread_cond_broadcast(&group.supervisor_progress) == 0);
+    group_unlock();
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
     fprintf(stderr,
         "SOURCE_ACTOR_TERMINAL_CONTROL_VERIFIED kind=%s slot=%llu generation=%llu code=%llu correlation=%llu\n",
