@@ -4435,8 +4435,10 @@ private:
             const bool named_class_receiver = field->left
                 && field->left->kind == Expression::Kind::Variable
                 && class_receivers_.count(field->left->name);
-            const bool actor_send = field->name == "send" && !named_class_receiver;
-            if (!actor_send && accept("(")) {
+            const bool actor_action =
+                (field->name == "send" || field->name == "flush_blocking")
+                && !named_class_receiver;
+            if (!actor_action && accept("(")) {
                 field->kind = Expression::Kind::ArrayCall;
                 // Member syntax is also used by extension-call lowering. Do not
                 // let it bypass the duplicate/ordering rules of direct calls.
