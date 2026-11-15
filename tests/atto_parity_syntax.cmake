@@ -119,16 +119,16 @@ reject_case(stdout_unknown_member
   "fnc main(): void {\n  stdio.stdout.flush(\"a\");\n  return;\n}\n"
   "unsupported native stdio.stdout operation")
 reject_case(ifnot_break_requires_native_continuation
-  "pub fnc main(): int { do ifnot false then break; fi return 0; }\\n"
+  "pub fnc main(): int { do ifnot false then break; fi return 0; }\n"
   "native break/continue in conditional arms requires verified loop continuation lowering")
 reject_case(unless_loop_requires_native_continuation
-  "pub fnc main(): int { loop { do unless false then break; fi } return 0; }\\n"
+  "pub fnc main(): int { loop { do unless false then break; fi } return 0; }\n"
   "native realtime source loop requires verified LLVM continuation lowering")
 reject_case(unless_value_break_not_an_expression
-  "pub fnc main(): int { return unless true then break else 7 fi; }\\n"
+  "pub fnc main(): int { return unless true then break else 7 fi; }\n"
   "value if/ifnot/unless branch must produce a value")
 reject_case(ifnot_missing_else_value
-  "pub fnc main(): int { return ifnot false then 7 fi; }\\n"
+  "pub fnc main(): int { return ifnot false then 7 fi; }\n"
   "expected 'else'")
 
 reject_case(if_semicolon_requires_then
