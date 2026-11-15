@@ -2114,6 +2114,17 @@ if(BUILD_TESTING)
                     --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-rt-scalar-step-positive.ores"
                     --harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_step_harness.c")
             set_tests_properties(native_rt_scalar_frame_aot_two_tasks PROPERTIES TIMEOUT 180)
+            # Separate real linked guest sanitizer execution: flags are passed
+            # to the Rust driver, which instruments both guest IR and C oracle.
+            # Never count ordinary CMake/compiler sanitizer flags as evidence.
+            add_test(NAME native_rt_scalar_frame_aot_sanitizers
+                COMMAND "${ORE_FRAME_RUST_DRIVER}"
+                    --sanitize
+                    --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                    --clang "${ORE_CLANG}"
+                    --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-rt-scalar-step-positive.ores"
+                    --harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_step_harness.c")
+            set_tests_properties(native_rt_scalar_frame_aot_sanitizers PROPERTIES TIMEOUT 300)
         else()
             message(WARNING "Experimental scalar-loop AOT Rust gate requires rustc; not registered")
         endif()
