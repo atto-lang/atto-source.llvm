@@ -16,19 +16,6 @@ struct Token {
     bool number = false;
 };
 
-[[noreturn]] inline void reject(std::string_view message, std::size_t at) {
-    throw std::runtime_error("Pointer<int> native AOT M1: " +
-        std::string(message) + " at byte " + std::to_string(at));
-}
-
-inline bool ident_start(char ch) {
-    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_';
-}
-inline bool ident_continue(char ch) {
-    return ident_start(ch) || (ch >= '0' && ch <= '9');
-}
-
-
 struct Expr {
     enum class Kind { Literal, Variable, Read, Neg, Add, Subtract, Multiply };
     Kind kind = Kind::Literal;
