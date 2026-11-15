@@ -1,0 +1,7 @@
+// Restart policy must be bounded and rejected before LLVM IR emission.
+@ActorRestartLimit(5)
+define actor RestartStorm as {
+  let count: int = 0;
+  pub fnc on_message(int n): int { return n; }
+}
+pub fnc main(): int { return 0; }
