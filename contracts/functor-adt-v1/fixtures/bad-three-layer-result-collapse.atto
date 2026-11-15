@@ -1,0 +1,4 @@
+// Must reject: one Result.flatten removes only one layer, not two.
+fnc invalid(Result<Result<Result<int,String>,String>,String> value): Result<int,String> {
+  return value.flatten();
+}

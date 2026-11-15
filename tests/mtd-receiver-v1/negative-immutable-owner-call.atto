@@ -1,0 +1,11 @@
+// A mut receiver is an exclusive loan; immutable owners cannot acquire it.
+define class Point as let int x = 40; end
+pub mtd (mut self: Point) move_by(int dx): void {
+  self.x = self.x + dx;
+  return;
+}
+pub fnc main(): int {
+  let Point p = new Point();
+  p.move_by(2);
+  return 0;
+}
