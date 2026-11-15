@@ -143,9 +143,17 @@ foreach(index RANGE 0 11)
     RESULT_VARIABLE compiled OUTPUT_FILE "${ir}" ERROR_VARIABLE compiler_stderr TIMEOUT 20)
   if(index GREATER 6 AND NOT index EQUAL 9)
     # Reject unknown symbol, implicit string conversion, removed ^ and no-return
-    # as compiler diagnostics (NOT a crash, not a published partial IR).
-    if(compiled STREQUAL "0" OR EXISTS "${ir}")
-      message(FATAL_ERROR "compiler admitted negative platform fixture: ${name}")
+    # as compiler diagnostics. OUTPUT_FILE can create an empty IR file even on
+    # failure; only zero-length IR is acceptable and no signal/crash qualifies.
+    if(compiled STREQUAL "0" OR NOT compiled MATCHES "^[0-9]+$" OR
+       compiler_stderr STREQUAL "")
+      message(FATAL_ERROR "compiler did not issue a normal negative diagnostic: ${name}: ${compiled}")
+    endif()
+    if(EXISTS "${ir}")
+      file(SIZE "${ir}" rejected_ir_size)
+      if(rejected_ir_size GREATER 0)
+        message(FATAL_ERROR "negative compiler published nonempty LLVM IR: ${name}")
+      endif()
     endif()
     continue()
   endif()
