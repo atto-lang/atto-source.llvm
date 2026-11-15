@@ -97,6 +97,18 @@ int main() {
                                   op(Kind::Move, unproven)}, {}}};
         assert(rejected([&] { verify(indexed_alias); }));
     }
+    // Compiler-owned ANF root locals (main's $effectN) are flat places;
+    // a bare or projected '$' is still rejected above / here.
+    Graph generated_local;
+    generated_local.entry = {{"$effect1", cell(kOwned)}};
+    generated_local.blocks = {{{op(Kind::Read, "$effect1")}, {}}};
+    verify(generated_local);
+    for (const char* bad : {"$", "$.a", "$$x", "$1"}) {
+        Graph bad_generated;
+        bad_generated.entry = {{bad, cell(kOwned)}};
+        bad_generated.blocks = {{{op(Kind::Read, bad)}, {}}};
+        assert(rejected([&] { verify(bad_generated); }));
+    }
     Graph too_deep_path;
     std::string deep_key = "p";
     for (int i = 0; i < 16; ++i) deep_key += ".a";

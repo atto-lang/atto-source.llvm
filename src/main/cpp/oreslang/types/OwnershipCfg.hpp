@@ -129,6 +129,11 @@ inline void validate_disjoint_place_layout(const State& state) {
             const auto valid_continuation = [&](unsigned char ch) {
                 return valid_start(ch) || (ch >= '0' && ch <= '9');
             };
+            // Main's parser names compiler-owned ANF locals with a leading
+            // '$' (e.g. '$effect1' for discarded comma-body items). Admit
+            // that marker only on the root segment; '$' never appears in a
+            // user identifier or a field projection ("p.$a" stays rejected).
+            if (at == 0 && key[at] == '$' && key.size() > 1) ++at;
             if (!valid_start(static_cast<unsigned char>(key[at])))
                 violation(key, "unproven CFG place projection syntax");
             ++at;
