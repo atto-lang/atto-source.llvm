@@ -437,18 +437,19 @@ pub fnc main(): int {
   return moved.number;
 }
 """, "moved Array<int> class requires let mut owner"),
-    "forbid-borrowed-parameter": (CLASS + """fnc read(borrow Shelf shelf): int {
+    "forbid-shared-borrow-mutation": (CLASS + """fnc read(borrow Shelf shelf): int {
+  shelf.first.add(1);
   return shelf.number;
 }
 pub fnc main(): int {
   return 42;
 }
-""", "Array<int> class cannot be borrowed or passed"),
-    "forbid-parameter-mut": (CLASS + """fnc change(borrow mut Shelf shelf): int {
+""", "Array<int> cannot be accessed through a borrowed class"),
+    "forbid-owning-parameter": (CLASS + """fnc change(Shelf shelf): int {
   return shelf.number;
 }
 pub fnc main(): int { return 42; }
-""", "Array<int> class cannot be borrowed or passed"),
+""", "by-value class parameter"),
     "forbid-field-value-escape": (CLASS + """pub fnc main(): int {
   let mut Shelf shelf = new Shelf();
   const leaked: int = shelf.first;
@@ -520,7 +521,7 @@ pub fnc main(): int { return 42; }
   pub let Array<int> items = new Array<int>();
 end
 pub fnc main(): int { return 42; }
-""", "expected 'int'"),
+""", "native Array<int> field requires mut referent capability"),
     "exceed-64-array-quota": ("""define class Shelf as
 """ + "".join(f"  let mut Array<int> item{i} = new Array<int>();\n"
                for i in range(8)) + """end

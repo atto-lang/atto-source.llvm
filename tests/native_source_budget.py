@@ -30,6 +30,23 @@ def require_rejected(compiler: pathlib.Path, path: pathlib.Path) -> None:
                          + ": " + result.stderr[:300])
 
 
+def require_nesting_rejected(compiler: pathlib.Path, path: pathlib.Path) -> None:
+    result = invoke(compiler, path)
+    if result.returncode == 0 or result.stdout:
+        raise SystemExit("FAIL: over-nested expression accepted or emitted LLVM IR: "
+                         + path.name)
+    if "native expression nesting limit exceeded (64)" not in result.stderr:
+        raise SystemExit("FAIL: wrong expression-depth diagnostic: " + path.name
+                         + ": " + result.stderr[:300])
+
+
+def require_compiles(compiler: pathlib.Path, path: pathlib.Path) -> None:
+    result = invoke(compiler, path)
+    if result.returncode != 0 or not result.stdout:
+        raise SystemExit("FAIL: boundary expression rejected: " + path.name
+                         + ": " + result.stderr[:300])
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit("usage: native_source_budget.py <oreslang-llvmc>")
@@ -121,7 +138,37 @@ def main() -> int:
                     or "cortex-m source exceeds 128 KiB limit" not in fail.stderr):
                 raise SystemExit("FAIL: Cortex-M byte admission did not precede parsing/encoding")
 
-    print("native source input budget: byte boundary, invalid UTF-8, NUL and Cortex-M boundary checks passed")
+        # Native recursive syntax and post-parse semantic walks share the same
+        # conservative expression-depth ceiling. The leaf counts toward depth,
+        # so 63 unary operators + one literal is the exact accepted boundary.
+        unary_ok = base / "unary-depth-64.ores"
+        unary_ok.write_text(
+            "pub fnc main(): int { return " + ("-" * 63) + "1; }\n"
+        )
+        require_compiles(compiler, unary_ok)
+
+        unary_over = base / "unary-depth-65.ores"
+        unary_over.write_text(
+            "pub fnc main(): int { return " + ("-" * 64) + "1; }\n"
+        )
+        require_nesting_rejected(compiler, unary_over)
+
+        # Additive parsing itself is iterative, so this separately proves that
+        # semantic validation rejects an over-deep left-associated AST before
+        # later recursive compiler passes can consume it.
+        additive_ok = base / "additive-depth-64.ores"
+        additive_ok.write_text(
+            "pub fnc main(): int { return " + "+".join(["1"] * 64) + "; }\n"
+        )
+        require_compiles(compiler, additive_ok)
+
+        additive_over = base / "additive-depth-65.ores"
+        additive_over.write_text(
+            "pub fnc main(): int { return " + "+".join(["1"] * 65) + "; }\n"
+        )
+        require_nesting_rejected(compiler, additive_over)
+
+    print("native source input budget: byte/encoding/Cortex-M and expression-depth boundaries passed")
     return 0
 
 
