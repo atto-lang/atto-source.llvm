@@ -57,19 +57,45 @@ public:
         }
     }
 
-    // Host code in an authenticated scheduler callback is allowed to request
-    // an already-authorized region. External host threads, foreign carriers,
-    // stale actor refs and STOPPING actors are rejected. The base pointer must
-    // still come from a supervisor-owned mapped allocation; arbitrary native
-    // host C++ remains inside the trusted computing base.
+    // Trusted HOST supervisor bootstrapping only: no guest binding. This
+    // maps an already owned and live native region into the broker's catalog.
+    // An actor turn cannot supply an arbitrary void* during grant issuance.
+    void register_mapped_region(OresNativeActorRef ref,
+                                std::uint64_t region,
+                                std::uint64_t allocation,
+                                void* base, std::size_t bytes,
+                                Mode mode) {
+        require_admitted_ref(ref);
+        if (!ores_native_actor_scheduler_poll_ready(scheduler_, ref))
+            throw std::logic_error("native mapped region requires live actor");
+        authority_.require_trusted_admission(identity(ref));
+        if (!region || !allocation || !base || !bytes)
+            throw std::invalid_argument("native mapped region is empty/invalid");
+        const auto key = region_key(identity(ref), region, allocation);
+        std::lock_guard<std::mutex> lock(mapped_mu_);
+        if (!mapped_regions_.emplace(key, MappedRegion{base, bytes, mode}).second)
+            throw std::logic_error("duplicate native mapped region registration");
+    }
+
+    // Host code in an authenticated scheduler callback can request an opaque
+    // supervisor-approved region ID. External threads, foreign carriers,
+    // stale refs and STOPPING actors fail closed. The callback supplies no
+    // raw address, length or access mode at grant issuance.
     Grant issue_current_region(OresNativeActorRef ref,
                                std::uint64_t region,
-                               std::uint64_t allocation,
-                               void* base, std::size_t bytes,
-                               Mode mode) {
+                               std::uint64_t allocation) {
         require_current_live(ref);
-        return authority_.issue_region(identity(ref), region, allocation,
-                                       base, bytes, mode);
+        const auto actor = identity(ref);
+        MappedRegion mapping;
+        {
+            std::lock_guard<std::mutex> lock(mapped_mu_);
+            const auto it = mapped_regions_.find(region_key(actor, region, allocation));
+            if (it == mapped_regions_.end())
+                throw std::logic_error("native region not supervisor registered");
+            mapping = it->second;
+        }
+        return authority_.issue_region(actor, region, allocation,
+                                       mapping.base, mapping.bytes, mapping.mode);
     }
 
     // Keep the cursor inside the current host turn. No cursor is returned to
@@ -115,6 +141,19 @@ public:
     }
 
 private:
+    struct MappedRegion {
+        void* base = nullptr;
+        std::size_t bytes = 0;
+        Mode mode = Mode::ReadOnly;
+    };
+    using RegionKey = std::tuple<std::uint64_t, std::uint64_t,
+                                 std::uint64_t, std::uint64_t>;
+    static RegionKey region_key(ActorHeapIdentity actor,
+                                std::uint64_t region,
+                                std::uint64_t allocation) noexcept {
+        return {actor.actor, actor.epoch, region, allocation};
+    }
+
     ActorHeapIdentity identity(OresNativeActorRef ref) const {
         if (!ref.scheduler_domain || !ref.generation)
             throw std::logic_error("invalid native scheduler actor ref");
@@ -147,6 +186,8 @@ private:
     // Retain exact scheduler-domain witnesses until bridge shutdown. This
     // forbids a forged/stale reference from retiring an unrelated actor.
     std::map<std::pair<std::uint64_t, std::uint64_t>, OresNativeActorRef> admitted_refs_;
+    mutable std::mutex mapped_mu_;
+    std::map<RegionKey, MappedRegion> mapped_regions_;
 };
 
 } // namespace oreslang::runtime
