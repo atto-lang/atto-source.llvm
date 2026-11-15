@@ -3953,10 +3953,15 @@ private:
                         marker.offset == token_.offset + token_.text.size()) {
                     advance();
                     require("!");
+                    // Canonical mutable borrowing puts the qualifier after
+                    // the attached bang: borrow! mut value.
+                    const bool canonical_mutable_borrow =
+                            operation == "borrow" && accept("mut");
                     auto result = make_expression(
                         operation == "copy" ? Expression::Kind::Copy :
                         operation == "take" ? Expression::Kind::Take :
                         operation == "share" ? Expression::Kind::Share :
+                        canonical_mutable_borrow ? Expression::Kind::BorrowMut :
                         Expression::Kind::Borrow, start);
                     result->left = unary();
                     return result;
