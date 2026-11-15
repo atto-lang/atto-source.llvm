@@ -193,8 +193,17 @@ int main() {
         }
     });
     start_race.store(true, std::memory_order_release);
-    bridge.stop_and_revoke(ctx.refs[0]);
+    // Trusted actor holds a real previously issued window. Stop directly
+    // through the scheduler, bypassing the explicit pointer adapter.
+    if (!ores_native_actor_scheduler_stop_sealed(scheduler, ctx.refs[0]))
+        throw std::runtime_error("trusted scheduler external STOP failed");
     registration_racer.join();
+    if (bridge.fence_stopped_actors() != 1)
+        throw std::runtime_error("trusted external STOP was not fenced");
+    if (bridge.fence_stopped_actors() != 0)
+        throw std::runtime_error("trusted stopped actor fenced twice");
+    // The explicit supervisor path is still safe to retry after maintenance.
+    bridge.stop_and_revoke(ctx.refs[0]);
     if (unexpected_registration_error.load(std::memory_order_acquire))
         throw std::runtime_error("native pointer registration/STOP race failed");
     // Supervisor stop is terminal authority revocation. Even the privileged
@@ -207,15 +216,11 @@ int main() {
     } catch (const std::logic_error&) { denied = true; }
     if (!denied)
         throw std::runtime_error("retired actor accepted a new native region");
-    // Simulate a STOP initiated outside the adapter (e.g. scheduler panic
-    // or supervisor cancellation). The external maintenance path must detect
-    // this incarnation and quiesce its pointer authority.
-    if (!ores_native_actor_scheduler_stop_sealed(scheduler, ctx.refs[1]))
-        throw std::runtime_error("native scheduler external STOP failed");
-    if (bridge.fence_stopped_actors() != 1)
-        throw std::runtime_error("external STOP pointer fence not observed");
+    // Untrusted actors also receive terminal bookkeeping, but never owned
+    // any native pointer grant.
+    bridge.stop_and_revoke(ctx.refs[1]);
     if (bridge.fence_stopped_actors() != 0)
-        throw std::runtime_error("already quiesced actor re-fenced");
+        throw std::runtime_error("quiesced actors re-fenced");
     if (!ores_native_actor_scheduler_wait_done(scheduler, ctx.refs[0]) ||
         !ores_native_actor_scheduler_wait_done(scheduler, ctx.refs[1]))
         throw std::runtime_error("native actor termination did not quiesce");
