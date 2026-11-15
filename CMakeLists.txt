@@ -3469,14 +3469,15 @@ if(BUILD_TESTING)
             --run 42 --clang "${ORE_CLANG}" --opt-level "${mode}")
     endforeach()
 
-    # Runtime ASan+UBSan evidence on actual Clang output, not a Python
-    # lexical model or a sanitizer build that never executes.
-    oreslang_contract_test(native_ownership_bang_take_asan_ubsan
+    # This checks that Clang can execute and link its sanitizer runtimes
+    # with LLVM IR. It does NOT prove ASan/UBSan actually instruments
+    # pre-generated Oreslang IR; that requires separate audited IR passes.
+    oreslang_contract_test(native_ownership_bang_take_sanitizer_runtime_smoke
         ownership-bang-v1/take-native.atto --run 42
-        --clang "${ORE_CLANG}" --opt-level 1 --sanitize address,undefined)
-    oreslang_contract_test(native_ownership_bang_borrow_asan_ubsan
+        --clang "${ORE_CLANG}" --opt-level 1 --sanitizer-runtime-smoke)
+    oreslang_contract_test(native_ownership_bang_borrow_sanitizer_runtime_smoke
         ownership-bang-v1/borrow-call-accept.atto --run 42
-        --clang "${ORE_CLANG}" --opt-level 1 --sanitize address,undefined)
+        --clang "${ORE_CLANG}" --opt-level 1 --sanitizer-runtime-smoke)
     # Unsafe ownership sources must fail with compiler diagnostics and no IR.
     oreslang_contract_test(native_ownership_bang_use_after_move_reject
         ownership-bang-v1/take-after-use-reject.atto
@@ -3508,8 +3509,8 @@ if(BUILD_TESTING)
         native_ownership_bang_take_guest
         native_ownership_bang_share_guest
         native_ownership_bang_borrow_call_guest
-        native_ownership_bang_take_asan_ubsan
-        native_ownership_bang_borrow_asan_ubsan
+        native_ownership_bang_take_sanitizer_runtime_smoke
+        native_ownership_bang_borrow_sanitizer_runtime_smoke
         native_ownership_bang_use_after_move_reject
         native_ownership_bang_escaping_borrow_reject
         native_ownership_bang_share_class_reject)
