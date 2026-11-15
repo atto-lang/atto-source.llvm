@@ -66,6 +66,33 @@ static size_t checked_mul(size_t a, size_t b) {
     if (a && b > SIZE_MAX / a) deny();
     return a * b;
 }
+/* Never let external host copy buffers alias the actor's backing or
+ * allocator authority. Overlap makes memcpy undefined and may corrupt
+ * metadata or leak private state. Reject wrapping pointer spans too.
+ * This check does not allocate, acquire an extra lock, or run on zero bytes. */
+static int disjoint_host_span(const void* buffer, size_t bytes,
+                              const void* private_buffer, size_t private_bytes) {
+    const uintptr_t start = (uintptr_t) buffer;
+    const uintptr_t owned = (uintptr_t) private_buffer;
+    if (bytes > UINTPTR_MAX - start ||
+        private_bytes > UINTPTR_MAX - owned) return 0;
+    return start + bytes <= owned || owned + private_bytes <= start;
+}
+static void require_external_buffer(OresActorArena* a,
+                                    const void* buffer, size_t bytes) {
+    if (!bytes) return;
+    if (!buffer ||
+        !disjoint_host_span(buffer, bytes, a, sizeof(*a)) ||
+        !disjoint_host_span(buffer, bytes, a->meta,
+                            checked_mul(a->slots, sizeof(Slot))) ||
+        !disjoint_host_span(buffer, bytes, a->free_slots,
+                            checked_mul(a->slots, sizeof(size_t))) ||
+        !disjoint_host_span(buffer, bytes, a->slab,
+                            checked_mul(a->slots, a->slot_bytes)) ||
+        !disjoint_host_span(buffer, bytes, a->scratch, a->scratch_bytes)) {
+        deny();
+    }
+}
 /* A volatile touch prevents the compiler from removing startup residency
  * preparation merely because calloc returned zero-filled storage. A 64-byte
  * stride is intentionally much smaller than supported OS page sizes. */
@@ -197,7 +224,7 @@ void ores_actor_arena_read(OresActorArena* a, OresArenaTurn turn,
     require_turn(a, turn);
     Slot* s = require_slot(a, handle);
     require_span(s->length, offset, bytes);
-    if (bytes && !out) deny();
+    require_external_buffer(a, out, bytes);
     if (bytes) memcpy(out, a->slab + (size_t) handle.index * a->slot_bytes + offset, bytes);
     leave_lock(a);
 }
@@ -207,7 +234,8 @@ void ores_actor_arena_write(OresActorArena* a, OresArenaTurn turn,
     require_turn(a, turn);
     Slot* s = require_slot(a, handle);
     require_span(s->length, offset, bytes);
-    if (s->loans || (bytes && !src)) deny();
+    if (s->loans) deny();
+    require_external_buffer(a, src, bytes);
     if (bytes) memcpy(a->slab + (size_t) handle.index * a->slot_bytes + offset, src, bytes);
     leave_lock(a);
 }
@@ -397,7 +425,7 @@ void ores_actor_arena_scratch_write(OresActorArena* a, OresArenaTurn turn,
                                     OresArenaScratch h, size_t off, const void* src, size_t bytes) {
     enter_lock(a);
     require_turn(a, turn); scratch_bounds(a, h, off, bytes);
-    if (bytes && !src) deny();
+    require_external_buffer(a, src, bytes);
     if (bytes) memcpy(a->scratch + (size_t) h.offset + off, src, bytes);
     leave_lock(a);
 }
@@ -405,7 +433,7 @@ void ores_actor_arena_scratch_read(OresActorArena* a, OresArenaTurn turn,
                                    OresArenaScratch h, size_t off, void* out, size_t bytes) {
     enter_lock(a);
     require_turn(a, turn); scratch_bounds(a, h, off, bytes);
-    if (bytes && !out) deny();
+    require_external_buffer(a, out, bytes);
     if (bytes) memcpy(out, a->scratch + (size_t) h.offset + off, bytes);
     leave_lock(a);
 }
