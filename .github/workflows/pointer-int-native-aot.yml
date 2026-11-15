@@ -39,7 +39,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           test "$(git hash-object src/main/cpp/oreslang/frontend/Parser.cpp)" = a671707bda15bc522d8a75f8c22b16f2dff38fb0
           test "$(git hash-object src/main/cpp/oreslang/frontend/PointerIntSyntax.hpp)" = 356a2bc6f870f3c2cb7b7f848934f708324bb36d
-          test "$(git hash-object src/main/cpp/oreslang/types/PointerIntHIR.hpp)" = 5f1f1fd080d93efddd0b09b4f695f4b265d328ac
+          test "$(git hash-object src/main/cpp/oreslang/types/PointerIntHIR.hpp)" = ea39b2653d6145d20739b53d7cf76a2af8961078
           test "$(git hash-object src/main/cpp/oreslang/types/PointerIntOwnership.hpp)" = 9df530bc13383aca0f6edf352403473f1b551208
           test "$(git hash-object src/main/cpp/oreslang/backend/PointerIntCodegen.hpp)" = b461987568ae2cf4b51831105c583929b40c3d9c
           test "$(git hash-object tests/pointer_int_hir_admission.cpp)" = 4170a8ba49e1199dfca1bfaf6e701aae2637286b
