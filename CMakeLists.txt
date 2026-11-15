@@ -5,6 +5,54 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# ActorRegionV1 verification can be built against the REAL ActorArena.c
+# without LLVM headers or the compiler. This is host-runtime evidence ONLY,
+# never proof that an AttoLang .atto guest was compiled or ran.
+option(ORESLANG_ACTOR_REGION_HOST_ONLY
+    "Build the isolated ActorRegionV1 native checks without LLVM" OFF)
+option(ORESLANG_ACTOR_REGION_SANITIZERS
+    "Enable ASan + UBSan for the isolated ActorRegionV1 native checks" OFF)
+if(ORESLANG_ACTOR_REGION_HOST_ONLY)
+    include(CTest)
+    if(NOT BUILD_TESTING)
+        message(FATAL_ERROR "ActorRegionV1 host verification requires BUILD_TESTING=ON")
+    endif()
+    if(NOT UNIX OR NOT CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+        message(FATAL_ERROR "ActorRegionV1 subprocess test requires POSIX + GCC/Clang")
+    endif()
+    find_package(Threads REQUIRED)
+    foreach(level IN ITEMS 0 2)
+        foreach(kind IN ITEMS adapter supervisor)
+            set(target "oreslang-actor-region-v1-${kind}-O${level}")
+            if(kind STREQUAL "adapter")
+                set(test_file tests/actor_region_v1_test.c)
+            else()
+                set(test_file tests/actor_region_v1_fault_supervisor_test.c)
+            endif()
+            add_executable(${target}
+                ${test_file}
+                src/main/cpp/oreslang/runtime/ActorRegionV1.c
+                src/main/cpp/oreslang/runtime/ActorArena.c)
+            target_include_directories(${target} PRIVATE
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+            target_compile_features(${target} PRIVATE c_std_11)
+            target_compile_options(${target} PRIVATE
+                -Wall -Wextra -Wpedantic -Werror -UNDEBUG "-O${level}")
+            target_link_libraries(${target} PRIVATE Threads::Threads)
+            if(ORESLANG_ACTOR_REGION_SANITIZERS)
+                target_compile_options(${target} PRIVATE
+                    -fsanitize=address,undefined -fno-omit-frame-pointer)
+                target_link_options(${target} PRIVATE
+                    -fsanitize=address,undefined)
+            endif()
+            set(test_name "native_actor_region_v1_${kind}_O${level}_host_only")
+            add_test(NAME ${test_name} COMMAND ${target})
+            set_tests_properties(${test_name} PROPERTIES TIMEOUT 45)
+        endforeach()
+    endforeach()
+    return()
+endif()
+
 # GPU actor host-only verification. Opt-in native CTest with real actor/OpenCL
 # sources but no LLVM developer packages or compiled AttoLang guest.
 option(ORESLANG_GPU_ACTOR_HOST_ONLY "Build native GPU actor security tests only" OFF)
@@ -4831,6 +4879,26 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-region-v1-test)
     set_tests_properties(native_actor_region_v1_offsets_generation_drop
         PROPERTIES TIMEOUT 30)
+
+    # A child-process worker may abort on an illegal region operation;
+    # the supervising host process MUST remain alive and start a new worker.
+    # This does not implement the production sandbox or source compiler ABI.
+    if(UNIX)
+        add_executable(oreslang-native-actor-region-supervisor-fault-test
+            tests/actor_region_v1_fault_supervisor_test.c
+            src/main/cpp/oreslang/runtime/ActorRegionV1.c
+            src/main/cpp/oreslang/runtime/ActorArena.c)
+        target_include_directories(oreslang-native-actor-region-supervisor-fault-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features(oreslang-native-actor-region-supervisor-fault-test PRIVATE c_std_11)
+        target_link_libraries(oreslang-native-actor-region-supervisor-fault-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-native-actor-region-supervisor-fault-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_actor_region_v1_fault_isolation_host_only
+            COMMAND oreslang-native-actor-region-supervisor-fault-test)
+        set_tests_properties(native_actor_region_v1_fault_isolation_host_only
+            PROPERTIES TIMEOUT 45)
+    endif()
 
     # Real checked .atto source -> validated LLVM function IR -> native Clang
     # executable linked with ActorRegionV1 and the production ActorArena.c.
