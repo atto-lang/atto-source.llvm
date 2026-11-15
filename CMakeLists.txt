@@ -2170,6 +2170,18 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_ownership_cfg_dataflow_fixed_point
         COMMAND oreslang-ownership-cfg-dataflow-test)
+    # HOST ONLY: additional path/loan-token fixed-point negatives. These do
+    # not certify typed MIR->LLVM SSA identity or native guest semantics.
+    add_executable(oreslang-ownership-cfg-phi-loan-test
+        tests/ownership_cfg_phi_loan_adversarial_test.cpp)
+    target_include_directories(oreslang-ownership-cfg-phi-loan-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-ownership-cfg-phi-loan-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_ownership_cfg_phi_loan_adversarial_host_only
+        COMMAND oreslang-ownership-cfg-phi-loan-test)
+    set_tests_properties(native_ownership_cfg_phi_loan_adversarial_host_only
+        PROPERTIES TIMEOUT 20)
     # Field-wise native destruction verifier and concrete owner flags.
     # Separate from unsupported source-level nontrivial class drop glue.
     add_executable(oreslang-ownership-drop-plan-test
