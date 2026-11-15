@@ -2772,10 +2772,18 @@ private:
         // the terminal expression in the existing checked Function.result.
         // This subset supports fnc, routine, class methods and extensions;
         // unsupported complex local types still fail closed.
-        if (token_.text == "::") {
+        // Java parity: a free/module callable may omit '::' only if the first
+        // body token begins on a later physical source line than its complete
+        // return type; the body is then the same expression sequence.
+        const bool explicit_end_body = token_.text == "::";
+        const bool newline_end_body = owner.empty() && arrow_return_type &&
+            token_.text != "{" && last_token_end_ <= token_.offset &&
+            source_.substr(last_token_end_, token_.offset - last_token_end_)
+                .find_first_of("\r\n") != std::string_view::npos;
+        if (explicit_end_body || newline_end_body) {
             if (!arrow_return_type)
                 fail("native '::' body requires '->' return syntax");
-            require("::");
+            if (explicit_end_body) require("::");
             bool terminal = false;
             while (token_.text != "end") {
                 if (token_.kind == Kind::End)
@@ -2847,6 +2855,8 @@ private:
             require("end");
             return value;
         }
+        if (owner.empty() && arrow_return_type && token_.text == "return")
+            fail("native compact end-delimited callable requires '::' before same-line body");
         require("{");
         auto array_effect_ahead = [&] {
             return peek_next().text == "." && std::any_of(value.locals.begin(), value.locals.end(),
@@ -7016,6 +7026,7 @@ private:
         }
     }
     void advance() {
+        last_token_end_ = token_.offset + token_.text.size();
         token_ = lexer_.next();
         reject_unlowered_with_update();
     }
@@ -7059,6 +7070,7 @@ private:
     std::string_view source_;
     Lexer lexer_;
     Token token_;
+    std::size_t last_token_end_ = 0;
     std::unordered_set<std::string> module_names_;
     std::unordered_map<std::string, MacroKind> macros_;
     std::size_t macro_expansions_ = 0;
