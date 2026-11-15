@@ -41,3 +41,12 @@ Status: proposed normative cross-backend language contract; Java has partial exe
 ## Required evidence to claim parity
 
 Use the same supported .ores fixtures for each compiler, and record toolchain versions, exact Git tree IDs, native sanitizer results, scheduler callback/interleaving tests, negative compile diagnostics, and emitted artifacts. A host-only callback gate test is not a source-language conformance pass.
+
+## Delivery effects and event-versus-resume admission
+
+See [Callback delivery and execution-context model](../../docs/CALLBACK_DELIVERY_MODEL.md)
+for the proposed sync/deferred parameter effects, serial event admission across
+cooperative yields, and explicit uncooperative-code/proof limits. Runtime resume
+tickets and independent event callbacks require different admission rules. Java
+has an additive host event adapter; this does not certify source callback syntax
+or native/backend parity.

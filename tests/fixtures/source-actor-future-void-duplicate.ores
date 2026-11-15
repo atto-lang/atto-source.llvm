@@ -1,0 +1,18 @@
+// First source-level await slice: no scalar locals cross suspension.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const worker: ActorRef<Worker> = spawn Worker();
+  const Future<void> ready = worker.get_ready();
+  const Future<void> other = worker.get_ready();
+  await ready;
+  worker.send(1);
+  worker.send(2);
+  stop worker;
+  return 43;
+}

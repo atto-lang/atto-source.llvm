@@ -8,6 +8,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
+#include "oreslang/backend/LlvmCompat.hpp"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -30,7 +31,7 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
     auto* i64 = llvm::Type::getInt64Ty(context);
     auto* i32 = llvm::Type::getInt32Ty(context);
     auto* voidTy = llvm::Type::getVoidTy(context);
-    auto* ptr = i64->getPointerTo();
+    auto* ptr = native_pointer_type(context, i64);
     auto* frameTy = llvm::StructType::create(context, {i64, i64, i64},
                                              "oreslang.rt.scalar.frame");
     constexpr std::uint64_t kMagic = 0x4f5245534c4f4f50ULL;
@@ -39,7 +40,7 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         return b.CreateStructGEP(frameTy, frame, index, "frame.field");
     };
     const auto fail = [&](llvm::IRBuilder<>& b) {
-        b.CreateCall(llvm::Intrinsic::getDeclaration(&module, llvm::Intrinsic::trap));
+        b.CreateCall(native_trap(module));
         b.CreateUnreachable();
     };
     const auto entryGuard = [&](llvm::Function* fn, llvm::Value* frame, llvm::IRBuilder<>& b) {
@@ -101,8 +102,8 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         auto* done = llvm::BasicBlock::Create(context, "done", step);
         auto* cancelled = llvm::BasicBlock::Create(context, "cancelled", step);
         auto* loopHead = llvm::BasicBlock::Create(context, "loop.check", step);
-        auto* budget = llvm::BasicBlock::Create(context, "loop.fuel", step);
         auto* advance = llvm::BasicBlock::Create(context, "loop.commit", step);
+        auto* batchExit = llvm::BasicBlock::Create(context, "loop.batch.exit", step);
         auto* exhausted = llvm::BasicBlock::Create(context, "cooperate", step);
         auto* complete = llvm::BasicBlock::Create(context, "loop.complete", step);
         auto* state = b.CreateLoad(i64, stateAddress, "state");
@@ -116,29 +117,44 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         b.SetInsertPoint(cancelled);
         b.CreateRet(llvm::ConstantInt::get(i32, 2));
         b.SetInsertPoint(active);
+        // Calculate the exclusive endpoint once per dispatch. Both the
+        // source bound and admitted fuel fit safely in signed i64 here.
+        // Loop backedges have NO repeated fuel test, time read or scheduler
+        // callback. The only loop condition is the necessary source bound.
+        auto* first = b.CreateLoad(i64, counterAddress, "counter.at.dispatch");
+        auto* upper = llvm::ConstantInt::getSigned(i64, loop.upper_bound);
+        // This counter is part of a long-lived heap continuation. Reject
+        // corruption/stale frame replay before computing the batch endpoint:
+        // otherwise i64 wrapping could bypass the fuel cap.
+        auto* counterValid = llvm::BasicBlock::Create(context, "counter.valid", step);
+        auto* atOrAboveInitial = b.CreateICmpSGE(first,
+            llvm::ConstantInt::getSigned(i64, loop.initial));
+        auto* atOrBelowBound = b.CreateICmpSLE(first, upper);
+        b.CreateCondBr(b.CreateAnd(atOrAboveInitial, atOrBelowBound), counterValid, invalid);
+        b.SetInsertPoint(counterValid);
+        auto* byFuel = b.CreateAdd(first, fuel, "dispatch.end.by.fuel");
+        auto* endByFuel = b.CreateICmpULT(byFuel, upper);
+        auto* stop = b.CreateSelect(endByFuel, byFuel, upper, "dispatch.batch.stop");
         b.CreateBr(loopHead);
         b.SetInsertPoint(loopHead);
-        auto* remaining = b.CreatePHI(i64, 2, "dispatch.fuel");
-        remaining->addIncoming(fuel, active);
         auto* current = b.CreateLoad(i64, counterAddress, "counter.before");
-        b.CreateCondBr(b.CreateICmpSLT(current,
-            llvm::ConstantInt::getSigned(i64, loop.upper_bound)), budget, complete);
+        b.CreateCondBr(b.CreateICmpSLT(current, stop), advance, batchExit);
 
+        b.SetInsertPoint(batchExit);
+        // The existing frame protocol returns DONE (0) before COOPERATE (1)
+        // when a dispatch ends at exactly the source bound, including fuel=0.
+        b.CreateCondBr(b.CreateICmpSLT(current, upper), exhausted, complete);
         b.SetInsertPoint(complete);
         b.CreateStore(constant(2), stateAddress);
         b.CreateRet(llvm::ConstantInt::get(i32, 0));
-        b.SetInsertPoint(budget);
-        b.CreateCondBr(b.CreateICmpEQ(remaining, constant(0)), exhausted, advance);
         b.SetInsertPoint(exhausted);
         b.CreateRet(llvm::ConstantInt::get(i32, 1));
         b.SetInsertPoint(advance);
         // Source body has exactly one nonthrowing, bounded +1 effect.
-        // Commit the i64 counter BEFORE any subsequent cooperation request.
+        // Commit the frame counter before a later dispatch can cooperate.
         auto* next = b.CreateNSWAdd(current, constant(1), "counter.committed");
         b.CreateStore(next, counterAddress);
-        auto* nextFuel = b.CreateSub(remaining, constant(1), "fuel.remaining");
         b.CreateBr(loopHead);
-        remaining->addIncoming(nextFuel, advance);
     }
 
     auto* cancel = llvm::Function::Create(
