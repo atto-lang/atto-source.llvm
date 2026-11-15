@@ -36,6 +36,29 @@ int main() {
             region, allocation, base, bytes, mode);
     };
     const ActorHeapIdentity owner{1, 2, 3}, other{1, 4, 3}, stale{1, 2, 2};
+    // The native allocation-domain ABI permits actor ID zero. Only runtime
+    // and incarnation epoch zero are invalid provenance.
+    const ActorHeapIdentity actorZero{1, 0, 7};
+    const ActorHeapIdentity invalidRuntime{0, 1, 7};
+    const ActorHeapIdentity invalidEpoch{1, 1, 0};
+    std::uint32_t actorZeroBacking = 77;
+    const auto zeroGrant = issue(NativeRegionRegistry::Trust::Trusted,
+        actorZero, 4, 1, &actorZeroBacking, sizeof(actorZeroBacking),
+        TrustedPointerWindow::Mode::ReadOnly);
+    if (registry.at<std::uint32_t>(zeroGrant, actorZero).load(actorZero) != 77)
+        throw std::runtime_error("valid actor zero grant rejected");
+    NativeRegionRegistryTestAccess::fence_actor(registry, actorZero);
+    reject([&] { (void)registry.at<std::uint32_t>(zeroGrant, actorZero); });
+    for (const ActorHeapIdentity bad : {invalidRuntime, invalidEpoch}) {
+        bool rejectedInvalid = false;
+        try {
+            (void)issue(NativeRegionRegistry::Trust::Trusted,
+                bad, 5, 1, &actorZeroBacking, sizeof(actorZeroBacking),
+                TrustedPointerWindow::Mode::ReadOnly);
+        } catch (const std::invalid_argument&) { rejectedInvalid = true; }
+        if (!rejectedInvalid) throw std::runtime_error("invalid domain admitted");
+    }
+
     std::array<std::uint32_t, 4> bytes{{10, 20, 30, 40}};
     reject([&] { issue(NativeRegionRegistry::Trust::Untrusted, owner, 9, 1,
         bytes.data(), sizeof(bytes), TrustedPointerWindow::Mode::ReadWrite); });
