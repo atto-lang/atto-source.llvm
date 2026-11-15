@@ -1,5 +1,11 @@
 #define _POSIX_C_SOURCE 200809L
 #include "atto/actor_process_isolation.h"
+/* Release builds define NDEBUG, disabling assert() and accidentally skipping
+ * test operations that were written inside assertions. Keep all executable
+ * fault-containment checks active in both Debug and Release tests. */
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <assert.h>
 #include <errno.h>
 #include <pthread.h>
