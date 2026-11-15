@@ -84,7 +84,8 @@ def verify_trace(receipt, contract=None):
     seen_message_ids = set()
     counts = {"spawns": 0, "admitted": 0, "completed": 0,
               "discarded": 0, "control_dispatches": 0,
-              "parallel_receives_witnessed": False, "parallel_reads_witnessed": False}
+              "parallel_receives_witnessed": False, "parallel_reads_witnessed": False,
+              "cross_actor_overlap_witnessed": False}
 
     for i, event in enumerate(events):
         require(type(event) is dict, f"event {i} not an object")
@@ -147,6 +148,12 @@ def verify_trace(receipt, contract=None):
             require(not a["serial"] or not a["active"], "serial actor ran parallel receiver")
             require(len(a["active"]) < contract["max_active_receivers_per_actor"],
                     "active receiver budget exceeded")
+            # Distinct serial actors may execute simultaneously on different
+            # carriers. This does NOT imply a single actor supports
+            # overlapping receiver turns.
+            if any(other_id != actor_id and other["active"]
+                   for other_id, other in actors.items()):
+                counts["cross_actor_overlap_witnessed"] = True
             a["ready"].pop(0)
             a["active"][rid] = msg
             if len(a["active"]) > 1:
@@ -207,6 +214,7 @@ def main(argv=None):
     ap.add_argument("--require-emission", choices=[
         "online_linearization_points", "reconstructed_after_quiescence"])
     ap.add_argument("--require-parallel-receives", action="store_true")
+    ap.add_argument("--require-cross-actor-overlap", action="store_true")
     ap.add_argument("--require-parallel-reads", action="store_true")
     ap.add_argument("--min-admitted", type=int, default=0)
     ap.add_argument("--min-control-dispatches", type=int, default=0)
@@ -230,6 +238,8 @@ def main(argv=None):
                     "too few observed CONTROL dispatches")
             require(not args.require_parallel_receives or counts["parallel_receives_witnessed"],
                     "no overlapping receiver turns observed")
+            require(not args.require_cross_actor_overlap or counts["cross_actor_overlap_witnessed"],
+                    "no overlapping turns of distinct actors observed")
             require(not args.require_parallel_reads or counts["parallel_reads_witnessed"],
                     "no overlapping critical readers observed")
             print("ACTOR_TRACE_V2_PASS", trace, json.dumps(counts, sort_keys=True))
