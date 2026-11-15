@@ -1,0 +1,63 @@
+name: Native cross-actor concurrency trace v2
+on:
+  pull_request:
+    paths:
+      - 'tests/native_cross_actor_overlap_trace_v2.cpp'
+      - 'tests/check_actor_trace_v2.py'
+      - '.github/workflows/actor-two-carrier-v2.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  real-two-carrier-overlap:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact PR head
+        env:
+          EXPECTED_SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_HEAD"
+          git rev-parse 'HEAD^{tree}'
+      - name: Real OS threads and fail-closed trace checks
+        run: |
+          set -euo pipefail
+          c++ -std=c++20 -O1 -pthread -Wall -Wextra -Wpedantic -Werror \
+            -Isrc/main/cpp tests/native_cross_actor_overlap_trace_v2.cpp \
+            src/main/cpp/oreslang/runtime/HungryCarrier.cpp \
+            src/main/cpp/oreslang/runtime/ParkingSignal.cpp \
+            -o /tmp/atto-native-dual-carrier
+          /tmp/atto-native-dual-carrier | grep -Fx 'PASS real two-carrier host overlap with complete admission accounting'
+          for i in 1 2 3 4 5 6 7 8; do
+            /tmp/atto-native-dual-carrier --trace-v2 > "/tmp/atto-dual-$i.json"
+            python3 tests/check_actor_trace_v2.py \
+              --require-backend llvm --require-subject runtime_host \
+              --require-emission reconstructed_after_quiescence \
+              --min-admitted 2 --require-cross-actor-overlap "/tmp/atto-dual-$i.json"
+            if python3 tests/check_actor_trace_v2.py \
+                --require-parallel-receives "/tmp/atto-dual-$i.json"; then exit 1; fi
+            if python3 tests/check_actor_trace_v2.py \
+                --require-subject compiled_atto_guest "/tmp/atto-dual-$i.json"; then exit 1; fi
+          done
+          echo 'REAL_NATIVE_DISTINCT_ACTORS_CONCURRENT=PASS'
+          echo 'SINGLE_ACTOR_CONCURRENT_RECEIVERS=NOT_EXECUTED'
+      - name: ASan and UBSan real native carriers
+        run: |
+          set -euo pipefail
+          c++ -std=c++20 -O1 -g -pthread -Wall -Wextra -Wpedantic -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer -Isrc/main/cpp \
+            tests/native_cross_actor_overlap_trace_v2.cpp \
+            src/main/cpp/oreslang/runtime/HungryCarrier.cpp \
+            src/main/cpp/oreslang/runtime/ParkingSignal.cpp \
+            -o /tmp/atto-native-dual-carrier-sanitized
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/atto-native-dual-carrier-sanitized --trace-v2 > /tmp/atto-native-dual-sanitized.json
+          python3 tests/check_actor_trace_v2.py \
+            --require-backend llvm --require-subject runtime_host \
+            --require-cross-actor-overlap /tmp/atto-native-dual-sanitized.json
+          echo 'REAL_NATIVE_DUAL_CARRIER_SANITIZERS=PASS'

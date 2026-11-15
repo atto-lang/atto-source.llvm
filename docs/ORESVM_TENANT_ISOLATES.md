@@ -1,5 +1,8 @@
 # OresVM tenant-isolate substrate (native host prototype)
 
+**Canonical naming (2026-11-11): TenantVM** is the OresVM-owned per-tenant execution domain; the existing `IsolateVM` C++ class is its legacy source symbol. See [TenantVM naming](TENANT_VM_NAMING_V1.md). This remains a prototype and does not yet certify hostile actor hosting.
+
+
 **Architecture and terminology:** [OresVM vs IsolateVM (including V8 isolate lessons)](ORESVM_VS_ISOLATEVM.md) explains the root-host vs tenant VM vs actor responsibilities and separates V8 Isolates, V8 Contexts and OS sandboxing. IsolateVM is now a concrete noncopyable C++ tenant-state type, privately constructed and managed by OresVM. It is not yet an autonomous scheduler or OS sandbox.
 
 **Status:** C++17 native host prototype with one experimental scalar source-to-LLVM guest entry. It is not a complete guest VM, process sandbox, production actor scheduler or verified Java/GraalVM parity.
