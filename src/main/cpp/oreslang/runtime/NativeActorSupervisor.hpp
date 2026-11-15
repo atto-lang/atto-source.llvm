@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <stdexcept>
@@ -71,10 +72,30 @@ public:
         authority_.require_trusted_admission(identity(ref));
         if (!region || !allocation || !base || !bytes)
             throw std::invalid_argument("native mapped region is empty/invalid");
+        // Device MMIO must use a separate hardware-scoped authority with
+        // ordering/width/barrier proof; a RAM grant is never an MMIO grant.
+        if (mode != Mode::ReadOnly && mode != Mode::ReadWrite)
+            throw std::logic_error("native MMIO mapping requires separate device authority");
+        const auto begin = reinterpret_cast<std::uintptr_t>(base);
+        if (bytes > std::numeric_limits<std::uintptr_t>::max() - begin)
+            throw std::invalid_argument("native mapped region address overflows");
+        const auto end = begin + bytes;
         const auto key = region_key(identity(ref), region, allocation);
         std::lock_guard<std::mutex> lock(mapped_mu_);
-        if (!mapped_regions_.emplace(key, MappedRegion{base, bytes, mode}).second)
+        if (mapped_regions_.count(key))
             throw std::logic_error("duplicate native mapped region registration");
+        if (mapped_regions_.size() >= maximum_region_mappings_)
+            throw std::length_error("native mapped-region catalog exhausted");
+        // Even independent IDs must not create multiple native authorities
+        // over the same RAM interval without a separate sharing contract.
+        for (const auto& registered : mapped_regions_) {
+            const auto other_begin = reinterpret_cast<std::uintptr_t>(
+                registered.second.base);
+            const auto other_end = other_begin + registered.second.bytes;
+            if (begin < other_end && other_begin < end)
+                throw std::logic_error("overlapping supervisor native regions");
+        }
+        mapped_regions_.emplace(key, MappedRegion{base, bytes, mode});
     }
 
     // Host code in an authenticated scheduler callback can request an opaque
@@ -127,6 +148,7 @@ public:
         // Still fence the authenticated incarnation to prevent stale cursors.
         (void)ores_native_actor_scheduler_stop_sealed(scheduler_, ref);
         authority_.retire_actor(actor);
+        forget_mapped_regions(actor);
     }
 
     // Caller has already observed a terminal ref (panic, raise escalation or
@@ -137,7 +159,9 @@ public:
         require_admitted_ref(ref);
         if (!ores_native_actor_scheduler_poll_done(scheduler_, ref))
             throw std::logic_error("native pointer actor is not terminal");
-        authority_.retire_actor(identity(ref));
+        const auto actor = identity(ref);
+        authority_.retire_actor(actor);
+        forget_mapped_regions(actor);
     }
 
 private:
@@ -152,6 +176,16 @@ private:
                                 std::uint64_t region,
                                 std::uint64_t allocation) noexcept {
         return {actor.actor, actor.epoch, region, allocation};
+    }
+
+    void forget_mapped_regions(ActorHeapIdentity actor) {
+        std::lock_guard<std::mutex> lock(mapped_mu_);
+        for (auto it = mapped_regions_.begin(); it != mapped_regions_.end();) {
+            if (std::get<0>(it->first) == actor.actor &&
+                std::get<1>(it->first) == actor.epoch)
+                it = mapped_regions_.erase(it);
+            else ++it;
+        }
     }
 
     ActorHeapIdentity identity(OresNativeActorRef ref) const {
@@ -187,6 +221,7 @@ private:
     // forbids a forged/stale reference from retiring an unrelated actor.
     std::map<std::pair<std::uint64_t, std::uint64_t>, OresNativeActorRef> admitted_refs_;
     mutable std::mutex mapped_mu_;
+    const std::size_t maximum_region_mappings_ = 65536;
     std::map<RegionKey, MappedRegion> mapped_regions_;
 };
 
