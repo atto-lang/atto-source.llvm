@@ -315,7 +315,10 @@ inline std::filesystem::path resolve_project_root_import(
 
     const auto suffix = raw.substr(2);
     validate_suffix(suffix);
-    const fs::path source_root_spelled = package_root / configured_root;
+    // Never spell the default root as "pkg/.": the parent walk in
+    // reject_nested_package would treat "pkg/." as a nested directory.
+    const fs::path source_root_spelled = configured_root == fs::path(".")
+        ? package_root : package_root / configured_root;
     const fs::path source_root = fs::canonical(source_root_spelled, error);
     if (error)
         throw std::runtime_error("cannot resolve configured native project.root");
@@ -328,8 +331,12 @@ inline std::filesystem::path resolve_project_root_import(
 
     fs::path candidate = source_root_spelled / fs::path(std::string(suffix));
     candidate = resolve_native_source_suffix(candidate);
-    reject_nested_package(physical_root, source_root == physical_root ? candidate : source_root);
-    reject_nested_package(physical_root, candidate);
+    // Compare like with like: canonical configured root against the canonical
+    // package root, and the spelled candidate against the spelled package root
+    // (temp dirs and checkouts may sit behind symlinks such as /var -> /private/var).
+    if (source_root != physical_root)
+        reject_nested_package(physical_root, source_root);
+    reject_nested_package(package_root, candidate);
 
     const auto target = fs::canonical(candidate, error);
     if (error)
