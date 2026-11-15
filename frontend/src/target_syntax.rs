@@ -34,6 +34,12 @@ pub struct TargetHeaders {
     /// Bodies are parsed but NOT typechecked for the new out-of-line profile.
     pub definitions: Vec<ActorDecl>,
     pub receivers: Vec<ReceiverHeader>,
+    /// Balanced token body spans: (receiver index, opening brace, after brace).
+    /// Exposed to the native linker, which reparses bodies through the
+    /// production parser after applying strictly checked state lowering.
+    pub receiver_body_spans: Vec<(usize, usize, usize)>,
+    /// Balanced top-level fnc body spans: (opening brace, after brace).
+    pub function_body_spans: Vec<(usize, usize)>,
 }
 struct Cursor<'a> { toks: &'a [Token], i: usize }
 impl Cursor<'_> {
@@ -288,12 +294,14 @@ pub fn parse_target_declarations(toks: &[Token]) -> R<TargetHeaders> {
                     receiver.owner)));
         }
     }
-    for (i, start, end) in spans {
+    for &(i, start, end) in &spans {
         validate_receiver_body(toks, &out, i, start, end)?;
     }
-    for (start, end) in function_spans {
+    for &(start, end) in &function_spans {
         validate_spawned_actor_calls(toks, &out, start, end)?;
     }
+    out.receiver_body_spans = spans;
+    out.function_body_spans = function_spans;
     Ok(out)
 }
 
