@@ -20,7 +20,9 @@ pub fnc main(): int {
   const a: ActorRef<QuotaActor> = spawn QuotaActor();
   const b: ActorRef<HealthyActor> = spawn HealthyActor();
   a.send(7);
+  a.flush_blocking();  // Physical A failure is settled before B runs.
   b.send(42);
+  b.flush_blocking();  // B's successful receipt is durable before STOP.
   stop a;
   stop b;
   return 42;
