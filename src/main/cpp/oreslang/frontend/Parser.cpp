@@ -782,6 +782,35 @@ bool native_reserved_io_callable_name(std::string_view name) {
         " at byte " + std::to_string(offset));
 }
 
+/*
+ * Staged flat-namespace runtime slice. No runtime identifiers, function calls,
+ * mutable locals or actor authorities may be smuggled through a literal tree.
+ * The normal typed checker and LLVM signed-overflow intrinsics still run.
+ */
+bool namespace_literal_i64_arithmetic(const Expression& expr, std::size_t depth = 1) {
+    if (depth > 64 || !expr.name.empty() || !expr.arguments.empty() ||
+            !expr.argument_names.empty() || !expr.type_arguments.empty() ||
+            expr.type_arguments_present || expr.condition || expr.condition_lhs ||
+            expr.condition_rhs || expr.when_true || expr.when_false)
+        return false;
+    using K = Expression::Kind;
+    switch (expr.kind) {
+        case K::Integer:
+            return !expr.left && !expr.right;
+        case K::Negate:
+            return expr.left && !expr.right &&
+                   namespace_literal_i64_arithmetic(*expr.left, depth + 1);
+        case K::Add:
+        case K::Subtract:
+        case K::Multiply:
+            return expr.left && expr.right &&
+                   namespace_literal_i64_arithmetic(*expr.left, depth + 1) &&
+                   namespace_literal_i64_arithmetic(*expr.right, depth + 1);
+        default:
+            return false;
+    }
+}
+
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
@@ -900,6 +929,10 @@ public:
             require(";");
             program.imports.push_back(std::move(imported));
         }
+        // Match Java: a contextual "use" in the source header selects the
+        // SAME flat namespace; it does not authorize cross-package binding.
+        if (token_.text == "use" && peek_next().text == "namespace")
+            advance();
         if (accept("namespace")) {
             program.namespace_name = identifier();
             require(";");
@@ -907,12 +940,30 @@ public:
         bool wrapped_module = false;
         if (token_.text == "import")
             fail("native contract imports require a validated cross-unit linker");
+        // An external mtd receive/init is an actor runtime-only entrypoint,
+        // not a free function, class method or native host export. Native
+        // declaration linker / actor-state MIR must verify its source unit
+        // before any LLVM IR is emitted. Explicit denial keeps parity tests
+        // honest until that implementation exists.
+        if (token_.text == "external" && peek_next().text == "mtd")
+            fail("DECLARED_ACTOR_CODEGEN_UNSUPPORTED: external runtime-only "
+                 "actor entrypoint needs manifest-verified receiver, state "
+                 "loan and mailbox MIR");
         while (token_.text == "define" || token_.text == "declare" ||
                 (token_.text == "pub" &&
                  (peek_next().text == "define" || peek_next().text == "declare"))) {
             if (at_type_only_introducer()) {
                 type_only_declaration(program);
                 continue;
+            }
+            // Unlike complete defined actors, declaration-only actors require
+            // manifest-proven cross-file method/state linkage before any LLVM
+            // IR may be emitted. Do not disguise them as empty actor classes.
+            if (token_.text == "declare"
+                    || (token_.text == "pub" && peek_next().text == "declare")) {
+                fail("DECLARED_ACTOR_CODEGEN_UNSUPPORTED: native actor receiver, "
+                     "sealed state and mailbox lowering require a verified "
+                     "same-manifest namespace source set");
             }
             bool exported = accept("pub");
             require("define");
@@ -941,6 +992,8 @@ public:
                 type_only_declaration(program, true, exported);
                 continue;
             }
+            // Never lower a GPU actor through the ordinary CPU actor parser.
+            reject_unlowered_gpu_actor();
             if (token_.text == "state" && peek_next().text == "container")
                 fail("STATE_CONTAINER_BACKEND_UNSUPPORTED: protected heap region and critical guard lowering required");
             if (token_.text == "virtual" && peek_next().text == "actor")
@@ -1098,6 +1151,8 @@ public:
                     type_only_declaration(program, true, public_class);
                     continue;
                 }
+                // Never lower a GPU actor through the ordinary CPU actor parser.
+                reject_unlowered_gpu_actor();
                 if (token_.text == "state" && peek_next().text == "container")
                     fail("STATE_CONTAINER_BACKEND_UNSUPPORTED: protected heap region and critical guard lowering required");
                 if (token_.text == "virtual" && peek_next().text == "actor")
@@ -1150,7 +1205,38 @@ public:
                 (!program.functions.empty() || !program.classes.empty() ||
                  !program.actors.empty() || !program.contracts.empty() ||
                  !program.cooperative_loops.empty() || !program.generators.empty())) {
-            fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native namespace v1 is metadata-only");
+            // First real native namespace execution slice: exactly one
+            // standalone, pure, zero-arg scalar main returning checked literal arithmetic.
+            // No imports, namespace cross-file linking, actors, closures or
+            // source FFI can acquire identity/dispatch authority here.
+            const bool checked_scalar_main = program.imports.empty()
+                    && program.functions.size() == 1
+                    && program.classes.empty() && program.actors.empty()
+                    && program.contracts.empty() && program.conforms.empty()
+                    && program.cooperative_loops.empty() && program.generators.empty()
+                    && program.type_only_declarations.empty()
+                    && program.functions.front().name == "main"
+                    && program.functions.front().parameters.empty()
+                    && program.functions.front().generic_parameters.empty()
+                    && !program.functions.front().returns_void
+                    && program.functions.front().return_type == ScalarType::I64
+                    && !program.functions.front().async_source_i64
+                    && !program.functions.front().has_declared_effects
+                    && program.functions.front().result
+                    && namespace_literal_i64_arithmetic(*program.functions.front().result)
+                    && program.functions.front().result->arguments.empty()
+                    && program.functions.front().locals.empty()
+                    && program.functions.front().statements.empty()
+                    && program.functions.front().early_returns.empty()
+                    && program.functions.front().actor_spawns.empty()
+                    && program.functions.front().actor_sends.empty()
+                    && program.functions.front().actor_stops.empty()
+                    && program.functions.front().source_tasks.empty()
+                    && program.functions.front().future_pipelines.empty()
+                    && program.functions.front().actor_field_writes.empty()
+                    && !program.functions.front().caught_throw_value;
+            if (!checked_scalar_main)
+                fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: only standalone checked literal-arithmetic i64 main is native-lowered; multi-file actor namespaces remain gated");
         }
         compile_type_constraint_descriptors(program);
         lower_extension_calls(program);
@@ -2686,10 +2772,18 @@ private:
         // the terminal expression in the existing checked Function.result.
         // This subset supports fnc, routine, class methods and extensions;
         // unsupported complex local types still fail closed.
-        if (token_.text == "::") {
+        // Java parity: a free/module callable may omit '::' only if the first
+        // body token begins on a later physical source line than its complete
+        // return type; the body is then the same expression sequence.
+        const bool explicit_end_body = token_.text == "::";
+        const bool newline_end_body = owner.empty() && arrow_return_type &&
+            token_.text != "{" && last_token_end_ <= token_.offset &&
+            source_.substr(last_token_end_, token_.offset - last_token_end_)
+                .find_first_of("\r\n") != std::string_view::npos;
+        if (explicit_end_body || newline_end_body) {
             if (!arrow_return_type)
                 fail("native '::' body requires '->' return syntax");
-            require("::");
+            if (explicit_end_body) require("::");
             bool terminal = false;
             while (token_.text != "end") {
                 if (token_.kind == Kind::End)
@@ -2761,6 +2855,8 @@ private:
             require("end");
             return value;
         }
+        if (owner.empty() && arrow_return_type && token_.text == "return")
+            fail("native compact end-delimited callable requires '::' before same-line body");
         require("{");
         auto array_effect_ahead = [&] {
             return peek_next().text == "." && std::any_of(value.locals.begin(), value.locals.end(),
@@ -3098,11 +3194,31 @@ private:
                     } else if (accept("Future")) {
                         require("<");
                         declared_type.kind = SourceType::Kind::Future;
+                        // Reject on the wrapper identity itself, before parsing
+                        // the inner payload. This keeps Future<Future<T>>,
+                        // Future<Future<Option<T>>> and deeper shapes on the
+                        // same semantic diagnostic instead of falling back to
+                        // incidental generic punctuation errors.
+                        if (token_.text == "Future")
+                            fail("nested Future remains nested; implicit Future flatten is forbidden; native nested Future continuation lowering is unavailable");
                         if (accept("int")) declared_type.argument = "int";
                         else declared_type.argument = identifier();
                         require(">");
                         fail("Future<T> requires native continuation lowering");
                     } else {
+                        // Same rule for Option, but distinguish a single
+                        // Option<T> from Option<Option<T>> without consuming
+                        // either wrapper. The wrapper pair alone is sufficient
+                        // to establish the no-auto-flatten diagnostic.
+                        if (token_.text == "Option") {
+                            Lexer look = lexer_;
+                            const Token open = look.next();
+                            const Token nested = look.next();
+                            const Token nested_open = look.next();
+                            if (open.text == "<" && nested.text == "Option"
+                                    && nested_open.text == "<")
+                                fail("nested Option remains nested; implicit Option flatten is forbidden; native nested Option lowering is unavailable");
+                        }
                         if (token_.text == "Entry")
                             reject_native_entry_boundary(token_.offset);
                         if (token_.text == "owned" && !experimental_owned_int_)
@@ -3430,14 +3546,25 @@ private:
                     if (accept("default")) {
                         if (has_fallback)
                             fail("native do match can contain only one default arm");
+                        if (token_.text == "when" || token_.text == "as")
+                            fail("native do match default arm cannot have a guard or binding");
                         require("->"); require("{");
                         fallback = branch_arm(false, false); require("}");
                         has_fallback = true;
+                        if (token_.text == "default")
+                            fail("native do match can contain only one default arm");
                         if (token_.text != "end")
                             fail("native do match default arm must be last");
                         continue;
                     }
                     require("on");
+                    if (accept("default"))
+                        fail("native do match fallback must use 'default ->' without 'on'");
+                    // Until native HIR carries a proven record field view,
+                    // never reinterpret a tilde/structural pattern as a
+                    // scalar expression or enable host map projection.
+                    if (token_.text == "structural" || token_.text == "~")
+                        fail("native structural field pattern requires checked typed aggregate lowering");
                     if (accept("_")) {
                         if (has_fallback)
                             fail("native do match can contain only one wildcard arm");
@@ -4567,13 +4694,21 @@ private:
             if (accept("default")) {
                 if (fallback)
                     fail("native value match can contain only one default arm");
+                if (token_.text == "when" || token_.text == "as")
+                    fail("native value match default arm cannot have a guard or binding");
                 require("->");
                 fallback = dispatch_value_arm("native value match");
+                if (token_.text == "default")
+                    fail("native value match can contain only one default arm");
                 if (token_.text != "end")
                     fail("native value match default arm must be last");
                 continue;
             }
             require("on");
+            if (accept("default"))
+                fail("native value match fallback must use 'default ->' without 'on'");
+            if (token_.text == "structural" || token_.text == "~")
+                fail("native structural field pattern requires checked typed aggregate lowering");
             if (accept("_")) {
                 if (fallback)
                     fail("native value match can contain only one wildcard arm");
@@ -6877,6 +7012,17 @@ private:
 
 
 
+    void reject_unlowered_gpu_actor() {
+        if (token_.text == "gpu" && peek_next().text == "actor") {
+            throw std::runtime_error(
+                "GPU_ACTOR_MIR_UNSUPPORTED: native GPU actor requires typed "
+                "sealed-state ownership, bounded GPU mailbox scheduling, "
+                "supervisor CONTROL and physical device lowering; "
+                "no implicit CPU fallback at byte "
+                + std::to_string(token_.offset));
+        }
+    }
+
     // 'with' is contextual: preserve ordinary identifiers such as with(x).
     // Inspect actual lexer tokens rather than strings/comments/substrings.
     // No LLVM IR may be emitted until typed field-wise copy/move, drop plans,
@@ -6892,6 +7038,7 @@ private:
         }
     }
     void advance() {
+        last_token_end_ = token_.offset + token_.text.size();
         token_ = lexer_.next();
         reject_unlowered_with_update();
     }
@@ -6935,6 +7082,7 @@ private:
     std::string_view source_;
     Lexer lexer_;
     Token token_;
+    std::size_t last_token_end_ = 0;
     std::unordered_set<std::string> module_names_;
     std::unordered_map<std::string, MacroKind> macros_;
     std::size_t macro_expansions_ = 0;
