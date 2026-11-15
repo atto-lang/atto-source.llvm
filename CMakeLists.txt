@@ -1052,6 +1052,17 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
+    # Pinned portable scalar corpus (shared with java/net) and the five-case
+    # zero-assert guest set: source -> LLVM IR -> Clang -> OS exit status,
+    # plus fail-closed rejection of removed/forbidden source operators.
+    add_test(NAME native_portable_scalar_v1_smoke
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/portable_scalar_v1_native_smoke.sh"
+            "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_portable_scalar_v1_smoke PROPERTIES TIMEOUT 120)
+    add_test(NAME native_scalar_zero_smoke
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_scalar_zero_smoke.sh"
+            "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_scalar_zero_smoke PROPERTIES TIMEOUT 120)
     # Source-executable Java-style signed integer remainder subset:
     # nonzero positive/negative i64 literals only. MIN % -1 is lowered
     # without LLVM srem poison; dynamic/zero divisors still fail closed.
