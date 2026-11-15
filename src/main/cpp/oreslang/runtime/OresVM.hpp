@@ -36,7 +36,10 @@ public:
         IsolateHandle() = default;
     };
 
-    // Canonical name: opaque per-tenant-generation host capability.\n    using TenantVMHandle = IsolateHandle;\n\n    class Allocation final {
+    // Canonical name: opaque per-tenant-generation host capability.
+    using TenantVMHandle = IsolateHandle;
+
+    class Allocation final {
         friend class OresVM;
         std::weak_ptr<IsolateVM> state_;
         std::uint64_t generation_ = 0;
