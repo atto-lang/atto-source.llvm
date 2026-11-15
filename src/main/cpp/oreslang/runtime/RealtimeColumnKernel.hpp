@@ -51,9 +51,13 @@ inline ColumnAddStatus add_i64_cells(
 
     const auto dst_offset = static_cast<std::size_t>(destination_offset);
     const auto src_offset = static_cast<std::size_t>(source_offset);
-    if (ores_rt_actor_arena_read(arena, turn, destination, dst_offset,
+    // Authority probe only: a zero-byte read at offset 0 runs the carrier,
+    // epoch, owner, generation and retirement gate without the arena's span
+    // check, so an out-of-range offset is reported as OutOfBounds below
+    // rather than masked as Denied.
+    if (ores_rt_actor_arena_read(arena, turn, destination, 0,
                                  nullptr, 0) != ORES_RT_ARENA_OK ||
-        ores_rt_actor_arena_read(arena, turn, source, src_offset,
+        ores_rt_actor_arena_read(arena, turn, source, 0,
                                  nullptr, 0) != ORES_RT_ARENA_OK)
         return ColumnAddStatus::Denied;
     if ((dst_offset & 7U) != 0U || (src_offset & 7U) != 0U)
