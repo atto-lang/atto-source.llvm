@@ -127,6 +127,13 @@ private:
         }
     }
 
+    bool actor_quiescent(ActorHeapIdentity actor) {
+        verify_actor(actor);
+        std::lock_guard<std::mutex> lock(mu_);
+        const auto it = actors_.find(key(actor));
+        return it != actors_.end() && it->second == State::Retired;
+    }
+
     bool shutdown_quiescent() {
         std::lock_guard<std::mutex> lock(mu_);
         for (const auto& actor : actors_)
