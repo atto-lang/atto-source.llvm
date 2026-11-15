@@ -46,6 +46,10 @@ private:
           maximum_incarnations_(maximum_incarnations) {
         if (!runtime_id || !maximum_incarnations)
             throw std::invalid_argument("native broker runtime id/capacity is zero");
+        // The registry may never be rebound to a different broker, even if
+        // the first broker is destructed. Otherwise a second broker could
+        // re-admit an actor incarnation that the first broker retired.
+        regions_.bind_runtime_authority(runtime_id_);
     }
     static ActorKey key(ActorHeapIdentity actor) noexcept {
         return {actor.actor, actor.epoch};
