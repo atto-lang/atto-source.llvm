@@ -72,6 +72,14 @@ def main():
             'b.ores': 'define module B as pub fnc answer(borrow int x):int{return rt copy x;} end',
         }, 42),
     ]
+    # Executable precursor for namespace linking: two physical provider
+    # source files are compiled into one native guest. These are existing
+    # module imports, NOT import namespace and NOT package/manifest admission.
+    positives.append(('cross-file-scalar-43', {
+        'main.ores': 'import module Charges from "./charges"; import module Balances from "./balances"; pub fnc main():int{return Charges.charge(40)+Balances.balance();}',
+        'charges.ores': 'define module Charges as pub fnc charge(int cents):int{return cents+1;} end',
+        'balances.ores': 'define module Balances as pub fnc balance():int{return 2;} end',
+    }, 43))
     positives.append(('project-root', {
         'main.ores': 'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}',
         '.ores.pkg.toml': 'schema_version = "1"\n',
@@ -129,6 +137,15 @@ def main():
         'lib.ores': 'define module Lib as define class Flag as const bool ready=true;pub enabled():bool{return self.ready;}pub result():int{return 42;}end pub fnc answer():int{let Flag f=new Flag();return f.enabled() ? f.result() : 0;}end',
     },42))
     negatives = [
+        # Import namespaces have a distinct AST identity; before checked v2
+        # package-manifest integration they must emit no LLVM IR, regardless
+        # of whether the quoted selector is local or a pinned dependency.
+        ('namespace-local-unlinked', 'import namespace billing as pay from "+/"; pub fnc main():int{return pay.answer();}', library, 'NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED'),
+        ('namespace-pinned-unlinked', 'import namespace billing as pay from "checkout"; pub fnc main():int{return pay.answer();}', library, 'NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED'),
+        ('namespace-traversal-selector', 'import namespace billing as pay from "../other"; pub fnc main():int{return 0;}', library, 'invalid native namespace package alias'),
+        ('namespace-empty-selector', 'import namespace billing as pay from ""; pub fnc main():int{return 0;}', library, 'namespace package selector'),
+        ('namespace-duplicate-local-alias', 'import namespace billing as pay from "+/"; import namespace other as pay from "checkout"; pub fnc main():int{return 0;}', library, 'duplicate imported namespace binding'),
+        ('namespace-module-alias-collision', 'import module Lib as pay from "./lib"; import namespace billing as pay from "+/"; pub fnc main():int{return 0;}', library, 'duplicate imported namespace binding'),
         ('private-export', 'import module Lib from "./lib"; pub fnc main():int{return Lib.secret();}', library, 'imported function is private'),
         ('wrong-selection', 'import module Other from "./lib"; pub fnc main():int{return 0;}', library, 'does not declare selected module'),
         ('wrong-arity', 'import module Lib from "./lib"; pub fnc main():int{return Lib.answer(2);}', library, 'wrong call arity'),
@@ -175,6 +192,17 @@ def main():
             if result.returncode: raise AssertionError((name, result.stderr))
             if name == 'private-helper' and 'define internal i64 @__ores_module_1.delta(' not in result.stdout:
                 raise AssertionError('private imported helper leaked as an external ABI symbol')
+            if name == 'cross-file-scalar-43':
+                # A successful native process alone would not prove each
+                # provider was compiled and called through the correct ABI.
+                for signature in ('define i64 @__ores_module_1.charge(',
+                                  'define i64 @__ores_module_2.balance('):
+                    if signature not in result.stdout:
+                        raise AssertionError(('missing physical provider IR', signature))
+                for call in ('call i64 @__ores_module_1.charge(',
+                             'call i64 @__ores_module_2.balance('):
+                    if call not in result.stdout:
+                        raise AssertionError(('missing cross-file scalar call', call))
             (directory/'guest.ll').write_text(result.stdout)
             built = run([a.clang, str(directory/'guest.ll'), '-O2', '-o', str(directory/'guest')])
             if built.returncode: raise AssertionError((name, built.stderr))

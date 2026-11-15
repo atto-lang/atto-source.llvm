@@ -68,6 +68,11 @@ static void run(void* raw, size_t actor, uint64_t msg) {
     atomic_fetch_sub(&s->active[actor], 1);
     atomic_fetch_add(&s->total, 1);
 }
+/* A far-end runnable slot amid thousands of idle lanes must still dispatch. */
+static void run_far_slot(void* raw, size_t actor, uint64_t message) {
+    if (actor != 4096u || message != 7u) abort();
+    atomic_fetch_add_explicit((atomic_int*)raw, 1, memory_order_relaxed);
+}
 int main(void) {
     State s = {0};
     OresNativeActorScheduler* scheduler =
@@ -205,6 +210,24 @@ int main(void) {
     check(runtime_terminal.abandoned_user_messages == 0);
     check(runtime_terminal.abandoned_control_messages == 0);
     check(ores_native_actor_scheduler_try_destroy(scheduler));
-    puts("NATIVE_ACTOR_READY_QUEUE_PASS actors=5 messages=1000 fifo=1 max_active=1 rejected=3");
+    /* The prior bitmap branch raised the actor ceiling to 1M. Preserve that
+     * explicit capacity goal while keeping main's O(1) intrusive queues. */
+    atomic_int far_seen;
+    atomic_init(&far_seen, 0);
+    OresNativeActorScheduler* large =
+        ores_native_actor_scheduler_open(4097, 1, 1, run_far_slot, &far_seen);
+    check(large != NULL);
+    OresNativeActorRef far = ores_native_actor_scheduler_spawn(large, 4096);
+    check(far.scheduler_domain != 0);
+    check(ores_native_actor_scheduler_send(large, far, 7));
+    check(ores_native_actor_scheduler_drain(large));
+    check(atomic_load(&far_seen) == 1);
+    check(ores_native_actor_scheduler_stop(large, far));
+    ores_native_actor_scheduler_retire(large);
+    check(ores_native_actor_scheduler_try_destroy(large));
+    check(ores_native_actor_scheduler_open(
+        (size_t)ORES_NATIVE_SCHEDULER_MAX_ACTORS + 1u,
+        1, 1, run_far_slot, &far_seen) == NULL);
+    puts("NATIVE_ACTOR_READY_QUEUE_PASS actors=5 messages=1000 fifo=1 max_active=1 rejected=3 high_slot=4096");
     return 0;
 }

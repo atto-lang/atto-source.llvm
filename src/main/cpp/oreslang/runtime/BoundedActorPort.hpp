@@ -1,10 +1,10 @@
 #pragma once
 
 #include "oreslang/runtime/ActorMailboxCompletion.hpp"
+#include "oreslang/runtime/PreallocatedSelectiveSlots.hpp"
 
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <exception>
 #include <limits>
 #include <memory>
@@ -29,20 +29,18 @@ template <typename T>
 class BoundedActorPort final {
     static_assert(std::is_move_constructible_v<T>, "actor payload must be movable");
 
-    struct Envelope {
-        std::uint64_t id;
-        std::size_t bytes;
-        std::unique_ptr<T> payload;
-        std::uint64_t sequence;
-    };
+    using Queue = PreallocatedSelectiveSlots<T>;
     struct State {
         explicit State(std::size_t frames, std::size_t bytes,
                        std::shared_ptr<ActorMailboxCompletion> ledger)
-            : max_frames(frames), max_bytes(bytes), ledger(std::move(ledger)) {
+            : queue(frames), max_frames(frames), max_bytes(bytes), ledger(std::move(ledger)) {
             if (!frames || !bytes) throw std::invalid_argument("positive port limits required");
         }
         std::mutex mutex;
-        std::deque<Envelope> queue;
+        // All queue node storage is preallocated during State construction.
+        // The caller-held mutex protects the fixed-slot free/active lists;
+        // checked-out frames keep their port credit until physical ACK.
+        Queue queue;
         std::size_t max_frames, max_bytes;
         std::size_t used_frames = 0, used_bytes = 0;
         // Preparations reserve the same credits as queued/checked-out frames.
@@ -96,7 +94,7 @@ public:
         ~Delivery() = default;
     private:
         friend class BoundedActorPort<T>;
-        Delivery(std::shared_ptr<State> state, Envelope envelope)
+        Delivery(std::shared_ptr<State> state, typename Queue::Frame envelope)
             : state_(std::move(state)), id_(envelope.id),
               bytes_(envelope.bytes), payload_(std::move(envelope.payload)),
               sequence_(envelope.sequence) {}
@@ -115,7 +113,9 @@ public:
     BoundedActorPort(const BoundedActorPort&) = delete;
     BoundedActorPort& operator=(const BoundedActorPort&) = delete;
 
-    bool offer(T&& payload, std::size_t bytes) {
+    // Nonzero tags are trusted runtime metadata, never guest-controlled
+    // authority or an RTTI/reflection lookup. Legacy untagged traffic is 0.
+    bool offer(T&& payload, std::size_t bytes, std::uint32_t match_tag = 0) {
         if (!bytes) throw std::invalid_argument("actor port frame charge must be positive");
         const auto state = state_;
         {
@@ -159,7 +159,8 @@ public:
         } reservation{state, bytes};
 
         auto owned = std::make_unique<T>(std::move(payload));
-        Envelope frame{0, bytes, std::move(owned), 0};
+        // No queue allocation or T move after taking the physical mutex.
+        // All user-defined move hooks have completed outside the lock.
         {
             std::lock_guard<std::mutex> guard(state->mutex);
             // A concurrently running close() can seal new admissions while
@@ -167,17 +168,18 @@ public:
             // already owns its credits, so it must be allowed to publish.
             if (state->next_id == 0)
                 throw std::overflow_error("actor frame identity exhausted");
-            frame.id = state->next_id;
-            // No user payload destruction can occur under the mutex on
-            // allocation failure: the local frame outlives this guard.
+            // Queue publication is deterministic and allocation-free. A
+            // failed invariant leaves 'owned' with the local sender while
+            // Reservation rolls back byte/frame/ledger preparation credits.
             if (state->ledger) {
                 state->ledger->publish([&](std::uint64_t sequence) {
-                    frame.sequence = sequence;
-                    state->queue.push_back(std::move(frame));
+                    if (!state->queue.push(owned, bytes, match_tag,
+                                          sequence, state->next_id))
+                        throw std::logic_error("reserved actor mailbox slot unavailable");
                 });
-            } else {
-                frame.sequence = frame.id;
-                state->queue.push_back(std::move(frame));
+            } else if (!state->queue.push(owned, bytes, match_tag,
+                                          state->next_id, state->next_id)) {
+                throw std::logic_error("reserved actor mailbox slot unavailable");
             }
             ++state->next_id;
             --state->pending_prepares;
@@ -196,7 +198,8 @@ public:
      * This transport helper is NOT proof that the pointer's target is
      * shareable; caller must validate actor generation/handle rights first.
      */
-    bool offer_owned(std::unique_ptr<T>& payload, std::size_t bytes) {
+    bool offer_owned(std::unique_ptr<T>& payload, std::size_t bytes,
+                     std::uint32_t match_tag = 0) {
         if (!payload) throw std::invalid_argument("null owned actor payload");
         if (!bytes) throw std::invalid_argument("actor port frame charge must be positive");
         const auto state = state_;
@@ -215,26 +218,24 @@ public:
         ++state->pending_prepares;
 
         try {
-            Envelope frame{state->next_id, bytes, nullptr, 0};
             if (state->ledger) {
                 state->ledger->publish([&](std::uint64_t sequence) {
-                    frame.sequence = sequence;
-                    state->queue.push_back(std::move(frame));
+                    if (!state->queue.push(payload, bytes, match_tag,
+                                           sequence, state->next_id))
+                        throw std::logic_error("reserved actor mailbox slot unavailable");
                 });
-            } else {
-                frame.sequence = frame.id;
-                state->queue.push_back(std::move(frame));
+            } else if (!state->queue.push(payload, bytes, match_tag,
+                                          state->next_id, state->next_id)) {
+                throw std::logic_error("reserved actor mailbox slot unavailable");
             }
-            // Non-throwing transfer AFTER queue publication; a receiver
-            // cannot observe the envelope until the port mutex is released.
-            state->queue.back().payload = std::move(payload);
+            // The producer's unique owner moves only at successful
+            // publication; no user allocation occurs under this mutex.
             ++state->next_id;
             --state->pending_prepares;
             return true;
         } catch (...) {
-            // No T ownership moved on a throwing publication. The empty
-            // envelope is not retained by the strong deque insertion
-            // guarantee for noexcept-movable Envelope.
+            // Failed validation/publication never steals the producer's
+            // owner and cannot consume a global ledger sequence.
             --state->pending_prepares;
             --state->used_frames;
             state->used_bytes -= bytes;
@@ -245,10 +246,39 @@ public:
 
     std::optional<Delivery> try_receive() {
         std::lock_guard<std::mutex> guard(state_->mutex);
-        if (state_->queue.empty()) return std::nullopt;
-        auto frame = std::move(state_->queue.front());
-        state_->queue.pop_front();
-        return std::optional<Delivery>(Delivery(state_, std::move(frame)));
+        auto frame = state_->queue.pop_front();
+        if (!frame) return std::nullopt;
+        return std::optional<Delivery>(Delivery(state_, std::move(*frame)));
+    }
+
+    // Stage-1 AOT immutable-tag selection. The preallocated queue owns its
+    // slot identity and validates resumable cursors against slot generations.
+    // No dynamic allocation or arbitrary guest matcher executes under lock.
+    // At most scan_budget tags are examined; middle unlink is O(1).
+    // This remains lane-local; Erlang global selective ordering, timeout/
+    // guard lowering and hard-RT WCET qualification are separate contracts.
+    using SelectiveStatus = typename Queue::Status;
+    using SelectiveCursor = typename Queue::Cursor;
+    struct SelectiveResult {
+        SelectiveStatus status;
+        std::optional<Delivery> delivery;
+        std::size_t inspected;
+        SelectiveCursor cursor;
+    };
+
+    SelectiveResult try_receive_tagged(
+            std::uint32_t tag, std::size_t scan_budget,
+            const SelectiveCursor& cursor = {}) {
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        auto result = state_->queue.select(tag, scan_budget, cursor);
+        if (result.frame) {
+            return {result.status,
+                    std::optional<Delivery>(
+                        Delivery(state_, std::move(*result.frame))),
+                    result.inspected, std::move(result.cursor)};
+        }
+        return {result.status, std::nullopt, result.inspected,
+                std::move(result.cursor)};
     }
 
     std::size_t used_frames() const {
