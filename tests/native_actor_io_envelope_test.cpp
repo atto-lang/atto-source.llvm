@@ -74,6 +74,11 @@ int main() {
         assert(io.try_write_output(auth, full, sizeof(full)));
     assert(!io.try_write_output(auth, full, sizeof(full)));
     assert(io.try_emit_event(auth, "progress", "still-live"));
+    // Drain one full record (FIFO) so the next write fits the 4-record ring.
+    std::uint8_t drained[8] = {};
+    std::size_t drained_len = 0;
+    assert(io.try_read_output(auth, drained, sizeof(drained), drained_len));
+    assert(drained_len == sizeof(full) && drained[0] == 0 && drained[7] == 7);
 
     // Restart must erase old-generation queued bytes and metadata.
     assert(io.try_write_output(auth, output, sizeof(output)));
