@@ -45,5 +45,17 @@ int main() {
     assert(deny("main.atto", "hardlinked-ids.json"));
     fs::create_directory(root / "directory.json");
     assert(deny("main.atto", "directory.json"));
-    std::cout << "LLVM_SOURCE_LOG_PATHS_HOST_PASS:11" << std::endl;
+    // fs::canonical normally throws filesystem_error including the absolute
+    // path. The source-identity gate must not expose the private CI workspace
+    // path to a caller-controlled compiler diagnostic.
+    bool private_path_was_redacted = false;
+    try {
+        verify("secret-missing-file.atto", "source-ids.json");
+    } catch (const std::runtime_error& error) {
+        private_path_was_redacted =
+            std::string(error.what()).find(root.string()) == std::string::npos
+            && std::string(error.what()).find("secret-missing-file") == std::string::npos;
+    }
+    assert(private_path_was_redacted);
+    std::cout << "LLVM_SOURCE_LOG_PATHS_HOST_PASS:12" << std::endl;
 }
