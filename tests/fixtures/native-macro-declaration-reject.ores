@@ -1,0 +1,7 @@
+define macro identity(Syntax<Expr> value) -> Syntax<Expr> {
+  return quote(value);
+}
+
+pub fnc main(): int {
+  return 42;
+}
