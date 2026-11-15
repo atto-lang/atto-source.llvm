@@ -54,6 +54,39 @@ int main() {
                                "mut borrow!"}) {
         reject(invalid);
     }
+    // Full native semantic admission on compiler-owned source AST, not only
+    // shape comparisons using the unresolved parser.
+    {
+        const std::string borrowed =
+            "fnc inspect(borrow int x): int { return x + 1; }"
+            "fnc wrapper(int x): int { return inspect(borrow! x); }"
+            "pub fnc main(): int { return wrapper(41); }";
+        const auto program = oreslang::parse_program(borrowed);
+        if (program.functions.size() != 3)
+            throw std::runtime_error("native borrowed-argument admission missing");
+    }
+    auto semantic_reject = [](std::string_view source, std::string_view expected) {
+        try {
+            (void)oreslang::parse_program(source);
+        } catch (const std::exception& e) {
+            if (std::string(e.what()).find(expected) != std::string::npos)
+                return;
+            throw std::runtime_error("wrong native ownership denial: " +
+                                     std::string(e.what()));
+        }
+        throw std::runtime_error("native ownership violation accepted");
+    };
+    semantic_reject(
+        "pub fnc main(int value): int { return take!value + value; }",
+        "moved");
+    semantic_reject(
+        "pub fnc main(int value): int { return borrow!value; }",
+        "borrowed reference");
+    semantic_reject(
+        "define class Box as pub let int value = 3; end"
+        "pub fnc main(): int { let mut Box b = new Box(); return share!b; }",
+        "non-Copy");
+
     // A genuine native parser+ownership check, not a lexical-model-only test.
     for (const auto source : {"copy!41", "copy! 41", "rt copy 41"}) {
         const auto program = oreslang::parse_program(
