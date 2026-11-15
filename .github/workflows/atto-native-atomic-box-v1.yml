@@ -5,6 +5,10 @@ on:
       - 'src/main/cpp/oreslang/runtime/NativeAtomicBoxV1.hpp'
       - 'src/main/cpp/oreslang/runtime/NativeBoxArenaV1.hpp'
       - 'src/main/cpp/oreslang/runtime/ActorBoxRegionV1.hpp'
+      - 'src/main/cpp/oreslang/runtime/SchedulerBoxRegionV1.hpp'
+      - 'tests/scheduler_box_region_v1_test.cpp'
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.c'
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.h'
       - 'src/main/cpp/oreslang/runtime/ActorHeapIdentity.hpp'
       - 'tests/actor_box_region_v1_test.cpp'
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
@@ -33,6 +37,10 @@ on:
       - 'src/main/cpp/oreslang/runtime/NativeAtomicBoxV1.hpp'
       - 'src/main/cpp/oreslang/runtime/NativeBoxArenaV1.hpp'
       - 'src/main/cpp/oreslang/runtime/ActorBoxRegionV1.hpp'
+      - 'src/main/cpp/oreslang/runtime/SchedulerBoxRegionV1.hpp'
+      - 'tests/scheduler_box_region_v1_test.cpp'
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.c'
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.h'
       - 'src/main/cpp/oreslang/runtime/ActorHeapIdentity.hpp'
       - 'tests/actor_box_region_v1_test.cpp'
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
@@ -117,3 +125,29 @@ jobs:
           cmake -S . -B /tmp/atto-main-aot-build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
           cmake --build /tmp/atto-main-aot-build --target oreslang-llvmc -j2
           bash tests/atto_atomic_main_v1.sh /tmp/atto-main-aot-build/oreslang-llvmc
+
+  scheduler-box-real-dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build native actor scheduler and Box adapter
+        run: |
+          set -euo pipefail
+          gcc -std=c11 -O2 -pthread -Wall -Wextra -Werror -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeActorScheduler.c -o /tmp/atto-box-scheduler.o
+          g++ -std=c++20 -O2 -pthread -Wall -Wextra -Werror -Isrc/main/cpp tests/scheduler_box_region_v1_test.cpp /tmp/atto-box-scheduler.o -o /tmp/atto-box-scheduler
+          /tmp/atto-box-scheduler
+      - name: Scheduler Box ASan and UBSan
+        run: |
+          set -euo pipefail
+          gcc -std=c11 -O1 -g -pthread -fno-omit-frame-pointer -fsanitize=address,undefined -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeActorScheduler.c -o /tmp/atto-box-scheduler-san.o
+          g++ -std=c++20 -O1 -g -pthread -fno-omit-frame-pointer -fsanitize=address,undefined -Isrc/main/cpp tests/scheduler_box_region_v1_test.cpp /tmp/atto-box-scheduler-san.o -o /tmp/atto-box-scheduler-san
+          ASAN_OPTIONS=detect_leaks=1 /tmp/atto-box-scheduler-san
+      - name: Scheduler Box TSan
+        run: |
+          set -euo pipefail
+          gcc -std=c11 -O1 -g -pthread -fno-omit-frame-pointer -fsanitize=thread -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeActorScheduler.c -o /tmp/atto-box-scheduler-tsan.o
+          g++ -std=c++20 -O1 -g -pthread -fno-omit-frame-pointer -fsanitize=thread -Isrc/main/cpp tests/scheduler_box_region_v1_test.cpp /tmp/atto-box-scheduler-tsan.o -o /tmp/atto-box-scheduler-tsan
+          TSAN_OPTIONS=halt_on_error=1 /tmp/atto-box-scheduler-tsan
