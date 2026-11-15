@@ -27,8 +27,11 @@ class NativeAotReceiptTest(unittest.TestCase):
                          "0b0ff561ada2e2abb722c894eec02633d7ecbf91")
         self.assertEqual(s["native_test_script_blob"],
                          "fdfc0a303403dd82040a5a071ab14b89d565ad74")
-        self.assertEqual(blob((ROOT / "src/main.rs").read_bytes()),
-                         self.h["llvm_emitter_blob"])
+        # Historical hardening receipt is pinned to the *previous* scalar
+        # compiler snapshot. Native actor bootstrap pins the new code in
+        # its own separate immutable machine-readable evidence record.
+        self.assertEqual(self.h["llvm_emitter_blob"],
+                         "22a8d706f839f9fce625b41aa752eca17fdf8ace")
         self.assertEqual(blob((ROOT / "ci/test_native_aot.sh").read_bytes()),
                          self.h["native_ci_script_blob"])
         self.assertEqual(blob((ROOT / "frontend/src/parser.rs").read_bytes()),
