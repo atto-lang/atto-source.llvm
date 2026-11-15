@@ -1,0 +1,41 @@
+name: Oreslang client scalar native LLVM parity
+on:
+  pull_request:
+    paths:
+      - 'tests/fixtures/clients-scalar-v1/**'
+      - 'scripts/test-clients-scalar-v1.sh'
+      - '.github/workflows/clients-scalar-native.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  exact-source-llvm-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source revision
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          echo "SOURCE_COMMIT=$EXPECTED"
+          echo "SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Install native toolchain
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev
+      - name: Build real Oreslang LLVM compiler
+        run: |
+          set -euo pipefail
+          bash -n scripts/test-clients-scalar-v1.sh
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --parallel 2
+          test -x build/oreslang-llvmc
+          sha256sum build/oreslang-llvmc
+      - name: Execute exact-source LLVM native client scalar guests
+        run: |
+          set -euo pipefail
+          bash scripts/test-clients-scalar-v1.sh

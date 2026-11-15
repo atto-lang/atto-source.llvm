@@ -54,6 +54,10 @@ struct PipelineEffectSummary {
         if (!effects.valid() || !stage.valid())
             throw std::invalid_argument(
                 "Future pipeline effect summary contains unknown effect bits");
+        if (provenance != PipelineEffectProvenance::CompleteStatic
+                && provenance != PipelineEffectProvenance::UpstreamFutureUnknown)
+            throw std::invalid_argument(
+                "Future pipeline effect summary contains unknown provenance");
         return {effects.united(stage), provenance};
     }
 };
@@ -96,6 +100,16 @@ inline bool has_exceptional_pipeline_effects(FunctionEffects effects) noexcept {
 inline void require_pipeline_input_traits(
         PipelineInputOwnership ownership,
         const AutoType& type) {
+    // This helper is also callable outside full plan validation. Never
+    // interpret a stale/unknown ownership proof as an owned Send-only edge.
+    switch (ownership) {
+        case PipelineInputOwnership::BorrowedUpstreamSharedPayload:
+        case PipelineInputOwnership::ConsumedUpstreamOwnedPayload:
+        case PipelineInputOwnership::OwnedPipelineValue:
+            break;
+        default:
+            throw std::invalid_argument("Future pipeline unknown input ownership");
+    }
     const Capabilities caps = infer_auto_traits(type);
     if (ownership == PipelineInputOwnership::BorrowedUpstreamSharedPayload) {
         if (!caps.send || !caps.share)
@@ -165,6 +179,32 @@ inline void validate_future_pipeline_plan(const FuturePipelinePlan& plan) {
             || !plan.cumulative_effects.valid())
         throw std::invalid_argument(
             "Future pipeline plan contains unknown effect bits");
+
+    // Proof records are compiler-owned, but malformed/stale enum bits must
+    // never be reinterpreted as a weaker Send-only ownership mode or as
+    // valid static effect provenance at a downstream publication boundary.
+    switch (plan.input_ownership) {
+        case PipelineInputOwnership::BorrowedUpstreamSharedPayload:
+        case PipelineInputOwnership::ConsumedUpstreamOwnedPayload:
+        case PipelineInputOwnership::OwnedPipelineValue:
+            break;
+        default:
+            throw std::invalid_argument("Future pipeline unknown input ownership");
+    }
+    switch (plan.effect_provenance) {
+        case PipelineEffectProvenance::CompleteStatic:
+        case PipelineEffectProvenance::UpstreamFutureUnknown:
+            break;
+        default:
+            throw std::invalid_argument("Future pipeline unknown effect provenance");
+    }
+    switch (plan.produced_future_ownership) {
+        case PipelineStageFutureOwnership::None:
+        case PipelineStageFutureOwnership::OwnedStageResult:
+            break;
+        default:
+            throw std::invalid_argument("Future pipeline unknown deferred Future ownership");
+    }
 
     const FunctionEffects expected_effects =
         plan.prior_effects.united(plan.stage_effects);

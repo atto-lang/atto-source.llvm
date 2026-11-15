@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <fcntl.h>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -65,6 +66,12 @@ public:
         if (fd < 0 || activation == nullptr || scope.tenant == 0 ||
             scope.isolate == 0 || scope.shard == 0 || scope.actor == 0 ||
             scope.generation == 0) throw std::invalid_argument("invalid WAL runtime grant");
+        // Linux pwrite() with O_APPEND can ignore the supplied offset.
+        // Refuse such handles *before* accepting any WAL ownership; this
+        // physical check is independent of path-confinement authorization.
+        const int flags = ::fcntl(fd, F_GETFL);
+        if (flags < 0 || (flags & O_APPEND) != 0)
+            throw std::invalid_argument("WAL FD has unsafe append/unknown status flags");
         struct stat st {};
         if (::fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) ||
             st.st_nlink != 1 || st.st_size != 0)
@@ -112,6 +119,13 @@ public:
         // From this point, any failure or revocation has unknown physical
         // effects. Do NOT rollback sequence, retry, skip, or close the FD.
         try {
+            // O_APPEND can be enabled after adoption through a duplicated
+            // descriptor sharing the same open-file description. Detect it
+            // immediately before positional writes and quarantine as UNKNOWN.
+            // This does not replace exclusive physical FD custody.
+            const int live_flags = ::fcntl(fd_, F_GETFL);
+            if (live_flags < 0 || (live_flags & O_APPEND) != 0)
+                throw UnknownOutcome("WAL descriptor status flags changed");
             struct stat st {};
             if (::fstat(fd_, &st) != 0 || !S_ISREG(st.st_mode)
                 || st.st_nlink != 1 || st.st_size < 0
