@@ -1,0 +1,5 @@
+declare actor Foo1;
+define class Foo1 as
+  let int total = 0;
+end
+pub fnc main(): int { return 0; }

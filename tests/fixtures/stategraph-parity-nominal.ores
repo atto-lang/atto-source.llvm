@@ -1,0 +1,8 @@
+// LLVM source guest: independent class-owned scalar state.
+define class StepState as
+  pub let int count = 42;
+end
+pub fnc main(): int {
+  let mut StepState state = new StepState();
+  return state.count;
+}

@@ -1,0 +1,54 @@
+name: Real LLVM .atto Task native AOT (exact head)
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  task-native-aot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify source commit
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          echo "SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Install native toolchain
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev
+      - name: Build native compiler and no-GC auditor
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --parallel 2
+          test -x build/oreslang-llvmc
+          test -x build/oreslang-no-gc-ir-audit
+      - name: Validate shell syntax and run existing native eager Task CTest
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/compile-aot.sh scripts/test-source-task-atto-aot.sh
+          if grep -Fq '\${' scripts/compile-aot.sh scripts/test-source-task-atto-aot.sh; then echo 'Escaped Bash expansion detected' >&2; exit 1; fi
+          ctest --test-dir build -R native_source_task_i64_shared_scheduler_runtime --output-on-failure --timeout 30
+      - name: Execute exact-head source Task .atto guest O0 and O2
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          bash scripts/test-source-task-atto-aot.sh | tee build/task-v1-guest.log
+          test "$(grep -c '^TASK_I64_ATTO_GUEST_PASS|' build/task-v1-guest.log)" = 2
+          test "$(grep -c '^TASK_I64_ATTO_NEGATIVE_PASS|' build/task-v1-guest.log)" = 4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: task-v1-llvm-source-local
+          path: build/task-v1-guest.log
+          if-no-files-found: ignore
