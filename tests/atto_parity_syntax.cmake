@@ -121,10 +121,10 @@ reject_case(end_scalar_compact_missing_delimiter
   "native compact end-delimited callable requires '::'")
 reject_case(end_scalar_reject_unlowered_if
   "fnc add_one(int x) -> int :: if x > 0 then return x + 1; fi end\nfnc main(): int { return add_one(41); }\n"
-  "expected 'return'")
+  "expected int expression")
 reject_case(end_scalar_reject_missing_end
   "fnc add_one(int x) -> int :: return x + 1;\n"
-  "native end-delimited callable")
+  "native comma expression body requires a single terminal result")
 reject_case(import_private_fnc
   "import fnc hidden from \"./lib\";\nfnc main(): int { return hidden(1); }\n"
   "unknown or private imported function 'hidden'")
