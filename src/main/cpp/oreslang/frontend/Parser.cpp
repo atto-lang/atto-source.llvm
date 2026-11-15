@@ -2411,8 +2411,21 @@ private:
             require("=");
 
             bool parenthesized_take = false;
+            bool consume_pipeline_root = false;
             if (accept("rt")) {
                 require("take");
+                consume_pipeline_root = true;
+            } else if (token_.text == "take") {
+                Lexer probe = lexer_;
+                const Token bang = probe.next();
+                if (bang.text == "!" &&
+                        bang.offset == token_.offset + token_.text.size()) {
+                    advance(); // take
+                    require("!");
+                    consume_pipeline_root = true;
+                }
+            }
+            if (consume_pipeline_root) {
                 pipeline.root_consumed = true;
                 parenthesized_take = accept("(");
             }
@@ -2633,8 +2646,19 @@ private:
                     }
                     binding.new_class = true;
                 } else {
-                    require("rt");
-                    require("take");
+                    if (accept("rt")) {
+                        require("take");
+                    } else {
+                        if (token_.text != "take")
+                            fail("native class move requires explicit take! or rt take");
+                        Lexer probe = lexer_;
+                        const Token bang = probe.next();
+                        if (bang.text != "!" ||
+                                bang.offset != token_.offset + token_.text.size())
+                            fail("native class move requires explicit take! or rt take");
+                        advance();
+                        require("!");
+                    }
                     const bool parenthesized = accept("(");
                     binding.move_source = identifier();
                     if (parenthesized) require(")");
