@@ -1,7 +1,10 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/ActorRegionV1Guest.hpp"
+#include "oreslang/backend/ActorRegionV2Guest.hpp"
 #include "oreslang/backend/GpuG1AttoSaxpySource.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
+#include "oreslang/frontend/ActorSourceSetAdmission.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ModuleLoader.hpp"
 #include "oreslang/frontend/LibraryProfile.hpp"
@@ -527,6 +530,8 @@ static void require_actor_region_v1_aot_graph(const oreslang::Program& program) 
 int main(int argc, char** argv) {
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
+    bool actor_region_v1_guest = false; // opt-in compiler-backed native class proof
+    bool actor_region_v2_guest = false; // two-owner guarded-return cleanup
     bool wasm32_target = false;
     bool cortex_m_target = false;
     bool target_seen = false;
@@ -542,6 +547,9 @@ int main(int argc, char** argv) {
     bool rt_entry_seen = false;
     bool rt_report_seen = false;
     bool constraint_descriptors_only = false;
+    bool verify_actor_source_set_only = false;
+    bool expected_source_set_seen = false;
+    std::string expected_source_set_sha;
     std::string rt_entry = "main/0";
     std::string rt_report_path;
     bool tree_shake = false;
@@ -557,6 +565,23 @@ int main(int argc, char** argv) {
     std::string coreLogLevel = envLevel ? envLevel : "off";
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
+        // This opt-in backend retains the legacy compiler flag decoder.
+        if (arg == "--actor-region-v2-guest") {
+            if (actor_region_v2_guest) {
+                std::cerr << "duplicate actor-region-v2-guest option\n";
+                return 2;
+            }
+            actor_region_v2_guest = true;
+            continue;
+        }
+        if (arg == "--actor-region-v1-guest") {
+            if (actor_region_v1_guest) {
+                std::cerr << "duplicate actor-region-v1-guest option\n";
+                return 2;
+            }
+            actor_region_v1_guest = true;
+            continue; // Keep the existing flag decoder byte-for-byte unchanged.
+        }
         if (!arg.empty() && arg[0] == '-' && arg != "--gpu-g1-kernel-ir")
             gpu_g1_other_option = true;
         if (arg.rfind("--allocator-provider=", 0) == 0) {
@@ -634,6 +659,20 @@ int main(int argc, char** argv) {
                 return 2;
             }
             constraint_descriptors_only = true;
+        } else if (arg == "--verify-actor-source-set-only") {
+            if (verify_actor_source_set_only) {
+                std::cerr << "duplicate actor source-set verification option\n";
+                return 2;
+            }
+            verify_actor_source_set_only = true;
+        } else if (arg.rfind("--expected-source-set-git-sha=", 0) == 0) {
+            if (expected_source_set_seen) {
+                std::cerr << "duplicate trusted source-set SHA option\n";
+                return 2;
+            }
+            expected_source_set_seen = true;
+            expected_source_set_sha =
+                arg.substr(std::string("--expected-source-set-git-sha=").size());
         } else if (arg.rfind("--core-log-level=", 0) == 0) {
             coreLogLevel = arg.substr(std::string_view("--core-log-level=").size());
         } else if (arg == "--no-core-log") {
@@ -682,6 +721,33 @@ int main(int argc, char** argv) {
             return 2;
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
+    }
+    // Source-set integrity is an independent read-only admission: it never
+    // calls the actor parser, emits IR, or grants a mailbox/critical capability.
+    // The expected Git SHA must come from an independently trusted CI plan.
+    if (verify_actor_source_set_only || expected_source_set_seen) {
+        if (!verify_actor_source_set_only || !expected_source_set_seen ||
+            path == nullptr || target_seen || profile_seen || library_profile_seen ||
+            allocator_provider_seen || rt_check_only || rt_entry_seen || rt_report_seen ||
+            constraint_descriptors_only || tree_shake || !tree_shake_roots.empty() ||
+            isolate_entry_seen || experimental_owned_int || experimental_rt_scalar_loop) {
+            std::cerr << "actor source-set verification requires only trusted SHA, manifest path and verification-only mode\n";
+            return 2;
+        }
+        try {
+            const auto receipt = oreslang::frontend::verify_actor_source_set_only(
+                path, expected_source_set_sha);
+            std::cout << "ACTOR_SOURCE_SET_INTEGRITY_ONLY"
+                      << " units=" << receipt.unit_count
+                      << " namespace=" << receipt.name_space
+                      << " actor=" << receipt.actor
+                      << " NO_AST_NO_IR_NO_GUEST\n";
+            return 0;
+        } catch (const std::exception& error) {
+            print_safe_diagnostic(std::cerr, error.what(), 512);
+            std::cerr << '\n';
+            return 1;
+        }
     }
     if (gpu_g1_kernel_ir && gpu_g1_other_option) {
         std::cerr << "GPU-G1-SOURCE-004: isolated G1 source lowering forbids unrelated compiler options\n";
@@ -820,6 +886,42 @@ int main(int argc, char** argv) {
             admitted_provider_bits);
         source_module = ast.module;
         source_namespace = ast.namespace_name;
+
+        // Checked two-owner native AOT: both branches converge on exactly
+        // two compiler-generated drops, with no interpreter or GC fallback.
+        if (actor_region_v2_guest) {
+            if (actor_region_v1_guest || wasm32_target || cortex_m_target ||
+                tree_shake || experimental_owned_int || experimental_rt_scalar_loop ||
+                native_hard_rt_profile || rt_check_only || rt_report_seen ||
+                constraint_descriptors_only || bounded_allocator_provider ||
+                isolate_entry_seen) {
+                throw std::runtime_error(
+                    "actor-region-v2 guest AOT rejects incompatible compiler profiles");
+            }
+            std::cout << oreslang::emit_actor_region_v2_guest_ir(ast);
+            std::cout.flush();
+            return 0;
+        }
+
+        // Explicitly selected, compiler-backed experimental native guest path.
+        // It consumes the production parser/type/ownership-checked AST, not a
+        // text rewrite, an interpreter or an independently trusted fixture.
+        // Keep all ordinary LLVM/actor lowering untouched. This narrow slice
+        // rejects async, exceptions, mutation, ownership escapes and other
+        // unmodeled edges before emitting even one LLVM IR byte.
+        if (actor_region_v1_guest) {
+            if (wasm32_target || cortex_m_target || tree_shake ||
+                experimental_owned_int || experimental_rt_scalar_loop ||
+                native_hard_rt_profile || rt_check_only || rt_report_seen ||
+                constraint_descriptors_only || bounded_allocator_provider ||
+                isolate_entry_seen) {
+                throw std::runtime_error(
+                    "actor-region-v1 guest AOT rejects incompatible compiler profiles");
+            }
+            std::cout << oreslang::emit_actor_region_v1_guest_ir(ast);
+            std::cout.flush();
+            return 0;
+        }
 
         // Strict admission happens on the fully resolved and ownership-checked
         // Program, before any executable LLVM IR or sidecar is emitted.
