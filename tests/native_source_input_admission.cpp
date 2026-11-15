@@ -108,6 +108,22 @@ int main() {
 #endif
         check(!ores_source_stat_stable(before, altered), "mtime change accepted");
         require_valid_source_utf8("valid ASCII");
+        // Shared 19-case corpus boundary extensions; compiler-host checks only.
+        require_valid_source_utf8(std::string("\\xF4\\x8F\\xBF\\xBF", 4));
+        require_valid_source_utf8(std::string("e\\xCC\\x81", 3));
+        rejects_source_at(std::string("\\0", 1),
+                          "native source contains NUL byte at byte offset 0");
+        rejects_source_at(std::string("\\"a\\0\\"", 4),
+                          "native source contains NUL byte at byte offset 2");
+        rejects_source_at(std::string("/* café */\\0", 13),
+                          "native source contains NUL byte at byte offset 12");
+        rejects_source_at(std::string("\\xE0\\x80\\x80", 3),
+                          "native source is not valid UTF-8 at byte offset 1");
+        rejects_source_at(std::string("a\\x80", 2),
+                          "native source is not valid UTF-8 at byte offset 1");
+        rejects_source_at(std::string("x\\xF0\\x90\\x80", 4),
+                          "native source is not valid UTF-8 at byte offset 1");
+
         rejects_source_at(std::string("ab\\0cd", 5),
                           "native source contains NUL byte at byte offset 2");
         rejects_source_at(std::string("\\xC0\\xAF", 2),
