@@ -43,6 +43,11 @@ int main() {
     using Admission = NativeRegionRuntimeAuthority::Admission;
     using Mode = TrustedPointerWindow::Mode;
     auto broker = Harness::create(registry, 29);
+    // Conflicting trusted/untrusted policy tables cannot coexist over the
+    // same memory registry. A second broker could otherwise re-admit a
+    // previously retired actor identity.
+    require_denied([&] { (void)Harness::create(registry, 29); });
+    require_denied([&] { (void)Harness::create(registry, 30); });
     const ActorHeapIdentity trusted{29, 0, 7}; // actor zero is valid
     const ActorHeapIdentity untrusted{29, 2, 7};
     const ActorHeapIdentity sibling{29, 3, 7};
@@ -115,7 +120,8 @@ int main() {
     const ActorHeapIdentity bogus{29, 8, 7};
     require_denied([&] { Harness::admit(*broker, bogus, static_cast<Admission>(255)); });
     // An attacker cannot force unlimited actor epoch tombstone growth.
-    auto limited = Harness::create(registry, 29, 1);
+    NativeRegionRegistry limited_registry;
+    auto limited = Harness::create(limited_registry, 29, 1);
     const ActorHeapIdentity limited_actor{29, 90, 1};
     Harness::admit(*limited, limited_actor, Admission::Untrusted);
     Harness::retire(*limited, limited_actor);
