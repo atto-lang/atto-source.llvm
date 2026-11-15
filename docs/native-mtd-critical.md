@@ -68,4 +68,20 @@ No cross-organization checkout secrets or tokens were used: the matching full Gi
 
 The expanded source and negative tests also passed on the private carrier: [63-file nominal-type and guarded-state hardening run](https://github.com/athlet-o/athleto-e2e/actions/runs/43666674489), exact tree `a6d2f2ab5155fac02d29fec426c2014c30ad4a98`. It executed the same **120 native actor guest runs** and **8,000-message ABI stress**, rejected **15 actor negatives** (including unsafe effects, immutable critical-write, nesting, complex unsupported read and unrelocated nominal type signatures), and preserved all 1,255 scalar protocol cases. The signed machine-readable receipt is `contracts/native-llvm-target-mtd-v1.json` (SHA-exact Git evidence, not a network interoperability claim).
 
+## Nominal-type and sealed-public-state security audit
+
+A subsequent source-focused audit closed three fail-closed gaps in this bounded native profile:
+
+- The production type checker now bounds-checks the indices of both `Type::Named` and `Type::NamedRef`. Out-of-range indices from separately parsed target units produce the explicit `E_TYPE_INDEX` diagnostic rather than an unchecked array access/panic.
+- The native target linker rejects `pub` actor-state fields with `E_SEALED`, even though the legacy concrete actor grammar accepted public fields. This prevents public metadata being attached to actor-private state.
+- Out-of-line `mtd` bodies reparsed via the production frontend must exactly match the validated nominal header's receiver method name, parameter names/types, return type, and instance/static status. A name + arity match alone is no longer considered an ABI proof.
+
+The audit adds four targeted negative `.atto` fixtures (`201` through `204`) and preserves the earlier source/runner receipts as historical evidence instead of rewriting them. A SHA-identical 69-file private runner compiled the actual native actor suite and returned **PASS**: 6 actor guest fixtures ×20 = 120 native ELF executions, **19** fail-closed actor compiler cases, **8,000** accepted concurrent mailbox messages, ASan/UBSan, the existing **1,255** scalar protocol checks and 12 earlier Python evidence checks.
+
+- [Verified private runner](https://github.com/athlet-o/athleto-e2e/actions/runs/43669072054)
+- Original executed Git tree: `c5e1f150fa628f3985a535efd83bcfcbffb03cb0` (69 blobs)
+- Exact hardening receipt: `contracts/native-llvm-nominal-sealed-hardening-v1.json`
+
+No cross-org checkout credentials were required; the private carrier's Git tree SHA matched the source repository before executing tests. This does **not** prove the complete borrow checker, concurrent reader locks, actor supervision or HTTP/3 networking.
+
 **Still blocked:** Full general-purpose `critical-read` with concurrent readers, mutable borrows and lifetimes, nested callbacks, effect analysis, ownership across `await/select`, atomically admitted typed `send(): Result`, cancellations/restarts, supervisor priority CONTROL events for panic, scalable worker scheduling and real QUIC/TLS/HTTP3 networking. Do not merge this draft as complete Atto actor support.
