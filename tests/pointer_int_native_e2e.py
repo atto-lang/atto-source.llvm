@@ -84,8 +84,8 @@ NEGATIVE = [
 ]
 
 
-def run(cmd):
-    return subprocess.run(cmd, capture_output=True, timeout=120)
+def run(cmd, env=None):
+    return subprocess.run(cmd, capture_output=True, timeout=120, env=env)
 
 
 class RealPointerNativeAot(unittest.TestCase):
@@ -135,6 +135,23 @@ class RealPointerNativeAot(unittest.TestCase):
                 executed = run([str(executable)])
                 self.assertEqual(executed.returncode, expected,
                                  name + ": compiled native guest exit differs")
+                # This is the guest binary (not merely the source-free
+                # C++ capability model) running under address/UB sanitizers.
+                sanitized = self.dir / (name + ".asan.native")
+                san_build = run([str(CLANG), "-Wno-override-module", "-O1",
+                                 "-fsanitize=address,undefined",
+                                 "-fno-omit-frame-pointer",
+                                 "-x", "ir", str(text_ir), "-o", str(sanitized)])
+                self.assertEqual(san_build.returncode, 0,
+                    "compiled Pointer<int> sanitizer build failed " + name +
+                    ": " + san_build.stderr.decode(errors="replace")[-1600:])
+                env = os.environ.copy()
+                env["ASAN_OPTIONS"] = "detect_leaks=1:halt_on_error=1"
+                env["UBSAN_OPTIONS"] = "halt_on_error=1"
+                sanitized_run = run([str(sanitized)], env=env)
+                self.assertEqual(sanitized_run.returncode, expected,
+                    "compiled Pointer<int> sanitizer guest failed " + name +
+                    ": " + sanitized_run.stderr.decode(errors="replace")[-1600:])
                 print("ATTO_POINTER_INT_NATIVE_PASS=" + name + " source=" + digest +
                       " executable=" + hashlib.sha256(executable.read_bytes()).hexdigest(),
                       flush=True)
