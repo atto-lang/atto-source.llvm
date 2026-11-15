@@ -3448,6 +3448,35 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_ownership_bang_borrow_call_guest
         ownership-bang-v1/borrow-call-accept.atto
         --run 42 --clang "${ORE_CLANG}")
+
+    # Optimization is an ABI/ownership-sensitive boundary: require both
+    # unoptimized and optimized real native runs (not just IR shape tests).
+    foreach(mode IN ITEMS 0 2)
+        oreslang_contract_test(native_ownership_bang_copy_compact_O${mode}
+            ownership-bang-v1/copy-compact-native.atto
+            --run 42 --clang "${ORE_CLANG}" --opt-level "${mode}")
+        oreslang_contract_test(native_ownership_bang_copy_spaced_O${mode}
+            ownership-bang-v1/copy-spaced-native.atto
+            --run 42 --clang "${ORE_CLANG}" --opt-level "${mode}")
+        oreslang_contract_test(native_ownership_bang_take_O${mode}
+            ownership-bang-v1/take-native.atto
+            --run 42 --clang "${ORE_CLANG}" --opt-level "${mode}")
+        oreslang_contract_test(native_ownership_bang_share_O${mode}
+            ownership-bang-v1/share-native.atto
+            --run 42 --clang "${ORE_CLANG}" --opt-level "${mode}")
+        oreslang_contract_test(native_ownership_bang_borrow_call_O${mode}
+            ownership-bang-v1/borrow-call-accept.atto
+            --run 42 --clang "${ORE_CLANG}" --opt-level "${mode}")
+    endforeach()
+
+    # Runtime ASan+UBSan evidence on actual Clang output, not a Python
+    # lexical model or a sanitizer build that never executes.
+    oreslang_contract_test(native_ownership_bang_take_asan_ubsan
+        ownership-bang-v1/take-native.atto --run 42
+        --clang "${ORE_CLANG}" --opt-level 1 --sanitize address,undefined)
+    oreslang_contract_test(native_ownership_bang_borrow_asan_ubsan
+        ownership-bang-v1/borrow-call-accept.atto --run 42
+        --clang "${ORE_CLANG}" --opt-level 1 --sanitize address,undefined)
     # Unsafe ownership sources must fail with compiler diagnostics and no IR.
     oreslang_contract_test(native_ownership_bang_use_after_move_reject
         ownership-bang-v1/take-after-use-reject.atto
