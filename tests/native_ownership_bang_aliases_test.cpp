@@ -87,6 +87,15 @@ int main(int argc, char** argv) {
     if (argc != 2) throw std::runtime_error("expected canonical .atto fixture directory");
     const std::string root(argv[1]);
     equivalent("rt copy foo", "copy! foo", "copy!foo", Expression::Kind::Copy);
+    equivalent("rt copy eqfoo", "copy! eqfoo", "copy!eqfoo", Expression::Kind::Copy);
+    // !eq is an atomic inequality token at an identifier boundary, not
+    // an ownership marker followed by the identifier 'eq'.
+    {
+        oreslang::Program holder;
+        const Expression& expr = parsed("copy!eq foo", holder);
+        if (expr.kind != Expression::Kind::NotEqual)
+            throw std::runtime_error("atomic !eq inequality parsed as ownership");
+    }
     equivalent("rt take foo", "take! foo", "take!foo", Expression::Kind::Take);
     equivalent("rt borrow foo", "borrow! foo", "borrow!foo", Expression::Kind::Borrow);
     equivalent("rt share foo", "share! foo", "share!foo", Expression::Kind::Share);
