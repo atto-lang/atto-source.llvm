@@ -26,7 +26,26 @@ ActorRegionV2 constructs a small CFG: all lexical objects are created in the ent
 
 ## Tests
 
-`native_ownership_dataflow_v1` contains eight positive scenarios and twenty-one negative scenarios. It checks cleanup order, moved and explicitly dropped owners, shared/mutable borrow release, double destruction, use after move, dropping with a loan, conflicting aliases, mismatched join states, suspend exit, missing explicit exit and duplicate owner identities, unbounded cycles, missing/invalid transfer destinations, transfer into an initialized destination, use-before-create, unknown operation kinds, unreachable blocks, unbalanced borrows, mutable access during shared borrowing, incompatible acquisition histories at joins, ending a nonexistent loan, stray transfer metadata, reading through the owner during an active mutable loan, and invalid exit operations.
+`native_ownership_dataflow_v1` contains sixteen positive scenarios and thirty-nine negative scenarios. It checks cleanup order, moved and explicitly dropped owners, shared/mutable borrow release, double destruction, use after move, dropping with a loan, conflicting aliases, mismatched join states, suspend exit, missing explicit exit and duplicate owner identities, unbounded cycles, missing/invalid transfer destinations, transfer into an initialized destination, use-before-create, unknown operation kinds, unreachable blocks, unbalanced borrows, mutable access during shared borrowing, incompatible acquisition histories at joins, ending a nonexistent loan, stray transfer metadata, reading through the owner during an active mutable loan, and invalid exit operations.
+
+The negative fixtures assert their exact expected ownership diagnostic (rather than accepting
+any rejection). Valid take-to-destination fixtures isolate use-after-move and CFG join
+mismatch. Additional negatives separately reject exceptional and cancellation exits,
+transfer during an outstanding shared loan, mutation through a missing exclusive
+loan, and ending a nonexistent mutable loan.
+
+The native test binary now uses an explicit named-case dispatcher. It executes every
+fixture even if an earlier fixture returns false or throws, prints a per-case
+`OWNERSHIP_CFG|case=...|kind=...|result=...` record, and emits one aggregate
+`OWNERSHIP_DATAFLOW_V1|positive=16|negative=39|attempted=55|failed=N|result=...`
+record. `native_ownership_dataflow_v1_runner_continuation` independently
+checks that a deliberately failing middle case does not short-circuit the
+third case. New positive fixtures exercise identical-state joins, branch-local
+borrow/release, drop on both branches, transfer across blocks, and all four
+inclusive analysis budgets; negative fixtures assert the corresponding
+overflow/invalid-graph diagnostics, bad exit placement, overlapping
+mutable loans, borrow-state mismatch at joins, and self-transfer. These
+fixtures remain host compiler-time tests, not source-language guest execution.
 
 The tests are authored and registered. They are **not reported as passing** until a nonzero-step native CTest job runs on the exact PR head. They do not prove LLVM guest execution or a process-wide no-GC link closure.
 

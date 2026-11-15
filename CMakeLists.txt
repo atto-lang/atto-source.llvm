@@ -83,6 +83,19 @@ if(ATTO_ACTOR_ACCESS_HOST_ONLY)
     -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
   add_test(NAME actor_access_v1_host_gate
     COMMAND atto_actor_access_v1_host_test)
+  find_package(Threads REQUIRED)
+  add_executable(atto_actor_access_v1_scoped_host_test
+    tests/actor_isolation_access_scoped_test.cpp)
+  target_include_directories(atto_actor_access_v1_scoped_host_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_features(atto_actor_access_v1_scoped_host_test PRIVATE cxx_std_17)
+  target_compile_options(atto_actor_access_v1_scoped_host_test PRIVATE
+    -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+  target_link_libraries(atto_actor_access_v1_scoped_host_test PRIVATE Threads::Threads)
+  add_test(NAME actor_access_v1_scoped_release_retire_quiescence
+    COMMAND atto_actor_access_v1_scoped_host_test)
+  set_tests_properties(actor_access_v1_scoped_release_retire_quiescence
+    PROPERTIES TIMEOUT 20)
   return()
 endif()
 
@@ -190,6 +203,32 @@ if(ORESLANG_PROXY_SLAB_HOST_ONLY)
     return()
 endif()
 
+# Narrow actual C++ host-runtime test, runnable without LLVM developer headers.
+# This is NOT compiler-lowered .atto Map<Bytes,Bytes> or typed ActorMail.
+option(ORESLANG_ACTOR_BYTES_MAP_HOST_ONLY
+    "Build only the bounded actor-owned Bytes map native host regression" OFF)
+if(ORESLANG_ACTOR_BYTES_MAP_HOST_ONLY)
+    include(CTest)
+    if(NOT BUILD_TESTING)
+        message(FATAL_ERROR "Actor Bytes map host proof requires BUILD_TESTING=ON")
+    endif()
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-actor-bytes-map-test
+        tests/native_actor_bytes_map_test.cpp)
+    target_include_directories(oreslang-native-actor-bytes-map-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-bytes-map-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-actor-bytes-map-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-actor-bytes-map-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_actor_owned_bytes_map_host_only
+        COMMAND oreslang-native-actor-bytes-map-test)
+    set_tests_properties(native_actor_owned_bytes_map_host_only
+        PROPERTIES TIMEOUT 60)
+    return()
+endif()
+
 # Managed Oreslang references are a language/runtime storage policy, separate
 # from the native target ABI. Keep compact actor-local references as the
 # default on 64-bit hosts while preserving an explicit full-width mode.
@@ -231,6 +270,107 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # An actual C11 native state gate, shared with LLVM's future typed
+    # handle_state lowering. This is HOST execution, not guest .atto dispatch.
+    add_executable(oreslang-declared-actor-critical-counter-test
+        tests/native_declared_actor_critical_counter_gate_test.c)
+    set_target_properties(oreslang-declared-actor-critical-counter-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_include_directories(oreslang-declared-actor-critical-counter-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-declared-actor-critical-counter-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_declared_actor_critical_counter_host_state_gate
+        COMMAND oreslang-declared-actor-critical-counter-test)
+    set_tests_properties(native_declared_actor_critical_counter_host_state_gate
+        PROPERTIES TIMEOUT 20)
+
+    # The first cross-backend namespace-header AOT receipt executes actual
+    # guest-generated LLVM IR with Clang. Declared actor source remains a
+    # separate strict negative codegen test until mailbox/loan MIR exists.
+    find_program(ORE_DECLARED_ACTOR_CLANG NAMES clang-20 clang-19 clang-18 clang-17 clang clang-16 clang-15 clang-14)
+    if(ORE_DECLARED_ACTOR_CLANG)
+        add_test(NAME native_use_namespace_scalar_aot_and_actor_codegen_gate
+            COMMAND "${CMAKE_COMMAND}"
+                "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                "-DCLANG=${ORE_DECLARED_ACTOR_CLANG}"
+                "-DPOSITIVE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/use-namespace-llvm-scalar-main.atto"
+                "-DARITHMETIC=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/use-namespace-scalar-arithmetic.atto"
+                "-DNEGATIVE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/declared-actor-use-namespace-reject.atto"
+                "-DBAD_NONLITERAL=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/use-namespace-nonliteral-reject.atto"
+                "-DBAD_MULTIFUNCTION=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/use-namespace-multifunction-reject.atto"
+                "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/declared-actor-namespace-v1"
+                "-DRECEIVE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/declared-actor-namespace-v1/receive-canonical.atto"
+                "-DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/declared-actor-native-aot"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/native_declared_actor_llvm_frontend_gate.cmake")
+        set_tests_properties(native_use_namespace_scalar_aot_and_actor_codegen_gate
+            PROPERTIES TIMEOUT 90)
+    endif()
+
+    # Pure host C++17 hashing/path admission unit. It can run without LLVM
+    # emission and is NEVER a source-language actor execution receipt.
+    add_executable(oreslang-actor-source-set-admission-unit
+        tests/native_actor_source_set_integrity_unit_test.cpp)
+    target_include_directories(oreslang-actor-source-set-admission-unit PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-source-set-admission-unit PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_actor_source_set_git_blob_and_paths_host_only
+        COMMAND oreslang-actor-source-set-admission-unit)
+    set_tests_properties(native_actor_source_set_git_blob_and_paths_host_only
+        PROPERTIES TIMEOUT 15)
+
+    # Authenticated manifest + all seven materialized .atto sources must pass
+    # through the actual compiler binary. Explicit verification-only mode
+    # has NO AST/IR/actor execution authority. Node only materializes the
+    # already-sha-pinned canonical fixture and is not a guest interpreter.
+    find_program(ORE_COUNTER_NODE NAMES node nodejs)
+    # The symlink-negative source-set test requires POSIX symlink semantics.
+    if(ORE_COUNTER_NODE AND UNIX)
+        add_test(NAME native_actor_counter_source_set_integrity_only
+            COMMAND "${CMAKE_COMMAND}"
+                "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                "-DNODE=${ORE_COUNTER_NODE}"
+                "-DTOOL=${CMAKE_CURRENT_SOURCE_DIR}/tools/actor-counter-parity.mjs"
+                "-DMANIFEST=${CMAKE_CURRENT_SOURCE_DIR}/contracts/actor-counter-identical-source-v1/actor-source-set.v1"
+                "-DEXPECTED_SHA=e4fd0afea3d21e6fed54f9943abbf0851550e028"
+                "-DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/actor-source-set-admission"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/native_actor_source_set_integrity_only.cmake")
+        set_tests_properties(native_actor_counter_source_set_integrity_only
+            PROPERTIES TIMEOUT 60)
+    endif()
+
+    # Fixed-budget, byte-exact Map<Bytes,Bytes> substrate. C++ host regression,
+    # not compiler-lowered .atto or authenticated typed mailbox dispatch.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-actor-bytes-map-test
+        tests/native_actor_bytes_map_test.cpp)
+    target_include_directories(oreslang-native-actor-bytes-map-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-bytes-map-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-actor-bytes-map-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-actor-bytes-map-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_owned_bytes_map_host_only
+        COMMAND oreslang-native-actor-bytes-map-test)
+    set_tests_properties(native_actor_owned_bytes_map_host_only
+        PROPERTIES TIMEOUT 60)
+    # Only the full compiler build can check that still-unsupported guest
+    # typed Map<Bytes,Bytes> actor source fails before any LLVM IR emission.
+    add_test(NAME native_actor_bytes_map_typed_source_fail_closed
+        COMMAND "${CMAKE_COMMAND}"
+            "-DORE_BYTES_MAP_COMPILER=$<TARGET_FILE:oreslang-llvmc>"
+            "-DORE_BYTES_MAP_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-actor-bytes-map-target.atto"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_bytes_map_source_negative.cmake")
+    set_tests_properties(native_actor_bytes_map_typed_source_fail_closed
+        PROPERTIES TIMEOUT 30)
+    add_test(NAME native_actor_bytes_map_scalar_atto_baseline
+        COMMAND "${CMAKE_COMMAND}"
+            "-DORE_ACTOR_LLVM_CLI=$<TARGET_FILE:oreslang-llvmc>"
+            "-DORE_ACTOR_SCALAR_ATTO=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-actor-redis-scalar-baseline.atto"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_bytes_map_source_baseline.cmake")
+    set_tests_properties(native_actor_bytes_map_scalar_atto_baseline
+        PROPERTIES TIMEOUT 40)
     # Compiler-linked API regression: genuine LLVM 19/20+ intrinsic declaration
     # selection, including overloaded checked-i64 arithmetic and trap.
     # It is host LLVM API evidence; NOT AttoLang guest-execution parity.
@@ -1597,6 +1737,8 @@ if(BUILD_TESTING)
     endif()
     # Java-parity syntax as .atto guests: if/then, stdio.stdout.write/println
     # of String/int/bool, Result.expect, and `import fnc` named imports.
+    # Register these gates even when Clang is missing: absent native toolchains
+    # must be visible failed tests, not falsely green CTest selections.
     if(ORE_CLANG)
         add_test(NAME native_atto_parity_syntax
             COMMAND "${CMAKE_COMMAND}"
@@ -1605,13 +1747,42 @@ if(BUILD_TESTING)
                 "-DCLANG=${ORE_CLANG}"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_parity_syntax.cmake")
         set_tests_properties(native_atto_parity_syntax PROPERTIES TIMEOUT 240)
-        add_test(NAME native_sealed_scalar_aot_v1
-            COMMAND "${CMAKE_COMMAND}"
-                "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
-                "-DBUILD=${CMAKE_CURRENT_BINARY_DIR}"
-                "-DCLANG=${ORE_CLANG}"
-                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/sealed_scalar_aot_v1.cmake")
-        set_tests_properties(native_sealed_scalar_aot_v1 PROPERTIES TIMEOUT 180)
+    endif()
+    add_test(NAME native_sealed_scalar_aot_v1
+        COMMAND "${CMAKE_COMMAND}"
+            "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+            "-DBUILD=${CMAKE_CURRENT_BINARY_DIR}"
+            "-DCLANG=${ORE_CLANG}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/sealed_scalar_aot_v1.cmake")
+    set_tests_properties(native_sealed_scalar_aot_v1 PROPERTIES TIMEOUT 180)
+    add_test(NAME native_sealed_class_fields_reachability_v1
+        COMMAND "${CMAKE_COMMAND}"
+            "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+            "-DBUILD=${CMAKE_CURRENT_BINARY_DIR}"
+            "-DCLANG=${ORE_CLANG}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/sealed_class_fields_reachability_v1.cmake")
+    set_tests_properties(native_sealed_class_fields_reachability_v1 PROPERTIES TIMEOUT 240)
+    add_test(NAME native_sealed_aot_profile_mutations
+        COMMAND "${CMAKE_COMMAND}"
+            "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+            "-DBUILD=${CMAKE_CURRENT_BINARY_DIR}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/sealed_aot_profile_mutations.cmake")
+    set_tests_properties(native_sealed_aot_profile_mutations PROPERTIES TIMEOUT 240)
+    # Independently prove invalid/missing build roots cannot trigger recursive
+    # cleanup before the native compiler or a guest exists.
+    add_test(NAME native_sealed_aot_workspace_guard
+        COMMAND "${CMAKE_COMMAND}"
+            "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+            "-DBUILD=${CMAKE_CURRENT_BINARY_DIR}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/sealed_aot_profile_guard_selftest.cmake")
+    set_tests_properties(native_sealed_aot_workspace_guard PROPERTIES TIMEOUT 30)
+    # Mock-tool regression: prove strict link-closure rejection without
+    # suggesting the fake compiler or Clang produced real guest evidence.
+    if(UNIX)
+        add_test(NAME native_sealed_aot_link_closure_sourcefree
+            COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-sealed-aot-link-closure.sh")
+        set_tests_properties(native_sealed_aot_link_closure_sourcefree
+            PROPERTIES TIMEOUT 45)
     endif()
     # Positive compiler-only contracts must assemble the emitted IR, not just
     # accept an expected substring after the textual ModuleID header.
@@ -2113,6 +2284,18 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_ownership_cfg_dataflow_fixed_point
         COMMAND oreslang-ownership-cfg-dataflow-test)
+    # HOST ONLY: additional path/loan-token fixed-point negatives. These do
+    # not certify typed MIR->LLVM SSA identity or native guest semantics.
+    add_executable(oreslang-ownership-cfg-phi-loan-test
+        tests/ownership_cfg_phi_loan_adversarial_test.cpp)
+    target_include_directories(oreslang-ownership-cfg-phi-loan-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-ownership-cfg-phi-loan-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_ownership_cfg_phi_loan_adversarial_host_only
+        COMMAND oreslang-ownership-cfg-phi-loan-test)
+    set_tests_properties(native_ownership_cfg_phi_loan_adversarial_host_only
+        PROPERTIES TIMEOUT 20)
     # Field-wise native destruction verifier and concrete owner flags.
     # Separate from unsupported source-level nontrivial class drop glue.
     add_executable(oreslang-ownership-drop-plan-test
@@ -2312,6 +2495,30 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_tilde_record_requires_typed_native_lowering
         tilde-record-literal-native-reject.ores
         --diagnostic "native tilde map/record literal unsupported")
+    oreslang_contract_test(native_match_fallback_hardening_1
+        dispatch-value-match-wildcard-then-default-reject.ores
+        --diagnostic "native value match wildcard arm must be last")
+    oreslang_contract_test(native_match_fallback_hardening_2
+        dispatch-do-match-wildcard-then-default-reject.ores
+        --diagnostic "native do match wildcard arm must be last")
+    oreslang_contract_test(native_match_fallback_hardening_3
+        dispatch-value-match-duplicate-case-reject.ores
+        --diagnostic "duplicate native value match pattern")
+    oreslang_contract_test(native_match_fallback_hardening_4
+        dispatch-do-match-duplicate-case-reject.ores
+        --diagnostic "duplicate native do match pattern")
+    oreslang_contract_test(native_structural_field_failclosed_1
+        dispatch-value-structural-field-reject.ores
+        --diagnostic "native structural field pattern requires checked typed aggregate lowering")
+    oreslang_contract_test(native_structural_field_failclosed_2
+        dispatch-do-structural-field-reject.ores
+        --diagnostic "native structural field pattern requires checked typed aggregate lowering")
+    oreslang_contract_test(native_structural_field_failclosed_3
+        dispatch-value-record-field-reject.ores
+        --diagnostic "native tilde map/record literal unsupported")
+    oreslang_contract_test(native_structural_field_failclosed_4
+        dispatch-do-record-field-reject.ores
+        --diagnostic "native tilde map/record literal unsupported")
     # Match-default hardening: ensure unmatched arms actually execute the
     # fallback, and reject duplicate/guarded patterns and tilde bypasses.
     oreslang_contract_test(native_value_match_default_fallthrough_ir
@@ -2336,6 +2543,29 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_tilde_ambiguous_empty_failclosed
         tilde-ambiguous-empty-native-reject.ores
         --diagnostic "native tilde map/record literal unsupported")
+    # Strict fallback admission: no duplicate, guarded or 'on default' forms.
+    oreslang_contract_test(native_value_match_default_fallback_ir
+        dispatch-value-match-default-fallback-run.ores --ir "ternary.merge")
+    oreslang_contract_test(native_do_match_default_fallback_ir
+        dispatch-do-match-default-fallback-run.ores --ir "return.snapshot.slot")
+    oreslang_contract_test(native_value_match_duplicate_default_reject
+        dispatch-value-match-default-duplicate-reject.ores
+        --diagnostic "native value match can contain only one default arm")
+    oreslang_contract_test(native_do_match_duplicate_default_reject
+        dispatch-do-match-default-duplicate-reject.ores
+        --diagnostic "native do match can contain only one default arm")
+    oreslang_contract_test(native_value_match_on_default_reject
+        dispatch-value-match-on-default-reject.ores
+        --diagnostic "native value match fallback must use 'default ->' without 'on'")
+    oreslang_contract_test(native_do_match_on_default_reject
+        dispatch-do-match-on-default-reject.ores
+        --diagnostic "native do match fallback must use 'default ->' without 'on'")
+    oreslang_contract_test(native_value_match_guarded_default_reject
+        dispatch-value-match-default-guard-reject.ores
+        --diagnostic "native value match default arm cannot have a guard or binding")
+    oreslang_contract_test(native_do_match_guarded_default_reject
+        dispatch-do-match-default-guard-reject.ores
+        --diagnostic "native do match default arm cannot have a guard or binding")
     # Direct signed-minimum literal remains valid; nested unary negation
     # would overflow host i64 and must reject before any LLVM IR.
     oreslang_contract_test(native_dispatch_signed_min_literal_ir
@@ -2376,6 +2606,10 @@ if(BUILD_TESTING)
             dispatch-value-match-default-fallthrough-run.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_do_match_default_fallthrough_runtime
             dispatch-do-match-default-fallthrough-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_value_match_default_fallback_runtime
+            dispatch-value-match-default-fallback-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_do_match_default_fallback_runtime
+            dispatch-do-match-default-fallback-run.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_value_switch_arm_result_runtime
             dispatch-value-switch-run.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_do_match_function_return_runtime
@@ -2889,13 +3123,25 @@ if(BUILD_TESTING)
         --diagnostic "await get_ready requires side-effect-free scalar return")
     oreslang_contract_test(source_future_typed_await_boundary source-future-typed-unimplemented.ores
         --diagnostic "Future<T> requires native continuation lowering")
-    # These tests reject nested type declarations BEFORE member-call lowering.
-    # They prove fail-closed type admission, not flatten/unwrap_all execution.
-    # Operation-level conformance remains blocked on LLVM generic representation.
-    oreslang_contract_test(source_nested_option_type_admission_fail_closed
-        source-nested-option-flatten-unimplemented.ores --diagnostic "native scalar local requires int, bool or checked scalar alias")
-    oreslang_contract_test(source_nested_future_type_admission_fail_closed
-        source-nested-future-flatten-unimplemented.ores --diagnostic "expected '>'")
+    # Nested wrappers are distinct source types. Until native generic
+    # representation/continuation lowering lands, reject them explicitly rather
+    # than accidentally accepting/canonicalizing them or failing on punctuation.
+    # This is a fail-closed semantic gate, not flatten/unwrap_all execution.
+    oreslang_contract_test(source_nested_option_preserves_type_fail_closed
+        source-nested-option-flatten-unimplemented.ores
+        --diagnostic "implicit Option flatten is forbidden")
+    oreslang_contract_test(source_nested_future_preserves_type_fail_closed
+        source-nested-future-flatten-unimplemented.ores
+        --diagnostic "implicit Future flatten is forbidden")
+    oreslang_contract_test(source_nested_future_generic_payload_preserves_type_fail_closed
+        source-nested-future-generic-payload-fail-closed.ores
+        --diagnostic "implicit Future flatten is forbidden")
+    oreslang_contract_test(source_nested_option_generic_payload_preserves_type_fail_closed
+        source-nested-option-generic-payload-fail-closed.ores
+        --diagnostic "implicit Option flatten is forbidden")
+    oreslang_contract_test(source_option_single_layer_not_nested_diagnostic
+        source-option-single-layer-unimplemented.ores
+        --diagnostic "native local Option/Result initializer cannot implicitly wrap or erase tagged value")
 
 
     # Entry<K,V> is a compiler-owned nominal product in Java/GraalVM.
@@ -3823,6 +4069,24 @@ if(BUILD_TESTING)
     set_tests_properties(native_source_task_i64_shared_scheduler_runtime
         PROPERTIES TIMEOUT 30)
 
+    # Actor-owned runtime Task lane shares the existing actor scheduler's
+    # single-writer lease and worker pool. This is a native host acceptance
+    # test, NOT compiler-lowered .atto task/await guest execution.
+    add_executable(oreslang-native-actor-task-pool-affinity-test
+        tests/native_actor_task_pool_affinity_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-task-pool-affinity-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-task-pool-affinity-test PRIVATE c_std_11)
+    target_compile_options(oreslang-native-actor-task-pool-affinity-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-actor-task-pool-affinity-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_actor_task_pool_affinity_host_only
+        COMMAND oreslang-native-actor-task-pool-affinity-test)
+    set_tests_properties(native_actor_task_pool_affinity_host_only
+        PROPERTIES TIMEOUT 40)
+
     set(ORE_SOURCE_TASK_E2E
         "${CMAKE_CURRENT_BINARY_DIR}/oreslang-source-task-i64-e2e")
     add_custom_command(
@@ -4604,6 +4868,12 @@ if(BUILD_TESTING)
     add_test(NAME native_ownership_dataflow_v1
         COMMAND oreslang-ownership-dataflow-v1-test)
     set_tests_properties(native_ownership_dataflow_v1 PROPERTIES TIMEOUT 30)
+    # Check the test dispatcher itself: a deliberately failing middle case
+    # must not prevent a later named case from executing.
+    add_test(NAME native_ownership_dataflow_v1_runner_continuation
+        COMMAND oreslang-ownership-dataflow-v1-test --self-check-runner)
+    set_tests_properties(native_ownership_dataflow_v1_runner_continuation
+        PROPERTIES TIMEOUT 30)
 
     add_test(NAME native_actor_region_v2_multiowner_guarded_cleanup
         COMMAND "${CMAKE_COMMAND}"
@@ -6090,6 +6360,29 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 20)
 endif()
 
+# GPU actors have a distinct source-admission diagnostic, but no GPU-native
+# state/MIR, kernel or physical hardware implementation. This test compiles
+# the REAL parser and must never be used as GPU execution evidence.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-gpu-actor-admission-test
+        tests/gpu_actor_source_admission_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp
+        src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-native-gpu-actor-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_include_directories(oreslang-native-gpu-actor-admission-test SYSTEM PRIVATE
+        ${LLVM_INCLUDE_DIRS})
+    target_link_libraries(oreslang-native-gpu-actor-admission-test PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_features(oreslang-native-gpu-actor-admission-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-gpu-actor-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_gpu_actor_source_admission
+        COMMAND oreslang-native-gpu-actor-admission-test)
+    set_tests_properties(native_gpu_actor_source_admission PROPERTIES TIMEOUT 20)
+endif()
+
 # Compile the production native parser against explicit v1 macro syntax.
 # Until native expansion exists, every macro declaration/invocation must fail
 # before LLVM IR with the dedicated no-runtime-fallback diagnostic.
@@ -7251,6 +7544,45 @@ if(BUILD_TESTING AND UNIX)
         add_test(NAME native_actor_arena_sqlite_reactivation_host_only
             COMMAND oreslang-actor-arena-persistence-restart-test)
         set_tests_properties(native_actor_arena_sqlite_reactivation_host_only PROPERTIES TIMEOUT 45)
+    endif()
+endif()
+
+# Native host event sourcing fault: _exit after SQLite event COMMIT before ACK.
+# This is not compiled .atto guest or actor scheduler execution.
+if(BUILD_TESTING AND UNIX)
+    find_package(SQLite3 QUIET)
+    if(SQLite3_FOUND)
+        add_executable(oreslang-native-event-sourced-fenced-recovery-test
+            tests/native_event_sourced_fenced_recovery_test.cpp)
+        target_include_directories(oreslang-native-event-sourced-fenced-recovery-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features(oreslang-native-event-sourced-fenced-recovery-test PRIVATE cxx_std_17)
+        target_compile_options(oreslang-native-event-sourced-fenced-recovery-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        target_link_libraries(oreslang-native-event-sourced-fenced-recovery-test PRIVATE SQLite::SQLite3)
+        add_test(NAME native_event_sourced_crash_after_commit_fenced_replay_host_only
+            COMMAND oreslang-native-event-sourced-fenced-recovery-test)
+        set_tests_properties(native_event_sourced_crash_after_commit_fenced_replay_host_only
+            PROPERTIES TIMEOUT 45)
+    endif()
+endif()
+
+# Durable command inbox + multi-event journal host integration only.
+if(BUILD_TESTING AND UNIX)
+    find_package(SQLite3 QUIET)
+    if(SQLite3_FOUND)
+        add_executable(oreslang-native-durable-command-inbox-test
+            tests/native_durable_command_inbox_test.cpp)
+        target_include_directories(oreslang-native-durable-command-inbox-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features(oreslang-native-durable-command-inbox-test PRIVATE cxx_std_17)
+        target_compile_options(oreslang-native-durable-command-inbox-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        target_link_libraries(oreslang-native-durable-command-inbox-test PRIVATE SQLite::SQLite3)
+        add_test(NAME native_durable_command_inbox_atomic_batch_host_only
+            COMMAND oreslang-native-durable-command-inbox-test)
+        set_tests_properties(native_durable_command_inbox_atomic_batch_host_only
+            PROPERTIES TIMEOUT 45)
     endif()
 endif()
 
