@@ -141,6 +141,12 @@ int main(int argc, char** argv) {
                Expression::Kind::BorrowMut);
     equivalent("rt borrow mut foo", "mut borrow! foo", "mut borrow!foo",
                Expression::Kind::BorrowMut);
+    equivalent("rt mut borrow foo", "borrow! mut foo", "borrow!mut foo",
+               Expression::Kind::BorrowMut);
+    equivalent("rt borrow mut foo", "borrow! mut foo", "borrow!mut foo",
+               Expression::Kind::BorrowMut);
+    equivalent("rt mut borrow foo.bar", "borrow! mut foo.bar", "borrow!mut foo.bar",
+               Expression::Kind::BorrowMut);
     equivalent("rt copy(foo + 1)", "copy! (foo + 1)", "copy!(foo + 1)",
                Expression::Kind::Copy);
     equivalent("rt borrow foo.bar", "borrow! foo.bar", "borrow!foo.bar",
