@@ -3664,9 +3664,13 @@ private:
                     // canonical std/error.Error values. The historical i64
                     // payload path has no nominal Error proof or typed unwind.
                     // Reject before building exceptional IR; catch does not
-                    // grant permission to throw an arbitrary scalar.
-                    fail("native caught throw requires canonical std/error.Error; "
-                         "typed exceptional lowering unsupported");
+                    // grant permission to throw an arbitrary scalar. Throw
+                    // directly: fail() maps a current `throw` token to main's
+                    // generic exceptional-control boundary diagnostic.
+                    throw std::runtime_error(
+                        "native caught throw requires canonical std/error.Error; "
+                        "typed exceptional lowering unsupported at byte " +
+                        std::to_string(token_.offset));
                 }
                 continue;
             }
