@@ -17,9 +17,10 @@ namespace oreslang::pointer_int_aot {
     throw std::runtime_error("Pointer<int> ownership M2a: " + detail);
 }
 
-inline void validate_ownership(Plan& plan) {
-    // Clear stale authority before attempting to validate any HIR.
-    plan.ownership_admitted = false;
+// A second, read-only verification is invoked by the backend immediately
+// before emission. This prevents a stale authorization bit from surviving a
+// later AST mutation by an optimization or compiler plug-in.
+inline void verify_plan(const Plan& plan) {
     if (plan.count == 0 || plan.count > 16)
         ownership_error("pointer capacity must be 1..16");
     if (plan.owner.empty() || plan.owner == "Pointer" ||
@@ -126,6 +127,13 @@ inline void validate_ownership(Plan& plan) {
     if (live || close_count != 1)
         ownership_error("one owned pointer must close exactly once before return");
     (void)eval(eval, *plan.result, 0); // no post-close pointer reads
+}
+
+inline void validate_ownership(Plan& plan) {
+    // Every validation attempt starts with no authority. The check runs
+    // in the same source-order used by the IR emission stage.
+    plan.ownership_admitted = false;
+    verify_plan(plan);
     plan.ownership_admitted = true;
 }
 
