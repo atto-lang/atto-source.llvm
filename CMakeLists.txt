@@ -318,6 +318,48 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Test-only Linux two-process local socket and EOF crash ambiguity.
+    # The test fixture does NOT authenticate a remote actor/peer.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(oreslang-native-ipc-two-process-test
+            tests/native_ipc_receipt_two_process_test.cpp)
+        target_include_directories(oreslang-native-ipc-two-process-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(oreslang-native-ipc-two-process-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        add_test(NAME native_ipc_two_process_eof_and_session_retirement
+            COMMAND oreslang-native-ipc-two-process-test)
+        set_tests_properties(native_ipc_two_process_eof_and_session_retirement
+            PROPERTIES TIMEOUT 25)
+    endif()
+    # Native host-only IPC receipt ledger (not source compiler parity or
+    # remote-peer authentication). Execute strict transitions and carrier races.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-ipc-receipts-test
+        tests/native_ipc_receipt_table_test.cpp)
+    target_include_directories(oreslang-native-ipc-receipts-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-ipc-receipts-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-ipc-receipts-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_ipc_receipt_bounded_correlation_and_races
+        COMMAND oreslang-native-ipc-receipts-test)
+    set_tests_properties(native_ipc_receipt_bounded_correlation_and_races
+        PROPERTIES TIMEOUT 25)
+    # Deliberate std::bad_alloc injection during the retirement snapshot:
+    # either all correlations remain, or every retired identity is returned.
+    add_executable(oreslang-native-ipc-loss-failpoint-test
+        tests/native_ipc_receipt_loss_failpoint_test.cpp)
+    target_include_directories(oreslang-native-ipc-loss-failpoint-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-ipc-loss-failpoint-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-ipc-loss-failpoint-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_ipc_loss_retirement_allocation_failure
+        COMMAND oreslang-native-ipc-loss-failpoint-test)
+    set_tests_properties(native_ipc_loss_retirement_allocation_failure
+        PROPERTIES TIMEOUT 25)
+
     # Source-free compiler-negative harness mutation scenarios. A passing
     # synthetic compiler proves only that malformed receipts are rejected;
     # it cannot promote actual llvmc or physical GPU execution.
@@ -1832,6 +1874,45 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 30)
     find_package(OpenSSL QUIET COMPONENTS Crypto)
     if(OpenSSL_FOUND)
+        add_executable(oreslang-native-ipc-authenticated-session-failpoint-test
+            tests/native_ipc_authenticated_session_failpoint_test.cpp)
+        target_include_directories(oreslang-native-ipc-authenticated-session-failpoint-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-ipc-authenticated-session-failpoint-test PRIVATE
+            OpenSSL::Crypto Threads::Threads)
+        target_compile_options(oreslang-native-ipc-authenticated-session-failpoint-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_ipc_authenticated_session_retire_failpoint
+            COMMAND oreslang-native-ipc-authenticated-session-failpoint-test)
+        set_tests_properties(native_ipc_authenticated_session_retire_failpoint
+            PROPERTIES TIMEOUT 20)
+
+        add_executable(oreslang-native-ipc-authenticated-session-test
+            tests/native_ipc_authenticated_stream_session_test.cpp)
+        target_include_directories(oreslang-native-ipc-authenticated-session-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-ipc-authenticated-session-test PRIVATE
+            OpenSSL::Crypto Threads::Threads)
+        target_compile_options(oreslang-native-ipc-authenticated-session-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_ipc_authenticated_stream_session
+            COMMAND oreslang-native-ipc-authenticated-session-test)
+        set_tests_properties(native_ipc_authenticated_stream_session
+            PROPERTIES TIMEOUT 30)
+
+        add_executable(oreslang-native-ipc-wire-v3-test
+            tests/native_ipc_wire_v3_test.cpp)
+        target_include_directories(oreslang-native-ipc-wire-v3-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-ipc-wire-v3-test PRIVATE
+            OpenSSL::Crypto)
+        target_compile_options(oreslang-native-ipc-wire-v3-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_ipc_wire_v3_java_golden_parity
+            COMMAND oreslang-native-ipc-wire-v3-test)
+        set_tests_properties(native_ipc_wire_v3_java_golden_parity
+            PROPERTIES TIMEOUT 20)
+
         # Host-only independently pinned dependency alias contract.
         # This proves fail-closed lock parsing, NOT executable namespaces.
         add_executable(oreslang-native-verified-namespace-dependency-lock-v2-test
