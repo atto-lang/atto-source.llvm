@@ -6,8 +6,10 @@ on:
       - 'src/main/cpp/oreslang/runtime/ActorHeapIdentity.hpp'
       - 'src/main/cpp/oreslang/runtime/TrustedPointerWindow.hpp'
       - 'src/main/cpp/oreslang/runtime/NativeRegionRegistry.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeRegionRuntimeAuthority.hpp'
       - 'tests/trusted_pointer_window_test.cpp'
       - 'tests/native_region_registry_test.cpp'
+      - 'tests/native_region_runtime_authority_test.cpp'
       - 'tests/native_region_negative_compile.cpp'
       - 'tests/run_native_pointer_negative_compile.sh'
   workflow_dispatch:
@@ -43,7 +45,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build/native-pointer-host-only
-          for name in trusted_pointer_window native_region_registry; do
+          for name in trusted_pointer_window native_region_registry native_region_runtime_authority; do
             "$CXX" -std=c++17 -Wall -Wextra -Wpedantic -Werror -pthread \
               $CXXFLAGS -Isrc/main/cpp "tests/${name}_test.cpp" \
               -o "build/native-pointer-host-only/${name}_test"
@@ -52,7 +54,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for name in trusted_pointer_window native_region_registry; do
+          for name in trusted_pointer_window native_region_registry native_region_runtime_authority; do
             "build/native-pointer-host-only/${name}_test"
           done
       - name: Verify negative compiler diagnostics
