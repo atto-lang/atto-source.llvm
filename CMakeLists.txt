@@ -7321,6 +7321,17 @@ if(BUILD_TESTING)
     set_tests_properties(native_failure_trace_capture_and_render PROPERTIES TIMEOUT 30)
 endif()
 
+# #170: independently check atomic nested actor adoption, host-only.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-actor-child-adoption-test tests/native_actor_child_adoption_test.cpp)
+    target_include_directories(oreslang-native-actor-child-adoption-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-child-adoption-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-native-actor-child-adoption-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-child-adoption-test PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_actor_child_adoption COMMAND oreslang-native-actor-child-adoption-test)
+endif()
+
 # Reconciled #73: String wire contracts remain deliberately unsupported by
 # native int-only contract lowering; assert diagnostic without Python.
 if(BUILD_TESTING)
