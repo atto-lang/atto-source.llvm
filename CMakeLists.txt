@@ -318,6 +318,48 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Test-only Linux two-process local socket and EOF crash ambiguity.
+    # The test fixture does NOT authenticate a remote actor/peer.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(oreslang-native-ipc-two-process-test
+            tests/native_ipc_receipt_two_process_test.cpp)
+        target_include_directories(oreslang-native-ipc-two-process-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(oreslang-native-ipc-two-process-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        add_test(NAME native_ipc_two_process_eof_and_session_retirement
+            COMMAND oreslang-native-ipc-two-process-test)
+        set_tests_properties(native_ipc_two_process_eof_and_session_retirement
+            PROPERTIES TIMEOUT 25)
+    endif()
+    # Native host-only IPC receipt ledger (not source compiler parity or
+    # remote-peer authentication). Execute strict transitions and carrier races.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-ipc-receipts-test
+        tests/native_ipc_receipt_table_test.cpp)
+    target_include_directories(oreslang-native-ipc-receipts-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-ipc-receipts-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-ipc-receipts-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_ipc_receipt_bounded_correlation_and_races
+        COMMAND oreslang-native-ipc-receipts-test)
+    set_tests_properties(native_ipc_receipt_bounded_correlation_and_races
+        PROPERTIES TIMEOUT 25)
+    # Deliberate std::bad_alloc injection during the retirement snapshot:
+    # either all correlations remain, or every retired identity is returned.
+    add_executable(oreslang-native-ipc-loss-failpoint-test
+        tests/native_ipc_receipt_loss_failpoint_test.cpp)
+    target_include_directories(oreslang-native-ipc-loss-failpoint-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-ipc-loss-failpoint-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-ipc-loss-failpoint-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_ipc_loss_retirement_allocation_failure
+        COMMAND oreslang-native-ipc-loss-failpoint-test)
+    set_tests_properties(native_ipc_loss_retirement_allocation_failure
+        PROPERTIES TIMEOUT 25)
+
     # Source-free compiler-negative harness mutation scenarios. A passing
     # synthetic compiler proves only that malformed receipts are rejected;
     # it cannot promote actual llvmc or physical GPU execution.
@@ -1509,6 +1551,18 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
+    # New real .ores guest span-boundary contract: no host/reference promotion.
+    # Uses the production source compiler and Clang AOT executable path.
+    add_test(NAME native_tensor_span_source_aot
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify-tensor-span-source.sh"
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_tensor_span_source_aot PROPERTIES TIMEOUT 120)
+    # Real `.ores` Array<int> native region ownership/lane execution.
+    # A passing host-side reference model cannot satisfy this gate.
+    add_test(NAME native_tensor_owned_array_source_aot
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify-tensor-owned-array.sh"
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_tensor_owned_array_source_aot PROPERTIES TIMEOUT 120)
     # Pinned portable scalar corpus (shared with java/net) and the five-case
     # zero-assert guest set: source -> LLVM IR -> Clang -> OS exit status,
     # plus fail-closed rejection of removed/forbidden source operators.
@@ -1832,6 +1886,45 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 30)
     find_package(OpenSSL QUIET COMPONENTS Crypto)
     if(OpenSSL_FOUND)
+        add_executable(oreslang-native-ipc-authenticated-session-failpoint-test
+            tests/native_ipc_authenticated_session_failpoint_test.cpp)
+        target_include_directories(oreslang-native-ipc-authenticated-session-failpoint-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-ipc-authenticated-session-failpoint-test PRIVATE
+            OpenSSL::Crypto Threads::Threads)
+        target_compile_options(oreslang-native-ipc-authenticated-session-failpoint-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_ipc_authenticated_session_retire_failpoint
+            COMMAND oreslang-native-ipc-authenticated-session-failpoint-test)
+        set_tests_properties(native_ipc_authenticated_session_retire_failpoint
+            PROPERTIES TIMEOUT 20)
+
+        add_executable(oreslang-native-ipc-authenticated-session-test
+            tests/native_ipc_authenticated_stream_session_test.cpp)
+        target_include_directories(oreslang-native-ipc-authenticated-session-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-ipc-authenticated-session-test PRIVATE
+            OpenSSL::Crypto Threads::Threads)
+        target_compile_options(oreslang-native-ipc-authenticated-session-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_ipc_authenticated_stream_session
+            COMMAND oreslang-native-ipc-authenticated-session-test)
+        set_tests_properties(native_ipc_authenticated_stream_session
+            PROPERTIES TIMEOUT 30)
+
+        add_executable(oreslang-native-ipc-wire-v3-test
+            tests/native_ipc_wire_v3_test.cpp)
+        target_include_directories(oreslang-native-ipc-wire-v3-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-ipc-wire-v3-test PRIVATE
+            OpenSSL::Crypto)
+        target_compile_options(oreslang-native-ipc-wire-v3-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_ipc_wire_v3_java_golden_parity
+            COMMAND oreslang-native-ipc-wire-v3-test)
+        set_tests_properties(native_ipc_wire_v3_java_golden_parity
+            PROPERTIES TIMEOUT 20)
+
         # Host-only independently pinned dependency alias contract.
         # This proves fail-closed lock parsing, NOT executable namespaces.
         add_executable(oreslang-native-verified-namespace-dependency-lock-v2-test
@@ -3581,6 +3674,18 @@ if(BUILD_TESTING)
     add_test(NAME native_pinned_actor_future_control_continuation
         COMMAND oreslang-actor-lifecycle-await-test)
     set_tests_properties(native_pinned_actor_future_control_continuation PROPERTIES TIMEOUT 15)
+    # Host-only typed i64 Future completion frame. Source-level Future<T>
+    # remains fail-closed until compiler-generated suspension is implemented.
+    add_executable(oreslang-native-scalar-future-await-test
+        tests/native_scalar_future_await_test.cpp)
+    target_include_directories(oreslang-native-scalar-future-await-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-scalar-future-await-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-scalar-future-await-test PRIVATE Threads::Threads)
+    add_test(NAME native_scalar_future_single_winner_control
+        COMMAND oreslang-native-scalar-future-await-test)
+    set_tests_properties(native_scalar_future_single_winner_control PROPERTIES TIMEOUT 30)
     add_executable(oreslang-bounded-actor-port-test tests/bounded_actor_port_test.cpp)
     target_include_directories(oreslang-bounded-actor-port-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-bounded-actor-port-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -4050,6 +4155,44 @@ if(BUILD_TESTING)
     add_test(NAME native_supervisor_hot_reload_generation_reclamation
         COMMAND oreslang-native-supervisor-code-slot-test)
     set_tests_properties(native_supervisor_hot_reload_generation_reclamation
+        PROPERTIES TIMEOUT 20)
+    # Actor-incarnation bounded code-only release; host-only precompiler gate.
+    add_executable(oreslang-native-actor-hot-upgrade-gate-test
+        tests/native_actor_hot_upgrade_gate_test.cpp)
+    target_include_directories(oreslang-native-actor-hot-upgrade-gate-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-hot-upgrade-gate-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    target_link_libraries(oreslang-native-actor-hot-upgrade-gate-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_hot_upgrade_generation_quiescence
+        COMMAND oreslang-native-actor-hot-upgrade-gate-test)
+    set_tests_properties(native_actor_hot_upgrade_generation_quiescence
+        PROPERTIES TIMEOUT 20)
+    # Real statically linked native machine-code callbacks, with runtime
+    # generation pins and guarded publication (not dynamic AOT/ORC loading).
+    add_executable(oreslang-native-actor-code-execution-test
+        tests/native_actor_code_execution_test.cpp)
+    target_include_directories(oreslang-native-actor-code-execution-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-code-execution-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    target_link_libraries(oreslang-native-actor-code-execution-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_compiled_aot_callable_generation_execution
+        COMMAND oreslang-native-actor-code-execution-test)
+    set_tests_properties(native_actor_compiled_aot_callable_generation_execution
+        PROPERTIES TIMEOUT 25)
+    # Dedicated shutdown-from-reclaim and concurrent terminal-close safety
+    # proof. A timeout is a test failure: a deadlocked cleanup cannot pass.
+    add_executable(oreslang-native-actor-reentrancy-test
+        tests/native_actor_hot_upgrade_reentrancy_test.cpp)
+    target_include_directories(oreslang-native-actor-reentrancy-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-reentrancy-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    target_link_libraries(oreslang-native-actor-reentrancy-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_hot_upgrade_reentrant_close_and_race
+        COMMAND oreslang-native-actor-reentrancy-test)
+    set_tests_properties(native_actor_hot_upgrade_reentrant_close_and_race
         PROPERTIES TIMEOUT 20)
     # Bounded independent supervisor CONTROL transport (runtime substrate only).
     add_executable(oreslang-supervisor-hierarchy-test tests/supervisor_hierarchy_test.cpp)
@@ -5019,6 +5162,77 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-arena-test)
     set_tests_properties(native_actor_arena_persistent_scratch PROPERTIES TIMEOUT 25)
 
+    # ActorRegionV1 native host evidence at both optimization levels.
+    # Optional sanitizers instrument the real allocator and trusted bridge;
+    # this is still host-only and not a compiler-generated guest receipt.
+    option(ORESLANG_ACTOR_REGION_SANITIZERS
+        "Enable ASan + UBSan for ActorRegionV1 native host tests" OFF)
+    function(add_actor_region_native_host_test kind level)
+        if(kind STREQUAL "allocator")
+            set(test_file tests/actor_region_v1_test.c)
+            set(runtime_sources
+                src/main/cpp/oreslang/runtime/ActorRegionV1.c
+                src/main/cpp/oreslang/runtime/ActorArena.c)
+        elseif(kind STREQUAL "guest-bridge")
+            set(test_file tests/actor_region_guest_v1_bridge_test.c)
+            set(runtime_sources
+                src/main/cpp/oreslang/runtime/ActorRegionGuestV1.c
+                src/main/cpp/oreslang/runtime/ActorRegionV1.c
+                src/main/cpp/oreslang/runtime/ActorArena.c)
+        elseif(kind STREQUAL "supervisor")
+            if(NOT UNIX)
+                return()
+            endif()
+            set(test_file tests/actor_region_v1_fault_supervisor_test.c)
+            set(runtime_sources
+                src/main/cpp/oreslang/runtime/ActorRegionV1.c
+                src/main/cpp/oreslang/runtime/ActorArena.c)
+        else()
+            message(FATAL_ERROR "unknown ActorRegionV1 host test kind: ${kind}")
+        endif()
+        set(target "oreslang-actor-region-${kind}-O${level}")
+        add_executable(${target} ${test_file} ${runtime_sources})
+        target_include_directories(${target} PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features(${target} PRIVATE c_std_11)
+        if(MSVC)
+            if(level STREQUAL "0")
+                target_compile_options(${target} PRIVATE /W4 /UNDEBUG /Od)
+            else()
+                target_compile_options(${target} PRIVATE /W4 /UNDEBUG /O2)
+            endif()
+            if(ORESLANG_ACTOR_REGION_SANITIZERS)
+                message(FATAL_ERROR "ActorRegionV1 ASan/UBSan host tests require GCC or Clang")
+            endif()
+        else()
+            target_compile_options(${target} PRIVATE
+                -Wall -Wextra -Wpedantic -Werror -UNDEBUG "-O${level}")
+            if(ORESLANG_ACTOR_REGION_SANITIZERS)
+                target_compile_options(${target} PRIVATE
+                    -fsanitize=address,undefined -fno-omit-frame-pointer)
+                target_link_options(${target} PRIVATE -fsanitize=address,undefined)
+            endif()
+        endif()
+        set(test_name "native_actor_region_v1_${kind}_O${level}_host_only")
+        add_test(NAME ${test_name} COMMAND ${target})
+        set_tests_properties(${test_name} PROPERTIES TIMEOUT 45)
+    endfunction()
+    foreach(level IN ITEMS 0 2)
+        add_actor_region_native_host_test(allocator ${level})
+        add_actor_region_native_host_test(guest-bridge ${level})
+        add_actor_region_native_host_test(supervisor ${level})
+    endforeach()
+
+    # Compiler-generated LLVM IR proof. This does NOT link or execute a guest;
+    # compile-aot.sh still refuses the unchecked ActorRegion native closure.
+    add_test(NAME actor_region_v1_compiler_generated_ir_and_negative_admission
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+            "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_region_v1_compiler_lowering_v1.cmake")
+    set_tests_properties(actor_region_v1_compiler_generated_ir_and_negative_admission
+        PROPERTIES TIMEOUT 45)
+
     # Host-only compiler-ready 32-bit actor-region adapter, built against
     # the real ActorArena.c; it is NOT native guest .atto codegen evidence.
     add_executable(oreslang-native-actor-region-v1-test
@@ -5176,6 +5390,22 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_owned_i64_heap_loan_quiescence
         COMMAND oreslang-actor-owned-i64-heap-test)
     set_tests_properties(native_actor_owned_i64_heap_loan_quiescence PROPERTIES TIMEOUT 20)
+
+    # Host/runtime substrate only: real per-actor i64 slots, read loan and
+    # physical retirement. This does NOT prove compiled guest tensor lowering.
+    add_executable(oreslang-actor-tensor-i64-test
+        tests/actor_tensor_i64_heap_test.c
+        src/main/cpp/oreslang/runtime/ActorTensorI64.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    set_target_properties(oreslang-actor-tensor-i64-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_include_directories(oreslang-actor-tensor-i64-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-tensor-i64-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_actor_tensor_i64_heap_host_only
+        COMMAND oreslang-actor-tensor-i64-test)
+    set_tests_properties(native_actor_tensor_i64_heap_host_only PROPERTIES TIMEOUT 20)
 
     add_executable(oreslang-fixed-arena-test tests/fixed_arena_test.cpp)
     target_include_directories(oreslang-fixed-arena-test PRIVATE
@@ -7145,6 +7375,16 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 60)
 endif()
 
+# Root effect policy forward-port (#273); host substrate only.
+if(BUILD_TESTING)
+    add_executable(oreslang-root-failure-boundary-test tests/root_failure_boundary_test.cpp)
+    target_include_directories(oreslang-root-failure-boundary-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-root-failure-boundary-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-root-failure-boundary-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_nonactor_root_failure_boundary COMMAND oreslang-root-failure-boundary-test)
+endif()
+
 # #769: host-only synchronous logical snapshot of typed failure ancestry.
 if(BUILD_TESTING)
     find_package(Threads REQUIRED)
@@ -7160,6 +7400,17 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-native-failure-trace-test PRIVATE $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
     add_test(NAME native_failure_trace_capture_and_render COMMAND oreslang-native-failure-trace-test)
     set_tests_properties(native_failure_trace_capture_and_render PROPERTIES TIMEOUT 30)
+endif()
+
+# #170: independently check atomic nested actor adoption, host-only.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-actor-child-adoption-test tests/native_actor_child_adoption_test.cpp)
+    target_include_directories(oreslang-native-actor-child-adoption-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-child-adoption-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-native-actor-child-adoption-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-child-adoption-test PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_actor_child_adoption COMMAND oreslang-native-actor-child-adoption-test)
 endif()
 
 # Reconciled #73: String wire contracts remain deliberately unsupported by

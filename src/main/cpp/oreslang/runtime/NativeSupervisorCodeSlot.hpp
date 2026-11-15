@@ -30,6 +30,23 @@ class NativeSupervisorRegistry;
  */
 template <class Policy>
 class NativeSupervisorCodeSlot final {
+    // Native images must not throw while moving their ownership wrappers:
+    // otherwise the callback may unload an image before a failed move
+    // finishes destroying the wrapper still referencing that image.
+    static_assert(std::is_nothrow_move_constructible_v<Policy>,
+                  "native code image must be nothrow-move-constructible");
+    static_assert(std::is_nothrow_destructible_v<Policy>,
+                  "native code image destructor must not throw");
+    // Runs *after* the Policy object has been destroyed. Running dlclose /
+    // ORC removal first could unload Policy's destructor or captured vtable.
+    struct ReclaimOwner final {
+        std::function<void()> callback;
+        explicit ReclaimOwner(std::function<void()> cb) : callback(std::move(cb)) {}
+        ~ReclaimOwner() noexcept {
+            try { if (callback) callback(); }
+            catch (...) { /* cleanup must not throw from a final code pin */ }
+        }
+    };
     // Process-lifetime monotonic failure observation for noexcept image
     // release callbacks. The count does not prove reclamation succeeded and
     // does not replace supervisor/domain-specific durable quarantine records.
