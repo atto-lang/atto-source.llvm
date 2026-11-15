@@ -1,7 +1,9 @@
 #include "oreslang/frontend/Parser.hpp"
+#include <openssl/sha.h>
 
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -10,10 +12,41 @@
 
 using oreslang::Expression;
 
+// Git hashes are against the exact reviewed blobs, not just filenames or
+// an untrusted test oracle copied alongside a modified fixture.
+static std::string git_blob_sha(const std::string& bytes) {
+    std::string preimage = "blob " + std::to_string(bytes.size());
+    preimage.push_back('\0');
+    preimage += bytes;
+    unsigned char digest[SHA_DIGEST_LENGTH];
+    SHA1(reinterpret_cast<const unsigned char*>(preimage.data()),
+         preimage.size(), digest);
+    constexpr char hex[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(40);
+    for (unsigned char byte : digest) {
+        result.push_back(hex[byte >> 4]);
+        result.push_back(hex[byte & 15]);
+    }
+    return result;
+}
+
 static std::string read_fixture(const std::string& root, const std::string& filename) {
+    static const std::map<std::string, std::string_view> reviewed_pins{
+        {"borrow-call-accept.atto", "8cf245cbd24dc158f50bb010cbdcf09e1e826c10"},
+        {"take-after-use-reject.atto", "7757036e704fc334842cac8254863139d85d2935"},
+        {"borrow-escape-reject.atto", "0c5d993b9c95d586ac2cb4018ce0df24856a36ae"},
+        {"share-class-reject.atto", "3368f59e356003118e281fa73461e4185936e849"}
+    };
+    const auto pin = reviewed_pins.find(filename);
+    if (pin == reviewed_pins.end())
+        throw std::runtime_error("unreviewed native ownership fixture");
     std::ifstream file(root + "/" + filename, std::ios::binary);
     if (!file) throw std::runtime_error("missing native ownership fixture: " + filename);
-    return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    std::string bytes(std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{});
+    if (git_blob_sha(bytes) != pin->second)
+        throw std::runtime_error("native ownership fixture Git blob drift: " + filename);
+    return bytes;
 }
 
 static const Expression& parsed(std::string_view source, oreslang::Program& holder) {
