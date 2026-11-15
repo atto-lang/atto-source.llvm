@@ -241,3 +241,53 @@ guest `Box<T>` lowering remain blocked until independently proven.
 - Cross-backend semantic conformance (Java/Graal, Rust, .NET, Wasm, Forge),
   true actor scheduler race proof, and complete mainline integration tests.
 - Branch rebase and source CI review; keep this PR **draft and unmerged**.
+
+
+## 2026-11-14: scheduler-authenticated Box region (integration PR #1826)
+
+The earlier \`ActorBoxRegionV1\` remains a single-carrier host prototype.
+A separate, trusted-only \`SchedulerBoxRegionV1<T, Slots>\` now derives
+authorization from the **real native scheduler's**
+\`ores_native_actor_scheduler_is_current_actor\` for an exact
+(scheduler domain, actor slot, generation) incarnation. It does not use
+guest-supplied numeric identity or a permanently pinned OS thread.
+The native scheduler guarantees at most one active turn per actor;
+different turns can execute on different worker carriers.
+
+* \`emplace_at\`, \`with_at\`, and \`drop_at\` require the exact current
+  scheduler-authenticated actor turn. Foreign/root and other actor turns
+  are rejected. Live borrows prohibit nested access and destruction.
+* Allocation uses the existing \`FixedBoxArena\` ticket protocol and
+  validates independent slot/domain/generation/address provenance.
+* \`retire_after_done\` is **trusted supervisor-only**, never callable
+  on a carrier. The supervisor must STOP/seal the exact actor, fence
+  producers, and retain the scheduler while \`wait_done\` establishes
+  quiescence (including resource loans). Only then are outstanding
+  Boxes destroyed synchronously.
+* A separate atomic retirement claim grants exactly **one winner**
+  among concurrent supervisors; duplicate and destructor-reentrant
+  attempts fail without double drop. Revocation precedes destructors.
+* Destruction without a previously completed supervisor retirement is
+  fail-closed (\`std::terminate\`) rather than silently destroying
+  live resources while a worker may still hold a reference.
+
+A four-worker **real C scheduler** regression exercises concurrent
+mailbox producers, exact actor identity rejection, nested borrow/drop
+denials, 100 × 10,000 Atomic increments (= 1,000,000), sealed STOP,
+DONE-fenced teardown, and 16 competing supervisor retirement attempts.
+All 24 relevant source Git blobs were mirrored exactly into a private
+carrier branch, verified by SHA, then tested with optimized native code,
+ASan/UBSan, and TSan:
+https://github.com/honeypot-r-us-test/hnpt-lambdas/actions/runs/43666864892
+
+**This is not yet production guest Box support.** The C++ helper is
+trusted-host-only. No \`.atto\` Box<T> parser/HIR/MIR or unsafe pointer
+escape policy is silently enabled. The guest compiler must still prove
+borrow lifetime, no suspension across an unpinned reference, exactly-once
+drop on all return/exception/cancellation edges, and actor-state
+sealing. The scheduler prototype handles externally coordinated STOP
+cleanup; it does not automatically register panic/cancellation/FFI
+finalizers or prove concurrent mutable methods on the same actor.
+No across-actor Box transfer, Arc/Weak, unsafe untrusted allocation,
+full backend parity, or hard-real-time WCET proof is claimed. Keep the
+integration PR draft until these gates are independently verified.
