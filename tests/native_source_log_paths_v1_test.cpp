@@ -6,6 +6,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <sys/stat.h>
 
 int main() {
     namespace fs = std::filesystem;
@@ -57,5 +58,20 @@ int main() {
             && std::string(error.what()).find("secret-missing-file") == std::string::npos;
     }
     assert(private_path_was_redacted);
-    std::cout << "LLVM_SOURCE_LOG_PATHS_HOST_PASS:12" << std::endl;
+    // A valid nested physical file is allowed; a symlinked parent directory
+    // must never supply a second logical source-ID spelling for that inode.
+    assert(fs::create_directory(root / "nested"));
+    { std::ofstream out(root / "nested" / "inner.atto"); out << "return 42;"; }
+    { std::ofstream out(root / "nested" / "inner.json"); out << "{}"; }
+    verify("nested/inner.atto", "nested/inner.json");
+    fs::create_directory_symlink(root / "nested", root / "alias-nested");
+    assert(deny("alias-nested/inner.atto", "nested/inner.json"));
+    assert(deny("nested/inner.atto", "alias-nested/inner.json"));
+    // The manifest admission must not block on a FIFO even if the path is
+    // otherwise package-relative and canonical.
+    assert(::mkfifo((root / "pipe.json").c_str(), 0600) == 0);
+    assert(deny("main.atto", "pipe.json"));
+    // Lexically equivalent spellings are not source identity authority.
+    assert(deny("main.atto", "nested/../source-ids.json"));
+    std::cout << "LLVM_SOURCE_LOG_PATHS_HOST_PASS:16" << std::endl;
 }
