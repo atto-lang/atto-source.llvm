@@ -21,6 +21,10 @@ int64_t ores_record_new_mutable(int64_t schema, int64_t fields,
 int64_t ores_record_set(int64_t handle, int64_t schema, int64_t field, int64_t value);
 int64_t ores_record_get(int64_t handle, int64_t schema, int64_t field);
 int64_t ores_record_check(int64_t handle, int64_t schema);
+/* Loop-iteration reclamation. The compiler emits these only when no record
+ * handle can outlive an iteration: no record arrays or sums in the program. */
+int64_t ores_record_mark(void);
+void ores_record_release(int64_t mark);
 /* Validate exact nominal shape before inspecting a tagged sum payload. */
 int64_t ores_record_check_shape(int64_t handle, int64_t schema, int64_t fields);
 #ifdef ORESLANG_RECORD_TEST_ALLOC_FAILURE

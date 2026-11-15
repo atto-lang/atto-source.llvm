@@ -1,0 +1,164 @@
+# Source-org only: NEVER export the LLVM private source tree or compiler binary.
+# An unassigned job is NOT_EXECUTED; this workflow cannot certify Wasm/Java parity.
+name: LLVM f64 exact-head native guest and Core IR
+on:
+  pull_request:
+    paths:
+      - .github/workflows/llvm-f64-exact-head.yml
+      - CMakeLists.txt
+      - src/main/cpp/oreslang/**
+      - tests/native_f64_lexical_gate.sh
+      - tests/wasm_f64_entry_gate.sh
+      - scripts/test_native_direct_f64_aot.sh
+      - scripts/test_native_direct_f64_reborrows.sh
+      - tests/native-direct-array-f64/**
+      - tests/native_float_ml.rs
+      - tests/fixtures/native-float/**
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: llvm-f64-exact-head-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  source-local-f64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact LLVM source head, no retained credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Bind commit, root tree, and clean checkout before execution
+        shell: bash
+        env:
+          EXPECTED_SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$EXPECTED_SOURCE_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse --verify HEAD)" = "$EXPECTED_SOURCE_HEAD"
+          test "$(git write-tree)" = "$(git rev-parse 'HEAD^{tree}')"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]]
+          test -n "$RUNNER_NAME"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          [[ "$tree" =~ ^[0-9a-f]{40}$ ]]
+          {
+            echo "ORESLANG_LLVM_SOURCE_SHA=$EXPECTED_SOURCE_HEAD"
+            echo "ORESLANG_LLVM_SOURCE_TREE=$tree"
+          } >> "$GITHUB_ENV"
+          echo "SOURCE_HEAD=$EXPECTED_SOURCE_HEAD SOURCE_TREE=$tree RUN_ID=$GITHUB_RUN_ID"
+      - name: Install compiler toolchain on source-org runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang lld llvm-dev rustc
+          clang --version | sed -n '1p'
+          rustc --version
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Build exact checked-out compiler and required native guest proof tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --target oreslang-llvmc oreslang-no-gc-ir-audit-build oreslang-native-float-ml-bin --parallel 2
+          test -x build/oreslang-llvmc
+          test -x build/oreslang-no-gc-ir-audit
+          test -x build/oreslang-native-float-ml
+          digest="$(sha256sum build/oreslang-llvmc | cut -d' ' -f1)"
+          [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+          echo "ORESLANG_LLVM_COMPILER_SHA256=$digest" >> "$GITHUB_ENV"
+      - name: Require the entire three-test compiler/guest suite, no missing cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          regex='^(native_f64_scalar_e2e|wasm_core_f64_entry_source_gate|native_float_ml)$'
+          ctest --test-dir build --show-only=json-v1 -R "$regex" > "$RUNNER_TEMP/f64-ctest-list.json"
+          node --input-type=commonjs -e '
+            const fs=require("node:fs");
+            const actual=JSON.parse(fs.readFileSync(process.argv[1],"utf8")).tests
+              .map(t=>t.name).sort();
+            const expected=["native_f64_scalar_e2e","native_float_ml",
+              "wasm_core_f64_entry_source_gate"].sort();
+            if(JSON.stringify(actual)!==JSON.stringify(expected))
+              throw Error("exact-head guest suite absent or mismatched: "+actual.join(","));
+          ' "$RUNNER_TEMP/f64-ctest-list.json"
+      - name: Execute real native guests and compiler-owned Wasm entry gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          regex='^(native_f64_scalar_e2e|wasm_core_f64_entry_source_gate|native_float_ml)$'
+          ctest --test-dir build --output-on-failure --output-junit "$RUNNER_TEMP/f64-ctest.xml" -R "$regex" |
+            tee "$RUNNER_TEMP/f64-ctest.log"
+          test -s "$RUNNER_TEMP/f64-ctest.xml"
+          node --input-type=commonjs -e '
+            const fs=require("node:fs");
+            const x=fs.readFileSync(process.argv[1],"utf8");
+            if((x.match(/<testcase\b/g)||[]).length!==3 ||
+                /<(?:skipped|failure|error)\b/i.test(x))
+              throw Error("missing, failed, or skipped compiler/native guest execution");
+          ' "$RUNNER_TEMP/f64-ctest.xml"
+      - name: Execute native direct Array f64 ABI and nested reborrow proofs
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/test_native_direct_f64_aot.sh
+          bash -n scripts/test_native_direct_f64_reborrows.sh
+          export ORESLANG_LLVMC="$PWD/build/oreslang-llvmc"
+          export ORES_NO_GC_IR_AUDIT="$PWD/build/oreslang-no-gc-ir-audit"
+          export ATTO_AOT_DRIVER="$PWD/scripts/compile-aot.sh"
+          export CLANG=clang
+          test -x "$ORESLANG_LLVMC"
+          test -x "$ORES_NO_GC_IR_AUDIT"
+          bash scripts/test_native_direct_f64_aot.sh
+          bash scripts/test_native_direct_f64_reborrows.sh
+          echo "SOURCE_LOCAL_DIRECT_F64_ABI_AND_REBORROW_EXECUTED"
+
+      - name: Issue source-local evidence only after executed tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$RUNNER_TEMP/f64-ctest.xml"
+          test -x build/oreslang-llvmc
+          digest="$(sha256sum build/oreslang-llvmc | cut -d' ' -f1)"
+          test "$digest" = "$ORESLANG_LLVM_COMPILER_SHA256"
+          node --input-type=commonjs -e '
+            const fs=require("node:fs"),crypto=require("node:crypto");
+            const env=process.env;
+            for(const k of ["ORESLANG_LLVM_SOURCE_SHA","ORESLANG_LLVM_SOURCE_TREE"])
+              if(!/^[0-9a-f]{40}$/.test(env[k]||""))throw Error("missing exact source identity");
+            if(!/^[0-9a-f]{64}$/.test(env.ORESLANG_LLVM_COMPILER_SHA256||""))
+              throw Error("missing executable compiler SHA");
+            const xml=fs.readFileSync(env.RUNNER_TEMP+"/f64-ctest.xml");
+            const sha=b=>crypto.createHash("sha256").update(b).digest("hex");
+            const output={
+              schema:"atto-llvm-f64-source-execution-v1",
+              sourceRepository:env.GITHUB_REPOSITORY,
+              sourceCommitSha:env.ORESLANG_LLVM_SOURCE_SHA,
+              sourceRootTreeSha:env.ORESLANG_LLVM_SOURCE_TREE,
+              compilerBinarySha256:env.ORESLANG_LLVM_COMPILER_SHA256,
+              ctestJUnitSha256:sha(xml),
+              executedTests:["native_f64_scalar_e2e","wasm_core_f64_entry_source_gate","native_float_ml"],
+              runnerName:env.RUNNER_NAME,runId:env.GITHUB_RUN_ID,
+              runAttempt:env.GITHUB_RUN_ATTEMPT,
+              execution:"EXECUTED",sourceToWasmWorker:"NOT_EXECUTED",
+              javaParity:"NOT_CERTIFIED",release:"NOT_CERTIFIED"
+            };
+            fs.writeFileSync(env.RUNNER_TEMP+"/f64-executed-receipt.json",
+              JSON.stringify(output,null,2)+"\n",{flag:"wx",mode:0o600});
+          '
+      - name: Upload receipt and native test report, NEVER source or compiler
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: llvm-f64-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/f64-executed-receipt.json
+            ${{ runner.temp }}/f64-ctest.xml
+          if-no-files-found: error
+          retention-days: 7

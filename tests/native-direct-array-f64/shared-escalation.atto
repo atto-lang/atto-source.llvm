@@ -1,0 +1,13 @@
+// Reject mutable reborrowing from a shared Array parameter.
+fnc mutate(borrow mut Array<float> values): int {
+  values.set(0, 5.0);
+  return 0;
+}
+fnc illegal(borrow Array<float> values): int {
+  return mutate(rt mut borrow values);
+}
+pub routine main(): int {
+  let mut Array<float> data = new Array<float>();
+  data.add(1.0);
+  return illegal(rt borrow data);
+}

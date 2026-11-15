@@ -1,0 +1,35 @@
+// Direct native f64 array loan: handle and region are passed without copying
+// or changing ownership. Only read/get/size and fixed-length set are allowed.
+pub fnc fill_f64(borrow mut Array<float> output, float start, float finish): int {
+  val int n = output.size;
+  if n != 3 then return -1; fi
+  if (start - start) != 0.0 || (finish - finish) != 0.0 then return -2; fi
+  val float middle = 0.5 * start + 0.5 * finish;
+  if (middle - middle) != 0.0 then return -3; fi
+  output.set(0, start);
+  output.set(1, middle);
+  output.set(2, finish);
+  return n;
+}
+
+pub fnc sum_endpoints(borrow Array<float> values): float {
+  return values.get(0) + values.get(2);
+}
+
+pub routine main(): int {
+  let mut Array<float> data = new Array<float>();
+  data.add(91.0); data.add(92.0); data.add(93.0);
+  val int first = fill_f64(rt mut borrow data, 1.0 / 0.0, 3.0);
+  if first != -2 then return 1; fi
+  if data.get(0) != 91.0 || data.get(1) != 92.0 || data.get(2) != 93.0 then return 2; fi
+  val int updated = fill_f64(rt mut borrow data, -1.0e308, 1.0e308);
+  if updated != 3 then return 3; fi
+  if data.get(0) != -1.0e308 || data.get(1) != 0.0 || data.get(2) != 1.0e308 then return 4; fi
+  val float summed = sum_endpoints(rt borrow data);
+  if summed != 0.0 then return 5; fi
+  val int signed = fill_f64(rt mut borrow data, -0.0, 0.0);
+  if signed != 3 then return 6; fi
+  if !(1.0 / data.get(0) < 0.0) then return 7; fi
+  if !(1.0 / data.get(2) > 0.0) then return 8; fi
+  return 42;
+}

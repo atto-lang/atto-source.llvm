@@ -1,0 +1,69 @@
+fnc classify(float x): int {
+  if x < 0.0 then
+    return -1;
+  elif x == 0.0 then
+    return 0;
+  else
+    return 1;
+  fi
+  return 2;
+}
+
+fnc newton_sqrt(float v): float {
+  let float estimate = v;
+  let int iterations = 0;
+  loop {
+    iterations = iterations + 1;
+    val float next = 0.5 * (estimate + v / estimate);
+    if next == estimate then break; fi
+    if iterations > 64 then break; fi
+    estimate = next;
+  }
+  return estimate;
+}
+
+pub routine main(): void {
+  stdio.stdout.println(classify(-2.5));
+  stdio.stdout.println(classify(0.0));
+  stdio.stdout.println(classify(0.25));
+  stdio.stdout.println(newton_sqrt(2.0));
+  stdio.stdout.println(newton_sqrt(1.0e10));
+  let int odd_total = 0;
+  let int i = 0;
+  let bool is_odd = false;
+  while i < 20 do
+    i = i + 1;
+    is_odd = !is_odd;
+    if !is_odd then continue; fi
+    if i > 15 then break; fi
+    val int doubled = i * 2;
+    odd_total = odd_total + doubled;
+  done
+  stdio.stdout.println(odd_total);
+  for (let int k = 3; k > 0; k--) {
+    for int j = 0; j < 5; j++ do
+      if j == k then break; fi
+      odd_total = odd_total + 1;
+    done
+  }
+  stdio.stdout.println(odd_total);
+
+  // Jumps must close array owners scoped inside the iteration.
+  val Array<int> values = new Array<int>();
+  for int n = 0; n < 6; n++ do
+    values.add(n);
+  done
+  let int seen = 0;
+  for const v of values do
+    if v == 1 then continue; fi
+    if v == 4 then break; fi
+    let mut Array<int> scratch = new Array<int>();
+    scratch.add(v);
+    if v == 3 then
+      seen = seen + 100;
+      break;
+    fi
+    seen = seen + scratch.get(0);
+  done
+  stdio.stdout.println(seen);
+}

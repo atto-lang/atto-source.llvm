@@ -9,26 +9,30 @@
 #include "NativeStringRegion.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
-enum { STRING_LIMIT = 65536, BYTE_LIMIT = 64 * 1024 * 1024, OUTPUT_SLOTS = 1024 };
+enum { STRING_LIMIT = 65536, BYTE_LIMIT = 64 * 1024 * 1024, OUTPUT_SLOTS = 1024, LITERAL_SLOTS = 512, SCALAR_TEXT = 48 };
 typedef struct { const char *data; size_t size; char *owned; } String;
-typedef struct { String value; int newline; } Output;
+typedef struct { String value; int newline; char scalar[SCALAR_TEXT]; } Output;
+typedef struct { const char *data; size_t size; int64_t handle; } Literal;
 typedef struct {
     String *strings;
     size_t count, capacity, bytes;
     int active, console, fd, original_flags, wake[2];
     pthread_t writer;
     Output output[OUTPUT_SLOTS];
+    Literal literals[LITERAL_SLOTS];
     _Atomic size_t head, tail;
     _Atomic int failed, done;
 } Region;
@@ -159,6 +163,104 @@ static String lookup(int64_t handle) {
     }
     return r->strings[handle - 1];
 }
+/* One compiled literal site keeps one handle, so a loop that evaluates it
+ * consumes a single region entry. Strings are immutable and region-lived. */
+int64_t ores_string_literal_interned(const char *data, int64_t size) {
+    Region *r = &region;
+    size_t slot = (((uintptr_t)data >> 3) ^ (size_t)size) % LITERAL_SLOTS;
+    for (size_t probe = 0; probe != LITERAL_SLOTS; ++probe, slot = (slot + 1) % LITERAL_SLOTS) {
+        Literal *entry = &r->literals[slot];
+        if (entry->handle && entry->data == data && (int64_t)entry->size == size) return entry->handle;
+        if (entry->handle) continue;
+        const int64_t handle = ores_string_literal(data, size);
+        if (handle) *entry = (Literal){data, (size_t)size, handle};
+        return handle;
+    }
+    return ores_string_literal(data, size);
+}
+/* Exact, stable, freshly owned text of one scalar value. */
+static int64_t publish_text(const char *text, size_t size) {
+    if (atomic_load(&region.failed)) return 0;
+    if (size > BYTE_LIMIT - region.bytes) { atomic_store(&region.failed, 1); return 0; }
+    char *bytes = malloc(size ? size : 1);
+    if (!bytes) { atomic_store(&region.failed, 1); return 0; }
+    if (size) memcpy(bytes, text, size);
+    return publish((String){bytes, size, bytes});
+}
+static size_t format_i64(int64_t value, char *text, size_t capacity) {
+    return (size_t)snprintf(text, capacity, "%lld", (long long)value);
+}
+int64_t ores_string_from_i64(int64_t value) {
+    char text[32];
+    return publish_text(text, format_i64(value, text, sizeof text));
+}
+/* The shortest decimal that round-trips, at least two significant digits, as
+ * java.lang.Double.toString selects it. Writes `digits` without a decimal point
+ * and returns the decimal exponent of its first digit. Requires finite x > 0. */
+static int shortest_digits(double x, char digits[32]) {
+    const int power_of_two = frexp(x, &(int){0}) == 0.5;
+    for (int precision = 2; precision <= 17; ++precision) {
+        char text[64];
+        snprintf(text, sizeof text, "%.*e", precision - 1, x);
+        double parsed = strtod(text, NULL);
+        unsigned long long whole = 0;
+        const char *cursor = text;
+        for (; *cursor != 'e'; ++cursor)
+            if (*cursor != '.') whole = whole * 10 + (unsigned long long)(*cursor - '0');
+        int exponent = atoi(cursor + 1);
+        /* Above a power of two the rounding interval is twice as wide, so the
+         * next decimal up may round-trip when the nearest one, below x, cannot. */
+        if (parsed != x && power_of_two && parsed < x) {
+            snprintf(text, sizeof text, "%llue%d", whole + 1, exponent - (precision - 1));
+            if (strtod(text, NULL) == x) { ++whole; parsed = x; }
+        }
+        if (parsed != x && precision != 17) continue;
+        int size = snprintf(digits, 32, "%llu", whole);
+        exponent += size - precision; /* an increment may carry into a new digit */
+        while (size > 1 && digits[size - 1] == '0') digits[--size] = '\0';
+        return exponent;
+    }
+    abort(); /* 17 significant digits always round-trip binary64 */
+}
+static size_t format_f64(double value, char text[SCALAR_TEXT]) {
+    if (isnan(value)) { memcpy(text, "NaN", 3); return 3; }
+    if (isinf(value)) {
+        if (value < 0) { memcpy(text, "-Infinity", 9); return 9; }
+        memcpy(text, "Infinity", 8); return 8;
+    }
+    if (value == 0.0) {
+        if (signbit(value)) { memcpy(text, "-0.0", 4); return 4; }
+        memcpy(text, "0.0", 3); return 3;
+    }
+    char digits[32];
+    const double magnitude = fabs(value);
+    const int exponent = shortest_digits(magnitude, digits);
+    const int count = (int)strlen(digits);
+    size_t at = 0;
+    if (value < 0) text[at++] = '-';
+    if (magnitude >= 1e-3 && magnitude < 1e7) {
+        if (exponent < 0) {
+            text[at++] = '0'; text[at++] = '.';
+            for (int i = -1; i > exponent; --i) text[at++] = '0';
+            for (int i = 0; i < count; ++i) text[at++] = digits[i];
+        } else {
+            for (int i = 0; i <= exponent; ++i) text[at++] = i < count ? digits[i] : '0';
+            text[at++] = '.';
+            if (count <= exponent + 1) text[at++] = '0';
+            for (int i = exponent + 1; i < count; ++i) text[at++] = digits[i];
+        }
+    } else {
+        text[at++] = digits[0]; text[at++] = '.';
+        if (count == 1) text[at++] = '0';
+        for (int i = 1; i < count; ++i) text[at++] = digits[i];
+        at += (size_t)snprintf(text + at, SCALAR_TEXT - at, "E%d", exponent);
+    }
+    return at;
+}
+int64_t ores_string_from_f64(double value) {
+    char text[SCALAR_TEXT];
+    return publish_text(text, format_f64(value, text));
+}
 int64_t ores_string_literal(const char *data, int64_t size) {
     if (size < 0 || (size && !data)) { atomic_store(&region.failed, 1); return 0; }
     return publish((String){data, (size_t)size, NULL});
@@ -178,19 +280,6 @@ int64_t ores_string_concat(int64_t left, int64_t right) {
 }
 /* Decimal rendering of a signed 64-bit int, as Java prints a long. No libc
  * formatting so INT64_MIN and locale cannot change the bytes. */
-int64_t ores_string_from_i64(int64_t value) {
-    char digits[20];
-    size_t count = 0;
-    uint64_t magnitude = value < 0 ? (uint64_t)0 - (uint64_t)value : (uint64_t)value;
-    do { digits[count++] = (char)('0' + (int)(magnitude % 10u)); magnitude /= 10u; } while (magnitude);
-    size_t size = count + (value < 0);
-    char *bytes = malloc(size);
-    if (!bytes) { atomic_store(&region.failed, 1); return 0; }
-    size_t at = 0;
-    if (value < 0) bytes[at++] = '-';
-    while (count) bytes[at++] = digits[--count];
-    return publish((String){bytes, size, bytes});
-}
 int64_t ores_string_from_bool(int64_t value) {
     return value ? ores_string_literal("true", 4) : ores_string_literal("false", 5);
 }
@@ -199,17 +288,65 @@ int64_t ores_string_equal(int64_t left, int64_t right) {
     if (atomic_load(&region.failed)) return 0;
     return a.size == b.size && (!a.size || memcmp(a.data, b.data, a.size) == 0);
 }
+/* A producer faster than stdout waits for the reactor instead of losing output.
+ * The console exists only in the synchronous host main region, never on an
+ * actor carrier, and the wait carries the same 5 s stall bound as the writer. */
+static Output *reserve_output(Region *r) {
+    const size_t head = atomic_load_explicit(&r->head, memory_order_relaxed);
+    if (!r->console) { atomic_store(&r->failed, 1); return NULL; }
+    int64_t started = -1;
+    while (head - atomic_load_explicit(&r->tail, memory_order_acquire) == OUTPUT_SLOTS) {
+        if (atomic_load(&r->failed)) return NULL;
+        const int64_t now = milliseconds();
+        if (started < 0) started = now;
+        if (now < 0 || now - started >= 5000) { atomic_store(&r->failed, 1); return NULL; }
+        wake_writer(r);
+        (void)poll(NULL, 0, 1);
+    }
+    return atomic_load(&r->failed) ? NULL : &r->output[head % OUTPUT_SLOTS];
+}
+static void publish_output(Region *r) {
+    atomic_fetch_add_explicit(&r->head, 1, memory_order_release);
+    wake_writer(r);
+}
 int64_t ores_string_print(int64_t handle, int64_t newline) {
     Region *r = &region;
     String value = lookup(handle);
-    size_t head = atomic_load_explicit(&r->head, memory_order_relaxed);
-    if (!r->console || atomic_load(&r->failed) ||
-            head - atomic_load_explicit(&r->tail, memory_order_acquire) == OUTPUT_SLOTS) {
-        atomic_store(&r->failed, 1); return 1;
-    }
-    r->output[head % OUTPUT_SLOTS] = (Output){value, newline != 0};
-    atomic_store_explicit(&r->head, head + 1, memory_order_release);
-    wake_writer(r);
+    Output *slot = reserve_output(r);
+    if (!slot) return 1;
+    slot->value = value;
+    slot->newline = newline != 0;
+    publish_output(r);
+    return 0;
+}
+/* Scalar text lives in the queue slot, so a print loop consumes no region entry. */
+int64_t ores_string_print_i64(int64_t value, int64_t newline) {
+    Region *r = &region;
+    Output *slot = reserve_output(r);
+    if (!slot) return 1;
+    slot->value = (String){slot->scalar, format_i64(value, slot->scalar, SCALAR_TEXT), NULL};
+    slot->newline = newline != 0;
+    publish_output(r);
+    return 0;
+}
+int64_t ores_string_print_bool(int64_t value, int64_t newline) {
+    Region *r = &region;
+    Output *slot = reserve_output(r);
+    if (!slot) return 1;
+    const size_t size = value ? 4 : 5;
+    memcpy(slot->scalar, value ? "true" : "false", size);
+    slot->value = (String){slot->scalar, size, NULL};
+    slot->newline = newline != 0;
+    publish_output(r);
+    return 0;
+}
+int64_t ores_string_print_f64(double value, int64_t newline) {
+    Region *r = &region;
+    Output *slot = reserve_output(r);
+    if (!slot) return 1;
+    slot->value = (String){slot->scalar, format_f64(value, slot->scalar), NULL};
+    slot->newline = newline != 0;
+    publish_output(r);
     return 0;
 }
 /* A failed unwrap/expect aborts without reaching region_end, which would
@@ -237,4 +374,18 @@ int64_t ores_string_region_end(void) {
     for (size_t i = 0; i != r->count; ++i) free(r->strings[i].owned);
     free(r->strings); r->strings = NULL; r->active = 0;
     return atomic_load(&r->failed) ? 1 : 0;
+}
+/* An unhandled rt fail: flush admitted output, report, exit with failure status.
+ * Admission rejects programs with handlers or cleanup that Java would run. */
+void ores_rt_fail(int64_t handle) {
+    String message = lookup(handle);
+    char *copy = malloc(message.size ? message.size : 1);
+    size_t size = 0;
+    if (copy && message.size) { memcpy(copy, message.data, message.size); size = message.size; }
+    (void)ores_string_region_end();
+    static const char prefix[] = "oreslang: rt fail: ";
+    (void)!write(2, prefix, sizeof prefix - 1);
+    if (size) (void)!write(2, copy, size);
+    (void)!write(2, "\n", 1);
+    _exit(1);
 }

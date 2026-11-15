@@ -1,0 +1,2 @@
+fnc illegal(borrow mut Array<int> data): int { return 0; }
+pub routine main(): int { return 0; }

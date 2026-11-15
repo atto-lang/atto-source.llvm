@@ -1,0 +1,9 @@
+// Shared and exclusive loans of one owner must conflict at a call.
+fnc collide(borrow Array<float> shared_data, borrow mut Array<float> exclusive_data): int {
+  return exclusive_data.size;
+}
+pub routine main(): int {
+  let mut Array<float> data = new Array<float>();
+  data.add(1.0);
+  return collide(rt borrow data, rt mut borrow data);
+}
