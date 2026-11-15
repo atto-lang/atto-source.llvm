@@ -1,0 +1,14 @@
+// Pure guest projection of *necessary* epoch-commit conditions.
+// This does not prove persistent transactional rollback or actor scheduling.
+fnc epoch_can_commit(bool current_epoch_live, bool next_epoch_available,
+                     bool validated_membership, bool staged_transaction): bool {
+  return current_epoch_live && next_epoch_available &&
+    validated_membership && staged_transaction;
+}
+pub fnc main(): int {
+  return epoch_can_commit(true, true, true, true) &&
+    !epoch_can_commit(false, true, true, true) &&
+    !epoch_can_commit(true, false, true, true) &&
+    !epoch_can_commit(true, true, false, true) &&
+    !epoch_can_commit(true, true, true, false) ? 0 : 1;
+}
