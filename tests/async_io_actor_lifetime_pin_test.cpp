@@ -71,6 +71,7 @@ int main() {
     auto stale = stale_group.adopt(
         612, actor_id, generation + 1, [] {});
     auto stale_finalizer = stale_group.runtime_finalizer(stale);
+    assert(stale_group.mark_ready(stale));
     bool rejected = false;
     try {
         AsyncIoActorLifetimePin wrong(stale, lifecycle);
