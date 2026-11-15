@@ -166,6 +166,21 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # SOURCE-FREE LLVM native metadata planner for recursively nested actor
+    # pipelines. This is not .atto parsing, LLVM guest execution, actor
+    # startup, message transport or supervision parity.
+    add_executable(oreslang-native-nested-actor-pipe-plan-test
+        tests/native_nested_actor_pipeline_plan_test.cpp)
+    target_include_directories(oreslang-native-nested-actor-pipe-plan-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-nested-actor-pipe-plan-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-nested-actor-pipe-plan-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_nested_actor_pipe_plan_host_only
+        COMMAND oreslang-native-nested-actor-pipe-plan-test)
+    set_tests_properties(native_nested_actor_pipe_plan_host_only
+        PROPERTIES TIMEOUT 15)
+
     find_package(Threads REQUIRED)
     # Host-only wiring of native WAL retirement with AsyncIoActorLifetimePin
     # and NativeActorRetirementBarrier. NOT compiled Oreslang guest evidence.
@@ -1822,6 +1837,38 @@ if(BUILD_TESTING)
     else()
         message(FATAL_ERROR "flags2env client ABI status parity requires Clang")
     endif()
+
+    # A .atto guest fixture is NOT accepted as a working actor pipeline:
+    # LLVM must reject before emitting partial IR until typed nested graph
+    # lowering, supervisor scopes and transactional start are implemented.
+    oreslang_contract_test(native_nested_actor_pipe_guest_failclosed
+        nested-actor-pipe-unsupported.atto
+        --diagnostic "NESTED_ACTOR_PIPE_LLVM_NOT_IMPLEMENTED")
+    oreslang_contract_test(native_actor_pipe_type_sugar_failclosed
+        actor-pipe-types-unsupported.atto
+        --diagnostic "NESTED_ACTOR_PIPE_LLVM_NOT_IMPLEMENTED")
+    oreslang_contract_test(native_actor_pipe_generic_failclosed
+        actor-pipe-generic-unsupported.atto
+        --diagnostic "NESTED_ACTOR_PIPE_LLVM_NOT_IMPLEMENTED")
+    oreslang_contract_test(native_actor_pipe_namespace_failclosed
+        actor-pipe-namespace-unsupported.atto
+        --diagnostic "NESTED_ACTOR_PIPE_LLVM_NOT_IMPLEMENTED")
+    oreslang_contract_test(native_actor_connect_guest_failclosed
+        actor-connect-unsupported.atto
+        --diagnostic "ACTOR_CONNECT_LLVM_NOT_IMPLEMENTED")
+    oreslang_contract_test(native_actor_connect_generic_failclosed
+        actor-connect-generic-unsupported.atto
+        --diagnostic "ACTOR_CONNECT_LLVM_NOT_IMPLEMENTED")
+    oreslang_contract_test(native_actor_pipe_comments_gap_failclosed
+        actor-pipe-comment-gap-unsupported.atto
+        --diagnostic "NESTED_ACTOR_PIPE_LLVM_NOT_IMPLEMENTED")
+    oreslang_contract_test(native_actor_connect_namespace_failclosed
+        actor-connect-namespace-unsupported.atto
+        --diagnostic "ACTOR_CONNECT_LLVM_NOT_IMPLEMENTED")
+    # Compiler-positive control: reserved factory names inside comments do
+    # not trigger source admission; actual Clang executable must exit 7.
+    oreslang_contract_test(native_actor_pipe_lexical_comment_control
+        actor-pipe-lexical-control.atto --run 7 --clang "${ORE_CLANG}")
 
     # A Python -O/PYTHONOPTIMIZE run must never turn failed compiler
     # admission/IR checks into a green CTest. Uses only fake compilers;
