@@ -1,0 +1,36 @@
+// Compiler-backed acceptance target, not a claim of current parser support.
+// Reuses the source-level actor/handle_state vocabulary of actor-state-e2e-v1.
+// Each actor must receive fresh sealed state and retire after its single turn.
+define pub actor ChurnCounter as
+  state {
+    count: int = 0;
+  }
+
+  receive(ActorMail<int> mail): void {
+    const result = self.handle_state(critical-write |s| -> {
+      s.count = s.count + mail.value;
+      return s.count;
+    });
+    self.send(result);
+    self.end();
+    return;
+  }
+end
+
+pub async routine main(): void {
+  let int iteration = 0;
+  while iteration < 128 do
+    val worker = spawn ChurnCounter();
+    await worker.get_ready();
+    worker.send(1);
+    val reply = (await worker.outputs.next()).value.unwrap();
+    if reply.value != 1 then
+      stdio.stdout.println("LLVM_ACTOR_HEAP_GUEST_CHURN_FAIL");
+      return;
+    fi
+    await worker.get_done();
+    iteration = iteration + 1;
+  end
+  stdio.stdout.println("LLVM_ACTOR_HEAP_GUEST_CHURN_OK|128");
+  return;
+}
