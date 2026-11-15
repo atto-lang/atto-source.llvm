@@ -121,6 +121,22 @@ int main(int argc, char** argv) {
     semantic_reject(read_fixture(root, "borrow-escape-reject.atto"), "borrowed reference");
     semantic_reject(read_fixture(root, "share-class-reject.atto"), "non-Copy");
 
+    // The native unary grammar is limited to 64 nested operands; aliases
+    // must not bypass that pre-existing stack/complexity budget.
+    {
+        std::string deeply_nested;
+        for (int i = 0; i < 100; ++i) deeply_nested += "copy!";
+        deeply_nested += "41";
+        try {
+            oreslang::Program parsed_source;
+            (void)parsed(deeply_nested, parsed_source);
+            throw std::runtime_error("native ownership nesting limit bypassed");
+        } catch (const std::exception& e) {
+            if (std::string(e.what()).find("nesting limit exceeded") == std::string::npos)
+                throw;
+        }
+    }
+
     // A genuine native parser+ownership check, not a lexical-model-only test.
     for (const auto source : {"copy!41", "copy! 41", "rt copy 41"}) {
         const auto program = oreslang::parse_program(
