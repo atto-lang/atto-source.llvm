@@ -1,5 +1,61 @@
 # Native Oreslang DB POSIX WAL physical sync — stage 1
 
+## Stage 1.9 — maximum-frame/delete recovery oracle
+
+The tracked `native_db_wal_replay_v1_test.cpp` adds a second, independent
+file exercising exactly the same deterministic ODB1 wire corpus as Java:
+tenant 7/generation 4, smallest PUT, maximum 1,118-byte PUT (64-byte key,
+1,024-byte value), and 94-byte DELETE (64-byte key, no value).
+Independently pinned checksum bytes are `42 1d 02 86` for the maximum PUT
+and `23 1f df 0a` for DELETE. All three frames must replay as 1,243
+contiguous bytes, last sequence 3/operation 43. A test loops over all
+1,117 incomplete maximum-frame prefixes, checking accepted read-only
+`incomplete_tail` and unchanged length. Corrupted complete checksum,
+DELETE-with-value and 1,025-byte oversize value must reject and preserve
+bytes. This is an authored host regression, not a simulated power cut, nor
+compiled guest/actor ACK proof. Run the exact-HEAD CTest with steps before
+promoting the draft.
+
+
+
+## Stage 1.8 — reject malformed truncated WAL headers
+
+The host replay scanner now checks all available magic/version, tenant,
+generation and next-sequence prefix bytes before classifying short tails
+as incomplete. A complete header is checked for kind, ordered operation,
+and bounded key/value lengths before the possibly truncated payload can
+be treated as an incomplete final record. A corrupt full/header-only
+tail is a hard failure, never an invitation to truncate a foreign
+operation. Recovery remains read-only: no automatic truncate or ACK.
+
+The tracked C++17 regression tests all 30 legitimate truncated frame
+prefix lengths, nine malformed header cases and single-byte invalid
+magic, while checking that rejected bytes stay on disk for forensic
+recovery. Exact-tree CTest/sanitizer execution, compiled guest and
+OS/power-cut recovery are still separate promotion gates.
+
+
+
+## Parent-directory WAL creation sync (stage 1.7, host-only)
+
+`DbDurableWalFile::open_trusted` now requires `fsync(directory_fd)`
+after exclusive file lock and before returning a writable owner. Merely
+`fdatasync`-ing a newly created WAL does not establish its directory
+entry's survival across a filesystem crash. A failed directory sync
+throws and closes the opened WAL descriptor without yielding authority;
+on an unsupported filesystem it MUST fail closed, not downgrade to a
+file-only commit receipt. On Linux, a tracked regression uses a valid
+`O_PATH` directory FD that permits `openat` but rejects `fsync`
+with `EBADF`. The existing normal-open process roundtrip remains.
+
+This protects one WAL open's file-name metadata sync only. It does NOT
+authenticate the supplied FD, defeat hostile directory co-writers, sync
+checkpoint rename/unlink, prove power-cut persistence, execute compiled
+Oreslang, or provide guest commit ACK. Tests and sanitizers still require
+exact-tree execution and source approval before promotion.
+
+
+
 **Host-only POSIX runtime; no guest I/O, commit ACK, authenticated storage
 capability, allocator/actor scheduler integration, or end-to-end durability.**
 

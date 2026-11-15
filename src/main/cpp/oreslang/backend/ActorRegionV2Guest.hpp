@@ -2,6 +2,7 @@
 
 #include "oreslang/backend/ActorRegionV1Guest.hpp"
 #include "oreslang/backend/OwnershipDataflowV1.hpp"
+#include "oreslang/backend/OwnershipSourceLoweringV1.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -18,7 +19,7 @@ namespace oreslang {
 // they cannot silently inherit normal cleanup.
 struct ActorRegionCleanupPlanV1 {
     std::vector<std::string> owners;
-    std::vector<unsigned> cleanup_order;
+    std::vector<std::size_t> cleanup_order;
 
     void add_owner(const std::string& name) {
         if (name.empty() || owners.size() >= 8 ||
@@ -140,7 +141,23 @@ inline std::string emit_actor_region_v2_guest_ir(const Program& program) {
         cleanup_plan.add_owner(owner.name);
     }
     cleanup_plan.seal_normal_exits(2);
+    // Analyze the actual resolver/typechecker-owned Program AST, rather than
+    // only a synthetic list of owners. The source adapter maps its lexical
+    // allocations, field reads, guard and both return expressions to CFG ops.
+    const auto source_ownership =
+        OwnershipSourceLoweringV1::lower_guarded_owned_class_function(
+            program, fn, cls);
+    if (source_ownership.normal_exits.size() != 2)
+        reject("source ownership CFG did not prove both return paths");
+    const auto& source_cleanup =
+        source_ownership.normal_exits.front().cleanup_reverse_order;
+    for (const auto& exit : source_ownership.normal_exits)
+        if (exit.cleanup_reverse_order != source_cleanup)
+            reject("source ownership CFG has path-dependent unmerged cleanup");
     cleanup_plan.verify_normal_exits_with_dataflow(2);
+    if (cleanup_plan.cleanup_order != source_cleanup)
+        reject("source and backend cleanup plans disagree");
+    cleanup_plan.cleanup_order = source_cleanup;
     // The source checker currently produces these metadata fields in a
     // limited class grammar. Fail closed if a future grammar adds ownership
     // transfers, sum payloads or unvalidated aliases alongside 'new'.
@@ -222,7 +239,8 @@ inline std::string emit_actor_region_v2_guest_ir(const Program& program) {
     auto* i8 = llvm::Type::getInt8Ty(context);
     auto* i32 = llvm::Type::getInt32Ty(context);
     auto* i64 = llvm::Type::getInt64Ty(context);
-    auto* ptr = llvm::Type::getInt8PtrTy(context);
+    // LLVM 18 removed Type::getInt8PtrTy; use the opaque address-space-0 pointer.
+    auto* ptr = llvm::PointerType::get(context, 0);
     auto* void_type = llvm::Type::getVoidTy(context);
     const auto native = [&](const char* name, llvm::Type* output,
                             std::vector<llvm::Type*> args) {
@@ -313,7 +331,7 @@ inline std::string emit_actor_region_v2_guest_ir(const Program& program) {
     // Both return paths converge here: drop in reverse lexical ownership
     // order, exactly once each, AFTER the scalar return value is snapshotted.
     // This does not cover throw/suspend/cancel; those are rejected above.
-    for (const unsigned owner_index : cleanup_plan.cleanup_order)
+    for (const std::size_t owner_index : cleanup_plan.cleanup_order)
         builder.CreateCall(drop, {region, turn_storage, refs[owner_index]});
     builder.CreateCall(leave, {region, turn_storage});
     builder.CreateCall(retire, {region});
