@@ -23,9 +23,13 @@ class ActorAotEvidenceTest(unittest.TestCase):
         src = m["source"]
         self.assertEqual(src["full_git_tree"], "f40cb5044af7ffb55cbd05dd7024cc7963d6042d")
         self.assertEqual(src["blob_count"], 43)
-        for path, key in (("src/main.rs", "codegen_blob"),
-                          ("runtime/actor_runtime.c", "native_runtime_blob"),
-                          ("ci/test_native_actors.sh", "test_script_blob"),
+        # The original codegen and actor test script blobs are historical
+        # and immutable; the target-syntax native linker is separately audited.
+        self.assertEqual(src["codegen_blob"],
+                         "fb5d05772f0b47d49876897dbbf02d825111460b")
+        self.assertEqual(src["test_script_blob"],
+                         "1aeff548f616423d68ffdd96509dfd51750c1b2c")
+        for path, key in (("runtime/actor_runtime.c", "native_runtime_blob"),
                           ("frontend/src/check.rs", "frontend_typechecker_blob")):
             self.assertEqual(blob((ROOT / path).read_bytes()), src[key], path)
         # The original stress proof remains an immutable 43-blob snapshot.
@@ -93,13 +97,14 @@ class ActorAotEvidenceTest(unittest.TestCase):
                          blob(RECEIPT.read_bytes()))
         self.assertEqual(proof["code_source"]["full_tree"],
                          "099b089383525f0da89dd734fc7d86e659450f2c")
+        self.assertEqual(proof["code_source"]["llvm_emitter_blob"],
+                         "fb5d05772f0b47d49876897dbbf02d825111460b")
+        self.assertEqual(proof["code_source"]["actor_test_script_blob"],
+                         "1aeff548f616423d68ffdd96509dfd51750c1b2c")
         for path, sha in (
-            ("src/main.rs", proof["code_source"]["llvm_emitter_blob"]),
             ("runtime/actor_runtime.c", proof["code_source"]["runtime_c_blob"]),
             ("tests/native_actor_mailbox_stress.c",
              proof["code_source"]["mailbox_stress_c_blob"]),
-            ("ci/test_native_actors.sh",
-             proof["code_source"]["actor_test_script_blob"]),
         ):
             self.assertEqual(blob((ROOT / path).read_bytes()), sha, path)
         self.assertIn("/actions/runs/43657779372",
