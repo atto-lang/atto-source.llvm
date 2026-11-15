@@ -3546,14 +3546,20 @@ private:
                     if (accept("default")) {
                         if (has_fallback)
                             fail("native do match can contain only one default arm");
+                        if (token_.text == "when" || token_.text == "as")
+                            fail("native do match default arm cannot have a guard or binding");
                         require("->"); require("{");
                         fallback = branch_arm(false, false); require("}");
                         has_fallback = true;
+                        if (token_.text == "default")
+                            fail("native do match can contain only one default arm");
                         if (token_.text != "end")
                             fail("native do match default arm must be last");
                         continue;
                     }
                     require("on");
+                    if (accept("default"))
+                        fail("native do match fallback must use 'default ->' without 'on'");
                     // Until native HIR carries a proven record field view,
                     // never reinterpret a tilde/structural pattern as a
                     // scalar expression or enable host map projection.
@@ -4688,13 +4694,19 @@ private:
             if (accept("default")) {
                 if (fallback)
                     fail("native value match can contain only one default arm");
+                if (token_.text == "when" || token_.text == "as")
+                    fail("native value match default arm cannot have a guard or binding");
                 require("->");
                 fallback = dispatch_value_arm("native value match");
+                if (token_.text == "default")
+                    fail("native value match can contain only one default arm");
                 if (token_.text != "end")
                     fail("native value match default arm must be last");
                 continue;
             }
             require("on");
+            if (accept("default"))
+                fail("native value match fallback must use 'default ->' without 'on'");
             if (token_.text == "structural" || token_.text == "~")
                 fail("native structural field pattern requires checked typed aggregate lowering");
             if (accept("_")) {
