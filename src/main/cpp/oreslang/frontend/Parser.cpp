@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <charconv>
 #include <limits>
+#include <optional>
 #include <functional>
 #include <cctype>
 #include <stdexcept>
@@ -448,6 +449,86 @@ bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
     return false;
 }
 
+// Conservative first native const-evaluator admission: only literal and
+// completely constant scalar operations. Runtime reads, calls, actor state,
+// borrows and effects are never reclassified as compile-time expressions.
+// Checked integer math is evaluated here for const overflow diagnostics.
+std::optional<std::int64_t> native_const_integer_value(
+        const Expression& expr, const std::vector<LocalBinding>& known,
+        std::size_t depth = 1) {
+    require_expression_depth(depth, expr.offset);
+    using K = Expression::Kind;
+    if (expr.kind == K::Integer) return expr.integer;
+    if (expr.kind == K::Variable) {
+        // Look only at preceding fixed primitive const bindings. Runtime val,
+        // let, imported globals, handles, and effects cannot be constexpr.
+        auto found = std::find_if(known.rbegin(), known.rend(),
+            [&](const LocalBinding& binding) { return binding.name == expr.name; });
+        if (found == known.rend() || found->assignable || found->owner_mutable ||
+                found->heap_owned || found->int_array || !found->class_name.empty() ||
+                !found->sum_type.empty() || !found->initializer ||
+                found->scalar_type != ScalarType::I64)
+            return std::nullopt;
+        return native_const_integer_value(*found->initializer, known, depth + 1);
+    }
+    if (expr.kind == K::Negate && expr.left) {
+        const auto v = native_const_integer_value(*expr.left, known, depth + 1);
+        if (!v) return std::nullopt;
+        if (*v == std::numeric_limits<std::int64_t>::min())
+            throw std::runtime_error("E_CONST_OVERFLOW: signed integer negate");
+        return -*v;
+    }
+    if ((expr.kind == K::Add || expr.kind == K::Subtract ||
+            expr.kind == K::Multiply) && expr.left && expr.right) {
+        const auto a = native_const_integer_value(*expr.left, known, depth + 1);
+        const auto b = native_const_integer_value(*expr.right, known, depth + 1);
+        if (!a || !b) return std::nullopt;
+        std::int64_t result = 0;
+        bool overflow = false;
+        if (expr.kind == K::Add) overflow = __builtin_add_overflow(*a, *b, &result);
+        else if (expr.kind == K::Subtract) overflow = __builtin_sub_overflow(*a, *b, &result);
+        else overflow = __builtin_mul_overflow(*a, *b, &result);
+        if (overflow) throw std::runtime_error("E_CONST_OVERFLOW: signed integer arithmetic");
+        return result;
+    }
+    return std::nullopt;
+}
+
+bool native_const_scalar_tree(
+        const Expression& expr, const std::vector<LocalBinding>& known,
+        std::size_t depth = 1) {
+    require_expression_depth(depth, expr.offset);
+    using K = Expression::Kind;
+    if (expr.kind == K::Integer || expr.kind == K::Boolean ||
+            expr.kind == K::String) return true;
+    if (expr.kind == K::Variable) {
+        auto found = std::find_if(known.rbegin(), known.rend(),
+            [&](const LocalBinding& binding) { return binding.name == expr.name; });
+        return found != known.rend() && !found->assignable && !found->owner_mutable &&
+                !found->heap_owned && !found->int_array && found->class_name.empty() &&
+                found->sum_type.empty() && found->initializer &&
+                native_const_scalar_tree(*found->initializer, known, depth + 1);
+    }
+    if (expr.kind == K::Negate && expr.left)
+        return native_const_integer_value(expr, known, depth).has_value();
+    if (expr.kind == K::LogicalNot && expr.left)
+        return native_const_scalar_tree(*expr.left, known, depth + 1);
+    if (expr.kind == K::Add || expr.kind == K::Subtract ||
+            expr.kind == K::Multiply) {
+        return native_const_integer_value(expr, known, depth).has_value();
+    }
+    if (expr.kind == K::Equal || expr.kind == K::NotEqual ||
+            expr.kind == K::Less || expr.kind == K::LessEqual ||
+            expr.kind == K::Greater || expr.kind == K::GreaterEqual ||
+            expr.kind == K::LogicalAnd || expr.kind == K::LogicalOr ||
+            expr.kind == K::LogicalXor) {
+        return expr.left && expr.right &&
+                native_const_scalar_tree(*expr.left, known, depth + 1) &&
+                native_const_scalar_tree(*expr.right, known, depth + 1);
+    }
+    return false;
+}
+
 bool native_capture_free_task_tree(
         const Expression& expr, std::size_t depth = 1) {
     require_expression_depth(depth, expr.offset);
@@ -715,6 +796,8 @@ public:
 
     Program parse() {
         Program program;
+        if (token_.text == "use" && peek_next().text == "namespace")
+            fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native actor namespace header needs typed module/linker identity");
         while (token_.text == "import") {
             advance();
             // Outside the host-only verified-metadata mode, namespace imports stay
@@ -837,6 +920,12 @@ public:
                 if (exported) fail("duplicate pub modifier");
                 exported = true;
             }
+            if (token_.text == "macro") {
+                if (exported) fail("NATIVE_MACRO_EXPANDER_REQUIRED: public macro export needs checked module visibility before LLVM IR; runtime fallback is forbidden");
+                advance();
+                macro_declaration();
+                continue;
+            }
             if (token_.text == "singleton")
                 fail("ORES-SINGLETON-UNSUPPORTED: native singleton declarations require exactly-once complete publication, cycle/failure semantics, runtime-derived actor authority for shared state, and five-backend guest execution parity");
             // Java M0 admits compiler-only durable declarations. LLVM has no
@@ -844,7 +933,7 @@ public:
             if (token_.text == "activity" || token_.text == "workflow")
                 fail("DURABLE_M0_BACKEND_UNSUPPORTED: LLVM requires typed durable manifest and replay lowering");
             if (token_.text == "mtd") {
-                program.functions.push_back(extension_method(exported));
+                parse_receiver_mtd(program, exported);
                 continue;
             }
             if (token_.text == "type" || token_.text == "trait" ||
@@ -923,6 +1012,14 @@ public:
                 program.generators.push_back(std::move(generator));
                 continue;
             }
+            // A receiver-first mtd is a declaration, not a standalone function.
+            // Preserve the previous define mtd name on Alias form separately.
+            if (token_.text == "mtd" ||
+                    (token_.text == "pub" && peek_next().text == "mtd")) {
+                const bool method_exported = accept("pub");
+                parse_receiver_mtd(program, method_exported);
+                continue;
+            }
             bool public_class = token_.text == "pub" && peek_next().text == "define";
             if (public_class) advance();
             if (accept("@")) {
@@ -982,6 +1079,10 @@ public:
                     if (public_class) fail("duplicate pub modifier");
                     public_class = true;
                 }
+                if (token_.text == "macro") {
+                    fail("NATIVE_MACRO_EXPANDER_REQUIRED: define macro is compile-time-only; "
+                         "native expansion must complete before LLVM IR and runtime fallback is forbidden");
+                }
                 if (token_.text == "singleton")
                     fail("ORES-SINGLETON-UNSUPPORTED: native singleton declarations require exactly-once complete publication, cycle/failure semantics, runtime-derived actor authority for shared state, and five-backend guest execution parity");
                 // Java M0 admits compiler-only durable declarations. LLVM has no
@@ -989,7 +1090,7 @@ public:
                 if (token_.text == "activity" || token_.text == "workflow")
                     fail("DURABLE_M0_BACKEND_UNSUPPORTED: LLVM requires typed durable manifest and replay lowering");
                 if (token_.text == "mtd") {
-                    program.functions.push_back(extension_method(public_class));
+                    parse_receiver_mtd(program, public_class);
                     continue;
                 }
                 if (token_.text == "type" || token_.text == "trait" ||
@@ -1028,12 +1129,16 @@ public:
                 } else fail("expected 'class', 'actor', or built-in MaxActorThreads enum");
             } else if (token_.text == "suspend") {
                 program.cooperative_loops.push_back(cooperative_scalar_loop());
+            } else if (macro_invocation_ahead()) {
+                fail("NATIVE_MACRO_EXPANDER_REQUIRED: macro invocation is compile-time syntax; "
+                     "native expansion must complete before LLVM IR and runtime fallback is forbidden");
             } else {
                 program.functions.push_back(function());
             }
         }
         for (auto& method : methods_) program.functions.push_back(std::move(method));
         if (wrapped_module) require("end");
+        validate_actor_forwards(program);
         if (token_.kind != Kind::End) fail("unexpected trailing source");
         // The package-local host graph is not connected to an authenticated
         // v2 manifest/source loader and native codegen yet. Namespace AST
@@ -1271,6 +1376,25 @@ private:
             exported = prefix_public || postfix_public;
         }
 
+        // A declared actor is only a same-source compile-time identity. It
+        // must resolve to exactly one real native actor, and never creates
+        // mailbox storage, a runtime actor or a foreign type capability.
+        // Exported forward signatures cannot be enforced by this native actor
+        // ABI, which has no actor visibility field, so reject them for now.
+        if (!already_defined && accept("actor")) {
+            if (exported)
+                fail("NATIVE_ACTOR_FORWARD_PUBLIC_UNSUPPORTED: native actor forward visibility needs an actor export ABI");
+            const std::string name = nominal_declaration_name();
+            if (token_.text == "<")
+                fail("NATIVE_ACTOR_FORWARD_GENERIC_UNSUPPORTED: native actor generics require typed specialization");
+            require(";");
+            if (!actor_forwards_.emplace(name, program.module).second)
+                fail("NATIVE_ACTOR_FORWARD_DUPLICATE: duplicate actor forward '" + name + "'");
+            return;
+        }
+        if (!already_defined && token_.text == "isoactor")
+            fail("NATIVE_ACTOR_FORWARD_KIND_UNSUPPORTED: private isoactor needs isolated actor heap/lifecycle lowering");
+
         TypeOnlyDecl decl;
         decl.module_name = program.module;
         decl.exported = exported;
@@ -1363,6 +1487,26 @@ private:
         if (program.type_only_declarations.size() >= 1024)
             fail("TYPE_ONLY_DECL_BUDGET: maximum 1024 type-only declarations");
         program.type_only_declarations.push_back(std::move(decl));
+    }
+
+    void validate_actor_forwards(const Program& program) const {
+        std::unordered_set<std::string> declared;
+        for (const auto& actor : program.actors) {
+            if (!declared.insert(actor.name).second)
+                fail("NATIVE_ACTOR_DUPLICATE_DEFINITION: duplicate actor '" + actor.name + "'");
+        }
+        for (const auto& forward : actor_forwards_) {
+            const std::string& name = forward.first;
+            if (forward.second != program.module)
+                fail("NATIVE_ACTOR_FORWARD_SCOPE: actor forward crosses a module boundary");
+            // Reject collisions even if an actor of this name also exists:
+            // no parser-order resolution between class and actor symbols.
+            for (const auto& cls : program.classes)
+                if (cls.name == name)
+                    fail("NATIVE_ACTOR_FORWARD_KIND: actor forward collides with class '" + name + "'");
+            if (!declared.count(name))
+                fail("NATIVE_ACTOR_FORWARD_UNRESOLVED: actor forward has no same-source definition '" + name + "'");
+        }
     }
 
     struct ForwardType {
@@ -1498,6 +1642,142 @@ private:
     Token peek_next() const {
         Lexer next_lexer = lexer_;
         return next_lexer.next();
+    }
+
+    enum class MacroKind { ConstIntQuote, SyntaxExprIdentity };
+    static constexpr std::size_t kMaxNativeMacroDefinitions = 8;
+    static constexpr std::size_t kMaxNativeMacroExpansions = 128;
+
+    void require_macro(std::string_view token) {
+        if (!accept(token))
+            fail("NATIVE_MACRO_EXPANDER_REQUIRED: unsupported macro signature/body or invocation; expected '" +
+                 std::string(token) + "'; runtime fallback is forbidden");
+    }
+
+    // Only two syntactically closed typed AST forms may cross this boundary.
+    // Macro bodies are checked at declaration even when never invoked.
+    void macro_declaration() {
+        if (macros_.size() >= kMaxNativeMacroDefinitions)
+            fail("NATIVE_MACRO_BUDGET: declaration budget exceeded; runtime fallback is forbidden");
+        const std::string name = identifier();
+        if (name == "quote" || name == "unquote" || name == "eval" ||
+                !macros_.emplace(name, MacroKind::ConstIntQuote).second)
+            fail("NATIVE_MACRO_EXPANDER_REQUIRED: reserved or duplicate macro declaration; runtime fallback is forbidden");
+        require_macro("(");
+        MacroKind kind;
+        if (accept("Const")) {
+            require_macro("<"); require_macro("int"); require_macro(">");
+            kind = MacroKind::ConstIntQuote;
+        } else if (accept("Syntax")) {
+            require_macro("<"); require_macro("Expr"); require_macro(">");
+            kind = MacroKind::SyntaxExprIdentity;
+        } else {
+            fail("NATIVE_MACRO_EXPANDER_REQUIRED: only Const<int> or Syntax<Expr> accepted before LLVM IR; runtime fallback is forbidden");
+        }
+        const std::string parameter = identifier();
+        if (parameter == "quote" || parameter == "unquote" || parameter == "eval")
+            fail("NATIVE_MACRO_EXPANDER_REQUIRED: reserved macro parameter; runtime fallback is forbidden");
+        require_macro(")"); require_macro("->");
+        require_macro("Syntax"); require_macro("<"); require_macro("Expr"); require_macro(">");
+        require_macro("{"); require_macro("return");
+        if (kind == MacroKind::ConstIntQuote) {
+            require_macro("quote"); require_macro("(");
+            if (identifier() != parameter)
+                fail("NATIVE_MACRO_EXPANDER_REQUIRED: Const<int> quote must use exact parameter; runtime fallback is forbidden");
+            require_macro(")");
+        } else if (identifier() != parameter) {
+            fail("NATIVE_MACRO_EXPANDER_REQUIRED: Syntax<Expr> identity must use exact parameter; runtime fallback is forbidden");
+        }
+        require_macro(";"); require_macro("}");
+        macros_.at(name) = kind;
+    }
+
+    // Constant evaluation visits the already parsed expression AST, never
+    // interpolates source text and never executes any host/guest call.
+    std::int64_t macro_const_int(const Expression& value, std::size_t depth = 0,
+                                 std::size_t* visited = nullptr) {
+        std::size_t initial = 0;
+        if (!visited) visited = &initial;
+        if (++*visited > 512)
+            fail("NATIVE_MACRO_BUDGET: constant AST node limit exceeded (512); runtime fallback is forbidden");
+        if (depth > 64)
+            fail("NATIVE_MACRO_BUDGET: constant expression nesting exceeds 64; runtime fallback is forbidden");
+        using K = Expression::Kind;
+        if (value.kind == K::Integer) return value.integer;
+        std::int64_t a = 0, b = 0, out = 0;
+        if (value.kind == K::Negate && value.left) {
+            a = macro_const_int(*value.left, depth + 1, visited);
+            if (__builtin_sub_overflow(std::int64_t{0}, a, &out))
+                fail("NATIVE_MACRO_CONST_OVERFLOW: checked compile-time i64 overflow; runtime fallback is forbidden");
+            return out;
+        }
+        if ((value.kind == K::Add || value.kind == K::Subtract ||
+                value.kind == K::Multiply) && value.left && value.right) {
+            a = macro_const_int(*value.left, depth + 1, visited);
+            b = macro_const_int(*value.right, depth + 1, visited);
+            bool overflow = value.kind == K::Add
+                    ? __builtin_add_overflow(a, b, &out)
+                    : value.kind == K::Subtract
+                    ? __builtin_sub_overflow(a, b, &out)
+                    : __builtin_mul_overflow(a, b, &out);
+            if (overflow)
+                fail("NATIVE_MACRO_CONST_OVERFLOW: checked compile-time i64 overflow; runtime fallback is forbidden");
+            return out;
+        }
+        fail("NATIVE_MACRO_CONST_UNCLOSED: Const<int> needs a closed literal AST; runtime fallback is forbidden");
+    }
+
+    std::unique_ptr<Expression> macro_expression(const std::string& name,
+                                                  std::size_t offset) {
+        const auto it = macros_.find(name);
+        if (it == macros_.end())
+            fail("NATIVE_MACRO_EXPANDER_REQUIRED: undeclared macro invocation before LLVM IR; runtime fallback is forbidden");
+        if (++macro_expansions_ > kMaxNativeMacroExpansions)
+            fail("NATIVE_MACRO_BUDGET: expansion count exceeded; runtime fallback is forbidden");
+        require_macro("!");
+        require_macro("(");
+        const MacroKind kind = it->second;
+        if (kind == MacroKind::ConstIntQuote) {
+            require_macro("const");
+            // Ordinary expressions stop at parser depth 64. A const-input
+            // expression must admit *64 AST edges* as well as its enclosing
+            // macro syntax, so allow a small, bounded parser margin here.
+            // The const evaluator still enforces depth 64 / 512 visits.
+            struct MacroConstParseScope {
+                std::size_t& depth;
+                explicit MacroConstParseScope(std::size_t& value) : depth(value) { ++depth; }
+                ~MacroConstParseScope() { --depth; }
+            };
+            std::unique_ptr<Expression> argument;
+            {
+                MacroConstParseScope scope(macro_const_parse_depth_);
+                argument = expression();
+            }
+            require_macro(")");
+            const std::int64_t constant = macro_const_int(*argument);
+            auto result = make_expression(Expression::Kind::Integer, offset);
+            result->integer = constant;
+            return result;
+        }
+        require_macro("syntax"); require_macro("expr");
+        auto argument = expression();
+        require_macro(")");
+        // Single-use forwarding preserves the caller's AST and ownership
+        // semantics; no new identifier, duplicate, capture, or runtime JIT.
+        return argument;
+    }
+
+    bool macro_invocation_ahead() const {
+        if (token_.kind != Kind::Identifier) return false;
+        Lexer probe = lexer_;
+        Token next = probe.next();
+        std::size_t qualifiers = 0;
+        while (next.text == "." && qualifiers++ < 32) {
+            const Token member = probe.next();
+            if (member.kind != Kind::Identifier) return false;
+            next = probe.next();
+        }
+        return next.text == "!";
     }
 
     void built_in_actor_threads_enum() {
@@ -2071,6 +2351,72 @@ private:
         return "$mtd$" + receiver + "$" + method;
     }
 
+    void parse_receiver_mtd(Program& program, bool exported) {
+        // Legacy named-alias extensions remain supported but do not grant
+        // class ownership or mutation. This canonical spelling is restricted
+        // to an ordinary class already declared in this same source unit.
+        if (peek_next().text != "(") {
+            program.functions.push_back(extension_method(exported));
+            return;
+        }
+
+        require("mtd");
+        require("(");
+        // Canonical AttoLang syntax is type-first: mtd (Foo self) method().
+        // Keep self-first forms for the existing class-method migration.
+        bool mutable_receiver = false;
+        std::string owner;
+        if (token_.text == "self" || token_.text == "mut") {
+            mutable_receiver = accept("mut");
+            require("self");
+            require(":");
+            owner = identifier();
+        } else {
+            owner = identifier();
+            mutable_receiver = accept("mut");
+            require("self");
+        }
+        require(")");
+        auto found = std::find_if(program.classes.begin(), program.classes.end(),
+            [&](const ClassDecl& cls) { return cls.name == owner; });
+        if (found == program.classes.end()) {
+            // A declaration-only actor with type-first methods is valid
+            // AttoLang, but cannot yet be represented by native on_message
+            // class slots. Reject for missing backend lowering, not grammar.
+            if (actor_forwards_.count(owner))
+                fail("NATIVE_ACTOR_MTD_BACKEND_UNSUPPORTED: declaration-only actor receiver needs typed mailbox method lowering");
+            const bool actor_target = std::any_of(program.actors.begin(), program.actors.end(),
+                [&](const ActorDecl& actor) { return actor.name == owner; });
+            if (actor_target)
+                fail("NATIVE_MTD_ACTOR_STATE_SEALED: external receiver methods cannot extend an already defined actor's sealed state");
+            fail("NATIVE_MTD_LOCAL_CLASS_REQUIRED: typed receiver must name an already declared ordinary local class");
+        }
+        const bool prior_active = external_class_receiver_active_;
+        const bool prior_mutable = external_class_receiver_mutable_;
+        external_class_receiver_active_ = true;
+        external_class_receiver_mutable_ = mutable_receiver;
+        Function method = function(owner, exported);
+        external_class_receiver_active_ = prior_active;
+        external_class_receiver_mutable_ = prior_mutable;
+        const std::string name = method.name.substr(owner.size() + 1);
+        // A declaration outside the nominal class is never an alternate
+        // constructor or actor/lifecycle authority.
+        if (name == "new" || name == "constructor" ||
+            name == "init" || name == "on_start")
+            fail("NATIVE_MTD_RESERVED_MEMBER: external receiver methods cannot be constructors, factories or lifecycle hooks");
+        ClassMethod signature;
+        signature.name = method.name.substr(owner.size() + 1);
+        signature.arity = native_source_value_arity(method.parameters.size(), true);
+        signature.public_member = exported;
+        signature.mutable_receiver =
+            method.parameters.front().mode == Parameter::Mode::BorrowMut;
+        for (const auto& prior : found->methods)
+            if (prior.name == signature.name && prior.arity == signature.arity)
+                fail("NATIVE_MTD_DUPLICATE_SLOT: duplicate receiver method name/arity");
+        found->methods.push_back(std::move(signature));
+        methods_.push_back(std::move(method));
+    }
+
     Function extension_method(bool exported) {
         extension_offset_ = token_.offset;
         require("mtd");
@@ -2209,7 +2555,13 @@ private:
         }
         if (!owner.empty()) {
             Parameter receiver;
-            receiver.name = "self"; receiver.class_name = owner; receiver.mode = Parameter::Mode::Borrow;
+            receiver.name = "self"; receiver.class_name = owner;
+            receiver.mode = external_class_receiver_mutable_
+                ? Parameter::Mode::BorrowMut : Parameter::Mode::Borrow;
+            if (external_class_receiver_active_ &&
+                    (token_.text == "self" ||
+                    (token_.text == "mut" && peek_next().text == "self")))
+                fail("NATIVE_MTD_DUPLICATE_SELF: receiver is already declared in mtd header");
             if (accept("mut")) {
                 require("self");
                 receiver.mode = Parameter::Mode::BorrowMut;
@@ -2329,29 +2681,83 @@ private:
             // Never accept an uncertified realtime property as a mere annotation.
             fail("native requires clause awaits verified WCET/allocation/blocking analysis");
         }
-        // End-delimited class methods use the same Function / hidden-receiver
-        // representation as braced methods. Until general structured-body
-        // lowering is shared, permit only an empty/return-only void body or
-        // one scalar terminal return; reject every other statement.
-        // This is not an alternate arity or method ABI.
+        // Arrow/:: is an expression-sequence body, not an alternate ABI.
+        // Represent intermediate expressions in compiler-owned ANF locals and
+        // the terminal expression in the existing checked Function.result.
+        // This subset supports fnc, routine, class methods and extensions;
+        // unsupported complex local types still fail closed.
         if (token_.text == "::") {
-            if (owner.empty()) fail("native '::' body requires a class method");
             if (!arrow_return_type)
-                fail("native '::' method requires '->' return syntax");
+                fail("native '::' body requires '->' return syntax");
             require("::");
-            if (value.returns_void) {
+            bool terminal = false;
+            while (token_.text != "end") {
+                if (token_.kind == Kind::End)
+                    fail("unterminated native comma expression body");
+                if (token_.text == ",")
+                    fail("native comma expression body contains an empty item");
                 if (accept("return")) {
-                    if (!accept(";") && token_.text != "end")
-                        fail("native end-delimited void method requires terminal return");
+                    if (value.returns_void) {
+                        if (token_.text != "end") require(";");
+                    } else {
+                        value.result = expression();
+                        accept(";");
+                    }
+                    terminal = true;
+                } else {
+                    bool local = token_.text == "int" || token_.text == "bool"
+                        || token_.text == "string" || token_.text == "String"
+                        || token_.text == "const" || token_.text == "val"
+                        || token_.text == "let";
+                    if (local) {
+                        LocalBinding binding;
+                        binding.offset = token_.offset;
+                        if (token_.text == "const" || token_.text == "val" || token_.text == "let") {
+                            const std::string mode(token_.text);
+                            advance();
+                            binding.owner_mutable = mode != "const";
+                            binding.assignable = mode == "let";
+                        }
+                        if (accept("int")) binding.scalar_type = ScalarType::I64;
+                        else if (accept("bool")) binding.scalar_type = ScalarType::Bool;
+                        else if (accept("string") || accept("String"))
+                            binding.scalar_type = ScalarType::String;
+                        else fail("native comma body local requires checked scalar type");
+                        binding.name = identifier();
+                        require("=");
+                        binding.initializer = expression();
+                        value.locals.push_back(std::move(binding));
+                        if (!accept(","))
+                            fail("native comma body local must be followed by ',' and an expression");
+                        if (token_.text == "," || token_.text == "end")
+                            fail("native comma expression body requires item after ','");
+                        continue;
+                    }
+                    auto evaluated = expression();
+                    if (accept(",")) {
+                        if (token_.text == "," || token_.text == "end")
+                            fail("native comma expression body requires item after ','");
+                        LocalBinding discarded;
+                        discarded.name = "$effect" + std::to_string(value.locals.size());
+                        discarded.initializer = std::move(evaluated);
+                        value.locals.push_back(std::move(discarded));
+                        continue;
+                    }
+                    if (value.returns_void) {
+                        LocalBinding discarded;
+                        discarded.name = "$effect" + std::to_string(value.locals.size());
+                        discarded.initializer = std::move(evaluated);
+                        value.locals.push_back(std::move(discarded));
+                    } else {
+                        value.result = std::move(evaluated);
+                    }
+                    terminal = true;
                 }
-            } else {
-                require("return");
-                value.result = expression();
-                if (!accept(";") && token_.text != "end")
-                    fail("native end-delimited method requires terminal return");
+                if (token_.text != "end")
+                    fail("native comma expression body requires a single terminal result");
             }
-            if (token_.text != "end")
-                fail("native end-delimited method supports only one terminal return");
+            if (!value.returns_void && !terminal)
+                fail("native non-void comma expression body requires a result");
             require("end");
             return value;
         }
@@ -2481,7 +2887,10 @@ private:
             require(";");
             return true;
         };
-        while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio" || array_effect_ahead()) {
+        while (token_.text == "const" || token_.text == "val" || token_.text == "let" ||
+                token_.text == "int" || token_.text == "bool" ||
+                token_.text == "string" || token_.text == "String" ||
+                token_.text == "stdio" || array_effect_ahead()) {
             // Typed Future<void> is admitted ONLY as a linear lexical alias
             // for one already-spawned ActorRef.get_ready() lifecycle promise.
             // No scalar/object borrow crosses this suspension, and general
@@ -2491,17 +2900,25 @@ private:
             if (ready_future_local()) continue;
             LocalBinding binding;
             binding.offset = token_.offset;
+            const bool type_first_const = token_.text == "int" || token_.text == "bool" ||
+                    token_.text == "String" || token_.text == "string";
+            if (token_.text == "const" && peek_next().text == "mut")
+                fail("E_CONST_MUT_UNSUPPORTED: scoped owned mutable value lowering is not yet implemented");
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
-            if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
-                    (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string")) {
-                const auto mode = token_.text; advance(); if (mode == "let") accept("mut");
+            if (type_first_const ||
+                    ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
+                    (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string"))) {
+                const std::string mode = type_first_const ? "const" : std::string(token_.text);
+                if (!type_first_const) { advance(); if (mode == "let") accept("mut"); }
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
                 binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
                 if (binding.scalar_type == ScalarType::I64) require("int");
                 binding.name = identifier();
                 require("=");
                 if (accept("await")) {
+                    if (mode == "const")
+                        fail("E_NON_CONST_INITIALIZER: await is not compile-time constant");
                     if (binding.scalar_type != ScalarType::I64)
                         fail("native scalar await requires an int result binding");
                     if (!value.locals.empty())
@@ -2537,6 +2954,9 @@ private:
                     }
                 } else {
                     binding.initializer = expression();
+                    if (mode == "const" &&
+                            !native_const_scalar_tree(*binding.initializer, value.locals))
+                        fail("E_NON_CONST_INITIALIZER: type-first/const scalar requires a compile-time value");
                 }
             } else if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
                     (sum_first.text == "Option" || sum_first.text == "Result")) {
@@ -3734,9 +4154,12 @@ private:
     }
 
     std::unique_ptr<Expression> conditional() {
-        if (++conditional_depth_ > kMaxNativeExpressionDepth) {
+        const std::size_t parser_limit = macro_const_parse_depth_ != 0
+                ? kMaxNativeExpressionDepth + 16 : kMaxNativeExpressionDepth;
+        if (++conditional_depth_ > parser_limit) {
             --conditional_depth_;
-            fail("native conditional expression nesting limit exceeded (64)");
+            fail("native conditional expression nesting limit exceeded ("
+                 + std::to_string(parser_limit) + ")");
         }
         struct ConditionalDepthGuard {
             std::size_t& depth;
@@ -3897,9 +4320,12 @@ private:
     }
 
     std::unique_ptr<Expression> unary() {
-        if (++expression_depth_ > kMaxNativeExpressionDepth) {
+        const std::size_t parser_limit = macro_const_parse_depth_ != 0
+                ? kMaxNativeExpressionDepth + 16 : kMaxNativeExpressionDepth;
+        if (++expression_depth_ > parser_limit) {
             --expression_depth_;
-            fail("native expression nesting limit exceeded (64)");
+            fail("native expression nesting limit exceeded ("
+                 + std::to_string(parser_limit) + ")");
         }
         struct DepthGuard {
             std::size_t& depth;
@@ -4195,6 +4621,19 @@ private:
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
 
+        // FAT_ARROW annotates the inline lambda's result type, but native
+        // closure frames and typed capture ownership are not lowered yet.
+        // Fail specifically here rather than allowing a logical-or token to
+        // masquerade as a value at the beginning of an expression.
+        if (token_.text == "||") {
+            // The native lexer deliberately does not yet combine => into
+            // a single token; matching it as a lookahead symbol would miss
+            // every typed inline lambda. A leading || cannot be a valid
+            // binary logical-or expression, so reject it unconditionally.
+            fail("NATIVE_LAMBDA_CLOSURE_UNSUPPORTED: => Type -> lambda requires "
+                 "native closure and ownership lowering");
+        }
+
         // nb is a nonblocking channel/select modifier. It is never permission
         // for suspension inside an otherwise synchronous match/switch.
         if (token_.text == "nb") {
@@ -4323,6 +4762,36 @@ private:
             if (lookahead.next().text == "{")
                 fail("native execution task lowering unsupported: scheduler-owned Task/Future continuation required; no implicit inline execution");
         }
+        // The recursive factory API is a compiler-recognized actor intrinsic,
+        // never an ordinary scalar method or host reflection call. Until
+        // checked descriptor, move-only ownership, capacity reservations and
+        // transactional start are wired into LLVM IR, reject the actual
+        // token sequence before parsing/evaluating nested constructor args.
+        // Lexical lookahead skips comments and strings are distinct tokens,
+        // so incidental text cannot trigger this source admission guard.
+        if (token_.text == "Actor") {
+            Lexer lookahead = lexer_;
+            const auto separator = lookahead.next().text;
+            if (separator == "." || separator == "::") {
+                const auto operation = lookahead.next().text;
+                if (operation == "pipe" || operation == "connect") {
+                    // A generic invocation also requires this intrinsic, not
+                    // an ordinary named runtime function. Reject before
+                    // parsing/evaluating constructor or ActorRef arguments.
+                    const auto invocation = lookahead.next().text;
+                    if (invocation == "(" || invocation == "<") {
+                        if (operation == "pipe")
+                            fail("NESTED_ACTOR_PIPE_LLVM_NOT_IMPLEMENTED: typed "
+                                 "actor descriptors, scoped supervision and "
+                                 "transactional start require native lowering");
+                        fail("ACTOR_CONNECT_LLVM_NOT_IMPLEMENTED: live ActorRef "
+                             "ownership, generation and bounded DATA admission "
+                             "require native compiler lowering");
+                    }
+                }
+            }
+        }
+
         // Opaque ActorGroup and join permits are runtime-affine capabilities.
         // Never silently admit a native scalar name or emit partial IR.
         if (token_.text == "ActorGroup" ||
@@ -4381,6 +4850,7 @@ private:
         else if (sum_variant(token_.text)) { expr->name = token_.text; advance(); }
         else expr->name = identifier();
         if (module_names_.count(expr->name) && accept(".")) expr->name += "." + identifier();
+        if (token_.text == "!") return macro_expression(expr->name, offset);
         if (generic_call_type_arguments_ahead()) {
             require("<");
             expr->type_arguments_present = true;
@@ -4482,6 +4952,10 @@ private:
                 }
             }
             expr = std::move(field);
+            if (token_.text == "!") {
+                fail("NATIVE_MACRO_EXPANDER_REQUIRED: macro invocation is compile-time syntax; "
+                     "native expansion must complete before LLVM IR and runtime fallback is forbidden");
+            }
         }
         return expr;
     }
@@ -6447,11 +6921,14 @@ private:
     }
 
     std::unordered_map<std::string, ForwardType> forwards_;
+    std::unordered_map<std::string, std::string> actor_forwards_;
     std::unordered_map<std::string, ScalarAlias> defined_type_aliases_;
     std::string_view source_;
     Lexer lexer_;
     Token token_;
     std::unordered_set<std::string> module_names_;
+    std::unordered_map<std::string, MacroKind> macros_;
+    std::size_t macro_expansions_ = 0;
     std::unordered_set<std::string> function_import_names_;
     std::string method_scope_;
     std::unordered_set<std::string> class_receivers_;
@@ -6469,12 +6946,15 @@ private:
         std::unordered_map<std::string, std::unordered_set<std::size_t>>> extension_methods_;
     std::unordered_set<std::string> extension_public_slots_;
     bool extension_header_active_ = false;
+    bool external_class_receiver_active_ = false;
+    bool external_class_receiver_mutable_ = false;
     // Inside a native actor on_message body: `self.field` names the actor field.
     bool actor_handler_active_ = false;
     std::string extension_receiver_alias_;
     std::string extension_method_name_;
     std::size_t extension_offset_ = 0;
     bool actor_threads_enum_seen_ = false;
+    std::size_t macro_const_parse_depth_ = 0;
     std::size_t expression_depth_ = 0;
     std::size_t conditional_depth_ = 0;
 };
