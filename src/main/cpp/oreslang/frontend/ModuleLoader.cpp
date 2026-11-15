@@ -56,6 +56,14 @@ public:
         read_bytes = text.size();
         visit(fs::canonical(path), std::move(text), identity, 0, false,
               frontend::CompilerLibraryTier::Core, root_provider_bits);
+        // Defense in depth: the old module linker must never silently ignore
+        // namespace AST records if a future parser starts admitting them.
+        // Authenticated package-source ownership and typed namespace call
+        // lowering have not been connected to this executable path.
+        for (const auto& unit : units) {
+            if (!unit->program.namespace_imports.empty())
+                fail(*unit, "NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native loader requires verified v2 namespace package linking");
+        }
         if (units.front()->program.imports.empty()) {
             auto root = std::move(units.front()->program);
             resolve_and_validate_program(root);
@@ -497,5 +505,18 @@ Program load_native_program(const std::string& path, std::string source, SourceI
                             std::uint32_t admitted_provider_bits) {
     return Loader(owned, scalar_loop, host, admitted_provider_bits)
         .run(path, std::move(source), identity);
+}
+frontend::VerifiedNamespaceSourceSnapshotV2 admit_native_namespace_sources_v2(
+    const std::filesystem::path& trusted_physical_root,
+    const std::vector<std::string>& approved_members,
+    std::string_view approved_manifest_sha256,
+    std::string_view approved_sources_sha256,
+    const frontend::NamespaceSha256& trusted_sha256) {
+    // Only the future authenticated package/lock host may provide these
+    // arguments. This host preparatory API does not bypass the executable
+    // native module loader's fail-closed namespace import gate.
+    return frontend::load_verified_namespace_source_snapshot_v2(
+        trusted_physical_root, approved_members, approved_manifest_sha256,
+        approved_sources_sha256, trusted_sha256);
 }
 } // namespace oreslang

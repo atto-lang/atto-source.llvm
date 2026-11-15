@@ -179,6 +179,202 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-import-path-variables-test)
     set_tests_properties(native_import_path_variables_host_only PROPERTIES TIMEOUT 15)
 
+    # Source-only package-local multi-file namespace identity proof.
+    # This does NOT accept, link or execute Oreslang import ns guest code.
+    add_executable(oreslang-native-namespace-package-index-test
+        tests/native_package_namespace_graph_test.cpp)
+    target_include_directories(oreslang-native-namespace-package-index-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-namespace-package-index-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_namespace_package_identity_source_only
+        COMMAND oreslang-native-namespace-package-index-test)
+    set_tests_properties(native_namespace_package_identity_source_only PROPERTIES TIMEOUT 15)
+
+    # ACTUAL production Parser.cpp boundary, not the source-only graph's
+    # synthetic Program fixtures. No native namespace guest/IR is enabled.
+    add_executable(oreslang-native-verified-namespace-parser-v2-test
+        tests/native_verified_namespace_parser_v2_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp
+        src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-native-verified-namespace-parser-v2-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(oreslang-native-verified-namespace-parser-v2-test PRIVATE
+        ${ORE_LLVM_LIBS})
+    target_compile_options(oreslang-native-verified-namespace-parser-v2-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_verified_namespace_parser_v2_host_only
+        COMMAND oreslang-native-verified-namespace-parser-v2-test)
+    set_tests_properties(native_verified_namespace_parser_v2_host_only
+        PROPERTIES TIMEOUT 30)
+
+    # G1 typed-device-IR prototype only: NOT parsed .atto guest, PTX, or GPU
+    # execution. Keep independent of the native host scalar compiler.
+    add_executable(oreslang-gpu-g1-typed-saxpy-ir-test
+        tests/gpu_g1_nvptx_saxpy_ir_test.cpp)
+    target_include_directories(oreslang-gpu-g1-typed-saxpy-ir-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-gpu-g1-typed-saxpy-ir-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_gpu_g1_typed_nvptx_saxpy_ir_host_only
+        COMMAND oreslang-gpu-g1-typed-saxpy-ir-test)
+    set_tests_properties(native_gpu_g1_typed_nvptx_saxpy_ir_host_only
+        PROPERTIES TIMEOUT 20)
+
+    # First positive, *restricted* source compiler island: one canonical
+    # .atto SAXPY kernel. It cannot admit host launch or arbitrary GPU source.
+    add_executable(oreslang-gpu-g1-atto-saxpy-llvmc
+        tests/gpu_g1_atto_saxpy_cli.cpp)
+    target_include_directories(oreslang-gpu-g1-atto-saxpy-llvmc PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-gpu-g1-atto-saxpy-llvmc PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_executable(oreslang-gpu-g1-atto-source-test
+        tests/gpu_g1_atto_saxpy_source_test.cpp)
+    target_include_directories(oreslang-gpu-g1-atto-source-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-gpu-g1-atto-source-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    # Typed source-alpha-renaming and 71 adversarial source mutations.
+    # Independently compiled and run; no CUDA/PTX hardware claim.
+    add_executable(oreslang-gpu-g1-typed-frontend-matrix-test
+        tests/gpu_g1_typed_frontend_matrix_test.cpp)
+    target_include_directories(oreslang-gpu-g1-typed-frontend-matrix-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-gpu-g1-typed-frontend-matrix-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_gpu_g1_typed_frontend_alpha_rename_negative_host_only
+        COMMAND oreslang-gpu-g1-typed-frontend-matrix-test)
+    set_tests_properties(native_gpu_g1_typed_frontend_alpha_rename_negative_host_only
+        PROPERTIES TIMEOUT 20 LABELS "restricted-atto;negative-mutation;host-only")
+
+    add_test(NAME native_gpu_g1_restricted_atto_source_host_only
+        COMMAND oreslang-gpu-g1-atto-source-test)
+    set_tests_properties(native_gpu_g1_restricted_atto_source_host_only
+        PROPERTIES TIMEOUT 20 LABELS "restricted-atto;host-only")
+
+    # Host-only structural admission, distinct from authentic provider/device authority.
+    add_executable(oreslang-gpu-g1-launch-admission-test
+        tests/gpu_g1_saxpy_launch_admission_test.cpp)
+    target_include_directories(oreslang-gpu-g1-launch-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-gpu-g1-launch-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_gpu_g1_structural_buffer_loan_host_only
+        COMMAND oreslang-gpu-g1-launch-admission-test)
+    set_tests_properties(native_gpu_g1_structural_buffer_loan_host_only
+        PROPERTIES TIMEOUT 20)
+
+    # Independent source-free identity mutation tests for the physical
+    # receipt script: no actual PTX or CUDA claims are permitted here.
+    if(UNIX)
+        find_program(ATTO_GPU_G1_GIT NAMES git)
+        if(ATTO_GPU_G1_GIT)
+            add_test(NAME native_gpu_g1_receipt_toctou_negative_host_only
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DG1_NEGATIVE_GIT=${ATTO_GPU_G1_GIT}"
+                    "-DG1_NEGATIVE_GATE=${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_g1_cuda_hardware_required.cmake"
+                    "-DG1_NEGATIVE_WORK=${CMAKE_CURRENT_BINARY_DIR}/gpu-g1-receipt-negative"
+                    "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_g1_receipt_toctou_negative.cmake")
+            set_tests_properties(native_gpu_g1_receipt_toctou_negative_host_only
+                PROPERTIES TIMEOUT 30 LABELS "host-only;negative-mutation;not-device-evidence")
+        endif()
+    endif()
+
+    # Actual NVPTX llc translation, not a physical device or .atto guest test.
+    option(ATTO_GPU_G1_REQUIRE_NVPTX "Require an installed NVPTX-capable llc" OFF)
+    find_program(ATTO_GPU_G1_LLC NAMES llc-21 llc-20 llc-19 llc-18 llc-17 llc)
+    if(ATTO_GPU_G1_REQUIRE_NVPTX AND NOT ATTO_GPU_G1_LLC)
+        message(FATAL_ERROR "GPU-G1-PTX-001: real llc is required")
+    endif()
+    if(ATTO_GPU_G1_LLC)
+        add_test(NAME native_gpu_g1_llc_ptx_no_device_claim
+            COMMAND "${CMAKE_COMMAND}"
+                "-DG1_EMITTER=$<TARGET_FILE:oreslang-gpu-g1-typed-saxpy-ir-test>"
+                "-DG1_LLC=${ATTO_GPU_G1_LLC}"
+                "-DG1_WORK=${CMAKE_CURRENT_BINARY_DIR}/gpu-g1-ptx-proof"
+                "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_g1_nvptx_ptx_compile.cmake")
+        set_tests_properties(native_gpu_g1_llc_ptx_no_device_claim PROPERTIES TIMEOUT 30)
+        # Separate source-backed PTX gate: it must consume .atto source,
+        # not the prebuilt typed-IR emitter, to support guest-source claims.
+        add_test(NAME native_gpu_g1_llc_ptx_from_restricted_atto
+            COMMAND "${CMAKE_COMMAND}"
+                "-DG1_EMITTER=$<TARGET_FILE:oreslang-llvmc>"
+                "-DG1_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/gpu-g1-saxpy.atto"
+                "-DG1_SOURCE_FLAG=--gpu-g1-kernel-ir"
+                "-DG1_REQUIRE_ATTO_SOURCE=ON"
+                "-DG1_LLC=${ATTO_GPU_G1_LLC}"
+                "-DG1_WORK=${CMAKE_CURRENT_BINARY_DIR}/gpu-g1-source-ptx-proof"
+                "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_g1_nvptx_ptx_compile.cmake")
+        set_tests_properties(native_gpu_g1_llc_ptx_from_restricted_atto
+            PROPERTIES TIMEOUT 30 LABELS "restricted-atto;requires-nvptx;not-device-evidence")
+    endif()
+
+    # This lane is STRICTLY OPT-IN. It cannot skip or pass on hosts without
+    # CUDA Driver API, an NVPTX-capable llc, actual GPU hardware and exact head.
+    option(ATTO_GPU_G1_REQUIRE_PHYSICAL "Require physical CUDA G1 proof; fail rather than skip" OFF)
+    set(ATTO_GPU_G1_EXACT_HEAD_SHA "" CACHE STRING
+        "Immutable PR head SHA required for physical CUDA G1 evidence")
+    if(ATTO_GPU_G1_REQUIRE_PHYSICAL)
+        if(NOT ATTO_GPU_G1_LLC)
+            message(FATAL_ERROR "GPU-G1-HW: real NVPTX llc is required")
+        endif()
+        if(ATTO_GPU_G1_EXACT_HEAD_SHA STREQUAL "")
+            message(FATAL_ERROR "GPU-G1-HW: exact PR head SHA must be supplied")
+        endif()
+        find_package(Git REQUIRED)
+        find_package(CUDAToolkit REQUIRED)
+        add_executable(oreslang-gpu-g1-cuda-physical-probe
+            tests/gpu_g1_cuda_physical_probe.cpp)
+        target_link_libraries(oreslang-gpu-g1-cuda-physical-probe PRIVATE
+            CUDA::cuda_driver)
+        target_compile_options(oreslang-gpu-g1-cuda-physical-probe PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        add_test(NAME native_gpu_g1_physical_cuda_hardware_required
+            COMMAND "${CMAKE_COMMAND}"
+                "-DG1_GIT=${GIT_EXECUTABLE}"
+                "-DG1_REPO=${CMAKE_CURRENT_SOURCE_DIR}"
+                "-DG1_HEAD=${ATTO_GPU_G1_EXACT_HEAD_SHA}"
+                "-DG1_EMITTER=$<TARGET_FILE:oreslang-llvmc>"
+                "-DG1_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/gpu-g1-saxpy.atto"
+                "-DG1_SOURCE_FLAG=--gpu-g1-kernel-ir"
+                "-DG1_LLC=${ATTO_GPU_G1_LLC}"
+                "-DG1_PROBE=$<TARGET_FILE:oreslang-gpu-g1-cuda-physical-probe>"
+                "-DG1_WORK=${CMAKE_CURRENT_BINARY_DIR}/gpu-g1-physical-proof"
+                "-DG1_PTX_GATE=${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_g1_nvptx_ptx_compile.cmake"
+                "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_g1_cuda_hardware_required.cmake")
+        set_tests_properties(native_gpu_g1_physical_cuda_hardware_required
+            PROPERTIES TIMEOUT 90 LABELS "physical-gpu;requires-nvidia;not-atto-guest")
+    endif()
+
+    # Actual LLVM IR parser and deliberately broken-SSA mutation, never
+    # conflated with PTX generation or a physical CUDA launch.
+    find_program(ATTO_GPU_G1_CLANG NAMES
+        clang-21 clang-20 clang-19 clang-18 clang-17 clang)
+    if(ATTO_GPU_G1_CLANG)
+        add_test(NAME native_gpu_g1_llvm_ir_parse_and_mutation_host_only
+            COMMAND "${CMAKE_COMMAND}"
+                "-DG1_EMITTER=$<TARGET_FILE:oreslang-gpu-g1-typed-saxpy-ir-test>"
+                "-DG1_CLANG=${ATTO_GPU_G1_CLANG}"
+                "-DG1_WORK=${CMAKE_CURRENT_BINARY_DIR}/gpu-g1-ir-proof"
+                "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_g1_nvptx_llvm_ir_verify.cmake")
+        set_tests_properties(native_gpu_g1_llvm_ir_parse_and_mutation_host_only
+            PROPERTIES TIMEOUT 30)
+        add_test(NAME native_gpu_g1_atto_source_to_llvm_ir_clang_host_only
+            COMMAND "${CMAKE_COMMAND}"
+                "-DG1_COMPILER=$<TARGET_FILE:oreslang-gpu-g1-atto-saxpy-llvmc>"
+                "-DG1_MAIN_COMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                "-DG1_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/gpu-g1-saxpy.atto"
+                "-DG1_EMITTER=$<TARGET_FILE:oreslang-gpu-g1-typed-saxpy-ir-test>"
+                "-DG1_CLANG=${ATTO_GPU_G1_CLANG}"
+                "-DG1_WORK=${CMAKE_CURRENT_BINARY_DIR}/gpu-g1-source-ir-proof"
+                "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_g1_atto_source_verify.cmake")
+        set_tests_properties(native_gpu_g1_atto_source_to_llvm_ir_clang_host_only
+            PROPERTIES TIMEOUT 30 LABELS "restricted-atto;host-only")
+    endif()
     # AOT trace policy gate; this does not compile a source-level Atto trace.
     find_package(Threads REQUIRED)
     add_executable(oreslang-native-trace-probe-policy-test
@@ -1069,6 +1265,43 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 30)
     find_package(OpenSSL QUIET COMPONENTS Crypto)
     if(OpenSSL_FOUND)
+        # Host-only independently pinned dependency alias contract.
+        # This proves fail-closed lock parsing, NOT executable namespaces.
+        add_executable(oreslang-native-verified-namespace-dependency-lock-v2-test
+            tests/native_verified_namespace_dependency_lock_v2_test.cpp)
+        target_include_directories(
+            oreslang-native-verified-namespace-dependency-lock-v2-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(
+            oreslang-native-verified-namespace-dependency-lock-v2-test PRIVATE
+            OpenSSL::Crypto)
+        target_compile_options(
+            oreslang-native-verified-namespace-dependency-lock-v2-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+        add_test(NAME native_verified_namespace_dependency_lock_v2_host_only
+            COMMAND oreslang-native-verified-namespace-dependency-lock-v2-test)
+        set_tests_properties(native_verified_namespace_dependency_lock_v2_host_only
+            PROPERTIES TIMEOUT 15)
+        # Real production Parser.cpp + physical v2 snapshot + verified owner
+        # graph, without authorizing native guest namespace execution.
+        add_executable(oreslang-native-verified-namespace-real-parser-v2-test
+            tests/native_verified_namespace_real_parser_v2_test.cpp
+            src/main/cpp/oreslang/frontend/Parser.cpp
+            src/main/cpp/oreslang/frontend/MethodResolver.cpp
+            src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+            src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+        target_include_directories(oreslang-native-verified-namespace-real-parser-v2-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+            "${LLVM_INCLUDE_DIRS}")
+        target_link_libraries(oreslang-native-verified-namespace-real-parser-v2-test PRIVATE
+            OpenSSL::Crypto ${ORE_LLVM_LIBS})
+        target_compile_options(oreslang-native-verified-namespace-real-parser-v2-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+        add_test(NAME native_verified_namespace_real_parser_v2_host_only
+            COMMAND oreslang-native-verified-namespace-real-parser-v2-test)
+        set_tests_properties(native_verified_namespace_real_parser_v2_host_only
+            PROPERTIES TIMEOUT 30)
+
         add_executable(oreslang-messagepack-wire-v2-test
             tests/messagepack_wire_v2_test.cpp)
         target_include_directories(oreslang-messagepack-wire-v2-test PRIVATE
