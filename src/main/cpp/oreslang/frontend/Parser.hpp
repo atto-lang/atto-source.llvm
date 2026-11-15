@@ -85,6 +85,10 @@ struct Parameter {
     std::string pending_type_alias;
     ScalarType scalar_type = ScalarType::I64;
     Mode mode = Mode::Value;
+    // Native direct Array<f64> is an affine, call-scoped reference to a
+    // caller-owned handle; its hidden region travels alongside the loan.
+    bool int_array = false;
+    ScalarType array_element_type = ScalarType::I64;
     std::string sum_type;
 };
 
