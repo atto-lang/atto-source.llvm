@@ -393,6 +393,12 @@ struct ActorDecl {
     // Maximum simultaneously owned logical frames per scalar receiver turn.
     // Zero deliberately refuses frame admission without process abort.
     std::uint32_t frame_budget = 16;
+    // The number of successful frame admissions permitted per incarnation.
+    // Zero disables this optional cumulative quota (depth quota is separate).
+    std::uint32_t lifetime_frame_budget = 0;
+    // Bounded one-for-one supervisor restarts for this actor family.
+    // A replacement inherits both frame budgets; zero disables restart.
+    std::uint32_t restart_limit = 0;
 };
 
 // Compiler-only structural contract evidence for the native i64 subset.
