@@ -4,6 +4,8 @@ use std::fmt::Write as _;
 use std::io::{Read as IoRead, Write as IoWrite};
 use std::process::{Command, Stdio};
 
+mod target_native;
+
 use atto_compiler::ast::{BinOp, Type};
 use atto_compiler::check::{self, Import, TExpr, TFunc, TProgram, TStmt, TE};
 
@@ -407,8 +409,12 @@ pub fn compile_ir(source: &str) -> Result<String, String> {
         return Err("E_SOURCE_LIMIT: native Atto input exceeds 64 KiB".into());
     }
     let toks = atto_compiler::lexer::lex(source).map_err(|e|e.to_string())?;
-    let program = atto_compiler::parser::Parser::new(toks).parse_program()
-        .map_err(|e|e.to_string())?;
+    let program = if target_native::requires_target_link(&toks) {
+        target_native::lower(&toks)?
+    } else {
+        atto_compiler::parser::Parser::new(toks).parse_program()
+            .map_err(|e|e.to_string())?
+    };
     let typed = check::check(&program).map_err(|e|e.to_string())?;
     let native_actor_mode = !typed.actors.is_empty();
     if !typed.generators.is_empty() || typed.heap || typed.strings ||
