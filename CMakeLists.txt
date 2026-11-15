@@ -2409,6 +2409,13 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_owned_stack_duplicate_field owned-stack-double-field.ores --diagnostic "duplicate class field")
     oreslang_contract_test(negative_literal negative-literal.ores --ir "llvm.sadd.with.overflow.i64" --run 42 --clang "${ORE_CLANG}")
     oreslang_contract_test(nested_comments nested-comments.ores --ir "llvm.sadd.with.overflow.i64" --run 42 --clang "${ORE_CLANG}")
+    # Real native lexer/compiler boundary, same limit as Java and .NET main:
+    # depth 128 compiles, depth 129 is rejected before parser/IR.
+    oreslang_contract_test(native_lexer_nested_comment_depth_128
+        nested-comments-depth-128.ores --ir "ret i64 42")
+    oreslang_contract_test(native_lexer_nested_comment_depth_129_failclosed
+        nested-comments-depth-129.ores
+        --diagnostic "block comment nesting exceeds 128")
     oreslang_contract_test(native_owned_lexical_lifetime owned-lexical-main.ores --no-native-abi --ir "llvm.lifetime.end")
     oreslang_contract_test(native_owned_identifier owned-identifier-main.ores --no-native-abi --ir "call i64 @owned")
     # Port the unique generated stress corpus from old stacked #72 without its
