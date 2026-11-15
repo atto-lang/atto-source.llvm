@@ -181,6 +181,98 @@ static void exercise_callback_copy_failure_cleanup() {
           "exception while constructing initial image leaked loaded resource");
 }
 
+// Runtime ownership proof: unload callbacks must run AFTER the Policy value
+// has been destroyed, including on invalid ABI, stale CAS and slot closure.
+struct TrackedImage final {
+    std::shared_ptr<std::atomic<int>> live;
+    explicit TrackedImage(std::shared_ptr<std::atomic<int>> counter)
+        : live(std::move(counter)) { ++*live; }
+    TrackedImage(const TrackedImage&) = delete;
+    TrackedImage& operator=(const TrackedImage&) = delete;
+    TrackedImage(TrackedImage&&) noexcept = default;
+    TrackedImage& operator=(TrackedImage&&) noexcept = default;
+    ~TrackedImage() noexcept { if (live) --*live; }
+};
+static void exercise_destructor_before_image_unload() {
+    std::atomic<int> callbacks{0}, wrong_order{0};
+    auto new_counter = [] { return std::make_shared<std::atomic<int>>(0); };
+    auto cleanup = [&](std::shared_ptr<std::atomic<int>> alive) {
+        return [&, alive] {
+            ++callbacks;
+            if (alive->load() != 0) ++wrong_order;
+        };
+    };
+    const auto v1 = new_counter();
+    {
+        NativeSupervisorCodeSlot<TrackedImage> slot("actor-abi", TrackedImage(v1),
+                                                     cleanup(v1));
+        check(v1->load() == 1, "initial generation wrapper not retained");
+        auto stale = new_counter();
+        bool denied = false;
+        try { slot.activate(0, "actor-abi", TrackedImage(stale), cleanup(stale)); }
+        catch (const std::logic_error&) { denied = true; }
+        check(denied && stale->load() == 0, "stale code wrapper not destroyed");
+        auto invalid = new_counter();
+        denied = false;
+        try { slot.activate(1, "", TrackedImage(invalid), cleanup(invalid)); }
+        catch (const std::invalid_argument&) { denied = true; }
+        check(denied && invalid->load() == 0, "invalid ABI wrapper not destroyed");
+        const auto v2 = new_counter();
+        check(slot.activate(1, "actor-abi", TrackedImage(v2), cleanup(v2)).revision == 2,
+              "valid tracked upgrade failed");
+        check(v1->load() == 0 && v2->load() == 1,
+              "previous accepted code wrapper not destroyed");
+        slot.close();
+        check(v2->load() == 0, "closed generation wrapper not destroyed");
+    }
+    check(callbacks == 4 && wrong_order == 0,
+          "native image unloaded before Policy destruction or leaked");
+    // Invalid initial admission must own and discharge its resource.
+    auto invalid_initial = new_counter();
+    bool denied = false;
+    try {
+        NativeSupervisorCodeSlot<TrackedImage> bad(
+            "", TrackedImage(invalid_initial), cleanup(invalid_initial));
+    } catch (const std::invalid_argument&) { denied = true; }
+    check(denied && callbacks == 5 && wrong_order == 0
+          && invalid_initial->load() == 0,
+          "rejected initial admission leaked or unloaded a live image wrapper");
+}
+
+// Throwing std::function copies simulate staging allocation failure after the
+// API has accepted ownership of a loaded resource. No image may leak.
+struct ThrowWhenCopied final {
+    std::shared_ptr<std::atomic<int>> callbacks;
+    explicit ThrowWhenCopied(std::shared_ptr<std::atomic<int>> count)
+        : callbacks(std::move(count)) {}
+    ThrowWhenCopied(const ThrowWhenCopied&) {
+        throw std::runtime_error("injected callback-copy failure");
+    }
+    ThrowWhenCopied(ThrowWhenCopied&&) noexcept = default;
+    void operator()() const noexcept { ++*callbacks; }
+};
+static void exercise_callback_copy_failure_cleanup() {
+    auto counter = std::make_shared<std::atomic<int>>(0);
+    NativeSupervisorCodeSlot<std::string> slot("abi", "old",
+        [] {});
+    std::function<void()> risky = ThrowWhenCopied(counter);
+    bool threw = false;
+    try {
+        (void)slot.activate(1, "abi", "unpublished", std::move(risky));
+    } catch (const std::runtime_error&) { threw = true; }
+    check(threw && counter->load() == 1 && slot.current().revision == 1,
+          "exception while constructing image leaked candidate or published it");
+    auto init_counter = std::make_shared<std::atomic<int>>(0);
+    std::function<void()> initial_risky = ThrowWhenCopied(init_counter);
+    threw = false;
+    try {
+        NativeSupervisorCodeSlot<std::string> rejected_initial(
+            "abi", "never-active", std::move(initial_risky));
+    } catch (const std::runtime_error&) { threw = true; }
+    check(threw && init_counter->load() == 1,
+          "exception while constructing initial image leaked loaded resource");
+}
+
 
 static void exercise_failed_image_unload_signal() {
     using Slot = NativeSupervisorCodeSlot<std::string>;
@@ -318,6 +410,8 @@ int main(){
     check(reclaimed.load()==6,"new policy or rejected candidate leaked after final pinned turn");
     group->close();
     exercise_rejected_hot_reload_reclamation();
+    exercise_destructor_before_image_unload();
+    exercise_callback_copy_failure_cleanup();
     exercise_destructor_before_image_unload();
     exercise_callback_copy_failure_cleanup();
     exercise_failed_image_unload_signal();

@@ -4051,6 +4051,44 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-supervisor-code-slot-test)
     set_tests_properties(native_supervisor_hot_reload_generation_reclamation
         PROPERTIES TIMEOUT 20)
+    # Actor-incarnation bounded code-only release; host-only precompiler gate.
+    add_executable(oreslang-native-actor-hot-upgrade-gate-test
+        tests/native_actor_hot_upgrade_gate_test.cpp)
+    target_include_directories(oreslang-native-actor-hot-upgrade-gate-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-hot-upgrade-gate-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    target_link_libraries(oreslang-native-actor-hot-upgrade-gate-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_hot_upgrade_generation_quiescence
+        COMMAND oreslang-native-actor-hot-upgrade-gate-test)
+    set_tests_properties(native_actor_hot_upgrade_generation_quiescence
+        PROPERTIES TIMEOUT 20)
+    # Real statically linked native machine-code callbacks, with runtime
+    # generation pins and guarded publication (not dynamic AOT/ORC loading).
+    add_executable(oreslang-native-actor-code-execution-test
+        tests/native_actor_code_execution_test.cpp)
+    target_include_directories(oreslang-native-actor-code-execution-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-code-execution-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    target_link_libraries(oreslang-native-actor-code-execution-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_compiled_aot_callable_generation_execution
+        COMMAND oreslang-native-actor-code-execution-test)
+    set_tests_properties(native_actor_compiled_aot_callable_generation_execution
+        PROPERTIES TIMEOUT 25)
+    # Dedicated shutdown-from-reclaim and concurrent terminal-close safety
+    # proof. A timeout is a test failure: a deadlocked cleanup cannot pass.
+    add_executable(oreslang-native-actor-reentrancy-test
+        tests/native_actor_hot_upgrade_reentrancy_test.cpp)
+    target_include_directories(oreslang-native-actor-reentrancy-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-reentrancy-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    target_link_libraries(oreslang-native-actor-reentrancy-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_hot_upgrade_reentrant_close_and_race
+        COMMAND oreslang-native-actor-reentrancy-test)
+    set_tests_properties(native_actor_hot_upgrade_reentrant_close_and_race
+        PROPERTIES TIMEOUT 20)
     # Bounded independent supervisor CONTROL transport (runtime substrate only).
     add_executable(oreslang-supervisor-hierarchy-test tests/supervisor_hierarchy_test.cpp)
     target_include_directories(oreslang-supervisor-hierarchy-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
