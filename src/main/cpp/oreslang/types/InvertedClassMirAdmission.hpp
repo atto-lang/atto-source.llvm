@@ -13,6 +13,8 @@
 
 namespace oreslang::dop::class_mir {
 
+enum class ScalarKind { I64, Bool, F64, Pointer };
+
 enum class Kind {
     Allocate, Push, CallMoveBy, ReadField, Snapshot, ReadSnapshotField,
     EraseSwap, Suspend, ExportHandle, Close
@@ -26,6 +28,8 @@ struct Schema {
     std::string second_field;
     std::uint64_t owner_actor = 0;
     std::size_t capacity = 0;
+    ScalarKind first_kind = ScalarKind::I64;
+    ScalarKind second_kind = ScalarKind::I64;
 };
 
 // Source-lowered operations refer to LOCAL symbolic handles only; they cannot
@@ -104,6 +108,9 @@ class VerifiedModule final {
         checked_name(schema.second_field, "second field");
         if (schema.first_field == schema.second_field)
             throw std::invalid_argument("duplicate inverted class field");
+        if (schema.first_kind != ScalarKind::I64 ||
+                schema.second_kind != ScalarKind::I64)
+            throw std::invalid_argument("phase-zero class MIR admits only two i64 fields");
         if (schema.owner_actor == 0 || schema.capacity == 0 ||
                 schema.capacity > 256)
             throw std::invalid_argument("inverted class actor/capacity invalid");
