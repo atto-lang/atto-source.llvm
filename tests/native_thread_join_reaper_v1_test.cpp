@@ -302,6 +302,83 @@ static void test_notification_registration_race() {
     }
     wait_cleanup(baseline + 24, reaper);
 }
+// Integrates the isolate's bounded native-thread capability with the
+// independent host join-reaper. Completion must imply a physical join and
+// handle release before the native scope's reservation can be retired.
+static void test_scope_reaper_retirement_v1() {
+    const int baseline = cleanup.load();
+    gate_a.store(false, std::memory_order_release);
+    ores_native_thread_scope_v1* scope = nullptr;
+    assert(ores_native_thread_scope_open_v1(1, &scope) == ORES_THREAD_OK_V1);
+    ores_native_thread_v1* native = nullptr;
+    auto* first = new Arg{701, &gate_a};
+    assert(ores_native_thread_scope_spawn_v1(scope, entry, first, drop, &native)
+           == ORES_THREAD_OK_V1);
+    assert(native != nullptr);
+    unsigned outstanding = 0;
+    assert(ores_native_thread_scope_outstanding_v1(scope, &outstanding)
+           == ORES_THREAD_OK_V1);
+    assert(outstanding == 1);
+
+    NativeThreadJoinReaperV1 reaper(1, 1);
+    auto completion = reaper.submit(native);
+    assert(completion && native == nullptr);
+    auto* rejected_arg = new Arg{702, nullptr};
+    ores_native_thread_v1* rejected = reinterpret_cast<ores_native_thread_v1*>(1);
+    assert(ores_native_thread_scope_spawn_v1(
+               scope, entry, rejected_arg, drop, &rejected)
+           == ORES_THREAD_SCOPE_FULL_V1);
+    assert(rejected == nullptr); // ownership remains with the caller
+    delete rejected_arg;
+    assert(ores_native_thread_scope_close_v1(scope) == ORES_THREAD_SCOPE_BUSY_V1);
+    assert(ores_native_thread_scope_destroy_v1(scope) == ORES_THREAD_SCOPE_BUSY_V1);
+
+    gate_a.store(true, std::memory_order_release);
+    wait_read(completion, ORES_THREAD_OK_V1, 701);
+    assert(ores_native_thread_scope_outstanding_v1(scope, &outstanding)
+           == ORES_THREAD_OK_V1);
+    assert(outstanding == 0);
+    wait_cleanup(baseline + 1, reaper);
+    assert(reaper.failed_count() == 0);
+    assert(ores_native_thread_scope_close_v1(scope) == ORES_THREAD_OK_V1);
+    assert(ores_native_thread_scope_destroy_v1(scope) == ORES_THREAD_OK_V1);
+}
+
+static int gated_scope_abnormal_exit_v1(void*) {
+    // Synchronize the test with scope close before invoking pthread_exit.
+    // Without a gate, the independent reaper can release the handle before
+    // close(), producing a valid OK result instead of BUSY.
+    while (!gate_b.load(std::memory_order_acquire))
+        std::this_thread::yield();
+    pthread_exit(nullptr);
+    return 0; // unreachable
+}
+
+static void test_scope_reaper_abnormal_exit_v1() {
+    const int baseline = cleanup.load();
+    gate_b.store(false, std::memory_order_release);
+    ores_native_thread_scope_v1* scope = nullptr;
+    assert(ores_native_thread_scope_open_v1(1, &scope) == ORES_THREAD_OK_V1);
+    ores_native_thread_v1* native = nullptr;
+    auto* arg = new Arg{703, nullptr};
+    assert(ores_native_thread_scope_spawn_v1(
+               scope, gated_scope_abnormal_exit_v1, arg, drop, &native)
+           == ORES_THREAD_OK_V1);
+    NativeThreadJoinReaperV1 reaper(1, 1);
+    auto completion = reaper.submit(native);
+    assert(completion && native == nullptr);
+    assert(ores_native_thread_scope_close_v1(scope) == ORES_THREAD_SCOPE_BUSY_V1);
+    gate_b.store(true, std::memory_order_release);
+    wait_read(completion, ORES_THREAD_UNEXPECTED_EXIT_V1);
+    unsigned outstanding = 1;
+    assert(ores_native_thread_scope_outstanding_v1(scope, &outstanding)
+           == ORES_THREAD_OK_V1);
+    assert(outstanding == 0);
+    wait_cleanup(baseline + 1, reaper);
+    assert(reaper.failed_count() == 0);
+    assert(ores_native_thread_scope_destroy_v1(scope) == ORES_THREAD_OK_V1);
+}
+
 int main() {
     test_invalid_limits();
     test_no_head_of_line_blocking();
@@ -310,5 +387,7 @@ int main() {
     test_abnormal_exit_consumes_join();
     test_nonblocking_completion_subscription();
     test_notification_registration_race();
+    test_scope_reaper_retirement_v1();
+    test_scope_reaper_abnormal_exit_v1();
     std::cout << "native concurrent join reaper: OK (host-only)\n";
 }
