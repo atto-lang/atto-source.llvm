@@ -1,4 +1,5 @@
 #pragma once
+#include <unistd.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <limits.h>
@@ -36,15 +37,36 @@ typedef struct {
      * sufficient to authorize a foreign-thread release. */
     pthread_t owner_thread;
     OresExecutionPhase phase;
+    int priority_inheritance_enabled;
 } OresNativeExecutionAuthority;
 
 static inline int ores_execution_init(OresNativeExecutionAuthority* a) {
-    if (!a || pthread_mutex_init(&a->mutex, NULL) != 0) return 0;
+    if (!a) return 0;
+    a->priority_inheritance_enabled = 0;
+
+    int initialized = 0;
+    pthread_mutexattr_t attr;
+    if (pthread_mutexattr_init(&attr) == 0) {
+#if defined(_POSIX_THREAD_PRIO_INHERIT) && _POSIX_THREAD_PRIO_INHERIT >= 0
+        if (pthread_mutexattr_setprotocol(&attr, PTHREAD_PRIO_INHERIT) == 0
+                && pthread_mutex_init(&a->mutex, &attr) == 0) {
+            a->priority_inheritance_enabled = 1;
+            initialized = 1;
+        }
+#endif
+        if (pthread_mutexattr_destroy(&attr) != 0) __builtin_trap();
+    }
+    if (!initialized && pthread_mutex_init(&a->mutex, NULL) != 0) return 0;
+
     a->generation = 1;
     a->sequence = 0;
     a->owner = 0;
     a->phase = ORES_EXEC_READY;
     return 1;
+}
+static inline int ores_execution_priority_inheritance_enabled(
+        OresNativeExecutionAuthority* a) {
+    return a && a->priority_inheritance_enabled;
 }
 /* A mutex is unlocked during guest execution. pthread_mutex_destroy()
  * alone therefore does not detect a live owner or suspended continuation.
@@ -79,7 +101,11 @@ static inline int ores_execution_enter(OresNativeExecutionAuthority* a,
         a->owner_thread = pthread_self();
         ++a->sequence;
         if (a->phase != ORES_EXEC_STOPPING) a->phase = ORES_EXEC_RUNNING;
+#ifdef __cplusplus
+        *out = OresExecutionClaim{generation, a->sequence, carrier};
+#else
         *out = (OresExecutionClaim){generation, a->sequence, carrier};
+#endif
     }
     ores_execution_unlock(a);
     return ok;
@@ -95,6 +121,24 @@ static inline int ores_execution_owns(OresNativeExecutionAuthority* a,
     ores_execution_unlock(a);
     return ok;
 }
+/* Same execution-claim check, with RUNNING phase authenticated under
+ * ONE native lock. RequestLocal must not authorize STOPPING cleanup turns,
+ * even if those turns may still own a physical actor carrier. Callers must
+ * separately couple STOP to logical request cancellation: this predicate
+ * alone cannot hold a lease across arbitrary user callbacks. */
+static inline int ores_execution_owns_running(
+        OresNativeExecutionAuthority* a, OresExecutionClaim claim) {
+    if (!a) return 0;
+    ores_execution_lock(a);
+    int ok = a->phase == ORES_EXEC_RUNNING
+        && claim.carrier && a->owner == claim.carrier
+        && claim.generation == a->generation
+        && claim.sequence == a->sequence
+        && pthread_equal(a->owner_thread, pthread_self());
+    ores_execution_unlock(a);
+    return ok;
+}
+
 /* Called only after guest code has unwound, not at the point where a Future
  * is produced. SUSPENDED never means two carriers may execute concurrently. */
 static inline int ores_execution_leave(OresNativeExecutionAuthority* a,

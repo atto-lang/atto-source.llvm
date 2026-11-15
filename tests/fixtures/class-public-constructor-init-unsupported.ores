@@ -1,4 +1,4 @@
-define class Pair as
+pub define class Pair as
   pub final int a: supplied_a + 1;
   pub constructor(int supplied_a) {
     return;
