@@ -1,0 +1,81 @@
+name: LLVM functor ADT exact-source admission and laws
+on:
+  pull_request:
+    paths:
+      - 'contracts/functor-adt-v1/**'
+      - 'tests/functor_adt_v1_*.mjs'
+      - '.github/workflows/functor-adt-v1-admission.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  pure-law-and-provenance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Source branch and exact corpus identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD:contracts/functor-adt-v1/fixtures)" = 'be201b1c667057582a6e7e53025bb1d1938179c6'
+          test "$(find contracts/functor-adt-v1/fixtures -name '*.atto' -type f | wc -l)" = 17
+          test -z "$(git status --porcelain --untracked-files=all)"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Execute reference laws, mutation controls, and SHA integrity
+        run: node --test tests/functor_adt_v1_integrity.test.mjs
+      - name: Clarify evidence
+        run: echo 'SOURCE_FREE_ONLY; no LLVM guest semantics or native code was certified.'
+  llvm-compiler-admission:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Confirm exact source head and fixture Git subtree
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD:contracts/functor-adt-v1/fixtures)" = 'be201b1c667057582a6e7e53025bb1d1938179c6'
+          test -z "$(git status --porcelain --untracked-files=all)"
+      - name: Install LLVM, Clang and Rust source-audit toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang llvm-dev cmake ninja-build rustc nodejs
+          llvm-config --version
+          clang --version | head -1
+      - name: Build real source LLVM compiler and no-tracing-GC IR screen
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -G Ninja -S . -B "$RUNNER_TEMP/functor-llvm-build" \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+            -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build "$RUNNER_TEMP/functor-llvm-build" --target oreslang-llvmc --parallel 2
+          rustc --edition=2021 -D warnings scripts/audit_no_gc_ir.rs -o "$RUNNER_TEMP/oreslang-no-gc-ir-audit"
+          test -x "$RUNNER_TEMP/functor-llvm-build/oreslang-llvmc"
+          sha256sum "$RUNNER_TEMP/functor-llvm-build/oreslang-llvmc" "$RUNNER_TEMP/oreslang-no-gc-ir-audit"
+      - name: Probe 17 real compiler inputs and require actual O0/O2 guests for any admitted positive
+        env:
+          ORESLANG_LLVMC: ${{ runner.temp }}/functor-llvm-build/oreslang-llvmc
+          ORES_NO_GC_IR_AUDIT: ${{ runner.temp }}/oreslang-no-gc-ir-audit
+          CLANG: clang
+          FUNCTOR_LLVM_RECEIPT_PATH: ${{ runner.temp }}/functor-llvm-admission.json
+        run: |
+          set -euo pipefail
+          node tests/functor_adt_v1_native_admission.mjs
+          test -s "$FUNCTOR_LLVM_RECEIPT_PATH"
+          node --input-type=module -e "import fs from 'node:fs'; const r=JSON.parse(fs.readFileSync(process.env.FUNCTOR_LLVM_RECEIPT_PATH)); if(r.backend_parity_certified !== false || r.cases.length !== 17)process.exit(1); console.log('LLVM_FUNCTOR_PARITY=NOT_CERTIFIED');"
+      - name: Record evidence boundary
+        if: always()
+        run: echo 'Admissions/rejections are provisional; generic parser failures are never certified semantic negatives.'
