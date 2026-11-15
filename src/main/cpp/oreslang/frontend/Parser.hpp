@@ -265,7 +265,7 @@ struct ActorSend {
 // Preserve the sequence of source-visible actor effects. Separating sends
 // from stops changes program behavior and can hide use-after-stop errors.
 struct ActorAction {
-    enum class Kind { Send, FlushBlocking, Stop };
+    enum class Kind { Send, FlushBlocking, RecoverBlocking, Stop };
     Kind kind;
     std::size_t index = 0;
 };
@@ -358,6 +358,7 @@ struct Function {
     std::vector<ActorSend> actor_sends;
     std::vector<std::string> actor_stops;
     std::vector<std::string> actor_flushes; // trusted-main mailbox callback barrier
+    std::vector<std::string> actor_recovers; // consumes old incarnation, replaces ActorRef
     std::vector<ActorAction> actor_actions; // source order of send/stop
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
