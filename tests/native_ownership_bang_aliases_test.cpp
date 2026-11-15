@@ -41,9 +41,15 @@ static std::string read_fixture(const std::string& root, const std::string& file
     const auto pin = reviewed_pins.find(filename);
     if (pin == reviewed_pins.end())
         throw std::runtime_error("unreviewed native ownership fixture");
-    std::ifstream file(root + "/" + filename, std::ios::binary);
+    std::ifstream file(root + "/" + filename, std::ios::binary | std::ios::ate);
     if (!file) throw std::runtime_error("missing native ownership fixture: " + filename);
+    const auto count = file.tellg();
+    if (count <= 0 || count > 8192)
+        throw std::runtime_error("oversized/invalid native ownership fixture: " + filename);
+    file.seekg(0, std::ios::beg);
     std::string bytes(std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{});
+    if (bytes.size() != static_cast<std::size_t>(count))
+        throw std::runtime_error("native ownership fixture changed while reading: " + filename);
     if (git_blob_sha(bytes) != pin->second)
         throw std::runtime_error("native ownership fixture Git blob drift: " + filename);
     return bytes;
