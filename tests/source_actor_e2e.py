@@ -124,6 +124,12 @@ def main():
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
     negatives = {
+        "source-actor-pipe-unlowered-reject.ores":
+            "NATIVE_ACTOR_PIPE_UNSUPPORTED: typed actor pipe requires guest port, mailbox and supervisor lowering",
+        "source-actor-transform-pipe-unlowered-reject.ores":
+            "native transform-pipe actor requires typed pipeline role and transport lowering",
+        "source-actor-pipeline-bidirectional.ores":
+            "native user-defined tagged enum requires ADT layout and constructor lowering",
         "source-actor-owned-unknown-initializer-reject.ores":
             "unknown parameter 'not_yet_declared'",
         "source-actor-owned-forward-reference-reject.ores":
@@ -200,7 +206,7 @@ def main():
     semantic_mutations = (
         ("write-through-read-loan",
          "using state.write", "using state.read",
-         "critical-write", "critical-read",
+         "critical-write |s|", "critical-read |s|",
          "read-only actor state loan cannot mutate state"),
         ("foreign-state-projection",
          "const previous: owned int = s.total + n;",

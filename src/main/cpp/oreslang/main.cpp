@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/GpuG1AttoSaxpySource.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
@@ -205,12 +206,16 @@ int main(int argc, char** argv) {
     bool allocator_provider_seen = false;
     bool bounded_allocator_provider = false;
     bool rt_check_only = false;
+    bool gpu_g1_kernel_ir = false;
+    bool gpu_g1_other_option = false;
     bool rt_entry_seen = false;
     bool rt_report_seen = false;
     bool constraint_descriptors_only = false;
     std::string rt_entry = "main/0";
     std::string rt_report_path;
     bool tree_shake = false;
+    bool isolate_entry_seen = false;
+    std::string isolate_entry;
     std::vector<std::string> tree_shake_roots;
     const char* path = nullptr;
     // Host-only severity policy: last CLI flag overrides the environment.
@@ -218,6 +223,8 @@ int main(int argc, char** argv) {
     std::string coreLogLevel = envLevel ? envLevel : "off";
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
+        if (!arg.empty() && arg[0] == '-' && arg != "--gpu-g1-kernel-ir")
+            gpu_g1_other_option = true;
         if (arg.rfind("--allocator-provider=", 0) == 0) {
             if (allocator_provider_seen) {
                 std::cerr << "duplicate allocator-provider option\n";
@@ -255,6 +262,9 @@ int main(int argc, char** argv) {
                 return 2;
             }
             native_hard_rt_profile = true;
+        } else if (arg == "--gpu-g1-kernel-ir") {
+            if (gpu_g1_kernel_ir) { std::cerr << "duplicate gpu-g1-kernel-ir option\n"; return 2; }
+            gpu_g1_kernel_ir = true;
         } else if (arg == "--rt-check") {
             if (rt_check_only) { std::cerr << "duplicate rt-check option\n"; return 2; }
             rt_check_only = true;
@@ -287,6 +297,11 @@ int main(int argc, char** argv) {
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
+        } else if (arg.rfind("--isolate-entry=", 0) == 0) {
+            if (isolate_entry_seen) { std::cerr << "duplicate isolate entry\n"; return 2; }
+            isolate_entry_seen = true;
+            isolate_entry = arg.substr(std::string("--isolate-entry=").size());
+            if (isolate_entry.empty()) { std::cerr << "empty isolate entry\n"; return 2; }
         } else if (arg == "--tree-shake") {
             if (tree_shake) { std::cerr << "duplicate tree-shake option\n"; return 2; }
             tree_shake = true;
@@ -318,6 +333,10 @@ int main(int argc, char** argv) {
             return 2;
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
+    }
+    if (gpu_g1_kernel_ir && gpu_g1_other_option) {
+        std::cerr << "GPU-G1-SOURCE-004: isolated G1 source lowering forbids unrelated compiler options\n";
+        return 2;
     }
     // Public library architecture has exactly two layers. For now the native
     // backend only certifies the freestanding core profile on targets whose ABI
@@ -363,6 +382,13 @@ int main(int argc, char** argv) {
         std::cerr << "constraint-descriptors is a metadata-only mode and cannot be combined with execution/codegen options\n";
         return 2;
     }
+    if (isolate_entry_seen && (tree_shake || !tree_shake_roots.empty() ||
+            wasm32_target || cortex_m_target || experimental_owned_int ||
+            experimental_rt_scalar_loop || native_hard_rt_profile ||
+            bounded_allocator_provider || rt_check_only || rt_report_seen)) {
+        std::cerr << "isolate entry supports only ordinary host scalar codegen\n";
+        return 2;
+    }
     if (!tree_shake && !tree_shake_roots.empty()) {
         std::cerr << "tree-shake-root requires --tree-shake\n";
         return 2;
@@ -382,7 +408,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -407,6 +433,20 @@ int main(int argc, char** argv) {
         if (text.find("// ores:") != std::string::npos) {
             throw std::runtime_error("native target admission unsupported: ores environment headers require compiler verification");
         }
+        if (gpu_g1_kernel_ir) {
+            // Isolated compiler-backed kernel-only proof; NOT general gpu fnc,
+            // host launch, device execution or a host-target scalar function.
+            const std::string source_path(path);
+            if (source_path.size() < 6 ||
+                source_path.compare(source_path.size() - 5, 5, ".atto") != 0)
+                throw std::runtime_error("GPU-G1-SOURCE-001: canonical .atto extension required");
+            if (text.size() > 65536)
+                throw std::runtime_error("GPU-G1-SOURCE-001: source exceeds kernel budget");
+            const auto kernel = oreslang::gpu::g1::compile_g1_saxpy_source(text);
+            std::cout << kernel.llvm_ir;
+            std::cout.flush();
+            return 0;
+        }
         if (experimental_rt_scalar_loop && (wasm32_target || experimental_owned_int))
             throw std::runtime_error("scalar-loop frame requires native host and no owned-int experiment");
         if (cortex_m_target && text.size() > 128u * 1024u)
@@ -422,6 +462,28 @@ int main(int argc, char** argv) {
             admitted_provider_bits);
         source_module = ast.module;
         source_namespace = ast.namespace_name;
+
+        // A enabled telemetry scope currently calls CLOCK_MONOTONIC on a
+        // native carrier. It has not been subjected to a proven WCET/time
+        // budget; do not certify this as hard-real-time compatible merely
+        // because the compiler can emit native LLVM IR.
+        if (native_hard_rt_profile || rt_report_seen) {
+            std::function<bool(const oreslang::Statement&)> has_span =
+                [&](const oreslang::Statement& stmt) {
+                    return stmt.kind ==
+                            oreslang::Statement::Kind::UsingTelemetrySpan
+                        || std::any_of(stmt.then_statements.begin(),
+                            stmt.then_statements.end(), has_span)
+                        || std::any_of(stmt.else_statements.begin(),
+                            stmt.else_statements.end(), has_span);
+                };
+            for (const auto& fn : ast.functions)
+                if (std::any_of(fn.statements.begin(),
+                        fn.statements.end(), has_span))
+                    throw std::runtime_error(
+                        "native telemetry using lacks bounded WCET/probe"
+                        " budget proof for native-hard-rt profile");
+        }
 
         if (constraint_descriptors_only) {
             for (const auto& descriptor : ast.type_constraint_descriptors) {
@@ -749,7 +811,7 @@ int main(int argc, char** argv) {
         }
         std::cout << oreslang::emit_verified_llvm_ir(
                 ast, wasm32_target, cortex_m_target,
-                bounded_allocator_provider);
+                bounded_allocator_provider, isolate_entry);
         std::cout.flush();
         if (coreLog) coreLog->dump(stderr);
         return 0;
