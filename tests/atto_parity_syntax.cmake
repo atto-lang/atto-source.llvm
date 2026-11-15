@@ -152,19 +152,19 @@ reject_case(scalar_loop_rejects_owned_resources
   "native scalar loop requires pure scalar writes and structured loop control")
 
 reject_case(scalar_loop_rejects_early_return
-  "pub fnc main(): int { loop { do ifnot false then return 4; fi } return 0; }\\n"
+  "pub fnc main(): int { loop { do ifnot false then return 4; fi } return 0; }\n"
   "native scalar loop requires pure scalar writes and structured loop control")
 reject_case(scalar_loop_rejects_unscoped_continue
-  "pub fnc main(): int { do ifnot false then continue; fi return 0; }\\n"
+  "pub fnc main(): int { do ifnot false then continue; fi return 0; }\n"
   "native break/continue in conditional arms requires verified loop continuation lowering")
 reject_target_case(scalar_loop_denied_hard_rt
-  "pub fnc main(): int { loop { break; } return 0; }\\n"
+  "pub fnc main(): int { loop { break; } return 0; }\n"
   "requires WCET/termination" "--profile=native-hard-rt")
 reject_target_case(scalar_loop_denied_wasm32
-  "pub fnc main(): int { loop { break; } return 0; }\\n"
+  "pub fnc main(): int { loop { break; } return 0; }\n"
   "requires WCET/termination" "--target=wasm32")
 reject_target_case(scalar_loop_denied_cortex_m
-  "pub fnc main(): int { loop { break; } return 0; }\\n"
+  "pub fnc main(): int { loop { break; } return 0; }\n"
   "requires WCET/termination" "--target=thumbv7m-none-eabi")
 
 reject_case(ifnot_break_requires_native_continuation
