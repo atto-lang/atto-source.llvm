@@ -89,13 +89,40 @@ static const Expression& parsed(std::string_view source, oreslang::Program& hold
     return *holder.functions[0].result;
 }
 
+// Comparison intentionally ignores byte offsets: source aliases differ in
+// spelling/length, but must carry the exact same resolved ownership operation
+// and complete operand tree (including member/index and nested expression).
+static bool same_operand_tree(const Expression* a, const Expression* b) {
+    if (!a || !b) return a == b;
+    if (a->kind != b->kind || a->integer != b->integer ||
+        a->boolean != b->boolean || a->name != b->name ||
+        a->arguments.size() != b->arguments.size())
+        return false;
+    if (!same_operand_tree(a->left.get(), b->left.get()) ||
+        !same_operand_tree(a->right.get(), b->right.get()) ||
+        !same_operand_tree(a->condition.get(), b->condition.get()) ||
+        !same_operand_tree(a->when_true.get(), b->when_true.get()) ||
+        !same_operand_tree(a->when_false.get(), b->when_false.get()))
+        return false;
+    for (std::size_t i = 0; i < a->arguments.size(); ++i) {
+        if (!same_operand_tree(a->arguments[i].get(), b->arguments[i].get()))
+            return false;
+    }
+    return true;
+}
+
 static void equivalent(std::string_view legacy, std::string_view spaced,
                        std::string_view compact, Expression::Kind kind) {
-    for (const auto source : {legacy, spaced, compact}) {
+    oreslang::Program expected_holder;
+    const Expression& expected = parsed(legacy, expected_holder);
+    if (expected.kind != kind || !expected.left)
+        throw std::runtime_error("incorrect legacy ownership baseline");
+    for (const auto source : {spaced, compact}) {
         oreslang::Program holder;
         const Expression& expr = parsed(source, holder);
-        if (expr.kind != kind || !expr.left)
-            throw std::runtime_error("incorrect bang alias AST for " + std::string(source));
+        if (!same_operand_tree(&expected, &expr))
+            throw std::runtime_error("ownership alias changed operand AST: " +
+                                     std::string(source));
     }
 }
 
@@ -136,6 +163,9 @@ int main(int argc, char** argv) {
     }
     equivalent("rt take foo", "take! foo", "take!foo", Expression::Kind::Take);
     equivalent("rt borrow foo", "borrow! foo", "borrow!foo", Expression::Kind::Borrow);
+    // mutfoo is an identifier; only a standalone mut keyword grants an exclusive loan.
+    equivalent("rt borrow mutfoo", "borrow! mutfoo", "borrow!mutfoo",
+               Expression::Kind::Borrow);
     equivalent("rt share foo", "share! foo", "share!foo", Expression::Kind::Share);
     equivalent("rt mut borrow foo", "mut borrow! foo", "mut borrow!foo",
                Expression::Kind::BorrowMut);
@@ -153,7 +183,8 @@ int main(int argc, char** argv) {
                Expression::Kind::Borrow);
     for (const auto invalid : {"copy !foo", "take !foo", "borrow !foo",
                                "mut borrow !foo", "share !foo", "copy!",
-                               "mut borrow!"}) {
+                               "mut borrow!", "borrow! mut", "borrow!mut",
+                               "borrow! mut mut foo", "mut borrow! mut foo"}) {
         reject(invalid);
     }
     // Production parser+ownership checker against exact checked-in .atto
