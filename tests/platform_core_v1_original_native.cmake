@@ -194,7 +194,7 @@ foreach(index RANGE 0 11)
       # SIGILL on Linux x86-64 conventionally becomes exit 132 through Bash.
       # This is a provisional trap ABI, not a typed Error or supervisor notice.
       execute_process(COMMAND bash -c
-        "ulimit -c 0; \"\$1\" >/dev/null 2>&1; code=\$?; test \"\$code\" -eq 132"
+        "ulimit -c 0; \"$1\" >/dev/null 2>&1; code=$?; test \"$code\" -eq 132"
         bash "${native}"
         RESULT_VARIABLE result TIMEOUT 5 ERROR_VARIABLE native_stderr)
       if(NOT result STREQUAL "0")
