@@ -1,0 +1,4 @@
+// Must reject: map_err converts the E parameter, not the success parameter.
+fnc wrong(Result<int,String> value): Result<int,String> {
+  return value.map_err((String reason) -> 7);
+}

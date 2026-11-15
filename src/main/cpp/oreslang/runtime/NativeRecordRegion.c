@@ -7,7 +7,7 @@
 #include <string.h>
 
 enum { RECORD_LIMIT = 65536, FIELD_LIMIT = 16 };
-typedef struct { int64_t schema; size_t count; int64_t fields[FIELD_LIMIT]; } Record;
+typedef struct { int64_t schema; size_t count; uint64_t writable_fields; int64_t fields[FIELD_LIMIT]; } Record;
 typedef struct {
     Record* records;
     size_t count, capacity;
@@ -45,10 +45,12 @@ int64_t ores_record_region_begin(void) {
     return 0;
 }
 
-int64_t ores_record_new(int64_t schema, int64_t fields, const int64_t* values) {
+int64_t ores_record_new_mutable(int64_t schema, int64_t fields, const int64_t* values,
+                              uint64_t writable_fields) {
     Region* r = &region;
     if (!r->active || r->failed || schema <= 0 || fields < 0 || fields > FIELD_LIMIT ||
-            (fields != 0 && !values) || r->count >= RECORD_LIMIT) {
+            (fields != 0 && !values) || r->count >= RECORD_LIMIT ||
+            (fields >= 0 && fields <= FIELD_LIMIT && (writable_fields >> (unsigned)fields) != 0)) {
         r->failed = 1;
         return 0;
     }
@@ -68,11 +70,16 @@ int64_t ores_record_new(int64_t schema, int64_t fields, const int64_t* values) {
     memset(record, 0, sizeof *record);
     record->schema = schema;
     record->count = (size_t)fields;
+    record->writable_fields = writable_fields;
     if (fields) memcpy(record->fields, values, (size_t)fields * sizeof(int64_t));
     /* Publication follows complete initialization; realloc never changes
      * logical identities and no payload pointer leaves the region. */
     ++r->count;
     return (int64_t)(((uint64_t)r->generation << 32) | r->count);
+}
+
+int64_t ores_record_new(int64_t schema, int64_t fields, const int64_t* values) {
+    return ores_record_new_mutable(schema, fields, values, 0);
 }
 
 static const Record* lookup(int64_t handle, int64_t schema) {
@@ -101,6 +108,18 @@ int64_t ores_record_check_shape(int64_t handle, int64_t schema, int64_t fields) 
 
 int64_t ores_record_check(int64_t handle, int64_t schema) {
     return lookup(handle, schema) ? 0 : 1;
+}
+
+int64_t ores_record_set(int64_t handle, int64_t schema, int64_t field, int64_t value) {
+    const Record* record = lookup(handle, schema);
+    if (!record || field < 0 || (uint64_t)field >= record->count ||
+            !(record->writable_fields & (UINT64_C(1) << (unsigned)field))) {
+        region.failed = 1;
+        return 1;
+    }
+    /* Resolve by identity after every possible growth; never cache a pointer. */
+    region.records[(uint32_t)(uint64_t)handle - 1].fields[field] = value;
+    return 0;
 }
 
 int64_t ores_record_get(int64_t handle, int64_t schema, int64_t field) {
