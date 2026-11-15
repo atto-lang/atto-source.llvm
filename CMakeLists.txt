@@ -5807,6 +5807,20 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_supervisor_execution_authority
         COMMAND oreslang-native-execution-authority-test)
     set_tests_properties(native_actor_supervisor_execution_authority PROPERTIES TIMEOUT 30)
+    # Trusted native authority adversarial lifecycle test: a foreign physical
+    # carrier cannot steal an execution claim, retirement fences active work,
+    # and stale generation claims fail after restart. Does not execute guest code.
+    add_executable(oreslang-native-actor-authority-stop-claim-race-test
+        tests/native_actor_authority_stop_claim_race_test.c)
+    target_include_directories(oreslang-native-actor-authority-stop-claim-race-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-authority-stop-claim-race-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-authority-stop-claim-race-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_authority_stop_claim_race
+        COMMAND oreslang-native-actor-authority-stop-claim-race-test)
+    set_tests_properties(native_actor_authority_stop_claim_race PROPERTIES TIMEOUT 30)
+
 
     # Across all actor-owned entrypoints (DATA and supervisor CONTROL), no
     # actor can have two physical guest executors, even on separate workers.
@@ -5860,6 +5874,23 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_nonblocking_ready_queue
         COMMAND oreslang-native-actor-ready-queue-test)
     set_tests_properties(native_actor_nonblocking_ready_queue PROPERTIES TIMEOUT 30)
+    # Native scheduler handler-originated sealed STOP: a running callback
+    # must not self-wait, seal must abandon queued DATA exactly once, and a
+    # host observer must see the correct terminal receipt after quiescence.
+    # This is a native host test, not a compiled .ores guest test.
+    add_executable(oreslang-native-actor-self-sealed-stop-test
+        tests/native_actor_self_sealed_stop_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-self-sealed-stop-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-self-sealed-stop-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-self-sealed-stop-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_self_sealed_stop_terminal_accounting
+        COMMAND oreslang-native-actor-self-sealed-stop-test)
+    set_tests_properties(native_actor_self_sealed_stop_terminal_accounting
+        PROPERTIES TIMEOUT 30)
+
     # O(1) intrusive ready queues, idle spin and CPU affinity. Every queue
     # mutation is cross-checked against an O(N) scan of lane state.
     add_executable(oreslang-native-actor-ready-queue-stress-test
