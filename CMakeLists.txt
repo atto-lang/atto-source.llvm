@@ -5,6 +5,71 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# GPU actor host-only verification. Opt-in native CTest with real actor/OpenCL
+# sources but no LLVM developer packages or compiled AttoLang guest.
+option(ORESLANG_GPU_ACTOR_HOST_ONLY "Build native GPU actor security tests only" OFF)
+if(ORESLANG_GPU_ACTOR_HOST_ONLY)
+    include(CTest)
+    if(NOT BUILD_TESTING)
+        message(FATAL_ERROR "GPU actor host-only verification needs BUILD_TESTING=ON")
+    endif()
+    find_package(Threads REQUIRED)
+    function(oreslang_gpu_actor_host_test target test_name source_file)
+        add_executable(${target} ${source_file})
+        target_include_directories(${target} PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features(${target} PRIVATE cxx_std_17)
+        target_compile_options(${target} PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+        target_link_libraries(${target} PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+        add_test(NAME ${test_name} COMMAND ${target})
+        set_tests_properties(${test_name} PROPERTIES TIMEOUT 45)
+    endfunction()
+    oreslang_gpu_actor_host_test(oreslang-gpu-host-v0-registry
+        native_gpu_actor_v0_registry_migration
+        tests/gpu_actor_host_turn_bridge_v0_test.cpp)
+    oreslang_gpu_actor_host_test(oreslang-gpu-host-v1-quarantine
+        native_gpu_actor_v1_quarantine
+        tests/gpu_actor_provider_bridge_v1_test.cpp)
+    oreslang_gpu_actor_host_test(oreslang-gpu-host-v2-opencl
+        native_gpu_actor_v2_opencl_mock
+        tests/gpu_actor_opencl_provider_v2_test.cpp)
+    oreslang_gpu_actor_host_test(oreslang-gpu-host-opencl-g3
+        native_gpu_opencl_g3_legacy_regression
+        tests/opencl_provider_g3_test.cpp)
+    add_test(NAME native_gpu_actor_v0_completion_authority_private
+        COMMAND "${CMAKE_COMMAND}"
+            "-DGPU_ACTOR_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+            "-DGPU_ACTOR_INCLUDE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+            "-DGPU_ACTOR_NEGATIVE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_actor_v0_completion_authority_negative.cpp"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/GpuActorV0CompletionAuthorityGate.cmake")
+    set_tests_properties(native_gpu_actor_v0_completion_authority_private
+        PROPERTIES TIMEOUT 30)
+    # Worker-only quiescence/cleanup authority: ordinary C++ callers MUST
+    # fail compilation when invoking these potentially blocking methods.
+    add_test(NAME native_gpu_actor_recovery_worker_authority_private
+        COMMAND "${CMAKE_COMMAND}"
+            "-DGPU_ACTOR_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+            "-DGPU_ACTOR_INCLUDE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+            "-DGPU_ACTOR_NEGATIVE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_actor_recovery_authority_negative.cpp"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/GpuActorRecoveryAuthorityGate.cmake")
+    set_tests_properties(native_gpu_actor_recovery_worker_authority_private
+        PROPERTIES TIMEOUT 30)
+
+    # Build the physical probe, but never count 77 as a passing GPU test.
+    add_executable(oreslang-gpu-physical-prerequisite
+        tests/gpu_actor_opencl_v2_physical_probe.cpp)
+    target_include_directories(oreslang-gpu-physical-prerequisite PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-gpu-physical-prerequisite PRIVATE cxx_std_17)
+    target_compile_options(oreslang-gpu-physical-prerequisite PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    target_link_libraries(oreslang-gpu-physical-prerequisite PRIVATE
+        Threads::Threads ${CMAKE_DL_LIBS})
+    return()
+endif()
+
+
 # Standalone host access-grant regression (no LLVM toolchain or guest proof).
 option(ATTO_ACTOR_ACCESS_HOST_ONLY
   "Build only the checked actor allocation authority host test" OFF)
@@ -6121,6 +6186,29 @@ if(BUILD_TESTING)
     add_test(NAME native_gpu_actor_host_turn_fence_control_v0
         COMMAND oreslang-gpu-actor-host-bridge-v0-test)
     set_tests_properties(native_gpu_actor_host_turn_fence_control_v0 PROPERTIES TIMEOUT 30)
+
+    # Production authority gate: only the supervisor V1 registry may invoke
+    # raw host Boolean completion/release methods. Ensure an ordinary native
+    # translation unit is rejected by the configured compiler.
+    add_test(NAME native_gpu_actor_v0_completion_authority_private
+        COMMAND "${CMAKE_COMMAND}"
+            "-DGPU_ACTOR_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+            "-DGPU_ACTOR_INCLUDE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+            "-DGPU_ACTOR_NEGATIVE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_actor_v0_completion_authority_negative.cpp"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/GpuActorV0CompletionAuthorityGate.cmake")
+    set_tests_properties(native_gpu_actor_v0_completion_authority_private
+        PROPERTIES TIMEOUT 30)
+    # Worker-only quiescence/cleanup authority: ordinary C++ callers MUST
+    # fail compilation when invoking these potentially blocking methods.
+    add_test(NAME native_gpu_actor_recovery_worker_authority_private
+        COMMAND "${CMAKE_COMMAND}"
+            "-DGPU_ACTOR_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+            "-DGPU_ACTOR_INCLUDE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+            "-DGPU_ACTOR_NEGATIVE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_actor_recovery_authority_negative.cpp"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/GpuActorRecoveryAuthorityGate.cmake")
+    set_tests_properties(native_gpu_actor_recovery_worker_authority_private
+        PROPERTIES TIMEOUT 30)
+
 endif()
 
 # V1 opaque host provider event identity and bounded actor quarantine. This
