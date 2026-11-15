@@ -66,7 +66,7 @@ for effect in throw raise panic; do
 done
 
 # A declared signature cannot authorize an unproven transitive call.
-printf 'fnc helper(): int { return 1; }\nfnc main(): int using throw { return helper(); }\n' \
+printf 'fnc helper(): int { return 1; }\nfnc main(): int using io { return helper(); }\n' \
   > "$tmp/transitive.atto"
 expect_reject 1 'using effects require transitive call summaries' \
   "$compiler" --check "$tmp/transitive.atto"
