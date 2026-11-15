@@ -933,6 +933,8 @@ void validate_i64_ownership(Program& program) {
                     return target.assignable && !target.heap_owned && !target.int_array && target.class_name.empty() &&
                         target.shared_loans == 0 && !target.exclusive_loan;
                 };
+                if (!state.at(stmt.receiver).assignable)
+                    throw std::runtime_error("E_IMMUTABLE_REBIND: cannot reassign fixed scalar binding");
                 if (!writable()) throw std::runtime_error("assignment requires an unloaned mutable scalar slot");
                 check_value(*stmt.expression, state, functions);
                 if (!writable()) throw std::runtime_error("assignment cannot publish through an active loan");
