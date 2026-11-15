@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <charconv>
 #include <limits>
+#include <optional>
 #include <functional>
 #include <cctype>
 #include <stdexcept>
@@ -445,6 +446,86 @@ bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
             (!expr.condition_rhs || native_pure_scalar_tree(*expr.condition_rhs, depth + 1)) &&
             native_pure_scalar_tree(*expr.when_true, depth + 1) &&
             native_pure_scalar_tree(*expr.when_false, depth + 1);
+    return false;
+}
+
+// Conservative first native const-evaluator admission: only literal and
+// completely constant scalar operations. Runtime reads, calls, actor state,
+// borrows and effects are never reclassified as compile-time expressions.
+// Checked integer math is evaluated here for const overflow diagnostics.
+std::optional<std::int64_t> native_const_integer_value(
+        const Expression& expr, const std::vector<LocalBinding>& known,
+        std::size_t depth = 1) {
+    require_expression_depth(depth, expr.offset);
+    using K = Expression::Kind;
+    if (expr.kind == K::Integer) return expr.integer;
+    if (expr.kind == K::Variable) {
+        // Look only at preceding fixed primitive const bindings. Runtime val,
+        // let, imported globals, handles, and effects cannot be constexpr.
+        auto found = std::find_if(known.rbegin(), known.rend(),
+            [&](const LocalBinding& binding) { return binding.name == expr.name; });
+        if (found == known.rend() || found->assignable || found->owner_mutable ||
+                found->heap_owned || found->int_array || !found->class_name.empty() ||
+                !found->sum_type.empty() || !found->initializer ||
+                found->scalar_type != ScalarType::I64)
+            return std::nullopt;
+        return native_const_integer_value(*found->initializer, known, depth + 1);
+    }
+    if (expr.kind == K::Negate && expr.left) {
+        const auto v = native_const_integer_value(*expr.left, known, depth + 1);
+        if (!v) return std::nullopt;
+        if (*v == std::numeric_limits<std::int64_t>::min())
+            throw std::runtime_error("E_CONST_OVERFLOW: signed integer negate");
+        return -*v;
+    }
+    if ((expr.kind == K::Add || expr.kind == K::Subtract ||
+            expr.kind == K::Multiply) && expr.left && expr.right) {
+        const auto a = native_const_integer_value(*expr.left, known, depth + 1);
+        const auto b = native_const_integer_value(*expr.right, known, depth + 1);
+        if (!a || !b) return std::nullopt;
+        std::int64_t result = 0;
+        bool overflow = false;
+        if (expr.kind == K::Add) overflow = __builtin_add_overflow(*a, *b, &result);
+        else if (expr.kind == K::Subtract) overflow = __builtin_sub_overflow(*a, *b, &result);
+        else overflow = __builtin_mul_overflow(*a, *b, &result);
+        if (overflow) throw std::runtime_error("E_CONST_OVERFLOW: signed integer arithmetic");
+        return result;
+    }
+    return std::nullopt;
+}
+
+bool native_const_scalar_tree(
+        const Expression& expr, const std::vector<LocalBinding>& known,
+        std::size_t depth = 1) {
+    require_expression_depth(depth, expr.offset);
+    using K = Expression::Kind;
+    if (expr.kind == K::Integer || expr.kind == K::Boolean ||
+            expr.kind == K::String) return true;
+    if (expr.kind == K::Variable) {
+        auto found = std::find_if(known.rbegin(), known.rend(),
+            [&](const LocalBinding& binding) { return binding.name == expr.name; });
+        return found != known.rend() && !found->assignable && !found->owner_mutable &&
+                !found->heap_owned && !found->int_array && found->class_name.empty() &&
+                found->sum_type.empty() && found->initializer &&
+                native_const_scalar_tree(*found->initializer, known, depth + 1);
+    }
+    if (expr.kind == K::Negate && expr.left)
+        return native_const_integer_value(expr, known, depth).has_value();
+    if (expr.kind == K::LogicalNot && expr.left)
+        return native_const_scalar_tree(*expr.left, known, depth + 1);
+    if (expr.kind == K::Add || expr.kind == K::Subtract ||
+            expr.kind == K::Multiply) {
+        return native_const_integer_value(expr, known, depth).has_value();
+    }
+    if (expr.kind == K::Equal || expr.kind == K::NotEqual ||
+            expr.kind == K::Less || expr.kind == K::LessEqual ||
+            expr.kind == K::Greater || expr.kind == K::GreaterEqual ||
+            expr.kind == K::LogicalAnd || expr.kind == K::LogicalOr ||
+            expr.kind == K::LogicalXor) {
+        return expr.left && expr.right &&
+                native_const_scalar_tree(*expr.left, known, depth + 1) &&
+                native_const_scalar_tree(*expr.right, known, depth + 1);
+    }
     return false;
 }
 
@@ -2806,7 +2887,10 @@ private:
             require(";");
             return true;
         };
-        while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio" || array_effect_ahead()) {
+        while (token_.text == "const" || token_.text == "val" || token_.text == "let" ||
+                token_.text == "int" || token_.text == "bool" ||
+                token_.text == "string" || token_.text == "String" ||
+                token_.text == "stdio" || array_effect_ahead()) {
             // Typed Future<void> is admitted ONLY as a linear lexical alias
             // for one already-spawned ActorRef.get_ready() lifecycle promise.
             // No scalar/object borrow crosses this suspension, and general
@@ -2816,17 +2900,25 @@ private:
             if (ready_future_local()) continue;
             LocalBinding binding;
             binding.offset = token_.offset;
+            const bool type_first_const = token_.text == "int" || token_.text == "bool" ||
+                    token_.text == "String" || token_.text == "string";
+            if (token_.text == "const" && peek_next().text == "mut")
+                fail("E_CONST_MUT_UNSUPPORTED: scoped owned mutable value lowering is not yet implemented");
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
-            if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
-                    (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string")) {
-                const auto mode = token_.text; advance(); if (mode == "let") accept("mut");
+            if (type_first_const ||
+                    ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
+                    (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string"))) {
+                const std::string mode = type_first_const ? "const" : std::string(token_.text);
+                if (!type_first_const) { advance(); if (mode == "let") accept("mut"); }
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
                 binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
                 if (binding.scalar_type == ScalarType::I64) require("int");
                 binding.name = identifier();
                 require("=");
                 if (accept("await")) {
+                    if (mode == "const")
+                        fail("E_NON_CONST_INITIALIZER: await is not compile-time constant");
                     if (binding.scalar_type != ScalarType::I64)
                         fail("native scalar await requires an int result binding");
                     if (!value.locals.empty())
@@ -2862,6 +2954,9 @@ private:
                     }
                 } else {
                     binding.initializer = expression();
+                    if (mode == "const" &&
+                            !native_const_scalar_tree(*binding.initializer, value.locals))
+                        fail("E_NON_CONST_INITIALIZER: type-first/const scalar requires a compile-time value");
                 }
             } else if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
                     (sum_first.text == "Option" || sum_first.text == "Result")) {
