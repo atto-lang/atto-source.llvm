@@ -175,7 +175,17 @@ fn parse_one_function(tokens: &[Token], start: usize, end: usize)
     if p.funcs.len()!=1 || !p.actors.is_empty() || !p.classes.is_empty() {
         return Err(error("E_SYNTAX","invalid native target top-level function"));
     }
-    Ok(p.funcs.into_iter().next().expect("exactly one function"))
+    let func=p.funcs.into_iter().next().expect("exactly one function");
+    // Parsed standalone function name indices are local to their temporary
+    // parser. Do not allow unresolved Named/NamedRef indices to enter the
+    // unified checked program without a verified type-name relocation table.
+    if !matches!(func.ret,Type::Int|Type::Bool|Type::Void)
+        || func.params.iter().any(|p|
+            !matches!(p.ty,Type::Int|Type::Bool)) {
+        return Err(error("E_UNSUPPORTED_NATIVE_TYPE",
+            "target fnc signatures admit only int/bool parameters and int/bool/void result"));
+    }
+    Ok(func)
 }
 fn parse_one_receiver(tokens: &[Token], start: usize, end: usize,
     head: &target_syntax::ReceiverHeader) -> Result<Method,String> {
@@ -247,6 +257,18 @@ pub fn lower(tokens: &[Token]) -> Result<Program,String> {
     }
     let mut program=target_typed::build_actor_program(&headers,&module);
     check::check_target_actor_interface(&program).map_err(|e|e.to_string())?;
+    // TargetHeaders reparses each concrete actor with a temporary parser.
+    // Only primitive fields and payloads can be reused without relocating
+    // its locally indexed Named types into the linked Program type table.
+    for actor in &program.actors {
+        if actor.fields.iter().any(|field|
+            !matches!(field.ty,Type::Int|Type::Bool))
+            || actor.receive.as_ref().is_some_and(|r|
+                !matches!(r.payload,Type::Int|Type::Bool)) {
+            return Err(error("E_UNSUPPORTED_NATIVE_TYPE",
+                "target actor state and mail payloads must be int/bool"));
+        }
+    }
     // A target-profile actor's legacy definition can include a lifecycle
     // receive handler, but cannot carry mutable state access or inline
     // receiver methods. State is only lowered inside checked out-of-line mtd.
