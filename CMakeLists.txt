@@ -3091,6 +3091,104 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-bounded-actor-port-test PRIVATE Threads::Threads)
     set_tests_properties(native_actor_port_bounded_owned_transport PROPERTIES TIMEOUT 30)
 
+    # Host-runtime-only typed-tag selective mailbox primitive. A full
+    # guest-language selective receive and compiled matcher remains separate.
+    add_executable(oreslang-native-selective-tagged-port-test
+        tests/native_selective_tagged_port_test.cpp)
+    target_include_directories(oreslang-native-selective-tagged-port-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-selective-tagged-port-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-selective-tagged-port-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-selective-tagged-port-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_tag_selective_bounded_receive
+        COMMAND oreslang-native-selective-tagged-port-test)
+    set_tests_properties(native_actor_tag_selective_bounded_receive PROPERTIES TIMEOUT 30)
+
+    # Real BoundedActorPort + preallocated slot pool + shared completion ledger.
+    add_executable(oreslang-native-preallocated-port-oracle-test
+        tests/native_preallocated_port_reference_model_test.cpp)
+    target_include_directories(oreslang-native-preallocated-port-oracle-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-preallocated-port-oracle-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-preallocated-port-oracle-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-preallocated-port-oracle-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_preallocated_production_port_oracle
+        COMMAND oreslang-native-preallocated-port-oracle-test)
+    set_tests_properties(native_actor_preallocated_production_port_oracle PROPERTIES TIMEOUT 30)
+
+    # Full runtime path (not a standalone slot model): bound PriorityActorInbox,
+    # NativeActorGroup CONTROL/user turns, generation-fenced STOP, physical ACK,
+    # and 400 concurrent sender-vs-stop trials.
+    add_executable(oreslang-native-preallocated-supervisor-races-test
+        tests/native_preallocated_supervisor_races_test.cpp)
+    target_include_directories(oreslang-native-preallocated-supervisor-races-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-preallocated-supervisor-races-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-preallocated-supervisor-races-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-preallocated-supervisor-races-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_preallocated_supervisor_races
+        COMMAND oreslang-native-preallocated-supervisor-races-test)
+    set_tests_properties(native_actor_preallocated_supervisor_races PROPERTIES TIMEOUT 60)
+
+    # Separately executable exact native host-component regression:
+    # NativeActorGroup CONTROL/STOP, BoundedActorPort preallocated slots,
+    # sequence-ledger gap fencing and 600 admission-vs-STOP races.
+    add_executable(oreslang-native-group-physical-port-stress-test
+        tests/native_group_physical_port_stress_test.cpp)
+    target_include_directories(oreslang-native-group-physical-port-stress-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-group-physical-port-stress-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-group-physical-port-stress-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-group-physical-port-stress-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_group_physical_port_stop_races
+        COMMAND oreslang-native-group-physical-port-stress-test)
+    set_tests_properties(native_actor_group_physical_port_stop_races PROPERTIES TIMEOUT 60)
+
+    # Independently buildable host primitive: fixed-capacity intrusive slots,
+    # compiler-generated tag selectors and generation-fenced scan continuations.
+    # BoundedActorPort now uses this queue; full native CMake, ACK, lifecycle
+    # and compiler-generated guest AOT tests remain independent merge gates.
+    add_executable(oreslang-preallocated-selective-slots-test
+        tests/preallocated_selective_slots_test.cpp)
+    target_include_directories(oreslang-preallocated-selective-slots-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-preallocated-selective-slots-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-preallocated-selective-slots-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-preallocated-selective-slots-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_preallocated_selective_slots
+        COMMAND oreslang-preallocated-selective-slots-test)
+    set_tests_properties(native_actor_preallocated_selective_slots PROPERTIES TIMEOUT 30)
+    # Real shared ActorMailboxCompletion with two independently preallocated
+    # priority lanes: global sequence fence versus lane-local receipt ID.
+    add_executable(oreslang-native-slot-ledger-integration-test
+        tests/native_slot_ledger_integration_test.cpp)
+    target_include_directories(oreslang-native-slot-ledger-integration-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-slot-ledger-integration-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-slot-ledger-integration-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-slot-ledger-integration-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_preallocated_slot_ledger_fence
+        COMMAND oreslang-native-slot-ledger-integration-test)
+    set_tests_properties(native_actor_preallocated_slot_ledger_fence PROPERTIES TIMEOUT 30)
+    # Compile-negative actor safety gate: custom deleter destructors or moves
+    # must not call back into an actor mailbox while the physical lock is held.
+    if(UNIX)
+        add_test(NAME native_actor_preallocated_selective_deleter_rejections
+            COMMAND "${CMAKE_COMMAND}"
+                "-DCXX=${CMAKE_CXX_COMPILER}"
+                "-DINCLUDE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+                "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/preallocated_selective_slots_negative_compile.cpp"
+                "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/preallocated_selective_slots_negative_compile.cmake")
+        set_tests_properties(native_actor_preallocated_selective_deleter_rejections
+            PROPERTIES TIMEOUT 30)
+    endif()
+
     add_executable(oreslang-native-mailbox-parallel-terminal-test
         tests/native_mailbox_parallel_terminal_test.cpp)
     target_include_directories(oreslang-native-mailbox-parallel-terminal-test PRIVATE
