@@ -1,0 +1,101 @@
+name: Native tenant isolation + strict RT host evidence (non-certifying)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/NativeTenantAdmission.hpp'
+      - 'src/main/cpp/oreslang/runtime/StrictHardRealtimeProfile.hpp'
+      - 'tests/native_tenant_isolate_rt_host_test.cpp'
+      - 'tests/native_tenant_isolate_race_test.cpp'
+      - 'tests/native_tenant_registry_provenance_test.cpp'
+      - 'tests/native_tenant_state_machine_test.cpp'
+      - 'tests/native_tenant_secure_retirement_test.cpp'
+      - 'tests/native_tenant_stop_interleaving_test.cpp'
+      - 'tests/native_tenant_concurrent_close_test.cpp'
+      - 'tests/native_tenant_vm_callback_bridge_test.cpp'
+      - 'CMakeLists.txt'
+      - 'src/main/cpp/oreslang/runtime/NativeOresVM.c'
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.c'
+      - 'src/main/cpp/oreslang/runtime/NativeActorFuture.c'
+      - 'docs/LLVM_ISOLATE_HARD_RT_FIRST_FIVE.md'
+      - 'tests/native_tenant_rt_denial_matrix_test.cpp'
+      - '.github/workflows/native-tenant-isolate-rt-host.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-host-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: GCC and Clang native unit and race matrices
+        shell: bash
+        run: |
+          set -euo pipefail
+          for compiler in g++ clang++; do
+            for opt in -O0 -O2; do
+              for suite in native_tenant_isolate_rt_host_test native_tenant_isolate_race_test native_tenant_registry_provenance_test native_tenant_state_machine_test native_tenant_secure_retirement_test native_tenant_stop_interleaving_test native_tenant_concurrent_close_test native_tenant_rt_denial_matrix_test; do
+                output="$(mktemp)"
+                trap 'rm -f "$output"' EXIT
+                "$compiler" -std=c++17 "$opt" -UNDEBUG -Wall -Wextra -Wpedantic -Werror -pthread \
+                  -I src/main/cpp "tests/${suite}.cpp" -o "$output"
+                "$output"
+                rm -f "$output"
+                trap - EXIT
+              done
+            done
+          done
+      - name: NativeOresVM DATA and CONTROL callback tenant bridge (host only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for cc in gcc clang; do
+            if [ "$cc" = gcc ]; then cxx=g++; else cxx=clang++; fi
+            for opt in -O0 -O2; do
+              build="$(mktemp -d)"
+              trap 'rm -rf "$build"' EXIT
+              for source in NativeActorScheduler NativeActorFuture NativeOresVM; do
+                "$cc" -std=c11 "$opt" -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+                  -pthread -I src/main/cpp \
+                  -c "src/main/cpp/oreslang/runtime/${source}.c" \
+                  -o "$build/${source}.o"
+              done
+              "$cxx" -std=c++17 "$opt" -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+                -pthread -I src/main/cpp \
+                tests/native_tenant_vm_callback_bridge_test.cpp \
+                "$build/NativeActorScheduler.o" "$build/NativeActorFuture.o" \
+                "$build/NativeOresVM.o" -o "$build/bridge"
+              timeout 30s "$build/bridge"
+              rm -rf "$build"
+              trap - EXIT
+            done
+          done
+          echo 'HOST NATIVE VM CALLBACKS ONLY: no native .ores guest or OS tenant sandbox.'
+      - name: GCC ASan and UBSan with repeated interleavings
+        shell: bash
+        run: |
+          set -euo pipefail
+          for suite in native_tenant_isolate_rt_host_test native_tenant_isolate_race_test native_tenant_registry_provenance_test native_tenant_state_machine_test native_tenant_secure_retirement_test native_tenant_stop_interleaving_test native_tenant_concurrent_close_test native_tenant_rt_denial_matrix_test; do
+            output="$(mktemp)"
+            trap 'rm -f "$output"' EXIT
+            g++ -std=c++17 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror -pthread \
+              -fsanitize=address,undefined -fno-omit-frame-pointer \
+              -I src/main/cpp "tests/${suite}.cpp" -o "$output"
+            for iteration in 1 2 3 4; do "$output"; done
+            rm -f "$output"
+            trap - EXIT
+          done
+      - name: ThreadSanitizer concurrent close and admission
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror -pthread \
+            -fsanitize=thread -fno-omit-frame-pointer \
+            -I src/main/cpp tests/native_tenant_concurrent_close_test.cpp \
+            -o /tmp/ores-tenant-close-tsan
+          for iteration in 1 2 3; do
+            TSAN_OPTIONS=halt_on_error=1 /tmp/ores-tenant-close-tsan
+          done
+      - name: Evidence scope
+        run: |
+          echo 'HOST ONLY: no compiled .ores guest isolation, hard RT certification, OS sandbox, or backend parity evidence.'

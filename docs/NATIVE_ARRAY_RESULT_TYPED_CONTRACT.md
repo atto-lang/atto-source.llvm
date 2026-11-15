@@ -38,7 +38,9 @@ The closed specialization has a portable **three-byte** v1 encoding:
 memory; a failure always carries a nominal ArrayError tag. All other
 representations, lengths, unknown versions, and null inputs fail decoding
 without modifying the caller's output. Encoding likewise refuses forged
-variant/error discriminants before writing any output bytes. Neither
+variant/error discriminants, including stale error data in an Ok host value,
+before writing any output bytes. The internal C++ success value stores a zero
+absence marker; this is **not** an additional public ArrayError variant. Neither
 C++ struct layout nor byte-order-dependent padding enters this format.
 
 The 65,536 variant/error byte pairs are exhaustively tested. This

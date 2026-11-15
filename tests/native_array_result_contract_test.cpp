@@ -97,7 +97,7 @@ int main() {
     // nominal error. Cross-language implementations must match these bytes.
     std::uint8_t wire[kAppendResultWireSize] = {0xa5, 0xa5, 0xa5};
     AppendResult decoded{ResultVariant::Err, ArrayError::NoMemory};
-    for (const auto expected : {AppendResult{ResultVariant::Ok, ArrayError::Limit},
+    for (const auto expected : {AppendResult{},
                                 AppendResult{ResultVariant::Err, ArrayError::Limit},
                                 AppendResult{ResultVariant::Err, ArrayError::NoMemory}}) {
         CHECK(encode_append_result(expected, wire));
@@ -109,6 +109,21 @@ int main() {
         CHECK(decoded.variant == expected.variant);
         if (expected.variant == ResultVariant::Err)
             CHECK(decoded.error == expected.error);
+    }
+    // Reject forged success values with stale, inconsistent error payloads.
+    for (const auto stale : {ArrayError::Limit, ArrayError::NoMemory,
+                             static_cast<ArrayError>(0xff)}) {
+        std::uint8_t untouched[] = {0xa5, 0xa5, 0xa5};
+        const AppendResult invalid{ResultVariant::Ok, stale};
+        CHECK(!encode_append_result(invalid, untouched));
+        CHECK(untouched[0] == 0xa5 && untouched[1] == 0xa5 && untouched[2] == 0xa5);
+    }
+    // Invalid native ABI values must not overwrite a preexisting Ok value.
+    for (const std::uint32_t invalid : {3u, 255u, 0x80000000u, 0xffffffffu}) {
+        AppendResult untouched{};
+        CHECK(!decode_checked_append(invalid, untouched));
+        CHECK(untouched.variant == ResultVariant::Ok);
+        CHECK(static_cast<std::uint8_t>(untouched.error) == 0);
     }
     // Reject every noncanonical variant/error combination and unsupported
     // versions, leaving an existing output unchanged on failure.

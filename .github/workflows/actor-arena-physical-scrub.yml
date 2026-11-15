@@ -1,0 +1,54 @@
+name: Actor arena physical scrub and isolation
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/ActorArena.*'
+      - 'tests/native_actor_arena_test.cpp'
+      - 'tests/actor_arena_scrub_test.c'
+      - '.github/workflows/actor-arena-physical-scrub.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  focused-host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        cc: [gcc, clang]
+        opt: [O1, O2]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Exact source identity
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          test -z "$(git status --porcelain)"
+          git rev-parse 'HEAD^{tree}'
+          git ls-files -s src/main/cpp/oreslang/runtime/ActorArena.c tests/actor_arena_scrub_test.c tests/native_actor_arena_test.cpp
+      - name: Strict optimized host tests and sanitizers
+        env:
+          CC: ${{ matrix.cc }}
+          OPT: ${{ matrix.opt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CXX=g++
+          if [[ "$CC" == clang ]]; then CXX=clang++; fi
+          work="$RUNNER_TEMP/arena-scrub"
+          mkdir -p "$work"
+          for mode in plain sanitized; do
+            flags=()
+            if [[ "$mode" == sanitized ]]; then
+              flags=(-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer)
+            fi
+            "$CC" -std=c11 -Wall -Wextra -Werror "-$OPT" "${flags[@]}" -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/ActorArena.c -o "$work/arena.o"
+            "$CXX" -std=c++20 -Wall -Wextra -Werror "-$OPT" "${flags[@]}" -pthread -Isrc/main/cpp tests/native_actor_arena_test.cpp "$work/arena.o" -o "$work/lifecycle"
+            ASAN_OPTIONS=detect_leaks=0 "$work/lifecycle"
+            "$CC" -std=c11 -Wall -Wextra -Werror "-$OPT" "${flags[@]}" -Isrc/main/cpp tests/actor_arena_scrub_test.c "$work/arena.o" -Wl,--wrap=calloc,--wrap=free -o "$work/scrub"
+            ASAN_OPTIONS=detect_leaks=0 "$work/scrub"
+          done

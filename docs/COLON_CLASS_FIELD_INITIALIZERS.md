@@ -5,9 +5,14 @@ Canonical source fields use `:` and the `=` spelling is admitted as compatibilit
 ```ores
 define class Foo as
   final int foo: 5
+  final const int number: 9 // accepted alias; formatter emits 'final int number: 9'
   int bar: 37
 end
 ```
+
+The native LLVM frontend admits literal-only `final const int` as a compatibility
+alias of `final int`; the extra `const` does not change the native field slot.
+Arbitrary expressions remain unsupported and must fail before IR is emitted.
 
 The native LLVM frontend accepts these type-first i64 literals (with or without
 a semicolon when a real newline separates fields). Old `let int foo = 5;`

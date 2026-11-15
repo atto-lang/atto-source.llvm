@@ -1,0 +1,7 @@
+use namespace two_workers;
+declare actor Foo1;
+define actor Foo1 as {
+  let total: int = 0;
+  pub on_message(int n): int { return total + n; }
+}
+pub fnc main(): int { return 0; }

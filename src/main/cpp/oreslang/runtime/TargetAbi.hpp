@@ -27,9 +27,15 @@ public:
             return {"i686-unknown-linux-gnu", 32, "little", "sysv", "unimplemented"};
         if (triple == "armv7-unknown-linux-gnueabihf")
             return {"armv7-unknown-linux-gnueabihf", 32, "little", "aapcs32-hardfp", "unimplemented"};
+        if (triple == "thumbv7m-none-eabi")
+            return {"thumbv7m-none-eabi", 32, "little", "aapcs32-soft", "experimental-cortexm-scalar-ir"};
         if (triple == "wasm32-unknown-unknown")
             return {"wasm32-unknown-unknown", 32, "little", "wasm-c", "experimental-wasm32-ir"};
         throw std::invalid_argument("unsupported target triple");
+    }
+
+    bool experimental_cortexm_ir() const noexcept {
+        return emission_ == "experimental-cortexm-scalar-ir";
     }
 
     bool experimental_wasm32_ir() const noexcept {
