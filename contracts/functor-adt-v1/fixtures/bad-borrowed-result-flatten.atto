@@ -1,0 +1,7 @@
+// Must reject: nested Result cannot leak an affine Box through a borrow.
+define class Box as
+  pub val int value = 42;
+end
+fnc wrong(borrow Result<Result<Box,String>,String> value): Result<Box,String> {
+  return value.flatten();
+}
