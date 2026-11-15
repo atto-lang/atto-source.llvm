@@ -2920,7 +2920,7 @@ private:
                     statement.kind = Statement::Kind::Conditional;
                     statement.condition = expression();
                     if (negated) {
-                        auto inverted = make_expression(Expression::Kind::LogicalNot, offset);
+                        auto inverted = make_expression(Expression::Kind::LogicalNot, statement.offset);
                         inverted->left = std::move(statement.condition);
                         statement.condition = std::move(inverted);
                     }
