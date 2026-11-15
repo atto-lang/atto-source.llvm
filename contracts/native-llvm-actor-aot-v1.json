@@ -66,11 +66,11 @@
     "abi_total_messages": 8000,
     "abi_stale_or_forged_generation_rejected": true,
     "abi_drain_on_close": true,
-    "abi_out_of_capacity_retry_exercised": true,
     "asan_ubsan_actor_guest": true,
     "asan_ubsan_abi_stress": true,
     "previous_native_scalar_protocol_cases_retained": 1255,
-    "previous_atomic_artifact_hardening_passed": true
+    "previous_atomic_artifact_hardening_passed": true,
+    "mailbox_full_retry_path": "IMPLEMENTED_BUT_NOT_EXPLICITLY_ASSERTED_NONZERO"
   },
   "guest_fixture_blobs": [
     {
