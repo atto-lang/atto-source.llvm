@@ -2,6 +2,7 @@
 #include "oreslang/backend/NativeFlatClasses.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
+#include "oreslang/frontend/NativeScalarSpecialization.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 #include "oreslang/runtime/OresIsolateAbi.h"
 
@@ -72,6 +73,10 @@ struct RegionMoveLowering {
     const NativeClassLayouts* layouts = nullptr;
     const Program* sum_program = nullptr;
     llvm::FunctionCallee sum_check;
+    // Compiler-frozen scalar direct targets, never a runtime selector table.
+    const NativeI64DispatchImage* frozen_scalar_dispatch = nullptr;
+    const std::unordered_map<std::string, llvm::Function*>* frozen_scalar_callees = nullptr;
+    const std::unordered_map<std::string, std::string>* frozen_scalar_symbols = nullptr;
 };
 
 llvm::Value* receiver_array_region(const Expression& receiver, const RegionMoveLowering* moves) {
@@ -154,6 +159,14 @@ llvm::Value* lower(const Expression& expr,
                    const RegionMoveLowering* moves = nullptr) {
     switch (expr.kind) {
         case Expression::Kind::SumConstruct: {
+            // Independent backend gate: a trap-origin Some may only wrap the
+            // statically total integer subset. Never accidentally catch host,
+            // ordinary guest, panic or cancellation errors by fabricating Some.
+            if (expr.trap_origin && (expr.name != "Some" ||
+                    expr.arguments.size() != 1 ||
+                    !native_trap_pure_integer(*expr.arguments.front()) ||
+                    expr.sum_type != "Option<int>"))
+                throw std::runtime_error("unproved native trap AST reached LLVM codegen");
             const auto& type = native_sum(*moves->sum_program, expr.sum_type);
             const bool option = type.kind == NativeSumType::Kind::Option;
             const std::size_t count = option ? 2 : 3;
@@ -481,22 +494,44 @@ llvm::Value* lower(const Expression& expr,
                 return builder.CreateAShr(left, distance, "shift.signed.right");
             return builder.CreateLShr(left, distance, "shift.unsigned.right");
         }
-        case Expression::Kind::Remainder: {
-            // The frontend normalizes syntactically signed literal divisors.
-            // Never trust an externally supplied AST to skip this proof gate.
-            if (!expr.left || !expr.right ||
-                    expr.right->kind != Expression::Kind::Integer ||
-                    expr.right->integer == 0)
-                throw std::runtime_error("native remainder lacks proved nonzero signed literal divisor");
+        case Expression::Kind::Remainder:
+        case Expression::Kind::Modulo: {
+            if (!expr.left || !expr.right)
+                throw std::runtime_error("native Integer.rem/mod requires two operands");
+            const bool modulo = expr.kind == Expression::Kind::Modulo;
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
-            // Java's signed remainder is zero for every dividend modulo -1,
-            // including INT64_MIN. LLVM srem INT64_MIN, -1 is poison, so
-            // preserve evaluation of the dividend but emit no srem here.
-            if (expr.right->integer == -1)
-                return llvm::ConstantInt::get(i64, 0);
-            llvm::Value* right = llvm::ConstantInt::get(i64,
-                static_cast<std::uint64_t>(expr.right->integer));
-            return builder.CreateSRem(left, right, "srem");
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            // A zero divisor traps, like checked overflow.
+            auto* module = builder.GetInsertBlock()->getModule();
+            auto* parent = builder.GetInsertBlock()->getParent();
+            auto* failed = llvm::BasicBlock::Create(builder.getContext(), "rem.zero.trap", parent);
+            auto* proceed = llvm::BasicBlock::Create(builder.getContext(), "rem.ok", parent);
+            builder.CreateCondBr(builder.CreateICmpEQ(right, llvm::ConstantInt::get(i64, 0), "rem.zero"),
+                failed, proceed);
+            builder.SetInsertPoint(failed);
+            builder.CreateCall(llvm::Intrinsic::getDeclaration(module, llvm::Intrinsic::trap));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(proceed);
+            // Any value modulo -1 is 0, including INT64_MIN, but LLVM srem INT64_MIN, -1
+            // is poison. srem by 1 is also 0, so divide by 1 in that case instead.
+            llvm::Value* minus_one = builder.CreateICmpEQ(right,
+                llvm::ConstantInt::getSigned(i64, -1), "rem.minus.one");
+            llvm::Value* safe = builder.CreateSelect(minus_one, llvm::ConstantInt::get(i64, 1), right, "rem.divisor");
+            llvm::Value* remainder = builder.CreateSRem(left, safe, "srem");
+            if (!modulo) return remainder;
+            // Euclidean modulus: shift a negative remainder by |divisor|. The true result
+            // lies in [0, |divisor|), so wrapping add/sub is exact even for INT64_MIN.
+            llvm::Value* negative = builder.CreateICmpSLT(remainder, llvm::ConstantInt::get(i64, 0), "mod.negative");
+            llvm::Value* positive_divisor = builder.CreateICmpSGT(right, llvm::ConstantInt::get(i64, 0), "mod.divisor.positive");
+            llvm::Value* adjusted = builder.CreateSelect(positive_divisor,
+                builder.CreateAdd(remainder, right, "mod.add"),
+                builder.CreateSub(remainder, right, "mod.sub"), "mod.adjusted");
+            return builder.CreateSelect(negative, adjusted, remainder, "mod");
+        }
+        case Expression::Kind::BitXor: {
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            return builder.CreateXor(left, right, "bitxor");
         }
         case Expression::Kind::LogicalNot: {
             llvm::Value* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
@@ -626,7 +661,32 @@ llvm::Value* lower(const Expression& expr,
             return value;
         }
         case Expression::Kind::Call: {
-            llvm::Function* callee = functions.at(native_function_slot(expr.name, expr.arguments.size()));
+            const std::string call_selector = native_function_slot(
+                expr.name, expr.arguments.size());
+            llvm::Function* callee = functions.at(call_selector);
+            if (moves && moves->frozen_scalar_dispatch) {
+                const auto* witness = moves->frozen_scalar_dispatch->find_direct(call_selector);
+                if (witness) {
+                    if (!moves->frozen_scalar_callees || !moves->frozen_scalar_symbols)
+                        throw std::runtime_error("native AOT static call lacks frozen target ledger");
+                    const auto frozen_callee = moves->frozen_scalar_callees->find(call_selector);
+                    const auto frozen_symbol = moves->frozen_scalar_symbols->find(call_selector);
+                    if (frozen_callee == moves->frozen_scalar_callees->end() ||
+                        frozen_symbol == moves->frozen_scalar_symbols->end() ||
+                        frozen_callee->second != callee)
+                        throw std::runtime_error("native AOT static call callee identity mismatch");
+                    std::vector<std::string> formal_labels;
+                    formal_labels.reserve(witness->parameter_abi.size());
+                    if (callee->arg_size() < witness->parameter_abi.size())
+                        throw std::runtime_error("native AOT static call formal ABI mismatch");
+                    for (std::size_t i = 0; i < witness->parameter_abi.size(); ++i)
+                        formal_labels.push_back(callee->getArg(i)->getName().str());
+                    verify_native_i64_scalar_call_witness(
+                        *witness, call_selector, frozen_symbol->second,
+                        callee->getName().str(), expr.arguments.size(), formal_labels,
+                        callee->getLinkage() == llvm::GlobalValue::InternalLinkage);
+                }
+            }
             const std::vector<std::size_t> no_hidden;
             const auto& hidden = moves && moves->class_array_parameters
                 ? moves->class_array_parameters->at(native_function_slot(expr.name, expr.arguments.size())) : no_hidden;
@@ -710,6 +770,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_string_", 0) == 0)
             throw std::runtime_error("reserved native string runtime symbol collision");
+    for (const auto& fn : source.functions)
+        if (fn.name.rfind("ores_native_telemetry_", 0) == 0)
+            throw std::runtime_error("reserved native telemetry ABI symbol collision");
 
     // First OresVM entry is deliberately a one-function, pure scalar state
     // transition. Runtime-owned state is injected, never a mutable LLVM global.
@@ -954,6 +1017,35 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // The test-only native owned-int experiment must never leak declarations
     // or allocations into ordinary int code. Resolve the ABI only when a
     // program actually contains a gated experimental heap-owned local.
+    // AOT scoped probes remain dormant unless trusted native host control
+    // explicitly enables them. Only hosted LLVM targets have the bounded,
+    // C11 thread-local telemetry ABI; freestanding/Wasm must fail closed.
+    std::function<bool(const Statement&)> has_native_scope =
+        [&](const Statement& statement) -> bool {
+            return statement.kind == Statement::Kind::UsingTelemetrySpan
+                || std::any_of(statement.then_statements.begin(),
+                               statement.then_statements.end(), has_native_scope)
+                || std::any_of(statement.else_statements.begin(),
+                               statement.else_statements.end(), has_native_scope);
+        };
+    const bool has_native_telemetry = std::any_of(
+        source.functions.begin(), source.functions.end(),
+        [&](const Function& fn) {
+            return std::any_of(fn.statements.begin(), fn.statements.end(),
+                               has_native_scope);
+        });
+    if (has_native_telemetry && (wasm32_target || cortex_m_target))
+        throw std::runtime_error(
+            "native telemetry span runtime currently supports only hosted LLVM AOT");
+    llvm::FunctionCallee telemetryBegin, telemetryEnd;
+    if (has_native_telemetry) {
+        telemetryBegin = module.getOrInsertFunction(
+            "ores_native_telemetry_span_begin",
+            llvm::FunctionType::get(i64, {native_ptr, i64}, false));
+        telemetryEnd = module.getOrInsertFunction(
+            "ores_native_telemetry_span_end",
+            llvm::FunctionType::get(llvm::Type::getVoidTy(context), {i64}, false));
+    }
     const bool has_source_tasks = std::any_of(
         source.functions.begin(), source.functions.end(),
         [](const Function& fn) {
@@ -1146,19 +1238,30 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // Unique free functions retain their ABI symbol, overloaded families use arity slots.
     std::unordered_map<std::string, std::size_t> family_sizes;
     for (const auto& fn : source.functions) ++family_sizes[fn.name];
+    // The existing typed native frontend admits concrete int generic
+    // arguments only. Freeze a canonical, bounded one-per-declaration
+    // specialization map before emitting any function bodies.
+    const auto frozen_i64_dispatch = freeze_native_i64_dispatch_image(source);
+    // The frozen image carries exact compiler-owned selectors, concrete type
+    // tuples, bounded closure evidence and symbol suffixes. Do not replace
+    // it with JIT profile data or a runtime name registry.
+    std::unordered_set<std::string> emitted_function_symbols;
+    std::unordered_map<std::string, llvm::Function*> frozen_scalar_callees;
+    std::unordered_map<std::string, std::string> frozen_scalar_symbols;
+    std::size_t emitted_concrete_specializations = 0;
     for (const auto& fn : source.functions) {
-        const std::string base_symbol = cortex_m_target && fn.name == "main"
-            ? "oreslang_cortexm_bootstrap"
-            : (native_main && source.module.empty() && fn.name == "main"
-            ? guest_main_symbol
-            : (source.module.empty() ? fn.name : source.module + "." + fn.name));
-        // Overloaded source selectors erase the hidden receiver. Keep the
-        // internal ABI parameter list and lookup count unchanged.
-        const std::size_t source_arity = native_source_value_arity(
-            fn.parameters.size(), !fn.method_owner.empty());
-        const std::string symbol = family_sizes.at(fn.name) > 1
-            ? native_function_slot(base_symbol, source_arity)
-            : base_symbol;
+        const auto* specialization = frozen_i64_dispatch.find_direct(
+            native_function_slot(fn.name, fn.parameters.size()));
+        // Single compiler-owned symbol planner covers qualified module names,
+        // overload slots, concrete generic ABI suffixes and reserved runtime
+        // names. Do this before LLVM is allowed to silently uniquify a global.
+        const std::string symbol = plan_native_aot_function_symbol(
+            source, fn, frozen_i64_dispatch, family_sizes.at(fn.name),
+            native_main, cortex_m_target);
+        if (!emitted_function_symbols.insert(symbol).second)
+            throw std::runtime_error("native AOT emitted function symbol collision");
+        if (module.getNamedValue(symbol))
+            throw std::runtime_error("native AOT direct dispatch linker symbol collision");
         std::vector<llvm::Type*> argument_types;
         for (const auto& param : fn.parameters)
             argument_types.push_back(param.class_name.empty()
@@ -1177,13 +1280,57 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         llvm::FunctionType* signature = llvm::FunctionType::get(
             fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
             argument_types, false);
+        if (specialization != nullptr) {
+            // Compare the LLVM physical ABI to the independently frozen
+            // typed parameter modes before binding the direct-call symbol.
+            // Hidden collection-region pointers and owned-return slots are
+            // compiler-generated ABI parameters. Demand the *exact* count:
+            // matching only explicit source arguments would silently allow
+            // a dropped or forged trailing ownership parameter.
+            std::size_t frozen_hidden_regions = 0;
+            for (const auto& param : specialization->parameter_abi)
+                if (!param.class_name.empty() && class_has_arrays.at(param.class_name))
+                    ++frozen_hidden_regions;
+            const std::size_t frozen_result_slots =
+                class_owns_arrays(specialization->return_class) ? 2 : 0;
+            if (hidden.size() != frozen_hidden_regions ||
+                (owning ? 2u : 0u) != frozen_result_slots ||
+                signature->getNumParams() !=
+                    specialization->parameter_abi.size() +
+                    frozen_hidden_regions + frozen_result_slots ||
+                signature->getReturnType()->isVoidTy() != specialization->returns_void ||
+                (!specialization->returns_void &&
+                 signature->getReturnType() != i64))
+                throw std::runtime_error("native AOT specialized LLVM function ABI mismatch");
+            for (std::size_t i = 0; i < specialization->parameter_abi.size(); ++i) {
+                const auto& param = specialization->parameter_abi[i];
+                llvm::Type* expected = param.class_name.empty()
+                    ? (param.mode == Parameter::Mode::Value ? i64 : loan_ptr)
+                    : native_pointer_type(context, class_types.at(param.class_name));
+                if (signature->getParamType(i) != expected)
+                    throw std::runtime_error("native AOT specialized LLVM parameter ABI mismatch");
+            }
+        }
         llvm::Function* declaration = llvm::Function::Create(
             signature,
             (fn.native_internal || fn.async_source_i64 ||
-             !fn.c_export_u32_symbol.empty())
+             !fn.c_export_u32_symbol.empty() ||
+             specialization != nullptr)
                 ? llvm::Function::InternalLinkage
                 : llvm::Function::ExternalLinkage,
             symbol, module);
+        // LLVM may silently uniquify a symbol after a collision with a
+        // runtime/import declaration. That would sever the frozen dispatch
+        // target even when our source-function symbol set is collision-free.
+        if (declaration->getName().str() != symbol)
+            throw std::runtime_error("native AOT direct dispatch linker symbol collision");
+        if (specialization != nullptr) {
+            const auto selector = native_function_slot(fn.name, fn.parameters.size());
+            if (!frozen_scalar_callees.emplace(selector, declaration).second ||
+                !frozen_scalar_symbols.emplace(selector, symbol).second)
+                throw std::runtime_error("duplicate native AOT frozen callee ledger identity");
+            ++emitted_concrete_specializations;
+        }
         // Forward references must already expose parameter labels.
         std::size_t label_index = 0;
         for (auto& formal : declaration->args()) {
@@ -1193,8 +1340,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             else formal.setName(label_index == fn.parameters.size() + hidden.size() ? "$result" : "$result.region");
             ++label_index;
         }
-        declarations.emplace(native_function_slot(fn.name, fn.parameters.size()), declaration);
+        if (!declarations.emplace(native_function_slot(fn.name, fn.parameters.size()),
+                                  declaration).second)
+            throw std::runtime_error("native AOT duplicate declaration selector");
     }
+    if (emitted_concrete_specializations != frozen_i64_dispatch.direct_targets.size())
+        throw std::runtime_error("native AOT frozen direct dispatch image incomplete at emission");
     for (const auto& fn : source.functions) {
         llvm::Function* function = declarations.at(native_function_slot(fn.name, fn.parameters.size()));
         llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", function);
@@ -1411,6 +1562,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         region_moves.layouts = &layouts;
         region_moves.sum_program = &source;
         region_moves.sum_check = sum_check;
+        region_moves.frozen_scalar_dispatch = &frozen_i64_dispatch;
+        region_moves.frozen_scalar_callees = &frozen_scalar_callees;
+        region_moves.frozen_scalar_symbols = &frozen_scalar_symbols;
 
         std::unordered_map<std::string, llvm::Value*> source_task_handles;
         for (const auto& task : fn.source_tasks) {
@@ -1896,6 +2050,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             storage.erase(slot.name);
         };
         std::vector<ScopedSlot> active_scopes;
+        // Compiler-owned opaque span tokens: not visible to guest expressions.
+        // This stack represents only the non-suspending region being lowered.
+        std::vector<llvm::Value*> active_telemetry_scopes;
         std::vector<ScopedSlot> ordered_root_scopes;
         auto forget_scope = [&](const ScopedSlot& slot) {
             forget_array_scope(slot);
@@ -1909,7 +2066,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             const auto scope_start = active_scopes.size();
             for (const auto& action : arm) {
                 if (builder.GetInsertBlock()->getTerminator()) break;
-                if (action.kind == Statement::Kind::ForEach || action.kind == Statement::Kind::ForIndex || action.kind == Statement::Kind::Conditional || action.kind == Statement::Kind::Return) {
+                if (action.kind == Statement::Kind::ForEach || action.kind == Statement::Kind::ForIndex || action.kind == Statement::Kind::Conditional || action.kind == Statement::Kind::Return || action.kind == Statement::Kind::UsingTelemetrySpan) {
                     lower_control(action); continue;
                 }
                 if (action.kind != Statement::Kind::ScopedLocal) {
@@ -1928,9 +2085,31 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             }
         };
         lower_control = [&](const Statement& stmt) {
+            if (stmt.kind == Statement::Kind::UsingTelemetrySpan) {
+                if (!has_native_telemetry || !telemetryBegin.getCallee()
+                        || !telemetryEnd.getCallee())
+                    throw std::runtime_error("LLVM native telemetry ABI missing");
+                llvm::Value* name = builder.CreateGlobalStringPtr(
+                    stmt.telemetry_operation, "atto.telemetry.operation");
+                llvm::Value* token = builder.CreateCall(
+                    telemetryBegin,
+                    {name, llvm::ConstantInt::get(i64, stmt.telemetry_operation.size())},
+                    "atto.telemetry.scope.token");
+                active_telemetry_scopes.push_back(token);
+                lower_arm(stmt.then_statements);
+                active_telemetry_scopes.pop_back();
+                if (!builder.GetInsertBlock()->getTerminator())
+                    builder.CreateCall(telemetryEnd, {token});
+                return;
+            }
             if (stmt.kind == Statement::Kind::Return) {
                 auto* result = stmt.expression ? lower(*stmt.expression, builder, i64, storage, field_storage, declarations, &region_moves) : nullptr;
                 if (!fn.returns_void) builder.CreateStore(result, structured_snapshot);
+                // End only the live lexical span stack, LIFO, before dropping
+                // temporary owners and taking the structured cleanup edge.
+                for (auto it = active_telemetry_scopes.rbegin();
+                     it != active_telemetry_scopes.rend(); ++it)
+                    builder.CreateCall(telemetryEnd, {*it});
                 for (auto it = active_scopes.rbegin(); it != active_scopes.rend(); ++it)
                     finish_scope(*it);
                 builder.CreateBr(structured_cleanup); return;
@@ -2027,7 +2206,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 continue;
             }
             if (stmt.kind == Statement::Kind::ForEach || stmt.kind == Statement::Kind::ForIndex ||
-                    stmt.kind == Statement::Kind::Conditional) {
+                    stmt.kind == Statement::Kind::Conditional || stmt.kind == Statement::Kind::UsingTelemetrySpan) {
                 lower_control(stmt); continue;
             }
             lower_effect(stmt);

@@ -1,0 +1,3 @@
+// Actor.pipe(Reader(), Writer()) is a comment, not a factory call.
+/* Actor::connect(reader_ref, writer_ref) */
+pub fnc main(): int { return 7; }

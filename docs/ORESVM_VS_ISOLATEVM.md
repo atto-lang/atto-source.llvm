@@ -1,4 +1,7 @@
-# OresVM vs IsolateVM: native multi-tenant runtime architecture
+# OresVM vs TenantVM: native multi-tenant runtime architecture (legacy IsolateVM)
+
+**Canonical naming (2026-11-11): TenantVM** replaces *IsolateVM* in architectural prose. The C++ `IsolateVM`, `IsolateHandle` and `OresIsolateContext` are legacy implementation/ABI identifiers intentionally preserved. See [TenantVM naming](TENANT_VM_NAMING_V1.md). No new physical isolation or compiled guest evidence is implied.
+
 
 Status: design contract for the Oreslang LLVM backend, October 2026.
 This document distinguishes the target architecture from what the
