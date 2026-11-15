@@ -78,6 +78,17 @@ private:
             throw std::logic_error("actor incarnation already admitted or retired");
     }
 
+    // Validate supervisor mapping registration before any raw region address
+    // is associated with a particular actor. Untrusted/retired actors do not
+    // get a reservation that might later be mistaken for an issued grant.
+    void require_trusted_admission(ActorHeapIdentity actor) {
+        verify_actor(actor);
+        std::lock_guard<std::mutex> lock(mu_);
+        const auto it = actors_.find(key(actor));
+        if (it == actors_.end() || it->second != State::TrustedNative)
+            throw std::logic_error("native region registration requires trusted actor");
+    }
+
     // Only the broker, not a client-supplied Trust enum, may invoke private
     // NativeRegionRegistry::issue. The lock linearizes issuance with retirement.
     NativeRegionRegistry::Grant issue_region(
