@@ -67,6 +67,103 @@ int main() {
                 "compiler analysis must not certify final artifact");
     }
 
+    // Regression: the strict copy/share fence must NOT classify ordinary
+    // scalar arithmetic/comparison/logical AST operators as ownership copies.
+    // These are analyzer-level AST fixtures, not compiled guest programs.
+    for (auto kind : {Expression::Kind::Subtract,
+                      Expression::Kind::Multiply,
+                      Expression::Kind::Equal,
+                      Expression::Kind::NotEqual,
+                      Expression::Kind::Less,
+                      Expression::Kind::LessEqual,
+                      Expression::Kind::Greater,
+                      Expression::Kind::GreaterEqual,
+                      Expression::Kind::LogicalAnd,
+                      Expression::Kind::LogicalOr,
+                      Expression::Kind::LogicalXor}) {
+        auto binary = std::make_unique<Expression>();
+        binary->kind = kind;
+        binary->left = integer(7);
+        binary->right = integer(2);
+        Function entry = pure("main", std::move(binary));
+        const auto facts = realtime_detail::direct_facts(entry, 8);
+        require(!facts.unqualified_copy_or_share,
+                "ordinary scalar operator must not be a copy/share transfer");
+        Program program;
+        program.functions.push_back(std::move(entry));
+        const auto report = analyze_native_hard_rt(program);
+        require(report.source_admitted && !report.artifact_certified,
+                "pure scalar AST operation must remain structurally admitted only");
+    }
+    {
+        Function entry = pure("main", conditional(integer(7), integer(2)));
+        const auto facts = realtime_detail::direct_facts(entry, 8);
+        require(!facts.unqualified_copy_or_share,
+                "a pure conditional is not an explicit transfer");
+        Program program;
+        program.functions.push_back(std::move(entry));
+        const auto report = analyze_native_hard_rt(program);
+        require(report.source_admitted && !report.artifact_certified,
+                "pure conditional must remain source-admitted and never certified");
+    }
+
+    // Unknown/corrupted or newly introduced AST kinds must fail closed
+    // rather than silently defaulting to a pure operation in strict RT.
+    {
+        auto unmodeled = std::make_unique<Expression>();
+        unmodeled->kind = static_cast<Expression::Kind>(255);
+        Function leaf = pure("unknown_leaf", std::move(unmodeled));
+        const auto facts = realtime_detail::direct_facts(leaf, 8);
+        require(facts.unmodeled_expression,
+                "unclassified expression must be tracked by direct facts");
+        Program program;
+        program.functions.push_back(std::move(leaf));
+        program.functions.push_back(pure("main", call("unknown_leaf")));
+        const auto report = analyze_native_hard_rt(program);
+        require(!report.source_admitted &&
+                    report.diagnostic == "RT015_UNMODELED_EXPRESSION",
+                "transitively reachable unclassified expression must fail closed");
+        require(!report.artifact_certified,
+                "unclassified expression must never certify an artifact");
+    }
+
+    // Strict RT must not silently certify rt copy or rt share before typed
+    // MIR establishes the copy/share byte and lifetime effects. The accepted
+    // scalar-shaped AST is deliberately also rejected: its lowering proof is
+    // not yet attached to the compiler's realtime admission certificate.
+    for (auto kind : {Expression::Kind::Copy, Expression::Kind::Share}) {
+        Program program;
+        auto transfer = std::make_unique<Expression>();
+        transfer->kind = kind;
+        transfer->resolved_type = ScalarType::I64;
+        transfer->left = integer(42);
+        Function leaf = pure("transferred", std::move(transfer));
+        const auto facts = realtime_detail::direct_facts(leaf, 8);
+        require(facts.unqualified_copy_or_share,
+                "explicit copy/share must enter RT transfer effect accounting");
+        program.functions.push_back(std::move(leaf));
+        program.functions.push_back(pure("main", call("transferred")));
+        const auto report = analyze_native_hard_rt(program);
+        require(!report.source_admitted,
+                "transitively reachable copy/share cannot pass hard RT unchecked");
+        require(report.diagnostic == "RT014_ZERO_COPY_UNPROVEN",
+                "copy/share denial must give explicit machine-readable diagnostic");
+        require(!report.artifact_certified,
+                "failed compiler transfer check must never qualify an artifact");
+    }
+    {
+        Program program;
+        auto unqualified = std::make_unique<Expression>();
+        unqualified->kind = Expression::Kind::Copy;
+        unqualified->left = integer(7);
+        program.functions.push_back(pure(
+            "main", conditional(integer(1), std::move(unqualified))));
+        const auto report = analyze_native_hard_rt(program);
+        require(!report.source_admitted &&
+                    report.diagnostic == "RT014_ZERO_COPY_UNPROVEN",
+                "lazy/unselected copy branch must not escape transitive RT admission");
+    }
+
     {
         Program program;
         Function allocated = pure("uses_array", integer(1));

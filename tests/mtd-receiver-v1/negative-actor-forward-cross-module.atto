@@ -1,0 +1,9 @@
+// A forward at file root cannot satisfy a module-owned actor.
+declare actor Foo1;
+define module services as
+  define actor Foo1 as {
+    let total: int = 0;
+    pub on_message(int n): int { return total + n; }
+  }
+  pub fnc main(): int { return 0; }
+end

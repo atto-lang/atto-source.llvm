@@ -45,8 +45,8 @@ typedef struct ores_start_v1 {
 
 static pthread_key_t ores_tls_key_v1;
 static pthread_once_t ores_tls_once_v1 = PTHREAD_ONCE_INIT;
-static atomic_int ores_tls_result_v1 = ATOMIC_VAR_INIT(0);
-static atomic_uint_fast64_t ores_id_counter_v1 = ATOMIC_VAR_INIT(1);
+static atomic_int ores_tls_result_v1 = 0;
+static atomic_uint_fast64_t ores_id_counter_v1 = 1;
 
 /* Logical native thread incarnations cannot be reused. fetch_add would
  * wrap at UINT64_MAX and eventually reissue older identities; reserve the
