@@ -121,6 +121,13 @@ reject_case(stdout_write_two_args
 reject_case(stdout_unknown_member
   "fnc main(): void {\n  stdio.stdout.flush(\"a\");\n  return;\n}\n"
   "unsupported native stdio.stdout operation")
+reject_case(scalar_loop_rejects_host_effects
+  "pub fnc main(): int { let int i = 0; loop { stdio.stdout.write(i); break; } return i; }\n"
+  "native scalar loop requires pure scalar writes and structured loop control")
+reject_case(scalar_loop_rejects_owned_resources
+  "pub fnc main(): int { loop { let int inner = 1; break; } return 0; }\n"
+  "native scalar loop requires pure scalar writes and structured loop control")
+
 reject_case(ifnot_break_requires_native_continuation
   "pub fnc main(): int { do ifnot false then break; fi return 0; }\n"
   "native break/continue in conditional arms requires verified loop continuation lowering")
