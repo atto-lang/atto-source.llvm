@@ -318,6 +318,18 @@ int64_t oreslang_int_array_get(OresNativeIntArrayRegion* region,
     return slot->values[index];
 }
 
+int oreslang_int_array_try_get_copy(OresNativeIntArrayRegion* region,
+                                  OresNativeIntArrayHandle handle, int64_t index,
+                                  int64_t* out_value) {
+    /* Validate ownership *before* testing the index: even None must not be a
+     * way to bypass stale, cross-region or forged authority. */
+    IntArraySlot* slot = require_slot(region, handle);
+    if (!out_value) fail_closed();
+    if (index < 0 || (uint64_t)index >= slot->length) return 0;
+    *out_value = slot->values[(uint64_t)index];
+    return 1;
+}
+
 void oreslang_int_array_set(OresNativeIntArrayRegion* region,
                            OresNativeIntArrayHandle handle, uint64_t index,
                            int64_t value) {
