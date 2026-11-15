@@ -39,6 +39,13 @@ public:
     }
     NativeActorSupervisor(const NativeActorSupervisor&) = delete;
     NativeActorSupervisor& operator=(const NativeActorSupervisor&) = delete;
+    ~NativeActorSupervisor() noexcept {
+        // A forgotten native region loan must not be silently abandoned as
+        // a supposedly clean host shutdown. The scheduler itself will block
+        // terminal publication while the region loan is held.
+        std::lock_guard<std::mutex> lock(mapped_mu_);
+        if (!mapped_regions_.empty()) std::terminate();
+    }
 
     // Trusted VM bootstrapping only. Admission must use a scheduler-issued,
     // currently ready ref. The trust decision is made by the embedding VM;
