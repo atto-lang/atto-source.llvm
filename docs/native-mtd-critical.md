@@ -52,7 +52,7 @@ The related `187-namespace-two-receivers.atto` fixture declares **Foo1** and **F
 - Out-of-line `mtd` methods accept `int` / `bool` params and `int` / `bool` / `void` results. ActorRef/heap/string/float payloads, exported module resolution, static methods, dynamic reflection and arbitrary callbacks are outside this native profile.
 - Direct `self.field` access in target syntax is rejected (`E_SEALED`). State is owned by each actor's private 64 KiB arena, not a shared LLVM global. Target `receive` handlers can call actor-local methods but cannot access fields directly.
 - `critical-read |s| -> s.field` lowers exactly one scalar field read. A callback with arithmetic, allocations or other expressions is not yet allowed.
-- `critical-write |s| -> { s.field = <escape>expression</escape>; }` supports only one assignment with a statically pure arithmetic RHS (integer literals, method parameters, and bound scalar state fields). The enclosing receiver must be `mut self`.
+- `critical-write |s| -> { s.field = expression; }` supports only one assignment with a statically pure arithmetic RHS (integer literals, method parameters, and bound scalar state fields). The enclosing receiver must be `mut self`.
 - All these callbacks execute on the **owning actor's serialized mailbox worker**. This makes the scalar state operations exclusive. It is **not** a concurrent reader/writer lock, a general borrow checker, a safe suspension mechanism, or a license to run arbitrary effects inside guarded state.
 - Compile-time failures include `E_READONLY`, `E_MUTABILITY`, `E_BORROW`, `E_ESCAPE`, `E_SEALED` and `E_UNSUPPORTED_CRITICAL`; negative fixtures check the required diagnostic, not merely a nonzero compiler exit.
 
