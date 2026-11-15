@@ -1,0 +1,4 @@
+// Must reject: map of an inner Result preserves that Result, not flatten.
+fnc wrong(Option<Result<int,String>> value): Option<int> {
+  return value.map((Result<int,String> inner) -> inner.map((int n) -> n + 1));
+}

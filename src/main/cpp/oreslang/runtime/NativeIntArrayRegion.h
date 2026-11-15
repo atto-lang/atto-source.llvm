@@ -31,6 +31,19 @@ typedef enum {
     ORES_NATIVE_ARRAY_NO_MEMORY = 2
 } OresNativeIntArrayStatus;
 
+/* First native error-handoff boundary. Called only after the compiler has
+ * completed all owned-resource cleanup, or after a failed region open with
+ * no published owner. Carries the exact LIMIT/NO_MEMORY tag for a future
+ * guest/supervisor handler. This implementation is intentionally noreturn:
+ * it never resumes into a frame whose owners have already been destroyed.
+ * Other statuses are invariant failures, not catchable resource errors.
+ * This ABI must remain allocation-free even on the out-of-memory path.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noreturn))
+#endif
+void oreslang_int_array_unhandled_resource_failure(uint32_t status);
+
 OresNativeIntArrayStatus oreslang_int_array_try_region_open(
     OresNativeIntArrayRegion** out_region);
 OresNativeIntArrayStatus oreslang_int_array_try_new(
@@ -73,12 +86,34 @@ void oreslang_int_array_commit_many(OresNativeIntArrayRegion* region, uint64_t n
     OresNativeIntArrayHandle* const destinations[],
     OresNativeIntArrayHandle* const sources[]);
 
+/* Transfer n unique owners between distinct serialized regions without copying
+ * or allocating backing storage. Destination owner places must be zero. Every
+ * invariant/quota is checked before publication; LIMIT leaves both regions and
+ * all owner places unchanged. Success disarms sources and preserves each token
+ * in its new region; the old region rejects that token thereafter. This trusted
+ * compiler ABI does not authorize concurrent access or expose raw guest pointers.
+ */
+OresNativeIntArrayStatus oreslang_int_array_try_transfer_many(
+    OresNativeIntArrayRegion* source_region,
+    OresNativeIntArrayRegion* destination_region, uint64_t n,
+    OresNativeIntArrayHandle* const destinations[],
+    OresNativeIntArrayHandle* const sources[]);
+
 OresNativeIntArrayRegion* oreslang_int_array_region_open(void);
 OresNativeIntArrayHandle oreslang_int_array_new(OresNativeIntArrayRegion* region);
 void oreslang_int_array_reserve(OresNativeIntArrayRegion* region, OresNativeIntArrayHandle handle, uint64_t capacity);
 void oreslang_int_array_add(OresNativeIntArrayRegion* region, OresNativeIntArrayHandle handle, int64_t value);
 uint64_t oreslang_int_array_length(OresNativeIntArrayRegion* region, OresNativeIntArrayHandle handle);
 int64_t oreslang_int_array_get(OresNativeIntArrayRegion* region, OresNativeIntArrayHandle handle, uint64_t index);
+/* Safe owned scalar copy: maps to Some(value) iff the signed index is within
+ * bounds; 0 maps to None. Always validates region/handle first, even on a miss.
+ * Missing indices leave *out_value unchanged, including when index < 0.
+ * This is a host ABI primitive, not a source-language ReadLoan/Option lowering.
+ * Invalid/stale/foreign ownership or null out_value still aborts. No raw
+ * element pointers escape; caller controls the lifetime of the copy.
+ */
+int oreslang_int_array_try_get_copy(OresNativeIntArrayRegion* region,
+    OresNativeIntArrayHandle handle, int64_t index, int64_t* out_value);
 void oreslang_int_array_set(OresNativeIntArrayRegion* region, OresNativeIntArrayHandle handle, uint64_t index, int64_t value);
 void oreslang_int_array_drop(OresNativeIntArrayRegion* region, OresNativeIntArrayHandle handle);
 void oreslang_int_array_region_close(OresNativeIntArrayRegion* region);

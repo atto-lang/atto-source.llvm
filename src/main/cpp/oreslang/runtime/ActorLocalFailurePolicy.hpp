@@ -21,6 +21,21 @@ struct ActorLocalHookReply {
 
 using ActorLocalHook = ActorLocalHookReply (*)(void*, EffectStatus) noexcept;
 
+// Local hooks may escalate a failure, independently of lexical cleanup's
+// first-terminal-wins policy. ProcessExit must never hide a failing actor.
+constexpr unsigned actor_local_effect_rank(EffectKind kind) noexcept {
+    switch (kind) {
+        case EffectKind::Return:
+        case EffectKind::ProcessExit: return 0;
+        case EffectKind::Throw: return 1;
+        case EffectKind::Raise: return 2;
+        case EffectKind::Panic: return 3;
+        case EffectKind::Cancel: return 4;
+        case EffectKind::Fatal: return 5;
+    }
+    return 5;
+}
+
 struct ActorLocalDispatch {
     bool hook_invoked = false;
     bool handled = false;
@@ -41,6 +56,7 @@ inline ActorLocalDispatch dispatch_actor_local_unhandled(
         void* state,
         ActorLocalHook on_throw,
         ActorLocalHook on_raise) noexcept {
+    failure = normalize_effect(failure);
     ActorLocalHook hook = nullptr;
     if (failure.kind == EffectKind::Throw) hook = on_throw;
     if (failure.kind == EffectKind::Raise) hook = on_raise;
@@ -53,8 +69,9 @@ inline ActorLocalDispatch dispatch_actor_local_unhandled(
     }
 
     EffectStatus terminal = failure;
-    if (effect_rank(reply.callback_effect.kind) > effect_rank(failure.kind)) {
-        terminal = reply.callback_effect;
+    const EffectStatus callback = normalize_effect(reply.callback_effect);
+    if (actor_local_effect_rank(callback.kind) > actor_local_effect_rank(failure.kind)) {
+        terminal = callback;
     }
     return {true, false, terminal};
 }

@@ -11,7 +11,9 @@ namespace oreslang {
 
 /**
  * Host-runtime bridge from typed native unwind outcomes to the reserved
- * supervisor CONTROL lane. This is intentionally separate from the data
+ * supervisor CONTROL lane. Actor-terminal Throw/Raise are promoted to
+ * supervisor-visible Panic; original Throw/Raise is retained as typed origin.
+ * This is intentionally separate from the data
  * mailbox; it cannot execute supervisor callbacks on the failing actor.
  *
  * The caller must reserve a child slot before its execution begins and retire
@@ -34,18 +36,20 @@ public:
             std::string_view parent_id = {}) {
         using Effect = EffectKind;
         using Failure = SupervisorFailureLane::Kind;
-        Failure classification;
-        switch (effect.kind) {
-            case Effect::Return: return false;
-            case Effect::Throw: classification = Failure::Throw; break;
-            case Effect::Raise: classification = Failure::Raise; break;
-            case Effect::Panic: classification = Failure::Panic; break;
-            case Effect::Cancel: classification = Failure::Cancel; break;
-            case Effect::Fatal: classification = Failure::HostFailure; break;
-            default: throw std::invalid_argument("unknown native typed effect");
-        }
+        // Every native/FFI tag, including forged bytes, is canonicalized
+        // *before* the CONTROL publication. A forged tag can neither appear
+        // as a graceful Return nor throw across the carrier and strand a
+        // preallocated child slot. Keep the original numeric error code
+        // for valid statuses, and use a fixed fatal code for invalid tags.
+        const bool forged = !effect_kind_valid(effect.kind);
+        const EffectStatus canonical = normalize_effect(effect);
+        if (canonical.kind == Effect::Return) return false;
+        const Failure origin = original_kind(canonical.kind);
+        const Failure delivered = terminal_kind(canonical.kind);
+        const auto summary = forged
+            ? std::string_view{"invalid native effect discriminant"} : diagnostic;
         return supervisor.publish_child(
-            actor, classification, diagnostic, parent_id);
+            actor, delivered, summary, parent_id, origin, canonical.code);
     }
 
     static bool publish_terminal(
@@ -56,17 +60,48 @@ public:
             std::string_view parent_id = {}) {
         using Effect = EffectKind;
         using Failure = SupervisorFailureLane::Kind;
-        Failure classification;
-        switch (effect.kind) {
-            case Effect::Return: return false;
-            case Effect::Throw: classification = Failure::Throw; break;
-            case Effect::Raise: classification = Failure::Raise; break;
-            case Effect::Panic: classification = Failure::Panic; break;
-            case Effect::Cancel: classification = Failure::Cancel; break;
-            case Effect::Fatal: classification = Failure::HostFailure; break;
-            default: throw std::invalid_argument("unrecognized native exception effect");
+        // Every native/FFI tag, including forged bytes, is canonicalized
+        // *before* the CONTROL publication. A forged tag can neither appear
+        // as a graceful Return nor throw across the carrier and strand a
+        // preallocated child slot. Keep the original numeric error code
+        // for valid statuses, and use a fixed fatal code for invalid tags.
+        const bool forged = !effect_kind_valid(effect.kind);
+        const EffectStatus canonical = normalize_effect(effect);
+        if (canonical.kind == Effect::Return) return false;
+        const Failure origin = original_kind(canonical.kind);
+        const Failure delivered = terminal_kind(canonical.kind);
+        const auto summary = forged
+            ? std::string_view{"invalid native effect discriminant"} : diagnostic;
+        return lane.publish_preallocated(actor, delivered, summary, parent_id, origin, canonical.code);
+    }
+
+private:
+    static SupervisorFailureLane::Kind original_kind(EffectKind kind) {
+        using K = SupervisorFailureLane::Kind;
+        switch (kind) {
+            case EffectKind::Throw: return K::Throw;
+            case EffectKind::Raise: return K::Raise;
+            case EffectKind::Panic: return K::Panic;
+            case EffectKind::Cancel: return K::Cancel;
+            case EffectKind::Fatal:
+            case EffectKind::ProcessExit: return K::HostFailure;
+            default: throw std::invalid_argument("unknown actor terminal effect");
         }
-        return lane.publish_preallocated(actor, classification, diagnostic, parent_id);
+    }
+
+    static SupervisorFailureLane::Kind terminal_kind(EffectKind kind) {
+        // This promotion is actor-boundary-specific. Ordinary non-actor
+        // call frames continue propagating until their task/root boundary.
+        using K = SupervisorFailureLane::Kind;
+        switch (kind) {
+            case EffectKind::Throw:
+            case EffectKind::Raise:
+            case EffectKind::Panic: return K::Panic;
+            case EffectKind::Cancel: return K::Cancel;
+            case EffectKind::Fatal:
+            case EffectKind::ProcessExit: return K::HostFailure;
+            default: throw std::invalid_argument("unknown actor terminal effect");
+        }
     }
 };
 

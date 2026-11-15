@@ -1,0 +1,24 @@
+define class PathSegment as
+    pub val int kind;
+    pub val String value;
+end
+define class PathPattern as
+    val String template_value;
+    val Array<PathSegment> segments_value;
+    pub template() -> String { return self.template_value; }
+    pub size() -> int { return self.segments_value.size; }
+    pub first() -> String {
+        val PathSegment segment = self.segments_value.get(0);
+        return segment.value;
+    }
+end
+fnc reborrowed_size(borrow PathPattern path): int { return path.size(); }
+pub routine main(): int {
+    val Array<PathSegment> segments = new Array<PathSegment>();
+    segments.add(new PathSegment(0, "foo"));
+    segments.add(new PathSegment(1, "id"));
+    val PathPattern path = new PathPattern("/foo/:id", segments);
+    stdio.println(path.template());
+    stdio.println(path.first());
+    return reborrowed_size(rt borrow path) == 2 ? 0 : 1;
+}

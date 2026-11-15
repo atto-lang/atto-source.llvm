@@ -1,0 +1,10 @@
+fnc show(string value): int { stdio.println(value); return 0; }
+pub routine main(): int {
+    val Array<String> segments = new Array<String>();
+    segments.add("foo");
+    segments.add("ba" + "r");
+    segments.set(1, "ba" + "z");
+    show(segments.get(0));
+    show(segments.get(1));
+    return segments.size == 2 && segments.get(1) == "baz" ? 0 : 1;
+}

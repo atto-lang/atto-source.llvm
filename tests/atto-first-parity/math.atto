@@ -1,0 +1,5 @@
+define module Math as
+  pub fnc add(int n): int {
+    return n + 2;
+  }
+end

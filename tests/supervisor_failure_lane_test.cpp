@@ -16,10 +16,14 @@ Lane::ActorKey key(int id, std::uint64_t generation = 1) {
 
 struct Recorder final : Lane::Handler {
     std::vector<Lane::Kind> events;
+    std::vector<Lane::Kind> origins;
+    std::vector<std::uint32_t> origin_codes;
     bool fail_once = false;
     void add(const Lane::Failure& event) {
         if (fail_once) { fail_once = false; throw std::runtime_error("retry"); }
         events.push_back(event.kind);
+        origins.push_back(event.origin_kind);
+        origin_codes.push_back(event.origin_code);
     }
     void on_throw(const Lane::Failure& event) override { add(event); }
     void on_raise(const Lane::Failure& event) override { add(event); }
@@ -62,8 +66,14 @@ int main() {
     CHECK(!lane.dispatch_one(handler));
     CHECK(lane.reserved_count() == 0);
     CHECK(handler.events.size() == 5);
-    CHECK(handler.events[0] == Lane::Kind::Raise);
-    CHECK(handler.events[4] == Lane::Kind::Throw);
+    CHECK(handler.events[0] == Lane::Kind::Panic);
+    CHECK(handler.events[1] == Lane::Kind::Panic);
+    CHECK(handler.events[4] == Lane::Kind::Panic);
+    CHECK(handler.origins == std::vector<Lane::Kind>({
+        Lane::Kind::Raise, Lane::Kind::Panic, Lane::Kind::Cancel,
+        Lane::Kind::HostFailure, Lane::Kind::Throw
+    }));
+    CHECK(handler.origin_codes == std::vector<std::uint32_t>(5, 0u));
     CHECK(normal_mail.size() == 100000);
 
     lane.reserve(key(1, 2));
@@ -90,6 +100,7 @@ int main() {
     CHECK(terminal->summary.size() == 512);
     CHECK(terminal->parent_id == "daddy-root");
     CHECK(terminal->kind == Lane::Kind::Panic);
+    CHECK(terminal->origin_kind == Lane::Kind::Panic);
     preallocated.ack(key(77));
     CHECK(preallocated.reserved_count() == 0);
 
@@ -139,5 +150,34 @@ int main() {
     CHECK(unicode_lane.pending_count() == 0);
     CHECK(unicode_lane.publish_preallocated(key(91), Lane::Kind::Panic, "valid"));
     unicode_lane.ack(unicode_lane.poll()->actor);
+
+    // Direct low-level lane writers must normalize unhandled actor
+    // Throw/Raise to supervisor-visible Panic and retain provenance.
+    Lane normalized(2);
+    normalized.reserve(key(101));
+    normalized.reserve(key(102));
+    CHECK(normalized.publish_preallocated(key(101), Lane::Kind::Throw,
+            "first", "parent", std::nullopt, 0xffffffffu));
+    CHECK(normalized.publish_preallocated(key(102), Lane::Kind::Raise,
+            "second", "parent", std::nullopt, 91u));
+    auto thrown = normalized.poll();
+    CHECK(thrown && thrown->kind == Lane::Kind::Panic);
+    CHECK(thrown->origin_kind == Lane::Kind::Throw);
+    CHECK(thrown->origin_code == 0xffffffffu);
+    normalized.ack(key(101));
+    auto raised = normalized.poll();
+    CHECK(raised && raised->kind == Lane::Kind::Panic);
+    CHECK(raised->origin_kind == Lane::Kind::Raise);
+    CHECK(raised->origin_code == 91u);
+    normalized.ack(key(102));
+
+    normalized.reserve(key(103));
+    bool mismatched = false;
+    try {
+        normalized.publish_preallocated(
+            key(103), Lane::Kind::Throw, "bad", "parent", Lane::Kind::Raise);
+    } catch (const std::invalid_argument&) { mismatched = true; }
+    CHECK(mismatched && normalized.pending_count() == 0);
+    normalized.retire_gracefully(key(103));
     return 0;
 }

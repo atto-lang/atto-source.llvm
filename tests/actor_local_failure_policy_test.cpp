@@ -31,6 +31,14 @@ static ActorLocalHookReply panic_in_hook(void* user, EffectStatus) noexcept {
     return {ActorLocalResolution::Handled, {EffectKind::Panic, 202}};
 }
 
+static ActorLocalHookReply invalid_in_hook(void*, EffectStatus) noexcept {
+    return {ActorLocalResolution::Handled, {static_cast<EffectKind>(255), 42}};
+}
+
+static ActorLocalHookReply exit_in_hook(void*, EffectStatus) noexcept {
+    return {ActorLocalResolution::Handled, {EffectKind::ProcessExit, 0}};
+}
+
 int main() {
     Counts counts;
     auto a = dispatch_actor_local_unhandled(
@@ -70,5 +78,14 @@ int main() {
             {EffectKind::Raise, 15}, &counts, panic_in_hook, panic_in_hook);
     CHECK(e.hook_invoked && !e.handled);
     CHECK(e.outgoing.kind == EffectKind::Panic && e.outgoing.code == 202);
+    auto invalid = dispatch_actor_local_unhandled(
+            {EffectKind::Throw, 16}, nullptr, invalid_in_hook, nullptr);
+    CHECK(!invalid.handled && invalid.outgoing.kind == EffectKind::Fatal);
+    auto bad_input = dispatch_actor_local_unhandled(
+            {static_cast<EffectKind>(255), 17}, nullptr, accept_throw, escalate_raise);
+    CHECK(!bad_input.hook_invoked && bad_input.outgoing.kind == EffectKind::Fatal);
+    auto exit = dispatch_actor_local_unhandled(
+            {EffectKind::Throw, 18}, nullptr, exit_in_hook, nullptr);
+    CHECK(!exit.handled && exit.outgoing.kind == EffectKind::Throw && exit.outgoing.code == 18);
     return 0;
 }

@@ -1,0 +1,6 @@
+pub fnc main(): int {
+    return match<int> 2 over
+        on _ -> { 41; }
+        default -> { 42; }
+    end;
+}
