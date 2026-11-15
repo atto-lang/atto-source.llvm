@@ -11,7 +11,11 @@ for name in return-get scalar-copy; do
   grep -q 'oreslang_owned_i64_region_read' "$tmp/$name.ll"
   grep -q 'oreslang_owned_i64_region_drop' "$tmp/$name.ll"
   grep -q 'oreslang_owned_i64_region_close' "$tmp/$name.ll"
-  clang -O1 -x ir "$tmp/$name.ll" -x c src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c -Isrc/main/cpp -std=c11 -o "$tmp/$name"
+  clang_flags=(-O1 -g -fno-omit-frame-pointer)
+  if [ "${ATTO_BOX_SANITIZE:-0}" = "1" ]; then
+    clang_flags+=(-fsanitize=address,undefined)
+  fi
+  clang "${clang_flags[@]}" -x ir "$tmp/$name.ll" -x c src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c -Isrc/main/cpp -std=c11 -o "$tmp/$name"
   if "$tmp/$name"; then status=0; else status=$?; fi
   test "$status" -eq 42 || { echo "Box AOT $name returned $status" >&2; exit 1; }
 done
@@ -32,4 +36,8 @@ for target in wasm32 thumbv7m-none-eabi; do
   fi
   test ! -s "$tmp/target.ll"
 done
-echo ATTO_MAIN_BOX_I64_AOT_PASS
+if [ "${ATTO_BOX_SANITIZE:-0}" = "1" ]; then
+  echo ATTO_MAIN_BOX_I64_AOT_SANITIZED_PASS
+else
+  echo ATTO_MAIN_BOX_I64_AOT_PASS
+fi
