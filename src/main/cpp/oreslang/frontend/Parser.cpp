@@ -3576,6 +3576,23 @@ private:
                 continue;
             }
             auto action = primary();
+            if (action->kind == Expression::Kind::Field
+                    && action->name == "flush_blocking" && accept("(")) {
+                // In the native AOT scalar-main profile this barrier waits
+                // for physically completed callbacks, including failed ones.
+                // No carrier turn may invoke a host-blocking barrier.
+                if (!action->left || action->left->kind != Expression::Kind::Variable)
+                    fail("native actor flush_blocking requires direct ActorRef receiver");
+                if (!value.done_await_actor.empty() || !value.ready_await_actor.empty())
+                    fail("native actor flush_blocking with lifecycle await requires a continuation");
+                const std::string reference = action->left->name;
+                require(")");
+                require(";");
+                value.actor_flushes.push_back(reference);
+                value.actor_actions.push_back({ActorAction::Kind::FlushBlocking,
+                                               value.actor_flushes.size() - 1});
+                continue;
+            }
             if (action->kind == Expression::Kind::Field && action->name == "send"
                     && accept("(")) {
                 if (!value.done_await_actor.empty())
@@ -5806,6 +5823,12 @@ private:
                     if (!live_actors.count(send.reference))
                         throw std::runtime_error("actor message sent after stop '" + send.reference + "'");
                     validate_expression(*send.payload, params, functions);
+                } else if (action.kind == ActorAction::Kind::FlushBlocking) {
+                    const auto& ref = fn.actor_flushes.at(action.index);
+                    if (!references.count(ref))
+                        throw std::runtime_error("unknown actor flush_blocking receiver '" + ref + "'");
+                    if (!live_actors.count(ref))
+                        throw std::runtime_error("actor flush_blocking after stop '" + ref + "'");
                 } else {
                     const auto& stop = fn.actor_stops.at(action.index);
                     if (!live_actors.erase(stop))
