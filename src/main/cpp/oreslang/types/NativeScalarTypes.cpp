@@ -30,6 +30,12 @@ Type constructor_parameter_type(const ClassDecl& cls, std::size_t index) {
         ? ScalarType::I64 : cls.constructor_parameter_types.at(index));
 }
 Type parameter_type(const Parameter& p) {
+    if (p.int_array) {
+        if (p.mode == Parameter::Mode::Value ||
+                p.array_element_type != ScalarType::F64)
+            throw std::runtime_error("native direct Array parameter requires borrowed f64");
+        return {Kind::Array, "float"};
+    }
     if (!p.sum_type.empty()) return {Kind::Sum, p.sum_type};
     return p.class_name.empty() ? scalar(p.scalar_type) : Type{Kind::Class, p.class_name};
 }
