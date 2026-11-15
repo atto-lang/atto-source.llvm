@@ -5915,6 +5915,14 @@ private:
                     for (const auto& action : stmt.then_statements) check_statement_names(action, body);
                     return;
                 }
+                if (stmt.kind == Statement::Kind::Loop) {
+                    NameSet body = names;
+                    for (const auto& action : stmt.then_statements)
+                        check_statement_names(action, body);
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::Break ||
+                        stmt.kind == Statement::Kind::Continue) return;
                 if (stmt.kind == Statement::Kind::Return) {
                     if (stmt.expression) validate_expression(*stmt.expression, names, functions);
                     return;
@@ -6097,6 +6105,14 @@ private:
                     for (const auto& action : stmt.then_statements) check_statement_types(action, body);
                     return;
                 }
+                if (stmt.kind == Statement::Kind::Loop) {
+                    TypeMap body = env;
+                    for (const auto& action : stmt.then_statements)
+                        check_statement_types(action, body);
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::Break ||
+                        stmt.kind == Statement::Kind::Continue) return;
                 if (stmt.kind == Statement::Kind::Return) {
                     if (stmt.expression) require_scalar(*stmt.expression, fn.return_type, "structured return", env);
                     return;
