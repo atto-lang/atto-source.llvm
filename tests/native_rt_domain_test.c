@@ -10,7 +10,7 @@
  *   - CONTROL queued behind DATA for the same core runs first,
  *   - stop() drains forwarded mail that handlers sent while draining.
  */
-#if defined(__linux__)
+#if defined(__linux__) && !defined(_GNU_SOURCE)
 #define _GNU_SOURCE
 #endif
 #define _POSIX_C_SOURCE 200809L

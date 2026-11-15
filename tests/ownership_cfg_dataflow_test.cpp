@@ -339,6 +339,53 @@ int main() {
     assert(direct.at("x").shared_loans == 0 &&
            !direct.at("x").exclusive_loan);
 
+    // Direct operations must reject malformed state before mutation. An
+    // explicit release ID previously still dereferenced an empty set because
+    // optional::value_or evaluates its fallback eagerly.
+    const auto reject_direct = [&](PlaceState malformed, Operation operation,
+                                   const char* expected) {
+        State state = {{"x", std::move(malformed)}};
+        const State before = state;
+        bool denied = false;
+        try {
+            apply(operation, state);
+        } catch (const std::runtime_error& error) {
+            denied = std::string(error.what()) ==
+                std::string("ownership violation: ") + expected + " 'x'";
+        }
+        assert(denied);
+        assert(state == before);
+    };
+    reject_direct({kOwned, 1, false}, {Kind::ReleaseShared, "x", 7},
+        "unproven operation loan identity");
+    reject_direct({kOwned, 1, false}, {Kind::ReleaseShared, "x"},
+        "unproven operation loan identity");
+    reject_direct({kOwned, 0, false, {7}}, {Kind::Move, "x"},
+        "unproven operation loan identity");
+    reject_direct({kOwned, 0, true}, {Kind::ReleaseExclusive, "x", 7},
+        "unproven operation loan identity");
+    reject_direct({kOwned, 0, false, {}, 7}, {Kind::Read, "x"},
+        "unproven operation loan identity");
+    reject_direct({kOwned, 1, true, {7}, 8}, {Kind::ReleaseShared, "x", 7},
+        "conflicting operation borrow states");
+    reject_direct({kMoved, 1, false, {7}}, {Kind::ReleaseShared, "x", 7},
+        "live loan on non-owned operation place");
+    reject_direct({kDropped, 0, true, {}, 7}, {Kind::ReleaseExclusive, "x", 7},
+        "live loan on non-owned operation place");
+    reject_direct({0}, {Kind::DropIfOwned, "x"},
+        "invalid operation ownership mask");
+    reject_direct({static_cast<ValueMask>(kOwned | 0x80)}, {Kind::DropIfOwned, "x"},
+        "invalid operation ownership mask");
+
+    // Valid direct loans and normalized legacy entry loans remain usable.
+    State direct_shared = {{"x", {kOwned, 2, false, {7, 8}}}};
+    apply({Kind::ReleaseShared, "x", 7}, direct_shared);
+    apply({Kind::ReleaseShared, "x"}, direct_shared);
+    apply({Kind::BorrowExclusive, "x", 9}, direct_shared);
+    apply({Kind::ReleaseExclusive, "x", 9}, direct_shared);
+    apply({Kind::Move, "x"}, direct_shared);
+    assert(direct_shared.at("x").possible == kMoved);
+
     // Drop with unknown ownership is an error unless the compiler emits
     // a runtime flag; the abstract flag-gated transfer remains explicit.
     Graph maybe_drop;
