@@ -21,8 +21,24 @@ Use `--emit-llvm` after `-o output.ll` to inspect the generated LLVM IR. See [Na
 
 Conformance receipt: [`contracts/native-llvm-aot-v1.json`](contracts/native-llvm-aot-v1.json). Tests are real *native machine-code* execution on Linux x86-64. The admitted scalar profile has no guest heap or guest GC.
 
+## Bounded native actor runtime (implemented and tested)
+
+The LLVM backend now compiles a limited legacy `define actor` / `spawn` / `ActorMail<int|bool>` / `send` / receiver-method profile to real native ELF machine code, including per-actor state:
+
+```sh
+target/release/atto-llvm tests/actors/pass/180-two-types-state.atto -o /tmp/atto-native-actors
+/tmp/atto-native-actors  # exit 0; per-actor FIFO output: 1,3 and 102,105
+bash ci/test_native_actors.sh
+```
+
+[Native actor/arena/mailbox private-runner PASS](https://github.com/athlet-o/athleto-e2e/actions/runs/43657189906): 4 true native `.atto` actor fixtures × 20 runs (80 executable runs), 3 fail-closed compiler fixtures, 5 × 1,600 concurrent C ABI messages (8,000 accepted) through eight actors, and ASan/UBSan; all **1,255 previous scalar protocol tests** also remained green. The exact compiled source tree was `f40cb5044af7ffb55cbd05dd7024cc7963d6042d`.
+
+The bounded runtime uses a 64 KiB zero-initialized actor-owned arena, a dedicated 256 KiB pthread stack, a 128-message bounded FIFO mailbox, 32-bit generation-checked actor handles, and explicit deterministic draining and teardown. It has no guest heap collector. This is one OS thread per actor, **not** the final many-actor cooperative/work-stealing scheduler.
+
+Full semantics, limitations, executable examples, and the exact Git receipt: [Native actors](docs/native-actors.md) and [`contracts/native-llvm-actor-aot-v1.json`](contracts/native-llvm-actor-aot-v1.json).
+
 ## Not yet implemented
 
-Actor-owned heaps and stacks, supervisor lifecycle, a full-AOT actor runtime, real QUIC/TLS/UDP, QPACK, HTTP/3 client/server loopback, Windows/macOS/embedded profiles, and the full language lowering are not implemented. Browser/Node WASM, JVM/GraalVM and .NET are independently tested only when their own backends execute; identical `.atto` source files do not prove runtime parity.
+The **new** `use namespace` / `declare actor` / `mtd` native lowering, required sealed-state `handle_state(critical-read/critical-write)` enforcement, borrow checker across suspension, supervisor panic CONTROL, typed `send` Result, per-actor cancellation/close and child spawning, work-stealing scheduler, full language AOT, QUIC/TLS/UDP, QPACK, HTTP/3 client/server loopback, and Windows/macOS/embedded profiles remain unimplemented. Browser/Node standalone WASM, JVM/GraalVM and .NET must each execute their own backend tests; byte-identical source does not establish parity.
 
-The proposed 11-operation actor-safe transport boundary is in `contracts/http3-host-abi-v1.json`. This is an ABI specification **not** a network engine. Keep the PR draft until actual actor and network interoperability evidence exists.
+The proposed 11-operation actor-safe transport boundary in `contracts/http3-host-abi-v1.json` is a **specification**, not a working QUIC engine. Keep this PR in draft until the missing actor semantics and networking integration are verified.
