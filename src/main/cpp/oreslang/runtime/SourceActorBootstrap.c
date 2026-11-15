@@ -26,6 +26,7 @@ typedef struct {
     uint64_t id;
     OresActorI64Heap* heap;
     OresNativeActorLogicalFramesV1* logical_frames;
+    uint32_t frame_budget;
     atomic_int logical_frame_failed;
     OresNativeActorRef ref;
     OresSourceActorInit constructor;
@@ -119,7 +120,8 @@ static int reject_compiled_frame(void) {
  * Ref32/ActorRef never carry the private frame store or physical turn token.
  */
 int oreslang_source_actor_frame_push(void) {
-    if (!frame_actor || frame_faulted || frame_active) return reject_compiled_frame();
+    if (!frame_actor || frame_faulted || frame_active ||
+        frame_actor->frame_budget == 0) return reject_compiled_frame();
     if (!ores_logical_frames_v1_push(frame_actor->logical_frames,
                                     frame_turn, &frame_handle))
         return reject_compiled_frame();
@@ -735,11 +737,13 @@ static void open_group_locked(void) {
 #endif
 }
 
-void* oreslang_source_actor_spawn(
+void* oreslang_source_actor_spawn_budgeted(
         OresSourceActorInit constructor,
         OresSourceActorMessage on_message,
-        uint64_t fields) {
-    ensure(constructor != NULL && fields >= 1 && fields <= 4096);
+        uint64_t fields,
+        uint64_t max_frames) {
+    ensure(constructor != NULL && fields >= 1 && fields <= 4096
+        && max_frames <= 16);
     group_lock();
     if (!group.vm) open_group_locked();
 
@@ -753,6 +757,7 @@ void* oreslang_source_actor_spawn(
     ensure(instance->id != 0 && instance->id != UINT64_MAX);
     instance->constructor = constructor;
     instance->on_message = on_message;
+    instance->frame_budget = (uint32_t)max_frames;
 
     /*
      * SourceActor is dynamically allocated. Initialize every C11 atomic
@@ -775,7 +780,8 @@ void* oreslang_source_actor_spawn(
     instance->heap = ores_actor_i64_heap_open(instance->id, 1, fields);
     /* Current native i64 heap is serial. One preallocated turn lane, with
      * reserved depth for future compiler-generated nested synchronous calls. */
-    instance->logical_frames = ores_logical_frames_v1_open(instance->id, 1, 1, 16, 64);
+    instance->logical_frames = ores_logical_frames_v1_open(
+        instance->id, 1, 1, max_frames == 0 ? 1 : max_frames, 64);
     ensure(instance->logical_frames != NULL);
     group.actors[slot] = instance;
     /* Every compiler-generated source actor has a registered root supervisor.
@@ -805,6 +811,14 @@ int oreslang_source_actor_try_send(void* opaque, int64_t payload) {
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref, (uint64_t)payload)
         == ORES_NATIVE_SEND_ACCEPTED;
 }
+void* oreslang_source_actor_spawn(
+        OresSourceActorInit constructor,
+        OresSourceActorMessage on_message,
+        uint64_t fields) {
+    return oreslang_source_actor_spawn_budgeted(
+        constructor, on_message, fields, 16);
+}
+
 void oreslang_source_actor_send(void* opaque, int64_t payload) {
     ensure(oreslang_source_actor_try_send(opaque, payload));
 }
