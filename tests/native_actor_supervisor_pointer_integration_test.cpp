@@ -207,7 +207,15 @@ int main() {
     } catch (const std::logic_error&) { denied = true; }
     if (!denied)
         throw std::runtime_error("retired actor accepted a new native region");
-    bridge.stop_and_revoke(ctx.refs[1]);
+    // Simulate a STOP initiated outside the adapter (e.g. scheduler panic
+    // or supervisor cancellation). The external maintenance path must detect
+    // this incarnation and quiesce its pointer authority.
+    if (!ores_native_actor_scheduler_stop_sealed(scheduler, ctx.refs[1]))
+        throw std::runtime_error("native scheduler external STOP failed");
+    if (bridge.fence_stopped_actors() != 1)
+        throw std::runtime_error("external STOP pointer fence not observed");
+    if (bridge.fence_stopped_actors() != 0)
+        throw std::runtime_error("already quiesced actor re-fenced");
     if (!ores_native_actor_scheduler_wait_done(scheduler, ctx.refs[0]) ||
         !ores_native_actor_scheduler_wait_done(scheduler, ctx.refs[1]))
         throw std::runtime_error("native actor termination did not quiesce");
