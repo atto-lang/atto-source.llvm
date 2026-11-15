@@ -83,6 +83,19 @@ if(ATTO_ACTOR_ACCESS_HOST_ONLY)
     -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
   add_test(NAME actor_access_v1_host_gate
     COMMAND atto_actor_access_v1_host_test)
+  find_package(Threads REQUIRED)
+  add_executable(atto_actor_access_v1_scoped_host_test
+    tests/actor_isolation_access_scoped_test.cpp)
+  target_include_directories(atto_actor_access_v1_scoped_host_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_features(atto_actor_access_v1_scoped_host_test PRIVATE cxx_std_17)
+  target_compile_options(atto_actor_access_v1_scoped_host_test PRIVATE
+    -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+  target_link_libraries(atto_actor_access_v1_scoped_host_test PRIVATE Threads::Threads)
+  add_test(NAME actor_access_v1_scoped_release_retire_quiescence
+    COMMAND atto_actor_access_v1_scoped_host_test)
+  set_tests_properties(actor_access_v1_scoped_release_retire_quiescence
+    PROPERTIES TIMEOUT 20)
   return()
 endif()
 
