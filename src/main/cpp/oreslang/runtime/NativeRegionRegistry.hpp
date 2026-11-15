@@ -74,7 +74,7 @@ private:
                 TrustedPointerWindow::Mode mode) {
         if (trust != Trust::Trusted)
             throw std::logic_error("untrusted actor cannot receive native grant");
-        if (!owner.runtime || !owner.actor || !owner.epoch)
+        if (!owner.runtime || !owner.epoch)
             throw std::invalid_argument("invalid native grant actor identity");
         std::lock_guard<std::mutex> lock(mu_);
         if (fenced_actors_.count(actor_key(owner)))
@@ -137,7 +137,7 @@ private:
     // Only NativeRegionRuntimeAuthority (or the isolated test shim) can
     // deactivate another actor's complete native authority.
     void fence_actor(ActorHeapIdentity owner) {
-        if (!owner.runtime || !owner.actor || !owner.epoch)
+        if (!owner.runtime || !owner.epoch)
             throw std::invalid_argument("invalid native fence actor identity");
         // Allocate the snapshot before changing admission policy. A failed
         // allocation must not leave a half-fenced actor with live cursors.
