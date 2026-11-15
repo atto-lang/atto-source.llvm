@@ -198,10 +198,18 @@ int main() {
     if (!ores_native_actor_scheduler_stop_sealed(scheduler, ctx.refs[0]))
         throw std::runtime_error("trusted scheduler external STOP failed");
     registration_racer.join();
+    // STOP must NOT publish terminal DONE while a supervisor-approved
+    // native RAM mapping still owns its scheduler resource pin.
+    if (ores_native_actor_scheduler_poll_done(scheduler, ctx.refs[0]))
+        throw std::runtime_error("actor DONE published before pointer fence");
     if (bridge.fence_stopped_actors() != 1)
         throw std::runtime_error("trusted external STOP was not fenced");
     if (bridge.fence_stopped_actors() != 0)
         throw std::runtime_error("trusted stopped actor fenced twice");
+    // The fence releases the exact-generation external-holder loan. Scheduler
+    // termination may now complete, but not one instruction earlier.
+    if (!ores_native_actor_scheduler_wait_done(scheduler, ctx.refs[0]))
+        throw std::runtime_error("actor DONE blocked after pointer fence release");
     // The explicit supervisor path is still safe to retry after maintenance.
     bridge.stop_and_revoke(ctx.refs[0]);
     if (unexpected_registration_error.load(std::memory_order_acquire))
