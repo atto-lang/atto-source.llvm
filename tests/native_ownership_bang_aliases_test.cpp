@@ -37,7 +37,11 @@ static std::string read_fixture(const std::string& root, const std::string& file
         {"borrow-call-accept.atto", "8cf245cbd24dc158f50bb010cbdcf09e1e826c10"},
         {"take-after-use-reject.atto", "7757036e704fc334842cac8254863139d85d2935"},
         {"borrow-escape-reject.atto", "0c5d993b9c95d586ac2cb4018ce0df24856a36ae"},
-        {"share-class-reject.atto", "3368f59e356003118e281fa73461e4185936e849"}
+        {"share-class-reject.atto", "3368f59e356003118e281fa73461e4185936e849"},
+        {"copy-compact-native.atto", "7cb835795345423f606caeed9b8fd4beb1c0a976"},
+        {"copy-spaced-native.atto", "911e84e65f1783e6ca61c544e3f5953d0deccd1a"},
+        {"take-native.atto", "c6983ffa37413732d359e87613a8ea79aa9dd591"},
+        {"share-native.atto", "5a1ac6ab8a4c4cffba2e21eeff02f2dd75414c30"}
     };
     const auto pin = reviewed_pins.find(filename);
     if (pin == reviewed_pins.end())
@@ -103,6 +107,18 @@ static void reject(std::string_view input) {
 int main(int argc, char** argv) {
     if (argc != 2) throw std::runtime_error("expected canonical .atto fixture directory");
     const std::string root(argv[1]);
+    // Each executable contract.py/Clang fixture is also bound to an immutable
+    // Git blob in this compiler-owned checker: ordinary CTest source reads
+    // alone are not a provenance assertion.
+    for (const char* name : {"borrow-call-accept.atto",
+                             "take-after-use-reject.atto",
+                             "borrow-escape-reject.atto",
+                             "share-class-reject.atto",
+                             "copy-compact-native.atto",
+                             "copy-spaced-native.atto",
+                             "take-native.atto", "share-native.atto"}) {
+        (void)read_fixture(root, name);
+    }
     equivalent("rt copy foo", "copy! foo", "copy!foo", Expression::Kind::Copy);
     equivalent("rt copy eqfoo", "copy! eqfoo", "copy!eqfoo", Expression::Kind::Copy);
     // !eq is an atomic inequality token at an identifier boundary, not
