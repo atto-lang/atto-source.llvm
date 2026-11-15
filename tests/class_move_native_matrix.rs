@@ -410,6 +410,6 @@ pub fnc main(): int {
   return dest.a;
 }
 "####,
-        "expected 'rt'",
+        "native class binding requires new, rt take or array.get",
     ),
 ];
