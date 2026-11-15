@@ -1551,6 +1551,18 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
+    # New real .ores guest span-boundary contract: no host/reference promotion.
+    # Uses the production source compiler and Clang AOT executable path.
+    add_test(NAME native_tensor_span_source_aot
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify-tensor-span-source.sh"
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_tensor_span_source_aot PROPERTIES TIMEOUT 120)
+    # Real `.ores` Array<int> native region ownership/lane execution.
+    # A passing host-side reference model cannot satisfy this gate.
+    add_test(NAME native_tensor_owned_array_source_aot
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify-tensor-owned-array.sh"
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_tensor_owned_array_source_aot PROPERTIES TIMEOUT 120)
     # Pinned portable scalar corpus (shared with java/net) and the five-case
     # zero-assert guest set: source -> LLVM IR -> Clang -> OS exit status,
     # plus fail-closed rejection of removed/forbidden source operators.
@@ -5307,6 +5319,22 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_owned_i64_heap_loan_quiescence
         COMMAND oreslang-actor-owned-i64-heap-test)
     set_tests_properties(native_actor_owned_i64_heap_loan_quiescence PROPERTIES TIMEOUT 20)
+
+    # Host/runtime substrate only: real per-actor i64 slots, read loan and
+    # physical retirement. This does NOT prove compiled guest tensor lowering.
+    add_executable(oreslang-actor-tensor-i64-test
+        tests/actor_tensor_i64_heap_test.c
+        src/main/cpp/oreslang/runtime/ActorTensorI64.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    set_target_properties(oreslang-actor-tensor-i64-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_include_directories(oreslang-actor-tensor-i64-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-tensor-i64-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_actor_tensor_i64_heap_host_only
+        COMMAND oreslang-actor-tensor-i64-test)
+    set_tests_properties(native_actor_tensor_i64_heap_host_only PROPERTIES TIMEOUT 20)
 
     add_executable(oreslang-fixed-arena-test tests/fixed_arena_test.cpp)
     target_include_directories(oreslang-fixed-arena-test PRIVATE
