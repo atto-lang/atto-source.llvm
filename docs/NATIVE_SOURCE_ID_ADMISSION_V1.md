@@ -325,3 +325,38 @@ were compiled and executed under GCC and Clang ASan+UBSan,
 missing private input path is absent from the returned compiler error.
 This host proof does **not** replace the still-unexecuted compiler AOT
 and linked Atto guest tests.
+
+
+### 2026-11-14 continued audit: exact typed source signatures and decoded controls
+
+The native LLVM source-routine gate no longer treats function name + value
+arity as sufficient proof of a manifest signature such as `main(int):int`.
+It now independently checks the lowered callable's **return type, parameter
+types and value/borrow modes**, plus rejects unresolved type aliases,
+generic/method ownership and non-int return types. Five negative compiler
+IR fixtures cover bool, borrowed, void and unresolved-alias collisions.
+**These compiler fixtures have NOT executed** without an LLVM SDK.
+
+The native parser now calls `NativeTelemetryLiteralV1.hpp` for both
+`log.info` and `using telemetry.span`, rather than using only ASCII
+control-character checks. The production header rejects decoded UTF-8 C1
+controls (U+0080–U+009F) as well as C0/DEL and enforces 96-byte log and
+256-byte span limits. This matches independent Java's
+`Character.isISOControl` behavior for the covered C0/C1 range.
+
+The **exact committed** header blob
+`edbce85e60c0d297a37c2a1533c374bf17fda117` and 10,000-vector
+test blob `4510257bd37352f1f533c84a4a908a396ab7ee9e`
+passed under GCC C++17 -O2 and Clang C++17 ASan+UBSan,
+`-Wall -Wextra -Wpedantic -Werror -UNDEBUG`. The physical path
+suite was expanded with nested real paths, symlinked parents, FIFOs and
+lexical aliases; exact test blob
+`ac6bc8c94c29405344085c2e8483c082c2c9cd22` passed **16
+negatives** with both compilers. An isolated CMake/CTest build covering
+these two exact production validators passed **2/2 on GCC and 2/2 on
+Clang ASan+UBSan**. The repository's host-only and SDK CMake targets
+now register the native literal property test.
+
+These tests prove real cold-path host validation only. The actual
+`.atto` compiler-generated IR and linked guest, optimized AOT/JIT,
+actor/span propagation and source SHA-linked CI remain unexecuted.
