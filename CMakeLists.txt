@@ -3487,6 +3487,43 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_ownership_bang_share_class_reject
         ownership-bang-v1/share-class-reject.atto
         --diagnostic "class is non-Copy")
+
+    # A selected -R bang guest must not skip its reviewed .atto Git blob
+    # verifier. CTest fixtures automatically pull the setup test into the
+    # selection and order it before compiler execution, including -j runs.
+    # The parser checker needs OpenSSL; when that dependency is unavailable
+    # register a FAILED setup, never silently run unpinned source fixtures.
+    if(TEST native_ownership_bang_aliases_parser_and_checker)
+        set_tests_properties(native_ownership_bang_aliases_parser_and_checker
+            PROPERTIES FIXTURES_SETUP native_ownership_bang_git_pins)
+    else()
+        add_test(NAME native_ownership_bang_pins_unavailable
+            COMMAND "${CMAKE_COMMAND}" -E false)
+        set_tests_properties(native_ownership_bang_pins_unavailable
+            PROPERTIES FIXTURES_SETUP native_ownership_bang_git_pins)
+    endif()
+    set(_ownership_bang_contracts
+        native_ownership_bang_copy_compact_guest
+        native_ownership_bang_copy_spaced_guest
+        native_ownership_bang_take_guest
+        native_ownership_bang_share_guest
+        native_ownership_bang_borrow_call_guest
+        native_ownership_bang_take_asan_ubsan
+        native_ownership_bang_borrow_asan_ubsan
+        native_ownership_bang_use_after_move_reject
+        native_ownership_bang_escaping_borrow_reject
+        native_ownership_bang_share_class_reject)
+    foreach(mode IN ITEMS 0 2)
+        list(APPEND _ownership_bang_contracts
+            native_ownership_bang_copy_compact_O${mode}
+            native_ownership_bang_copy_spaced_O${mode}
+            native_ownership_bang_take_O${mode}
+            native_ownership_bang_share_O${mode}
+            native_ownership_bang_borrow_call_O${mode})
+    endforeach()
+    set_tests_properties(${_ownership_bang_contracts}
+        PROPERTIES FIXTURES_REQUIRED native_ownership_bang_git_pins)
+
     oreslang_contract_test(native_rt_copy_scalar native-rt-copy-scalar.ores --ir "llvm.sadd.with.overflow.i64" --run 42 --clang "${ORE_CLANG}")
     oreslang_contract_test(native_rt_take_scalar native-rt-take-scalar.ores --ir "llvm.sadd.with.overflow.i64" --run 42 --clang "${ORE_CLANG}")
     oreslang_contract_test(native_rt_share_scalar native-rt-share-scalar.ores --ir "llvm.sadd.with.overflow.i64" --run 42 --clang "${ORE_CLANG}")
