@@ -64,14 +64,18 @@ The two committed C++ files were compiled and run using GCC/Clang with
 does not partially commit a successful first-field addition when the second
 field overflows or underflows. It also runs 12,000 concurrent slot reuse
 operations while a reader repeatedly checks the deleted capability and a
-live survivor. All stale handles must fail closed, and the surviving handle
+live survivor. Three fixed progress milestones (100, 6,000 and 11,000)
+force both threads to participate before either can finish; a serial-only
+schedule must not masquerade as a concurrent race test. All stale handles must fail closed, and the surviving handle
 must continue to identify the same values.
 
 The committed adversarial source has exact Git blob ID
-`6f7b828a2ac97de9290d105991479eac07496ab5`.
+`08dc8a057b33960f505894d7f31232c588b02991`.
 It was compiled and **actually executed successfully** in a local Linux
 environment with GCC and Clang C++17 at `-O0/-O2` and GCC at `-O1` with
-ASan, UBSan and TSan (7 passing executions). This is a host reference
+ASan, UBSan and TSan (7 passing executions). The exact revised source
+also passed Clang ASan and UBSan and 30 additional repeated GCC TSan
+runs; no sanitizer reports were observed. This is a host reference
 regression, not a compiled `.atto` guest or a remote CI receipt.
 
 The GitHub Actions matrix and CTest both include the adversarial target.
