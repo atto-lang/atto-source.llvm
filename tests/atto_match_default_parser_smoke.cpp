@@ -71,7 +71,21 @@ int main(int argc, char** argv) {
         {"tilde-explicit-record-native-reject.ores", false,
          "native tilde map/record literal unsupported"},
         {"tilde-ambiguous-empty-native-reject.ores", false,
-         "native tilde map/record literal unsupported"}
+         "native tilde map/record literal unsupported"},
+        {"dispatch-value-match-default-fallback-run.ores", true, ""},
+        {"dispatch-do-match-default-fallback-run.ores", true, ""},
+        {"dispatch-value-match-default-duplicate-reject.ores", false,
+         "native value match can contain only one default arm"},
+        {"dispatch-do-match-default-duplicate-reject.ores", false,
+         "native do match can contain only one default arm"},
+        {"dispatch-value-match-on-default-reject.ores", false,
+         "native value match fallback must use 'default ->' without 'on'"},
+        {"dispatch-do-match-on-default-reject.ores", false,
+         "native do match fallback must use 'default ->' without 'on'"},
+        {"dispatch-value-match-default-guard-reject.ores", false,
+         "native value match default arm cannot have a guard or binding"},
+        {"dispatch-do-match-default-guard-reject.ores", false,
+         "native do match default arm cannot have a guard or binding"}
     };
     std::size_t checked = 0;
     for (const auto& c : cases) {

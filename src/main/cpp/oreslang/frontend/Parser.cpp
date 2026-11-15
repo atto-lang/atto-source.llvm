@@ -2772,10 +2772,18 @@ private:
         // the terminal expression in the existing checked Function.result.
         // This subset supports fnc, routine, class methods and extensions;
         // unsupported complex local types still fail closed.
-        if (token_.text == "::") {
+        // Java parity: a free/module callable may omit '::' only if the first
+        // body token begins on a later physical source line than its complete
+        // return type; the body is then the same expression sequence.
+        const bool explicit_end_body = token_.text == "::";
+        const bool newline_end_body = owner.empty() && arrow_return_type &&
+            token_.text != "{" && last_token_end_ <= token_.offset &&
+            source_.substr(last_token_end_, token_.offset - last_token_end_)
+                .find_first_of("\r\n") != std::string_view::npos;
+        if (explicit_end_body || newline_end_body) {
             if (!arrow_return_type)
                 fail("native '::' body requires '->' return syntax");
-            require("::");
+            if (explicit_end_body) require("::");
             bool terminal = false;
             while (token_.text != "end") {
                 if (token_.kind == Kind::End)
@@ -2847,6 +2855,8 @@ private:
             require("end");
             return value;
         }
+        if (owner.empty() && arrow_return_type && token_.text == "return")
+            fail("native compact end-delimited callable requires '::' before same-line body");
         require("{");
         auto array_effect_ahead = [&] {
             return peek_next().text == "." && std::any_of(value.locals.begin(), value.locals.end(),
@@ -3184,11 +3194,31 @@ private:
                     } else if (accept("Future")) {
                         require("<");
                         declared_type.kind = SourceType::Kind::Future;
+                        // Reject on the wrapper identity itself, before parsing
+                        // the inner payload. This keeps Future<Future<T>>,
+                        // Future<Future<Option<T>>> and deeper shapes on the
+                        // same semantic diagnostic instead of falling back to
+                        // incidental generic punctuation errors.
+                        if (token_.text == "Future")
+                            fail("nested Future remains nested; implicit Future flatten is forbidden; native nested Future continuation lowering is unavailable");
                         if (accept("int")) declared_type.argument = "int";
                         else declared_type.argument = identifier();
                         require(">");
                         fail("Future<T> requires native continuation lowering");
                     } else {
+                        // Same rule for Option, but distinguish a single
+                        // Option<T> from Option<Option<T>> without consuming
+                        // either wrapper. The wrapper pair alone is sufficient
+                        // to establish the no-auto-flatten diagnostic.
+                        if (token_.text == "Option") {
+                            Lexer look = lexer_;
+                            const Token open = look.next();
+                            const Token nested = look.next();
+                            const Token nested_open = look.next();
+                            if (open.text == "<" && nested.text == "Option"
+                                    && nested_open.text == "<")
+                                fail("nested Option remains nested; implicit Option flatten is forbidden; native nested Option lowering is unavailable");
+                        }
                         if (token_.text == "Entry")
                             reject_native_entry_boundary(token_.offset);
                         if (token_.text == "owned" && !experimental_owned_int_)
@@ -3516,14 +3546,20 @@ private:
                     if (accept("default")) {
                         if (has_fallback)
                             fail("native do match can contain only one default arm");
+                        if (token_.text == "when" || token_.text == "as")
+                            fail("native do match default arm cannot have a guard or binding");
                         require("->"); require("{");
                         fallback = branch_arm(false, false); require("}");
                         has_fallback = true;
+                        if (token_.text == "default")
+                            fail("native do match can contain only one default arm");
                         if (token_.text != "end")
                             fail("native do match default arm must be last");
                         continue;
                     }
                     require("on");
+                    if (accept("default"))
+                        fail("native do match fallback must use 'default ->' without 'on'");
                     // Until native HIR carries a proven record field view,
                     // never reinterpret a tilde/structural pattern as a
                     // scalar expression or enable host map projection.
@@ -4658,13 +4694,19 @@ private:
             if (accept("default")) {
                 if (fallback)
                     fail("native value match can contain only one default arm");
+                if (token_.text == "when" || token_.text == "as")
+                    fail("native value match default arm cannot have a guard or binding");
                 require("->");
                 fallback = dispatch_value_arm("native value match");
+                if (token_.text == "default")
+                    fail("native value match can contain only one default arm");
                 if (token_.text != "end")
                     fail("native value match default arm must be last");
                 continue;
             }
             require("on");
+            if (accept("default"))
+                fail("native value match fallback must use 'default ->' without 'on'");
             if (token_.text == "structural" || token_.text == "~")
                 fail("native structural field pattern requires checked typed aggregate lowering");
             if (accept("_")) {
@@ -6996,6 +7038,7 @@ private:
         }
     }
     void advance() {
+        last_token_end_ = token_.offset + token_.text.size();
         token_ = lexer_.next();
         reject_unlowered_with_update();
     }
@@ -7039,6 +7082,7 @@ private:
     std::string_view source_;
     Lexer lexer_;
     Token token_;
+    std::size_t last_token_end_ = 0;
     std::unordered_set<std::string> module_names_;
     std::unordered_map<std::string, MacroKind> macros_;
     std::size_t macro_expansions_ = 0;
