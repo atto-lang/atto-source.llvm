@@ -1,0 +1,107 @@
+#pragma once
+
+#include "oreslang/runtime/NativeRegionRegistry.hpp"
+#include <cstddef>
+#include <cstdint>
+#include <map>
+#include <mutex>
+#include <stdexcept>
+#include <tuple>
+
+namespace oreslang::runtime {
+
+// Defined by the trusted native supervisor integration, never by guest code.
+class NativeActorSupervisor;
+#ifdef ORESLANG_NATIVE_GRANT_TESTING
+struct NativeRegionAuthorityTestAccess;
+#endif
+
+// Host-only broker: no source pointer or unsafe lowering is enabled by this.
+// The scheduler/supervisor must authenticate actor admission independently.
+// This object is a privileged TCB control surface, not a guest-callable API.
+class NativeRegionRuntimeAuthority final {
+    friend class NativeActorSupervisor;
+#ifdef ORESLANG_NATIVE_GRANT_TESTING
+    friend struct NativeRegionAuthorityTestAccess;
+#endif
+
+public:
+    enum class Admission { Untrusted, TrustedNative };
+
+private:
+    enum class State { Untrusted, TrustedNative, Retired };
+    using ActorKey = std::tuple<std::uint64_t, std::uint64_t>;
+    NativeRegionRegistry& regions_;
+    const std::uint64_t runtime_id_;
+    std::mutex mu_;
+    // Retired entries remain tombstoned until registry/process retirement:
+    // no same-incarnation privilege re-admission after cancellation/restart.
+    std::map<ActorKey, State> actors_;
+
+    explicit NativeRegionRuntimeAuthority(NativeRegionRegistry& regions,
+                                           std::uint64_t runtime_id)
+        : regions_(regions), runtime_id_(runtime_id) {
+        if (!runtime_id) throw std::invalid_argument("native broker runtime id is zero");
+    }
+    static ActorKey key(ActorHeapIdentity actor) noexcept {
+        return {actor.actor, actor.epoch};
+    }
+    void verify_actor(ActorHeapIdentity actor) const {
+        // Actor ID zero is a valid native allocation-domain identity.
+        if (actor.runtime != runtime_id_ || actor.epoch == 0)
+            throw std::logic_error("native broker runtime/epoch mismatch");
+    }
+
+    // Called only after the native supervisor has established actor identity,
+    // execution domain and trust. No self-upgrade from an untrusted actor.
+    void admit_actor(ActorHeapIdentity actor, Admission admission) {
+        verify_actor(actor);
+        if (admission != Admission::Untrusted &&
+            admission != Admission::TrustedNative)
+            throw std::logic_error("invalid native actor trust category");
+        std::lock_guard<std::mutex> lock(mu_);
+        const auto state = admission == Admission::TrustedNative
+                               ? State::TrustedNative : State::Untrusted;
+        if (!actors_.emplace(key(actor), state).second)
+            throw std::logic_error("actor incarnation already admitted or retired");
+    }
+
+    // Only the broker, not a client-supplied Trust enum, may invoke private
+    // NativeRegionRegistry::issue. The lock linearizes issuance with retirement.
+    NativeRegionRegistry::Grant issue_region(
+            ActorHeapIdentity actor, std::uint64_t region,
+            std::uint64_t allocation, void* base, std::size_t bytes,
+            TrustedPointerWindow::Mode mode) {
+        verify_actor(actor);
+        std::lock_guard<std::mutex> lock(mu_);
+        const auto it = actors_.find(key(actor));
+        if (it == actors_.end() || it->second != State::TrustedNative)
+            throw std::logic_error("actor lacks trusted native pointer admission");
+        return regions_.issue(NativeRegionRegistry::Trust::Trusted,
+                              actor, region, allocation, base, bytes, mode);
+    }
+
+    // Actor shutdown, supervisor cancellation, trust downgrade or permission
+    // loss all permanently revoke this incarnation; a new epoch is required
+    // for later authority. A deferred same-thread FFI callback throws and
+    // MUST be retried after callback exit before unmapping backing bytes.
+    void retire_actor(ActorHeapIdentity actor) {
+        verify_actor(actor);
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            const auto it = actors_.find(key(actor));
+            if (it == actors_.end())
+                throw std::logic_error("unadmitted actor cannot request native retirement");
+            it->second = State::Retired;
+        }
+        regions_.fence_actor(actor);
+    }
+
+public:
+    NativeRegionRuntimeAuthority(const NativeRegionRuntimeAuthority&) = delete;
+    NativeRegionRuntimeAuthority& operator=(const NativeRegionRuntimeAuthority&) = delete;
+    // The owning native supervisor must quiesce/revoke actors *before*
+    // destroying either broker or registry. This reference is non-owning.
+};
+
+} // namespace oreslang::runtime
