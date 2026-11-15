@@ -8,9 +8,10 @@
 namespace oreslang::runtime {
 struct NativeRegionAuthorityTestAccess {
     static std::unique_ptr<NativeRegionRuntimeAuthority> create(
-            NativeRegionRegistry& registry, std::uint64_t runtime_id) {
+            NativeRegionRegistry& registry, std::uint64_t runtime_id,
+            std::size_t maximum_incarnations = 65536) {
         return std::unique_ptr<NativeRegionRuntimeAuthority>(
-            new NativeRegionRuntimeAuthority(registry, runtime_id));
+            new NativeRegionRuntimeAuthority(registry, runtime_id, maximum_incarnations));
     }
     static void admit(NativeRegionRuntimeAuthority& authority,
                       ActorHeapIdentity actor,
@@ -113,4 +114,14 @@ int main() {
     // Invalid enum values are never reinterpreted as trusted admission.
     const ActorHeapIdentity bogus{29, 8, 7};
     require_denied([&] { Harness::admit(*broker, bogus, static_cast<Admission>(255)); });
+    // An attacker cannot force unlimited actor epoch tombstone growth.
+    auto limited = Harness::create(registry, 29, 1);
+    const ActorHeapIdentity limited_actor{29, 90, 1};
+    Harness::admit(*limited, limited_actor, Admission::Untrusted);
+    Harness::retire(*limited, limited_actor);
+    bool denied_budget = false;
+    try { Harness::admit(*limited, ActorHeapIdentity{29, 90, 2}, Admission::Untrusted); }
+    catch (const std::length_error&) { denied_budget = true; }
+    if (!denied_budget) throw std::runtime_error("native broker exceeded actor tombstone budget");
+
 }
