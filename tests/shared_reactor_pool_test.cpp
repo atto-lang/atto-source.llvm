@@ -157,6 +157,28 @@ int main() {
         try { Pool invalid(reactor, 0, 2); } catch (const std::invalid_argument&) { denied = true; }
         check(denied);
     }
+    // Admission/close linearization: accepted callbacks must execute exactly
+    // once even when submitters race with the closing supervisor. A rejected
+    // enqueue never transfers callback ownership to the pool.
+    {
+        Reactor reactor; Pool pool(reactor, 2, 2); reactor.pool = &pool;
+        std::atomic<int> accepted{0}, finished{0}, producers_entered{0};
+        std::vector<std::thread> producers;
+        for (int p = 0; p < 4; ++p) producers.emplace_back([&] {
+            producers_entered.fetch_add(1, std::memory_order_relaxed);
+            for (int i = 0; i < 1000; ++i) {
+                if (pool.try_submit(increment, &finished))
+                    accepted.fetch_add(1, std::memory_order_relaxed);
+                else std::this_thread::yield();
+            }
+        });
+        until([&] { return producers_entered.load() == 4 && accepted.load() > 0; });
+        pool.close();
+        for (auto& producer : producers) producer.join();
+        check(finished.load() == accepted.load());
+        check(!pool.try_submit(increment, &finished));
+        check(reactor.active.load() == 0);
+    }
     std::cout << "shared-reactor host: default-two, single-poller, real-fd readiness, shared execution, "
                  "bounded queue, 8000 concurrent submissions, growth cap, self-join denial, drain PASS\n";
 }

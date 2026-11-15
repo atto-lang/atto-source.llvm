@@ -5,6 +5,9 @@
 #include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/types/OwnershipChecker.hpp"
 #include "oreslang/types/TaskSourceAuthority.hpp"
+#include "oreslang/frontend/GpuLaunchSourceMir.hpp"
+#include "oreslang/frontend/GpuKernelSourceLink.hpp"
+#include "oreslang/frontend/GpuKernelBodyHir.hpp"
 #include "oreslang/frontend/MethodResolver.hpp"
 #include "oreslang/types/NativeScalarTypes.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
@@ -1052,6 +1055,11 @@ public:
                 type_only_declaration(program);
                 continue;
             }
+            if ((token_.text == "pub" && peek_next().text == "gpu") ||
+                    (token_.text == "gpu" && peek_next().text == "fnc")) {
+                gpu_kernel_source_declaration();
+                continue;
+            }
             if (token_.text == "gen" || token_.text == "generator" ||
                     (token_.text == "pub" &&
                      (peek_next().text == "gen" || peek_next().text == "generator"))) {
@@ -1242,6 +1250,13 @@ public:
         compile_type_constraint_descriptors(program);
         lower_extension_calls(program);
         resolve_alias_uses(program);
+        // Even an otherwise empty unit containing only a GPU kernel must
+        // never be silently admitted as a host-only or empty native program.
+        if (!gpu_kernel_source_signatures_.empty())
+            throw std::runtime_error(
+                "GPU-LAUNCH-008: GPU source declarations and signatures are "
+                "checked, but device body lowering, host value types and "
+                "completion fences are not executable; no implicit CPU fallback");
         if (program.functions.empty() && program.actors.empty() && program.classes.empty() &&
                 program.cooperative_loops.empty() && program.generators.empty() &&
                 program.type_only_declarations.empty())
@@ -1273,6 +1288,8 @@ public:
     static void validate_complete(const Program& program) { validate(program); }
 
 private:
+    std::vector<gpu::source_link::Signature> gpu_kernel_source_signatures_;
+    std::vector<std::pair<std::string, gpu::body_hir::CheckedBody>> gpu_kernel_typed_body_hirs_;
     std::vector<NativeSumType> sum_types_;
     bool is_sum_name(const std::string& name) const {
         return name.rfind("Option<", 0) == 0 || name.rfind("Result<", 0) == 0;
@@ -1958,8 +1975,17 @@ private:
             fail("callable signatures cannot be declared as nominal actor types");
         if (entry_builtin_name(actor.name))
             fail("builtin Entry is compiler-owned and cannot be declared as a nominal actor type");
+        // The native scalar bootstrap has no actor-superclass layout, trait
+        // witness table or interface dispatch. A generic 'expected as' error
+        // obscures this crucial fail-closed boundary.
+        if (token_.text == "extends" || token_.text == "implements" || token_.text == "impl") {
+            fail("native actor extends/implements requires actor inheritance, trait/interface dispatch and sealed-state lowering; unsupported");
+        }
         require("as");
         const bool braced = accept("{");
+        if (token_.text == "receive") {
+            fail("native ActorMail<T> receive and actor outputs require typed message and mailbox lowering; unsupported");
+        }
         if (token_.text == "state") {
             fail("native actor state { ... } requires sealed handle_state lowering; legacy scalar actor fields are not this contract");
         }
@@ -1990,6 +2016,9 @@ private:
         Function method;
         method.offset = token_.offset;
         method.exported = accept("pub");
+        if (token_.text == "receive") {
+            fail("native ActorMail<T> receive and actor outputs require typed message and mailbox lowering; unsupported");
+        }
         if (!method.exported) fail("native actor requires pub on_message(int)");
         // Match the Java frontend's declaration spelling contract. The native
         // actor subset still lowers only on_message(int) and cannot admit
@@ -2773,10 +2802,18 @@ private:
         // the terminal expression in the existing checked Function.result.
         // This subset supports fnc, routine, class methods and extensions;
         // unsupported complex local types still fail closed.
-        if (token_.text == "::") {
+        // Java parity: a free/module callable may omit '::' only if the first
+        // body token begins on a later physical source line than its complete
+        // return type; the body is then the same expression sequence.
+        const bool explicit_end_body = token_.text == "::";
+        const bool newline_end_body = owner.empty() && arrow_return_type &&
+            token_.text != "{" && last_token_end_ <= token_.offset &&
+            source_.substr(last_token_end_, token_.offset - last_token_end_)
+                .find_first_of("\r\n") != std::string_view::npos;
+        if (explicit_end_body || newline_end_body) {
             if (!arrow_return_type)
                 fail("native '::' body requires '->' return syntax");
-            require("::");
+            if (explicit_end_body) require("::");
             bool terminal = false;
             while (token_.text != "end") {
                 if (token_.kind == Kind::End)
@@ -2848,6 +2885,8 @@ private:
             require("end");
             return value;
         }
+        if (owner.empty() && arrow_return_type && token_.text == "return")
+            fail("native compact end-delimited callable requires '::' before same-line body");
         require("{");
         auto array_effect_ahead = [&] {
             return peek_next().text == "." && std::any_of(value.locals.begin(), value.locals.end(),
@@ -3185,11 +3224,31 @@ private:
                     } else if (accept("Future")) {
                         require("<");
                         declared_type.kind = SourceType::Kind::Future;
+                        // Reject on the wrapper identity itself, before parsing
+                        // the inner payload. This keeps Future<Future<T>>,
+                        // Future<Future<Option<T>>> and deeper shapes on the
+                        // same semantic diagnostic instead of falling back to
+                        // incidental generic punctuation errors.
+                        if (token_.text == "Future")
+                            fail("nested Future remains nested; implicit Future flatten is forbidden; native nested Future continuation lowering is unavailable");
                         if (accept("int")) declared_type.argument = "int";
                         else declared_type.argument = identifier();
                         require(">");
                         fail("Future<T> requires native continuation lowering");
                     } else {
+                        // Same rule for Option, but distinguish a single
+                        // Option<T> from Option<Option<T>> without consuming
+                        // either wrapper. The wrapper pair alone is sufficient
+                        // to establish the no-auto-flatten diagnostic.
+                        if (token_.text == "Option") {
+                            Lexer look = lexer_;
+                            const Token open = look.next();
+                            const Token nested = look.next();
+                            const Token nested_open = look.next();
+                            if (open.text == "<" && nested.text == "Option"
+                                    && nested_open.text == "<")
+                                fail("nested Option remains nested; implicit Option flatten is forbidden; native nested Option lowering is unavailable");
+                        }
                         if (token_.text == "Entry")
                             reject_native_entry_boundary(token_.offset);
                         if (token_.text == "owned" && !experimental_owned_int_)
@@ -3517,14 +3576,20 @@ private:
                     if (accept("default")) {
                         if (has_fallback)
                             fail("native do match can contain only one default arm");
+                        if (token_.text == "when" || token_.text == "as")
+                            fail("native do match default arm cannot have a guard or binding");
                         require("->"); require("{");
                         fallback = branch_arm(false, false); require("}");
                         has_fallback = true;
+                        if (token_.text == "default")
+                            fail("native do match can contain only one default arm");
                         if (token_.text != "end")
                             fail("native do match default arm must be last");
                         continue;
                     }
                     require("on");
+                    if (accept("default"))
+                        fail("native do match fallback must use 'default ->' without 'on'");
                     // Until native HIR carries a proven record field view,
                     // never reinterpret a tilde/structural pattern as a
                     // scalar expression or enable host map projection.
@@ -3752,74 +3817,17 @@ private:
                 require("try");
                 require("{");
                 if (token_.text == "defer" || token_.text == "throw") {
-                    // First typed-i64 exceptional CFG: one unconditional throw,
-                    // LIFO scoped field cleanups, and a local catch. No await,
-                    // exception-producing calls or nested try are admitted.
-                    if (value.returns_void || !value.statements.empty() ||
-                            !value.actor_actions.empty())
-                        fail("native caught throw requires a single terminal int try scope");
-                    // No partially inferred effect set can masquerade as a
-                    // complete exception/cleanup summary at this boundary.
-                    if (value.has_declared_effects)
-                        throw std::runtime_error(
-                            "native caught throw effect-qualified function unsupported at byte " +
-                            std::to_string(token_.offset));
-                    while (accept("defer")) {
-                        if (value.caught_throw_defers.size() == 8)
-                            fail("native caught throw defer limit exceeded (8)");
-                        Statement deferred;
-                        deferred.kind = Statement::Kind::FieldWrite;
-                        deferred.offset = token_.offset;
-                        auto target = primary();
-                        if (target->kind != Expression::Kind::Field ||
-                                !target->left ||
-                                target->left->kind != Expression::Kind::Variable)
-                            fail("native caught throw defer requires named class field write");
-                        deferred.receiver = target->left->name;
-                        deferred.field = target->name;
-                        require("=");
-                        deferred.expression = expression();
-                        if (!native_pure_scalar_tree(*deferred.expression))
-                            fail("native caught throw defer requires nonthrowing scalar/field expression");
-                        require(";");
-                        value.caught_throw_defers.push_back(std::move(deferred));
-                    }
-                    require("throw");
-                    value.caught_throw_value = expression();
-                    if (!native_pure_scalar_tree(*value.caught_throw_value))
-                        fail("native caught throw requires nonthrowing int payload");
-                    require(";");
-                    require("}");
-                    require("catch");
-                    require("(");
-                    value.catch_binding = identifier();
-                    for (const auto& param : value.parameters)
-                        if (param.name == value.catch_binding)
-                            fail("native caught throw binding shadows parameter");
-                    for (const auto& local : value.locals)
-                        if (local.name == value.catch_binding)
-                            fail("native caught throw binding shadows local owner");
-                    require(")");
-                    require("{");
-                    require("return");
-                    value.result = expression();
-                    if (!native_pure_scalar_tree(*value.result))
-                        fail("native caught throw catch return requires nonthrowing scalar/field read");
-                    require(";");
-                    require("}");
-                    require("finally");
-                    require("{");
-                    auto cleanup = branch_arm(true, false);
-                    require("}");
-                    for (auto it = cleanup.rbegin(); it != cleanup.rend(); ++it) {
-                        if (it->kind != Statement::Kind::FieldWrite ||
-                                !native_pure_scalar_tree(*it->expression))
-                            fail("native caught throw finally requires nonthrowing field write");
-                        it->kind = Statement::Kind::Defer;
-                        value.statements.push_back(std::move(*it));
-                    }
-                    require("}");
-                    return value;
+                    // Guest exceptional operands must be owned, non-null
+                    // canonical std/error.Error values. The historical i64
+                    // payload path has no nominal Error proof or typed unwind.
+                    // Reject before building exceptional IR; catch does not
+                    // grant permission to throw an arbitrary scalar. Throw
+                    // directly: fail() maps a current `throw` token to main's
+                    // generic exceptional-control boundary diagnostic.
+                    throw std::runtime_error(
+                        "native caught throw requires canonical std/error.Error; "
+                        "typed exceptional lowering unsupported at byte " +
+                        std::to_string(token_.offset));
                 }
                 continue;
             }
@@ -4659,13 +4667,19 @@ private:
             if (accept("default")) {
                 if (fallback)
                     fail("native value match can contain only one default arm");
+                if (token_.text == "when" || token_.text == "as")
+                    fail("native value match default arm cannot have a guard or binding");
                 require("->");
                 fallback = dispatch_value_arm("native value match");
+                if (token_.text == "default")
+                    fail("native value match can contain only one default arm");
                 if (token_.text != "end")
                     fail("native value match default arm must be last");
                 continue;
             }
             require("on");
+            if (accept("default"))
+                fail("native value match fallback must use 'default ->' without 'on'");
             if (token_.text == "structural" || token_.text == "~")
                 fail("native structural field pattern requires checked typed aggregate lowering");
             if (accept("_")) {
@@ -4721,8 +4735,293 @@ private:
         return result;
     }
 
+
+    [[noreturn]] void gpu_launch_parse_error(const char* code,
+                                              const char* detail,
+                                              std::size_t at) const {
+        throw std::runtime_error(std::string(code) + ": " + detail +
+                "; no implicit CPU fallback at byte " + std::to_string(at));
+    }
+
+    // G1c: actual native lexer tokens -> immutable source launch MIR.
+    // Compiler/codegen remains closed until kernel types, capabilities,
+    // ownership, and completion events have been proven independently.
+    std::string gpu_launch_symbol(const char* code, const char* what) {
+        if (token_.kind != Kind::Identifier || reserved(token_.text))
+            gpu_launch_parse_error(code, what, token_.offset);
+        std::string symbol(token_.text);
+        advance();
+        while (accept(".")) {
+            if (token_.kind != Kind::Identifier || reserved(token_.text))
+                gpu_launch_parse_error(code, "malformed qualified symbol", token_.offset);
+            symbol += ".";
+            symbol += token_.text;
+            advance();
+        }
+        if (symbol.size() > 256)
+            gpu_launch_parse_error(code, "GPU symbol exceeds 256 bytes", token_.offset);
+        return symbol;
+    }
+
+    gpu::source_mir::I64 gpu_launch_i64(unsigned depth = 0) {
+        if (depth > 16)
+            gpu_launch_parse_error("GPU-LAUNCH-003", "geometry expression too deep", token_.offset);
+        if (token_.text == "-" || token_.text == "await" || token_.text == "gpu")
+            gpu_launch_parse_error("GPU-LAUNCH-003", "negative/effectful geometry", token_.offset);
+        if (token_.kind == Kind::Integer) {
+            std::string digits(token_.text);
+            if (digits.empty() || digits.front() == '_' || digits.back() == '_' ||
+                    digits.find("__") != std::string::npos)
+                gpu_launch_parse_error("GPU-LAUNCH-003", "invalid integer separators", token_.offset);
+            digits.erase(std::remove(digits.begin(), digits.end(), '_'), digits.end());
+            std::int64_t result = 0;
+            const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), result);
+            if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size())
+                gpu_launch_parse_error("GPU-LAUNCH-003", "signed i64 geometry overflow", token_.offset);
+            advance();
+            return gpu::source_mir::I64::constant(result);
+        }
+        if (token_.kind != Kind::Identifier || reserved(token_.text))
+            gpu_launch_parse_error("GPU-LAUNCH-003", "geometry needs i64 symbol/constant", token_.offset);
+        const auto symbol = std::string(token_.text);
+        advance();
+        if (accept("(")) {
+            if (symbol != "ceil_div")
+                gpu_launch_parse_error("GPU-LAUNCH-003", "host calls forbidden in geometry", token_.offset);
+            auto first = gpu_launch_i64(depth + 1);
+            if (!accept(",")) gpu_launch_parse_error("GPU-LAUNCH-003", "ceil_div needs 2 args", token_.offset);
+            auto second = gpu_launch_i64(depth + 1);
+            if (!accept(")")) gpu_launch_parse_error("GPU-LAUNCH-003", "ceil_div missing ')'", token_.offset);
+            return gpu::source_mir::I64::ceil_div(std::move(first), std::move(second));
+        }
+        return gpu::source_mir::I64::named(symbol);
+    }
+
+    std::vector<gpu::source_mir::I64> gpu_launch_axes(bool logical) {
+        if (!accept("[")) gpu_launch_parse_error("GPU-LAUNCH-003", "geometry needs '['", token_.offset);
+        std::vector<gpu::source_mir::I64> axes;
+        do {
+            if (axes.size() >= 3)
+                gpu_launch_parse_error("GPU-LAUNCH-003", "too many geometry axes", token_.offset);
+            axes.push_back(gpu_launch_i64());
+        } while (accept(","));
+        if (!accept("]")) gpu_launch_parse_error("GPU-LAUNCH-003", "geometry missing ']'", token_.offset);
+        if (!logical && axes.size() != 3)
+            gpu_launch_parse_error("GPU-LAUNCH-003", "physical grid/block needs exactly 3 axes", token_.offset);
+        while (axes.size() < 3) axes.push_back(gpu::source_mir::I64::constant(1));
+        return axes;
+    }
+
+
+    // Compile-time source-signature admission only. The kernel body is a
+    // bounded balanced-token envelope, NOT a validated executable GPU HIR.
+    // Any compilation unit containing gpu fnc remains closed at parse end.
+    void gpu_kernel_source_declaration() {
+        accept("pub");
+        require("gpu");
+        require("fnc");
+        const auto name = gpu_launch_symbol("GPU-LAUNCH-001", "invalid GPU kernel name");
+        if (gpu_kernel_source_signatures_.size() >= 512)
+            gpu_launch_parse_error("GPU-LAUNCH-001", "GPU kernel declaration budget exceeded", token_.offset);
+        if (!accept("("))
+            gpu_launch_parse_error("GPU-LAUNCH-001", "GPU kernel needs parameter list", token_.offset);
+        gpu::source_link::Signature sig;
+        sig.symbol = name;
+        if (!accept(")")) {
+            do {
+                if (sig.parameters.size() >= 64)
+                    gpu_launch_parse_error("GPU-LAUNCH-001", "GPU kernel has more than 64 parameters", token_.offset);
+                gpu::typed_ir::Parameter type;
+                if (accept("f32")) {
+                    type = gpu::typed_ir::Parameter::F32;
+                } else if (accept("int") || accept("i64")) {
+                    type = gpu::typed_ir::Parameter::I64;
+                } else if (accept("u64")) {
+                    type = gpu::typed_ir::Parameter::U64;
+                } else {
+                    const bool ro = accept("GpuReadBuffer");
+                    const bool wo = !ro && accept("GpuWriteBuffer");
+                    const bool array = !ro && !wo && accept("GpuArray");
+                    if (!ro && !wo && !array)
+                        gpu_launch_parse_error("GPU-LAUNCH-002",
+                            "unsupported GPU parameter type (requires f32, int/i64, u64 or f32 device view)",
+                            token_.offset);
+                    if (!accept("<") || !accept("f32") || !accept(">"))
+                        gpu_launch_parse_error("GPU-LAUNCH-002", "device views require f32 element", token_.offset);
+                    const bool mutable_view = accept("mut");
+                    if ((ro && mutable_view) || (wo && mutable_view))
+                        gpu_launch_parse_error("GPU-LAUNCH-002", "buffer mutability is encoded in view type", token_.offset);
+                    type = (wo || (array && mutable_view))
+                        ? gpu::typed_ir::Parameter::WriteF32
+                        : gpu::typed_ir::Parameter::ReadF32;
+                }
+                if (token_.kind != Kind::Identifier || reserved(token_.text))
+                    gpu_launch_parse_error("GPU-LAUNCH-001", "GPU parameter needs name", token_.offset);
+                std::string param(token_.text);
+                advance();
+                sig.parameters.push_back({std::move(param), type});
+            } while (accept(","));
+            if (!accept(")"))
+                gpu_launch_parse_error("GPU-LAUNCH-001", "unterminated GPU parameter list", token_.offset);
+        }
+        if (!accept(":")) {
+            if (!accept("=") || !accept(">"))
+                gpu_launch_parse_error("GPU-LAUNCH-001", "GPU kernel must return void", token_.offset);
+        }
+        if (!accept("void"))
+            gpu_launch_parse_error("GPU-LAUNCH-001", "GPU kernel must return void", token_.offset);
+        if (!accept("{"))
+            gpu_launch_parse_error("GPU-LAUNCH-001", "GPU kernel requires braced body", token_.offset);
+        std::vector<gpu::body_hir::Token> body_tokens;
+        std::size_t depth = 1;
+        std::size_t count = 0;
+        while (depth > 0) {
+            if (token_.kind == Kind::End)
+                gpu_launch_parse_error("GPU-LAUNCH-001", "unterminated GPU kernel body", token_.offset);
+            if (++count > 16384 || depth > 64)
+                gpu_launch_parse_error("GPU-LAUNCH-001", "GPU kernel body token/depth budget", token_.offset);
+            // GPU device subset excludes strings/templates; their contents
+            // are not structural braces and cannot bypass the body envelope.
+            if (token_.kind == Kind::String || token_.kind == Kind::Template)
+                gpu_launch_parse_error("GPU-LAUNCH-006",
+                    "string/template is not a GPU device value", token_.offset);
+            if (token_.kind == Kind::Identifier &&
+                    (token_.text == "await" || token_.text == "spawn" ||
+                     token_.text == "critical" || token_.text == "suspends" ||
+                     token_.text == "yield" || token_.text == "actor" ||
+                     token_.text == "new" || token_.text == "defer" ||
+                     token_.text == "recover" || token_.text == "select" ||
+                     token_.text == "readch" || token_.text == "writech" ||
+                     token_.text == "throw" || token_.text == "raise" ||
+                     token_.text == "panic" || token_.text == "async" ||
+                     token_.text == "nb" || token_.text == "using" ||
+                     token_.text == "console" || token_.text == "sleep"))
+                gpu_launch_parse_error("GPU-LAUNCH-006", "effectful operation in GPU kernel source", token_.offset);
+            if (token_.kind == Kind::Symbol && token_.text == "{") ++depth;
+            else if (token_.kind == Kind::Symbol && token_.text == "}") --depth;
+            if (depth > 0) {
+                const auto kind = token_.kind == Kind::Integer
+                    ? gpu::body_hir::TokenKind::Integer
+                    : token_.kind == Kind::Identifier
+                        ? gpu::body_hir::TokenKind::Identifier
+                        : gpu::body_hir::TokenKind::Symbol;
+                body_tokens.push_back({kind, std::string(token_.text)});
+            }
+            advance();
+        }
+        try {
+            sig = gpu::source_link::checked_signature(std::move(sig));
+            for (const auto& existing : gpu_kernel_source_signatures_)
+                if (existing.symbol == sig.symbol)
+                    gpu_launch_parse_error("GPU-LAUNCH-001",
+                        "duplicate GPU source kernel declaration", token_.offset);
+
+            std::vector<gpu::body_hir::Parameter> body_params;
+            body_params.reserve(sig.parameters.size());
+            for (const auto& p : sig.parameters) {
+                gpu::body_hir::Type type;
+                switch (p.type) {
+                    case gpu::typed_ir::Parameter::F32: type = gpu::body_hir::Type::F32; break;
+                    case gpu::typed_ir::Parameter::I64: type = gpu::body_hir::Type::I64; break;
+                    case gpu::typed_ir::Parameter::U64: type = gpu::body_hir::Type::U64; break;
+                    case gpu::typed_ir::Parameter::ReadF32: type = gpu::body_hir::Type::ReadF32; break;
+                    case gpu::typed_ir::Parameter::WriteF32: type = gpu::body_hir::Type::WriteF32; break;
+                    default:
+                        gpu_launch_parse_error("GPU-LAUNCH-002", "unknown GPU body type", token_.offset);
+                }
+                body_params.push_back({p.name, type});
+            }
+            auto typed_body = gpu::body_hir::check(body_params, body_tokens);
+            if (typed_body.executable() || typed_body.device_code_available() ||
+                    typed_body.provider_loans_verified())
+                gpu_launch_parse_error("GPU-LAUNCH-008",
+                    "forged GPU typed-body execution authority", token_.offset);
+            gpu_kernel_typed_body_hirs_.push_back({sig.symbol, std::move(typed_body)});
+        } catch (const std::invalid_argument& malformed) {
+            throw std::runtime_error(std::string(malformed.what()) +
+                    "; no implicit CPU fallback at byte " + std::to_string(token_.offset));
+        }
+        gpu_kernel_source_signatures_.push_back(std::move(sig));
+    }
+
+    gpu::source_mir::Candidate gpu_launch_source_candidate() {
+        advance();  // contextual launch; launch(...) remains a normal function call
+        auto kernel = gpu_launch_symbol("GPU-LAUNCH-001", "expected statically named kernel");
+        if (!accept("(")) gpu_launch_parse_error("GPU-LAUNCH-001", "expected kernel argument list", token_.offset);
+        std::vector<std::string> args;
+        if (!accept(")")) {
+            do {
+                if (args.size() >= 64)
+                    gpu_launch_parse_error("GPU-LAUNCH-002", "too many kernel arguments", token_.offset);
+                if (token_.kind != Kind::Identifier || reserved(token_.text))
+                    gpu_launch_parse_error("GPU-LAUNCH-002", "kernel arg needs a bound symbol", token_.offset);
+                args.push_back(std::string(token_.text));
+                advance();
+            } while (accept(","));
+            if (!accept(")")) gpu_launch_parse_error("GPU-LAUNCH-002", "invalid kernel argument", token_.offset);
+        }
+        if (!accept("on") || !accept("gpu") || !accept("("))
+            gpu_launch_parse_error("GPU-LAUNCH-004", "explicit GPU placement required", token_.offset);
+        auto device = gpu_launch_symbol("GPU-LAUNCH-004", "expected device symbol");
+        if (!accept(")") || !accept("{"))
+            gpu_launch_parse_error("GPU-LAUNCH-004", "invalid device placement/config", token_.offset);
+        const bool logical = token_.text == "over";
+        if (!accept(logical ? "over" : "grid") || !accept(":"))
+            gpu_launch_parse_error("GPU-LAUNCH-003", "expected grid or over", token_.offset);
+        auto extent = gpu_launch_axes(logical);
+        if (!accept(",") || !accept(logical ? "group" : "block") || !accept(":"))
+            gpu_launch_parse_error("GPU-LAUNCH-003", "expected block/group", token_.offset);
+        auto group = gpu_launch_axes(logical);
+        if (!accept(",") || !accept("queue") || !accept(":"))
+            gpu_launch_parse_error("GPU-LAUNCH-003", "expected queue", token_.offset);
+        auto queue = gpu_launch_symbol("GPU-LAUNCH-004", "expected queue symbol");
+        auto shared = gpu::source_mir::I64::constant(0);
+        if (accept(",")) {
+            if (!accept("shared_bytes") || !accept(":"))
+                gpu_launch_parse_error("GPU-LAUNCH-003", "unknown launch field", token_.offset);
+            shared = gpu_launch_i64();
+        }
+        if (!accept("}")) gpu_launch_parse_error("GPU-LAUNCH-003", "unexpected launch fields", token_.offset);
+        return gpu::source_mir::source_candidate({std::move(kernel), std::move(args),
+            std::move(device), std::move(queue),
+            {logical ? gpu::source_mir::Mode::LogicalOverGroup :
+                gpu::source_mir::Mode::PhysicalGridBlock,
+                std::move(extent), std::move(group)}, std::move(shared)});
+    }
+
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
+
+        // Source-to-MIR analysis runs inside the real compiler parser, but
+        // never publishes an executable AST or LLVM scalar fallback.
+        if (token_.text == "launch" &&
+                peek_next().kind == Kind::Identifier) {
+            try {
+                const auto candidate = gpu_launch_source_candidate();
+                if (candidate.executable() || candidate.type_checked())
+                    gpu_launch_parse_error("GPU-LAUNCH-008", "forged source execution authority", offset);
+                // A declaration seen earlier in this compilation unit yields a
+                // checked typed *signature shape* and arity, never host values
+                // or an executable GPU token. Legacy launch-only negative
+                // fixture syntax stays at source-shape admission until G1d.
+                if (!gpu_kernel_source_signatures_.empty()) {
+                    const auto linked = gpu::source_link::link(
+                        gpu_kernel_source_signatures_, candidate);
+                    if (linked.executable() || linked.host_arguments_typed() ||
+                            linked.kernel_body_verified())
+                        gpu_launch_parse_error("GPU-LAUNCH-008",
+                            "forged GPU source-link authority", offset);
+                }
+            } catch (const std::invalid_argument& malformed) {
+                throw std::runtime_error(std::string(malformed.what()) +
+                        "; no implicit CPU fallback at byte " + std::to_string(offset));
+            }
+            throw std::runtime_error(
+                    "GPU-LAUNCH-008: source MIR created, but typed kernel ABI, "
+                    "owned device loans, completion fence and physical GPU "
+                    "lowering are absent; no implicit CPU fallback at byte " +
+                    std::to_string(offset));
+        }
 
         // FAT_ARROW annotates the inline lambda's result type, but native
         // closure frames and typed capture ownership are not lowered yet.
@@ -4856,6 +5155,33 @@ private:
             // syntax, so Entry<...> must fail before scalar lowering.
             if (next.text == "." || next.text == "<") {
                 fail("native Entry<K,V> unsupported: nominal key/value product layout and ownership lowering are not implemented");
+            }
+        }
+        // AttoLang std.thread is not yet a scalar function or class call.
+        // Until the compiler owns typed ThreadSpawn IR, immutable Send/Sync
+        // proofs, isolate-generation authority and asynchronous scheduler
+        // join lowering, reject the source call before ordinary expression
+        // lowering. Preserve ordinary functions named thread()/std().
+        if (token_.text == "thread" || token_.text == "std") {
+            Lexer lookahead = lexer_;
+            const auto first = lookahead.next();
+            bool thread_namespace = token_.text == "thread";
+            if (!thread_namespace && first.text == ".") {
+                thread_namespace = lookahead.next().text == "thread";
+            }
+            if (thread_namespace) {
+                const auto dot = token_.text == "thread"
+                    ? first : lookahead.next();
+                const auto member = lookahead.next();
+                // Even an uninvoked thread.spawn member would be an
+                // unverified first-class thread capability. Never let it
+                // flow through ordinary scalar/record lowering.
+                if (dot.text == "." && member.text == "spawn") {
+                    fail("THREAD_SPAWN_BACKEND_UNSUPPORTED: AttoLang std.thread "
+                         "requires compiler-owned Send/Sync capture proofs, "
+                         "isolate-scoped native admission and asynchronous "
+                         "scheduler join lowering");
+                }
             }
         }
         // 'task' is contextual in Oreslang v2. Preserve ordinary identifiers
@@ -6997,6 +7323,7 @@ private:
         }
     }
     void advance() {
+        last_token_end_ = token_.offset + token_.text.size();
         token_ = lexer_.next();
         reject_unlowered_with_update();
     }
@@ -7040,6 +7367,7 @@ private:
     std::string_view source_;
     Lexer lexer_;
     Token token_;
+    std::size_t last_token_end_ = 0;
     std::unordered_set<std::string> module_names_;
     std::unordered_map<std::string, MacroKind> macros_;
     std::size_t macro_expansions_ = 0;
