@@ -5162,6 +5162,77 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-arena-test)
     set_tests_properties(native_actor_arena_persistent_scratch PROPERTIES TIMEOUT 25)
 
+    # ActorRegionV1 native host evidence at both optimization levels.
+    # Optional sanitizers instrument the real allocator and trusted bridge;
+    # this is still host-only and not a compiler-generated guest receipt.
+    option(ORESLANG_ACTOR_REGION_SANITIZERS
+        "Enable ASan + UBSan for ActorRegionV1 native host tests" OFF)
+    function(add_actor_region_native_host_test kind level)
+        if(kind STREQUAL "allocator")
+            set(test_file tests/actor_region_v1_test.c)
+            set(runtime_sources
+                src/main/cpp/oreslang/runtime/ActorRegionV1.c
+                src/main/cpp/oreslang/runtime/ActorArena.c)
+        elseif(kind STREQUAL "guest-bridge")
+            set(test_file tests/actor_region_guest_v1_bridge_test.c)
+            set(runtime_sources
+                src/main/cpp/oreslang/runtime/ActorRegionGuestV1.c
+                src/main/cpp/oreslang/runtime/ActorRegionV1.c
+                src/main/cpp/oreslang/runtime/ActorArena.c)
+        elseif(kind STREQUAL "supervisor")
+            if(NOT UNIX)
+                return()
+            endif()
+            set(test_file tests/actor_region_v1_fault_supervisor_test.c)
+            set(runtime_sources
+                src/main/cpp/oreslang/runtime/ActorRegionV1.c
+                src/main/cpp/oreslang/runtime/ActorArena.c)
+        else()
+            message(FATAL_ERROR "unknown ActorRegionV1 host test kind: ${kind}")
+        endif()
+        set(target "oreslang-actor-region-${kind}-O${level}")
+        add_executable(${target} ${test_file} ${runtime_sources})
+        target_include_directories(${target} PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features(${target} PRIVATE c_std_11)
+        if(MSVC)
+            if(level STREQUAL "0")
+                target_compile_options(${target} PRIVATE /W4 /UNDEBUG /Od)
+            else()
+                target_compile_options(${target} PRIVATE /W4 /UNDEBUG /O2)
+            endif()
+            if(ORESLANG_ACTOR_REGION_SANITIZERS)
+                message(FATAL_ERROR "ActorRegionV1 ASan/UBSan host tests require GCC or Clang")
+            endif()
+        else()
+            target_compile_options(${target} PRIVATE
+                -Wall -Wextra -Wpedantic -Werror -UNDEBUG "-O${level}")
+            if(ORESLANG_ACTOR_REGION_SANITIZERS)
+                target_compile_options(${target} PRIVATE
+                    -fsanitize=address,undefined -fno-omit-frame-pointer)
+                target_link_options(${target} PRIVATE -fsanitize=address,undefined)
+            endif()
+        endif()
+        set(test_name "native_actor_region_v1_${kind}_O${level}_host_only")
+        add_test(NAME ${test_name} COMMAND ${target})
+        set_tests_properties(${test_name} PROPERTIES TIMEOUT 45)
+    endfunction()
+    foreach(level IN ITEMS 0 2)
+        add_actor_region_native_host_test(allocator ${level})
+        add_actor_region_native_host_test(guest-bridge ${level})
+        add_actor_region_native_host_test(supervisor ${level})
+    endforeach()
+
+    # Compiler-generated LLVM IR proof. This does NOT link or execute a guest;
+    # compile-aot.sh still refuses the unchecked ActorRegion native closure.
+    add_test(NAME actor_region_v1_compiler_generated_ir_and_negative_admission
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+            "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_region_v1_compiler_lowering_v1.cmake")
+    set_tests_properties(actor_region_v1_compiler_generated_ir_and_negative_admission
+        PROPERTIES TIMEOUT 45)
+
     # Host-only compiler-ready 32-bit actor-region adapter, built against
     # the real ActorArena.c; it is NOT native guest .atto codegen evidence.
     add_executable(oreslang-native-actor-region-v1-test
