@@ -2779,7 +2779,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_owned_int_without_opt_in owned-native-region-main.ores --diagnostic "experimental owned int requires --experimental-owned-int")
     oreslang_contract_test(owned_native_heap_lowering owned-native-region-main.ores --experimental-owned-int --ir "call void @oreslang_owned_i64_region_drop")
     oreslang_contract_test(owned_native_region_nested owned-native-region-call.ores --experimental-owned-int --ir "call void @oreslang_owned_i64_region_close")
-    oreslang_contract_test(reject_unsupported_native_heap_type owned-native-region-unsupported.ores --experimental-owned-int --diagnostic "native scalar type mismatch: local initializer type")
+    oreslang_contract_test(reject_unsupported_native_heap_type owned-native-region-unsupported.ores --experimental-owned-int --diagnostic "native scalar local requires int, bool or checked scalar alias")
     oreslang_contract_test(reject_local_uninitialized owned-uninitialized.ores --diagnostic "unknown parameter")
     oreslang_contract_test(reject_local_duplicate owned-duplicate.ores --diagnostic "duplicate owned local")
     oreslang_contract_test(reject_local_forward_reference owned-use-before-declaration.ores --diagnostic "unknown parameter")
@@ -2907,7 +2907,7 @@ if(BUILD_TESTING)
         --diagnostic "implicit Option flatten is forbidden")
     oreslang_contract_test(source_option_single_layer_not_nested_diagnostic
         source-option-single-layer-unimplemented.ores
-        --diagnostic "native scalar type mismatch: local initializer type")
+        --diagnostic "native local Option/Result initializer cannot implicitly wrap or erase tagged value")
 
 
     # Entry<K,V> is a compiler-owned nominal product in Java/GraalVM.
