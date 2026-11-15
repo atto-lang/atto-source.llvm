@@ -389,6 +389,9 @@ struct ActorDecl {
     Function on_message; // exactly one synchronous pub on_message(int): int
     std::size_t offset = 0;
     MaxActorThreads max_actor_threads = MaxActorThreads::LOW;
+    // Maximum simultaneously owned logical frames per scalar receiver turn.
+    // Zero deliberately refuses frame admission without process abort.
+    std::uint32_t frame_budget = 16;
 };
 
 // Compiler-only structural contract evidence for the native i64 subset.
