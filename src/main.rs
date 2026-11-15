@@ -410,10 +410,34 @@ pub fn compile_ir(source: &str) -> Result<String, String> {
     let program = atto_compiler::parser::Parser::new(toks).parse_program()
         .map_err(|e|e.to_string())?;
     let typed = check::check(&program).map_err(|e|e.to_string())?;
-    if !typed.imports.is_empty() || !typed.generators.is_empty() ||
-       !typed.actors.is_empty() || !typed.globals.is_empty() ||
-       typed.heap || typed.strings || typed.guest_eh || !typed.data.is_empty() {
-        return Err("E_UNSUPPORTED_NATIVE_RUNTIME: guest I/O/heap/actor/generator effects not lowered".into());
+    let native_actor_mode = !typed.actors.is_empty();
+    if !typed.generators.is_empty() || typed.heap || typed.strings ||
+       typed.guest_eh || !typed.data.is_empty() {
+        return Err("E_UNSUPPORTED_NATIVE_RUNTIME: guest object heap/string/generator/exception not lowered".into());
+    }
+    if typed.actors.len() > 32 || typed.globals.len() > 1024 {
+        return Err("E_NATIVE_ACTOR_LIMIT: 32 actors, 1024 state slots".into());
+    }
+    if !native_actor_mode && (!typed.imports.is_empty() || !typed.globals.is_empty()) {
+        return Err("E_UNSUPPORTED_NATIVE_RUNTIME: standalone I/O and actor state require actor runtime".into());
+    }
+    for import in &typed.imports {
+        if !native_actor_mode || !matches!(import,
+            Import::ActorSpawn | Import::ActorSend | Import::PrintI64 |
+            Import::PrintBool | Import::PrintNewline
+        ) {
+            return Err(format!("E_UNSUPPORTED_NATIVE_IMPORT: {import:?}"));
+        }
+    }
+    for typ in &typed.globals {
+        if !matches!(typ, Type::Int | Type::Bool) {
+            return Err("E_UNSUPPORTED_NATIVE_STATE: only int/bool actor slots".into());
+        }
+    }
+    for actor in &typed.actors {
+        if actor.receive.is_none() {
+            return Err("E_UNSUPPORTED_NATIVE_ACTOR: every actor requires receive".into());
+        }
     }
     let main = typed.funcs.get(typed.main as usize)
         .ok_or("E_INTERNAL: main index not found")?;
@@ -426,11 +450,75 @@ pub fn compile_ir(source: &str) -> Result<String, String> {
          declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64)\n\
          declare { i64, i1 } @llvm.ssub.with.overflow.i64(i64, i64)\n\
          declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)\n\n");
+    if native_actor_mode {
+        out.push_str(
+            "; Actor-owned C ABI with pthread per-actor stack/arena: no guest GC.\n\
+             declare i32 @atto_actor_spawn(i32)\n\
+             declare i32 @atto_actor_send(i32, i64)\n\
+             declare i64 @atto_actor_state_load(i32)\n\
+             declare void @atto_actor_state_store(i32, i64)\n\
+             declare void @atto_actor_print_i64(i64, i32)\n\
+             declare void @atto_actor_finish()\n\n"
+        );
+    }
     for (idx, func) in typed.funcs.iter().enumerate() {
         out.push_str(&FunctionEmitter::new(&typed, func)?.emit(idx)?);
         out.push('\n');
     }
-    let _ = writeln!(out, "define i32 @main() {{\nentry:\n  %answer = call i64 @atto_func_{}()\n  %code = trunc i64 %answer to i32\n  ret i32 %code\n}}\n", typed.main);
+    if native_actor_mode {
+        // Each actor receives a fresh instance arena and its state initializers
+        // run on its own pthread stack. No static LLVM global stores exist.
+        for (idx, actor) in typed.actors.iter().enumerate() {
+            let mut init = TFunc {
+                name: format!("$actor_init_{idx}"),
+                params: Vec::new(), ret: Type::Void, locals: Vec::new(),
+                body: actor.inits.iter().map(|(slot, value)|
+                    TStmt::GlobalSet(*slot, value.clone())).collect(),
+            };
+            init.body.push(TStmt::Return(None));
+            out.push_str(&FunctionEmitter::new(&typed, &init)?
+                .emit(typed.funcs.len() + idx)?);
+            out.push('\n');
+        }
+        let _ = writeln!(out, "define void @atto_actor_init(i32 %kind) {{\nentry:");
+        let _ = writeln!(out, "  switch i32 %kind, label %init_invalid [");
+        for ai in 0..typed.actors.len() {
+            let _ = writeln!(out, "    i32 {ai}, label %init_{ai}");
+        }
+        let _ = writeln!(out, "  ]");
+        for ai in 0..typed.actors.len() {
+            let _ = writeln!(out,
+                "init_{ai}:\n  call void @atto_func_{}()\n  ret void",
+                typed.funcs.len() + ai
+            );
+        }
+        out.push_str("init_invalid:\n  call void @llvm.trap()\n  unreachable\n}\n");
+        out.push_str("define void @atto_actor_receive(i32 %kind, i64 %value, i64 %sequence) {\nentry:\n");
+        out.push_str("  switch i32 %kind, label %recv_invalid [\n");
+        for ai in 0..typed.actors.len() {
+            let _ = writeln!(out, "    i32 {ai}, label %recv_{ai}");
+        }
+        out.push_str("  ]\n");
+        for (ai, actor) in typed.actors.iter().enumerate() {
+            let rx_idx = actor.receive
+                .ok_or("E_UNSUPPORTED_NATIVE_ACTOR: no receive handler")?;
+            let func = typed.funcs.get(rx_idx as usize)
+                .ok_or("E_INTERNAL: invalid receive function index")?;
+            if func.params != [Type::Int, Type::Int] || func.ret != Type::Void {
+                return Err("E_UNSUPPORTED_NATIVE_ACTOR: receive ABI mismatch".into());
+            }
+            let _ = writeln!(out,
+                "recv_{ai}:\n  call void @atto_func_{rx_idx}(i64 %value, i64 %sequence)\n  ret void"
+            );
+        }
+        out.push_str("recv_invalid:\n  call void @llvm.trap()\n  unreachable\n}\n");
+    }
+    let finish = if native_actor_mode { "  call void @atto_actor_finish()\n" }
+        else { "" };
+    let _ = writeln!(out,
+        "define i32 @main() {{\nentry:\n  %answer = call i64 @atto_func_{}()\n{}  %code = trunc i64 %answer to i32\n  ret i32 %code\n}}\n",
+        typed.main, finish
+    );
     Ok(out)
 }
 
@@ -563,11 +651,20 @@ fn cli() -> Result<(), String> {
     // LLVM's clang lowers IR to closed-world machine code in a private staging
     // path; even compiler failure cannot damage the previous output artifact.
     // No Wasm runtime, guest interpreter, dynamic language VM, or collector.
-    let mut child = Command::new("clang")
-        .args(["-x", "ir", "-O2", "-o"])
+    let native_actor_mode = ir.contains("define void @atto_actor_init(i32 %kind)");
+    let mut compiler = Command::new("clang");
+    compiler.args(["-x", "ir", "-O2", "-o"])
         .arg(&staged.temp)
-        .arg("-")
-        .stdin(Stdio::piped()).spawn()
+        .arg("-");
+    if native_actor_mode {
+        let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("runtime/actor_runtime.c");
+        if !runtime.is_file() {
+            return Err("E_NATIVE_ACTOR_RUNTIME: native C actor runtime missing".into());
+        }
+        compiler.args(["-x", "c"]).arg(runtime).arg("-pthread");
+    }
+    let mut child = compiler.stdin(Stdio::piped()).spawn()
         .map_err(|e|format!("E_CLANG: {e}"))?;
     let write_result = match child.stdin.take() {
         Some(mut input) => input.write_all(ir.as_bytes()),
