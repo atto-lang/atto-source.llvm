@@ -241,4 +241,37 @@ int main() {
     ores_native_actor_scheduler_retire(scheduler);
     if (!ores_native_actor_scheduler_try_destroy(scheduler))
         throw std::runtime_error("native actor scheduler teardown failed");
+
+    // A runtime-wide retirement initiated outside the pointer adapter must
+    // ALSO be unable to publish terminal DONE while mapped RAM is pinned.
+    // The external supervisor maintenance fence clears the exact generation.
+    OresNativeActorScheduler* shutdown_scheduler =
+        ores_native_actor_scheduler_open(1, 2, 1, actor_callback, &ctx);
+    if (!shutdown_scheduler)
+        throw std::runtime_error("global-retirement scheduler open failed");
+    {
+        NativeActorSupervisor shutdown_bridge(shutdown_scheduler, 46);
+        const auto shutdown_actor =
+            ores_native_actor_scheduler_spawn(shutdown_scheduler, 0);
+        if (!shutdown_actor.scheduler_domain)
+            throw std::runtime_error("global-retirement actor spawn failed");
+        shutdown_bridge.admit_spawned(
+            shutdown_actor, NativeActorSupervisor::Admission::TrustedNative);
+        std::uint32_t shutdown_backing = 47;
+        shutdown_bridge.register_mapped_region(
+            shutdown_actor, 301, 1, &shutdown_backing,
+            sizeof(shutdown_backing), NativeActorSupervisor::Mode::ReadOnly);
+        ores_native_actor_scheduler_retire(shutdown_scheduler);
+        if (ores_native_actor_scheduler_poll_done(shutdown_scheduler, shutdown_actor))
+            throw std::runtime_error(
+                "global-retirement DONE published before pointer loan drain");
+        if (shutdown_bridge.fence_stopped_actors() != 1)
+            throw std::runtime_error(
+                "global-retirement pointer mapping not revoked");
+        if (!ores_native_actor_scheduler_wait_done(shutdown_scheduler, shutdown_actor))
+            throw std::runtime_error(
+                "global-retirement completion not published after pointer fence");
+        if (!ores_native_actor_scheduler_try_destroy(shutdown_scheduler))
+            throw std::runtime_error("global-retirement scheduler teardown failed");
+    }
 }
