@@ -27,6 +27,9 @@ struct NativeRegionAuthorityTestAccess {
     static void retire(NativeRegionRuntimeAuthority& authority, ActorHeapIdentity actor) {
         authority.retire_actor(actor);
     }
+    static bool shutdown_quiescent(NativeRegionRuntimeAuthority& authority) {
+        return authority.shutdown_quiescent();
+    }
 };
 }
 using namespace oreslang::runtime;
@@ -93,6 +96,8 @@ int main() {
     Harness::retire(*broker, next_epoch);
     Harness::retire(*broker, sibling);
     Harness::retire(*broker, untrusted);
+    if (!Harness::shutdown_quiescent(*broker))
+        throw std::runtime_error("fully retired broker still has live native authority");
 
     // In-callback retirement is terminal for admissions, but may not return
     // quiesced while raw foreign code still holds the backing address.
@@ -108,11 +113,15 @@ int main() {
         catch (const std::logic_error&) { deferred = true; }
         if (!deferred || *ptr != 77)
             throw std::runtime_error("FFI callback quiescence failed");
+        if (Harness::shutdown_quiescent(*broker))
+            throw std::runtime_error("active FFI incorrectly marked quiesced");
         require_denied([&] { (void)Harness::issue(*broker, active, 9, 1,
             &ffi_memory, sizeof(ffi_memory), Mode::ReadOnly); });
     });
     if (!deferred) throw std::runtime_error("active FFI revoke was not deferred");
     Harness::retire(*broker, active);
+    if (!Harness::shutdown_quiescent(*broker))
+        throw std::runtime_error("FFI cleanup retry did not complete");
     require_denied([&] { (void)ffi.load(active); });
     require_denied([&] { (void)registry.at<std::uint32_t>(active_grant, active); });
 
