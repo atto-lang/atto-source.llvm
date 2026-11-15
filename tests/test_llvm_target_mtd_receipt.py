@@ -24,13 +24,19 @@ class TargetNativeEvidenceTest(unittest.TestCase):
         self.assertEqual(e["source"]["exact_git_tree"],
                          "a6d2f2ab5155fac02d29fec426c2014c30ad4a98")
         self.assertEqual(e["source"]["blob_count"], 63)
+        # Historical P0 runner source is immutable: later security fixes
+        # changed the frontend type resolver, target linker, and test script.
+        # Their new execution evidence must appear in a *new* receipt.
+        for name, old_sha in (
+            ("target_ast_linker_blob", "2121531dab025aa9e719f128b49dcbd531c3f45d"),
+            ("checked_production_typechecker_blob", "18c9b7e3e9696bfdd56fa5130f52a9a71a796c43"),
+            ("native_guest_test_script_blob", "886b8e78e9a15b60069839b044ea5505446c33ed"),
+        ):
+            self.assertEqual(e["source"][name], old_sha, name)
         for path, name in (
             ("src/main.rs", "codegen_blob"),
-            ("src/target_native.rs", "target_ast_linker_blob"),
             ("frontend/src/target_syntax.rs", "target_header_grammar_blob"),
-            ("frontend/src/check.rs", "checked_production_typechecker_blob"),
             ("runtime/actor_runtime.c", "native_actor_runtime_blob"),
-            ("ci/test_native_actors.sh", "native_guest_test_script_blob"),
         ):
             self.assertEqual(git_blob((ROOT / path).read_bytes()),
                              e["source"][name],path)
