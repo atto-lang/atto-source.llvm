@@ -144,7 +144,7 @@ bool reserved(std::string_view name) {
         "define", "class", "enum", "pattern", "module", "contract", "conforms", "namespace",
         "import", "from", "as", "extends", "implements", "try", "catch",
         "throw", "raise", "panic", "recover",
-        "finally", "end", "fi", "if", "guard", "do", "else", "then", "new",
+        "finally", "end", "fi", "if", "ifnot", "unless", "guard", "do", "else", "then", "new",
         "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "gen", "generator",
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
@@ -2910,18 +2910,35 @@ private:
                     actions.push_back(std::move(inverted));
                     continue;
                 }
-                if (token_.text == "if" && !finally_scope) {
-                    advance(); statement.kind = Statement::Kind::Conditional;
+                const bool explicit_do_if = token_.text == "do" &&
+                    (peek_next().text == "if" || peek_next().text == "ifnot" || peek_next().text == "unless");
+                if ((token_.text == "if" || token_.text == "ifnot" || token_.text == "unless" || explicit_do_if)
+                        && !finally_scope) {
+                    if (explicit_do_if) require("do");
+                    const bool negated = token_.text == "ifnot" || token_.text == "unless";
+                    advance();
+                    statement.kind = Statement::Kind::Conditional;
                     statement.condition = expression();
-                    if (accept_keyword_if_header()) {
+                    if (negated) {
+                        auto inverted = make_expression(Expression::Kind::LogicalNot, offset);
+                        inverted->left = std::move(statement.condition);
+                        statement.condition = std::move(inverted);
+                    }
+                    const bool then_form = accept_keyword_if_header();
+                    if (explicit_do_if && !then_form)
+                        fail("do if/ifnot/unless requires 'then' and a final 'fi'");
+                    if (then_form) {
                         statement.then_statements = branch_arm(false, true);
                         if (accept("else")) statement.else_statements = branch_arm(false, true);
                     } else {
                         require("{"); statement.then_statements = branch_arm(false, false); require("}");
                         if (accept("else")) { require("{"); statement.else_statements = branch_arm(false, false); require("}"); }
                     }
+                    // The native migration parser still requires 'fi' after brace forms.
                     require("fi"); actions.push_back(std::move(statement)); continue;
                 }
+                if (token_.text == "break" || token_.text == "continue")
+                    fail("native break/continue in conditional arms requires verified loop continuation lowering");
                 if (finally_scope && (token_.text == "return" ||
                         token_.text == "break" || token_.text == "continue"))
                     fail("return/break/continue cannot escape finally; finally is cleanup-only");
@@ -3388,13 +3405,25 @@ private:
                 value.statements.push_back(std::move(inverted));
                 continue;
             }
-            if (token_.text == "if") {
+            const bool explicit_do_if = token_.text == "do" &&
+                (peek_next().text == "if" || peek_next().text == "ifnot" || peek_next().text == "unless");
+            if (token_.text == "if" || token_.text == "ifnot" ||
+                    token_.text == "unless" || explicit_do_if) {
                 const auto offset = token_.offset;
-                require("if");
+                if (explicit_do_if) require("do");
+                const bool negated = token_.text == "ifnot" || token_.text == "unless";
+                advance();
                 auto condition = expression();
+                if (negated) {
+                    auto inverted = make_expression(Expression::Kind::LogicalNot, offset);
+                    inverted->left = std::move(condition);
+                    condition = std::move(inverted);
+                }
                 if (terminal_try_finally && !native_pure_scalar_tree(*condition))
                     fail("native protected try guard requires a pure nonthrowing bool expression");
                 const bool then_form = accept_keyword_if_header();
+                if (explicit_do_if && !then_form)
+                    fail("do if/ifnot/unless requires 'then' and a final 'fi'");
                 if (!then_form) require("{");
                 if (accept("return")) {
                     if (value.returns_void)
@@ -3730,6 +3759,31 @@ private:
             ~ConditionalDepthGuard() { --depth; }
         } depth_guard{conditional_depth_};
 
+        if (token_.text == "if" || token_.text == "ifnot" || token_.text == "unless") {
+            const auto offset = token_.offset;
+            const bool negated = token_.text != "if";
+            advance();
+            auto predicate = expression();
+            if (negated) {
+                auto not_condition = make_expression(Expression::Kind::LogicalNot, offset);
+                not_condition->left = std::move(predicate);
+                predicate = std::move(not_condition);
+            }
+            require("then");
+            if (token_.text == "break" || token_.text == "continue" || token_.text == "return")
+                fail("value if/ifnot/unless branch must produce a value; use 'do if' for control flow");
+            auto yes = expression();
+            require("else");
+            if (token_.text == "break" || token_.text == "continue" || token_.text == "return")
+                fail("value if/ifnot/unless branch must produce a value; use 'do if' for control flow");
+            auto no = expression();
+            require("fi");
+            auto result = make_expression(Expression::Kind::Conditional, offset);
+            result->condition = std::move(predicate);
+            result->when_true = std::move(yes);
+            result->when_false = std::move(no);
+            return result;
+        }
         auto condition = logical_or();
         if (!accept("?")) return condition;
 
