@@ -21,12 +21,24 @@
 #define SOURCE_ROOT_CONTROL_DONE_SUSPEND UINT64_C(3)
 #define SOURCE_ROOT_CONTROL_DONE_RESUME UINT64_C(4)
 
-typedef struct {
+typedef struct SourceActor {
     uint64_t magic;
     uint64_t id;
     OresActorI64Heap* heap;
     OresNativeActorLogicalFramesV1* logical_frames;
     uint32_t frame_budget;
+    uint32_t lifetime_frame_budget;
+    uint32_t lifetime_frame_admissions;
+    uint32_t restart_remaining;
+    uint64_t fields_count;
+    /* For a failed supervised incarnation, this metadata remains an invalid
+     * tombstone until the root group closes. Every backing heap/frame is
+     * reclaimed before the root supervisor authorizes a fresh incarnation.
+     * This prevents raw opaque ActorRef addresses from being immediately
+     * recycled into an unrelated actor within the same source program. */
+    struct SourceActor* replacement;
+    int restart_decided;
+    int tombstone;
     /* Accepted guest DATA snapshot and waiters are guarded by group.mutex.
      * Physical callbacks signal this preinitialized condition after their
      * success/failure receipts become observable. No per-message allocation. */
@@ -83,6 +95,8 @@ typedef struct {
     ReadyAwaitFrame* pending_ready;
     DoneAwaitFrame* pending_done;
     SourceActor* actors[SOURCE_GROUP_SLOTS];
+    SourceActor* retired[SOURCE_GROUP_SLOTS];
+    pthread_cond_t supervisor_progress;
     size_t next_slot;
     size_t live;
     size_t peak;
@@ -97,7 +111,10 @@ typedef struct {
  * in a zero-argument top-level main. There is exactly one worker pool per
  * active group, not one pool per actor.
  */
-static SourceActorGroup group = { .mutex = PTHREAD_MUTEX_INITIALIZER };
+static SourceActorGroup group = {
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+    .supervisor_progress = PTHREAD_COND_INITIALIZER
+};
 static _Atomic uint64_t next_actor_id = 4100;
 static _Thread_local OresNativeExecutionHandle current_source_execution;
 
@@ -128,10 +145,15 @@ static int reject_compiled_frame(void) {
  */
 int oreslang_source_actor_frame_push(void) {
     if (!frame_actor || frame_faulted || frame_active ||
-        frame_actor->frame_budget == 0) return reject_compiled_frame();
+        frame_actor->frame_budget == 0
+        || (frame_actor->lifetime_frame_budget != 0
+            && frame_actor->lifetime_frame_admissions
+                >= frame_actor->lifetime_frame_budget))
+        return reject_compiled_frame();
     if (!ores_logical_frames_v1_push(frame_actor->logical_frames,
                                     frame_turn, &frame_handle))
         return reject_compiled_frame();
+    frame_actor->lifetime_frame_admissions++;
     frame_active = 1;
     return 1;
 }
