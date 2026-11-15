@@ -80,9 +80,14 @@ struct RegionMoveLowering {
 };
 
 llvm::Value* receiver_array_region(const Expression& receiver, const RegionMoveLowering* moves) {
-    if (receiver.kind == Expression::Kind::Field && receiver.left &&
-            moves->class_array_regions)
-        return moves->class_array_regions->at(native_place_key(*receiver.left));
+    if (moves && moves->class_array_regions) {
+        if (receiver.kind == Expression::Kind::Field && receiver.left)
+            return moves->class_array_regions->at(native_place_key(*receiver.left));
+        if (receiver.kind == Expression::Kind::Variable) {
+            auto found = moves->class_array_regions->find(receiver.name);
+            if (found != moves->class_array_regions->end()) return found->second;
+        }
+    }
     return moves->array_region;
 }
 
@@ -150,6 +155,17 @@ llvm::Value* checked_signed_arithmetic(llvm::IRBuilder<>& builder,
     return value;
 }
 
+llvm::Value* lower_unwidened(const Expression& expr,
+                   llvm::IRBuilder<>& builder,
+                   llvm::Type* i64,
+                   const std::unordered_map<std::string, llvm::Value*>& storage,
+                   const std::unordered_map<std::string, llvm::Value*>& field_storage,
+                   const std::unordered_map<std::string, llvm::Function*>& functions,
+                   const RegionMoveLowering* moves);
+
+// Applies the checker's int-to-float widening at the value's use site. Doubles
+// occupying an i64 record or array slot are stored as raw bits; every typed
+// reader recovers them from the checked static type, never from the bits.
 llvm::Value* lower(const Expression& expr,
                    llvm::IRBuilder<>& builder,
                    llvm::Type* i64,
@@ -157,6 +173,20 @@ llvm::Value* lower(const Expression& expr,
                    const std::unordered_map<std::string, llvm::Value*>& field_storage,
                    const std::unordered_map<std::string, llvm::Function*>& functions,
                    const RegionMoveLowering* moves = nullptr) {
+    llvm::Value* value = lower_unwidened(expr, builder, i64, storage, field_storage, functions, moves);
+    if (!expr.widen_to_f64) return value;
+    if (!value->getType()->isIntegerTy(64))
+        throw std::runtime_error("native int-to-f64 widening requires an int operand");
+    return builder.CreateSIToFP(value, builder.getDoubleTy(), "int.widen.f64");
+}
+
+llvm::Value* lower_unwidened(const Expression& expr,
+                   llvm::IRBuilder<>& builder,
+                   llvm::Type* i64,
+                   const std::unordered_map<std::string, llvm::Value*>& storage,
+                   const std::unordered_map<std::string, llvm::Value*>& field_storage,
+                   const std::unordered_map<std::string, llvm::Function*>& functions,
+                   const RegionMoveLowering* moves) {
     switch (expr.kind) {
         case Expression::Kind::SumConstruct: {
             const auto& type = native_sum(*moves->sum_program, expr.sum_type);
@@ -164,8 +194,9 @@ llvm::Value* lower(const Expression& expr,
             const std::size_t count = option ? 2 : 3;
             const bool error = expr.name == "Err";
             const auto tag = option ? (expr.name == "Some" ? 1 : 0) : (error ? 1 : 0);
-            auto* payload = expr.arguments.empty() ? llvm::ConstantInt::get(i64, 0)
+            llvm::Value* payload = expr.arguments.empty() ? llvm::ConstantInt::get(i64, 0)
                 : lower(*expr.arguments[0], builder, i64, storage, field_storage, functions, moves);
+            if (payload->getType()->isDoubleTy()) payload = builder.CreateBitCast(payload, i64, "sum.f64.bits");
             auto* values = entry_alloca(builder, i64, llvm::ConstantInt::get(i64, count), "sum.fields");
             for (std::size_t i = 0; i < count; ++i) builder.CreateStore(llvm::ConstantInt::get(i64, 0),
                 builder.CreateGEP(i64, values, llvm::ConstantInt::get(i64, i)));
@@ -192,7 +223,8 @@ llvm::Value* lower(const Expression& expr,
             auto* absent = llvm::BasicBlock::Create(builder.getContext(), "sum.payload.absent", function);
             builder.CreateCondBr(builder.CreateICmpEQ(tag, llvm::ConstantInt::get(i64, selected)), present, absent);
             builder.SetInsertPoint(present);
-            auto* value = builder.CreateCall(moves->record_get, {handle, llvm::ConstantInt::get(i64, schema), llvm::ConstantInt::get(i64, 1)});
+            llvm::Value* value = builder.CreateCall(moves->record_get, {handle, llvm::ConstantInt::get(i64, schema), llvm::ConstantInt::get(i64, 1)});
+            if (type.value_type == ScalarType::F64) value = builder.CreateBitCast(value, builder.getDoubleTy(), "sum.f64");
             if (!fallback) {
                 builder.SetInsertPoint(absent);
                 auto flush = function->getParent()->getOrInsertFunction("ores_string_panic_flush",
@@ -212,7 +244,7 @@ llvm::Value* lower(const Expression& expr,
             }
             auto* merge = llvm::BasicBlock::Create(builder.getContext(), "sum.fallback.merge", function);
             builder.CreateBr(merge); builder.SetInsertPoint(absent); builder.CreateBr(merge);
-            builder.SetInsertPoint(merge); auto* result = builder.CreatePHI(i64, 2);
+            builder.SetInsertPoint(merge); auto* result = builder.CreatePHI(value->getType(), 2);
             result->addIncoming(value, present); result->addIncoming(fallback, absent); return result;
         }
         case Expression::Kind::RecordConstruct: {
@@ -262,20 +294,57 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::String: {
             auto* module = builder.GetInsertBlock()->getModule();
             auto* bytes = builder.CreateGlobalStringPtr(expr.name, "string.literal");
-            auto runtime = module->getOrInsertFunction("ores_string_literal",
+            auto runtime = module->getOrInsertFunction("ores_string_literal_interned",
                 llvm::FunctionType::get(i64, {bytes->getType(), i64}, false));
             return builder.CreateCall(runtime, {bytes, llvm::ConstantInt::get(i64, expr.name.size())}, "string.handle");
         }
-        case Expression::Kind::Console: {
+        case Expression::Kind::ToText: {
             auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             auto* module = builder.GetInsertBlock()->getModule();
-            if (expr.resolved_type == ScalarType::I64) {
-                // Decimal text, matching Java's rendering of an int.
-                auto format = module->getOrInsertFunction("ores_string_from_i64", llvm::FunctionType::get(i64, {i64}, false));
-                value = builder.CreateCall(format, {value}, "console.int.text");
-            } else if (expr.resolved_type == ScalarType::Bool) {
-                auto format = module->getOrInsertFunction("ores_string_from_bool", llvm::FunctionType::get(i64, {i64}, false));
-                value = builder.CreateCall(format, {value}, "console.bool.text");
+            if (value->getType()->isDoubleTy()) {
+                auto runtime = module->getOrInsertFunction("ores_string_from_f64",
+                    llvm::FunctionType::get(i64, {builder.getDoubleTy()}, false));
+                return builder.CreateCall(runtime, {value}, "f64.text");
+            }
+            if (expr.left->resolved_type == ScalarType::String) return value;
+            if (expr.left->resolved_type == ScalarType::Bool) {
+                // Interned: a bool rendered in a loop must not consume region slots.
+                auto runtime = module->getOrInsertFunction("ores_string_literal_interned",
+                    llvm::FunctionType::get(i64, {builder.getPtrTy(), i64}, false));
+                auto* is_true = builder.CreateICmpNE(value, llvm::ConstantInt::get(i64, 0));
+                auto* bytes = builder.CreateSelect(is_true,
+                    builder.CreateGlobalStringPtr("true", "bool.true"),
+                    builder.CreateGlobalStringPtr("false", "bool.false"));
+                auto* size = builder.CreateSelect(is_true,
+                    llvm::ConstantInt::get(i64, 4), llvm::ConstantInt::get(i64, 5));
+                return builder.CreateCall(runtime, {bytes, size}, "bool.text");
+            }
+            auto runtime = module->getOrInsertFunction("ores_string_from_i64",
+                llvm::FunctionType::get(i64, {i64}, false));
+            return builder.CreateCall(runtime, {value}, "int.text");
+        }
+        case Expression::Kind::Console: {
+            // A lone numeric operand prints without any region allocation.
+            if (expr.name != "fail" && expr.left->kind == Expression::Kind::ToText &&
+                    (expr.left->left->resolved_type == ScalarType::F64 ||
+                     expr.left->left->resolved_type == ScalarType::I64 ||
+                     expr.left->left->resolved_type == ScalarType::Bool)) {
+                auto* operand = lower(*expr.left->left, builder, i64, storage, field_storage, functions, moves);
+                const bool real = operand->getType()->isDoubleTy();
+                const bool truth = !real && expr.left->left->resolved_type == ScalarType::Bool;
+                auto print = builder.GetInsertBlock()->getModule()->getOrInsertFunction(
+                    real ? "ores_string_print_f64" : truth ? "ores_string_print_bool" : "ores_string_print_i64",
+                    llvm::FunctionType::get(i64, {operand->getType(), i64}, false));
+                return builder.CreateCall(print, {operand, llvm::ConstantInt::get(i64, expr.name == "println")}, "console.status");
+            }
+            auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            if (expr.name == "fail") {
+                auto* module = builder.GetInsertBlock()->getModule();
+                auto failure = module->getOrInsertFunction("ores_rt_fail",
+                    llvm::FunctionType::get(builder.getVoidTy(), {i64}, false));
+                llvm::cast<llvm::Function>(failure.getCallee())->setDoesNotReturn();
+                builder.CreateCall(failure, {value});
+                return llvm::ConstantInt::get(i64, 0);
             }
             auto runtime = builder.GetInsertBlock()->getModule()->getOrInsertFunction("ores_string_print",
                 llvm::FunctionType::get(i64, {i64, i64}, false));
@@ -283,6 +352,8 @@ llvm::Value* lower(const Expression& expr,
         }
         case Expression::Kind::Integer:
             return llvm::ConstantInt::getSigned(i64, expr.integer);
+        case Expression::Kind::Floating:
+            return llvm::ConstantFP::get(builder.getDoubleTy(), expr.floating);
         case Expression::Kind::Boolean:
             return llvm::ConstantInt::get(i64, expr.boolean ? 1 : 0);
         case Expression::Kind::Variable: {
@@ -300,8 +371,9 @@ llvm::Value* lower(const Expression& expr,
                     llvm::ConstantInt::get(i64, moves->record_schemas->at(cls.name)),
                     llvm::ConstantInt::get(i64, cls.fields.size()), values}, "return.record.handle");
             }
-            llvm::Value* stored = builder.CreateLoad(i64, storage.at(expr.name),
-                expr.name + ".read");
+            llvm::Value* stored = builder.CreateLoad(
+                expr.resolved_type == ScalarType::F64 ? builder.getDoubleTy() : i64,
+                storage.at(expr.name), expr.name + ".read");
             if (moves && moves->live_flags &&
                     moves->live_flags->count(expr.name))
                 return builder.CreateCall(moves->read, {moves->region, stored},
@@ -325,10 +397,12 @@ llvm::Value* lower(const Expression& expr,
                 llvm::Value* handle = builder.CreateLoad(i64,
                     storage.at(expr.left->name), expr.left->name + ".array.handle");
                 return builder.CreateCall(moves->array_length,
-                    {moves->array_region, handle}, expr.left->name + ".size");
+                    {receiver_array_region(*expr.left, moves), handle}, expr.left->name + ".size");
             }
-            return builder.CreateLoad(i64, field_storage.at(native_place_key(expr)),
-                                      expr.left->name + "." + expr.name + ".read");
+            return builder.CreateLoad(
+                expr.resolved_type == ScalarType::F64 ? builder.getDoubleTy() : i64,
+                field_storage.at(native_place_key(expr)),
+                expr.left->name + "." + expr.name + ".read");
         case Expression::Kind::ArrayCall: {
             if (!expr.left)
                 throw std::runtime_error("native Array<int> call has no owned receiver");
@@ -337,11 +411,17 @@ llvm::Value* lower(const Expression& expr,
                 "owned.array.call.handle");
             llvm::Value* selected_region = receiver_array_region(*expr.left, moves);
             std::vector<llvm::Value*> args;
-            for (const auto& arg : expr.arguments)
-                args.push_back(lower(*arg, builder, i64, storage, field_storage, functions, moves));
-            if (expr.name == "get" && args.size() == 1)
-                return builder.CreateCall(moves->array_get,
+            for (const auto& arg : expr.arguments) {
+                llvm::Value* value = lower(*arg, builder, i64, storage, field_storage, functions, moves);
+                // Array<float> elements occupy i64 slots as raw binary64 bits.
+                args.push_back(value->getType()->isDoubleTy() ? builder.CreateBitCast(value, i64, "f64.element.bits") : value);
+            }
+            if (expr.name == "get" && args.size() == 1) {
+                llvm::Value* element = builder.CreateCall(moves->array_get,
                     {selected_region, handle, args[0]}, "array.get");
+                return expr.resolved_type == ScalarType::F64
+                    ? builder.CreateBitCast(element, builder.getDoubleTy(), "array.get.f64") : element;
+            }
             if (expr.name == "add" && args.size() == 1) {
                 llvm::Value* status = builder.CreateCall(moves->array_add,
                     {selected_region, handle, args[0]}, "array.add.status");
@@ -396,6 +476,8 @@ llvm::Value* lower(const Expression& expr,
         }
         case Expression::Kind::Negate: {
             auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            if (expr.resolved_type == ScalarType::F64)
+                return builder.CreateFNeg(value, "f64.neg");
             return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow,
                 llvm::ConstantInt::get(i64, 0), value, "neg");
         }
@@ -431,6 +513,8 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::Add: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            if (expr.resolved_type == ScalarType::F64)
+                return builder.CreateFAdd(left, right, "f64.add");
             if (expr.resolved_type == ScalarType::String) {
                 auto runtime = builder.GetInsertBlock()->getModule()->getOrInsertFunction("ores_string_concat",
                     llvm::FunctionType::get(i64, {i64, i64}, false));
@@ -442,14 +526,25 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::Subtract: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            if (expr.resolved_type == ScalarType::F64)
+                return builder.CreateFSub(left, right, "f64.sub");
             return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow,
                 left, right, "sub");
         }
         case Expression::Kind::Multiply: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            if (expr.resolved_type == ScalarType::F64)
+                return builder.CreateFMul(left, right, "f64.mul");
             return checked_signed_arithmetic(builder, llvm::Intrinsic::smul_with_overflow,
                 left, right, "mul");
+        }
+        case Expression::Kind::Divide: {
+            if (expr.resolved_type != ScalarType::F64 || !expr.left || !expr.right)
+                throw std::runtime_error("native f64 division lacks checked typing");
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            return builder.CreateFDiv(left, right, "f64.div");
         }
         case Expression::Kind::ShiftLeft:
         case Expression::Kind::ShiftRight:
@@ -537,8 +632,46 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::LessEqual:
         case Expression::Kind::Greater:
         case Expression::Kind::GreaterEqual: {
+            // Java compares int == float exactly: 2^53 + 1 never equals the
+            // nearest double even though widening rounds onto it.
+            if ((expr.kind == Expression::Kind::Equal || expr.kind == Expression::Kind::NotEqual) &&
+                    expr.left->widen_to_f64 != expr.right->widen_to_f64) {
+                const bool int_left = expr.left->widen_to_f64;
+                llvm::Value* first = int_left
+                    ? lower_unwidened(*expr.left, builder, i64, storage, field_storage, functions, moves)
+                    : lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+                llvm::Value* second = int_left
+                    ? lower(*expr.right, builder, i64, storage, field_storage, functions, moves)
+                    : lower_unwidened(*expr.right, builder, i64, storage, field_storage, functions, moves);
+                llvm::Value* integer = int_left ? first : second;
+                llvm::Value* real = int_left ? second : first;
+                llvm::Value* rounded = builder.CreateFCmpOEQ(
+                    builder.CreateSIToFP(integer, builder.getDoubleTy()), real);
+                // 2^63 is the one widened value outside i64, and saturating
+                // back onto INT64_MAX would falsely match it.
+                llvm::Value* in_range = builder.CreateFCmpOLT(real,
+                    llvm::ConstantFP::get(builder.getDoubleTy(), 9223372036854775808.0));
+                llvm::Value* exact = builder.CreateICmpEQ(integer, builder.CreateIntrinsic(
+                    llvm::Intrinsic::fptosi_sat, {i64, builder.getDoubleTy()}, {real}));
+                llvm::Value* equal = builder.CreateAnd(rounded, builder.CreateAnd(in_range, exact));
+                if (expr.kind == Expression::Kind::NotEqual) equal = builder.CreateNot(equal);
+                return builder.CreateZExt(equal, i64, "mixed.cmp.bool");
+            }
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            if (left->getType()->isDoubleTy()) {
+                llvm::Value* compared = nullptr;
+                switch (expr.kind) {
+                    case Expression::Kind::Equal: compared = builder.CreateFCmpOEQ(left, right, "f64.eq"); break;
+                    case Expression::Kind::NotEqual: compared = builder.CreateFCmpUNE(left, right, "f64.neq"); break;
+                    case Expression::Kind::Less: compared = builder.CreateFCmpOLT(left, right, "f64.lt"); break;
+                    case Expression::Kind::LessEqual: compared = builder.CreateFCmpOLE(left, right, "f64.le"); break;
+                    case Expression::Kind::Greater: compared = builder.CreateFCmpOGT(left, right, "f64.gt"); break;
+                    case Expression::Kind::GreaterEqual: compared = builder.CreateFCmpOGE(left, right, "f64.ge"); break;
+                    default: throw std::runtime_error("invalid f64 comparison kind");
+                }
+                return builder.CreateZExt(compared, i64, "f64.cmp.bool");
+            }
             if (expr.left->resolved_type == ScalarType::String) {
                 if (expr.kind != Expression::Kind::Equal && expr.kind != Expression::Kind::NotEqual)
                     throw std::runtime_error("native String ordered comparison is not supported");
@@ -619,9 +752,12 @@ llvm::Value* lower(const Expression& expr,
                     storage, field_storage, functions, moves);
                 llvm::Value* rhs = lower(*expr.condition_rhs, builder, i64,
                     storage, field_storage, functions, moves);
-                conditionValue = builder.CreateZExt(
-                    builder.CreateICmpEQ(lhs, rhs, "ternary.eq.i1"),
-                    i64, "ternary.eq");
+                if (lhs->getType() != rhs->getType())
+                    throw std::runtime_error("native ternary equality operands differ in LLVM type");
+                llvm::Value* equal = lhs->getType()->isFloatingPointTy()
+                    ? builder.CreateFCmpOEQ(lhs, rhs, "ternary.eq.f64.i1")
+                    : builder.CreateICmpEQ(lhs, rhs, "ternary.eq.i64.i1");
+                conditionValue = builder.CreateZExt(equal, i64, "ternary.eq");
             }
             llvm::Value* condition = builder.CreateICmpNE(
                 conditionValue, llvm::ConstantInt::get(i64, 0), "ternary.cond.i1");
@@ -647,7 +783,12 @@ llvm::Value* lower(const Expression& expr,
             builder.CreateBr(merge);
 
             builder.SetInsertPoint(merge);
-            auto* value = builder.CreatePHI(i64, 2, "ternary.value");
+            llvm::Type* arm_type = expr.resolved_type == ScalarType::F64
+                ? builder.getDoubleTy() : i64;
+            if (trueValue->getType() != arm_type ||
+                    falseValue->getType() != arm_type)
+                throw std::runtime_error("native ternary arm LLVM types violate checked scalar identity");
+            auto* value = builder.CreatePHI(arm_type, 2, "ternary.value");
             value->addIncoming(trueValue, trueExit);
             value->addIncoming(falseValue, falseExit);
             return value;
@@ -728,13 +869,22 @@ llvm::Value* lower(const Expression& expr,
                 // Emit instructions in source order, not in formal-slot order.
                 ordered[target] = lower(*expr.arguments[i], builder, i64,
                                         storage, field_storage, functions, moves);
+                // Even a manually constructed/untrusted AST cannot pass an
+                // i64 value into a double ABI slot (or vice versa).
+                llvm::Type* required = callee->getFunctionType()->getParamType(target);
+                if (ordered[target]->getType() != required)
+                    throw std::runtime_error("native call argument LLVM type disagrees with callee ABI");
             }
             for (std::size_t parameter : hidden) {
                 const auto& arg = *ordered_source.at(parameter);
                 if (!arg.left || (arg.left->kind != Expression::Kind::Variable && arg.left->kind != Expression::Kind::Field) ||
                         (arg.kind != Expression::Kind::Borrow && arg.kind != Expression::Kind::BorrowMut))
                     throw std::runtime_error("collection class argument lacks named borrowed provenance");
-                ordered.push_back(moves->class_array_regions->at(native_place_key(*arg.left)));
+                if (arg.left->kind == Expression::Kind::Variable &&
+                        moves->array_names && moves->array_names->count(arg.left->name))
+                    ordered.push_back(receiver_array_region(*arg.left, moves));
+                else
+                    ordered.push_back(moves->class_array_regions->at(native_place_key(*arg.left)));
             }
             if (owning) {
                 if (!moves->result_destination || !moves->result_region)
@@ -754,7 +904,8 @@ llvm::Value* lower(const Expression& expr,
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool cortex_m_target,
                                   bool bounded_allocator_provider,
-                                  const std::string& isolate_entry) {
+                                  const std::string& isolate_entry,
+                                  bool wasm_core_f64_entry) {
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
@@ -822,6 +973,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         }
     }
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
+    // Hidden native array-region pointers have a host-owned lifetime/allocator
+    // contract. Never silently re-use them in the Wasm or Cortex-M ABIs.
+    if ((wasm32_target || cortex_m_target) &&
+            std::any_of(source.functions.begin(), source.functions.end(),
+                [](const Function& fn) {
+                    return std::any_of(fn.parameters.begin(), fn.parameters.end(),
+                        [](const Parameter& param) { return param.int_array; });
+                }))
+        throw std::runtime_error("native direct Array<f64> borrowing requires host region ABI; target not certified");
+    if (wasm_core_f64_entry && !wasm32_target)
+        throw std::runtime_error("wasm Core f64 entry requires wasm32 target");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
             throw std::runtime_error("experimental scalar loop unsupported target/owners");
@@ -876,7 +1038,20 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         [](const Function& fn) { return fn.name == "main"; });
     const bool native_main = !wasm32_target && !cortex_m_target &&
         main_it != source.functions.end();
-    bool string_runtime = false, console_runtime = false, record_runtime = !source.sum_types.empty(), iteration_runtime = false;
+    if (main_it != source.functions.end()) {
+        const bool returns_f64 = main_it->return_type == ScalarType::F64;
+        const bool f64_param = std::any_of(main_it->parameters.begin(), main_it->parameters.end(),
+            [](const Parameter& p) { return p.scalar_type == ScalarType::F64; });
+        if (f64_param || (returns_f64 && !wasm_core_f64_entry))
+            throw std::runtime_error("native main does not admit f64 process ABI");
+        if (wasm_core_f64_entry && (!returns_f64 || main_it->returns_void ||
+                !main_it->parameters.empty() || !main_it->return_class.empty() ||
+                !main_it->return_sum.empty()))
+            throw std::runtime_error("wasm Core f64 entry requires exact main(): f64");
+    } else if (wasm_core_f64_entry) {
+        throw std::runtime_error("wasm Core f64 entry requires exact main(): f64");
+    }
+    bool string_runtime = false, console_runtime = false, record_runtime = !source.sum_types.empty(), iteration_runtime = false, record_arrays = false;
     const NativeClassLayouts layouts(source);
     std::unordered_map<std::string, ClassDecl> flat_classes;
     for (const auto& cls : source.classes) flat_classes.emplace(cls.name, native_flat_class(cls, layouts));
@@ -902,7 +1077,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             if (wasm32_target)
                 throw std::runtime_error("wasm32 scoped array owners require allocator-provider scope qualification");
             if (s.branch_local->array_element_type == ScalarType::String) string_runtime = true;
-            if (!s.branch_local->array_record_class.empty()) record_runtime = true;
+            if (!s.branch_local->array_record_class.empty()) record_runtime = record_arrays = true;
         }
         if (s.kind == Statement::Kind::ForEach || s.kind == Statement::Kind::ForIndex)
             iteration_runtime = true;
@@ -918,6 +1093,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         if (fn.return_type == ScalarType::String) string_runtime = true;
         for (const auto& p : fn.parameters) if (p.scalar_type == ScalarType::String) string_runtime = true;
         for (const auto& local : fn.locals) {
+            if (!local.array_record_class.empty()) record_arrays = true;
             if (!local.array_record_class.empty() || (local.record_view && !class_owns_arrays(local.class_name))) record_runtime = true;
             if (local.int_array && local.array_element_type == ScalarType::String) string_runtime = true;
             scan_string(local.initializer.get());
@@ -936,7 +1112,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     for (const auto& fn : source.functions) scan_function(fn);
     for (const auto& cls : source.classes) for (const auto& field : cls.fields) {
         if (field.int_array && field.array_element_type == ScalarType::String) string_runtime = true;
-        if (!field.array_record_class.empty()) record_runtime = true;
+        if (!field.array_record_class.empty()) record_runtime = record_arrays = true;
         if (field.scalar_type == ScalarType::String) string_runtime = true;
         scan_string(field.initializer_expression.get());
     }
@@ -944,6 +1120,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         for (const auto& field : actor.fields) scan_string(field.initializer.get());
         scan_function(actor.on_message);
     }
+    // Fields are copied out of a record as soon as it is bound, so a handle only
+    // outlives its iteration through a record array element or a stored sum.
+    const bool loop_record_reclaim = record_runtime && !record_arrays && source.sum_types.empty();
     if (string_runtime || record_runtime || owning_result_runtime || iteration_runtime) {
         if (!native_main || !source.actors.empty() || std::any_of(source.functions.begin(), source.functions.end(),
                 [](const Function& f) {
@@ -1195,7 +1374,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     std::unordered_map<std::string, llvm::StructType*> class_types;
     std::unordered_map<std::string, const ClassDecl*> record_classes;
     std::unordered_map<std::string, std::uint64_t> record_schemas;
-    llvm::FunctionCallee record_new, record_get, record_check, sum_check;
+    llvm::FunctionCallee record_new, record_get, record_check, sum_check, recordMark, recordRelease;
     if (record_runtime) {
         record_new = module.getOrInsertFunction("ores_record_new",
             llvm::FunctionType::get(i64, {i64, i64, native_ptr}, false));
@@ -1205,6 +1384,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             llvm::FunctionType::get(i64, {i64, i64, i64}, false));
         record_check = module.getOrInsertFunction("ores_record_check",
             llvm::FunctionType::get(i64, {i64, i64}, false));
+        if (loop_record_reclaim) {
+            recordMark = module.getOrInsertFunction("ores_record_mark", llvm::FunctionType::get(i64, {}, false));
+            recordRelease = module.getOrInsertFunction("ores_record_release",
+                llvm::FunctionType::get(llvm::Type::getVoidTy(context), {i64}, false));
+        }
     }
     std::unordered_map<std::string, std::unordered_map<std::string, std::size_t>> field_indices;
     std::unordered_map<std::string, bool> class_has_arrays;
@@ -1242,6 +1426,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     std::unordered_map<std::string, std::string> frozen_scalar_symbols;
     std::size_t emitted_concrete_specializations = 0;
     for (const auto& fn : source.functions) {
+        if (fn.return_type == ScalarType::F64 &&
+                (fn.returns_void || !fn.return_class.empty() || !fn.return_sum.empty()))
+            throw std::runtime_error("native f64 return cannot share an aggregate or void ABI");
         const auto* specialization = frozen_i64_dispatch.find_direct(
             native_function_slot(fn.name, fn.parameters.size()));
         // Single compiler-owned symbol planner covers qualified module names,
@@ -1255,13 +1442,26 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         if (module.getNamedValue(symbol))
             throw std::runtime_error("native AOT direct dispatch linker symbol collision");
         std::vector<llvm::Type*> argument_types;
-        for (const auto& param : fn.parameters)
+        for (const auto& param : fn.parameters) {
+            // Function by-value f64 travels in an actual LLVM double, never
+            // through i64 bits or a borrow pointer. The parser rejects f64
+            // loans; the backend independently validates untrusted ASTs.
+            if (param.scalar_type == ScalarType::F64 &&
+                    (param.mode != Parameter::Mode::Value ||
+                     !param.class_name.empty() || !param.generic_type.empty() ||
+                     !param.sum_type.empty()))
+                throw std::runtime_error("native f64 parameter requires value-only scalar ABI");
             argument_types.push_back(param.class_name.empty()
-                ? (param.mode == Parameter::Mode::Value ? i64 : loan_ptr)
+                ? (param.mode == Parameter::Mode::Value
+                    ? (param.scalar_type == ScalarType::F64
+                        ? static_cast<llvm::Type*>(llvm::Type::getDoubleTy(context)) : i64)
+                    : loan_ptr)
                 : native_pointer_type(context, class_types.at(param.class_name)));
+        }
         std::vector<std::size_t> hidden;
         for (std::size_t i = 0; i < fn.parameters.size(); ++i)
-            if (!fn.parameters[i].class_name.empty() && class_has_arrays.at(fn.parameters[i].class_name)) {
+            if (fn.parameters[i].int_array ||
+                    (!fn.parameters[i].class_name.empty() && class_has_arrays.at(fn.parameters[i].class_name))) {
                 hidden.push_back(i);
                 argument_types.push_back(native_ptr);
             }
@@ -1270,7 +1470,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         owning_results.emplace(native_function_slot(fn.name, fn.parameters.size()), owning);
         if (owning) { argument_types.push_back(native_ptr); argument_types.push_back(native_ptr); }
         llvm::FunctionType* signature = llvm::FunctionType::get(
-            fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
+            fn.returns_void ? llvm::Type::getVoidTy(context) :
+                fn.return_type == ScalarType::F64
+                    ? static_cast<llvm::Type*>(llvm::Type::getDoubleTy(context)) : i64,
             argument_types, false);
         if (specialization != nullptr) {
             // Compare the LLVM physical ABI to the independently frozen
@@ -1378,7 +1580,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 }
                 register_subobjects(param.name, param.class_name, &arg);
             } else if (param.mode == Parameter::Mode::Value) {
-                llvm::Value* slot = builder.CreateAlloca(i64, nullptr, param.name + ".slot");
+                llvm::Type* abi_type = param.scalar_type == ScalarType::F64
+                    ? static_cast<llvm::Type*>(builder.getDoubleTy()) : i64;
+                if (arg.getType() != abi_type)
+                    throw std::runtime_error("native parameter LLVM ABI disagrees with checked scalar type");
+                llvm::Value* slot = builder.CreateAlloca(abi_type, nullptr, param.name + ".slot");
                 llvm::Value* incoming = &arg;
                 if (param.scalar_type == ScalarType::Bool) {
                     // Public/native callers are not trusted to preserve the
@@ -1438,6 +1644,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                         static_cast<std::uint64_t>(heap_count))}, "native.owned.region");
         std::unordered_set<std::string> array_names;
         std::unordered_set<std::string> array_field_keys;
+        for (const auto& param : fn.parameters) if (param.int_array) array_names.insert(param.name);
         for (const auto& param : fn.parameters) if (!param.class_name.empty())
             for (const auto& field : record_classes.at(param.class_name)->fields)
                 if (field.int_array) array_field_keys.insert(field_key(param.name, field.name));
@@ -1825,7 +2032,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 builder.CreateStore(builder.getTrue(), live);
                 owned_live_flags.emplace(binding.name, live);
             } else {
-                slot = builder.CreateAlloca(i64, nullptr, binding.name + ".stack.owned");
+                // IEEE f64 locals retain true double storage. Never reinterpret
+                // floating bits as the i64 source/borrow/ABI value domain.
+                llvm::Type* slot_type = binding.scalar_type == ScalarType::F64
+                    ? builder.getDoubleTy() : i64;
+                slot = builder.CreateAlloca(slot_type, nullptr, binding.name + ".stack.owned");
                 native_lifetime_start(builder, slot, 8);
                 builder.CreateStore(initial, slot);
             }
@@ -1836,6 +2047,18 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         auto lower_effect = [&](const Statement& effect) {
             if (effect.kind == Statement::Kind::ScalarWrite) {
                 auto* value = lower(*effect.expression, builder, i64, storage, field_storage, declarations, &region_moves);
+                if (!effect.expression->resolved_class.empty()) {
+                    // Rebinding a `let` record slot copies the new immutable
+                    // record's fields after the right side has fully evaluated.
+                    const auto& cls = *record_classes.at(effect.expression->resolved_class);
+                    auto* schema = llvm::ConstantInt::get(i64, record_schemas.at(cls.name));
+                    builder.CreateCall(record_check, {value, schema});
+                    for (std::size_t i = 0; i < cls.fields.size(); ++i) {
+                        auto* field = builder.CreateCall(record_get, {value, schema, llvm::ConstantInt::get(i64, i)});
+                        builder.CreateStore(field, field_storage.at(field_key(effect.receiver, cls.fields[i].name)));
+                    }
+                    return;
+                }
                 builder.CreateStore(value, storage.at(effect.receiver));
                 return;
             }
@@ -1973,11 +2196,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         llvm::BasicBlock* structured_cleanup = structured_returns
             ? llvm::BasicBlock::Create(context, "exit.cleanup", function) : nullptr;
         llvm::Value* structured_snapshot = structured_returns && !fn.returns_void
-            ? builder.CreateAlloca(i64, nullptr, "return.snapshot.slot") : nullptr;
+            ? builder.CreateAlloca(function->getReturnType(), nullptr, "return.snapshot.slot") : nullptr;
         struct ScopedSlot { std::string name; llvm::Value* address; std::size_t bytes; std::vector<std::string> fields; std::vector<std::string> subobjects; llvm::Value* array_shadow = nullptr; };
         auto scoped_value = [&](const LocalBinding& local, llvm::Value* init) {
             const bool record = !local.class_name.empty();
-            llvm::Type* shape = record ? static_cast<llvm::Type*>(class_types.at(local.class_name)) : i64;
+            // Branch-scoped f64 must use a real double slot, not an i64 carrier.
+            // The same lexical lifetime/CFG cleanup applies to an eight-byte float.
+            llvm::Type* shape = record ? static_cast<llvm::Type*>(class_types.at(local.class_name))
+                : local.scalar_type == ScalarType::F64 ? static_cast<llvm::Type*>(builder.getDoubleTy()) : i64;
             const std::size_t bytes = record ? record_classes.at(local.class_name)->fields.size() * 8 : 8;
             // Allocate once per native invocation, never on every back-edge.
             llvm::IRBuilder<> entry_slots(&function->getEntryBlock(), function->getEntryBlock().begin());
@@ -2005,7 +2231,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     if (!field_storage.emplace(key, address).second) throw std::runtime_error("scoped record field collision");
                     result.fields.push_back(key);
                 }
-            } else builder.CreateStore(init, slot);
+            } else {
+                if (local.scalar_type == ScalarType::F64 &&
+                        (!init || init->getType() != builder.getDoubleTy()))
+                    throw std::runtime_error("native scoped f64 initializer requires LLVM double");
+                builder.CreateStore(init, slot);
+            }
             if (!storage.emplace(local.name, slot).second) throw std::runtime_error("scoped value shadows existing storage");
             if (record) result.subobjects = register_subobjects(local.name, local.class_name, slot);
             return result;
@@ -2052,13 +2283,18 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             for (const auto& key : slot.fields) field_storage.erase(key);
             storage.erase(slot.name);
         };
+        struct LoopTarget { llvm::BasicBlock* break_block; llvm::BasicBlock* continue_block; std::size_t scope_depth; };
+        std::vector<LoopTarget> loop_targets;
         std::function<void(const std::vector<Statement>&)> lower_arm;
         std::function<void(const Statement&)> lower_control;
         lower_arm = [&](const std::vector<Statement>& arm) {
             const auto scope_start = active_scopes.size();
             for (const auto& action : arm) {
                 if (builder.GetInsertBlock()->getTerminator()) break;
-                if (action.kind == Statement::Kind::ForEach || action.kind == Statement::Kind::ForIndex || action.kind == Statement::Kind::Conditional || action.kind == Statement::Kind::Return || action.kind == Statement::Kind::UsingTelemetrySpan) {
+                if (action.kind == Statement::Kind::ForEach || action.kind == Statement::Kind::ForIndex ||
+                        action.kind == Statement::Kind::Conditional || action.kind == Statement::Kind::Return ||
+                        action.kind == Statement::Kind::UsingTelemetrySpan ||
+                        action.kind == Statement::Kind::Break || action.kind == Statement::Kind::Continue) {
                     lower_control(action); continue;
                 }
                 if (action.kind != Statement::Kind::ScopedLocal) {
@@ -2106,20 +2342,34 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     finish_scope(*it);
                 builder.CreateBr(structured_cleanup); return;
             }
+            if (stmt.kind == Statement::Kind::Break || stmt.kind == Statement::Kind::Continue) {
+                // Close every scope opened inside this iteration, innermost first.
+                const auto& target = loop_targets.back();
+                for (auto it = active_scopes.rbegin(); it != active_scopes.rend() - target.scope_depth; ++it)
+                    finish_scope(*it);
+                builder.CreateBr(stmt.kind == Statement::Kind::Break ? target.break_block : target.continue_block);
+                return;
+            }
             if (stmt.kind == Statement::Kind::ForIndex) {
                 auto* initial = lower(*stmt.branch_local->initializer, builder, i64, storage, field_storage, declarations, &region_moves);
                 const auto counter = scoped_value(*stmt.branch_local, initial); active_scopes.push_back(counter);
                 auto* header = llvm::BasicBlock::Create(context, "for.index.header", function);
                 auto* body = llvm::BasicBlock::Create(context, "for.index.body", function);
+                auto* step = llvm::BasicBlock::Create(context, "for.index.step", function);
                 auto* exit = llvm::BasicBlock::Create(context, "for.index.exit", function);
+                llvm::Value* record_mark = loop_record_reclaim ? builder.CreateCall(recordMark, {}, "loop.record.mark") : nullptr;
                 builder.CreateBr(header); builder.SetInsertPoint(header);
                 auto* condition = lower(*stmt.condition, builder, i64, storage, field_storage, declarations, &region_moves);
                 builder.CreateCondBr(builder.CreateICmpNE(condition, llvm::ConstantInt::get(i64, 0)), body, exit);
-                builder.SetInsertPoint(body); lower_arm(stmt.then_statements);
-                if (!builder.GetInsertBlock()->getTerminator()) {
-                    auto* next = lower(*stmt.loop_step, builder, i64, storage, field_storage, declarations, &region_moves);
-                    builder.CreateStore(next, counter.address); builder.CreateBr(header);
-                }
+                builder.SetInsertPoint(body);
+                loop_targets.push_back({exit, step, active_scopes.size()});
+                lower_arm(stmt.then_statements);
+                loop_targets.pop_back();
+                if (!builder.GetInsertBlock()->getTerminator()) builder.CreateBr(step);
+                builder.SetInsertPoint(step);
+                if (record_mark) builder.CreateCall(recordRelease, {record_mark});
+                auto* next = lower(*stmt.loop_step, builder, i64, storage, field_storage, declarations, &region_moves);
+                builder.CreateStore(next, counter.address); builder.CreateBr(header);
                 active_scopes.pop_back(); builder.SetInsertPoint(exit); end_scope(counter); return;
             }
             if (stmt.kind == Statement::Kind::ForEach) {
@@ -2129,20 +2379,32 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 auto* entrance = builder.GetInsertBlock();
                 auto* header = llvm::BasicBlock::Create(context, "foreach.header", function);
                 auto* body = llvm::BasicBlock::Create(context, "foreach.body", function);
+                auto* step = llvm::BasicBlock::Create(context, "foreach.step", function);
                 auto* exit = llvm::BasicBlock::Create(context, "foreach.exit", function);
                 builder.CreateBr(header); builder.SetInsertPoint(header);
                 auto* index = builder.CreatePHI(i64, 2, "foreach.index");
                 index->addIncoming(llvm::ConstantInt::get(i64, 0), entrance);
                 builder.CreateCondBr(builder.CreateICmpULT(index, length), body, exit);
                 builder.SetInsertPoint(body);
-                auto* element = builder.CreateCall(arrayGet, {selected, handle, index});
-                auto scope = scoped_value(*stmt.branch_local, element); active_scopes.push_back(scope);
-                lower_arm(stmt.then_statements); active_scopes.pop_back();
+                llvm::Value* element = builder.CreateCall(arrayGet, {selected, handle, index});
+                if (stmt.branch_local->scalar_type == ScalarType::F64)
+                    element = builder.CreateBitCast(element, builder.getDoubleTy(), "foreach.f64");
+                auto scope = scoped_value(*stmt.branch_local, element);
+                // The element scope sits below the loop target, so `continue`
+                // closes it here rather than on the shared step edge.
+                active_scopes.push_back(scope);
+                loop_targets.push_back({exit, step, active_scopes.size() - 1});
+                lower_arm(stmt.then_statements);
+                loop_targets.pop_back();
+                active_scopes.pop_back();
                 if (!builder.GetInsertBlock()->getTerminator()) {
-                    end_scope(scope);
-                    auto* next = builder.CreateAdd(index, llvm::ConstantInt::get(i64, 1));
-                    auto* tail = builder.GetInsertBlock(); builder.CreateBr(header); index->addIncoming(next, tail);
-                } else forget_scope(scope);
+                    finish_scope(scope);
+                    builder.CreateBr(step);
+                }
+                forget_scope(scope);
+                builder.SetInsertPoint(step);
+                auto* next = builder.CreateAdd(index, llvm::ConstantInt::get(i64, 1));
+                builder.CreateBr(header); index->addIncoming(next, step);
                 builder.SetInsertPoint(exit); return;
             }
             llvm::Value* condition = nullptr;
@@ -2371,7 +2633,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         // That fast path still runs the same drop and lifetime cleanup.
         std::function<llvm::Value*(const Expression&)> lower_return;
         lower_return = [&](const Expression& expr) -> llvm::Value* {
-            if (!owning_return) return lower(expr, builder, i64, storage, field_storage, declarations, &region_moves);
+            if (!owning_return) {
+                llvm::Value* result = lower(expr, builder, i64, storage, field_storage,
+                    declarations, &region_moves);
+                if (result->getType() != function->getReturnType())
+                    throw std::runtime_error("native return LLVM type differs from checked function ABI");
+                return result;
+            }
             if (expr.kind == Expression::Kind::Call) {
                 RegionMoveLowering forwarding = region_moves;
                 forwarding.result_destination = result_destination;
@@ -2545,7 +2813,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             else builder.CreateRet(result);
         } else {
             llvm::Value* return_snapshot = fn.returns_void
-                ? nullptr : (structured_returns ? structured_snapshot : builder.CreateAlloca(i64, nullptr, "return.snapshot.slot"));
+                ? nullptr : (structured_returns ? structured_snapshot :
+                    builder.CreateAlloca(function->getReturnType(), nullptr, "return.snapshot.slot"));
             llvm::BasicBlock* cleanup = structured_returns ? structured_cleanup : llvm::BasicBlock::Create(
                 context, "exit.cleanup", function);
             auto branch_to_cleanup = [&](llvm::Value* value) {
@@ -2600,7 +2869,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             }
             emit_lexical_cleanup();
             if (fn.returns_void) builder.CreateRetVoid();
-            else builder.CreateRet(builder.CreateLoad(i64, return_snapshot, "return.snapshot"));
+            else builder.CreateRet(builder.CreateLoad(function->getReturnType(), return_snapshot, "return.snapshot"));
         }
         if (array_failure) {
             builder.SetInsertPoint(array_failure);
