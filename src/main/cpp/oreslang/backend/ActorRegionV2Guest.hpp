@@ -18,7 +18,7 @@ namespace oreslang {
 // they cannot silently inherit normal cleanup.
 struct ActorRegionCleanupPlanV1 {
     std::vector<std::string> owners;
-    std::vector<unsigned> cleanup_order;
+    std::vector<std::size_t> cleanup_order;
 
     void add_owner(const std::string& name) {
         if (name.empty() || owners.size() >= 8 ||
@@ -222,7 +222,8 @@ inline std::string emit_actor_region_v2_guest_ir(const Program& program) {
     auto* i8 = llvm::Type::getInt8Ty(context);
     auto* i32 = llvm::Type::getInt32Ty(context);
     auto* i64 = llvm::Type::getInt64Ty(context);
-    auto* ptr = llvm::Type::getInt8PtrTy(context);
+    // LLVM 18 removed Type::getInt8PtrTy; use the opaque address-space-0 pointer.
+    auto* ptr = llvm::PointerType::get(context, 0);
     auto* void_type = llvm::Type::getVoidTy(context);
     const auto native = [&](const char* name, llvm::Type* output,
                             std::vector<llvm::Type*> args) {
@@ -313,7 +314,7 @@ inline std::string emit_actor_region_v2_guest_ir(const Program& program) {
     // Both return paths converge here: drop in reverse lexical ownership
     // order, exactly once each, AFTER the scalar return value is snapshotted.
     // This does not cover throw/suspend/cancel; those are rejected above.
-    for (const unsigned owner_index : cleanup_plan.cleanup_order)
+    for (const std::size_t owner_index : cleanup_plan.cleanup_order)
         builder.CreateCall(drop, {region, turn_storage, refs[owner_index]});
     builder.CreateCall(leave, {region, turn_storage});
     builder.CreateCall(retire, {region});
