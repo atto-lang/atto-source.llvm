@@ -318,6 +318,124 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Source-free compiler-negative harness mutation scenarios. A passing
+    # synthetic compiler proves only that malformed receipts are rejected;
+    # it cannot promote actual llvmc or physical GPU execution.
+    if(UNIX)
+        add_test(NAME native_atto_gpu_kernel_link_negative_evidence_source_free
+            COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_kernel_source_link_harness_selftest.sh")
+        set_tests_properties(native_atto_gpu_kernel_link_negative_evidence_source_free
+            PROPERTIES TIMEOUT 90)
+    endif()
+
+    # Compiler-checked restricted SAXPY source-body HIR, not GPU execution.
+    add_executable(oreslang-native-gpu-kernel-body-hir-test
+        tests/gpu_kernel_body_hir_test.cpp)
+    target_include_directories(oreslang-native-gpu-kernel-body-hir-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-gpu-kernel-body-hir-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-gpu-kernel-body-hir-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_atto_gpu_kernel_body_hir_host_only
+        COMMAND oreslang-native-gpu-kernel-body-hir-test)
+    set_tests_properties(native_atto_gpu_kernel_body_hir_host_only
+        PROPERTIES TIMEOUT 30)
+
+    # Source-declared GPU kernel types -> typed kernel signature *shape*.
+    # Does not resolve host values or yield device execution permissions.
+    add_executable(oreslang-native-gpu-kernel-source-link-test
+        tests/gpu_kernel_source_link_test.cpp)
+    target_include_directories(oreslang-native-gpu-kernel-source-link-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-gpu-kernel-source-link-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-gpu-kernel-source-link-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_atto_gpu_kernel_source_link_host_only
+        COMMAND oreslang-native-gpu-kernel-source-link-test)
+    set_tests_properties(native_atto_gpu_kernel_source_link_host_only
+        PROPERTIES TIMEOUT 30)
+
+    # Actual oreslang-llvmc invocation: 13 source-only negative cases and no
+    # emitted LLVM IR/artifact. This is NOT physical GPU execution.
+    add_test(NAME native_atto_gpu_kernel_source_link_compiler_negative
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+            "-DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/atto-gpu-kernel-source-link"
+            "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_gpu_kernel_source_link_admission.cmake")
+    set_tests_properties(native_atto_gpu_kernel_source_link_compiler_negative
+        PROPERTIES TIMEOUT 230)
+
+    # Adversarial host-only source MIR mutation and negative-evidence tests.
+    # These do NOT run native llvmc or a physical GPU.
+    add_executable(oreslang-native-gpu-source-mir-adversarial-test
+        tests/gpu_source_mir_adversarial_test.cpp)
+    target_include_directories(oreslang-native-gpu-source-mir-adversarial-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-gpu-source-mir-adversarial-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-gpu-source-mir-adversarial-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_atto_gpu_source_mir_adversarial_host_only
+        COMMAND oreslang-native-gpu-source-mir-adversarial-test)
+    set_tests_properties(native_atto_gpu_source_mir_adversarial_host_only
+        PROPERTIES TIMEOUT 30)
+    if(UNIX)
+        add_test(NAME native_atto_gpu_negative_evidence_harness_source_free
+            COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_native_negative_harness_selftest.sh")
+        set_tests_properties(native_atto_gpu_negative_evidence_harness_source_free
+            PROPERTIES TIMEOUT 30)
+    endif()
+
+    # Native frontend-source MIR is deliberately non-executable; the actual
+    # compiler admission test below also verifies source diagnostics.
+    add_executable(oreslang-native-gpu-source-mir-test
+        tests/gpu_source_launch_mir_test.cpp)
+    target_include_directories(oreslang-native-gpu-source-mir-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-gpu-source-mir-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-gpu-source-mir-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_atto_gpu_source_mir_host_only
+        COMMAND oreslang-native-gpu-source-mir-test)
+    set_tests_properties(native_atto_gpu_source_mir_host_only
+        PROPERTIES TIMEOUT 20)
+
+    # Host-only typed GPU IR v1: checks ordered ABI arguments, device effects,
+    # queue scope, byte extents and mutable-loan aliasing. No physical dispatch.
+    add_executable(oreslang-native-gpu-typed-launch-ir-test
+        tests/gpu_typed_launch_ir_test.cpp)
+    target_include_directories(oreslang-native-gpu-typed-launch-ir-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-gpu-typed-launch-ir-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-gpu-typed-launch-ir-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_atto_gpu_typed_launch_host_only
+        COMMAND oreslang-native-gpu-typed-launch-ir-test)
+    set_tests_properties(native_atto_gpu_typed_launch_host_only
+        PROPERTIES TIMEOUT 30)
+
+    # AttoLang native launch spelling: exact compiler-backed scalar control and
+    # fail-closed GPU admission, not executed kernels or hardware parity.
+    add_test(NAME native_atto_gpu_explicit_launch_source_admission
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+            "-DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/atto-gpu-launch-admission"
+            "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_gpu_explicit_launch_admission.cmake")
+    set_tests_properties(native_atto_gpu_explicit_launch_source_admission
+        PROPERTIES TIMEOUT 75)
+
+    # Standalone native geometry model: a host-only checked-arithmetic test,
+    # not a physical device launch or kernel execution claim.
+    add_executable(oreslang-native-gpu-launch-geometry-test
+        tests/gpu_explicit_launch_geometry_test.cpp)
+    target_include_directories(oreslang-native-gpu-launch-geometry-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-gpu-launch-geometry-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_atto_gpu_launch_geometry_host_only
+        COMMAND oreslang-native-gpu-launch-geometry-test)
+    set_tests_properties(native_atto_gpu_launch_geometry_host_only
+        PROPERTIES TIMEOUT 20)
+
     # An actual C11 native state gate, shared with LLVM's future typed
     # handle_state lowering. This is HOST execution, not guest .atto dispatch.
     add_executable(oreslang-declared-actor-critical-counter-test
