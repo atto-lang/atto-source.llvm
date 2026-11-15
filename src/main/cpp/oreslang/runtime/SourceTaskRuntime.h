@@ -13,7 +13,10 @@ typedef enum {
     ORES_SOURCE_TASK_INVALID = 1,
     ORES_SOURCE_TASK_WOULD_DEADLOCK = 2,
     ORES_SOURCE_TASK_ALREADY_CONSUMED = 3,
-    ORES_SOURCE_TASK_RESOURCE_EXHAUSTED = 4
+    ORES_SOURCE_TASK_RESOURCE_EXHAUSTED = 4,
+    /* This narrow scalar Task ABI has no actor-incarnation routing.
+     * An actor task must NEVER silently use its synthetic native pool. */
+    ORES_SOURCE_TASK_ACTOR_POOL_UNSUPPORTED = 5
 } OresSourceTaskStatus;
 
 /*
