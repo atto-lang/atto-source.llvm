@@ -2,6 +2,7 @@
 
 #include "oreslang/runtime/ActorArena.h"
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -68,15 +69,27 @@ public:
         : layout_(layout), capacity_(capacity), lanes_(lanes),
           arena_(arena), turn_(turn), pages_(pages), page_words_(page_words) {
         const auto count = required_words(layout, capacity, lanes);
-        if (!arena_ || pages_.empty() || page_words_ == 0
+        if (!arena_ || pages_.empty() || pages_.size() > owned_pages_.size()
+                || page_words_ == 0
                 || page_words_ > (1024U * 1024U) / sizeof(std::uint32_t)
-                || pages_.size() < (count + page_words_ - 1) / page_words_) {
+                || pages_.size() != (count + page_words_ - 1) / page_words_) {
             throw std::invalid_argument("invalid arena-backed proxy pages");
+        }
+        std::copy(pages_.begin(), pages_.end(), owned_pages_.begin());
+        pages_ = std::span<const OresArenaHandle>(owned_pages_.data(), pages_.size());
+        // Atomic all-pages reservation: two logical slabs cannot initialize
+        // overlapping live arena slots. A failed attempt makes no writes.
+        // Close releases only after all request receipts settle and pages
+        // are physically scrubbed; host destruction cannot skip this receipt.
+        page_claim_ = ores_actor_arena_claim_pages(arena_, turn_, pages_.data(),
+                pages_.size(), page_words_ * sizeof(std::uint32_t));
+        if (!page_claim_) {
+            throw std::invalid_argument("proxy pages invalid or already claimed");
         }
         rows_ = layout_ == Layout::AoSoA
             ? ((capacity_ + lanes_ - 1) / lanes_) * lanes_ : capacity_;
         receipt_base_ = rows_ * kFields;
-        for (std::size_t word = 0; word < count; ++word) write_word(word, 0);
+        zero_words();
         free_head_ = 0;
         for (std::uint32_t row = 0; row < capacity_; ++row) {
             put(row, kNextFree, row + 1 == capacity_ ? kNoSlot : row + 1);
@@ -191,11 +204,13 @@ public:
     void close() {
         check_open();
         if (live_ != 0) throw std::logic_error("unretired native requests");
+        zero_words();
         if (arena_) {
-            const auto words = required_words(layout_, capacity_, lanes_);
-            for (std::size_t i = 0; i < words; ++i) write_word(i, 0);
-        } else {
-            std::fill(words_.begin(), words_.end(), 0);
+            if (!page_claim_ || !ores_actor_arena_unclaim_pages(
+                    arena_, turn_, pages_.data(), pages_.size(), page_claim_)) {
+                throw std::logic_error("proxy slab page claim release failed");
+            }
+            page_claim_ = 0;
         }
         closed_ = true;
         free_head_ = kNoSlot;
@@ -217,6 +232,31 @@ private:
             : (static_cast<std::size_t>(row / lanes_) * kFields + field) * lanes_
                 + (row % lanes_);
     }
+    // Bulk scrub through the existing checked arena API. This retains
+    // owner-turn and carrier verification on every write, without taking
+    // hundreds of thousands of spinlock acquisitions for individual words.
+    // Arena pages may contain prior logical state, so never assume calloc.
+    void zero_words() {
+        if (!arena_) {
+            std::fill(words_.begin(), words_.end(), 0);
+            return;
+        }
+        constexpr std::size_t kChunkBytes = 4096;
+        constexpr std::size_t kChunkWords = kChunkBytes / sizeof(std::uint32_t);
+        const std::array<std::uint32_t, kChunkWords> zero{};
+        std::size_t offset = 0;
+        while (offset < pages_.size() * page_words_) {
+            const auto page = offset / page_words_;
+            const auto within = offset % page_words_;
+            const auto extent = std::min({pages_.size() * page_words_ - offset,
+                page_words_ - within, kChunkWords});
+            ores_actor_arena_write(arena_, turn_, pages_[page],
+                within * sizeof(std::uint32_t), zero.data(),
+                extent * sizeof(std::uint32_t));
+            offset += extent;
+        }
+    }
+
     std::uint32_t read_word(std::size_t word) const {
         if (!arena_) return words_[word];
         const auto page = word / page_words_;
@@ -281,7 +321,9 @@ private:
     OresActorArena* arena_ = nullptr;
     OresArenaTurn turn_{};
     std::span<const OresArenaHandle> pages_{};
+    std::array<OresArenaHandle, 16> owned_pages_{};
     std::size_t page_words_ = 0;
+    std::uint64_t page_claim_ = 0;
     std::uint32_t free_head_ = kNoSlot;
     std::uint32_t live_ = 0;
     bool closed_ = false;

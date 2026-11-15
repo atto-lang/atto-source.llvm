@@ -135,9 +135,13 @@ Implementation refinement still requires checking every entrypoint, context
 migration, generation fencing, cleanup, error and resource-lifetime path. No
 liveness theorem is claimed without scheduling fairness and terminating code.
 
-The Java `scripts/no-zalgo` project runs the actual host runtime via the Oreslang
-test CLI. `--race` consumes fresh run-ID-bound traces of actual actor accesses
-and lease boundaries, with an independent active-carrier overlap assertion.
-`--fuzz` mutates completion mode, yield count and cancellation. These are scoped
-host-runtime checks, not comprehensive source memory instrumentation or coverage-
-guided scheduling. See Java `docs/NO_ZALGO_VERIFICATION.md` for commands/evidence.
+Test CLI status (`atto test`, legacy `oreslang test`): no runtime currently
+feeds this protocol to the test CLI automatically. `atto test --race --trace
+FILE.jsonl` analyzes an explicitly supplied, offline `ORES_RACE_V1` trace (the
+Java `RaceTraceRecorder` can emit one from caller-supplied events); live
+`atto test --race` exits 2 (inconclusive) until trusted runtime instrumentation
+exists. `atto test --fuzz` mutates stdin bytes for a configured executable; it
+does not mutate completion mode, yield count or cancellation. Java's
+`NoZalgoCallbackDispatchTest` is a host unit test of this ordering, not an
+end-to-end race or fuzz gate, and there is no `scripts/no-zalgo` project or
+`NO_ZALGO_VERIFICATION.md`.
