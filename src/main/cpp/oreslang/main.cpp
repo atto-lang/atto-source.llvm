@@ -281,6 +281,40 @@ int main(int argc, char** argv) {
                 if (std::string_view(error.what()).find("single-unit")
                         == std::string_view::npos) throw;
             }
+            // Manifest `main(int):int` must never authorize a different
+            // typed function just because its name and arity match.
+            auto rejects_wrong_signature = [&](const auto& mutate) {
+                auto candidate = oreslang::parse_program(
+                    "pub fnc main(int n): int { return n; }");
+                mutate(candidate.functions.front());
+                try {
+                    (void)oreslang::emit_verified_llvm_ir(
+                        candidate, false, false, false, "",
+                        {{"main", 1, "rid_d5f8e146ba97430dac6bf17430477e2a"}}, {});
+                    return false;
+                } catch (const std::runtime_error& error) {
+                    return std::string_view(error.what()).find("exact int-only")
+                        != std::string_view::npos;
+                }
+            };
+            if (!rejects_wrong_signature([](oreslang::Function& fn) {
+                    fn.parameters.front().scalar_type = oreslang::ScalarType::Bool;
+                }) ||
+                !rejects_wrong_signature([](oreslang::Function& fn) {
+                    fn.parameters.front().mode = oreslang::Parameter::Mode::Borrow;
+                }) ||
+                !rejects_wrong_signature([](oreslang::Function& fn) {
+                    fn.return_type = oreslang::ScalarType::Bool;
+                }) ||
+                !rejects_wrong_signature([](oreslang::Function& fn) {
+                    fn.returns_void = true;
+                }) ||
+                !rejects_wrong_signature([](oreslang::Function& fn) {
+                    fn.parameters.front().pending_type_alias = "Other";
+                })) {
+                std::cerr << "native LLVM source IDs admitted mismatched typed callable signature\n";
+                return 2;
+            }
             std::cout << "LLVM_NATIVE_LOG_INFO_GUEST_IR_PASS\n";
             return 0;
         } catch (const std::exception& error) {
