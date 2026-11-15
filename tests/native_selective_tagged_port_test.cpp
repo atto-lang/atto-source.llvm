@@ -61,7 +61,13 @@ static void bounded_port_selective() {
     auto selected = p.try_receive_tagged(shutdown, 1, yielded.cursor);
     CHECK(selected.status == Status::Matched && selected.delivery);
     CHECK(selected.inspected == 1 && *selected.delivery->value().value == 300);
-    // Even checked-out receives hold bytes until physical ACK.
+    // Dequeue is custody transfer, not admission credit refund.
+    // Regression: despite a free physical queue slot, an unacknowledged
+    // selected receipt must keep both frame and byte windows saturated.
+    CHECK(p.used_frames() == 3 && p.used_bytes() == 48);
+    MoveOnlyMessage while_inflight(410);
+    CHECK(!p.offer(std::move(while_inflight), 16, payment));
+    CHECK(while_inflight.value && *while_inflight.value == 410);
     CHECK(p.used_frames() == 3 && p.used_bytes() == 48);
     CHECK(selected.delivery->acknowledge_released());
     CHECK(!selected.delivery->acknowledge_released());
