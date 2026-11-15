@@ -2054,11 +2054,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         };
         std::function<void(const std::vector<Statement>&)> lower_arm;
         std::function<void(const Statement&)> lower_control;
+        // Only lexical, synchronous scalar loop backedges are admitted.
+        // The source validator prohibits scoped owners, calls and suspension.
+        std::vector<std::pair<llvm::BasicBlock*, llvm::BasicBlock*>> loop_targets;
         lower_arm = [&](const std::vector<Statement>& arm) {
             const auto scope_start = active_scopes.size();
             for (const auto& action : arm) {
                 if (builder.GetInsertBlock()->getTerminator()) break;
-                if (action.kind == Statement::Kind::ForEach || action.kind == Statement::Kind::ForIndex || action.kind == Statement::Kind::Conditional || action.kind == Statement::Kind::Return || action.kind == Statement::Kind::UsingTelemetrySpan) {
+                if (action.kind == Statement::Kind::ForEach || action.kind == Statement::Kind::ForIndex || action.kind == Statement::Kind::Conditional || action.kind == Statement::Kind::Return || action.kind == Statement::Kind::UsingTelemetrySpan || action.kind == Statement::Kind::Loop || action.kind == Statement::Kind::Break || action.kind == Statement::Kind::Continue) {
                     lower_control(action); continue;
                 }
                 if (action.kind != Statement::Kind::ScopedLocal) {
@@ -2077,6 +2080,31 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             }
         };
         lower_control = [&](const Statement& stmt) {
+            if (stmt.kind == Statement::Kind::Break ||
+                    stmt.kind == Statement::Kind::Continue) {
+                if (loop_targets.empty())
+                    throw std::runtime_error("native break/continue has no lexical loop");
+                builder.CreateBr(stmt.kind == Statement::Kind::Break
+                    ? loop_targets.back().second
+                    : loop_targets.back().first);
+                return;
+            }
+            if (stmt.kind == Statement::Kind::Loop) {
+                auto* header = llvm::BasicBlock::Create(context, "scalar.loop.header", function);
+                auto* body = llvm::BasicBlock::Create(context, "scalar.loop.body", function);
+                auto* exit = llvm::BasicBlock::Create(context, "scalar.loop.exit", function);
+                builder.CreateBr(header);
+                builder.SetInsertPoint(header);
+                builder.CreateBr(body);
+                builder.SetInsertPoint(body);
+                loop_targets.emplace_back(header, exit);
+                lower_arm(stmt.then_statements);
+                loop_targets.pop_back();
+                if (!builder.GetInsertBlock()->getTerminator())
+                    builder.CreateBr(header);
+                builder.SetInsertPoint(exit);
+                return;
+            }
             if (stmt.kind == Statement::Kind::UsingTelemetrySpan) {
                 if (!has_native_telemetry || !telemetryBegin.getCallee()
                         || !telemetryEnd.getCallee())
@@ -2198,7 +2226,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 continue;
             }
             if (stmt.kind == Statement::Kind::ForEach || stmt.kind == Statement::Kind::ForIndex ||
-                    stmt.kind == Statement::Kind::Conditional || stmt.kind == Statement::Kind::UsingTelemetrySpan) {
+                    stmt.kind == Statement::Kind::Conditional || stmt.kind == Statement::Kind::UsingTelemetrySpan ||
+                    stmt.kind == Statement::Kind::Loop) {
                 lower_control(stmt); continue;
             }
             lower_effect(stmt);
