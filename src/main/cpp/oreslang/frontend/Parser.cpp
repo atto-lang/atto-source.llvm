@@ -917,12 +917,36 @@ public:
                     program.functions.push_back(std::move(fn));
                     continue;
                 }
-                const MaxActorThreads cap = actor_max_threads_attribute();
-                require("define");
-                require("actor");
-                auto actor = actor_declaration();
-                actor.max_actor_threads = cap;
-                program.actors.push_back(std::move(actor));
+                if (accept("ActorFrameBudget")) {
+                    // A resource-budget attribute, not a test-only guest hook.
+                    // Zero is a valid deny-all setting and must cause a
+                    // recoverable actor-local frame admission failure.
+                    require("(");
+                    if (token_.kind != Kind::Integer)
+                        fail("@ActorFrameBudget requires a literal 0..16");
+                    const std::string budget_literal(token_.text);
+                    if (budget_literal.size() > 2 ||
+                        !std::all_of(budget_literal.begin(), budget_literal.end(),
+                                     [](char c) { return c >= '0' && c <= '9'; }))
+                        fail("@ActorFrameBudget requires a literal 0..16");
+                    const unsigned budget = static_cast<unsigned>(std::stoul(budget_literal));
+                    if (budget > 16)
+                        fail("@ActorFrameBudget exceeds native actor frame limit (16)");
+                    advance();
+                    require(")");
+                    require("define");
+                    require("actor");
+                    auto actor = actor_declaration();
+                    actor.frame_budget = budget;
+                    program.actors.push_back(std::move(actor));
+                } else {
+                    const MaxActorThreads cap = actor_max_threads_attribute();
+                    require("define");
+                    require("actor");
+                    auto actor = actor_declaration();
+                    actor.max_actor_threads = cap;
+                    program.actors.push_back(std::move(actor));
+                }
             } else if (accept("define")) {
                 if (accept("pub")) {
                     if (public_class) fail("duplicate pub modifier");
