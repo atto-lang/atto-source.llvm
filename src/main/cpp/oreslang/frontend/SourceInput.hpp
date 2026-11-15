@@ -210,6 +210,9 @@ inline void require_valid_source_utf8(std::string_view source) {
     for (std::size_t i = 0; i < source.size();) {
         const auto lead = static_cast<unsigned char>(source[i]);
         if (lead == 0) throw ores_invalid_source_byte("native source contains NUL byte", i);
+        // Reject raw terminal ESC/DEL even in comments/strings, before tokens.
+        if (lead == 0x1b || lead == 0x7f)
+            throw ores_invalid_source_byte("native source contains terminal control", i);
         if (lead <= 0x7f) { ++i; continue; }
 
         std::size_t continuation_count = 0;
