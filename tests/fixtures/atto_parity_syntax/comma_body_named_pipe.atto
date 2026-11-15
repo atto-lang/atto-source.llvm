@@ -1,0 +1,7 @@
+fnc add_one(int n): int { return n + 1; }
+fnc twice(int n): int { return n * 2; }
+
+fnc main() -> int ::
+    int seed = 20,
+    seed |> add_one |> twice
+end

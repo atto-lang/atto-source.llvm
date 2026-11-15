@@ -1,0 +1,170 @@
+name: LLVM ActorArena lifecycle O0/O2 sanitizer gate (host runtime)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/ActorArena.c'
+      - 'src/main/cpp/oreslang/runtime/ActorArena.h'
+      - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c'
+      - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h'
+      - 'tests/actor_owned_heap_lifecycle_test.cpp'
+      - 'scripts/test-source-actor-heap-carrier-v1.sh'
+      - 'tests/actor_arena_lifecycle_stress_v1.c'
+      - 'scripts/test-actor-arena-lifecycle-v1.sh'
+      - 'scripts/test-actor-arena-guest-churn-v1.sh'
+      - 'tests/fixtures/actor-arena-lifecycle-v1/churn-128.atto'
+      - 'tests/fixtures/actor-state-e2e-v1/sealed-direct-state-reject.atto'
+      - 'scripts/compile-aot.sh'
+      - 'scripts/audit_no_gc_ir.rs'
+      - '.github/workflows/actor-arena-native-sanitizers-v1.yml'
+  push:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/ActorArena.c'
+      - 'src/main/cpp/oreslang/runtime/ActorArena.h'
+      - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c'
+      - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h'
+      - 'tests/actor_owned_heap_lifecycle_test.cpp'
+      - 'scripts/test-source-actor-heap-carrier-v1.sh'
+      - 'tests/actor_arena_lifecycle_stress_v1.c'
+      - 'scripts/test-actor-arena-lifecycle-v1.sh'
+      - 'scripts/test-actor-arena-guest-churn-v1.sh'
+      - 'tests/fixtures/actor-arena-lifecycle-v1/churn-128.atto'
+      - 'tests/fixtures/actor-state-e2e-v1/sealed-direct-state-reject.atto'
+      - 'scripts/compile-aot.sh'
+      - 'scripts/audit_no_gc_ir.rs'
+      - '.github/workflows/actor-arena-native-sanitizers-v1.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  production-arena-asan-ubsan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact unprivileged head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Check exact source identity
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          echo "LLVM_ACTOR_ARENA_SOURCE_HEAD=$EXPECTED_HEAD" >> "$GITHUB_STEP_SUMMARY"
+          echo "LLVM_ACTOR_ARENA_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_STEP_SUMMARY"
+      - name: Compile production native arena at O0/O2 and execute sanitizers
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          CLANG: /usr/bin/clang
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v /usr/bin/clang
+          /usr/bin/clang --version
+          bash -n scripts/test-actor-arena-lifecycle-v1.sh
+          bash scripts/test-actor-arena-lifecycle-v1.sh | tee "$RUNNER_TEMP/actor-arena-lifecycle-v1-receipts.txt"
+          grep -Fqx 'LLVM_ACTOR_ARENA_HOST_MATRIX_PASS|compiler=clang|sanitizers=ASAN_UBSAN|levels=O0_O2|real_runtime=YES|atto_guest=NOT_EXECUTED' "$RUNNER_TEMP/actor-arena-lifecycle-v1-receipts.txt"
+          test "$(grep -c '^LLVM_ACTOR_ARENA_HOST_SANITIZED|' "$RUNNER_TEMP/actor-arena-lifecycle-v1-receipts.txt")" = 2
+      - name: Retain host-runtime receipts (not guest certificate)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-host-arena-asan-ubsan-not-guest
+          path: ${{ runner.temp }}/actor-arena-lifecycle-v1-receipts.txt
+          if-no-files-found: warn
+
+  compiler-backed-atto-actor-churn:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - name: Checkout exact unprivileged guest compiler head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Verify immutable source identity
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          echo "LLVM_ACTOR_HEAP_GUEST_SOURCE_HEAD=$EXPECTED_HEAD" >> "$GITHUB_STEP_SUMMARY"
+          echo "LLVM_ACTOR_HEAP_GUEST_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_STEP_SUMMARY"
+      - name: Install native LLVM compiler prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-19 llvm-19-dev cmake ninja-build
+      - name: Build source compiler and test production IR no-GC gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B "$RUNNER_TEMP/native-atto-actor" -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DLLVM_DIR=/usr/lib/llvm-19/lib/cmake/llvm
+          cmake --build "$RUNNER_TEMP/native-atto-actor" --target oreslang-llvmc --parallel 2
+          test -x "$RUNNER_TEMP/native-atto-actor/oreslang-llvmc"
+          command -v rustc
+          rustc --edition=2021 -D warnings --test scripts/audit_no_gc_ir.rs -o "$RUNNER_TEMP/native-atto-actor/ir-audit-tests"
+          "$RUNNER_TEMP/native-atto-actor/ir-audit-tests" --test-threads=1
+          rustc --edition=2021 -D warnings scripts/audit_no_gc_ir.rs -o "$RUNNER_TEMP/native-atto-actor/oreslang-no-gc-ir-audit"
+      - name: Run real Atto actor churn O0/O2 or fail closed
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          ORESLANG_LLVMC: ${{ runner.temp }}/native-atto-actor/oreslang-llvmc
+          ORES_NO_GC_IR_AUDIT: ${{ runner.temp }}/native-atto-actor/oreslang-no-gc-ir-audit
+          CLANG: /usr/bin/clang-19
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/test-actor-arena-guest-churn-v1.sh
+          bash scripts/test-actor-arena-guest-churn-v1.sh | tee "$RUNNER_TEMP/actor-arena-guest-churn-v1-receipts.txt"
+          grep -Fqx "LLVM_ACTOR_HEAP_GUEST_MATRIX_EXECUTED|head=$EXPECTED_HEAD|levels=O0_O2|process_executions=8|negative_ir_denials=2|runtime_heap_proof=NOT_CERTIFIED" "$RUNNER_TEMP/actor-arena-guest-churn-v1-receipts.txt"
+          test "$(grep -c '^LLVM_ACTOR_HEAP_GUEST_CANDIDATE_EXECUTED_NOT_CERTIFIED|' "$RUNNER_TEMP/actor-arena-guest-churn-v1-receipts.txt")" = 2
+      - name: Retain guest execution receipts separately from native host controls
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: atto-actor-heap-guest-churn-candidate
+          path: ${{ runner.temp }}/actor-arena-guest-churn-v1-receipts.txt
+          if-no-files-found: warn
+
+  compiler-source-actor-heap-carrier:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout immutable unprivileged source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Execute original compiler heap lifecycle with carrier hardening
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          CLANG: /usr/bin/clang
+          CLANGXX: /usr/bin/clang++
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          command -v /usr/bin/clang
+          command -v /usr/bin/clang++
+          bash -n scripts/test-source-actor-heap-carrier-v1.sh
+          bash scripts/test-source-actor-heap-carrier-v1.sh | tee "$RUNNER_TEMP/compiler-heap-carrier-receipts.txt"
+          grep -Fqx 'SOURCE_ACTOR_HEAP_CARRIER_HOST_MATRIX_PASS|levels=O0_O2|negative_each=12|cross_carrier_stolen_token=REJECTED|migration_between_turns=ALLOWED|pre_free_scrubbed=YES|guest=NOT_EXECUTED' "$RUNNER_TEMP/compiler-heap-carrier-receipts.txt"
+          test "$(grep -c '^SOURCE_ACTOR_HEAP_CARRIER_HOST_PASS|' "$RUNNER_TEMP/compiler-heap-carrier-receipts.txt")" = 2
+      - name: Retain compiler backend host receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: compiler-source-actor-heap-carrier-host-only
+          path: ${{ runner.temp }}/compiler-heap-carrier-receipts.txt
+          if-no-files-found: warn
