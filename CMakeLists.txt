@@ -3195,6 +3195,19 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_owned_local_shared_borrow owned-local-shared-borrow.ores --ir "llvm.lifetime.end")
     oreslang_contract_test(native_owned_local_mutable_borrow owned-local-mutable-borrow.ores --ir "llvm.lifetime.end")
     oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "actor requires at least one scalar field")
+    # Hierarchy and protocol contracts are Java-only at present; the native
+    # scalar actor subset must reject before emitting IR or a guest artifact.
+    foreach(hierarchy_case IN ITEMS inheritance interface trait)
+        oreslang_contract_test(native_actor_${hierarchy_case}_unsupported
+            source-actor-${hierarchy_case}-unsupported.ores
+            --diagnostic "native actor extends/implements requires actor inheritance, trait/interface dispatch and sealed-state lowering")
+    endforeach()
+    # Exact canonical lifecycle source is a positive Java guest candidate,
+    # but the native bootstrap cannot lower ActorMail<T>, outputs or
+    # receive(ActorMail<T>). The rejection must return no LLVM IR.
+    oreslang_contract_test(native_actor_canonical_lifecycle_unsupported
+        source-actor-lifecycle-canonical-unsupported.ores
+        --diagnostic "native ActorMail<T> receive and actor outputs require typed message and mailbox lowering")
     # Optional instance method marker: fnc, method, and no marker all lower
     # to the same native supported on_message(int) handler.
     oreslang_contract_test(native_actor_explicit_method source-actor-method-keyword.ores

@@ -1974,8 +1974,17 @@ private:
             fail("callable signatures cannot be declared as nominal actor types");
         if (entry_builtin_name(actor.name))
             fail("builtin Entry is compiler-owned and cannot be declared as a nominal actor type");
+        // The native scalar bootstrap has no actor-superclass layout, trait
+        // witness table or interface dispatch. A generic 'expected as' error
+        // obscures this crucial fail-closed boundary.
+        if (token_.text == "extends" || token_.text == "implements" || token_.text == "impl") {
+            fail("native actor extends/implements requires actor inheritance, trait/interface dispatch and sealed-state lowering; unsupported");
+        }
         require("as");
         const bool braced = accept("{");
+        if (token_.text == "receive") {
+            fail("native ActorMail<T> receive and actor outputs require typed message and mailbox lowering; unsupported");
+        }
         if (token_.text == "state") {
             fail("native actor state { ... } requires sealed handle_state lowering; legacy scalar actor fields are not this contract");
         }
@@ -2006,6 +2015,9 @@ private:
         Function method;
         method.offset = token_.offset;
         method.exported = accept("pub");
+        if (token_.text == "receive") {
+            fail("native ActorMail<T> receive and actor outputs require typed message and mailbox lowering; unsupported");
+        }
         if (!method.exported) fail("native actor requires pub on_message(int)");
         // Match the Java frontend's declaration spelling contract. The native
         // actor subset still lowers only on_message(int) and cannot admit
