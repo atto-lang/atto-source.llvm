@@ -424,7 +424,10 @@ impl Globals<'_> {
 fn resolve(t: Type, type_names: &[(String, Pos)], classes: &[String], enums: &[EnumDecl], actors: &[String]) -> R<Type> {
     Ok(match t {
         Type::Named(i) => {
-            let (n, pos) = &type_names[i as usize];
+            let (n, pos) = type_names.get(i as usize).ok_or_else(|| {
+                Diagnostic::new(Pos::default(), "E_TYPE_INDEX",
+                    format!("unrelocated or out-of-bounds named type index {i}"))
+            })?;
             if let Some(c) = classes.iter().position(|c| c == n) {
                 Type::Class(c as u32)
             } else if let Some(e) = enums.iter().position(|e| e.name == *n) {
@@ -436,7 +439,10 @@ fn resolve(t: Type, type_names: &[(String, Pos)], classes: &[String], enums: &[E
             }
         }
         Type::NamedRef(i) => {
-            let (n, pos) = &type_names[i as usize];
+            let (n, pos) = type_names.get(i as usize).ok_or_else(|| {
+                Diagnostic::new(Pos::default(), "E_TYPE_INDEX",
+                    format!("unrelocated or out-of-bounds named type index {i}"))
+            })?;
             match actors.iter().position(|a| a == n) {
                 Some(a) => Type::ActorRef(a as u32),
                 None => return Err(type_err(*pos, format!("ActorRef<{n}> needs an actor type, and '{n}' is not one"))),
