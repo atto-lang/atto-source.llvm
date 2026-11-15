@@ -5719,6 +5719,52 @@ if(BUILD_TESTING)
     set_tests_properties(native_gpu_actor_host_turn_fence_control_v0 PROPERTIES TIMEOUT 30)
 endif()
 
+# V1 opaque host provider event identity and bounded actor quarantine. This
+# test uses an injected MOCK port; no physical GPU execution is implied.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-gpu-actor-provider-bridge-v1-test
+        tests/gpu_actor_provider_bridge_v1_test.cpp)
+    target_include_directories(oreslang-gpu-actor-provider-bridge-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-gpu-actor-provider-bridge-v1-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-gpu-actor-provider-bridge-v1-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    target_link_libraries(oreslang-gpu-actor-provider-bridge-v1-test PRIVATE Threads::Threads)
+    add_test(NAME native_gpu_actor_provider_bridge_v1_host_mock
+        COMMAND oreslang-gpu-actor-provider-bridge-v1-test)
+    set_tests_properties(native_gpu_actor_provider_bridge_v1_host_mock PROPERTIES TIMEOUT 30)
+endif()
+
+# V2 OpenCL actor adapter integration: the first target uses an injected
+# fake Api, the second REQUIRES a real GPU. A CPU OpenCL device cannot pass.
+# A physical probe returning 77 reports GPU_NOT_EXECUTED, not success.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-gpu-actor-opencl-v2-host-test
+        tests/gpu_actor_opencl_provider_v2_test.cpp)
+    target_include_directories(oreslang-gpu-actor-opencl-v2-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-gpu-actor-opencl-v2-host-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-gpu-actor-opencl-v2-host-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    target_link_libraries(oreslang-gpu-actor-opencl-v2-host-test PRIVATE Threads::Threads dl)
+    add_test(NAME native_gpu_actor_opencl_v2_host_mock
+        COMMAND oreslang-gpu-actor-opencl-v2-host-test)
+    set_tests_properties(native_gpu_actor_opencl_v2_host_mock PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-gpu-actor-opencl-v2-physical-probe
+        tests/gpu_actor_opencl_v2_physical_probe.cpp)
+    target_include_directories(oreslang-gpu-actor-opencl-v2-physical-probe PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-gpu-actor-opencl-v2-physical-probe PRIVATE cxx_std_17)
+    target_compile_options(oreslang-gpu-actor-opencl-v2-physical-probe PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    target_link_libraries(oreslang-gpu-actor-opencl-v2-physical-probe PRIVATE Threads::Threads dl)
+    # Explicit physical GPU gate is run separately on GPU-capable runners.
+    # Do NOT mark SKIP_RETURN_CODE=77: skipped CTest is NOT hardware proof.
+endif()
+
 # Dependency-free, executable import/source admission boundary. This test
 # compiles the production SourceInput.hpp with the host C++ compiler.
 if(BUILD_TESTING AND UNIX)
