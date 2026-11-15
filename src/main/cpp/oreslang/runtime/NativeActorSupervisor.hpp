@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -102,7 +103,20 @@ public:
             if (begin < other_end && other_begin < end)
                 throw std::logic_error("overlapping supervisor native regions");
         }
-        mapped_regions_.emplace(key, MappedRegion{base, bytes, mode});
+        // Pin one scheduler-owned resource loan for every mapped region.
+        // STOP and runtime retirement cannot publish actor DONE or reclaim
+        // scheduler-owned actor resources until revocation releases this loan.
+        // The retain is synchronized with STOP by the scheduler's own lock.
+        if (!ores_native_actor_scheduler_retain_resource(scheduler_, ref))
+            throw std::logic_error("stopped actor cannot retain native RAM mapping");
+        try {
+            mapped_regions_.emplace(key, MappedRegion{ref, base, bytes, mode});
+        } catch (...) {
+            // Failed catalog allocation must not strand a scheduler loan.
+            if (!ores_native_actor_scheduler_release_resource(scheduler_, ref))
+                std::terminate();
+            throw;
+        }
     }
 
     // Host code in an authenticated scheduler callback can request an opaque
@@ -208,6 +222,7 @@ public:
 
 private:
     struct MappedRegion {
+        OresNativeActorRef ref{}; // scheduler-owned external-holder loan
         void* base = nullptr;
         std::size_t bytes = 0;
         Mode mode = Mode::ReadOnly;
@@ -224,9 +239,17 @@ private:
         std::lock_guard<std::mutex> lock(mapped_mu_);
         for (auto it = mapped_regions_.begin(); it != mapped_regions_.end();) {
             if (std::get<0>(it->first) == actor.actor &&
-                std::get<1>(it->first) == actor.epoch)
+                std::get<1>(it->first) == actor.epoch) {
+                // Only reached AFTER the broker's pointer window fence fully
+                // quiesces all synchronous FFI. Releasing here lets the
+                // scheduler finalize STOP exactly once per mapped region.
+                if (!ores_native_actor_scheduler_release_resource(
+                        scheduler_, it->second.ref))
+                    throw std::logic_error("native region scheduler holder release failed");
                 it = mapped_regions_.erase(it);
-            else ++it;
+            } else {
+                ++it;
+            }
         }
     }
 
