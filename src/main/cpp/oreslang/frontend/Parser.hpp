@@ -459,6 +459,17 @@ struct ModuleImport {
     std::size_t offset = 0;
 };
 
+// Syntax-only namespace import. No host, AOT or guest namespace authority is
+// obtained from a parsed source string. The backend must reject this record
+// until a verified v2 package manifest/lockfile graph supplies immutable
+// source ownership, pins and typed physical-provider resolution.
+struct NamespaceImportSyntax {
+    std::string namespace_name;
+    std::string local_name;
+    std::string package_selector;
+    std::size_t offset = 0;
+};
+
 struct TypeConstraintDescriptor {
     std::string schema_id;
     std::string qualified_type_name;
@@ -480,6 +491,7 @@ struct FileExport {
 struct Program {
     std::vector<FileExport> exports;
     std::vector<ModuleImport> imports;
+    std::vector<NamespaceImportSyntax> namespace_imports;
     std::vector<CooperativeScalarLoop> cooperative_loops;
     std::vector<ScalarGenerator> generators;
     std::string namespace_name;
@@ -506,6 +518,10 @@ Program parse_program(std::string_view source, bool experimental_owned_int = fal
 // resolve_and_validate_program must run after all module names are resolved.
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int = false,
                                  bool experimental_rt_scalar_loop = false);
+// HOST-ONLY preparatory AST: caller must supply already authenticated frozen
+// source bytes, and only the verified package graph may consume the result.
+// Unlike parse_program(), this must never authorize IR or guest execution.
+Program parse_verified_namespace_source_unresolved(std::string_view authenticated_source);
 void resolve_and_validate_program(Program& program);
 
 } // namespace oreslang
