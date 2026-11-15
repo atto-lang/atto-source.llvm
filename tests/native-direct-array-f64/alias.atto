@@ -1,0 +1,9 @@
+fnc collide(borrow mut Array<float> a, borrow mut Array<float> b): int {
+  a.set(0, 1.0); b.set(0, 2.0);
+  return 0;
+}
+pub routine main(): int {
+  let mut Array<float> data = new Array<float>();
+  data.add(0.0);
+  return collide(rt mut borrow data, rt mut borrow data);
+}
