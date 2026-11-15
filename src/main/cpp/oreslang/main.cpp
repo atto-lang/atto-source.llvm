@@ -831,7 +831,7 @@ int main(int argc, char** argv) {
             // so unsupported target features cannot hide in unreachable code.
             (void)oreslang::emit_verified_llvm_ir(
                 ast, wasm32_target, cortex_m_target,
-                bounded_allocator_provider, wasm_core_f64_entry);
+                bounded_allocator_provider, isolate_entry, wasm_core_f64_entry);
 
             // The shipped pass is deliberately function-only. Richer Program
             // owners have hidden semantic/ABI roots that are not represented
