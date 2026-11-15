@@ -66,4 +66,6 @@ The first exact-tree private runner passed six native actor guest fixtures 20 ti
 
 No cross-organization checkout secrets or tokens were used: the matching full Git tree was copied to a private branch in `athlet-o/athleto-e2e`.
 
+The expanded source and negative tests also passed on the private carrier: [63-file nominal-type and guarded-state hardening run](https://github.com/athlet-o/athleto-e2e/actions/runs/43666674489), exact tree `a6d2f2ab5155fac02d29fec426c2014c30ad4a98`. It executed the same **120 native actor guest runs** and **8,000-message ABI stress**, rejected **15 actor negatives** (including unsafe effects, immutable critical-write, nesting, complex unsupported read and unrelocated nominal type signatures), and preserved all 1,255 scalar protocol cases. The signed machine-readable receipt is `contracts/native-llvm-target-mtd-v1.json` (SHA-exact Git evidence, not a network interoperability claim).
+
 **Still blocked:** Full general-purpose `critical-read` with concurrent readers, mutable borrows and lifetimes, nested callbacks, effect analysis, ownership across `await/select`, atomically admitted typed `send(): Result`, cancellations/restarts, supervisor priority CONTROL events for panic, scalable worker scheduling and real QUIC/TLS/HTTP3 networking. Do not merge this draft as complete Atto actor support.
