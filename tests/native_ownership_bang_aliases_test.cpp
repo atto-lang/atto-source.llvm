@@ -264,6 +264,23 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Nested comments must hide ownership operators before tokenization,
+    // with a fixed admission budget instead of unbounded comment depth.
+    {
+        oreslang::Program holder;
+        const Expression& expr = parsed(
+            "/* outer /* take! foo */ tail /* share! foo */ */ copy!41", holder);
+        if (expr.kind != Expression::Kind::Copy)
+            throw std::runtime_error("nested comment leaked an ownership token");
+    }
+    {
+        std::string excessive;
+        for (int i = 0; i < 129; ++i) excessive += "/*";
+        excessive += "copy!41";
+        for (int i = 0; i < 129; ++i) excessive += "*/";
+        reject_with_diagnostic(excessive, "block comment nesting exceeds 128");
+    }
+
     // A genuine native parser+ownership check, not a lexical-model-only test.
     for (const auto source : {"copy!41", "copy! 41", "rt copy 41"}) {
         const auto program = oreslang::parse_program(
