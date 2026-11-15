@@ -32,12 +32,15 @@ class NativeAotReceiptTest(unittest.TestCase):
         # its own separate immutable machine-readable evidence record.
         self.assertEqual(self.h["llvm_emitter_blob"],
                          "22a8d706f839f9fce625b41aa752eca17fdf8ace")
-        self.assertEqual(blob((ROOT / "ci/test_native_aot.sh").read_bytes()),
-                         self.h["native_ci_script_blob"])
+        # This immutable receipt describes the earlier scalar hardening
+        # snapshot. A subsequent nominal-type safety fix changed the active
+        # CI script; do not pretend it ran in this historical execution.
+        self.assertEqual(self.h["native_ci_script_blob"],
+                         "da04534fbbaf5a59420343c9e0306ea4329c0ff2")
         self.assertEqual(blob((ROOT / "frontend/src/parser.rs").read_bytes()),
                          s["frontend_parser_blob"])
-        self.assertEqual(blob((ROOT / "frontend/src/check.rs").read_bytes()),
-                         s["frontend_check_blob"])
+        self.assertEqual(s["frontend_check_blob"],
+                         "18c9b7e3e9696bfdd56fa5130f52a9a71a796c43")
 
     def test_hardened_compiler_output_contract_and_scope(self):
         h = self.h
