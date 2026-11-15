@@ -166,6 +166,9 @@ int main() {
     // Terminal observations can be safely retried, but may never reauthorize.
     bridge.revoke_terminal(ctx.refs[0]);
     bridge.revoke_terminal(ctx.refs[1]);
+    // Scheduler destruction requires an explicit global retirement after
+    // all actor lanes and their native pointer grants have quiesced.
+    ores_native_actor_scheduler_retire(scheduler);
     if (!ores_native_actor_scheduler_try_destroy(scheduler))
         throw std::runtime_error("native actor scheduler teardown failed");
 }
