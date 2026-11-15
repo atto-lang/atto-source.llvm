@@ -781,13 +781,16 @@ static void open_group_locked(void) {
 #endif
 }
 
-void* oreslang_source_actor_spawn_budgeted(
+void* oreslang_source_actor_spawn_supervised_budgeted(
         OresSourceActorInit constructor,
         OresSourceActorMessage on_message,
         uint64_t fields,
-        uint64_t max_frames) {
+        uint64_t max_frames,
+        uint64_t lifetime_frame_budget,
+        uint64_t restart_limit) {
     ensure(constructor != NULL && fields >= 1 && fields <= 4096
-        && max_frames <= 16);
+        && max_frames <= 16 && lifetime_frame_budget <= 64
+        && restart_limit <= 4);
     group_lock();
     if (!group.vm) open_group_locked();
 
@@ -802,6 +805,13 @@ void* oreslang_source_actor_spawn_budgeted(
     instance->constructor = constructor;
     instance->on_message = on_message;
     instance->frame_budget = (uint32_t)max_frames;
+    instance->lifetime_frame_budget = (uint32_t)lifetime_frame_budget;
+    instance->lifetime_frame_admissions = 0;
+    instance->restart_remaining = (uint32_t)restart_limit;
+    instance->fields_count = fields;
+    instance->replacement = NULL;
+    instance->restart_decided = 0;
+    instance->tombstone = 0;
     instance->admitted_sends = 0;
     instance->flush_waiters = 0;
     ensure(pthread_cond_init(&instance->callback_completed, NULL) == 0);
@@ -893,6 +903,14 @@ int oreslang_source_actor_flush_blocking(void* opaque) {
     ensure(pthread_cond_broadcast(&instance->callback_completed) == 0);
     group_unlock();
     return completed;
+}
+void* oreslang_source_actor_spawn_budgeted(
+        OresSourceActorInit constructor,
+        OresSourceActorMessage on_message,
+        uint64_t fields,
+        uint64_t max_frames) {
+    return oreslang_source_actor_spawn_supervised_budgeted(
+        constructor, on_message, fields, max_frames, 0, 0);
 }
 void* oreslang_source_actor_spawn(
         OresSourceActorInit constructor,
