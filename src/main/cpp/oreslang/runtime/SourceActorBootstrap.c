@@ -81,6 +81,7 @@ typedef struct {
     size_t live;
     size_t peak;
     atomic_uint_fast64_t terminal_notices;
+    atomic_uint_fast64_t terminal_published;
     atomic_uint_fast64_t terminal_panic_notices;
     atomic_uint_fast64_t terminal_stopped_notices;
     atomic_uint_fast64_t last_panic_code;
@@ -676,6 +677,15 @@ static void source_supervisor_notice(
             &group.terminal_stopped_notices, 1, memory_order_release);
     }
     atomic_fetch_add_explicit(&group.terminal_notices, 1, memory_order_release);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    fprintf(stderr,
+        "SOURCE_ACTOR_TERMINAL_CONTROL_VERIFIED kind=%s slot=%llu generation=%llu code=%llu correlation=%llu\n",
+        failure.kind == ORES_NATIVE_CONTROL_PANIC ? "PANIC" : "STOPPED",
+        (unsigned long long)failure.child.actor_slot,
+        (unsigned long long)failure.child.generation,
+        (unsigned long long)failure.failure_code,
+        (unsigned long long)failure.correlation);
+#endif
 }
 
 static void open_group_locked(void) {
@@ -683,6 +693,7 @@ static void open_group_locked(void) {
     ensure(group.live == 0 && group.next_slot == 0 && group.peak == 0);
     ensure(group.pending_ready == NULL && group.pending_done == NULL);
     atomic_store_explicit(&group.terminal_notices, 0, memory_order_release);
+    atomic_store_explicit(&group.terminal_published, 0, memory_order_release);
     atomic_store_explicit(&group.terminal_panic_notices, 0, memory_order_release);
     atomic_store_explicit(&group.terminal_stopped_notices, 0, memory_order_release);
     atomic_store_explicit(&group.last_panic_code, 0, memory_order_release);
@@ -1162,6 +1173,8 @@ void oreslang_source_actor_join_done(void* opaque) {
     while (!ores_native_vm_publish_supervised_failure(
             group.vm, ORES_NATIVE_VM_MAIN, notice))
         sched_yield();
+    atomic_fetch_add_explicit(
+        &group.terminal_published, 1, memory_order_release);
     group_lock();
     ensure(group.vm && slot < group.next_slot
         && group.actors[slot] == instance);
@@ -1187,6 +1200,18 @@ void oreslang_source_actor_join_done(void* opaque) {
     group.live--;
 
     if (group.live == 0) {
+        /* Publication is not delivery. Ensure all authenticated priority
+         * CONTROL callbacks have actually executed before destroying the
+         * supervisor pool and dropping the audit receipt. */
+        uint64_t published = atomic_load_explicit(
+            &group.terminal_published, memory_order_acquire);
+        unsigned spins = 0;
+        while (atomic_load_explicit(
+                   &group.terminal_notices, memory_order_acquire) < published
+               && spins++ < 1000000)
+            sched_yield();
+        ensure(atomic_load_explicit(
+            &group.terminal_notices, memory_order_acquire) == published);
         ensure(group.pending_ready == NULL && group.pending_done == NULL);
         ensure(ores_native_execution_context_store_live(group.executions) == 0);
         ensure(ores_native_continuation_store_live(group.continuations) == 0);
