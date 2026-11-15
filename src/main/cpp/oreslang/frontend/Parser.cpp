@@ -5144,6 +5144,33 @@ private:
                 fail("native Entry<K,V> unsupported: nominal key/value product layout and ownership lowering are not implemented");
             }
         }
+        // AttoLang std.thread is not yet a scalar function or class call.
+        // Until the compiler owns typed ThreadSpawn IR, immutable Send/Sync
+        // proofs, isolate-generation authority and asynchronous scheduler
+        // join lowering, reject the source call before ordinary expression
+        // lowering. Preserve ordinary functions named thread()/std().
+        if (token_.text == "thread" || token_.text == "std") {
+            Lexer lookahead = lexer_;
+            const auto first = lookahead.next();
+            bool thread_namespace = token_.text == "thread";
+            if (!thread_namespace && first.text == ".") {
+                thread_namespace = lookahead.next().text == "thread";
+            }
+            if (thread_namespace) {
+                const auto dot = token_.text == "thread"
+                    ? first : lookahead.next();
+                const auto member = lookahead.next();
+                // Even an uninvoked thread.spawn member would be an
+                // unverified first-class thread capability. Never let it
+                // flow through ordinary scalar/record lowering.
+                if (dot.text == "." && member.text == "spawn") {
+                    fail("THREAD_SPAWN_BACKEND_UNSUPPORTED: AttoLang std.thread "
+                         "requires compiler-owned Send/Sync capture proofs, "
+                         "isolate-scoped native admission and asynchronous "
+                         "scheduler join lowering");
+                }
+            }
+        }
         // 'task' is contextual in Oreslang v2. Preserve ordinary identifiers
         // named task, but fail closed when it opens a task block.
         if (token_.text == "task") {
