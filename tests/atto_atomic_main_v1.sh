@@ -3,14 +3,35 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 compiler="./build/oreslang-llvmc"
 if [ "$#" -gt 0 ]; then compiler="$1"; fi
-command -v clang >/dev/null
+# The LLVM IR emitted by this compiler must be consumed by a matching
+# Clang major version. LLVM 22 changed lifetime intrinsic signatures; using
+# an older PATH-preferred clang would reject otherwise valid LLVM 22 IR.
+clang_bin="${ATTO_LLVM_CLANG:-}"
+if command -v llvm-config >/dev/null; then
+  llvm_major="$(llvm-config --version | cut -d. -f1)"
+  if [ -z "$clang_bin" ]; then clang_bin="clang-${llvm_major}"; fi
+else
+  if [ -z "$clang_bin" ]; then clang_bin="clang"; fi
+  llvm_major=""
+fi
+command -v "$clang_bin" >/dev/null || {
+  echo "matching Clang for LLVM ${llvm_major:-unspecified} is required: $clang_bin" >&2
+  exit 1
+}
+if [ -n "$llvm_major" ]; then
+  clang_version="$("$clang_bin" --version | head -n 1)"
+  case "$clang_version" in
+    *"version $llvm_major."*) ;;
+    *) echo "Clang/LLVM major version mismatch: $clang_version vs LLVM $llvm_major" >&2; exit 1 ;;
+  esac
+fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 for name in main-int main-int-default; do
   "$compiler" "tests/atto-atomic-main-v1/$name.atto" >"$tmp/$name.ll"
   grep -q 'load atomic i64' "$tmp/$name.ll"
   grep -q 'store atomic i64' "$tmp/$name.ll"
-  clang -x ir -Wno-override-module "$tmp/$name.ll" -o "$tmp/$name"
+  "$clang_bin" -x ir -Wno-override-module "$tmp/$name.ll" -o "$tmp/$name"
   if "$tmp/$name"; then status=0; else status=$?; fi
   test "$status" -eq 42 || { echo "main AOT $name returned $status"; exit 1; }
 done
