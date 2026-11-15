@@ -264,6 +264,23 @@ int main(int argc, char** argv) {
                 std::cerr << "guest log shadowing was incorrectly admitted\n";
                 return 2;
             } catch (const std::runtime_error&) { }
+            // Flattened imports may no longer be present in Program.imports.
+            // Never assign root-unit routine IDs to compiler-qualified
+            // functions from a different .atto source file.
+            try {
+                auto foreign = oreslang::parse_program(
+                    "pub fnc foreign(): int { return 42; }");
+                foreign.functions.front().name = "__ores_module_1.foreign";
+                (void)oreslang::emit_verified_llvm_ir(
+                    foreign, false, false, false, "",
+                    {{"__ores_module_1.foreign", 0,
+                      "rid_d5f8e146ba97430dac6bf17430477e2a"}}, {});
+                std::cerr << "imported function accepted root source identity\n";
+                return 2;
+            } catch (const std::runtime_error& error) {
+                if (std::string_view(error.what()).find("single-unit")
+                        == std::string_view::npos) throw;
+            }
             std::cout << "LLVM_NATIVE_LOG_INFO_GUEST_IR_PASS\n";
             return 0;
         } catch (const std::exception& error) {
