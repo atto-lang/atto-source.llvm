@@ -7,9 +7,13 @@ on:
       - 'src/main/cpp/oreslang/runtime/TrustedPointerWindow.hpp'
       - 'src/main/cpp/oreslang/runtime/NativeRegionRegistry.hpp'
       - 'src/main/cpp/oreslang/runtime/NativeRegionRuntimeAuthority.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeActorSupervisor.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.c'
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.h'
       - 'tests/trusted_pointer_window_test.cpp'
       - 'tests/native_region_registry_test.cpp'
       - 'tests/native_region_runtime_authority_test.cpp'
+      - 'tests/native_actor_supervisor_pointer_integration_test.cpp'
       - 'tests/native_region_negative_compile.cpp'
       - 'tests/run_native_pointer_negative_compile.sh'
   workflow_dispatch:
@@ -57,6 +61,24 @@ jobs:
           for name in trusted_pointer_window native_region_registry native_region_runtime_authority; do
             "build/native-pointer-host-only/${name}_test"
           done
+      - name: Compile and run real scheduler-pointer integration
+        env:
+          CC: ${{ matrix.compiler == 'clang++' && 'clang' || 'gcc' }}
+          CXX: ${{ matrix.compiler }}
+          EXTRA_FLAGS: ${{ matrix.flags }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CC" -std=c11 -Wall -Wextra -Wpedantic -Werror -pthread \
+            $EXTRA_FLAGS -Isrc/main/cpp -c \
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            -o build/native-pointer-host-only/NativeActorScheduler.o
+          "$CXX" -std=c++17 -Wall -Wextra -Wpedantic -Werror -pthread \
+            $EXTRA_FLAGS -Isrc/main/cpp \
+            tests/native_actor_supervisor_pointer_integration_test.cpp \
+            build/native-pointer-host-only/NativeActorScheduler.o \
+            -o build/native-pointer-host-only/native_actor_supervisor_pointer_integration_test
+          build/native-pointer-host-only/native_actor_supervisor_pointer_integration_test
       - name: Verify negative compiler diagnostics
         env:
           CXX: ${{ matrix.compiler }}
