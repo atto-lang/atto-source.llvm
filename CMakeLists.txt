@@ -6296,3 +6296,18 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-fixed-buffer-registry-mailbox-test)
     set_tests_properties(native_fixed_buffer_registry_mailbox_host_only PROPERTIES TIMEOUT 30)
 endif()
+
+# Phase-zero typed inverted class MIR admission: no guest .atto lowering or
+# actual actor memory operations. Validates guard requirements before codegen.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-inverted-class-mir-admission-test
+        tests/inverted_class_mir_admission_test.cpp)
+    target_include_directories(oreslang-native-inverted-class-mir-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-inverted-class-mir-admission-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-inverted-class-mir-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_inverted_class_typed_mir_admission
+        COMMAND oreslang-native-inverted-class-mir-admission-test)
+    set_tests_properties(native_inverted_class_typed_mir_admission PROPERTIES TIMEOUT 30)
+endif()
