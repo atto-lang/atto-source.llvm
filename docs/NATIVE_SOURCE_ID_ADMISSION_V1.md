@@ -302,3 +302,26 @@ This test proves ordinary path admission decisions, not atomic
 filesystem snapshots against privileged concurrent mutation or approved
 private-source export. The compiler SDK and actual Atto linked guest
 remained unexecuted at the time of this report.
+
+### Imported function provenance and diagnostic audit
+
+The LLVM static-source-ID emitter now denies both declared imports and
+compiler-flattened imported function names, including
+`__ores_module_1.foreign`. ModuleLoader can flatten imports into
+renamed native functions, leaving `Program.imports` empty. Without
+checking the lowered symbols, a root-source ID could be attached to a
+function that originated in a different .atto source unit. An exact
+compiler IR negative selftest was added, but **has not run** without
+the LLVM SDK.
+
+The source/manifest physical-path gate also now catches
+`std::filesystem::filesystem_error` and replaces it with a generic
+path-independent diagnostic. The exact committed header/test Git blobs
+(`95c41436d9e2234399ab256fe7ebf933b8a7a5f0` /
+`aece9b1696c3556a7e75ba8b07db775ea0d2117f`)
+were compiled and executed under GCC and Clang ASan+UBSan,
+`-Werror -UNDEBUG`; both returned
+`LLVM_SOURCE_LOG_PATHS_HOST_PASS:12`. The added check verifies that a
+missing private input path is absent from the returned compiler error.
+This host proof does **not** replace the still-unexecuted compiler AOT
+and linked Atto guest tests.
