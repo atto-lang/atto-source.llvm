@@ -81,6 +81,41 @@ class ActorAotEvidenceTest(unittest.TestCase):
         self.assertEqual(e["mailbox_full_retry_path"],
                          "IMPLEMENTED_BUT_NOT_EXPLICITLY_ASSERTED_NONZERO")
 
+    def test_newer_32_actor_capacity_run_is_separate_and_pinned(self):
+        proof = json.loads((ROOT / "contracts/native-llvm-actor-capacity-v1.json").read_text())
+        self.assertEqual(proof["schema"],
+                         "atto.llvm.native-actor-capacity-hardening.v1")
+        self.assertEqual(proof["status"],
+                         "PASS_32_ACTOR_CAP_AND_NATIVE_GUEST_REGRESSION")
+        self.assertEqual(proof["base_actor_receipt"],
+                         "contracts/native-llvm-actor-aot-v1.json")
+        self.assertEqual(proof["base_actor_receipt_blob"],
+                         blob(RECEIPT.read_bytes()))
+        self.assertEqual(proof["code_source"]["full_tree"],
+                         "099b089383525f0da89dd734fc7d86e659450f2c")
+        for path, sha in (
+            ("src/main.rs", proof["code_source"]["llvm_emitter_blob"]),
+            ("runtime/actor_runtime.c", proof["code_source"]["runtime_c_blob"]),
+            ("tests/native_actor_mailbox_stress.c",
+             proof["code_source"]["mailbox_stress_c_blob"]),
+            ("ci/test_native_actors.sh",
+             proof["code_source"]["actor_test_script_blob"]),
+        ):
+            self.assertEqual(blob((ROOT / path).read_bytes()), sha, path)
+        self.assertIn("/actions/runs/43657779372",
+                      proof["runner"]["run"])
+        self.assertTrue(proof["runner"]["exact_git_tree"])
+        self.assertFalse(proof["runner"]["no_cross_org_checkout_secret"] is False)
+        self.assertEqual(proof["runner"]["result"], "success")
+        self.assertEqual(proof["verified"]["maximum_actor_instances"], 32)
+        self.assertTrue(proof["verified"]["maximum_actor_instances_actually_tested"])
+        self.assertTrue(proof["verified"]["thirty_third_spawn_rejected"])
+        self.assertEqual(proof["verified"]["abi_accepted_messages_total"], 8000)
+        self.assertEqual(proof["verified"]["actor_native_guest_executions"], 80)
+        self.assertEqual(proof["verified"]["scalar_protocol_cases_preserved"], 1255)
+        for flag, status in proof["unsupported"].items():
+            self.assertFalse(status, flag)
+
     def test_missing_actor_model_features_not_overclaimed(self):
         p = self.m["runtime_profile"]
         self.assertEqual(p["send_full_result"], "NATIVE_TRAP_NOT_YET_RESULT")
