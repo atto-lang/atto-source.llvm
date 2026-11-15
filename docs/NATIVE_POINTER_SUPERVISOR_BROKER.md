@@ -86,6 +86,29 @@ negative authorization tests on UNIX. Separately run the updated GitHub
 workflow's GCC release, Clang ASan+UBSan and GCC TSan matrix, and the
 `oreslang-llvmc` negative `.atto` corpus in the normal compiler build.
 
+## Exact-head local evidence receipt (approved checkout only)
+
+Use the checked-in verifier at the **exact PR head** to avoid a misleading
+build of an older commit or a dirty tree. The script refuses a wrong SHA,
+missing required tools, absent tests, zero/too-few CTest cases, and an in-tree
+artifact directory. It runs the standalone host tests in three separate builds:
+GCC release, Clang ASan+UBSan and GCC TSan.
+
+```sh
+sha="$(git rev-parse HEAD)"
+bash scripts/native-pointer-exact-head-verify.sh "$sha"
+```
+
+The verifier writes an external receipt directory with each stage's actual
+exit status and logs, immutable commit/tree identity, compiler versions,
+log SHA-256 digests and native binary SHA-256 digests. It explicitly reports
+`atto_guest_aot=NOT_EXECUTED` and
+`cross_backend_parity=NOT_CERTIFIED` even when all **host-only** tests pass.
+Compiler `.atto` fixtures still require separate true compiler execution.
+
+Run only on an authorized local/private checkout. Never place private source
+or logs in an unapproved public repository or cross-organization carrier.
+
 **Evidence gate:** source-only checks and GitHub Actions jobs with zero
 executed steps are `NOT_EXECUTED`; do not promote/merge as verified.
 Cross-organization private Git mirroring requires reviewed protected-source
