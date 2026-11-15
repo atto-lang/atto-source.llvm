@@ -2126,7 +2126,10 @@ if(BUILD_TESTING)
                     --harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_step_harness.c")
             set_tests_properties(native_rt_scalar_frame_aot_sanitizers PROPERTIES TIMEOUT 300)
         else()
-            message(WARNING "Experimental scalar-loop AOT Rust gate requires rustc; not registered")
+            # This is a required security regression gate. A missing Rust
+            # toolchain must not silently remove the LLVM frame tests from
+            # normal CTest discovery and yield a false-positive CI result.
+            message(FATAL_ERROR "Experimental scalar-loop AOT security tests require rustc")
         endif()
     else()
         message(WARNING "Experimental scalar-loop AOT trap gate requires Linux and clang")
