@@ -51,21 +51,33 @@ int main() {
     const auto survivor = churn.push(9, 10);
     std::atomic<bool> recycled{false};
     std::atomic<bool> bad{false};
+    std::atomic<int> writer_progress{0};
+    std::atomic<int> reader_progress{0};
+    // Ensure neither thread can finish its entire loop before the other
+    // has performed work: synchronize at three intermediate milestones.
+    auto require_other = [](int i, const std::atomic<int>& progress) {
+        if (i == 100 || i == 6000 || i == 11000)
+            while (progress.load(std::memory_order_acquire) < i)
+                std::this_thread::yield();
+    };
     std::thread writer([&] {
         churn.erase_swap(retired);
         recycled.store(true, std::memory_order_release);
         for (int i = 0; i < 12000; ++i) {
+            require_other(i, reader_progress);
             const auto temp = churn.push(i, -i);
             if (churn.snapshot(survivor).x != 9 ||
                 churn.snapshot(survivor).y != 10)
                 bad.store(true, std::memory_order_relaxed);
             churn.erase_swap(temp);
+            writer_progress.store(i + 1, std::memory_order_release);
         }
     });
     std::thread reader([&] {
         while (!recycled.load(std::memory_order_acquire))
             std::this_thread::yield();
         for (int i = 0; i < 12000; ++i) {
+            require_other(i, writer_progress);
             try {
                 (void)churn.snapshot(retired);
                 bad.store(true, std::memory_order_relaxed);
@@ -77,6 +89,7 @@ int main() {
             const auto actual = churn.snapshot(survivor);
             if (actual.x != 9 || actual.y != 10)
                 bad.store(true, std::memory_order_relaxed);
+            reader_progress.store(i + 1, std::memory_order_release);
         }
     });
     writer.join();
