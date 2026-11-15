@@ -37,8 +37,16 @@ The bounded runtime uses a 64 KiB zero-initialized actor-owned arena, a dedicate
 
 Full semantics, limitations, executable examples, and the exact Git receipt: [Native actors](docs/native-actors.md) and [`contracts/native-llvm-actor-aot-v1.json`](contracts/native-llvm-actor-aot-v1.json).
 
+## Executable `declare actor` / `mtd` and sealed scalar callbacks
+
+The new target syntax is now **natively executable for a deliberately bounded scalar profile**, not just parse-only. Actors must be both `declare actor` and concretely defined with `define actor ... receive ... end` in the same file. Out-of-line `mtd (Foo self)` methods are type checked and linked nominally, including two different actor types with the same method name.
+
+The guarded actor-state subset admits `critical-read |s| -> s.field` and one pure `critical-write |s| -> { s.field = expression; }` assignment with `mut self`, on the actor's serialized mailbox worker. Direct field access, callback escapes, suspension, invalid mutability and unsupported effects are compile-time errors. This is **not** a general concurrent reader-writer lock, complete lifetime/borrow checker or arbitrary critical callback system.
+
+[Exact-tree native LLVM target-syntax runner](https://github.com/athlet-o/athleto-e2e/actions/runs/43666674489) passed 6 actor guest fixtures ×20 native ELF executions, 15 negative actor compiler fixtures, the existing 8,000-message stress and 1,255 scalar protocol fixtures. See [target syntax and guarded-state scope](docs/native-mtd-critical.md) and the immutable [target-syntax AOT receipt](contracts/native-llvm-target-mtd-v1.json).
+
 ## Not yet implemented
 
-The **new** `use namespace` / `declare actor` / `mtd` native lowering, required sealed-state `handle_state(critical-read/critical-write)` enforcement, borrow checker across suspension, supervisor panic CONTROL, typed `send` Result, per-actor cancellation/close and child spawning, work-stealing scheduler, full language AOT, QUIC/TLS/UDP, QPACK, HTTP/3 client/server loopback, and Windows/macOS/embedded profiles remain unimplemented. Browser/Node standalone WASM, JVM/GraalVM and .NET must each execute their own backend tests; byte-identical source does not establish parity.
+General-purpose state callback effects and lifetimes, concurrent reader/writer scheduling, borrow checking across suspension, supervisor panic CONTROL, typed `send` Result, per-actor cancellation/close and child spawning, work-stealing scheduler, full language AOT, QUIC/TLS/UDP, QPACK, HTTP/3 client/server loopback, and Windows/macOS/embedded profiles remain unimplemented. Browser/Node standalone WASM, JVM/GraalVM and .NET must each execute their own backend tests; byte-identical source does not establish parity.
 
 The proposed 11-operation actor-safe transport boundary in `contracts/http3-host-abi-v1.json` is a **specification**, not a working QUIC engine. Keep this PR in draft until the missing actor semantics and networking integration are verified.
