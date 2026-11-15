@@ -71,6 +71,12 @@ Independent exact-source private carrier branch:
 Its manifest verifies every selected source blob SHA before compilation;
 no token or secret is used to check out the private source organization.
 This is focused C++17 main-compiler testing, not the entire source tree.
+The latest 57-file exact-source carrier run passed the real C++17 LLVM
+compiler build, four positive `.atto` guest AOT executions returning 42,
+ten unsafe-source rejections, taken/untaken early-return cleanup,
+`ATTO_BOX_SANITIZE=1` (ASan+UBSan), and Send/Sync marker denial:
+https://github.com/honeypot-r-us-test/hnpt-lambdas/actions/runs/43657820729
+
 
 **Merge blockers:** full affine Box moves and borrow-lifetime inference,
 arbitrary `T` destruction, function exits and unwind/cancellation cleanup,
