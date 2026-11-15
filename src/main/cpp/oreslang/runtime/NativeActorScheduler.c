@@ -1034,8 +1034,10 @@ OresNativeActorRef ores_native_actor_scheduler_spawn(
     unlock(s);
     return ref;
 }
-OresNativeSendStatus ores_native_actor_scheduler_try_send(
-    OresNativeActorScheduler* s, OresNativeActorRef actor, uint64_t payload) {
+static OresNativeSendStatus try_send_impl(
+    OresNativeActorScheduler* s, OresNativeActorRef actor, uint64_t payload,
+    uint64_t* out_sequence) {
+    if (out_sequence) *out_sequence = 0;
     if (!s) return ORES_NATIVE_SEND_INVALID_REF;
     lock(s);
     OresNativeSendStatus status;
@@ -1058,6 +1060,11 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
              * fails; a stop that wins first is always rejected. */
             if (enqueue_locked(s, (size_t)actor.actor_slot, payload)) {
                 status = ORES_NATIVE_SEND_ACCEPTED;
+                /* Minted by enqueue_locked under this same scheduler lock;
+                 * no callback can complete before the transport binds its
+                 * descriptor to this accepted mail sequence. */
+                if (out_sequence)
+                    *out_sequence = lane->accepted_user_messages;
             } else {
                 /* enqueue_locked already counted this rejected admission. */
                 counted_in_enqueue = 1;
@@ -1070,6 +1077,16 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
         s->rejected++;
     unlock(s);
     return status;
+}
+OresNativeSendStatus ores_native_actor_scheduler_try_send(
+    OresNativeActorScheduler* s, OresNativeActorRef actor, uint64_t payload) {
+    return try_send_impl(s, actor, payload, NULL);
+}
+OresNativeSendStatus ores_native_actor_scheduler_try_send_receipted(
+    OresNativeActorScheduler* s, OresNativeActorRef actor, uint64_t payload,
+    uint64_t* out_sequence) {
+    if (!out_sequence) return ORES_NATIVE_SEND_INVALID_REF;
+    return try_send_impl(s, actor, payload, out_sequence);
 }
 int ores_native_actor_scheduler_send(OresNativeActorScheduler* s,
                                      OresNativeActorRef actor, uint64_t payload) {
@@ -1555,6 +1572,46 @@ void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
 }
 int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* s) {
     return s && executing == s;
+}
+/* A pair of native actor generations must remain live across the entire
+ * bounded host commit. Ordinary STOP, sealed STOP and global retirement
+ * all arbitrate using this same lifecycle lock. The callback is restricted
+ * to allocation-free bookkeeping and must never reenter scheduler APIs. */
+int ores_native_actor_scheduler_commit_if_both_live_v1(
+        OresNativeActorScheduler* s, OresNativeActorRef sender,
+        OresNativeActorRef recipient, OresNativeActorBoundedCommitV1 commit,
+        void* opaque) {
+    if (!s || !commit) return 0;
+    lock(s);
+    int live = !s->retired && matching(s, sender) && matching(s, recipient);
+    if (live) {
+        ActorLane* from = &s->actors[sender.actor_slot];
+        ActorLane* to = &s->actors[recipient.actor_slot];
+        live = !from->retired && !to->retired;
+        if (live) {
+            const OresExecutionPhase from_phase =
+                ores_execution_phase(&from->authority);
+            const OresExecutionPhase to_phase =
+                ores_execution_phase(&to->authority);
+            live = (from_phase == ORES_EXEC_READY ||
+                    from_phase == ORES_EXEC_RUNNING ||
+                    from_phase == ORES_EXEC_SUSPENDED)
+                && (to_phase == ORES_EXEC_READY ||
+                    to_phase == ORES_EXEC_RUNNING ||
+                    to_phase == ORES_EXEC_SUSPENDED);
+        }
+    }
+    const int accepted = live ? (commit(opaque) != 0) : 0;
+    unlock(s);
+    return accepted;
+}
+int ores_native_actor_scheduler_in_any_actor_turn(void) {
+    /* executing is installed only during a scheduler-owned callback and
+     * cleared before leaving it, including CONTROL and WAKE callbacks.
+     * A synthetic SourceTask worker is not exempt from this fence. */
+    return executing != NULL
+        && executing_actor.scheduler_domain != 0
+        && executing_claim.carrier != 0;
 }
 /* Actor-specific authority, not merely membership in the same worker pool. */
 int ores_native_actor_scheduler_is_current_actor(
