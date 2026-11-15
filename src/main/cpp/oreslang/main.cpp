@@ -462,6 +462,26 @@ int main(int argc, char** argv) {
             admitted_provider_bits);
         source_module = ast.module;
         source_namespace = ast.namespace_name;
+        // A lexical scalar loop has valid native CFG continuation semantics,
+        // but no static WCET / termination proof or actor scheduler yield.
+        // Preserve strict target admission for hard-RT and freestanding ABIs.
+        if (native_hard_rt_profile || rt_report_seen || cortex_m_target || wasm32_target) {
+            std::function<bool(const oreslang::Statement&)> has_unbounded_loop =
+                [&](const oreslang::Statement& stmt) {
+                    return stmt.kind == oreslang::Statement::Kind::Loop
+                        || std::any_of(stmt.then_statements.begin(),
+                            stmt.then_statements.end(), has_unbounded_loop)
+                        || std::any_of(stmt.else_statements.begin(),
+                            stmt.else_statements.end(), has_unbounded_loop);
+                };
+            for (const auto& fn : ast.functions)
+                if (std::any_of(fn.statements.begin(), fn.statements.end(),
+                        has_unbounded_loop))
+                    throw std::runtime_error(
+                        "native scalar loop requires WCET/termination and cooperative"
+                        " scheduler proof for hard-RT, freestanding or wasm targets");
+        }
+
 
         // A enabled telemetry scope currently calls CLOCK_MONOTONIC on a
         // native carrier. It has not been subjected to a proven WCET/time
