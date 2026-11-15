@@ -1,0 +1,6 @@
+// Must be rejected by parser before producing any native LLVM artifact.
+@ActorFrameBudget(17) define actor InvalidBudget as {
+  let total: int = 0;
+  pub fnc on_message(int n): int { return n; }
+}
+pub fnc main(): int { return 0; }
