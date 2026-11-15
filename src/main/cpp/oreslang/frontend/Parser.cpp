@@ -3184,11 +3184,31 @@ private:
                     } else if (accept("Future")) {
                         require("<");
                         declared_type.kind = SourceType::Kind::Future;
+                        // Reject on the wrapper identity itself, before parsing
+                        // the inner payload. This keeps Future<Future<T>>,
+                        // Future<Future<Option<T>>> and deeper shapes on the
+                        // same semantic diagnostic instead of falling back to
+                        // incidental generic punctuation errors.
+                        if (token_.text == "Future")
+                            fail("nested Future remains nested; implicit Future flatten is forbidden; native nested Future continuation lowering is unavailable");
                         if (accept("int")) declared_type.argument = "int";
                         else declared_type.argument = identifier();
                         require(">");
                         fail("Future<T> requires native continuation lowering");
                     } else {
+                        // Same rule for Option, but distinguish a single
+                        // Option<T> from Option<Option<T>> without consuming
+                        // either wrapper. The wrapper pair alone is sufficient
+                        // to establish the no-auto-flatten diagnostic.
+                        if (token_.text == "Option") {
+                            Lexer look = lexer_;
+                            const Token open = look.next();
+                            const Token nested = look.next();
+                            const Token nested_open = look.next();
+                            if (open.text == "<" && nested.text == "Option"
+                                    && nested_open.text == "<")
+                                fail("nested Option remains nested; implicit Option flatten is forbidden; native nested Option lowering is unavailable");
+                        }
                         if (token_.text == "Entry")
                             reject_native_entry_boundary(token_.offset);
                         if (token_.text == "owned" && !experimental_owned_int_)

@@ -3096,13 +3096,25 @@ if(BUILD_TESTING)
         --diagnostic "await get_ready requires side-effect-free scalar return")
     oreslang_contract_test(source_future_typed_await_boundary source-future-typed-unimplemented.ores
         --diagnostic "Future<T> requires native continuation lowering")
-    # These tests reject nested type declarations BEFORE member-call lowering.
-    # They prove fail-closed type admission, not flatten/unwrap_all execution.
-    # Operation-level conformance remains blocked on LLVM generic representation.
-    oreslang_contract_test(source_nested_option_type_admission_fail_closed
-        source-nested-option-flatten-unimplemented.ores --diagnostic "native scalar local requires int, bool or checked scalar alias")
-    oreslang_contract_test(source_nested_future_type_admission_fail_closed
-        source-nested-future-flatten-unimplemented.ores --diagnostic "expected '>'")
+    # Nested wrappers are distinct source types. Until native generic
+    # representation/continuation lowering lands, reject them explicitly rather
+    # than accidentally accepting/canonicalizing them or failing on punctuation.
+    # This is a fail-closed semantic gate, not flatten/unwrap_all execution.
+    oreslang_contract_test(source_nested_option_preserves_type_fail_closed
+        source-nested-option-flatten-unimplemented.ores
+        --diagnostic "implicit Option flatten is forbidden")
+    oreslang_contract_test(source_nested_future_preserves_type_fail_closed
+        source-nested-future-flatten-unimplemented.ores
+        --diagnostic "implicit Future flatten is forbidden")
+    oreslang_contract_test(source_nested_future_generic_payload_preserves_type_fail_closed
+        source-nested-future-generic-payload-fail-closed.ores
+        --diagnostic "implicit Future flatten is forbidden")
+    oreslang_contract_test(source_nested_option_generic_payload_preserves_type_fail_closed
+        source-nested-option-generic-payload-fail-closed.ores
+        --diagnostic "implicit Option flatten is forbidden")
+    oreslang_contract_test(source_option_single_layer_not_nested_diagnostic
+        source-option-single-layer-unimplemented.ores
+        --diagnostic "native local Option/Result initializer cannot implicitly wrap or erase tagged value")
 
 
     # Entry<K,V> is a compiler-owned nominal product in Java/GraalVM.
