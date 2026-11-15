@@ -81,7 +81,12 @@ public:
         for (const auto& cls : program.classes) classes_.emplace(cls.name, &cls);
         for (const auto& cls : program.classes) build(cls.name, 1);
     }
-    const NativeClassLayout& at(const std::string& name) const { return layouts_.at(name); }
+    const NativeClassLayout& at(const std::string& name) const {
+        const auto found = layouts_.find(name);
+        if (found == layouts_.end())
+            throw std::runtime_error("unknown native class type '" + name + "'");
+        return found->second;
+    }
     const ClassDecl& source(const std::string& name) const { return *classes_.at(name); }
     std::unordered_set<std::string> mutable_paths(const std::string& name) const {
         std::unordered_set<std::string> result;

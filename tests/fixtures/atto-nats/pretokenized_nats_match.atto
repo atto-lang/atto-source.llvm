@@ -1,0 +1,74 @@
+use namespace guest;
+
+// This test must be composed with the byte-exact core class after removing
+// only the duplicated top-level namespace headers. Both LLVM (AOT) and
+// Java/GraalVM must execute the same composed Atto source body.
+pub routine main(): int {
+  val Array<String> published_parts = new Array<String>();
+  published_parts.add("orders");
+  published_parts.add("created");
+  published_parts.add("eu");
+  val NatsSubjectTokens published = new NatsSubjectTokens(published_parts);
+
+  val Array<String> exact_parts = new Array<String>();
+  exact_parts.add("orders");
+  exact_parts.add("created");
+  exact_parts.add("eu");
+  val NatsSubjectTokens exact = new NatsSubjectTokens(exact_parts);
+
+  val Array<String> wildcard_parts = new Array<String>();
+  wildcard_parts.add("orders");
+  wildcard_parts.add("*");
+  wildcard_parts.add("eu");
+  val NatsSubjectTokens wildcard = new NatsSubjectTokens(wildcard_parts);
+
+  val Array<String> prefix_parts = new Array<String>();
+  prefix_parts.add("orders");
+  prefix_parts.add(">");
+  val NatsSubjectTokens prefix = new NatsSubjectTokens(prefix_parts);
+
+  val Array<String> short_parts = new Array<String>();
+  short_parts.add("orders");
+  val NatsSubjectTokens short_pattern = new NatsSubjectTokens(short_parts);
+
+  val Array<String> single_parts = new Array<String>();
+  single_parts.add(">");
+  val NatsSubjectTokens single = new NatsSubjectTokens(single_parts);
+
+  val Array<String> mismatch_parts = new Array<String>();
+  mismatch_parts.add("payments");
+  mismatch_parts.add("created");
+  mismatch_parts.add("eu");
+  val NatsSubjectTokens mismatch = new NatsSubjectTokens(mismatch_parts);
+
+  val Array<String> short_pub_parts = new Array<String>();
+  short_pub_parts.add("orders");
+  val NatsSubjectTokens short_pub = new NatsSubjectTokens(short_pub_parts);
+
+  val Array<String> empty_parts = new Array<String>();
+  val NatsSubjectTokens empty = new NatsSubjectTokens(empty_parts);
+
+  val Array<String> interior_greater_parts = new Array<String>();
+  interior_greater_parts.add(">");
+  interior_greater_parts.add("eu");
+  val NatsSubjectTokens invalid_interior_greater = new NatsSubjectTokens(interior_greater_parts);
+
+  for (let int iteration = 0; iteration < 256; iteration = iteration + 1) {
+    if !exact.matches_prevalidated(rt borrow published) ||
+       !wildcard.matches_prevalidated(rt borrow published) ||
+       !prefix.matches_prevalidated(rt borrow published) ||
+       !single.matches_prevalidated(rt borrow published) ||
+       short_pattern.matches_prevalidated(rt borrow published) ||
+       mismatch.matches_prevalidated(rt borrow published) ||
+       prefix.matches_prevalidated(rt borrow short_pub) ||
+       wildcard.matches_prevalidated(rt borrow short_pub) ||
+       invalid_interior_greater.matches_prevalidated(rt borrow published) ||
+       empty.matches_prevalidated(rt borrow published) ||
+       exact.matches_prevalidated(rt borrow empty) then
+      stdio.println("ATTO_NATS_TOKEN_MATCH_FAIL");
+      return 1;
+    fi
+  }
+  stdio.println("ATTO_NATS_TOKEN_MATCH_PASS");
+  return 0;
+}

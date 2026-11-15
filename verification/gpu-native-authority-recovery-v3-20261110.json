@@ -1,0 +1,98 @@
+{
+  "schema": "attolang.gpu-native-authority-recovery-v3/1",
+  "recordedOn": "2026-11-10",
+  "source": {
+    "repo": "ores-truffle-oreslang/oreslang-source.llvm",
+    "branch": "feat/gpu-native-authority-recovery-v3-20261110",
+    "stackedOn": "security/gpu-v0-test-seam-removal-20261110",
+    "blobs": {
+      "src/main/cpp/oreslang/runtime/GpuActorHostTurnBridgeV0.hpp": "f49fcb2bfea035ac504ea3e58dc207980df8eb91",
+      "tests/gpu_actor_host_turn_bridge_v0_test.cpp": "57294886d72b8b1ff62ef4e07b654774fcb7e2b5",
+      "src/main/cpp/oreslang/runtime/GpuActorOpenClProviderV2.hpp": "78253690fcdc896f2246f266bab7083f6bb1e014",
+      "src/main/cpp/oreslang/runtime/GpuActorOpenClRecoveryWorkerV1.hpp": "f7eef7f03a16bd664863ff9be1f850a00be3af49",
+      "tests/gpu_actor_opencl_provider_v2_test.cpp": "650886eb2dc85b0b902c48d6d6b5db94dfeebf20",
+      "CMakeLists.txt": "2cda0040c6ffcd353b7613e785c70554d5642954",
+      "tests/gpu_actor_recovery_authority_negative.cpp": "be93e3792a516ebe871046806c9dbc5cad56b12b",
+      "tests/cmake/GpuActorRecoveryAuthorityGate.cmake": "0d9775504c84566a3e855fcc2c0d778cd7187ad6"
+    }
+  },
+  "carrier": {
+    "repo": "scintilla-run/scintilla-run-e2e",
+    "branch": "carrier/gpu-native-worker-v3-20261110",
+    "head": "7f8e0e2d237b89646ba427a40e4128939c0a1bb7",
+    "runId": 42959491252,
+    "jobId": 130322389355,
+    "url": "https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42959491252",
+    "exactBlobChecks": true,
+    "noCrossOrgSecretsOrPrivateCheckout": true,
+    "gccAsanUbsan": "passed",
+    "clangStrict": "passed",
+    "assertionsPerCompiler": {
+      "openclV2": 156,
+      "actorV1": 6329,
+      "v0RegistryMigration": 1169
+    },
+    "legacyV0DirectAssertionsRetired": 6257,
+    "preexistingOpenClG3": "passed under GCC sanitizers",
+    "compilerNegativeAuthority": {
+      "gcc": "pass - private",
+      "clang": "pass - private",
+      "cmakeScriptGcc": "pass",
+      "cmakeScriptClang": "pass"
+    },
+    "actualSourceHostOnlyCMake": {
+      "gccAsanUbsan": {
+        "passed": 6,
+        "total": 6
+      },
+      "clang": {
+        "passed": 6,
+        "total": 6
+      }
+    },
+    "fullCompilerBuild": false,
+    "fullRepoCtest": false,
+    "compilerNegativeRecovery": {
+      "gcc": "pass - private access",
+      "clang": "pass - private access",
+      "cmakeScriptGcc": "pass",
+      "cmakeScriptClang": "pass"
+    }
+  },
+  "worker": {
+    "inProcess": true,
+    "dedicatedThread": true,
+    "capacityBounded": true,
+    "generationAndTurnScoped": true,
+    "deduplicateJobs": true,
+    "stalledMockNativeFinishDoesNotBlockActorPoll": true,
+    "deviceLossRecoveryMovedToWorker": true,
+    "unknownBeginRecoveryMovedToWorker": true,
+    "unknownKernelRecoveryMovedToWorker": true,
+    "releaseFailureRecoveryMovedToWorker": true,
+    "crashDurable": false,
+    "driverHangMayBlockWorkerDestructor": true,
+    "automaticSupervisorActorIntegration": false,
+    "nativeRecoveryEntrypointsPrivateToWorkerFriend": true,
+    "directNativeRecoveryCompileNegativeVerified": true,
+    "ordinaryNativeCallerCannotInvokeBlockingRecovery": true
+  },
+  "hardware": {
+    "nativeProbeCompiled": true,
+    "probeAttempted": true,
+    "exitCode": 77,
+    "marker": "GPU_ACTOR_V2_NO_GPU_RUNTIME",
+    "deviceKernelExecuted": false,
+    "compiledAttoGuestExecuted": false,
+    "cpuFallback": false
+  },
+  "claims": {
+    "nativeHostLifecyclePassed": true,
+    "sourceProductionV0MacroRemoved": true,
+    "physicallyAuthenticatedGpuEvent": false,
+    "fullAotGuest": false,
+    "fiveBackendParity": false
+  },
+  "releaseReady": false,
+  "draftOnly": true
+}

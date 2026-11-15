@@ -30,9 +30,9 @@ typedef struct {
 } OresNativeFailureTraceHeader;
 
 /*
- * Capture the logical portion of a throw/raise/panic trace. The current
- * execution is retained for the duration of the snapshot so parent execution
- * ancestry cannot disappear midway through the walk.
+ * Capture the logical portion of a throw/raise/panic trace. The output header
+ * is cleared on failure. The current execution is retained for the snapshot
+ * so parent execution ancestry cannot disappear midway through the walk.
  */
 int ores_native_failure_trace_capture(
     OresNativeExecutionContextStore* executions,
@@ -47,6 +47,22 @@ int ores_native_failure_trace_capture(
     OresNativeFailureTraceHeader* out);
 
 /*
+ * Checked allocation-free renderer. Counts must fit the actual caller-owned
+ * frame buffers. Invalid input returns zero and empties a supplied nonempty
+ * output buffer. Rendering stops as soon as the output buffer is full.
+ */
+size_t ores_native_failure_trace_format_checked(
+    const OresNativeFailureTraceHeader* header,
+    const OresNativeExecutionTraceFrame* execution_frames,
+    size_t execution_capacity,
+    const OresNativeContinuationTraceFrame* continuation_frames,
+    size_t continuation_capacity,
+    char* buffer,
+    size_t capacity);
+
+/*
+ * Compatibility renderer for trusted captured counts. The caller guarantees
+ * frame arrays contain at least the counts in header; prefer the checked API.
  * Allocation-free logical renderer. It is intentionally separate from native
  * symbolization: callers can render live native frames first and append this
  * continuation/execution ancestry afterward. Returns bytes written excluding

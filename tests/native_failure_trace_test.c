@@ -50,10 +50,10 @@ static void verify_kind(
     check(!header.logical.corrupt);
 
     char text[2048];
-    const size_t written = ores_native_failure_trace_format(
+    const size_t written = ores_native_failure_trace_format_checked(
         &header,
-        execution_frames,
-        continuation_frames,
+        execution_frames, 4,
+        continuation_frames, 4,
         text,
         sizeof(text));
     check(written != 0);
@@ -72,6 +72,47 @@ static void verify_kind(
         sizeof(tiny));
     check(tiny_written == sizeof(tiny) - 1);
     check(tiny[sizeof(tiny) - 1] == '\0');
+
+    char checked[2048];
+    check(ores_native_failure_trace_format_checked(
+        &header, execution_frames, 4, continuation_frames, 4,
+        checked, sizeof(checked)) == written);
+    check(strcmp(text, checked) == 0);
+    char single[1] = {'x'};
+    check(ores_native_failure_trace_format_checked(
+        &header, execution_frames, 4, continuation_frames, 4,
+        single, sizeof(single)) == 0);
+    check(single[0] == '\0');
+
+    /* Invalid input must not publish a stale previous trace. Bounds are
+     * rejected before indexing either caller-owned frame array. */
+    strcpy(checked, "stale trace");
+    check(ores_native_failure_trace_format_checked(
+        &header, execution_frames, 1, continuation_frames, 4,
+        checked, sizeof(checked)) == 0);
+    check(checked[0] == '\0');
+    strcpy(checked, "stale trace");
+    check(ores_native_failure_trace_format_checked(
+        &header, execution_frames, 4, continuation_frames, 0,
+        checked, sizeof(checked)) == 0);
+    check(checked[0] == '\0');
+    strcpy(checked, "stale trace");
+    check(ores_native_failure_trace_format_checked(
+        NULL, execution_frames, 4, continuation_frames, 4,
+        checked, sizeof(checked)) == 0);
+    check(checked[0] == '\0');
+    strcpy(checked, "stale trace");
+    check(ores_native_failure_trace_format(
+        NULL, execution_frames, continuation_frames,
+        checked, sizeof(checked)) == 0);
+    check(checked[0] == '\0');
+
+    OresNativeFailureTraceHeader malformed = header;
+    malformed.logical.execution_count = SIZE_MAX;
+    check(ores_native_failure_trace_format_checked(
+        &malformed, execution_frames, 4, continuation_frames, 4,
+        checked, sizeof(checked)) == 0);
+    check(checked[0] == '\0');
 }
 
 int main(void) {
@@ -131,7 +172,9 @@ int main(void) {
 
     OresNativeExecutionTraceFrame execution_frames[2] = {0};
     OresNativeContinuationTraceFrame continuation_frames[2] = {0};
-    OresNativeFailureTraceHeader invalid = {0};
+    OresNativeFailureTraceHeader invalid;
+    OresNativeFailureTraceHeader empty = {0};
+    memset(&invalid, 0xa5, sizeof(invalid));
     check(!ores_native_failure_trace_capture(
         executions,
         continuations,
@@ -143,10 +186,12 @@ int main(void) {
         continuation_frames,
         2,
         &invalid));
+    check(memcmp(&invalid, &empty, sizeof(invalid)) == 0);
 
     const OresNativeExecutionHandle stale = resumed;
     check(ores_native_execution_context_store_release(
         executions, resumed));
+    memset(&invalid, 0xa5, sizeof(invalid));
     check(!ores_native_failure_trace_capture(
         executions,
         continuations,
@@ -158,6 +203,7 @@ int main(void) {
         continuation_frames,
         2,
         &invalid));
+    check(memcmp(&invalid, &empty, sizeof(invalid)) == 0);
 
     check(ores_native_continuation_store_release(
         continuations, link.continuation));
