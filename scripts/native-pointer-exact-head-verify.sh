@@ -54,7 +54,8 @@ finish() {
     printf 'expected_commit=%s\n' "$expected_sha"
     printf 'observed_commit=%s\n' "$actual_sha"
     printf 'git_tree=%s\n' "$(git rev-parse 'HEAD^{tree}')"
-    printf 'repository=%s\n' "$(git remote get-url origin 2>/dev/null || echo 'UNKNOWN_LOCAL')"
+    # Never record credential-bearing remote URLs in a published receipt.
+    printf 'repository=ores-truffle-oreslang/oreslang-source.llvm\n'
     printf 'host_os=%s\n' "$(uname -srm)"
     printf 'host_status=%s\n' "$([[ $rc -eq 0 ]] && echo EXECUTED_PASS || echo EXECUTED_FAIL_OR_INCOMPLETE)"
     printf 'atto_guest_aot=NOT_EXECUTED\n'
@@ -62,6 +63,8 @@ finish() {
   } > "$receipt/manifest.txt"
   (cd "$receipt" && find logs -type f -print0 | sort -z | xargs -0 -r sha256sum) \
     > "$receipt/log_sha256.txt"
+  (cd "$receipt" && find . -type f -path './build-*' -name '*_host_test' -print0 | sort -z | xargs -0 -r sha256sum) \
+    > "$receipt/binary_sha256.txt"
   echo "Native pointer evidence receipt: $receipt" >&2
 }
 trap finish EXIT
@@ -109,6 +112,17 @@ for profile in gcc-release clang-asan-ubsan gcc-tsan; do
     -DCMAKE_C_FLAGS="$flags" -DCMAKE_CXX_FLAGS="$flags" \
     -DCMAKE_EXE_LINKER_FLAGS="$ldflags"
   run_stage "build-$profile" cmake --build "$build" --parallel 2
+  # CTest's default success for ZERO tests must never certify an empty suite.
+  run_stage "enumerate-$profile" ctest --test-dir "$build" -N
+  listed="$receipt/logs/enumerate-$profile.log"
+  count=$(sed -n 's/^Total Tests: \([0-9][0-9]*\).*$/\1/p' "$listed" | tail -1)
+  if [[ ! $count =~ ^[0-9]+$ || $count -lt 5 ]] ||
+     ! grep -Fq 'atto_native_actor_supervisor_pointer_host_only' "$listed" ||
+     ! grep -Fq 'atto_native_pointer_negative_compile' "$listed"; then
+    printf '%s\tEXECUTED_FAIL\t%s\n' "test-manifest-$profile" "logs/enumerate-$profile.log" >> "$status_file"
+    echo "FAIL: native pointer CTest manifest missing required cases for $profile" >&2
+    exit 1
+  fi
   run_stage "test-$profile" env CXX="$cxx" ctest --test-dir "$build" \
     --output-on-failure --timeout 120
 done
