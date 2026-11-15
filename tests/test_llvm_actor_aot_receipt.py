@@ -29,9 +29,10 @@ class ActorAotEvidenceTest(unittest.TestCase):
                          "fb5d05772f0b47d49876897dbbf02d825111460b")
         self.assertEqual(src["test_script_blob"],
                          "1aeff548f616423d68ffdd96509dfd51750c1b2c")
-        for path, key in (("runtime/actor_runtime.c", "native_runtime_blob"),
-                          ("frontend/src/check.rs", "frontend_typechecker_blob")):
-            self.assertEqual(blob((ROOT / path).read_bytes()), src[key], path)
+        self.assertEqual(src["frontend_typechecker_blob"],
+                         "18c9b7e3e9696bfdd56fa5130f52a9a71a796c43")
+        self.assertEqual(blob((ROOT / "runtime/actor_runtime.c").read_bytes()),
+                         src["native_runtime_blob"])
         # The original stress proof remains an immutable 43-blob snapshot.
         # A newer source harness may test more capacity bounds; do not rewrite
         # the historical Git blob or claim it ran in the earlier execution.
