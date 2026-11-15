@@ -42,6 +42,9 @@ public:
     // currently ready ref. The trust decision is made by the embedding VM;
     // passing "TrustedNative" from guest code is never authorization.
     void admit_spawned(OresNativeActorRef ref, Admission admission) {
+        if (ores_native_actor_scheduler_in_any_actor_turn())
+            throw std::logic_error("native pointer actor admission is supervisor-only");
+        std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mu_);
         if (!ores_native_actor_scheduler_poll_ready(scheduler_, ref))
             throw std::logic_error("native pointer actor ref is not live/issued by scheduler");
         const auto actor = identity(ref);
@@ -66,6 +69,9 @@ public:
                                 std::uint64_t allocation,
                                 void* base, std::size_t bytes,
                                 Mode mode) {
+        if (ores_native_actor_scheduler_in_any_actor_turn())
+            throw std::logic_error("native region registration requires external supervisor");
+        std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mu_);
         require_admitted_ref(ref);
         if (!ores_native_actor_scheduler_poll_ready(scheduler_, ref))
             throw std::logic_error("native mapped region requires live actor");
@@ -142,6 +148,7 @@ public:
     void stop_and_revoke(OresNativeActorRef ref) {
         if (ores_native_actor_scheduler_in_any_actor_turn())
             throw std::logic_error("blocking native pointer retirement forbidden on actor carrier");
+        std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mu_);
         const auto actor = identity(ref);
         require_admitted_ref(ref);
         // A STOP from another subsystem may already have sealed the mailbox.
@@ -156,6 +163,7 @@ public:
     void revoke_terminal(OresNativeActorRef ref) {
         if (ores_native_actor_scheduler_in_any_actor_turn())
             throw std::logic_error("native pointer terminal revoke forbidden on actor carrier");
+        std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mu_);
         require_admitted_ref(ref);
         if (!ores_native_actor_scheduler_poll_done(scheduler_, ref))
             throw std::logic_error("native pointer actor is not terminal");
@@ -216,6 +224,10 @@ private:
     const std::uint64_t runtime_id_;
     NativeRegionRegistry regions_;
     NativeRegionRuntimeAuthority authority_;
+    // Serializes supervisor admission/mapping against STOP, shutdown and
+    // removal. Actor callbacks may issue only previously registered regions
+    // and never acquire this lock, avoiding FFI callback lock inversion.
+    mutable std::mutex lifecycle_mu_;
     mutable std::mutex admission_mu_;
     // Retain exact scheduler-domain witnesses until bridge shutdown. This
     // forbids a forged/stale reference from retiring an unrelated actor.
