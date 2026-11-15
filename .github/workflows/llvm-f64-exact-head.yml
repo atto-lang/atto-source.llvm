@@ -9,6 +9,9 @@ on:
       - src/main/cpp/oreslang/**
       - tests/native_f64_lexical_gate.sh
       - tests/wasm_f64_entry_gate.sh
+      - scripts/test_native_direct_f64_aot.sh
+      - scripts/test_native_direct_f64_reborrows.sh
+      - tests/native-direct-array-f64/**
       - tests/native_float_ml.rs
       - tests/fixtures/native-float/**
   workflow_dispatch:
@@ -101,6 +104,22 @@ jobs:
                 /<(?:skipped|failure|error)\b/i.test(x))
               throw Error("missing, failed, or skipped compiler/native guest execution");
           ' "$RUNNER_TEMP/f64-ctest.xml"
+      - name: Execute native direct Array f64 ABI and nested reborrow proofs
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/test_native_direct_f64_aot.sh
+          bash -n scripts/test_native_direct_f64_reborrows.sh
+          export ORESLANG_LLVMC="$PWD/build/oreslang-llvmc"
+          export ORES_NO_GC_IR_AUDIT="$PWD/build/oreslang-no-gc-ir-audit"
+          export ATTO_AOT_DRIVER="$PWD/scripts/compile-aot.sh"
+          export CLANG=clang
+          test -x "$ORESLANG_LLVMC"
+          test -x "$ORES_NO_GC_IR_AUDIT"
+          bash scripts/test_native_direct_f64_aot.sh
+          bash scripts/test_native_direct_f64_reborrows.sh
+          echo "SOURCE_LOCAL_DIRECT_F64_ABI_AND_REBORROW_EXECUTED"
+
       - name: Issue source-local evidence only after executed tests
         shell: bash
         run: |
