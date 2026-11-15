@@ -5,6 +5,7 @@ on:
       - 'tests/support/InvertedClassHandleContract.hpp'
       - 'tests/inverted_class_handle_contract_test.cpp'
       - 'tests/inverted_class_handle_fuzz_test.cpp'
+      - 'tests/inverted_class_handle_adversarial_test.cpp'
       - 'CMakeLists.txt'
       - '.github/workflows/inverted-class-handle-reference.yml'
   workflow_dispatch:
@@ -50,7 +51,12 @@ jobs:
             tests/inverted_class_handle_fuzz_test.cpp \
             -o /tmp/inverted-class-handle-fuzz
           /tmp/inverted-class-handle-fuzz
-          echo CLASS_HANDLE_HOST_REFERENCE_AND_50K_MODEL=EXECUTED
+          "$CXX" -std=c++17 "$OPT" -Wall -Wextra -Wpedantic -Werror \
+            -pthread -Itests/support \
+            tests/inverted_class_handle_adversarial_test.cpp \
+            -o /tmp/inverted-class-handle-adversarial
+          /tmp/inverted-class-handle-adversarial
+          echo CLASS_HANDLE_HOST_ALL_3_TARGETS=EXECUTED
 
   sanitizer-contract:
     runs-on: ubuntu-24.04
@@ -82,11 +88,17 @@ jobs:
             -pthread -Itests/support \
             tests/inverted_class_handle_contract_test.cpp \
             -o /tmp/inverted-class-handle-sanitized
-          ASAN_OPTIONS=detect_leaks=1 /tmp/inverted-class-handle-sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 TSAN_OPTIONS=halt_on_error=1 /tmp/inverted-class-handle-sanitized
           g++ -std=c++17 -O1 -Wall -Wextra -Wpedantic -Werror \
             -fno-omit-frame-pointer "-fsanitize=$SANITIZER" \
             -pthread -Itests/support \
             tests/inverted_class_handle_fuzz_test.cpp \
             -o /tmp/inverted-class-handle-fuzz-sanitized
-          ASAN_OPTIONS=detect_leaks=1 /tmp/inverted-class-handle-fuzz-sanitized
-          echo CLASS_HANDLE_HOST_SANITIZER_AND_50K_MODEL=EXECUTED
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 TSAN_OPTIONS=halt_on_error=1 /tmp/inverted-class-handle-fuzz-sanitized
+          g++ -std=c++17 -O1 -Wall -Wextra -Wpedantic -Werror \
+            -fno-omit-frame-pointer "-fsanitize=$SANITIZER" \
+            -pthread -Itests/support \
+            tests/inverted_class_handle_adversarial_test.cpp \
+            -o /tmp/inverted-class-handle-adversarial-sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 TSAN_OPTIONS=halt_on_error=1 /tmp/inverted-class-handle-adversarial-sanitized
+          echo CLASS_HANDLE_HOST_ALL_3_SANITIZER_TARGETS=EXECUTED
