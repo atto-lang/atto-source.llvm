@@ -85,7 +85,7 @@ ORES_LTO_MAIN
     exit 69
   fi
 fi
-"$compiler" "${compiler_aot_args[@]}" --target=host "$source_file" > "$work/program.ll"
+"$compiler" ${compiler_aot_args[@]+"${compiler_aot_args[@]}"} --target=host "$source_file" > "$work/program.ll"
 # Known tracing-GC IR screen; not a complete linked-image/FFI collector proof.
 "$auditor" "$work/program.ll" >/dev/null
 runtime_sources=()

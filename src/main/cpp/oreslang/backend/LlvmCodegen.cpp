@@ -1165,6 +1165,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     llvm::FunctionCallee actorRegionGuestRead, actorRegionGuestWrite;
     llvm::FunctionCallee actorRegionGuestDrop, actorRegionGuestEnd;
     if (actor_region_v1) {
+        auto* voidTy = llvm::Type::getVoidTy(context);
         auto* i32 = llvm::Type::getInt32Ty(context);
         actorRegionGuestBegin = module.getOrInsertFunction(
             "ores_actor_region_guest_v1_begin",

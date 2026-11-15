@@ -52,7 +52,7 @@ endif()
 # be rejected before any IR is printed, even though the root object is valid.
 set(branch_negative "${CMAKE_CURRENT_BINARY_DIR}/actor-region-v1-branch-owner.atto")
 file(WRITE "${branch_negative}"
-"define class Point as\n  pub final int x: 20;\nend\npub fnc main(): int {\n  let Point point = new Point();\n  if true {\n    const Point alias = point;\n  } fi\n  return point.x;\n}\n")
+"define class Point as\n  pub final int x: 20;\nend\npub fnc main(): int {\n  let Point point = new Point();\n  if true then\n    const Point alias = point;\n  fi\n  return point.x;\n}\n")
 execute_process(
   COMMAND "${COMPILER}" --aot-profile=actor-region-v1 "${branch_negative}"
   RESULT_VARIABLE branch_status OUTPUT_VARIABLE branch_ir
@@ -60,8 +60,10 @@ execute_process(
 if(branch_status STREQUAL "0" OR NOT branch_ir STREQUAL "")
   message(FATAL_ERROR "actor-region-v1 accepted a branch-scoped class alias or emitted partial IR")
 endif()
-string(FIND "${branch_diagnostic}" "branch-scoped class owners" branch_expected)
-if(branch_expected EQUAL -1)
+# Main's ownership checker now rejects the non-Copy class alias itself
+# (explicit borrow required) before the actor-region branch-owner gate; either
+# fail-closed diagnostic proves no branch-scoped owner reaches IR.
+if(NOT branch_diagnostic MATCHES "branch-scoped class owners|class is non-Copy; use an explicit borrow")
   message(FATAL_ERROR "actor-region-v1 branch-owner negative returned unexpected diagnostic: ${branch_diagnostic}")
 endif()
 
@@ -77,8 +79,9 @@ execute_process(
 if(parameter_status STREQUAL "0" OR NOT parameter_ir STREQUAL "")
   message(FATAL_ERROR "actor-region-v1 accepted a class-valued helper parameter or emitted partial IR")
 endif()
-string(FIND "${parameter_diagnostic}" "class-valued function parameters and returns" parameter_expected)
-if(parameter_expected EQUAL -1)
+# Main's ownership checker rejects a by-value class parameter before the
+# profile gate; the profile itself says "class-valued parameters and returns".
+if(NOT parameter_diagnostic MATCHES "class-valued parameters and returns|by-value class parameter 'value' requires exclusive borrow")
   message(FATAL_ERROR "actor-region-v1 class-parameter negative returned unexpected diagnostic: ${parameter_diagnostic}")
 endif()
 
@@ -92,8 +95,8 @@ execute_process(
 if(return_status STREQUAL "0" OR NOT return_ir STREQUAL "")
   message(FATAL_ERROR "actor-region-v1 accepted a class-valued return or emitted partial IR")
 endif()
-string(FIND "${return_diagnostic}" "class-valued function parameters and returns" return_expected)
-if(return_expected EQUAL -1)
+# The reused sealed class-field checker rejects class returns first.
+if(NOT return_diagnostic MATCHES "class-valued parameters and returns|sealed scalar AOT rejects unmodeled function, ownership or suspension roots")
   message(FATAL_ERROR "actor-region-v1 class-return negative returned unexpected diagnostic: ${return_diagnostic}")
 endif()
 
