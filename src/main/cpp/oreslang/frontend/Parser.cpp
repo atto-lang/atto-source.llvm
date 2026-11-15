@@ -3899,6 +3899,46 @@ private:
             // the guest failure channel and violate panic/raise precedence.
             fail("native trap expression unsupported: typed throw effects and cleanup lowering required");
         }
+        // Preferred contextual ownership prefixes lower into the existing
+        // Copy/Take/Borrow/BorrowMut/Share expression kinds and checker.
+        // Only the verb must touch '!'; the operand may be separated by trivia.
+        {
+            bool mutable_borrow = token_.text == "mut";
+            const auto start = token_.offset;
+            std::string operation(token_.text);
+            Lexer probe = lexer_;
+            if (mutable_borrow) {
+                const Token verb = probe.next();
+                operation = std::string(verb.text);
+                if (operation == "borrow") {
+                    const Token marker = probe.next();
+                    if (marker.text == "!" &&
+                            marker.offset == verb.offset + verb.text.size()) {
+                        advance(); // mut
+                        advance(); // borrow
+                        require("!");
+                        auto result = make_expression(Expression::Kind::BorrowMut, start);
+                        result->left = unary();
+                        return result;
+                    }
+                }
+            } else if (operation == "copy" || operation == "take" ||
+                       operation == "borrow" || operation == "share") {
+                const Token marker = probe.next();
+                if (marker.text == "!" &&
+                        marker.offset == token_.offset + token_.text.size()) {
+                    advance();
+                    require("!");
+                    auto result = make_expression(
+                        operation == "copy" ? Expression::Kind::Copy :
+                        operation == "take" ? Expression::Kind::Take :
+                        operation == "share" ? Expression::Kind::Share :
+                        Expression::Kind::Borrow, start);
+                    result->left = unary();
+                    return result;
+                }
+            }
+        }
         if (token_.text == "rt") {
             const auto offset = token_.offset;
             advance();
@@ -3936,10 +3976,11 @@ private:
             advance();
             if (!mutable_borrow && operation == "borrow" &&
                     token_.text == "mut") {
-                fail("legacy 'rt borrow mut value' is not accepted; use 'rt mut borrow value'");
-            }
-            if (mutable_borrow && token_.text == "mut")
+                advance(); // Historical 'rt borrow mut' is a compatibility alias.
+                mutable_borrow = true;
+            } else if (mutable_borrow && token_.text == "mut") {
                 fail("duplicate mutable borrow qualifier");
+            }
             auto result = make_expression(
                 operation == "copy" ? Expression::Kind::Copy :
                 operation == "take" ? Expression::Kind::Take :
