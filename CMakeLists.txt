@@ -263,6 +263,38 @@ if(BUILD_TESTING)
             COMMAND oreslang-native-db-durable-wal-host-test)
         set_tests_properties(native_db_durable_wal_host_only PROPERTIES TIMEOUT 20)
     endif()
+    # Source-only package-local multi-file namespace identity proof.
+    # This does NOT accept, link or execute Oreslang import ns guest code.
+    add_executable(oreslang-native-namespace-package-index-test
+        tests/native_package_namespace_graph_test.cpp)
+    target_include_directories(oreslang-native-namespace-package-index-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-namespace-package-index-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_namespace_package_identity_source_only
+        COMMAND oreslang-native-namespace-package-index-test)
+    set_tests_properties(native_namespace_package_identity_source_only PROPERTIES TIMEOUT 15)
+
+    # ACTUAL production Parser.cpp boundary, not the source-only graph's
+    # synthetic Program fixtures. No native namespace guest/IR is enabled.
+    add_executable(oreslang-native-verified-namespace-parser-v2-test
+        tests/native_verified_namespace_parser_v2_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp
+        src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-native-verified-namespace-parser-v2-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(oreslang-native-verified-namespace-parser-v2-test PRIVATE
+        ${ORE_LLVM_LIBS})
+    target_compile_options(oreslang-native-verified-namespace-parser-v2-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_verified_namespace_parser_v2_host_only
+        COMMAND oreslang-native-verified-namespace-parser-v2-test)
+    set_tests_properties(native_verified_namespace_parser_v2_host_only
+        PROPERTIES TIMEOUT 30)
+
     # G1 typed-device-IR prototype only: NOT parsed .atto guest, PTX, or GPU
     # execution. Keep independent of the native host scalar compiler.
     add_executable(oreslang-gpu-g1-typed-saxpy-ir-test
@@ -1317,6 +1349,43 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 30)
     find_package(OpenSSL QUIET COMPONENTS Crypto)
     if(OpenSSL_FOUND)
+        # Host-only independently pinned dependency alias contract.
+        # This proves fail-closed lock parsing, NOT executable namespaces.
+        add_executable(oreslang-native-verified-namespace-dependency-lock-v2-test
+            tests/native_verified_namespace_dependency_lock_v2_test.cpp)
+        target_include_directories(
+            oreslang-native-verified-namespace-dependency-lock-v2-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(
+            oreslang-native-verified-namespace-dependency-lock-v2-test PRIVATE
+            OpenSSL::Crypto)
+        target_compile_options(
+            oreslang-native-verified-namespace-dependency-lock-v2-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+        add_test(NAME native_verified_namespace_dependency_lock_v2_host_only
+            COMMAND oreslang-native-verified-namespace-dependency-lock-v2-test)
+        set_tests_properties(native_verified_namespace_dependency_lock_v2_host_only
+            PROPERTIES TIMEOUT 15)
+        # Real production Parser.cpp + physical v2 snapshot + verified owner
+        # graph, without authorizing native guest namespace execution.
+        add_executable(oreslang-native-verified-namespace-real-parser-v2-test
+            tests/native_verified_namespace_real_parser_v2_test.cpp
+            src/main/cpp/oreslang/frontend/Parser.cpp
+            src/main/cpp/oreslang/frontend/MethodResolver.cpp
+            src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+            src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+        target_include_directories(oreslang-native-verified-namespace-real-parser-v2-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+            "${LLVM_INCLUDE_DIRS}")
+        target_link_libraries(oreslang-native-verified-namespace-real-parser-v2-test PRIVATE
+            OpenSSL::Crypto ${ORE_LLVM_LIBS})
+        target_compile_options(oreslang-native-verified-namespace-real-parser-v2-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+        add_test(NAME native_verified_namespace_real_parser_v2_host_only
+            COMMAND oreslang-native-verified-namespace-real-parser-v2-test)
+        set_tests_properties(native_verified_namespace_real_parser_v2_host_only
+            PROPERTIES TIMEOUT 30)
+
         add_executable(oreslang-messagepack-wire-v2-test
             tests/messagepack_wire_v2_test.cpp)
         target_include_directories(oreslang-messagepack-wire-v2-test PRIVATE
