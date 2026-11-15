@@ -5,6 +5,71 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# GPU actor host-only verification. Opt-in native CTest with real actor/OpenCL
+# sources but no LLVM developer packages or compiled AttoLang guest.
+option(ORESLANG_GPU_ACTOR_HOST_ONLY "Build native GPU actor security tests only" OFF)
+if(ORESLANG_GPU_ACTOR_HOST_ONLY)
+    include(CTest)
+    if(NOT BUILD_TESTING)
+        message(FATAL_ERROR "GPU actor host-only verification needs BUILD_TESTING=ON")
+    endif()
+    find_package(Threads REQUIRED)
+    function(oreslang_gpu_actor_host_test target test_name source_file)
+        add_executable(${target} ${source_file})
+        target_include_directories(${target} PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features(${target} PRIVATE cxx_std_17)
+        target_compile_options(${target} PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+        target_link_libraries(${target} PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+        add_test(NAME ${test_name} COMMAND ${target})
+        set_tests_properties(${test_name} PROPERTIES TIMEOUT 45)
+    endfunction()
+    oreslang_gpu_actor_host_test(oreslang-gpu-host-v0-registry
+        native_gpu_actor_v0_registry_migration
+        tests/gpu_actor_host_turn_bridge_v0_test.cpp)
+    oreslang_gpu_actor_host_test(oreslang-gpu-host-v1-quarantine
+        native_gpu_actor_v1_quarantine
+        tests/gpu_actor_provider_bridge_v1_test.cpp)
+    oreslang_gpu_actor_host_test(oreslang-gpu-host-v2-opencl
+        native_gpu_actor_v2_opencl_mock
+        tests/gpu_actor_opencl_provider_v2_test.cpp)
+    oreslang_gpu_actor_host_test(oreslang-gpu-host-opencl-g3
+        native_gpu_opencl_g3_legacy_regression
+        tests/opencl_provider_g3_test.cpp)
+    add_test(NAME native_gpu_actor_v0_completion_authority_private
+        COMMAND "${CMAKE_COMMAND}"
+            "-DGPU_ACTOR_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+            "-DGPU_ACTOR_INCLUDE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+            "-DGPU_ACTOR_NEGATIVE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_actor_v0_completion_authority_negative.cpp"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/GpuActorV0CompletionAuthorityGate.cmake")
+    set_tests_properties(native_gpu_actor_v0_completion_authority_private
+        PROPERTIES TIMEOUT 30)
+    # Worker-only quiescence/cleanup authority: ordinary C++ callers MUST
+    # fail compilation when invoking these potentially blocking methods.
+    add_test(NAME native_gpu_actor_recovery_worker_authority_private
+        COMMAND "${CMAKE_COMMAND}"
+            "-DGPU_ACTOR_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+            "-DGPU_ACTOR_INCLUDE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+            "-DGPU_ACTOR_NEGATIVE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_actor_recovery_authority_negative.cpp"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/GpuActorRecoveryAuthorityGate.cmake")
+    set_tests_properties(native_gpu_actor_recovery_worker_authority_private
+        PROPERTIES TIMEOUT 30)
+
+    # Build the physical probe, but never count 77 as a passing GPU test.
+    add_executable(oreslang-gpu-physical-prerequisite
+        tests/gpu_actor_opencl_v2_physical_probe.cpp)
+    target_include_directories(oreslang-gpu-physical-prerequisite PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-gpu-physical-prerequisite PRIVATE cxx_std_17)
+    target_compile_options(oreslang-gpu-physical-prerequisite PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    target_link_libraries(oreslang-gpu-physical-prerequisite PRIVATE
+        Threads::Threads ${CMAKE_DL_LIBS})
+    return()
+endif()
+
+
 # Standalone host access-grant regression (no LLVM toolchain or guest proof).
 option(ATTO_ACTOR_ACCESS_HOST_ONLY
   "Build only the checked actor allocation authority host test" OFF)
@@ -223,6 +288,20 @@ if(BUILD_TESTING)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_bytes_map_source_baseline.cmake")
     set_tests_properties(native_actor_bytes_map_scalar_atto_baseline
         PROPERTIES TIMEOUT 40)
+    # Compiler-linked API regression: genuine LLVM 19/20+ intrinsic declaration
+    # selection, including overloaded checked-i64 arithmetic and trap.
+    # It is host LLVM API evidence; NOT AttoLang guest-execution parity.
+    add_executable(atto-llvm-intrinsic-compat-test
+        tests/llvm_intrinsic_compat_api_test.cpp)
+    target_include_directories(atto-llvm-intrinsic-compat-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(atto-llvm-intrinsic-compat-test PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_options(atto-llvm-intrinsic-compat-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_llvm_intrinsic_api_compat
+        COMMAND atto-llvm-intrinsic-compat-test)
+    set_tests_properties(native_llvm_intrinsic_api_compat PROPERTIES TIMEOUT 15)
     # Native CUDA CUBIN AOT admission only: host tests with a fake driver,
     # not evidence of physical-GPU execution or AttoLang guest lowering.
     add_executable(oreslang-cuda-cubin-aot-test tests/cuda_cubin_aot_test.cpp)
@@ -2101,6 +2180,16 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_ownership_cfg_exact_once_field_destruction
         COMMAND oreslang-ownership-drop-plan-test)
+    # Actor graph heap host drop-glue order. This is not guest-source lowering.
+    add_executable(oreslang-actor-graph-reverse-drop-test
+        tests/actor_graph_reverse_drop_test.cpp)
+    target_include_directories(oreslang-actor-graph-reverse-drop-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-graph-reverse-drop-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-actor-graph-reverse-drop-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_graph_reverse_destructor_order
+        COMMAND oreslang-actor-graph-reverse-drop-test)
     add_executable(oreslang-target-abi-test tests/target_abi_test.cpp)
     target_include_directories(oreslang-target-abi-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-target-abi-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -3123,6 +3212,104 @@ if(BUILD_TESTING)
     # transport tests; host primitives only, not guest compiler parity.
     target_link_libraries(oreslang-bounded-actor-port-test PRIVATE Threads::Threads)
     set_tests_properties(native_actor_port_bounded_owned_transport PROPERTIES TIMEOUT 30)
+
+    # Host-runtime-only typed-tag selective mailbox primitive. A full
+    # guest-language selective receive and compiled matcher remains separate.
+    add_executable(oreslang-native-selective-tagged-port-test
+        tests/native_selective_tagged_port_test.cpp)
+    target_include_directories(oreslang-native-selective-tagged-port-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-selective-tagged-port-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-selective-tagged-port-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-selective-tagged-port-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_tag_selective_bounded_receive
+        COMMAND oreslang-native-selective-tagged-port-test)
+    set_tests_properties(native_actor_tag_selective_bounded_receive PROPERTIES TIMEOUT 30)
+
+    # Real BoundedActorPort + preallocated slot pool + shared completion ledger.
+    add_executable(oreslang-native-preallocated-port-oracle-test
+        tests/native_preallocated_port_reference_model_test.cpp)
+    target_include_directories(oreslang-native-preallocated-port-oracle-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-preallocated-port-oracle-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-preallocated-port-oracle-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-preallocated-port-oracle-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_preallocated_production_port_oracle
+        COMMAND oreslang-native-preallocated-port-oracle-test)
+    set_tests_properties(native_actor_preallocated_production_port_oracle PROPERTIES TIMEOUT 30)
+
+    # Full runtime path (not a standalone slot model): bound PriorityActorInbox,
+    # NativeActorGroup CONTROL/user turns, generation-fenced STOP, physical ACK,
+    # and 400 concurrent sender-vs-stop trials.
+    add_executable(oreslang-native-preallocated-supervisor-races-test
+        tests/native_preallocated_supervisor_races_test.cpp)
+    target_include_directories(oreslang-native-preallocated-supervisor-races-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-preallocated-supervisor-races-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-preallocated-supervisor-races-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-preallocated-supervisor-races-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_preallocated_supervisor_races
+        COMMAND oreslang-native-preallocated-supervisor-races-test)
+    set_tests_properties(native_actor_preallocated_supervisor_races PROPERTIES TIMEOUT 60)
+
+    # Separately executable exact native host-component regression:
+    # NativeActorGroup CONTROL/STOP, BoundedActorPort preallocated slots,
+    # sequence-ledger gap fencing and 600 admission-vs-STOP races.
+    add_executable(oreslang-native-group-physical-port-stress-test
+        tests/native_group_physical_port_stress_test.cpp)
+    target_include_directories(oreslang-native-group-physical-port-stress-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-group-physical-port-stress-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-group-physical-port-stress-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-group-physical-port-stress-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_group_physical_port_stop_races
+        COMMAND oreslang-native-group-physical-port-stress-test)
+    set_tests_properties(native_actor_group_physical_port_stop_races PROPERTIES TIMEOUT 60)
+
+    # Independently buildable host primitive: fixed-capacity intrusive slots,
+    # compiler-generated tag selectors and generation-fenced scan continuations.
+    # BoundedActorPort now uses this queue; full native CMake, ACK, lifecycle
+    # and compiler-generated guest AOT tests remain independent merge gates.
+    add_executable(oreslang-preallocated-selective-slots-test
+        tests/preallocated_selective_slots_test.cpp)
+    target_include_directories(oreslang-preallocated-selective-slots-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-preallocated-selective-slots-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-preallocated-selective-slots-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-preallocated-selective-slots-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_preallocated_selective_slots
+        COMMAND oreslang-preallocated-selective-slots-test)
+    set_tests_properties(native_actor_preallocated_selective_slots PROPERTIES TIMEOUT 30)
+    # Real shared ActorMailboxCompletion with two independently preallocated
+    # priority lanes: global sequence fence versus lane-local receipt ID.
+    add_executable(oreslang-native-slot-ledger-integration-test
+        tests/native_slot_ledger_integration_test.cpp)
+    target_include_directories(oreslang-native-slot-ledger-integration-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-slot-ledger-integration-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-slot-ledger-integration-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-slot-ledger-integration-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_preallocated_slot_ledger_fence
+        COMMAND oreslang-native-slot-ledger-integration-test)
+    set_tests_properties(native_actor_preallocated_slot_ledger_fence PROPERTIES TIMEOUT 30)
+    # Compile-negative actor safety gate: custom deleter destructors or moves
+    # must not call back into an actor mailbox while the physical lock is held.
+    if(UNIX)
+        add_test(NAME native_actor_preallocated_selective_deleter_rejections
+            COMMAND "${CMAKE_COMMAND}"
+                "-DCXX=${CMAKE_CXX_COMPILER}"
+                "-DINCLUDE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+                "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/preallocated_selective_slots_negative_compile.cpp"
+                "-P" "${CMAKE_CURRENT_SOURCE_DIR}/tests/preallocated_selective_slots_negative_compile.cmake")
+        set_tests_properties(native_actor_preallocated_selective_deleter_rejections
+            PROPERTIES TIMEOUT 30)
+    endif()
 
     add_executable(oreslang-native-mailbox-parallel-terminal-test
         tests/native_mailbox_parallel_terminal_test.cpp)
@@ -5718,6 +5905,24 @@ if(BUILD_TESTING)
     set_tests_properties(native_shared_immutable_payload_host PROPERTIES TIMEOUT 25)
 endif()
 
+# Connect immutable payload tickets to the REAL native actor scheduler DATA lane.
+# Host-only integration: no source .atto lowering and no five-backend parity claim.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-actor-shared-payload-bridge-test
+        tests/native_actor_shared_payload_scheduler_bridge_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-shared-payload-bridge-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-shared-payload-bridge-test PRIVATE cxx_std_20)
+    target_link_libraries(oreslang-native-actor-shared-payload-bridge-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-shared-payload-bridge-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_shared_payload_real_scheduler
+        COMMAND oreslang-native-actor-shared-payload-bridge-test)
+    set_tests_properties(native_actor_shared_payload_real_scheduler PROPERTIES TIMEOUT 30)
+endif()
+
 # Host-only actor-shared TCP/HTTP pool over real loopback sockets (POSIX).
 # NOT compiled .atto guest networking.
 if(BUILD_TESTING AND UNIX)
@@ -6038,6 +6243,29 @@ if(BUILD_TESTING)
     add_test(NAME native_gpu_actor_host_turn_fence_control_v0
         COMMAND oreslang-gpu-actor-host-bridge-v0-test)
     set_tests_properties(native_gpu_actor_host_turn_fence_control_v0 PROPERTIES TIMEOUT 30)
+
+    # Production authority gate: only the supervisor V1 registry may invoke
+    # raw host Boolean completion/release methods. Ensure an ordinary native
+    # translation unit is rejected by the configured compiler.
+    add_test(NAME native_gpu_actor_v0_completion_authority_private
+        COMMAND "${CMAKE_COMMAND}"
+            "-DGPU_ACTOR_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+            "-DGPU_ACTOR_INCLUDE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+            "-DGPU_ACTOR_NEGATIVE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_actor_v0_completion_authority_negative.cpp"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/GpuActorV0CompletionAuthorityGate.cmake")
+    set_tests_properties(native_gpu_actor_v0_completion_authority_private
+        PROPERTIES TIMEOUT 30)
+    # Worker-only quiescence/cleanup authority: ordinary C++ callers MUST
+    # fail compilation when invoking these potentially blocking methods.
+    add_test(NAME native_gpu_actor_recovery_worker_authority_private
+        COMMAND "${CMAKE_COMMAND}"
+            "-DGPU_ACTOR_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+            "-DGPU_ACTOR_INCLUDE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+            "-DGPU_ACTOR_NEGATIVE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_actor_recovery_authority_negative.cpp"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/GpuActorRecoveryAuthorityGate.cmake")
+    set_tests_properties(native_gpu_actor_recovery_worker_authority_private
+        PROPERTIES TIMEOUT 30)
+
 endif()
 
 # V1 opaque host provider event identity and bounded actor quarantine. This

@@ -169,6 +169,47 @@ pub fnc main(): int {
 ATTO
 reject_source forged-close
 
+# Java's continuation scope may outlive a physical carrier. This native AOT
+# implementation currently has a carrier-local, strict-LIFO span stack and
+# MUST NOT accept a suspension/yield inside it. Such a source requires a
+# scheduler-owned scope frame, generation validation, and terminal cleanup.
+# Each rejection must produce neither a native executable nor partial LLVM IR.
+cat > "$OUT/scope-await.atto" <<'ATTO'
+pub suspends fnc main(): int {
+  using telemetry.span("await-boundary") as span {
+    let int result = await next_value();
+    return result;
+  }
+  return 1;
+}
+ATTO
+reject_source scope-await
+
+cat > "$OUT/scope-cooperate.atto" <<'ATTO'
+pub fnc main(): int {
+  using telemetry.span("cooperative-yield") as span {
+    rt cooperate;
+    return 41;
+  }
+  return 1;
+}
+ATTO
+reject_source scope-cooperate
+
+cat > "$OUT/scope-nested-await.atto" <<'ATTO'
+pub suspends fnc main(): int {
+  using telemetry.span("outer") as outer {
+    using telemetry.span("inner") as inner {
+      return await nested_result();
+    }
+  }
+  return 1;
+}
+ATTO
+reject_source scope-nested-await
+
+echo 'LLVM_TELEMETRY_SUSPENSION_NEGATIVES_PASS:3'
+
 # Enabled instrumentation is not yet admitted by hard-real-time WCET policy.
 if "$COMPILER" --profile=native-hard-rt "$OUT/normal.atto" \
     > "$OUT/hard-rt.ll" 2> "$OUT/hard-rt.err"; then
