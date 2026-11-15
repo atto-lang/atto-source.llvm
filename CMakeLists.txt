@@ -3448,6 +3448,14 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_ownership_bang_borrow_call_guest
         ownership-bang-v1/borrow-call-accept.atto
         --run 42 --clang "${ORE_CLANG}")
+    # Compile and actually execute both mutable-loan spellings through the
+    # production LLVM frontend; borrow return values and take are checked.
+    oreslang_contract_test(native_ownership_bang_borrow_mut_canonical_guest
+        ownership-bang-v1/borrow-mut-canonical-native.atto
+        --run 42 --clang "${ORE_CLANG}")
+    oreslang_contract_test(native_ownership_bang_borrow_mut_compatible_guest
+        ownership-bang-v1/borrow-mut-compatible-native.atto
+        --run 42 --clang "${ORE_CLANG}")
 
     # Optimization is an ABI/ownership-sensitive boundary: require both
     # unoptimized and optimized real native runs (not just IR shape tests).
@@ -3466,6 +3474,12 @@ if(BUILD_TESTING)
             --run 42 --clang "${ORE_CLANG}" --opt-level "${mode}")
         oreslang_contract_test(native_ownership_bang_borrow_call_O${mode}
             ownership-bang-v1/borrow-call-accept.atto
+            --run 42 --clang "${ORE_CLANG}" --opt-level "${mode}")
+        oreslang_contract_test(native_ownership_bang_borrow_mut_canonical_O${mode}
+            ownership-bang-v1/borrow-mut-canonical-native.atto
+            --run 42 --clang "${ORE_CLANG}" --opt-level "${mode}")
+        oreslang_contract_test(native_ownership_bang_borrow_mut_compatible_O${mode}
+            ownership-bang-v1/borrow-mut-compatible-native.atto
             --run 42 --clang "${ORE_CLANG}" --opt-level "${mode}")
     endforeach()
 
@@ -3509,6 +3523,8 @@ if(BUILD_TESTING)
         native_ownership_bang_take_guest
         native_ownership_bang_share_guest
         native_ownership_bang_borrow_call_guest
+        native_ownership_bang_borrow_mut_canonical_guest
+        native_ownership_bang_borrow_mut_compatible_guest
         native_ownership_bang_take_sanitizer_runtime_smoke
         native_ownership_bang_borrow_sanitizer_runtime_smoke
         native_ownership_bang_use_after_move_reject
@@ -3520,7 +3536,9 @@ if(BUILD_TESTING)
             native_ownership_bang_copy_spaced_O${mode}
             native_ownership_bang_take_O${mode}
             native_ownership_bang_share_O${mode}
-            native_ownership_bang_borrow_call_O${mode})
+            native_ownership_bang_borrow_call_O${mode}
+            native_ownership_bang_borrow_mut_canonical_O${mode}
+            native_ownership_bang_borrow_mut_compatible_O${mode})
     endforeach()
     set_tests_properties(${_ownership_bang_contracts}
         PROPERTIES FIXTURES_REQUIRED native_ownership_bang_git_pins)
