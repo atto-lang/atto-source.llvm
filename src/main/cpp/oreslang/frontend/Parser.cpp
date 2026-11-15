@@ -4011,9 +4011,11 @@ private:
                     token_.text == "mut") {
                 advance(); // Historical 'rt borrow mut' is a compatibility alias.
                 mutable_borrow = true;
-            } else if (mutable_borrow && token_.text == "mut") {
-                fail("duplicate mutable borrow qualifier");
             }
+            // A legacy 'rt borrow mut mut x' must fail with the same
+            // dedicated diagnostic as the preferred borrow! mut mut x.
+            if (mutable_borrow && token_.text == "mut")
+                fail("duplicate mutable borrow qualifier");
             auto result = make_expression(
                 operation == "copy" ? Expression::Kind::Copy :
                 operation == "take" ? Expression::Kind::Take :
