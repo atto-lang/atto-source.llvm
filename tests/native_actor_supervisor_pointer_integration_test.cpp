@@ -20,6 +20,7 @@ struct Context {
     std::atomic<bool> failed{false};
     std::atomic<bool> foreign_denied{false};
     std::atomic<bool> untrusted_denied{false};
+    std::atomic<bool> actor_mapping_denied{false};
 };
 
 extern "C" void actor_callback(void* opaque, size_t slot, std::uint64_t) {
@@ -27,6 +28,20 @@ extern "C" void actor_callback(void* opaque, size_t slot, std::uint64_t) {
     try {
         if (slot == 0) {
             const auto ref = ctx.refs[0];
+            // An actor callback may request a registered grant but may not
+            // register arbitrary host addresses into the supervisor catalog.
+            bool actor_registration_rejected = false;
+            try {
+                ctx.bridge->register_mapped_region(
+                    ref, 105, 8, &ctx.untrusted_backing,
+                    sizeof(ctx.untrusted_backing),
+                    NativeActorSupervisor::Mode::ReadOnly);
+            } catch (const std::logic_error&) {
+                actor_registration_rejected = true;
+            }
+            if (!actor_registration_rejected)
+                throw std::runtime_error("actor turn registered native RAM");
+            ctx.actor_mapping_denied.store(true, std::memory_order_release);
             auto grant = ctx.bridge->issue_current_region(ref, 101, 7);
             if (ctx.bridge->read_current<std::uint32_t>(ref, grant) != 11)
                 throw std::runtime_error("trusted actor pointer load failed");
@@ -148,6 +163,7 @@ int main() {
         ctx.failed.load(std::memory_order_acquire) ||
         !ctx.foreign_denied.load(std::memory_order_acquire) ||
         !ctx.untrusted_denied.load(std::memory_order_acquire) ||
+        !ctx.actor_mapping_denied.load(std::memory_order_acquire) ||
         ctx.trusted_backing[1] != 99)
         throw std::runtime_error("native pointer scheduler actor test failed");
 
@@ -158,6 +174,16 @@ int main() {
     if (!denied) throw std::runtime_error("forged native actor retirement admitted");
 
     bridge.stop_and_revoke(ctx.refs[0]);
+    // Supervisor stop is terminal authority revocation. Even the privileged
+    // host thread cannot register fresh windows after STOP seals admission.
+    denied = false;
+    try {
+        bridge.register_mapped_region(
+            ctx.refs[0], 110, 10, &ctx.untrusted_backing,
+            sizeof(ctx.untrusted_backing), NativeActorSupervisor::Mode::ReadOnly);
+    } catch (const std::logic_error&) { denied = true; }
+    if (!denied)
+        throw std::runtime_error("retired actor accepted a new native region");
     bridge.stop_and_revoke(ctx.refs[1]);
     if (!ores_native_actor_scheduler_wait_done(scheduler, ctx.refs[0]) ||
         !ores_native_actor_scheduler_wait_done(scheduler, ctx.refs[1]))
