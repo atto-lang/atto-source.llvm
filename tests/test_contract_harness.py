@@ -144,20 +144,20 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         self.assertNotEqual(p.returncode, 0)
         self.assertIn("--native-runtime requires --run", p.stderr)
 
-    def test_ownership_optimizer_and_sanitizer_modes_cannot_be_silently_skipped(self):
+    def test_ownership_optimizer_and_sanitizer_link_modes_cannot_be_silently_skipped(self):
         compiler = self.compiler(stdout="; ModuleID = 'guest'\n")
         for flags, diagnostic in (
                 (("--opt-level", "2"), "--opt-level requires an executable"),
-                (("--sanitize", "address,undefined"), "--sanitize requires an executable")):
+                (("--sanitizer-runtime-smoke",), "--sanitizer-runtime-smoke requires an executable")):
             with self.subTest(flags=flags):
                 p = self.run_contract(compiler, *flags)
                 self.assertNotEqual(p.returncode, 0)
                 self.assertIn(diagnostic, p.stderr)
 
-    def test_ownership_optimizer_and_sanitizer_flags_reach_executable_linker(self):
+    def test_ownership_optimizer_and_sanitizer_link_flags_reach_executable_linker(self):
         # A test-only fake compiler/linker proves CLI flag plumbing. Only
         # native Clang/LLVM CI can prove genuine source execution or sanitizer
-        # correctness; this test must not be reported as guest evidence.
+        # correctness or ASan/UBSan instrumentation; source-only helper evidence.
         compiler = self.compiler(stdout="; ModuleID = 'guest'\n"
                                         "define i32 @main() { ret i32 42 }\n")
         clang = self.linker(exit_code=42)
@@ -172,7 +172,7 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         )
         clang.write_text(script.replace(needle, check + needle), encoding="utf-8")
         p = self.run_contract(compiler, "--run", "42", "--clang", str(clang),
-                              "--opt-level", "2", "--sanitize", "address,undefined")
+                              "--opt-level", "2", "--sanitizer-runtime-smoke")
         self.assertEqual(p.returncode, 0, p.stderr)
 
     def test_unrelated_linker_error_followed_by_main_note_is_rejected(self):
