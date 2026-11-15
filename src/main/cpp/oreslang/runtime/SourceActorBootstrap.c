@@ -662,10 +662,6 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
     } else {
         atomic_fetch_add_explicit(&instance->failed, 1, memory_order_release);
     }
-    /* Matches the scheduler's *physically processed* DATA callback count.
-     * A failed callback is processed by the carrier, not a successful turn. */
-    atomic_fetch_add_explicit(&instance->processed, 1, memory_order_release);
-
     if (!succeeded) {
         /* Seal future DATA immediately on a frame failure while allowing this
          * callback to finish its physical carrier turn. Stop is idempotent
@@ -680,6 +676,11 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
         }
         group_unlock();
     }
+    /* A DATA callback is only completed after failure admission is sealed.
+     * Publishing 'processed' before STOP sealing let flush_blocking return
+     * with a failed-count receipt but a still-live mailbox. The ordered
+     * release also covers last_success_result/success/failed/failure_code. */
+    atomic_fetch_add_explicit(&instance->processed, 1, memory_order_release);
     /* An explicit trusted-main flush_blocking barrier observes physical
      * callback completion, regardless of whether the guest succeeded. */
     group_lock();
