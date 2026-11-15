@@ -1,0 +1,21 @@
+// A mutable loan can be reborrowed synchronously, and shared loans can overlap.
+fnc add_two(borrow mut Array<float> values): int {
+  val float before = values.get(0);
+  values.set(0, before + 2.0);
+  return values.size;
+}
+fnc forward(borrow mut Array<float> values): int {
+  return add_two(rt mut borrow values);
+}
+fnc shared_pair(borrow Array<float> left, borrow Array<float> right): float {
+  return left.get(0) + right.get(0);
+}
+pub routine main(): int {
+  let mut Array<float> data = new Array<float>();
+  data.add(40.0);
+  val int count = forward(rt mut borrow data);
+  if count != 1 || data.get(0) != 42.0 then return 1; fi
+  val float sum = shared_pair(rt borrow data, rt borrow data);
+  if sum != 84.0 then return 2; fi
+  return 42;
+}
