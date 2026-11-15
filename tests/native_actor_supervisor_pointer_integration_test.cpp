@@ -27,9 +27,7 @@ extern "C" void actor_callback(void* opaque, size_t slot, std::uint64_t) {
     try {
         if (slot == 0) {
             const auto ref = ctx.refs[0];
-            auto grant = ctx.bridge->issue_current_region(
-                ref, 101, 7, ctx.trusted_backing.data(),
-                sizeof(ctx.trusted_backing), NativeActorSupervisor::Mode::ReadWrite);
+            auto grant = ctx.bridge->issue_current_region(ref, 101, 7);
             if (ctx.bridge->read_current<std::uint32_t>(ref, grant) != 11)
                 throw std::runtime_error("trusted actor pointer load failed");
             ctx.bridge->write_current<std::uint32_t>(
@@ -45,14 +43,18 @@ extern "C" void actor_callback(void* opaque, size_t slot, std::uint64_t) {
                 (void)ctx.bridge->read_current<std::uint32_t>(forged, grant);
             } catch (const std::logic_error&) { denied = true; }
             if (!denied) throw std::runtime_error("foreign actor pointer succeeded");
+            // No raw base/address parameter exists at this callsite, and
+            // a made-up region or allocation ID cannot mint a grant.
+            bool unknown_region_denied = false;
+            try { (void)ctx.bridge->issue_current_region(ref, 101, 999); }
+            catch (const std::logic_error&) { unknown_region_denied = true; }
+            if (!unknown_region_denied)
+                throw std::runtime_error("unregistered pointer region admitted");
             ctx.foreign_denied.store(true, std::memory_order_release);
         } else if (slot == 1) {
             bool denied = false;
             try {
-                (void)ctx.bridge->issue_current_region(
-                    ctx.refs[1], 102, 7, &ctx.untrusted_backing,
-                    sizeof(ctx.untrusted_backing),
-                    NativeActorSupervisor::Mode::ReadWrite);
+                (void)ctx.bridge->issue_current_region(ctx.refs[1], 102, 7);
             } catch (const std::logic_error&) { denied = true; }
             if (!denied) throw std::runtime_error("untrusted native pointer succeeded");
             ctx.untrusted_denied.store(true, std::memory_order_release);
@@ -84,14 +86,33 @@ int main() {
     if (!denied) throw std::runtime_error("forged scheduler ref admitted");
     bridge.admit_spawned(ctx.refs[0], NativeActorSupervisor::Admission::TrustedNative);
     bridge.admit_spawned(ctx.refs[1], NativeActorSupervisor::Admission::Untrusted);
+    bridge.register_mapped_region(
+        ctx.refs[0], 101, 7, ctx.trusted_backing.data(),
+        sizeof(ctx.trusted_backing), NativeActorSupervisor::Mode::ReadWrite);
+    // Duplicate registration and untrusted mappings are rejected before
+    // any actor callback can request a native grant.
+    bool duplicate_denied = false;
+    try {
+        bridge.register_mapped_region(
+            ctx.refs[0], 101, 7, ctx.trusted_backing.data(),
+            sizeof(ctx.trusted_backing), NativeActorSupervisor::Mode::ReadWrite);
+    } catch (const std::logic_error&) { duplicate_denied = true; }
+    if (!duplicate_denied)
+        throw std::runtime_error("native mapped region duplicate admitted");
+    bool untrusted_mapping_denied = false;
+    try {
+        bridge.register_mapped_region(
+            ctx.refs[1], 102, 7, &ctx.untrusted_backing,
+            sizeof(ctx.untrusted_backing), NativeActorSupervisor::Mode::ReadWrite);
+    } catch (const std::logic_error&) { untrusted_mapping_denied = true; }
+    if (!untrusted_mapping_denied)
+        throw std::runtime_error("untrusted actor mapped region admitted");
 
     // External host threads lack the exact actor turn; trust alone is never
     // permission to issue a raw pointer.
     denied = false;
     try {
-        (void)bridge.issue_current_region(
-            ctx.refs[0], 99, 1, ctx.trusted_backing.data(),
-            sizeof(ctx.trusted_backing), NativeActorSupervisor::Mode::ReadOnly);
+        (void)bridge.issue_current_region(ctx.refs[0], 101, 7);
     } catch (const std::logic_error&) { denied = true; }
     if (!denied) throw std::runtime_error("outside-turn pointer issue admitted");
 
