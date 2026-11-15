@@ -3085,8 +3085,12 @@ private:
             if (token_.kind != Kind::String)
                 fail("native using telemetry.span requires one literal operation name");
             scope.telemetry_operation = string_literal(token_.text);
-            if (scope.telemetry_operation.empty() || scope.telemetry_operation.size() > 256)
-                fail("native telemetry span name requires 1..256 UTF-8 bytes");
+            if (scope.telemetry_operation.empty() || scope.telemetry_operation.size() > 256 ||
+                std::any_of(scope.telemetry_operation.begin(),
+                            scope.telemetry_operation.end(), [](unsigned char c) {
+                                return c < 32 || c == 127;
+                            }))
+                fail("native telemetry span name requires 1..256 UTF-8 bytes without control characters");
             advance();
             require(")"); require("as");
             scope.receiver = identifier();
