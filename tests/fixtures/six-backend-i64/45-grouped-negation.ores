@@ -1,0 +1,3 @@
+// 45: grouped-negation
+// Candidate scalar exactness fixture; no compiler-backed execution claimed.
+pub fnc main(): int { return -(-42); }
