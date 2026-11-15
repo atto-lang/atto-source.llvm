@@ -1,0 +1,2 @@
+pub fnc main(): int { return with(42); }
+fnc with(int value): int { return value; }
