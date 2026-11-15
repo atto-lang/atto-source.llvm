@@ -73,12 +73,13 @@ int main() {
           module.code()[2].required.generation && module.code()[2].required.bounds,
           "mutable receiver required runtime guards missing");
     check(module.code()[1].required.capacity, "push requires capacity guard");
+    check(module.code()[2].required.arithmetic, "mutating mtd requires checked arithmetic");
     check(!module.code()[6].required.generation,
           "detached snapshot must not re-resolve stale row");
     (void)VerifiedModule::import_checked(schema(), module.code());
 
     // Independently imported MIR must reject any missing/forged guard.
-    for (int kind = 0; kind < 5; ++kind) {
+    for (int kind = 0; kind < 6; ++kind) {
         auto copied = module.code();
         switch (kind) {
             case 0: copied[2].required.actor = false; break;
@@ -86,6 +87,7 @@ int main() {
             case 2: copied[2].required.generation = false; break;
             case 3: copied[2].required.bounds = false; break;
             case 4: copied[1].required.capacity = false; break;
+            case 5: copied[2].required.arithmetic = false; break;
         }
         denied("runtime guards", [&] { (void)VerifiedModule::import_checked(schema(), copied); });
     }
@@ -102,10 +104,10 @@ int main() {
     });
     mutate_and_deny("snapshot", [](Ops& ops) { ops[6].snapshot_name = "other"; });
     mutate_and_deny("snapshot", [](Ops& ops) { ops[4].snapshot_name = "particle"; });
-    mutate_and_deny("operation not supported", [](Ops& ops) {
+    mutate_and_deny("not admitted", [](Ops& ops) {
         ops.insert(ops.end() - 1, make(Kind::Suspend));
     });
-    mutate_and_deny("operation not supported", [](Ops& ops) {
+    mutate_and_deny("not admitted", [](Ops& ops) {
         ops.insert(ops.end() - 1, make(Kind::ExportHandle));
     });
     mutate_and_deny("terminal close", [](Ops& ops) { ops.pop_back(); });
@@ -127,6 +129,12 @@ int main() {
     wrong_schema = schema();
     wrong_schema.capacity = 0;
     denied("actor/capacity", [&] { (void)VerifiedModule::lower(wrong_schema, valid()); });
+    wrong_schema = schema();
+    wrong_schema.first_kind = ScalarKind::Bool;
+    denied("only two i64", [&] { (void)VerifiedModule::lower(wrong_schema, valid()); });
+    wrong_schema = schema();
+    wrong_schema.second_kind = ScalarKind::Pointer;
+    denied("only two i64", [&] { (void)VerifiedModule::lower(wrong_schema, valid()); });
     wrong_schema = schema();
     wrong_schema.second_field = "x";
     denied("duplicate inverted class field", [&] {
