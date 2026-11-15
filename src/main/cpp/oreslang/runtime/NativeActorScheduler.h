@@ -100,6 +100,15 @@ typedef enum {
 } OresNativeSendStatus;
 OresNativeSendStatus ores_native_actor_scheduler_try_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
+/* Trusted host-only admission receipt. On ACCEPTED, returns the exact native
+ * DATA sequence minted under the scheduler lock for this target incarnation.
+ * On denial, out_sequence is set to 0; NULL is invalid. This is not a guest
+ * serializable capability or a handler-completion acknowledgement.
+ * The source-target typed transport binds this to its opaque descriptor to
+ * prevent cross-mail ticket substitution or replay. */
+OresNativeSendStatus ores_native_actor_scheduler_try_send_receipted(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
+    uint64_t payload, uint64_t* out_sequence);
 /* Compatibility API: 1 iff accepted, 0 otherwise. Prefer typed try_send. */
 int ores_native_actor_scheduler_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
