@@ -1,0 +1,4 @@
+// Must reject: Result<Option<Result<T,E>>,E>.transpose retains both Result levels.
+fnc invalid(Result<Option<Result<int,String>>,String> value): Option<Result<int,String>> {
+  return value.transpose();
+}
