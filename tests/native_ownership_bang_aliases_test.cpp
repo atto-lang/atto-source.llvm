@@ -68,8 +68,13 @@ static std::string read_fixture(const std::string& root, const std::string& file
     if (count <= 0 || count > 8192)
         throw std::runtime_error("oversized/invalid native ownership fixture: " + filename);
     file.seekg(0, std::ios::beg);
-    std::string bytes(std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{});
-    if (bytes.size() != static_cast<std::size_t>(count))
+    // istreambuf_iterator reads to EOF and can exceed the validated size if
+    // the fixture grows between tellg() and read(). Allocate only the
+    // validated byte count and refuse any extra byte or short read.
+    std::string bytes(static_cast<std::size_t>(count), '\0');
+    file.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    if (file.gcount() != count ||
+        file.peek() != std::char_traits<char>::eof() || file.bad())
         throw std::runtime_error("native ownership fixture changed while reading: " + filename);
     if (git_blob_sha(bytes) != pin->second)
         throw std::runtime_error("native ownership fixture Git blob drift: " + filename);
