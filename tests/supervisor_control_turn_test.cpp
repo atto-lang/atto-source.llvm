@@ -1,5 +1,6 @@
 #include "oreslang/runtime/SupervisorControlTurn.hpp"
 #include <atomic>
+#include <exception>
 #include <limits>
 #include <initializer_list>
 #include <stdexcept>
@@ -369,15 +370,24 @@ int main() {
             }
         });
     }
-    for (std::uint64_t i = 1; i <= 3000; ++i) {
-        Key child{"metrics-child", i};
-        concurrentMetrics.reserve_child(child);
-        CHECK(concurrentMetrics.publish_child(child, Kind::Panic, "panic"));
-        CHECK(concurrentMetrics.admit_turn(metricsHooks, false, i)
-                == SupervisorControlTurn::Admitted::Control);
+    // Even if a CONTROL assertion fails, stop/join the metric readers before
+    // propagating the error. Otherwise a joinable std::thread destructor
+    // calls terminate() and obscures the actual failing assertion.
+    std::exception_ptr writerFailure;
+    try {
+        for (std::uint64_t i = 1; i <= 3000; ++i) {
+            Key child{"metrics-child", i};
+            concurrentMetrics.reserve_child(child);
+            CHECK(concurrentMetrics.publish_child(child, Kind::Panic, "panic"));
+            CHECK(concurrentMetrics.admit_turn(metricsHooks, false, i)
+                    == SupervisorControlTurn::Admitted::Control);
+        }
+    } catch (...) {
+        writerFailure = std::current_exception();
     }
     sampling.store(false, std::memory_order_release);
     for (auto& reader : metricReaders) reader.join();
+    if (writerFailure) std::rethrow_exception(writerFailure);
     CHECK(!invalidMetric.load(std::memory_order_relaxed));
     CHECK(concurrentMetrics.restarts_used() <= 3000);
     CHECK(concurrentMetrics.restarts_in_window() <= 64);
