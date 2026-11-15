@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdatomic.h>
+#include <string.h>
 
 #define CHECK(x) do { if (!(x)) { \
   fprintf(stderr, "SOURCE_ACTOR_RESTART_FAIL line=%d condition=%s\n", __LINE__, #x); \
@@ -49,7 +50,9 @@ static int64_t actor_b(OresActorI64Heap* h, uint64_t d, uint64_t e, int64_t msg)
     atomic_fetch_add(&b_forty_two, 1);
     return value;
 }
-int main(void) {
+int main(int argc, char** argv) {
+    const int exhaust_restart = argc == 2 && strcmp(argv[1], "--exhaust") == 0;
+    CHECK(argc == 1 || exhaust_restart);
     atomic_init(&a_seven, 0); atomic_init(&a_nine, 0);
     atomic_init(&b_forty_two, 0);
     void* a = oreslang_source_actor_spawn_supervised_budgeted(
@@ -86,13 +89,30 @@ int main(void) {
     CHECK(atomic_load(&a_seven) == 1);
     CHECK(atomic_load(&a_nine) == 1);
     CHECK(atomic_load(&b_forty_two) == 1);
+    if (exhaust_restart) {
+        /* A2 received a fresh per-incarnation quota of one frame and
+         * processed 9. Its next turn must fail *without* creating A3:
+         * the supervisor's total one_for_one restart budget was spent. */
+        CHECK(oreslang_source_actor_try_send(replacement, 10));
+        CHECK(oreslang_source_actor_flush_blocking(replacement));
+        CHECK(oreslang_source_actor_message_receipt(replacement, &fresh));
+        CHECK(fresh.processed_callbacks == 2);
+        CHECK(fresh.successful_messages == 1 && fresh.failed_messages == 1);
+        CHECK(fresh.last_success_result == 9);
+        CHECK(fresh.failure_code == ORES_SOURCE_ACTOR_FAILURE_FRAME);
+        CHECK(fresh.stop_requested);
+        CHECK(!oreslang_source_actor_recover_blocking(replacement));
+    }
     oreslang_source_actor_stop(replacement);
     oreslang_source_actor_stop(b);
     CHECK(oreslang_source_actor_test_terminal_notices() == 3);
-    CHECK(oreslang_source_actor_test_panic_notices() == 1);
-    CHECK(oreslang_source_actor_test_stopped_notices() == 2);
+    CHECK(oreslang_source_actor_test_panic_notices() == (exhaust_restart ? 2u : 1u));
+    CHECK(oreslang_source_actor_test_stopped_notices() == (exhaust_restart ? 1u : 2u));
     CHECK(oreslang_source_actor_test_last_panic_code()
           == ORES_SOURCE_ACTOR_FAILURE_FRAME);
-    puts("SOURCE_ACTOR_ONE_FOR_ONE_PASS A=1_failed_1 A2=9 B=42 PANIC=1 STOPPED=2");
+    if (exhaust_restart)
+        puts("SOURCE_ACTOR_RESTART_BUDGET_EXHAUSTED_PASS A=PANIC A2=PANIC B=42 A3=NONE");
+    else
+        puts("SOURCE_ACTOR_ONE_FOR_ONE_PASS A=1_failed_1 A2=9 B=42 PANIC=1 STOPPED=2");
     return 0;
 }
