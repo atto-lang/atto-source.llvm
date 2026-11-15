@@ -3438,6 +3438,11 @@ private:
                         continue;
                     }
                     require("on");
+                    // Until native HIR carries a proven record field view,
+                    // never reinterpret a tilde/structural pattern as a
+                    // scalar expression or enable host map projection.
+                    if (token_.text == "structural" || token_.text == "~")
+                        fail("native structural field pattern requires checked typed aggregate lowering");
                     if (accept("_")) {
                         if (has_fallback)
                             fail("native do match can contain only one wildcard arm");
@@ -4574,6 +4579,8 @@ private:
                 continue;
             }
             require("on");
+            if (token_.text == "structural" || token_.text == "~")
+                fail("native structural field pattern requires checked typed aggregate lowering");
             if (accept("_")) {
                 if (fallback)
                     fail("native value match can contain only one wildcard arm");

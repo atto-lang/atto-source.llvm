@@ -2369,6 +2369,30 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_tilde_record_requires_typed_native_lowering
         tilde-record-literal-native-reject.ores
         --diagnostic "native tilde map/record literal unsupported")
+    oreslang_contract_test(native_match_fallback_hardening_1
+        dispatch-value-match-wildcard-then-default-reject.ores
+        --diagnostic "native value match wildcard arm must be last")
+    oreslang_contract_test(native_match_fallback_hardening_2
+        dispatch-do-match-wildcard-then-default-reject.ores
+        --diagnostic "native do match wildcard arm must be last")
+    oreslang_contract_test(native_match_fallback_hardening_3
+        dispatch-value-match-duplicate-case-reject.ores
+        --diagnostic "duplicate native value match pattern")
+    oreslang_contract_test(native_match_fallback_hardening_4
+        dispatch-do-match-duplicate-case-reject.ores
+        --diagnostic "duplicate native do match pattern")
+    oreslang_contract_test(native_structural_field_failclosed_1
+        dispatch-value-structural-field-reject.ores
+        --diagnostic "native structural field pattern requires checked typed aggregate lowering")
+    oreslang_contract_test(native_structural_field_failclosed_2
+        dispatch-do-structural-field-reject.ores
+        --diagnostic "native structural field pattern requires checked typed aggregate lowering")
+    oreslang_contract_test(native_structural_field_failclosed_3
+        dispatch-value-record-field-reject.ores
+        --diagnostic "native tilde map/record literal unsupported")
+    oreslang_contract_test(native_structural_field_failclosed_4
+        dispatch-do-record-field-reject.ores
+        --diagnostic "native tilde map/record literal unsupported")
     # Match-default hardening: ensure unmatched arms actually execute the
     # fallback, and reject duplicate/guarded patterns and tilde bypasses.
     oreslang_contract_test(native_value_match_default_fallthrough_ir
