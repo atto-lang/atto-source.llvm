@@ -43,7 +43,15 @@ jobs:
           set -euo pipefail
           for iteration in 1 2 3 4; do
             /tmp/actor-trace-v2-native --trace-v2 > "/tmp/actor-trace-v2-$iteration.json"
-            python3 tests/check_actor_trace_v2.py "/tmp/actor-trace-v2-$iteration.json"
+            python3 tests/check_actor_trace_v2.py \
+              --require-backend llvm --require-subject runtime_host \
+              --require-emission reconstructed_after_quiescence \
+              --min-admitted 24 "/tmp/actor-trace-v2-$iteration.json"
+            if python3 tests/check_actor_trace_v2.py \
+              --require-subject compiled_atto_guest "/tmp/actor-trace-v2-$iteration.json"; then
+              echo 'HOST_RECEIPT_WAS_PROMOTED_TO_GUEST_PROOF' >&2
+              exit 1
+            fi
             python3 -c "import json,sys; t=json.load(open(sys.argv[1])); a=t['events']; assert sum(e['kind']=='send_accept' for e in a)==24; assert sum(e['kind']=='receive_complete' for e in a)==24; assert len(a)==75; assert t['producer']==dict(backend='llvm',subject='runtime_host',emission='reconstructed_after_quiescence')" "/tmp/actor-trace-v2-$iteration.json"
           done
           echo 'NATIVE_ACTOR_TRACE_V2_HOST_ONLY=PASS'
