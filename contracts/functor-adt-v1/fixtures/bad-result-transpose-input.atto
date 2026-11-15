@@ -1,0 +1,4 @@
+// Must reject: transpose requires the success payload to be Option<T>.
+fnc wrong(Result<int,String> value): Option<Result<int,String>> {
+  return value.transpose();
+}

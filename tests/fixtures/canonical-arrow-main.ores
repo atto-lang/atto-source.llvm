@@ -1,0 +1,4 @@
+// Format-stable scalar signature: native compiler accepts canonical arrow.
+pub fnc main() -> int {
+  return 42;
+}
