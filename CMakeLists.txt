@@ -3430,6 +3430,34 @@ if(BUILD_TESTING)
 
     # Native i64 is a Copy value: rt copy/rt share are scalar value copies,
     # while rt take invalidates named scalar binding until function exit.
+    # Actual source-compiled, Clang-linked native .atto guest executions.
+    # These are executable gates (not parser-only smoke tests) and reuse the
+    # existing compiler-owned contract harness / exact-tree CI configuration.
+    oreslang_contract_test(native_ownership_bang_copy_compact_guest
+        ownership-bang-v1/copy-compact-native.atto
+        --run 42 --clang "${ORE_CLANG}")
+    oreslang_contract_test(native_ownership_bang_copy_spaced_guest
+        ownership-bang-v1/copy-spaced-native.atto
+        --run 42 --clang "${ORE_CLANG}")
+    oreslang_contract_test(native_ownership_bang_take_guest
+        ownership-bang-v1/take-native.atto
+        --run 42 --clang "${ORE_CLANG}")
+    oreslang_contract_test(native_ownership_bang_share_guest
+        ownership-bang-v1/share-native.atto
+        --run 42 --clang "${ORE_CLANG}")
+    oreslang_contract_test(native_ownership_bang_borrow_call_guest
+        ownership-bang-v1/borrow-call-accept.atto
+        --run 42 --clang "${ORE_CLANG}")
+    # Unsafe ownership sources must fail with compiler diagnostics and no IR.
+    oreslang_contract_test(native_ownership_bang_use_after_move_reject
+        ownership-bang-v1/take-after-use-reject.atto
+        --diagnostic "use of explicitly moved int")
+    oreslang_contract_test(native_ownership_bang_escaping_borrow_reject
+        ownership-bang-v1/borrow-escape-reject.atto
+        --diagnostic "borrowed reference may only be passed")
+    oreslang_contract_test(native_ownership_bang_share_class_reject
+        ownership-bang-v1/share-class-reject.atto
+        --diagnostic "class is non-Copy")
     oreslang_contract_test(native_rt_copy_scalar native-rt-copy-scalar.ores --ir "llvm.sadd.with.overflow.i64" --run 42 --clang "${ORE_CLANG}")
     oreslang_contract_test(native_rt_take_scalar native-rt-take-scalar.ores --ir "llvm.sadd.with.overflow.i64" --run 42 --clang "${ORE_CLANG}")
     oreslang_contract_test(native_rt_share_scalar native-rt-share-scalar.ores --ir "llvm.sadd.with.overflow.i64" --run 42 --clang "${ORE_CLANG}")
