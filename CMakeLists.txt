@@ -1289,6 +1289,26 @@ if(BUILD_TESTING)
         set_tests_properties(native_verified_namespace_real_parser_v2_host_only
             PROPERTIES TIMEOUT 30)
 
+        # Compiles the actual native Parser.cpp and applies the existing
+        # ownership validator; the source spelling fixture is not AOT proof.
+        add_executable(oreslang-native-ownership-bang-aliases-test
+            tests/native_ownership_bang_aliases_test.cpp
+            src/main/cpp/oreslang/frontend/Parser.cpp
+            src/main/cpp/oreslang/frontend/MethodResolver.cpp
+            src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+            src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+        target_include_directories(oreslang-native-ownership-bang-aliases-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+            "${LLVM_INCLUDE_DIRS}")
+        target_link_libraries(oreslang-native-ownership-bang-aliases-test PRIVATE
+            OpenSSL::Crypto ${ORE_LLVM_LIBS})
+        target_compile_options(oreslang-native-ownership-bang-aliases-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+        add_test(NAME native_ownership_bang_aliases_parser_and_checker
+            COMMAND oreslang-native-ownership-bang-aliases-test)
+        set_tests_properties(native_ownership_bang_aliases_parser_and_checker
+            PROPERTIES TIMEOUT 30)
+
         add_executable(oreslang-messagepack-wire-v2-test
             tests/messagepack_wire_v2_test.cpp)
         target_include_directories(oreslang-messagepack-wire-v2-test PRIVATE
