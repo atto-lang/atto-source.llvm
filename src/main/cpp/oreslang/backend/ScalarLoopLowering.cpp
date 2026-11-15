@@ -63,7 +63,14 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         auto* stateAddress = field(b, frame, 0);
         auto* fresh = llvm::BasicBlock::Create(context, "fresh", init);
         auto* invalid = llvm::BasicBlock::Create(context, "already.initialized", init);
-        b.CreateCondBr(b.CreateICmpEQ(b.CreateLoad(i64, stateAddress), constant(0)),
+        // Recycled frames must not be mistaken for fresh reservations. All
+        // three ABI words must be zero before an owner can initialize them.
+        auto* zeroState = b.CreateICmpEQ(b.CreateLoad(i64, stateAddress), constant(0));
+        auto* zeroCounter = b.CreateICmpEQ(
+            b.CreateLoad(i64, field(b, frame, 1)), constant(0));
+        auto* zeroMagic = b.CreateICmpEQ(
+            b.CreateLoad(i64, field(b, frame, 2)), constant(0));
+        b.CreateCondBr(b.CreateAnd(zeroState, b.CreateAnd(zeroCounter, zeroMagic)),
                        fresh, invalid);
         b.SetInsertPoint(invalid);
         fail(b);
@@ -107,6 +114,21 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         auto* exhausted = llvm::BasicBlock::Create(context, "cooperate", step);
         auto* complete = llvm::BasicBlock::Create(context, "loop.complete", step);
         auto* state = b.CreateLoad(i64, stateAddress, "state");
+        // A terminal status can be consumed without result(), so validate
+        // every lifecycle path before publishing DONE or CANCELLED.
+        auto* entryCounter = b.CreateLoad(i64, counterAddress, "frame.counter");
+        auto* terminal = llvm::ConstantInt::getSigned(i64, loop.upper_bound);
+        auto* entryInRange = b.CreateAnd(
+            b.CreateICmpSGE(entryCounter,
+                llvm::ConstantInt::getSigned(i64, loop.initial)),
+            b.CreateICmpSLE(entryCounter, terminal));
+        auto* doneConsistent = b.CreateOr(
+            b.CreateICmpNE(state, constant(2)),
+            b.CreateICmpEQ(entryCounter, terminal));
+        auto* stateVerified = llvm::BasicBlock::Create(
+            context, "frame.state.consistent", step);
+        b.CreateCondBr(b.CreateAnd(entryInRange, doneConsistent), stateVerified, invalid);
+        b.SetInsertPoint(stateVerified);
         auto* sw = b.CreateSwitch(state, invalid, 3);
         sw->addCase(constant(1), active);
         sw->addCase(constant(2), done);
@@ -170,8 +192,18 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         auto* invalid = llvm::BasicBlock::Create(context, "invalid", cancel);
         auto* known = b.CreateAnd(b.CreateICmpUGE(s, constant(1)),
                                    b.CreateICmpULE(s, constant(3)));
+        auto* counter = b.CreateLoad(i64, field(b, frame, 1));
+        auto* terminal = llvm::ConstantInt::getSigned(i64, loop.upper_bound);
+        auto* counterValid = b.CreateAnd(
+            b.CreateICmpSGE(counter,
+                llvm::ConstantInt::getSigned(i64, loop.initial)),
+            b.CreateICmpSLE(counter, terminal));
+        auto* doneValid = b.CreateOr(
+            b.CreateICmpNE(s, constant(2)), b.CreateICmpEQ(counter, terminal));
+        auto* magicValid = b.CreateICmpEQ(
+            b.CreateLoad(i64, field(b, frame, 2)), constant(kMagic));
         b.CreateCondBr(b.CreateAnd(known,
-            b.CreateICmpEQ(b.CreateLoad(i64, field(b, frame, 2)), constant(kMagic))),
+            b.CreateAnd(counterValid, b.CreateAnd(doneValid, magicValid))),
             valid, invalid);
         b.SetInsertPoint(invalid);
         fail(b);
@@ -195,10 +227,15 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         entryGuard(result, frame, b);
         auto* valid = llvm::BasicBlock::Create(context, "result.ready", result);
         auto* invalid = llvm::BasicBlock::Create(context, "result.invalid", result);
-        b.CreateCondBr(b.CreateAnd(
-            b.CreateICmpEQ(b.CreateLoad(i64, field(b, frame, 0)), constant(2)),
-            b.CreateICmpEQ(b.CreateLoad(i64, field(b, frame, 2)), constant(kMagic))),
-            valid, invalid);
+        auto* done = b.CreateICmpEQ(
+            b.CreateLoad(i64, field(b, frame, 0)), constant(2));
+        auto* magicValid = b.CreateICmpEQ(
+            b.CreateLoad(i64, field(b, frame, 2)), constant(kMagic));
+        auto* exactlyComplete = b.CreateICmpEQ(
+            b.CreateLoad(i64, field(b, frame, 1)),
+            llvm::ConstantInt::getSigned(i64, loop.upper_bound));
+        b.CreateCondBr(b.CreateAnd(done, b.CreateAnd(magicValid, exactlyComplete)),
+                       valid, invalid);
         b.SetInsertPoint(invalid);
         fail(b);
         b.SetInsertPoint(valid);

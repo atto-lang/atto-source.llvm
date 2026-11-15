@@ -2075,18 +2075,50 @@ if(BUILD_TESTING)
         message(FATAL_ERROR "Native source IR object verification requires Clang")
     endif()
     # This isolated AOT source-to-native frame test does not relax the nine
-    # default compiler-negative RT admission contracts.
-    if(ORE_CLANG)
-        add_test(NAME native_rt_scalar_frame_aot_two_tasks
-            COMMAND "${Python3_EXECUTABLE}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_step_aot.py"
-                --compiler "$<TARGET_FILE:oreslang-llvmc>"
-                --clang "${ORE_CLANG}"
-                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-rt-scalar-step-positive.ores"
-                --harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_step_harness.c")
-        set_tests_properties(native_rt_scalar_frame_aot_two_tasks PROPERTIES TIMEOUT 120)
+    # default compiler-negative RT admission contracts. Its 16 required
+    # signal-based trap assertions require Linux fork/waitpid semantics.
+    # Do not register a guaranteed-failing trap suite on macOS/Windows.
+    if(ORE_CLANG AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # This security test uses std-only Rust, never Python. Compile
+        # the real compiler/IR mutation driver and independent Rust unit suite.
+        find_program(ORE_RUSTC NAMES rustc)
+        if(ORE_RUSTC)
+            set(ORE_FRAME_RUST_SOURCE
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_step_aot.rs")
+            set(ORE_FRAME_RUST_DRIVER
+                "${CMAKE_CURRENT_BINARY_DIR}/native_rt_scalar_step_aot_rust")
+            set(ORE_FRAME_RUST_UNIT
+                "${CMAKE_CURRENT_BINARY_DIR}/native_rt_scalar_frame_ir_mutation_rust_unit")
+            add_custom_command(OUTPUT "${ORE_FRAME_RUST_DRIVER}"
+                COMMAND "${ORE_RUSTC}" --edition=2021 -C opt-level=2 -D warnings
+                    "${ORE_FRAME_RUST_SOURCE}" -o "${ORE_FRAME_RUST_DRIVER}"
+                DEPENDS "${ORE_FRAME_RUST_SOURCE}"
+                VERBATIM)
+            add_custom_target(native_rt_scalar_step_aot_rust ALL
+                DEPENDS "${ORE_FRAME_RUST_DRIVER}")
+            add_custom_command(OUTPUT "${ORE_FRAME_RUST_UNIT}"
+                COMMAND "${ORE_RUSTC}" --edition=2021 --test -C opt-level=2 -D warnings
+                    "${ORE_FRAME_RUST_SOURCE}" -o "${ORE_FRAME_RUST_UNIT}"
+                DEPENDS "${ORE_FRAME_RUST_SOURCE}"
+                VERBATIM)
+            add_custom_target(native_rt_scalar_frame_ir_mutation_rust_unit ALL
+                DEPENDS "${ORE_FRAME_RUST_UNIT}")
+            add_test(NAME native_rt_scalar_frame_ir_mutation_rust_unit
+                COMMAND "${ORE_FRAME_RUST_UNIT}")
+            set_tests_properties(native_rt_scalar_frame_ir_mutation_rust_unit
+                PROPERTIES TIMEOUT 30)
+            add_test(NAME native_rt_scalar_frame_aot_two_tasks
+                COMMAND "${ORE_FRAME_RUST_DRIVER}"
+                    --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                    --clang "${ORE_CLANG}"
+                    --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-rt-scalar-step-positive.ores"
+                    --harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_step_harness.c")
+            set_tests_properties(native_rt_scalar_frame_aot_two_tasks PROPERTIES TIMEOUT 180)
+        else()
+            message(WARNING "Experimental scalar-loop AOT Rust gate requires rustc; not registered")
+        endif()
     else()
-        message(WARNING "Experimental scalar-loop AOT gate requires clang")
+        message(WARNING "Experimental scalar-loop AOT trap gate requires Linux and clang")
     endif()
     find_program(ORE_NODE NAMES node nodejs)
     if(ORE_CLANG AND ORE_NODE)
