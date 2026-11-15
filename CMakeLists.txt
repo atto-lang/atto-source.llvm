@@ -1372,6 +1372,16 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
+    # Actual .atto source-compiler admission: raw pointer/effect syntax MUST
+    # fail before native IR until trusted grants, effects, and AOT are complete.
+    foreach(pointer_case IN ITEMS unsafe type wrapper raw-type)
+        oreslang_contract_test(native_trusted_pointer_${pointer_case}_failclosed
+            trusted-pointer-${pointer_case}-unlowered.atto
+            --diagnostic "NATIVE_POINTER_CAPABILITY_UNSUPPORTED")
+    endforeach()
+    oreslang_contract_test(native_trusted_pointer_comment_safe
+        trusted-pointer-comment-safe.atto --ir "ret i64 42")
+
     # HTTP actor source lowering is not verified on LLVM. These compiler-
     # negative fixtures must exercise the real oreslang-llvmc, not a host model.
     oreslang_contract_test(native_http_actor_serial_alias_failclosed
