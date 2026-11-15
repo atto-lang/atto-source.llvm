@@ -98,7 +98,16 @@ int main() {
         REQUIRE(!region.with_at(0, [](Counter&) {})); // no foreign/root access
         REQUIRE(ores_native_actor_scheduler_stop_sealed(scheduler, actor));
         REQUIRE(ores_native_actor_scheduler_stop_sealed(scheduler, foreign));
-        REQUIRE(region.retire_after_done()); // exact STOP and DONE fence
+        // Adversarial supervisor race: only one of 16 competing shutdown
+        // requests may reclaim the Box. Others must fail without double drop.
+        std::atomic<int> retirement_winners{0};
+        std::thread supervisors[16];
+        for (auto& t : supervisors) t = std::thread([&] {
+            if (region.retire_after_done())
+                retirement_winners.fetch_add(1, std::memory_order_relaxed);
+        });
+        for (auto& t : supervisors) t.join();
+        REQUIRE(retirement_winners.load() == 1);
         REQUIRE(region.is_retired());
         REQUIRE(state.drops.load() == 1);
         REQUIRE(!region.retire_after_done()); // no repeated teardown

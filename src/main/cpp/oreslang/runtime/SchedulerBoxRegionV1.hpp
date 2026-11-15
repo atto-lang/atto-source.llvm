@@ -5,6 +5,7 @@
 #include "oreslang/runtime/NativeActorScheduler.h"
 #include "oreslang/runtime/NativeBoxArenaV1.hpp"
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -23,13 +24,17 @@ class SchedulerBoxRegionV1 final {
     // Actor-local fields: the scheduler guarantees one physical turn per
     // exact actor incarnation, even when successive turns migrate workers.
     // The external retire path runs only AFTER wait_done's quiescence fence.
-    bool retired_ = false;
+    // A single supervisor wins retirement; losers and reentrant drops
+    // fail immediately, without waiting or attempting a second destruction.
+    std::atomic<bool> retiring_{false};
+    std::atomic<bool> retired_{false};
     bool borrowed_ = false;
     bool dropping_ = false;
 
     bool in_authenticated_turn() const noexcept {
         return scheduler_ && actor_.scheduler_domain != 0 &&
-            actor_.generation != 0 && !retired_ &&
+            actor_.generation != 0 &&
+            !retired_.load(std::memory_order_acquire) &&
             ores_native_actor_scheduler_is_current_actor(scheduler_, actor_) != 0;
     }
 
@@ -57,7 +62,8 @@ public:
     ~SchedulerBoxRegionV1() noexcept {
         // Shutdown MUST be completed by the external supervisor, not by
         // a destructor racing an active or parked actor continuation.
-        if (!retired_ || borrowed_ || dropping_ || !arena_.try_close())
+        if (!retired_.load(std::memory_order_acquire) ||
+                borrowed_ || dropping_ || !arena_.try_close())
             std::terminate();
     }
 
@@ -99,19 +105,31 @@ public:
     // and fenced external producers; never call on a scheduler carrier.
     // wait_done also waits for retained external resource loans and callbacks.
     bool retire_after_done() noexcept {
-        if (!scheduler_ || retired_ || borrowed_ || dropping_ ||
+        if (!scheduler_ ||
                 ores_native_actor_scheduler_is_current_carrier(scheduler_))
             return false;
-        if (!ores_native_actor_scheduler_wait_done(scheduler_, actor_))
-            return false;
-        retired_ = true; // revoke admission before any destructor reentrancy
+        bool expected = false;
+        if (!retiring_.compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel,
+                std::memory_order_acquire))
+            return false; // duplicate or reentrant retirement
+        if (!ores_native_actor_scheduler_wait_done(scheduler_, actor_)) {
+            retiring_.store(false, std::memory_order_release);
+            return false; // STOP not yet sealed, or stale scheduler generation
+        }
+        // wait_done fences every active callback and retained resource loan.
+        // Only now is reading the actor-local callback/drop state safe.
+        if (borrowed_ || dropping_) std::terminate();
+        retired_.store(true, std::memory_order_release);
         dropping_ = true;
         for (auto& box : boxes_) box.reset();
         dropping_ = false;
         return arena_.try_close();
     }
 
-    bool is_retired() const noexcept { return retired_; }
+    bool is_retired() const noexcept {
+        return retired_.load(std::memory_order_acquire);
+    }
 };
 
 } // namespace oreslang::runtime::native_ownership_v1
