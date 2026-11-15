@@ -4793,6 +4793,47 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_region_v1_offsets_generation_drop
         PROPERTIES TIMEOUT 30)
 
+    # Real checked .atto source -> validated LLVM function IR -> native Clang
+    # executable linked with ActorRegionV1 and the production ActorArena.c.
+    # This is a narrow compiler-backed guest slice; not full general AOT.
+    add_test(NAME native_actor_region_v1_compiled_guest_aot
+        COMMAND "${CMAKE_COMMAND}"
+            "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+            "-DBUILD=${CMAKE_CURRENT_BINARY_DIR}"
+            "-DCLANG=${ORE_CLANG}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_region_v1_compiled_guest.cmake")
+    set_tests_properties(native_actor_region_v1_compiled_guest_aot
+        PROPERTIES TIMEOUT 240)
+
+    # Two checked class owners and a genuine guarded early return converge
+    # at ONE LLVM-generated drop block. Host runtime from #1599 is unchanged.
+    # This verifies compiler-backed native guest execution, not full GC proof.
+        add_executable(oreslang-ownership-dataflow-v1-test
+        tests/ownership_dataflow_v1_test.cpp)
+    target_include_directories(oreslang-ownership-dataflow-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-ownership-dataflow-v1-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-ownership-dataflow-v1-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ownership_dataflow_v1
+        COMMAND oreslang-ownership-dataflow-v1-test)
+    set_tests_properties(native_ownership_dataflow_v1 PROPERTIES TIMEOUT 30)
+    # Check the test dispatcher itself: a deliberately failing middle case
+    # must not prevent a later named case from executing.
+    add_test(NAME native_ownership_dataflow_v1_runner_continuation
+        COMMAND oreslang-ownership-dataflow-v1-test --self-check-runner)
+    set_tests_properties(native_ownership_dataflow_v1_runner_continuation
+        PROPERTIES TIMEOUT 30)
+
+    add_test(NAME native_actor_region_v2_multiowner_guarded_cleanup
+        COMMAND "${CMAKE_COMMAND}"
+            "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+            "-DBUILD=${CMAKE_CURRENT_BINARY_DIR}"
+            "-DCLANG=${ORE_CLANG}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_region_v2_multiowner_guest.cmake")
+    set_tests_properties(native_actor_region_v2_multiowner_guarded_cleanup
+        PROPERTIES TIMEOUT 240)
+
     # Security regression: reject actor-private/control-buffer overlap and
     # overflowing host spans before any memcpy. POSIX fork oracle verifies abort.
     if(UNIX)

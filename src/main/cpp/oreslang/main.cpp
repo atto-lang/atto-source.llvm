@@ -1,4 +1,6 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/ActorRegionV1Guest.hpp"
+#include "oreslang/backend/ActorRegionV2Guest.hpp"
 #include "oreslang/backend/GpuG1AttoSaxpySource.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
@@ -464,6 +466,8 @@ static void require_sealed_scalar_aot_graph(const oreslang::Program& program,
 int main(int argc, char** argv) {
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
+    bool actor_region_v1_guest = false; // opt-in compiler-backed native class proof
+    bool actor_region_v2_guest = false; // two-owner guarded-return cleanup
     bool wasm32_target = false;
     bool cortex_m_target = false;
     bool target_seen = false;
@@ -496,6 +500,23 @@ int main(int argc, char** argv) {
     std::string coreLogLevel = envLevel ? envLevel : "off";
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
+        // This opt-in backend retains the legacy compiler flag decoder.
+        if (arg == "--actor-region-v2-guest") {
+            if (actor_region_v2_guest) {
+                std::cerr << "duplicate actor-region-v2-guest option\n";
+                return 2;
+            }
+            actor_region_v2_guest = true;
+            continue;
+        }
+        if (arg == "--actor-region-v1-guest") {
+            if (actor_region_v1_guest) {
+                std::cerr << "duplicate actor-region-v1-guest option\n";
+                return 2;
+            }
+            actor_region_v1_guest = true;
+            continue; // Keep the existing flag decoder byte-for-byte unchanged.
+        }
         if (!arg.empty() && arg[0] == '-' && arg != "--gpu-g1-kernel-ir")
             gpu_g1_other_option = true;
         if (arg.rfind("--allocator-provider=", 0) == 0) {
@@ -798,6 +819,42 @@ int main(int argc, char** argv) {
             admitted_provider_bits);
         source_module = ast.module;
         source_namespace = ast.namespace_name;
+
+        // Checked two-owner native AOT: both branches converge on exactly
+        // two compiler-generated drops, with no interpreter or GC fallback.
+        if (actor_region_v2_guest) {
+            if (actor_region_v1_guest || wasm32_target || cortex_m_target ||
+                tree_shake || experimental_owned_int || experimental_rt_scalar_loop ||
+                native_hard_rt_profile || rt_check_only || rt_report_seen ||
+                constraint_descriptors_only || bounded_allocator_provider ||
+                isolate_entry_seen) {
+                throw std::runtime_error(
+                    "actor-region-v2 guest AOT rejects incompatible compiler profiles");
+            }
+            std::cout << oreslang::emit_actor_region_v2_guest_ir(ast);
+            std::cout.flush();
+            return 0;
+        }
+
+        // Explicitly selected, compiler-backed experimental native guest path.
+        // It consumes the production parser/type/ownership-checked AST, not a
+        // text rewrite, an interpreter or an independently trusted fixture.
+        // Keep all ordinary LLVM/actor lowering untouched. This narrow slice
+        // rejects async, exceptions, mutation, ownership escapes and other
+        // unmodeled edges before emitting even one LLVM IR byte.
+        if (actor_region_v1_guest) {
+            if (wasm32_target || cortex_m_target || tree_shake ||
+                experimental_owned_int || experimental_rt_scalar_loop ||
+                native_hard_rt_profile || rt_check_only || rt_report_seen ||
+                constraint_descriptors_only || bounded_allocator_provider ||
+                isolate_entry_seen) {
+                throw std::runtime_error(
+                    "actor-region-v1 guest AOT rejects incompatible compiler profiles");
+            }
+            std::cout << oreslang::emit_actor_region_v1_guest_ir(ast);
+            std::cout.flush();
+            return 0;
+        }
 
         // Strict admission happens on the fully resolved and ownership-checked
         // Program, before any executable LLVM IR or sidecar is emitted.
