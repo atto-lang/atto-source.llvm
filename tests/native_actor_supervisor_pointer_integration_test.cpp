@@ -173,7 +173,30 @@ int main() {
     catch (const std::logic_error&) { denied = true; }
     if (!denied) throw std::runtime_error("forged native actor retirement admitted");
 
+    // Race an ordinary supervisor registration with STOP. Either the region
+    // wins before STOP and gets purged after quiescence, or STOP wins and
+    // registration is rejected. It may never survive as an admitted grant.
+    std::uint32_t concurrent_backing = 123;
+    std::atomic<bool> start_race{false};
+    std::atomic<bool> unexpected_registration_error{false};
+    std::thread registration_racer([&] {
+        while (!start_race.load(std::memory_order_acquire))
+            std::this_thread::yield();
+        try {
+            bridge.register_mapped_region(
+                ctx.refs[0], 111, 8, &concurrent_backing,
+                sizeof(concurrent_backing), NativeActorSupervisor::Mode::ReadOnly);
+        } catch (const std::logic_error&) {
+            // Expected if STOP linearizes before the registration.
+        } catch (...) {
+            unexpected_registration_error.store(true, std::memory_order_release);
+        }
+    });
+    start_race.store(true, std::memory_order_release);
     bridge.stop_and_revoke(ctx.refs[0]);
+    registration_racer.join();
+    if (unexpected_registration_error.load(std::memory_order_acquire))
+        throw std::runtime_error("native pointer registration/STOP race failed");
     // Supervisor stop is terminal authority revocation. Even the privileged
     // host thread cannot register fresh windows after STOP seals admission.
     denied = false;
