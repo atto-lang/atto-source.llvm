@@ -1,8 +1,16 @@
-name: Executable bounded Pointer<int> LLVM native AOT M1
+name: Canonical typed Pointer<int> LLVM native AOT M2a
 on:
   pull_request:
     paths:
-      - 'src/main/cpp/oreslang/frontend/PointerIntAot.hpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      - 'src/main/cpp/oreslang/frontend/PointerIntSyntax.hpp'
+      - 'src/main/cpp/oreslang/types/PointerIntHIR.hpp'
+      - 'src/main/cpp/oreslang/types/PointerIntOwnership.hpp'
+      - 'src/main/cpp/oreslang/types/OwnershipChecker.cpp'
+      - 'src/main/cpp/oreslang/backend/PointerIntCodegen.hpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'tests/pointer_int_hir_admission.cpp'
       - 'src/main/cpp/oreslang/main.cpp'
       - 'tests/pointer_int_native_e2e.py'
       - 'tests/guard_native_e2e.py'
@@ -29,9 +37,15 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          test "$(git hash-object src/main/cpp/oreslang/frontend/PointerIntAot.hpp)" = 46976e217186637eb45b4f7faf559d4bd9e23bf1
+          test "$(git hash-object src/main/cpp/oreslang/frontend/Parser.cpp)" = a671707bda15bc522d8a75f8c22b16f2dff38fb0
+          test "$(git hash-object src/main/cpp/oreslang/frontend/PointerIntSyntax.hpp)" = 356a2bc6f870f3c2cb7b7f848934f708324bb36d
+          test "$(git hash-object src/main/cpp/oreslang/types/PointerIntHIR.hpp)" = 5f1f1fd080d93efddd0b09b4f695f4b265d328ac
+          test "$(git hash-object src/main/cpp/oreslang/types/PointerIntOwnership.hpp)" = 9df530bc13383aca0f6edf352403473f1b551208
+          test "$(git hash-object src/main/cpp/oreslang/backend/PointerIntCodegen.hpp)" = b461987568ae2cf4b51831105c583929b40c3d9c
+          test "$(git hash-object tests/pointer_int_hir_admission.cpp)" = 4170a8ba49e1199dfca1bfaf6e701aae2637286b
+          test ! -e src/main/cpp/oreslang/frontend/PointerIntAot.hpp
           test "$(git hash-object tests/pointer_int_native_e2e.py)" = c33e9de3c03eb6072f882ee2893c13f3114bd453
-          test "$(git hash-object src/main/cpp/oreslang/main.cpp)" = de9fd3d47d793be2bf6cf70f229aaabc312f62df
+          test "$(git hash-object src/main/cpp/oreslang/main.cpp)" = 12951e0c289458d135381089247916a83559240f
           git rev-parse HEAD HEAD^{tree}
           git status --porcelain
       - name: Install LLVM18 and Clang18 real native toolchain
@@ -47,6 +61,11 @@ jobs:
           cmake --build build/pointer-m1 --target oreslang-llvmc -j2
           test -x build/pointer-m1/oreslang-llvmc
           sha256sum build/pointer-m1/oreslang-llvmc
+      - name: Exercise shared nominal pointer HIR ownership against forged ASTs
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -I src/main/cpp tests/pointer_int_hir_admission.cpp -o /tmp/pointer-hir-ownership
+          /tmp/pointer-hir-ownership
       - name: Execute compiled bounded Pointer<int> native guests and ASan UBSan negatives
         run: |
           set -euo pipefail
@@ -57,7 +76,7 @@ jobs:
           python3 tests/guard_native_e2e.py --compiler build/pointer-m1/oreslang-llvmc --clang /usr/bin/clang-18
       - name: Accurate evidence limits
         run: |
-          echo 'POINTER_INT_STACK_AOT=RESTRICTED_OPT_IN_ONLY'
+          echo 'POINTER_INT_CANONICAL_FRONTEND_HIR=RESTRICTED_OPT_IN_ONLY'
           echo 'GENERAL_POINTER_T_HEAP_AOT=UNSUPPORTED'
           echo 'POINTER_BORROW_SHARE_ACTOR_TRANSFER=NOT_EXECUTED'
           echo 'OTHER_BACKEND_PARITY=NOT_EXECUTED'
