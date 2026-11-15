@@ -1,0 +1,55 @@
+name: Native rt mut share exact-head admission
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'tests/native_borrow_admission.rs'
+      - '.github/workflows/native-rt-mut-share-exact-head.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-admission:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout reviewed exact PR head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Record checked out commit and clean tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD)" = "$expected"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          echo "NATIVE_SOURCE_HEAD=$expected"
+          echo "NATIVE_SOURCE_TREE=$(git rev-parse HEAD^{tree})"
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq build-essential cmake clang llvm-dev rustc
+      - name: Build real LLVM compiler and exact Rust borrow harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --target oreslang-llvmc oreslang-native-borrow-admission-build oreslang-native-project-root-import-test --parallel 2
+          test -x build/oreslang-llvmc
+          test -x build/oreslang-native-borrow-admission
+          test -x build/oreslang-native-borrow-predicates
+      - name: Execute canonical .atto compiler, imports, and ownership admission tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          selected="^(native_compile_time_borrow_escape_admission|native_borrow_harness_predicates|native_project_root_import_security|native_source_module_graph_execution|numerics_atto_integer_guest)$"
+          # The test-name inventory is an admission control; an absent test
+          # must never silently produce a green CTest result.
+          listing="$(ctest --test-dir build -N -R "$selected")"
+          printf '%s\n' "$listing"
+          count="$(printf '%s\n' "$listing" | grep -Ec '^[[:space:]]*Test #[0-9]+: ' || true)"
+          test "$count" -eq 5
+          ctest --test-dir build --output-on-failure --timeout 180 -R "$selected"
+          echo 'ATTO_NATIVE_OWNERSHIP_AND_IMPORT_TESTS=5'

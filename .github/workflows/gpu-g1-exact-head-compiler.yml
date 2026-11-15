@@ -1,0 +1,128 @@
+name: GPU G1 exact-head source and NVPTX compiler gates
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/gpu-g1-exact-head-compiler.yml'
+      - 'src/main/cpp/oreslang/backend/GpuG1*'
+      - 'src/main/cpp/oreslang/main.cpp'
+      - 'tests/gpu_g1_*'
+      - 'tests/fixtures/gpu-g1-*'
+      - 'CMakeLists.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  g1-frontend:
+    name: g1-frontend-host-only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout immutable source head
+        uses: actions/checkout@v4
+        with:
+          ref: '${{ github.event.pull_request.head.sha || github.sha }}'
+          persist-credentials: false
+      - name: Verify Git tree and source identity
+        env:
+          EXPECTED_HEAD: '${{ github.event.pull_request.head.sha || github.sha }}'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          printf 'GPU_G1_HEAD=%s\nGPU_G1_TREE=%s\n' "$EXPECTED_HEAD" "$(git rev-parse HEAD^{tree})"
+          sha256sum src/main/cpp/oreslang/backend/GpuG1AttoSaxpySource.hpp \
+            tests/gpu_g1_typed_frontend_matrix_test.cpp tests/fixtures/gpu-g1-saxpy.atto
+      - name: Compile and execute typed frontend source tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/gpu-g1-proof
+          clang++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -I src/main/cpp tests/gpu_g1_typed_frontend_matrix_test.cpp \
+            -o /tmp/gpu-g1-proof/typed-frontend
+          clang++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -I src/main/cpp tests/gpu_g1_atto_saxpy_source_test.cpp \
+            -o /tmp/gpu-g1-proof/source-admission
+          clang++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -I src/main/cpp tests/gpu_g1_atto_saxpy_cli.cpp \
+            -o /tmp/gpu-g1-proof/source-compiler
+          /tmp/gpu-g1-proof/typed-frontend
+          /tmp/gpu-g1-proof/source-admission
+          /tmp/gpu-g1-proof/source-compiler tests/fixtures/gpu-g1-saxpy.atto \
+            > /tmp/gpu-g1-proof/source.ll
+          clang -x ir -S -emit-llvm -Wno-override-module \
+            -o /tmp/gpu-g1-proof/parsed.ll /tmp/gpu-g1-proof/source.ll
+          grep -F 'define ptx_kernel void @atto_g1_saxpy_f32(' \
+            /tmp/gpu-g1-proof/source.ll
+          sed 's/if i >= n/if i > n/' tests/fixtures/gpu-g1-saxpy.atto \
+            > /tmp/gpu-g1-proof/invalid.atto
+          if /tmp/gpu-g1-proof/source-compiler /tmp/gpu-g1-proof/invalid.atto \
+              > /tmp/gpu-g1-proof/rejected.ll; then
+            echo 'GPU_G1_FAIL: invalid guest source was admitted' >&2
+            exit 1
+          fi
+          test ! -s /tmp/gpu-g1-proof/rejected.ll
+          sha256sum /tmp/gpu-g1-proof/source-compiler /tmp/gpu-g1-proof/source.ll
+          echo 'GPU_G1_HOST_SOURCE_PASS; no physical GPU or PTX claim'
+
+  g1-llvm-ptx:
+    name: g1-main-llvmc-to-ptx-no-device
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout immutable source head
+        uses: actions/checkout@v4
+        with:
+          ref: '${{ github.event.pull_request.head.sha || github.sha }}'
+          persist-credentials: false
+      - name: Verify immutable head and install compiler dependencies
+        env:
+          EXPECTED_HEAD: '${{ github.event.pull_request.head.sha || github.sha }}'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          printf 'GPU_G1_HEAD=%s\nGPU_G1_TREE=%s\n' "$EXPECTED_HEAD" "$(git rev-parse HEAD^{tree})"
+          sudo apt-get update
+          sudo apt-get install -y clang-18 llvm-18-dev llvm-18-tools
+          command -v llc-18
+          llc-18 --version | grep -E 'nvptx|NVPTX'
+      - name: Build real native compiler and lower Atto source to PTX
+        env:
+          CC: clang-18
+          CXX: clang++-18
+          EXPECTED_HEAD: '${{ github.event.pull_request.head.sha || github.sha }}'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B /tmp/gpu-g1-native-build \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+            -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
+          cmake --build /tmp/gpu-g1-native-build --target oreslang-llvmc --parallel 2
+          mkdir -p /tmp/gpu-g1-proof
+          /tmp/gpu-g1-native-build/oreslang-llvmc --gpu-g1-kernel-ir \
+            tests/fixtures/gpu-g1-saxpy.atto > /tmp/gpu-g1-proof/from-atto.ll
+          clang-18 -x ir -S -emit-llvm -Wno-override-module \
+            -o /tmp/gpu-g1-proof/validated.ll /tmp/gpu-g1-proof/from-atto.ll
+          llc-18 -march=nvptx64 -mcpu=sm_50 -O0 -filetype=asm \
+            -o /tmp/gpu-g1-proof/from-atto.ptx /tmp/gpu-g1-proof/from-atto.ll
+          grep -F '.entry atto_g1_saxpy_f32' /tmp/gpu-g1-proof/from-atto.ptx
+          sed 's/if i >= n/if i > n/' tests/fixtures/gpu-g1-saxpy.atto \
+            > /tmp/gpu-g1-proof/invalid.atto
+          if /tmp/gpu-g1-native-build/oreslang-llvmc --gpu-g1-kernel-ir \
+              /tmp/gpu-g1-proof/invalid.atto > /tmp/gpu-g1-proof/rejected.ll; then
+            echo 'GPU_G1_FAIL: native compiler admitted invalid bounds' >&2
+            exit 1
+          fi
+          test ! -s /tmp/gpu-g1-proof/rejected.ll
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          printf 'GPU_G1_TREE=%s\n' "$(git rev-parse HEAD^{tree})"
+          sha256sum /tmp/gpu-g1-native-build/oreslang-llvmc \
+            /tmp/gpu-g1-proof/from-atto.ll /tmp/gpu-g1-proof/from-atto.ptx
+          echo 'GPU_G1_PTX_SOURCE_PASS; no physical device execution claim'
