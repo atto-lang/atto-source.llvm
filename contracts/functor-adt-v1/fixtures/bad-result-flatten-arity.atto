@@ -1,0 +1,4 @@
+// Must reject: flatten has no arguments.
+fnc wrong(Result<Result<int,String>,String> value): Result<int,String> {
+  return value.flatten(42);
+}

@@ -1,0 +1,2 @@
+// Generic-form factory must not bypass compiler-owned graph admission.
+pub fnc main(): int { return Actor.pipe<int>(Reader(), Writer()); }
