@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/GpuG1AttoSaxpySource.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
@@ -536,6 +537,8 @@ int main(int argc, char** argv) {
     bool allocator_provider_seen = false;
     bool bounded_allocator_provider = false;
     bool rt_check_only = false;
+    bool gpu_g1_kernel_ir = false;
+    bool gpu_g1_other_option = false;
     bool rt_entry_seen = false;
     bool rt_report_seen = false;
     bool constraint_descriptors_only = false;
@@ -554,6 +557,8 @@ int main(int argc, char** argv) {
     std::string coreLogLevel = envLevel ? envLevel : "off";
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
+        if (!arg.empty() && arg[0] == '-' && arg != "--gpu-g1-kernel-ir")
+            gpu_g1_other_option = true;
         if (arg.rfind("--allocator-provider=", 0) == 0) {
             if (allocator_provider_seen) {
                 std::cerr << "duplicate allocator-provider option\n";
@@ -606,6 +611,9 @@ int main(int argc, char** argv) {
                 return 2;
             }
             native_hard_rt_profile = true;
+        } else if (arg == "--gpu-g1-kernel-ir") {
+            if (gpu_g1_kernel_ir) { std::cerr << "duplicate gpu-g1-kernel-ir option\n"; return 2; }
+            gpu_g1_kernel_ir = true;
         } else if (arg == "--rt-check") {
             if (rt_check_only) { std::cerr << "duplicate rt-check option\n"; return 2; }
             rt_check_only = true;
@@ -674,6 +682,10 @@ int main(int argc, char** argv) {
             return 2;
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
+    }
+    if (gpu_g1_kernel_ir && gpu_g1_other_option) {
+        std::cerr << "GPU-G1-SOURCE-004: isolated G1 source lowering forbids unrelated compiler options\n";
+        return 2;
     }
     // Public library architecture has exactly two layers. For now the native
     // backend only certifies the freestanding core profile on targets whose ABI
@@ -779,6 +791,20 @@ int main(int argc, char** argv) {
         if (text.find("// ores:") != std::string::npos) {
             throw std::runtime_error("native target admission unsupported: ores environment headers require compiler verification");
         }
+        if (gpu_g1_kernel_ir) {
+            // Isolated compiler-backed kernel-only proof; NOT general gpu fnc,
+            // host launch, device execution or a host-target scalar function.
+            const std::string source_path(path);
+            if (source_path.size() < 6 ||
+                source_path.compare(source_path.size() - 5, 5, ".atto") != 0)
+                throw std::runtime_error("GPU-G1-SOURCE-001: canonical .atto extension required");
+            if (text.size() > 65536)
+                throw std::runtime_error("GPU-G1-SOURCE-001: source exceeds kernel budget");
+            const auto kernel = oreslang::gpu::g1::compile_g1_saxpy_source(text);
+            std::cout << kernel.llvm_ir;
+            std::cout.flush();
+            return 0;
+        }
         if (experimental_rt_scalar_loop && (wasm32_target || experimental_owned_int))
             throw std::runtime_error("scalar-loop frame requires native host and no owned-int experiment");
         if (cortex_m_target && text.size() > 128u * 1024u)
@@ -800,6 +826,28 @@ int main(int argc, char** argv) {
         if (sealed_scalar_aot) require_sealed_scalar_aot_graph(ast);
         if (sealed_class_fields_aot) require_sealed_scalar_aot_graph(ast, true);
         if (actor_region_v1_aot) require_actor_region_v1_aot_graph(ast);
+
+        // A enabled telemetry scope currently calls CLOCK_MONOTONIC on a
+        // native carrier. It has not been subjected to a proven WCET/time
+        // budget; do not certify this as hard-real-time compatible merely
+        // because the compiler can emit native LLVM IR.
+        if (native_hard_rt_profile || rt_report_seen) {
+            std::function<bool(const oreslang::Statement&)> has_span =
+                [&](const oreslang::Statement& stmt) {
+                    return stmt.kind ==
+                            oreslang::Statement::Kind::UsingTelemetrySpan
+                        || std::any_of(stmt.then_statements.begin(),
+                            stmt.then_statements.end(), has_span)
+                        || std::any_of(stmt.else_statements.begin(),
+                            stmt.else_statements.end(), has_span);
+                };
+            for (const auto& fn : ast.functions)
+                if (std::any_of(fn.statements.begin(),
+                        fn.statements.end(), has_span))
+                    throw std::runtime_error(
+                        "native telemetry using lacks bounded WCET/probe"
+                        " budget proof for native-hard-rt profile");
+        }
 
         if (constraint_descriptors_only) {
             for (const auto& descriptor : ast.type_constraint_descriptors) {

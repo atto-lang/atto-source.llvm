@@ -100,6 +100,15 @@ typedef enum {
 } OresNativeSendStatus;
 OresNativeSendStatus ores_native_actor_scheduler_try_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
+/* Trusted host-only admission receipt. On ACCEPTED, returns the exact native
+ * DATA sequence minted under the scheduler lock for this target incarnation.
+ * On denial, out_sequence is set to 0; NULL is invalid. This is not a guest
+ * serializable capability or a handler-completion acknowledgement.
+ * The source-target typed transport binds this to its opaque descriptor to
+ * prevent cross-mail ticket substitution or replay. */
+OresNativeSendStatus ores_native_actor_scheduler_try_send_receipted(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
+    uint64_t payload, uint64_t* out_sequence);
 /* Compatibility API: 1 iff accepted, 0 otherwise. Prefer typed try_send. */
 int ores_native_actor_scheduler_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
@@ -273,6 +282,24 @@ int ores_native_actor_scheduler_drain(OresNativeActorScheduler* scheduler);
 /* Whether this OS thread is currently executing a callback from scheduler.
  * Only intended for immediate deadlock prevention in VM teardown. */
 int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* scheduler);
+/*
+ * Trusted-host bounded, nonallocating commit. Both exact actor generations
+ * must be READY/RUNNING/SUSPENDED and not stopping or retired, serialized
+ * under the SAME scheduler lifecycle mutex used by STOP/retirement.
+ * The callback MUST NOT allocate, suspend, lock other mutexes, call a
+ * scheduler API, run guest code or destructors, or block the carrier.
+ * This is NOT a guest ABI, transport for functions, or a generic executor.
+ */
+typedef int (*OresNativeActorBoundedCommitV1)(void* opaque);
+int ores_native_actor_scheduler_commit_if_both_live_v1(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef sender,
+    OresNativeActorRef recipient, OresNativeActorBoundedCommitV1 commit,
+    void* opaque);
+/* Trusted host-only guard: true during ANY native actor scheduler callback,
+ * regardless of which scheduler owns the carrier. This does not grant actor
+ * authority; callers use it to reject unsafe fallback to foreign/root pools.
+ * Returns zero on external producer threads and between actor turns. */
+int ores_native_actor_scheduler_in_any_actor_turn(void);
 /* Exact live actor identity for trusted callback/FFI bridges only. */
 int ores_native_actor_scheduler_is_current_actor(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
