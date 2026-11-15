@@ -166,6 +166,103 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    # Host-only wiring of native WAL retirement with AsyncIoActorLifetimePin
+    # and NativeActorRetirementBarrier. NOT compiled Oreslang guest evidence.
+    add_executable(oreslang-native-db-wal-physical-pin-integration-test
+        tests/native_db_wal_physical_pin_integration_test.cpp)
+    target_include_directories(oreslang-native-db-wal-physical-pin-integration-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-db-wal-physical-pin-integration-test
+        PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-db-wal-physical-pin-integration-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_db_wal_physical_pin_integration_host_only
+        COMMAND oreslang-native-db-wal-physical-pin-integration-test)
+    set_tests_properties(native_db_wal_physical_pin_integration_host_only
+        PROPERTIES TIMEOUT 30)
+    # Host-only integration of the context/shard/actor/generation grant
+    # with the physical WAL write, fdatasync and drain fence.
+    add_executable(oreslang-native-db-wal-authorized-writer-test
+        tests/native_db_wal_authorized_writer_test.cpp)
+    target_include_directories(oreslang-native-db-wal-authorized-writer-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-db-wal-authorized-writer-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-db-wal-authorized-writer-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_db_wal_authorized_writer_host_only
+        COMMAND oreslang-native-db-wal-authorized-writer-test)
+    set_tests_properties(native_db_wal_authorized_writer_host_only PROPERTIES TIMEOUT 30)
+    # Host-only bounded ODB1 restart/replay proof. The scanner never
+    # truncates, does not publish recovered state, and is not a guest ABI.
+    add_executable(oreslang-native-db-wal-replay-v1-test
+        tests/native_db_wal_replay_v1_test.cpp)
+    target_include_directories(oreslang-native-db-wal-replay-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-db-wal-replay-v1-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_db_wal_replay_v1_host_only
+        COMMAND oreslang-native-db-wal-replay-v1-test)
+    set_tests_properties(native_db_wal_replay_v1_host_only PROPERTIES TIMEOUT 30)
+    # Trusted host-only validated ODB1 append/fdatasync and process reopen.
+    # No guest authority, commit ACK or physical power-cut proof.
+    add_executable(oreslang-native-db-wal-validated-append-test
+        tests/native_db_wal_validated_append_test.cpp)
+    target_include_directories(oreslang-native-db-wal-validated-append-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-db-wal-validated-append-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_db_wal_validated_append_host_only
+        COMMAND oreslang-native-db-wal-validated-append-test)
+    set_tests_properties(native_db_wal_validated_append_host_only PROPERTIES TIMEOUT 30)
+    # Host-only ODB1 v1 frame integrity and shard identity checks.
+    # This is not authenticated guest WAL append or durable ACK evidence.
+    add_executable(oreslang-native-db-wal-frame-v1-test
+        tests/native_db_wal_frame_v1_test.cpp)
+    target_include_directories(oreslang-native-db-wal-frame-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-db-wal-frame-v1-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_db_wal_frame_v1_host_only
+        COMMAND oreslang-native-db-wal-frame-v1-test)
+    set_tests_properties(native_db_wal_frame_v1_host_only PROPERTIES TIMEOUT 30)
+    # Bounded, allocator-free host WAL shard authority model. This does
+    # not authenticate guest tenant credentials or grant fsync/ACK authority.
+    add_executable(oreslang-native-db-wal-shard-grant-test
+        tests/native_db_wal_shard_grant_registry_test.cpp)
+    target_include_directories(oreslang-native-db-wal-shard-grant-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-db-wal-shard-grant-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-db-wal-shard-grant-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_db_wal_shard_grant_host_only
+        COMMAND oreslang-native-db-wal-shard-grant-test)
+    set_tests_properties(native_db_wal_shard_grant_host_only PROPERTIES TIMEOUT 30)
+    # Host-only generation-fenced WAL retirement model, not guest I/O or
+    # a durable commit receipt. Keep as a separate host evidence class.
+    add_executable(oreslang-native-db-wal-owner-retirement-test
+        tests/native_db_wal_owner_retirement_test.cpp)
+    target_include_directories(oreslang-native-db-wal-owner-retirement-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-db-wal-owner-retirement-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-db-wal-owner-retirement-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_db_wal_owner_physical_retirement_host_only
+        COMMAND oreslang-native-db-wal-owner-retirement-test)
+    set_tests_properties(native_db_wal_owner_physical_retirement_host_only
+        PROPERTIES TIMEOUT 30)
+    # Host-only POSIX storage substrate, NOT source guest or durable DB proof.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE)
+        add_executable(oreslang-native-db-durable-wal-host-test
+            tests/native_db_durable_wal_file_test.cpp)
+        target_include_directories(oreslang-native-db-durable-wal-host-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(oreslang-native-db-durable-wal-host-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        add_test(NAME native_db_durable_wal_host_only
+            COMMAND oreslang-native-db-durable-wal-host-test)
+        set_tests_properties(native_db_durable_wal_host_only PROPERTIES TIMEOUT 20)
+    endif()
     # Source-only package-local multi-file namespace identity proof.
     # This does NOT accept, link or execute Oreslang import ns guest code.
     add_executable(oreslang-native-namespace-package-index-test
