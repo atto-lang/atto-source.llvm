@@ -1974,8 +1974,17 @@ private:
             fail("callable signatures cannot be declared as nominal actor types");
         if (entry_builtin_name(actor.name))
             fail("builtin Entry is compiler-owned and cannot be declared as a nominal actor type");
+        // The native scalar bootstrap has no actor-superclass layout, trait
+        // witness table or interface dispatch. A generic 'expected as' error
+        // obscures this crucial fail-closed boundary.
+        if (token_.text == "extends" || token_.text == "implements" || token_.text == "impl") {
+            fail("native actor extends/implements requires actor inheritance, trait/interface dispatch and sealed-state lowering; unsupported");
+        }
         require("as");
         const bool braced = accept("{");
+        if (token_.text == "receive") {
+            fail("native ActorMail<T> receive and actor outputs require typed message and mailbox lowering; unsupported");
+        }
         if (token_.text == "state") {
             fail("native actor state { ... } requires sealed handle_state lowering; legacy scalar actor fields are not this contract");
         }
@@ -2006,6 +2015,9 @@ private:
         Function method;
         method.offset = token_.offset;
         method.exported = accept("pub");
+        if (token_.text == "receive") {
+            fail("native ActorMail<T> receive and actor outputs require typed message and mailbox lowering; unsupported");
+        }
         if (!method.exported) fail("native actor requires pub on_message(int)");
         // Match the Java frontend's declaration spelling contract. The native
         // actor subset still lowers only on_message(int) and cannot admit
@@ -3804,74 +3816,17 @@ private:
                 require("try");
                 require("{");
                 if (token_.text == "defer" || token_.text == "throw") {
-                    // First typed-i64 exceptional CFG: one unconditional throw,
-                    // LIFO scoped field cleanups, and a local catch. No await,
-                    // exception-producing calls or nested try are admitted.
-                    if (value.returns_void || !value.statements.empty() ||
-                            !value.actor_actions.empty())
-                        fail("native caught throw requires a single terminal int try scope");
-                    // No partially inferred effect set can masquerade as a
-                    // complete exception/cleanup summary at this boundary.
-                    if (value.has_declared_effects)
-                        throw std::runtime_error(
-                            "native caught throw effect-qualified function unsupported at byte " +
-                            std::to_string(token_.offset));
-                    while (accept("defer")) {
-                        if (value.caught_throw_defers.size() == 8)
-                            fail("native caught throw defer limit exceeded (8)");
-                        Statement deferred;
-                        deferred.kind = Statement::Kind::FieldWrite;
-                        deferred.offset = token_.offset;
-                        auto target = primary();
-                        if (target->kind != Expression::Kind::Field ||
-                                !target->left ||
-                                target->left->kind != Expression::Kind::Variable)
-                            fail("native caught throw defer requires named class field write");
-                        deferred.receiver = target->left->name;
-                        deferred.field = target->name;
-                        require("=");
-                        deferred.expression = expression();
-                        if (!native_pure_scalar_tree(*deferred.expression))
-                            fail("native caught throw defer requires nonthrowing scalar/field expression");
-                        require(";");
-                        value.caught_throw_defers.push_back(std::move(deferred));
-                    }
-                    require("throw");
-                    value.caught_throw_value = expression();
-                    if (!native_pure_scalar_tree(*value.caught_throw_value))
-                        fail("native caught throw requires nonthrowing int payload");
-                    require(";");
-                    require("}");
-                    require("catch");
-                    require("(");
-                    value.catch_binding = identifier();
-                    for (const auto& param : value.parameters)
-                        if (param.name == value.catch_binding)
-                            fail("native caught throw binding shadows parameter");
-                    for (const auto& local : value.locals)
-                        if (local.name == value.catch_binding)
-                            fail("native caught throw binding shadows local owner");
-                    require(")");
-                    require("{");
-                    require("return");
-                    value.result = expression();
-                    if (!native_pure_scalar_tree(*value.result))
-                        fail("native caught throw catch return requires nonthrowing scalar/field read");
-                    require(";");
-                    require("}");
-                    require("finally");
-                    require("{");
-                    auto cleanup = branch_arm(true, false);
-                    require("}");
-                    for (auto it = cleanup.rbegin(); it != cleanup.rend(); ++it) {
-                        if (it->kind != Statement::Kind::FieldWrite ||
-                                !native_pure_scalar_tree(*it->expression))
-                            fail("native caught throw finally requires nonthrowing field write");
-                        it->kind = Statement::Kind::Defer;
-                        value.statements.push_back(std::move(*it));
-                    }
-                    require("}");
-                    return value;
+                    // Guest exceptional operands must be owned, non-null
+                    // canonical std/error.Error values. The historical i64
+                    // payload path has no nominal Error proof or typed unwind.
+                    // Reject before building exceptional IR; catch does not
+                    // grant permission to throw an arbitrary scalar. Throw
+                    // directly: fail() maps a current `throw` token to main's
+                    // generic exceptional-control boundary diagnostic.
+                    throw std::runtime_error(
+                        "native caught throw requires canonical std/error.Error; "
+                        "typed exceptional lowering unsupported at byte " +
+                        std::to_string(token_.offset));
                 }
                 continue;
             }
@@ -5199,6 +5154,33 @@ private:
             // syntax, so Entry<...> must fail before scalar lowering.
             if (next.text == "." || next.text == "<") {
                 fail("native Entry<K,V> unsupported: nominal key/value product layout and ownership lowering are not implemented");
+            }
+        }
+        // AttoLang std.thread is not yet a scalar function or class call.
+        // Until the compiler owns typed ThreadSpawn IR, immutable Send/Sync
+        // proofs, isolate-generation authority and asynchronous scheduler
+        // join lowering, reject the source call before ordinary expression
+        // lowering. Preserve ordinary functions named thread()/std().
+        if (token_.text == "thread" || token_.text == "std") {
+            Lexer lookahead = lexer_;
+            const auto first = lookahead.next();
+            bool thread_namespace = token_.text == "thread";
+            if (!thread_namespace && first.text == ".") {
+                thread_namespace = lookahead.next().text == "thread";
+            }
+            if (thread_namespace) {
+                const auto dot = token_.text == "thread"
+                    ? first : lookahead.next();
+                const auto member = lookahead.next();
+                // Even an uninvoked thread.spawn member would be an
+                // unverified first-class thread capability. Never let it
+                // flow through ordinary scalar/record lowering.
+                if (dot.text == "." && member.text == "spawn") {
+                    fail("THREAD_SPAWN_BACKEND_UNSUPPORTED: AttoLang std.thread "
+                         "requires compiler-owned Send/Sync capture proofs, "
+                         "isolate-scoped native admission and asynchronous "
+                         "scheduler join lowering");
+                }
             }
         }
         // 'task' is contextual in Oreslang v2. Preserve ordinary identifiers

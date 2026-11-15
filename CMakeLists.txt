@@ -1205,6 +1205,23 @@ if(BUILD_TESTING)
         COMMAND oreslang-realtime-actor-arena-test)
     set_tests_properties(native_realtime_actor_arena_contract PROPERTIES TIMEOUT 15)
 
+    # Trusted native runtime: preallocated arena + four heterogeneous layouts.
+    # Proves only host in-place operation and C++ new-free iteration, NOT
+    # compiler-generated guest, malloc-free full image or hardware WCET.
+    add_executable(oreslang-realtime-four-layout-kernel-test
+        tests/realtime_four_layout_inplace_kernel_test.cpp
+        src/main/cpp/oreslang/runtime/RealtimeActorArena.c)
+    target_include_directories(oreslang-realtime-four-layout-kernel-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-realtime-four-layout-kernel-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(oreslang-realtime-four-layout-kernel-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-realtime-four-layout-kernel-test PRIVATE Threads::Threads)
+    add_test(NAME native_realtime_four_layout_noalloc_inplace
+        COMMAND oreslang-realtime-four-layout-kernel-test)
+    set_tests_properties(native_realtime_four_layout_noalloc_inplace PROPERTIES TIMEOUT 20)
+
     # Experimental native compiler AST safety graph; not a full security proof.
     add_executable(oreslang-native-static-safety-test
         tests/native_static_safety_test.cpp)
@@ -2987,47 +3004,54 @@ if(BUILD_TESTING)
             native-try-finally-return-snapshot.ores
             --run 246 --clang "${ORE_CLANG}")
     endif()
-    # First executable native typed-i64 throw/catch CFG; Java still reserves
-    # source throw, so this is NOT cross-backend guest-source parity.
-    if(ORE_CLANG)
-        oreslang_contract_test(native_caught_throw_unwind_lifo
-            native-caught-throw-unwind-lifo.ores
-            --ir "throw.cleanup" --run 47 --clang "${ORE_CLANG}")
-        oreslang_contract_test(native_caught_throw_payload
-            native-caught-throw-payload.ores
-            --ir "throw.catch" --run 43 --clang "${ORE_CLANG}")
-    endif()
+    oreslang_contract_test(reject_caught_non_error_scalar
+        native-caught-scalar-error-only-reject.atto
+        --diagnostic "native caught throw requires canonical std/error.Error")
+    oreslang_contract_test(reject_caught_non_error_string
+        native-caught-string-error-only-reject.atto
+        --diagnostic "native caught throw requires canonical std/error.Error")
+    oreslang_contract_test(reject_caught_non_error_null
+        native-caught-null-error-only-reject.atto
+        --diagnostic "native caught throw requires canonical std/error.Error")
+    # Catch must not authorize non-Error scalar throws. These are real
+    # compiler-negative gates and run even without a native linker.
+    oreslang_contract_test(reject_caught_throw_unwind_lifo
+        native-caught-throw-unwind-lifo.ores
+        --diagnostic "native caught throw requires canonical std/error.Error")
+    oreslang_contract_test(reject_caught_throw_payload
+        native-caught-throw-payload.ores
+        --diagnostic "native caught throw requires canonical std/error.Error")
     oreslang_contract_test(reject_caught_throw_nested_call
         native-caught-throw-nested-call-reject.ores
-        --diagnostic "native caught throw requires nonthrowing int payload")
+        --diagnostic "native caught throw requires canonical std/error.Error")
     oreslang_contract_test(reject_caught_throw_unsafe_defer
         native-caught-throw-defer-call-reject.ores
-        --diagnostic "native caught throw defer requires named class field write")
+        --diagnostic "native caught throw requires canonical std/error.Error")
     oreslang_contract_test(reject_caught_throw_effect_signature
         native-caught-throw-qualified-effects-reject.ores
-        --diagnostic "native caught throw effect-qualified function unsupported")
+        --diagnostic "native caught throw requires canonical std/error.Error")
     oreslang_contract_test(reject_caught_throw_finally_call
         native-caught-throw-finally-call-reject.ores
-        --diagnostic "native caught throw finally requires nonthrowing field write")
-    # Native ABI-backed reads are not pure scalar operations.
+        --diagnostic "native caught throw requires canonical std/error.Error")
+    # Rejection applies regardless of operand storage or cleanup shape.
     oreslang_contract_test(reject_caught_throw_array_size_operand
         native-caught-throw-array-size-reject.ores
-        --diagnostic "native caught throw scalar read requires stack i64")
+        --diagnostic "native caught throw requires canonical std/error.Error")
     oreslang_contract_test(reject_caught_throw_heap_owned_operand
         native-caught-throw-heap-owned-reject.ores --experimental-owned-int
-        --diagnostic "native caught throw scalar read requires stack i64")
+        --diagnostic "native caught throw requires canonical std/error.Error")
     oreslang_contract_test(reject_caught_throw_defer_array_size
         native-caught-throw-defer-array-size-reject.ores
-        --diagnostic "native caught throw scalar read requires stack i64")
+        --diagnostic "native caught throw requires canonical std/error.Error")
     oreslang_contract_test(reject_caught_throw_catch_array_size
         native-caught-throw-catch-array-size-reject.ores
-        --diagnostic "native caught throw scalar read requires stack i64")
+        --diagnostic "native caught throw requires canonical std/error.Error")
     oreslang_contract_test(reject_caught_throw_finally_array_size
         native-caught-throw-finally-array-size-reject.ores
-        --diagnostic "native caught throw scalar read requires stack i64")
+        --diagnostic "native caught throw requires canonical std/error.Error")
     oreslang_contract_test(reject_caught_throw_wasm32
         native-caught-throw-payload.ores --target wasm32
-        --diagnostic "wasm32 native caught-throw guest unsupported")
+        --diagnostic "native caught throw requires canonical std/error.Error")
     oreslang_contract_test(reject_finally_return_override
         native-finally-return-reject.ores --diagnostic "cannot escape finally")
     oreslang_contract_test(reject_finally_break_override
@@ -3188,6 +3212,19 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_owned_local_shared_borrow owned-local-shared-borrow.ores --ir "llvm.lifetime.end")
     oreslang_contract_test(native_owned_local_mutable_borrow owned-local-mutable-borrow.ores --ir "llvm.lifetime.end")
     oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "actor requires at least one scalar field")
+    # Hierarchy and protocol contracts are Java-only at present; the native
+    # scalar actor subset must reject before emitting IR or a guest artifact.
+    foreach(hierarchy_case IN ITEMS inheritance interface trait)
+        oreslang_contract_test(native_actor_${hierarchy_case}_unsupported
+            source-actor-${hierarchy_case}-unsupported.ores
+            --diagnostic "native actor extends/implements requires actor inheritance, trait/interface dispatch and sealed-state lowering")
+    endforeach()
+    # Exact canonical lifecycle source is a positive Java guest candidate,
+    # but the native bootstrap cannot lower ActorMail<T>, outputs or
+    # receive(ActorMail<T>). The rejection must return no LLVM IR.
+    oreslang_contract_test(native_actor_canonical_lifecycle_unsupported
+        source-actor-lifecycle-canonical-unsupported.ores
+        --diagnostic "native ActorMail<T> receive and actor outputs require typed message and mailbox lowering")
     # Optional instance method marker: fnc, method, and no marker all lower
     # to the same native supported on_message(int) handler.
     oreslang_contract_test(native_actor_explicit_method source-actor-method-keyword.ores
@@ -7445,6 +7482,83 @@ if(BUILD_TESTING AND UNIX)
     target_link_libraries(oreslang-native-thread-join-reaper-test PRIVATE Threads::Threads)
     add_test(NAME native_thread_join_reaper_host_only
         COMMAND oreslang-native-thread-join-reaper-test)
+endif()
+
+# Host-only Task join notification adapter: cancellation/completion arbitration.
+# This does not compile .atto programs or exercise real guest suspension.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-join-task-wait-test
+        tests/native_join_task_wait_v1_test.cpp
+        src/main/cpp/oreslang/runtime/NativeThreadV1.c)
+    target_include_directories(oreslang-native-join-task-wait-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-join-task-wait-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-join-task-wait-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-join-task-wait-test PRIVATE Threads::Threads)
+    add_test(NAME native_join_task_wait_notification_host_only
+        COMMAND oreslang-native-join-task-wait-test)
+    set_tests_properties(native_join_task_wait_notification_host_only
+        PROPERTIES TIMEOUT 30)
+endif()
+
+# Host-only pthread join -> Task cancellation/READY admission -> carrier claim.
+# This uses actual native continuation stores, not source .atto lowering.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-join-task-continuation-bridge-test
+        tests/native_join_task_continuation_bridge_v1_test.cpp
+        src/main/cpp/oreslang/runtime/NativeThreadV1.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c)
+    target_include_directories(oreslang-native-join-task-continuation-bridge-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-join-task-continuation-bridge-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-join-task-continuation-bridge-test PRIVATE
+        "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>"
+        "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>")
+    target_link_libraries(oreslang-native-join-task-continuation-bridge-test PRIVATE Threads::Threads)
+    add_test(NAME native_join_task_continuation_bridge_host_only
+        COMMAND oreslang-native-join-task-continuation-bridge-test)
+    set_tests_properties(native_join_task_continuation_bridge_host_only
+        PROPERTIES TIMEOUT 45)
+endif()
+
+# M0 AttoLang .atto source admission for std.thread. Real LLVM parser
+# invocation is REQUIRED: unlike host-only pthread references this test
+# rejects ten source forms (including bare references), preserves thread(),
+# and prohibits IR/side-artifact emission on unsupported operations.
+if(BUILD_TESTING)
+    add_test(NAME native_thread_source_admission_m0
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+            "-DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/native-thread-source-admission-m0"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_thread_source_admission_m0.cmake")
+    set_tests_properties(native_thread_source_admission_m0
+        PROPERTIES TIMEOUT 60)
+endif()
+
+# LLVM threading parity host substrate (compiler guest lowering remains gated).
+# Separate tests preserve the current parent CMake source and .atto admission.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-thread-scope-v1-test
+        tests/native_thread_scope_v1_test.c
+        src/main/cpp/oreslang/runtime/NativeThreadV1.c)
+    set_target_properties(oreslang-native-thread-scope-v1-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS OFF)
+    target_include_directories(oreslang-native-thread-scope-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_definitions(oreslang-native-thread-scope-v1-test PRIVATE
+        ORES_NATIVE_THREAD_TEST_ID_EXHAUSTION=1)
+    target_compile_options(oreslang-native-thread-scope-v1-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-thread-scope-v1-test PRIVATE Threads::Threads)
+    add_test(NAME native_thread_scope_quota_join_host_only
+        COMMAND oreslang-native-thread-scope-v1-test)
+    set_tests_properties(native_thread_scope_quota_join_host_only PROPERTIES TIMEOUT 20)
 endif()
 
 # Host-only Task join notification adapter: cancellation/completion arbitration.
