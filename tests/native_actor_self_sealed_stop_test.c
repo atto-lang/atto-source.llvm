@@ -15,6 +15,7 @@ typedef struct {
     atomic_int release;
     atomic_int callbacks;
     atomic_int errors;
+    atomic_int stopped;
 } SelfStop;
 
 static void check(int valid) { if (!valid) abort(); }
@@ -45,6 +46,7 @@ static void handler(void* opaque, size_t actor_slot, uint64_t message) {
             state->scheduler, state->actor, 999)
             != ORES_NATIVE_SEND_TERMINATED)
         atomic_fetch_add(&state->errors, 1);
+    atomic_store_explicit(&state->stopped, 1, memory_order_release);
 }
 
 int main(void) {
@@ -75,6 +77,18 @@ int main(void) {
     check(!ores_native_actor_scheduler_poll_done(scheduler, state.actor));
     atomic_store_explicit(&state.release, 1, memory_order_release);
 
+    /* wait_done only waits for an actor whose STOP/retirement is already
+     * recorded (it returns 0 otherwise), so first observe the handler's
+     * sealed STOP, again with a bounded rendezvous. */
+    int stopped = 0;
+    for (int i = 0; i < 5000; ++i) {
+        if (atomic_load_explicit(&state.stopped, memory_order_acquire)) {
+            stopped = 1;
+            break;
+        }
+        nanosleep(&delay, NULL);
+    }
+    check(stopped);
     check(ores_native_actor_scheduler_wait_done(scheduler, state.actor));
     check(atomic_load(&state.errors) == 0);
     check(atomic_load(&state.callbacks) == 1);
