@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/GpuG1AttoSaxpySource.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
@@ -192,6 +193,81 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
 
 
 
+// This deliberately narrow strict AOT admission path proves *static scalar
+// call graph closure* before LLVM IR emission. It is not proof of actor heaps,
+// complete guest AOT, whole-program no-GC, WCET, or linker/FFI reachability.
+// Reuse the same compiler-maintained expression/statement scanner as the
+// hard-RT analysis; never trust source-text keyword scans as a graph oracle.
+static void require_sealed_scalar_aot_graph(const oreslang::Program& program) {
+    using namespace oreslang;
+    namespace detail = oreslang::realtime_detail;
+    if (!program.actors.empty() || !program.classes.empty() ||
+        !program.generators.empty() || !program.cooperative_loops.empty() ||
+        !program.imports.empty() || !program.contracts.empty() ||
+        !program.type_only_declarations.empty() || !program.sum_types.empty() ||
+        !program.conforms.empty() || !program.type_constraint_descriptors.empty())
+        throw std::runtime_error(
+            "sealed scalar AOT rejects non-scalar declarations until their "
+            "dispatch, initialization, continuation and drop roots are verified");
+
+    if (program.functions.empty() ||
+        program.functions.size() > detail::kMaxRealtimeFunctions)
+        throw std::runtime_error("sealed scalar AOT requires a bounded function graph");
+
+    std::unordered_set<std::string> definitions;
+    for (const auto& function : program.functions) {
+        const auto key = detail::function_key(
+            function.name, function.parameters.size());
+        if (!definitions.insert(key).second)
+            throw std::runtime_error("sealed scalar AOT rejects duplicate function identity");
+    }
+    if (!definitions.count("main/0"))
+        throw std::runtime_error("sealed scalar AOT requires a statically known main/0 entry");
+
+    std::size_t remaining_edges = detail::kMaxRealtimeCallEdges;
+    for (const auto& function : program.functions) {
+        if (!function.generic_parameters.empty() ||
+            !function.method_owner.empty() || function.native_internal ||
+            !function.c_export_u32_symbol.empty() ||
+            function.scalar_while || function.async_source_i64 ||
+            !function.source_tasks.empty() || !function.future_pipelines.empty() ||
+            !function.actor_spawns.empty() || !function.actor_sends.empty() ||
+            !function.actor_stops.empty() || !function.actor_actions.empty() ||
+            !function.actor_field_writes.empty() ||
+            !function.ready_await_actor.empty() || !function.done_await_actor.empty() ||
+            function.ready_await_form != NativeAwaitForm::None ||
+            !function.ready_future_name.empty() ||
+            !function.ready_future_actor.empty() ||
+            !function.return_class.empty() || !function.return_sum.empty() ||
+            function.caught_throw_value ||
+            function.return_type == ScalarType::String)
+            throw std::runtime_error(
+                "sealed scalar AOT rejects unmodeled function, ownership or suspension roots");
+        for (const auto& param : function.parameters)
+            if (!param.class_name.empty() || !param.sum_type.empty() ||
+                param.mode != Parameter::Mode::Value ||
+                param.scalar_type == ScalarType::String ||
+                !param.generic_type.empty())
+                throw std::runtime_error(
+                    "sealed scalar AOT rejects non-scalar or borrowed parameter ABI");
+
+        const auto facts = detail::direct_facts(function, remaining_edges, &program);
+        if (facts.call_budget_exceeded || !facts.bounded_calls ||
+            !facts.bounded_cleanup || facts.unsupported_runtime ||
+            facts.unqualified_copy_or_share || facts.unmodeled_expression ||
+            facts.effects.bits != 0u)
+            throw std::runtime_error(
+                "sealed scalar AOT requires fully modeled pure scalar effects and calls");
+        if (facts.calls.size() > remaining_edges)
+            throw std::runtime_error("sealed scalar AOT call graph edge budget exceeded");
+        remaining_edges -= facts.calls.size();
+        for (const auto& callee : facts.calls)
+            if (!definitions.count(callee))
+                throw std::runtime_error(
+                    "sealed scalar AOT rejects unresolved callable: " + callee);
+    }
+}
+
 int main(int argc, char** argv) {
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
@@ -205,12 +281,15 @@ int main(int argc, char** argv) {
     bool allocator_provider_seen = false;
     bool bounded_allocator_provider = false;
     bool rt_check_only = false;
+    bool gpu_g1_kernel_ir = false;
+    bool gpu_g1_other_option = false;
     bool rt_entry_seen = false;
     bool rt_report_seen = false;
     bool constraint_descriptors_only = false;
     std::string rt_entry = "main/0";
     std::string rt_report_path;
     bool tree_shake = false;
+    bool sealed_scalar_aot = false;
     bool isolate_entry_seen = false;
     std::string isolate_entry;
     std::vector<std::string> tree_shake_roots;
@@ -220,6 +299,8 @@ int main(int argc, char** argv) {
     std::string coreLogLevel = envLevel ? envLevel : "off";
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
+        if (!arg.empty() && arg[0] == '-' && arg != "--gpu-g1-kernel-ir")
+            gpu_g1_other_option = true;
         if (arg.rfind("--allocator-provider=", 0) == 0) {
             if (allocator_provider_seen) {
                 std::cerr << "duplicate allocator-provider option\n";
@@ -248,6 +329,16 @@ int main(int argc, char** argv) {
                           << " (expected core or std)\n";
                 return 2;
             }
+        } else if (arg.rfind("--aot-profile=", 0) == 0) {
+            if (sealed_scalar_aot) {
+                std::cerr << "duplicate AOT profile option\n"; return 2;
+            }
+            const std::string profile = arg.substr(std::string_view("--aot-profile=").size());
+            if (profile != "sealed-scalar-v1") {
+                std::cerr << "unsupported AOT profile (expected sealed-scalar-v1)\n";
+                return 2;
+            }
+            sealed_scalar_aot = true;
         } else if (arg.rfind("--profile=", 0) == 0) {
             if (profile_seen) { std::cerr << "duplicate profile option\n"; return 2; }
             profile_seen = true;
@@ -257,6 +348,9 @@ int main(int argc, char** argv) {
                 return 2;
             }
             native_hard_rt_profile = true;
+        } else if (arg == "--gpu-g1-kernel-ir") {
+            if (gpu_g1_kernel_ir) { std::cerr << "duplicate gpu-g1-kernel-ir option\n"; return 2; }
+            gpu_g1_kernel_ir = true;
         } else if (arg == "--rt-check") {
             if (rt_check_only) { std::cerr << "duplicate rt-check option\n"; return 2; }
             rt_check_only = true;
@@ -326,6 +420,10 @@ int main(int argc, char** argv) {
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
     }
+    if (gpu_g1_kernel_ir && gpu_g1_other_option) {
+        std::cerr << "GPU-G1-SOURCE-004: isolated G1 source lowering forbids unrelated compiler options\n";
+        return 2;
+    }
     // Public library architecture has exactly two layers. For now the native
     // backend only certifies the freestanding core profile on targets whose ABI
     // is explicitly no-OS, and the std profile on the ordinary hosted target.
@@ -362,6 +460,15 @@ int main(int argc, char** argv) {
                 oreslang::frontend::CoreProviderRequirement::Allocator)
             : 0u;
 
+    if (sealed_scalar_aot &&
+        (wasm32_target || cortex_m_target || experimental_owned_int ||
+         experimental_rt_scalar_loop || native_hard_rt_profile || rt_check_only ||
+         rt_entry_seen || rt_report_seen || tree_shake ||
+         !tree_shake_roots.empty() || isolate_entry_seen ||
+         bounded_allocator_provider || constraint_descriptors_only)) {
+        std::cerr << "sealed scalar AOT only supports isolated host scalar codegen\n";
+        return 2;
+    }
     if (constraint_descriptors_only &&
             (tree_shake || !tree_shake_roots.empty() || native_hard_rt_profile ||
              rt_check_only || rt_entry_seen || rt_report_seen ||
@@ -396,7 +503,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--aot-profile=sealed-scalar-v1] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -421,6 +528,20 @@ int main(int argc, char** argv) {
         if (text.find("// ores:") != std::string::npos) {
             throw std::runtime_error("native target admission unsupported: ores environment headers require compiler verification");
         }
+        if (gpu_g1_kernel_ir) {
+            // Isolated compiler-backed kernel-only proof; NOT general gpu fnc,
+            // host launch, device execution or a host-target scalar function.
+            const std::string source_path(path);
+            if (source_path.size() < 6 ||
+                source_path.compare(source_path.size() - 5, 5, ".atto") != 0)
+                throw std::runtime_error("GPU-G1-SOURCE-001: canonical .atto extension required");
+            if (text.size() > 65536)
+                throw std::runtime_error("GPU-G1-SOURCE-001: source exceeds kernel budget");
+            const auto kernel = oreslang::gpu::g1::compile_g1_saxpy_source(text);
+            std::cout << kernel.llvm_ir;
+            std::cout.flush();
+            return 0;
+        }
         if (experimental_rt_scalar_loop && (wasm32_target || experimental_owned_int))
             throw std::runtime_error("scalar-loop frame requires native host and no owned-int experiment");
         if (cortex_m_target && text.size() > 128u * 1024u)
@@ -436,6 +557,10 @@ int main(int argc, char** argv) {
             admitted_provider_bits);
         source_module = ast.module;
         source_namespace = ast.namespace_name;
+
+        // Strict admission happens on the fully resolved and ownership-checked
+        // Program, before any executable LLVM IR or sidecar is emitted.
+        if (sealed_scalar_aot) require_sealed_scalar_aot_graph(ast);
 
         // A enabled telemetry scope currently calls CLOCK_MONOTONIC on a
         // native carrier. It has not been subjected to a proven WCET/time
