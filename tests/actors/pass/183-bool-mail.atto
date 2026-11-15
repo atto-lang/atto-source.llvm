@@ -11,8 +11,8 @@ define actor Flag as
 end
 
 pub fnc main(): int {
-    val actor = spawn Flag();
-    actor.send(true);
-    actor.send(false);
+    val worker = spawn Flag();
+    worker.send(true);
+    worker.send(false);
     return 0;
 }
