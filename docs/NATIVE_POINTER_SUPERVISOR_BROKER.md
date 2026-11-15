@@ -95,9 +95,15 @@ artifact directory. It runs the standalone host tests in three separate builds:
 GCC release, Clang ASan+UBSan and GCC TSan.
 
 ```sh
-sha="$(git rev-parse HEAD)"
-bash scripts/native-pointer-exact-head-verify.sh "$sha"
+# Copy this independently from PR #1825 GitHub metadata (not local HEAD).
+EXPECTED_SHA="<exact-40-hex-PR-head-sha>"
+bash scripts/native-pointer-exact-head-verify.sh "$EXPECTED_SHA"
 ```
+
+A value copied from local `git rev-parse HEAD` does **not** independently
+prove source provenance. Confirm the expected GitHub PR head via an approved
+read-only API/UI before invoking the verifier, and compare both the commit
+SHA and Git tree in the receipt afterward. A remote URL alone is spoofable.
 
 The verifier writes an external receipt directory with each stage's actual
 exit status and logs, immutable commit/tree identity, compiler versions,
