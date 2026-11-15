@@ -108,6 +108,23 @@ int main() {
     if (!untrusted_mapping_denied)
         throw std::runtime_error("untrusted actor mapped region admitted");
 
+    // Distinct IDs must never authorize aliasing the same backing bytes.
+    bool overlap_denied = false;
+    try {
+        bridge.register_mapped_region(
+            ctx.refs[0], 103, 8, ctx.trusted_backing.data(),
+            sizeof(std::uint32_t), NativeActorSupervisor::Mode::ReadOnly);
+    } catch (const std::logic_error&) { overlap_denied = true; }
+    if (!overlap_denied) throw std::runtime_error("overlapping native mapping admitted");
+    bool mmio_denied = false;
+    try {
+        bridge.register_mapped_region(
+            ctx.refs[0], 104, 8, &ctx.untrusted_backing,
+            sizeof(ctx.untrusted_backing),
+            NativeActorSupervisor::Mode::MmioReadWrite);
+    } catch (const std::logic_error&) { mmio_denied = true; }
+    if (!mmio_denied) throw std::runtime_error("unapproved MMIO mapping admitted");
+
     // External host threads lack the exact actor turn; trust alone is never
     // permission to issue a raw pointer.
     denied = false;
