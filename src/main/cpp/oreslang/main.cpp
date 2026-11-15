@@ -1,5 +1,6 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/PointerIntAot.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ModuleLoader.hpp"
@@ -195,6 +196,7 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
 int main(int argc, char** argv) {
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
+    bool experimental_pointer_int_aot = false;
     bool wasm32_target = false;
     bool cortex_m_target = false;
     bool tenant_vm_guest = false;
@@ -287,6 +289,11 @@ int main(int argc, char** argv) {
                 std::cerr << "duplicate rt scalar loop option\n"; return 2;
             }
             experimental_rt_scalar_loop = true;
+        } else if (arg == "--experimental-pointer-int-aot") {
+            if (experimental_pointer_int_aot) {
+                std::cerr << "duplicate Pointer<int> AOT option\n"; return 2;
+            }
+            experimental_pointer_int_aot = true;
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
@@ -361,7 +368,7 @@ int main(int argc, char** argv) {
     if (constraint_descriptors_only &&
             (tree_shake || !tree_shake_roots.empty() || native_hard_rt_profile ||
              rt_check_only || rt_entry_seen || rt_report_seen ||
-             experimental_owned_int || experimental_rt_scalar_loop ||
+             experimental_owned_int || experimental_rt_scalar_loop || experimental_pointer_int_aot ||
              target_seen || allocator_provider_seen)) {
         std::cerr << "constraint-descriptors is a metadata-only mode and cannot be combined with execution/codegen options\n";
         return 2;
@@ -385,7 +392,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--guest-abi=tenant-vm] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--guest-abi=tenant-vm] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--experimental-pointer-int-aot] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -418,6 +425,28 @@ int main(int argc, char** argv) {
             throw std::runtime_error("native-hard-rt profile currently requires the host target");
         if (native_hard_rt_profile && experimental_owned_int)
             throw std::runtime_error("native-hard-rt profile rejects experimental owned heap lowering");
+
+        if (experimental_pointer_int_aot) {
+            // This source profile is deliberately independent of the main
+            // language parser: a closed-world, typed, nonescaping stack
+            // specialization with no actor/scheduler/import/FFI capability.
+            // Any unrecognized syntax is rejected BEFORE any LLVM text
+            // escapes to stdout. Never silently enable for regular sources.
+            if (wasm32_target || cortex_m_target || tenant_vm_guest ||
+                    experimental_owned_int || experimental_rt_scalar_loop ||
+                    bounded_allocator_provider || tree_shake ||
+                    !tree_shake_roots.empty() || native_hard_rt_profile ||
+                    rt_check_only || rt_entry_seen || rt_report_seen ||
+                    constraint_descriptors_only) {
+                throw std::runtime_error(
+                    "Pointer<int> AOT M1 requires isolated --target=host "
+                    "without ownership, scheduler, RT, tree shaking or allocator overrides");
+            }
+            const auto ir = oreslang::pointer_int_aot::compile(text);
+            std::cout << ir;
+            std::cout.flush();
+            return 0;
+        }
 
         auto ast = oreslang::load_native_program(
             path, text, source_identity, experimental_owned_int,
