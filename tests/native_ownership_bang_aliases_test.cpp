@@ -195,13 +195,9 @@ int main(int argc, char** argv) {
     equivalent("rt share foo", "share! foo", "share!foo", Expression::Kind::Share);
     equivalent("rt mut borrow foo", "mut borrow! foo", "mut borrow!foo",
                Expression::Kind::BorrowMut);
-    equivalent("rt borrow mut foo", "mut borrow! foo", "mut borrow!foo",
-               Expression::Kind::BorrowMut);
     equivalent("rt mut borrow foo", "borrow! mut foo", "borrow!mut foo",
                Expression::Kind::BorrowMut);
     equivalent("rt mut borrow(foo)", "borrow! mut (foo)", "borrow!mut(foo)",
-               Expression::Kind::BorrowMut);
-    equivalent("rt borrow mut foo", "borrow! mut foo", "borrow!mut foo",
                Expression::Kind::BorrowMut);
     equivalent("rt mut borrow foo.bar", "borrow! mut foo.bar", "borrow!mut foo.bar",
                Expression::Kind::BorrowMut);
@@ -220,9 +216,13 @@ int main(int argc, char** argv) {
     for (std::string_view invalid : {"borrow! mut mut foo",
                                      "borrow!mut mut foo",
                                      "mut borrow! mut foo",
-                                     "rt borrow mut mut foo",
                                      "rt mut borrow mut foo"}) {
         reject_with_diagnostic(invalid, "duplicate mutable borrow qualifier");
+    }
+    // Parity with java main: the historical postfix spelling stays rejected;
+    // the bang aliases do not reopen it.
+    for (std::string_view legacy : {"rt borrow mut foo", "rt borrow mut mut foo"}) {
+        reject_with_diagnostic(legacy, "legacy 'rt borrow mut value' is not accepted");
     }
     // Production parser+ownership checker against exact checked-in .atto
     // fixtures. CTest must execute this; source-only fixture presence is not

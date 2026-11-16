@@ -4765,16 +4765,15 @@ if(BUILD_TESTING)
     # A selected -R bang guest must not skip its reviewed .atto Git blob
     # verifier. CTest fixtures automatically pull the setup test into the
     # selection and order it before compiler execution, including -j runs.
-    # The parser checker needs OpenSSL; when that dependency is unavailable
-    # register a FAILED setup, never silently run unpinned source fixtures.
+    # The parser checker needs the Linux OpenSSL host block; where it is
+    # unavailable the guests are registered DISABLED (reported "Not Run
+    # (Disabled)"), never silently run against unpinned source fixtures.
     if(TEST native_ownership_bang_aliases_parser_and_checker)
         set_tests_properties(native_ownership_bang_aliases_parser_and_checker
             PROPERTIES FIXTURES_SETUP native_ownership_bang_git_pins)
+        set(_ownership_bang_pins_available ON)
     else()
-        add_test(NAME native_ownership_bang_pins_unavailable
-            COMMAND "${CMAKE_COMMAND}" -E false)
-        set_tests_properties(native_ownership_bang_pins_unavailable
-            PROPERTIES FIXTURES_SETUP native_ownership_bang_git_pins)
+        set(_ownership_bang_pins_available OFF)
     endif()
     set(_ownership_bang_contracts
         native_ownership_bang_copy_compact_guest
@@ -4797,6 +4796,9 @@ if(BUILD_TESTING)
     endforeach()
     set_tests_properties(${_ownership_bang_contracts}
         PROPERTIES FIXTURES_REQUIRED native_ownership_bang_git_pins)
+    if(NOT _ownership_bang_pins_available)
+        set_tests_properties(${_ownership_bang_contracts} PROPERTIES DISABLED TRUE)
+    endif()
 
     oreslang_contract_test(native_rt_copy_scalar native-rt-copy-scalar.ores --ir "llvm.sadd.with.overflow.i64" --run 42 --clang "${ORE_CLANG}")
     oreslang_contract_test(native_rt_take_scalar native-rt-take-scalar.ores --ir "llvm.sadd.with.overflow.i64" --run 42 --clang "${ORE_CLANG}")

@@ -51,7 +51,6 @@ inline constexpr std::size_t kMaxNativeBlockCommentNesting = 128;
 inline constexpr std::size_t kMaxNativeTemplateNesting = 32;
 inline constexpr std::size_t kMaxNativeTemplateBraceNesting = 256;
 inline constexpr std::size_t kMaxNativeTemplateInterpolations = 1024;
-inline constexpr std::size_t kMaxNativeBlockCommentNesting = 128;
 
 [[noreturn]] void template_error(std::string_view detail, std::size_t offset) {
     throw std::runtime_error("native template " + std::string(detail) +
@@ -4867,11 +4866,8 @@ private:
             advance();
             if (!mutable_borrow && operation == "borrow" &&
                     token_.text == "mut") {
-                advance(); // Historical 'rt borrow mut' is a compatibility alias.
-                mutable_borrow = true;
+                fail("legacy 'rt borrow mut value' is not accepted; use 'rt mut borrow value'");
             }
-            // A legacy 'rt borrow mut mut x' must fail with the same
-            // dedicated diagnostic as the preferred borrow! mut mut x.
             if (mutable_borrow && token_.text == "mut")
                 fail("duplicate mutable borrow qualifier");
             auto result = make_expression(
