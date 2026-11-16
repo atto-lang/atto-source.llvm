@@ -1760,6 +1760,16 @@ if(BUILD_TESTING)
             --clang "${ORE_NATIVE_ARRAY_CLANG}")
     set_tests_properties(native_scalar_generic_source_execution PROPERTIES TIMEOUT 240)
 
+    # Real source→LLVM IR→Clang→native guest proof for reverse scalar <|.
+    # Continuous rpipe is checked and fails closed until owned transport.
+    add_test(NAME native_reverse_pipe_scalar_guest_and_rejection
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_reverse_pipe_parity.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_NATIVE_ARRAY_CLANG}")
+    set_tests_properties(native_reverse_pipe_scalar_guest_and_rejection
+        PROPERTIES TIMEOUT 240)
+
     add_test(NAME native_annotation_macro_aot_admission
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/annotation_macro_aot_admission_matrix.py"
