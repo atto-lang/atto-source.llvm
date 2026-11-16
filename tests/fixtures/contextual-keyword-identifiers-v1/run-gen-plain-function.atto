@@ -1,0 +1,2 @@
+fnc gen(): int { return 42; }
+pub fnc main(): int { return gen(); }

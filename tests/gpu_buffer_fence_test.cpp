@@ -104,6 +104,20 @@ int main() {
     check(failed.status() == Status::Closed);
     failed.close_after_retirement();
     expects<std::invalid_argument>([&] { (void)BufferFence(second, 0); });
+
+    // Zero is an unbound allocation generation. Even a matching caller may
+    // not create a standalone command/ticket or make it visible as in flight.
+    {
+        const Identity unbound{"tenant", "device", 0};
+        BufferFence zero_generation(unbound, 16);
+        expects<std::invalid_argument>([&] {
+            (void)zero_generation.begin_command(unbound);
+        });
+        check(zero_generation.status() == Status::Idle);
+        zero_generation.retire_after_backend_release(unbound);
+        zero_generation.close_after_retirement();
+    }
+
     // Deterministic concurrent start: a command admission and transfer
     // compete on *the same* owner wrapper. Exactly one may succeed, and
     // ThreadSanitizer must observe no state_ or generation data races.

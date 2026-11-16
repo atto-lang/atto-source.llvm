@@ -1,0 +1,3 @@
+type Count = int;
+fnc inc(int p): int { return p + 1; }
+pub fnc main(): int { let mut Count c = inc(39); c = c + 2; return c; }

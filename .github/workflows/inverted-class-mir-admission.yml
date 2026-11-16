@@ -1,0 +1,84 @@
+name: Inverted class typed MIR admission (host-only)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/types/InvertedClassMirAdmission.hpp'
+      - 'tests/inverted_class_mir_admission_test.cpp'
+      - 'CMakeLists.txt'
+      - '.github/workflows/inverted-class-mir-admission.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checked-mir:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+        optimization: ['-O0', '-O2']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Verify exact PR head and record entire tree
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          echo "PR_HEAD_SHA=$EXPECTED_SHA"
+          echo "SOURCE_TREE_SHA=$(git rev-parse 'HEAD^{tree}')"
+          git hash-object src/main/cpp/oreslang/types/InvertedClassMirAdmission.hpp
+          git hash-object tests/inverted_class_mir_admission_test.cpp
+      - name: Execute typed MIR guard and negative admission
+        env:
+          CXX: ${{ matrix.compiler }}
+          OPT: ${{ matrix.optimization }}
+        run: |
+          set -euo pipefail
+          "$CXX" -std=c++17 "$OPT" -Wall -Wextra -Wpedantic -Werror \
+            -Isrc/main/cpp tests/inverted_class_mir_admission_test.cpp \
+            -o /tmp/inverted-class-typed-mir
+          /tmp/inverted-class-typed-mir
+          echo TYPED_MIR_HOST_ONLY=EXECUTED
+
+  sanitizer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address, undefined, thread]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Verify exact PR head
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          echo "SOURCE_TREE_SHA=$(git rev-parse 'HEAD^{tree}')"
+      - name: Execute MIR admission under sanitizer
+        env:
+          SANITIZER: ${{ matrix.sanitizer }}
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O1 -Wall -Wextra -Wpedantic -Werror \
+            -fno-omit-frame-pointer "-fsanitize=$SANITIZER" \
+            -Isrc/main/cpp tests/inverted_class_mir_admission_test.cpp \
+            -o /tmp/inverted-class-typed-mir-sanitized
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+            TSAN_OPTIONS=halt_on_error=1 \
+            /tmp/inverted-class-typed-mir-sanitized
+          echo TYPED_MIR_HOST_SANITIZER=EXECUTED

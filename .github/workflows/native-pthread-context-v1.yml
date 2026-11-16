@@ -1,0 +1,125 @@
+name: Native pthread context v1 (host-only)
+on:
+  pull_request:
+    paths:
+      - "src/main/cpp/oreslang/runtime/NativeThreadV1.*"
+      - "src/main/cpp/oreslang/types/ThreadCaptureAdmission.hpp"
+      - "tests/native_thread_capture_admission_test.cpp"
+      - "src/main/cpp/oreslang/runtime/NativeThreadJoinReaperV1.hpp"
+      - "src/main/cpp/oreslang/runtime/NativeJoinTaskWaitV1.hpp"
+      - "src/main/cpp/oreslang/runtime/NativeJoinTaskContinuationBridgeV1.hpp"
+      - "src/main/cpp/oreslang/runtime/TaskContinuationGate.hpp"
+      - "tests/native_join_task_continuation_bridge_v1_test.cpp"
+      - "tests/native_task_continuation_gate_test.cpp"
+      - "tests/native_join_task_wait_v1_test.cpp"
+      - "tests/native_thread_join_reaper_v1_test.cpp"
+      - "tests/native_thread_v1_test.c"
+      - "tests/native_thread_scope_v1_test.c"
+      - "tests/run_native_thread_v1.sh"
+      - "tests/run_native_thread_sanitizers_v1.sh"
+      - ".github/workflows/native-pthread-context-v1.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-pthread:
+    name: "host-only - ${{ matrix.compiler }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Build and run pthread substrate regression
+        env:
+          CC: ${{ matrix.compiler }}
+        run: sh tests/run_native_thread_v1.sh
+
+  native-pthread-sanitizer:
+    name: "host-only sanitizer - ${{ matrix.compiler }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Execute ASan/UBSan host pthread and capture checks
+        env:
+          CC: ${{ matrix.compiler }}
+        run: sh tests/run_native_thread_sanitizers_v1.sh
+
+  native-pthread-tsan:
+    name: "host-only ThreadSanitizer - gcc"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Execute true pthread ID-exhaustion race under TSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          gcc -std=c11 -O1 -g -fno-omit-frame-pointer -fsanitize=thread \
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -DORES_NATIVE_THREAD_TEST_ID_EXHAUSTION -pthread \
+            -Isrc/main/cpp \
+            src/main/cpp/oreslang/runtime/NativeThreadV1.c \
+            tests/native_thread_v1_test.c \
+            -o "$tmp/native-thread-tsan"
+          TSAN_OPTIONS="halt_on_error=1:report_signal_unsafe=1" \
+            "$tmp/native-thread-tsan"
+          # Exercise scope close/reaper join races under the same sanitizer.
+          gcc -std=c11 -O1 -g -fno-omit-frame-pointer -fsanitize=thread \
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -DORES_NATIVE_THREAD_TEST_ID_EXHAUSTION -pthread \
+            -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeThreadV1.c \
+            -o "$tmp/native-thread-tsan.o"
+          gcc -std=c11 -O1 -g -fno-omit-frame-pointer -fsanitize=thread \
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -DORES_NATIVE_THREAD_TEST_ID_EXHAUSTION -pthread -Isrc/main/cpp \
+            tests/native_thread_scope_v1_test.c "$tmp/native-thread-tsan.o" \
+            -o "$tmp/native-thread-scope-tsan"
+          TSAN_OPTIONS="halt_on_error=1:report_signal_unsafe=1" \
+            "$tmp/native-thread-scope-tsan"
+          g++ -std=c++17 -O1 -g -fno-omit-frame-pointer -fsanitize=thread \
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
+            -Isrc/main/cpp tests/native_thread_join_reaper_v1_test.cpp \
+            "$tmp/native-thread-tsan.o" -o "$tmp/native-thread-reaper-tsan"
+          TSAN_OPTIONS="halt_on_error=1:report_signal_unsafe=1" \
+            "$tmp/native-thread-reaper-tsan"
+          # Scheduler notification callback/cancellation racing against a
+          # physical pthread join. Host-side model, not compiled guest code.
+          g++ -std=c++17 -O1 -g -fno-omit-frame-pointer -fsanitize=thread \
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
+            -Isrc/main/cpp tests/native_join_task_wait_v1_test.cpp \
+            "$tmp/native-thread-tsan.o" -o "$tmp/native-join-task-wait-tsan"
+          TSAN_OPTIONS="halt_on_error=1:report_signal_unsafe=1" \
+            "$tmp/native-join-task-wait-tsan"
+
+          # Exercise the actual continuation store and Task cancellation
+          # bridge under TSan; still a host test, not .atto guest lowering.
+          for unit in NativeExecutionContextStore NativeContinuationStore NativeAwaitTraceBridge; do
+            gcc -std=c11 -O1 -g -fno-omit-frame-pointer -fsanitize=thread \
+              -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
+              -Isrc/main/cpp -c "src/main/cpp/oreslang/runtime/$unit.c" \
+              -o "$tmp/$unit-tsan.o"
+          done
+          g++ -std=c++17 -O1 -g -fno-omit-frame-pointer -fsanitize=thread \
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
+            -Isrc/main/cpp tests/native_join_task_continuation_bridge_v1_test.cpp \
+            "$tmp/native-thread-tsan.o" "$tmp/NativeExecutionContextStore-tsan.o" \
+            "$tmp/NativeContinuationStore-tsan.o" "$tmp/NativeAwaitTraceBridge-tsan.o" \
+            -o "$tmp/native-join-task-continuation-tsan"
+          TSAN_OPTIONS="halt_on_error=1:report_signal_unsafe=1" \
+            "$tmp/native-join-task-continuation-tsan"
