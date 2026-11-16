@@ -5,6 +5,7 @@
 #include "oreslang/frontend/NativeScalarSpecialization.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 #include "oreslang/runtime/OresIsolateAbi.h"
+#include "oreslang/runtime/SourceIdentityV1.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -25,6 +26,7 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
@@ -820,7 +822,163 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool cortex_m_target,
                                   bool bounded_allocator_provider,
                                   const std::string& isolate_entry,
-                                  bool actor_region_v1) {
+                                  bool actor_region_v1,
+                                  const std::vector<CheckedSourceRoutineV1>& checked_routines,
+                                  const std::vector<CheckedLogSiteV1>& checked_sites) {
+    // Every compiler retains its own frontend and source map. This optional
+    // LLVM-owned admission binds reviewed static IDs to the native typed
+    // source function selector; no source ID is synthesized at runtime.
+    // The caller must already have checked the registry's source-unit/build
+    // provenance. No guest log-site or dynamic instrumentation is implied.
+    std::unordered_map<std::string, std::string> routine_source_ids;
+    if (!checked_routines.empty()) {
+        // ModuleLoader may flatten imports into an independently renamed
+        // callable and clear the Program.imports list. Without per-unit
+        // provenance, a manifest for root.atto must never certify imported
+        // function bodies as if they originated in root.atto. Fail closed on
+        // both direct imports and compiler-qualified/imported symbols.
+        const bool has_cross_unit_callables = std::any_of(
+            source.functions.begin(), source.functions.end(),
+            [](const Function& fn) {
+                return fn.name.find('.') != std::string::npos ||
+                    fn.name.rfind("__ores_module_", 0) == 0;
+            });
+        if (checked_routines.size() != source.functions.size() ||
+            !source.imports.empty() || has_cross_unit_callables ||
+            !source.actors.empty() || !source.generators.empty() ||
+            !source.classes.empty()) {
+            throw std::runtime_error(
+                "checked source IDs require exact single-unit scalar function coverage");
+        }
+        std::unordered_set<std::string> unique_routine_ids;
+        for (const auto& id : checked_routines) {
+            telemetry::SourceId parsed{};
+            if (!telemetry::parse_source_id(id.routine_id,
+                                            telemetry::SourceKind::Routine, parsed)) {
+                throw std::runtime_error("malformed native checked routine source ID");
+            }
+            if (!unique_routine_ids.insert(id.routine_id).second)
+                throw std::runtime_error("duplicate cross-function native routine source ID");
+            if (!routine_source_ids.emplace(
+                    native_function_slot(id.symbol, id.arity), id.routine_id).second) {
+                throw std::runtime_error("duplicate checked native routine source selector");
+            }
+        }
+        for (const auto& fn : source.functions) {
+            if (!routine_source_ids.count(native_function_slot(fn.name, fn.parameters.size()))) {
+                throw std::runtime_error("checked source routine registry missing a native callable");
+            }
+            // The v1 manifest spells signatures as name(int,...):int.
+            // Name/arity matching alone is insufficient: bool, String,
+            // borrows and void methods can have the same selector. Never
+            // associate such a different typed ABI with a reviewed rid_.
+            const bool exact_int_parameters = std::all_of(
+                fn.parameters.begin(), fn.parameters.end(),
+                [](const Parameter& param) {
+                    return param.mode == Parameter::Mode::Value &&
+                        param.scalar_type == ScalarType::I64 &&
+                        param.class_name.empty() &&
+                        param.generic_type.empty() &&
+                        param.pending_type_alias.empty() &&
+                        param.sum_type.empty();
+                });
+            if (fn.returns_void || fn.return_type != ScalarType::I64 ||
+                !fn.return_class.empty() || !fn.return_sum.empty() ||
+                !fn.pending_return_type_alias.empty() ||
+                !fn.generic_parameters.empty() || !fn.method_owner.empty() ||
+                !exact_int_parameters) {
+                throw std::runtime_error(
+                    "checked source routine manifest requires exact int-only callable signature");
+            }
+        }
+    }
+    // Every lexical log.info literal is an actual compiler-owned site.
+    // The temporary selector+literal key is only an exact admission witness;
+    // source-controlled site_id is the persistent identity. Multiple calls
+    // to the same literal in one routine are ambiguous in this v1 slice.
+    auto log_key = [&](const std::string& symbol, std::size_t arity,
+                       const std::string& message) {
+        return native_function_slot(symbol, arity) + '\x1f' + message;
+    };
+    std::unordered_set<std::string> emitted_log_keys;
+    std::function<void(const Function&, const Statement&)> scan_log_site;
+    scan_log_site = [&](const Function& fn, const Statement& stmt) {
+        if (stmt.kind == Statement::Kind::TelemetryLogInfo) {
+            if (!emitted_log_keys.insert(log_key(
+                    fn.name, fn.parameters.size(), stmt.telemetry_operation)).second)
+                throw std::runtime_error("ambiguous repeated native log.info literal requires explicit site locator");
+        }
+        for (const auto& child : stmt.then_statements) scan_log_site(fn, child);
+        for (const auto& child : stmt.else_statements) scan_log_site(fn, child);
+    };
+    // A guest binding named "log" must never be silently treated as the
+    // compiler-owned logging intrinsic. Reject it even if it appears in a
+    // nested lexical scope or later in the function: v1 does not yet track
+    // all control-flow and shadowing provenance in the static-site table.
+    std::function<bool(const Statement&)> shadows_log;
+    shadows_log = [&](const Statement& stmt) -> bool {
+        if ((stmt.branch_local && stmt.branch_local->name == "log") ||
+            (stmt.kind == Statement::Kind::UsingTelemetrySpan &&
+             stmt.receiver == "log")) return true;
+        return std::any_of(stmt.then_statements.begin(), stmt.then_statements.end(), shadows_log)
+            || std::any_of(stmt.else_statements.begin(), stmt.else_statements.end(), shadows_log);
+    };
+    for (const auto& fn : source.functions) {
+        const auto prior = emitted_log_keys.size();
+        for (const auto& stmt : fn.statements) scan_log_site(fn, stmt);
+        if (emitted_log_keys.size() != prior &&
+            (std::any_of(fn.parameters.begin(), fn.parameters.end(),
+                    [](const Parameter& p) { return p.name == "log"; }) ||
+             std::any_of(fn.locals.begin(), fn.locals.end(),
+                    [](const LocalBinding& local) { return local.name == "log"; }) ||
+             std::any_of(fn.statements.begin(), fn.statements.end(), shadows_log)))
+            throw std::runtime_error(
+                "native compiler logging intrinsic cannot be shadowed by guest log binding");
+    }
+    if (emitted_log_keys.size() != checked_sites.size()) {
+        throw std::runtime_error("native log.info requires exact source-controlled site ID coverage");
+    }
+    if (checked_sites.size() > 4096) {
+        throw std::runtime_error("native static log site budget exceeded");
+    }
+    std::unordered_map<std::string, CheckedLogSiteV1> native_log_sites;
+    std::unordered_set<std::string> seen_site_ids;
+    for (const auto& site : checked_sites) {
+        telemetry::SourceId rid{}, sid{};
+        if (!telemetry::parse_source_id(
+                site.routine_id, telemetry::SourceKind::Routine, rid) ||
+            !telemetry::parse_source_id(
+                site.site_id, telemetry::SourceKind::Site, sid) ||
+            !seen_site_ids.insert(site.site_id).second) {
+            throw std::runtime_error("invalid or duplicate source-controlled native log site identity");
+        }
+        const auto fn_key = native_function_slot(site.symbol, site.arity);
+        auto parent = routine_source_ids.find(fn_key);
+        if (parent == routine_source_ids.end() ||
+            parent->second != site.routine_id) {
+            throw std::runtime_error("source log site does not belong to checked source routine");
+        }
+        const auto key = log_key(site.symbol, site.arity, site.message);
+        if (!emitted_log_keys.count(key) ||
+            !native_log_sites.emplace(key, site).second) {
+            throw std::runtime_error("stale, conflicting or misbound native static log site");
+        }
+    }
+    if (!checked_sites.empty() &&
+        (wasm32_target || cortex_m_target || !source.actors.empty() ||
+         !source.generators.empty() || !source.classes.empty() ||
+         std::any_of(source.functions.begin(), source.functions.end(),
+             [](const Function& fn) {
+                 return fn.async_source_i64 || !fn.source_tasks.empty() ||
+                     !fn.future_pipelines.empty() ||
+                     !fn.ready_await_actor.empty() ||
+                     !fn.done_await_actor.empty() ||
+                     !fn.actor_actions.empty() || !fn.actor_spawns.empty() ||
+                     !fn.actor_field_writes.empty();
+             }))) {
+        throw std::runtime_error(
+            "native log.info v1 only supports hosted non-suspending scalar AOT");
+    }
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
@@ -1183,6 +1341,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             "ores_native_telemetry_span_end",
             llvm::FunctionType::get(llvm::Type::getVoidTy(context), {i64}, false));
     }
+    llvm::FunctionCallee telemetryLog;
+    if (!checked_sites.empty()) {
+        telemetryLog = module.getOrInsertFunction(
+            "ores_native_telemetry_log_info",
+            llvm::FunctionType::get(i32, {i64, i64, i64, i64, native_ptr, i64}, false));
+    }
     const bool has_source_tasks = std::any_of(
         source.functions.begin(), source.functions.end(),
         [](const Function& fn) {
@@ -1503,6 +1667,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         // target even when our source-function symbol set is collision-free.
         if (declaration->getName().str() != symbol)
             throw std::runtime_error("native AOT direct dispatch linker symbol collision");
+        // Compiler-emitted metadata for the exact native callable. Native IR
+        // metadata is NOT a runtime probe and may not survive object emission:
+        // the authenticated artifact sidecar remains a separate future gate.
+        if (auto id = routine_source_ids.find(
+                native_function_slot(fn.name, fn.parameters.size()));
+                id != routine_source_ids.end()) {
+            declaration->setMetadata(
+                "atto.source.routine_id.v1",
+                llvm::MDNode::get(context, {llvm::MDString::get(context, id->second)}));
+        }
         if (specialization != nullptr) {
             const auto selector = native_function_slot(fn.name, fn.parameters.size());
             if (!frozen_scalar_callees.emplace(selector, declaration).second ||
@@ -1820,7 +1994,44 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
 
         for (const auto& binding : fn.locals) {
             if (binding.int_array) {
+                llvm::Value* split_source = nullptr;
+                llvm::Value* split_delimiter = nullptr;
+                if (binding.initializer) {
+                    const Expression& split = *binding.initializer;
+                    if (split.kind != Expression::Kind::ArrayCall ||
+                            split.name != "split_literal" || !split.left ||
+                            split.arguments.size() != 1 ||
+                            binding.array_element_type != ScalarType::String)
+                        throw std::runtime_error("unchecked native owned String split initializer");
+                    // Preserve lexical evaluation of String expressions
+                    // before allocating the output array.
+                    split_source = lower(*split.left, builder, i64,
+                        storage, field_storage, declarations, &region_moves);
+                    split_delimiter = lower(*split.arguments.front(), builder, i64,
+                        storage, field_storage, declarations, &region_moves);
+                }
                 llvm::Value* handle = new_checked_array(binding.name);
+                if (binding.initializer) {
+                    if (!array_region || !array_failure || !array_failure_status)
+                        throw std::runtime_error("native String split has no owned array region");
+                    auto split_call = module.getOrInsertFunction(
+                        "ores_string_split_literal",
+                        llvm::FunctionType::get(llvm::Type::getInt32Ty(context),
+                            {native_ptr, i64, i64, i64}, false));
+                    auto* status = builder.CreateCall(split_call,
+                        {array_region, handle, split_source, split_delimiter},
+                        binding.name + ".split.status");
+                    auto* ok = llvm::BasicBlock::Create(context,
+                        binding.name + ".split.ok", function);
+                    auto* denied = llvm::BasicBlock::Create(context,
+                        binding.name + ".split.denied", function);
+                    builder.CreateCondBr(builder.CreateICmpEQ(status,
+                        llvm::ConstantInt::get(status->getType(), 0)), ok, denied);
+                    builder.SetInsertPoint(denied);
+                    builder.CreateStore(status, array_failure_status);
+                    builder.CreateBr(array_failure);
+                    builder.SetInsertPoint(ok);
+                }
                 llvm::Value* slot = builder.CreateAlloca(i64, nullptr,
                     binding.name + ".array.owner");
                 builder.CreateStore(handle, slot);
@@ -2183,6 +2394,43 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                         storage, field_storage, declarations, &region_moves);
                     builder.CreateStore(updated, field_storage.at(target));
                 }
+            } else if (effect.kind == Statement::Kind::TelemetryLogInfo) {
+                // The compiler IR call is a real AOT guest callsite. Runtime
+                // copies only source-controlled IDs and the bounded literal
+                // into its carrier-local ring, never a guest object/handle.
+                const auto key = log_key(fn.name, fn.parameters.size(),
+                                         effect.telemetry_operation);
+                auto found = native_log_sites.find(key);
+                if (found == native_log_sites.end() || !telemetryLog.getCallee())
+                    throw std::runtime_error("unverified native guest telemetry log site");
+                telemetry::SourceId rid{}, sid{};
+                if (!telemetry::parse_source_id(
+                        found->second.routine_id, telemetry::SourceKind::Routine, rid) ||
+                    !telemetry::parse_source_id(
+                        found->second.site_id, telemetry::SourceKind::Site, sid))
+                    throw std::runtime_error("corrupt checked native log source descriptor");
+                auto lane = [](const telemetry::SourceId& id, std::size_t begin) {
+                    std::uint64_t result = 0;
+                    for (std::size_t k = begin; k < begin + 8; ++k)
+                        result = (result << 8) | id.bytes[k];
+                    return result;
+                };
+                auto* literal = builder.CreateGlobalStringPtr(
+                    effect.telemetry_operation, "atto.telemetry.log.literal");
+                auto* siteCall = builder.CreateCall(telemetryLog, {
+                    llvm::ConstantInt::get(i64, lane(rid, 0)),
+                    llvm::ConstantInt::get(i64, lane(rid, 8)),
+                    llvm::ConstantInt::get(i64, lane(sid, 0)),
+                    llvm::ConstantInt::get(i64, lane(sid, 8)),
+                    literal,
+                    llvm::ConstantInt::get(i64, effect.telemetry_operation.size())
+                }, "atto.telemetry.log.receipt");
+                siteCall->setMetadata("atto.source.site_id.v1",
+                    llvm::MDNode::get(context, {
+                        llvm::MDString::get(context, found->second.site_id)}));
+                siteCall->setMetadata("atto.source.routine_id.v1",
+                    llvm::MDNode::get(context, {
+                        llvm::MDString::get(context, found->second.routine_id)}));
             } else if (effect.kind == Statement::Kind::Call) {
                 lower(*effect.expression, builder, i64, storage, field_storage, declarations, &region_moves);
             } else {
@@ -2218,9 +2466,43 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             if (!local.int_array) native_lifetime_start(builder, slot, bytes);
             ScopedSlot result{local.name, slot, bytes, {}, {}};
             if (local.int_array) {
+                llvm::Value* split_source = nullptr;
+                llvm::Value* split_delimiter = nullptr;
+                if (local.initializer) {
+                    const auto& split = *local.initializer;
+                    if (split.kind != Expression::Kind::ArrayCall ||
+                            split.name != "split_literal" || !split.left ||
+                            split.arguments.size() != 1 ||
+                            local.array_element_type != ScalarType::String)
+                        throw std::runtime_error("unchecked scoped String.split_literal owner");
+                    split_source = lower(*split.left, builder, i64,
+                        storage, field_storage, declarations, &region_moves);
+                    split_delimiter = lower(*split.arguments.front(), builder, i64,
+                        storage, field_storage, declarations, &region_moves);
+                }
                 init = new_checked_array(local.name);
                 result.array_shadow = array_failure_places.at(local.name);
                 array_names.insert(local.name);
+                if (local.initializer) {
+                    if (!array_region || !array_failure || !array_failure_status)
+                        throw std::runtime_error("scoped String.split_literal lacks array region");
+                    auto split_call = module.getOrInsertFunction("ores_string_split_literal",
+                        llvm::FunctionType::get(llvm::Type::getInt32Ty(context),
+                            {native_ptr, i64, i64, i64}, false));
+                    auto* status = builder.CreateCall(split_call,
+                        {array_region, init, split_source, split_delimiter},
+                        local.name + ".scoped.split.status");
+                    auto* ok = llvm::BasicBlock::Create(
+                        context, local.name + ".scoped.split.ok", function);
+                    auto* denied = llvm::BasicBlock::Create(
+                        context, local.name + ".scoped.split.denied", function);
+                    builder.CreateCondBr(builder.CreateICmpEQ(status,
+                        llvm::ConstantInt::get(status->getType(), 0)), ok, denied);
+                    builder.SetInsertPoint(denied);
+                    builder.CreateStore(status, array_failure_status);
+                    builder.CreateBr(array_failure);
+                    builder.SetInsertPoint(ok);
+                }
             }
             if (record) {
                 const auto& cls = *record_classes.at(local.class_name);
@@ -2295,8 +2577,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     continue;
                 }
                 const LocalBinding& local = *action.branch_local;
-                llvm::Value* init = local.initializer ? lower(*local.initializer, builder, i64,
-                    storage, field_storage, declarations, &region_moves) : nullptr;
+                llvm::Value* init = (local.initializer && !local.int_array)
+                    ? lower(*local.initializer, builder, i64,
+                        storage, field_storage, declarations, &region_moves) : nullptr;
                 active_scopes.push_back(scoped_value(local, init));
             }
             while (active_scopes.size() > scope_start) {
@@ -2422,7 +2705,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             if (builder.GetInsertBlock()->getTerminator()) break;
             if (stmt.kind == Statement::Kind::ScopedLocal) {
                 const auto& local = *stmt.branch_local;
-                auto* value = local.initializer ? lower(*local.initializer, builder, i64, storage, field_storage, declarations, &region_moves) : nullptr;
+                auto* value = (local.initializer && !local.int_array)
+                    ? lower(*local.initializer, builder, i64, storage, field_storage, declarations, &region_moves)
+                    : nullptr;
                 ordered_root_scopes.push_back(scoped_value(local, value));
                 continue;
             }
