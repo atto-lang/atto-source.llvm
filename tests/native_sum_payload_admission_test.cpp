@@ -174,7 +174,7 @@ int main() {
         {
             Program p = initial("Option<int>", "Some", scalar(Kind::Integer));
             p.functions.front().locals.front().initializer->arguments.front().reset();
-            require_rejection(std::move(p), "native sum constructor has missing payload expression",
+            require_rejection(std::move(p), "malformed native sum constructor AST",
                 "null Some payload is rejected");
         }
         require_rejection(conditional("Option<int>", nullptr, constructor("None")),
@@ -224,7 +224,7 @@ int main() {
             auto access = scalar(Kind::SumAccess);
             access->name = "is_some";
             p.functions.front().locals.front().initializer = std::move(access);
-            require_rejection(std::move(p), "native member access requires receiver",
+            require_rejection(std::move(p), "malformed native sum/member access AST",
                 "null sum member receiver");
         }
         {
@@ -235,7 +235,7 @@ int main() {
             access->left->name = "value";
             access->arguments.push_back(nullptr);
             p.functions.front().locals.front().initializer = std::move(access);
-            require_rejection(std::move(p), "native expression has missing argument",
+            require_rejection(std::move(p), "malformed native sum/member access AST",
                 "null sum member argument");
         }
 

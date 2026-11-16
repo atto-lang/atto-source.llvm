@@ -65,12 +65,14 @@ inline void validate_native_sum_expression_shape(const Expression& e) {
     for (const auto& arg : e.arguments) {
         if (!arg) {
             if (e.kind == K::SumConstruct)
-                throw std::runtime_error("native sum constructor has missing payload expression");
+                throw std::runtime_error("malformed native sum constructor AST");
+            if (e.kind == K::SumAccess || e.kind == K::ArrayCall)
+                throw std::runtime_error("malformed native sum/member access AST");
             throw std::runtime_error("native expression has missing argument");
         }
     }
     if ((e.kind == K::ArrayCall || e.kind == K::SumAccess) && !e.left)
-        throw std::runtime_error("native member access requires receiver");
+        throw std::runtime_error("malformed native sum/member access AST");
     if (e.kind == K::Call && !e.argument_names.empty() &&
             e.argument_names.size() != e.arguments.size())
         throw std::runtime_error("native call argument-name metadata arity mismatch");
