@@ -57,6 +57,33 @@ void ores_actor_region_v1_release(OresActorRegionV1*, OresActorRegionV1Loan);
  * outstanding loans; the scheduler must ALSO quiesce callbacks/wakers/FFI. */
 void ores_actor_region_v1_retire(OresActorRegionV1*);
 int ores_actor_region_v1_try_destroy(OresActorRegionV1*);
+
+/* Compiler-generated native guest ABI, never an untrusted host RPC or
+ * independently accessible guest API. Explicit output pointers avoid the
+ * target-dependent aggregate-return C ABI for turn and reference records.
+ * The LLVM lowering allocates 16-byte turn and 32-byte reference sidecars
+ * with 8-byte alignment on a nonescaping native stack frame. They include
+ * host-only domain, generation and turn evidence, not serializable values.
+ *
+ * The checked source profile rejects cancellation, suspension, exceptions,
+ * methods, owned escapes and dynamic FFI before calling these functions.
+ * A future fully general AOT backend must add path-sensitive cleanup and
+ * scheduler-issued turn authority, not widen these wrappers by assumption. */
+void ores_actor_region_v1_compiler_enter(OresActorRegionV1* region,
+    uint64_t owner, uint64_t incarnation, OresArenaTurn* out);
+void ores_actor_region_v1_compiler_alloc(OresActorRegionV1* region,
+    const OresArenaTurn* turn, uint32_t bytes, OresActorRegionV1Ref* out);
+void ores_actor_region_v1_compiler_write_i64(OresActorRegionV1* region,
+    const OresArenaTurn* turn, const OresActorRegionV1Ref* ref,
+    uint32_t field_offset, int64_t value);
+int64_t ores_actor_region_v1_compiler_read_i64(OresActorRegionV1* region,
+    const OresArenaTurn* turn, const OresActorRegionV1Ref* ref,
+    uint32_t field_offset);
+void ores_actor_region_v1_compiler_drop(OresActorRegionV1* region,
+    const OresArenaTurn* turn, OresActorRegionV1Ref* ref);
+void ores_actor_region_v1_compiler_leave(OresActorRegionV1* region,
+    const OresArenaTurn* turn);
+
 #ifdef __cplusplus
 }
 #endif

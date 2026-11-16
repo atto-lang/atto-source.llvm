@@ -43,7 +43,7 @@ NEGATIVE = {
     "incomplete-trait": ("declare trait Printable;" + ENTRY, "expected 'as'"),
     "incomplete-interface": ("declare interface Named;" + ENTRY, "expected 'as'"),
     "enum-runtime-layout": ("define enum Status as Success = 1; end " + ENTRY, "native user-defined tagged enum"),
-    "actor-not-type-only": ("declare actor Worker;" + ENTRY, "TYPE_ONLY_INVALID_KIND"),
+    "actor-not-type-only": ("declare actor Worker;" + ENTRY, "NATIVE_ACTOR_FORWARD_UNRESOLVED"),
     "enum-not-type-only": ("declare enum Status;" + ENTRY, "TYPE_ONLY_INVALID_KIND"),
     "non-scalar-generic-alias": ("define type Code = Option<int>;" + ENTRY, "expected ';'"),
     "self-alias": ("define type Code = Code;" + ENTRY, "TYPE_ALIAS_CYCLE"),
