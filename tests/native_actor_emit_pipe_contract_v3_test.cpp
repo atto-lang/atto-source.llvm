@@ -105,6 +105,20 @@ int main() {
     reject({stage(std::string(1'000'000, 'x'), "Parse", "int", {"bool"}),
             stage("sink", "Sink", "bool")}, "E_ACTOR_PIPE_IDENTITY");
 
+    // Compiler evidence must be bounded even if all observations agree.
+    require(check_actor_emit_pipeline_v3({
+        stage("p0", "Parse", "int", std::vector<std::string>(1024, "bool")),
+        stage("sink", "Sink", "bool")}).size() == 1,
+        "1024 typed emissions must remain valid");
+    reject({
+        stage("p0", "Parse", "int", std::vector<std::string>(1025, "bool")),
+        stage("sink", "Sink", "bool")
+    }, "E_ACTOR_PIPE_EMIT_LIMIT");
+    reject({
+        stage("p0", "Parse", "int", std::vector<std::string>(1000000, "int")),
+        stage("sink", "Sink", "int")
+    }, "E_ACTOR_PIPE_EMIT_LIMIT");
+
     for (int n = 2; n <= 16; ++n) {
         std::vector<ActorEmitStageV3> chain;
         for (int i = 0; i < n; ++i) {
