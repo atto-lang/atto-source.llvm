@@ -1,10 +1,16 @@
 #include "oreslang/runtime/ActorSlabHeap32.hpp"
 #include <cassert>
+#include <cstdlib>
+#include <new>
 #include <cstdint>
 #include <iostream>
 #include <limits>
 #include <vector>
 using oreslang::runtime::vm::ActorSlabHeap32;
+static std::size_t new_calls = 0;
+void* operator new(std::size_t n) { ++new_calls; if (auto* p = std::malloc(n)) return p; throw std::bad_alloc(); }
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 static int checks = 0;
 void yes(bool v) { ++checks; if (!v) { std::cerr << "FAIL CHECK " << checks << "\n"; std::abort(); } }
 int main() {
@@ -68,6 +74,16 @@ int main() {
         yes(a.release(x, 128, 16));
         a.reset();
         yes(a.allocate(128, 16) == x);
+    }
+    {
+        std::vector<std::uint8_t> memory(8192, 0);
+        ActorSlabHeap32 heap(4096); heap.bind(memory.data(), 4096);
+        const auto before = new_calls;
+        for (std::size_t n = 0; n < 1000; ++n) {
+            const auto ptr = heap.allocate(32, 16);
+            yes(ptr != 0 && heap.release(ptr, 32, 16));
+        }
+        yes(before == new_calls);
     }
     std::cout << "COMPACT_ACTOR_SLAB_TEST_PASS checks=" << checks << "\n";
 }
