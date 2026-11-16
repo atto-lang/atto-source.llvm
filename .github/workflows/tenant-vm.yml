@@ -35,6 +35,10 @@ jobs:
           test "$actual" = "$expected" || { echo "Wrong checkout: expected $expected, got $actual" >&2; exit 1; }
           printf 'Source commit: %s\nSource tree: %s\n' "$actual" "$(git rev-parse HEAD^{tree})"
           printf 'Runner architecture: %s\n' "$(uname -m)"
+          case "${{ matrix.os }}:$(uname -m):${{ runner.arch }}" in
+            ubuntu-24.04:x86_64:X64|ubuntu-24.04-arm:aarch64:ARM64) ;;
+            *) echo "Wrong native runner architecture for ${{ matrix.os }}: $(uname -m) / ${{ runner.arch }}" >&2; exit 1 ;;
+          esac
           uname -a
           lscpu | head -n 25 || true
           {
@@ -72,7 +76,13 @@ jobs:
               exit 1
             fi
           done
-          ctest --test-dir build/tv --output-on-failure
+          # -V preserves the per-executable case totals, including the real
+          # compiler-generated guest cases. Missing cases are a failed gate.
+          ctest --test-dir build/tv --verbose --output-on-failure | tee build/tv/test-execution.log
+          grep -Fq '43 cases, 0 failed' build/tv/test-execution.log || { echo "Native host case total or result mismatch" >&2; exit 1; }
+          grep -Fq '21 cases, 0 failed' build/tv/test-execution.log || { echo "Lowered guest case total or result mismatch" >&2; exit 1; }
+          grep -Fq 'SOURCE_CONTRACT_PASS' build/tv/test-execution.log || { echo "Missing source contract execution proof" >&2; exit 1; }
+          grep -Fq 'ADMISSION_PASS' build/tv/test-execution.log || { echo "Missing admission execution proof" >&2; exit 1; }
       - name: ASan and UBSan
         shell: bash
         run: |
