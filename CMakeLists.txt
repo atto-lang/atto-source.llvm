@@ -585,7 +585,9 @@ if(BUILD_TESTING)
     add_executable(atto-llvm-intrinsic-compat-test
         tests/llvm_intrinsic_compat_api_test.cpp)
     target_include_directories(atto-llvm-intrinsic-compat-test PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    # SYSTEM: -Werror below is for this test, not for warnings in LLVM headers.
+    target_include_directories(atto-llvm-intrinsic-compat-test SYSTEM PRIVATE
         "${LLVM_INCLUDE_DIRS}")
     target_link_libraries(atto-llvm-intrinsic-compat-test PRIVATE ${ORE_LLVM_LIBS})
     target_compile_options(atto-llvm-intrinsic-compat-test PRIVATE

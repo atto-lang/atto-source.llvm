@@ -14,6 +14,7 @@ inline llvm::Type* native_pointer_type(llvm::LLVMContext& context, llvm::Type* p
     (void)pointee;
     return llvm::PointerType::get(context, 0);
 #else
+    (void)context;
     return pointee->getPointerTo();
 #endif
 }
