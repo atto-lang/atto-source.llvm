@@ -66,5 +66,7 @@ int main() {
                 v.nominal_id=0; (void)p(v); },"SP015");
     reject([] { (void)prove(src(origin::class_,{f("x",scalar::i64,0)}),
                   {{"x",scalar::i64},{"x",scalar::i64}}); },"SP016");
+    reject([] { (void)prove(src(origin::class_,{f("x",scalar::boolean,0)}),
+                    {{"x",scalar::boolean}}); },"non-i64 ABI must reject");
     std::cout << "readonly shape LLVM C++ HOST_WITNESS 16/16; target i64 oracle 84; native guest NOT_EXECUTED\n";
 }
