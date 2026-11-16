@@ -55,6 +55,9 @@ void require(Type actual, Type expected, std::size_t offset, const std::string& 
 }
 }
 void validate_native_scalar_types(const Program& program) {
+    // This API also accepts compiler-created ASTs; do not assume that a
+    // caller previously ran resolve_native_sums or the text parser.
+    validate_native_sum_registry(program);
     std::unordered_map<std::string, const ClassDecl*> classes;
     std::unordered_map<std::string, const Function*> functions;
     for (const auto& cls : program.classes) classes.emplace(cls.name, &cls);
@@ -79,6 +82,7 @@ void validate_native_scalar_types(const Program& program) {
     };
     std::function<Type(const Expression&, const Locals&)> expression;
     expression = [&](const Expression& e, const Locals& locals) -> Type {
+        validate_native_sum_expression_shape(e);
         const auto evaluate = [&]() -> Type {
         using E = Expression::Kind;
         switch (e.kind) {
@@ -299,6 +303,7 @@ void validate_native_scalar_types(const Program& program) {
         std::function<void(const std::vector<Statement>&, Locals&)> statements;
         statements = [&](const std::vector<Statement>& items, Locals& scope) {
             for (const auto& item : items) {
+                validate_native_sum_statement_shape(item);
                 if (item.kind == Statement::Kind::UsingTelemetrySpan) {
                     // Compiler-owned AOT tracing token is not a scalar,
                     // class, field receiver or guest-visible local. Recurse

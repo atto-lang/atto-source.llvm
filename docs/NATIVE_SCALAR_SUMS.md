@@ -96,3 +96,44 @@ emitted LLVM IR. Legacy fixtures remain `.ores`.
 
 These are test definitions, not executed evidence. The exact-head compiler,
 native guest stdout/exit, and ASan/UBSan receipts remain required.
+
+## Compiler-created descriptor validation
+
+Native C++ compiler ASTs are not automatically trusted. The sum registry
+now rejects duplicated `Option`/`Result` names, a mismatched case kind,
+noncanonical payload names, an invalid `ScalarType` or sum kind, and
+noncanonical hidden `Option` error metadata before the resolver or scalar
+type checker can pass descriptors to LLVM code generation.
+
+The standalone native regression adds eight forged-descriptor mutation
+cases, alongside the existing conditional-arm and payload tests. These
+are compiler-host tests, **not** evidence of source-defined nominal
+`define enum`, recursive ADTs, .atto guest execution, or Native AOT
+parity. Exact-head LLVM CTest execution is required.
+
+## Malformed compiler ASTs
+
+The resolver explicitly rejects null sum-constructor payload pointers,
+conditional expressions with a missing true/false value arm, and scoped
+or iteration statements missing their declaration binding. This prevents
+null-pointer dereferences when an internal compiler stage supplies a
+malformed AST. Six additional host-only negative mutations raise the
+standalone native-sum admission suite to 37 assertion **definitions**.
+Re-execute this changed source at the exact PR head before claiming
+37 passing assertions; previous host-carrier receipts apply only to
+their original byte-identical compiler/test blobs.
+
+## Shared untrusted-AST shape validation
+
+Both `resolve_native_sums` and `validate_native_scalar_types` now invoke the
+same `validate_native_sum_expression_shape` preflight before walking AST
+children. It rejects null tagged constructor/member arguments, missing
+member receivers, incomplete conditional predicates, ambiguous dual
+conditional predicates, and missing conditional result arms. The scalar
+typechecker's loop and scoped-binding dereferences receive the same
+explicit rejection as the sum resolver.
+
+Five additional host mutations expand the regression corpus from 37 to
+42 **defined** assertions. These checks need a fresh exact-source test
+run; previously successful selected-blob carrier runs do not certify
+this new compiler/test source tree or guest `.atto` execution.
