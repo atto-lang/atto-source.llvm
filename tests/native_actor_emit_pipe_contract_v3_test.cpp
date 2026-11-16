@@ -100,7 +100,7 @@ int main() {
             stage("sink", "Sink", "bool")}, "E_ACTOR_PIPE_IDENTITY");
     reject({stage(unicode_256 + "\xF0\x9F\x8C\x8D", "Parse", "int", {"bool"}),
             stage("sink", "Sink", "bool")}, "E_ACTOR_PIPE_IDENTITY");
-    reject({stage(std::string("abc\\0def", 7), "Parse", "int", {"bool"}),
+    reject({stage((std::string("abc") + std::string(1, char(0)) + "def"), "Parse", "int", {"bool"}),
             stage("sink", "Sink", "bool")}, "E_ACTOR_PIPE_IDENTITY");
     reject({stage(std::string(1'000'000, 'x'), "Parse", "int", {"bool"}),
             stage("sink", "Sink", "bool")}, "E_ACTOR_PIPE_IDENTITY");
