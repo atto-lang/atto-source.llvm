@@ -147,12 +147,16 @@ std::size_t template_close(std::string_view source, std::size_t from,
 
 bool reserved(std::string_view name) {
     // Keep these reserved even while their grammar is unsupported.
+    // Contextual words (borrow, critical, enum, gen, pure, requires, serial,
+    // structural, suspend, using) are ordinary identifiers, as in the Java
+    // lexer (KeywordTaxonomyLexerExecutionTest) and the spec ch.23 taxonomy;
+    // the parser recognizes them only at their declaration/modifier sites.
     static constexpr std::string_view words[] = {
-        "define", "class", "enum", "pattern", "module", "contract", "conforms", "namespace",
+        "define", "class", "pattern", "module", "contract", "conforms", "namespace",
         "import", "from", "as", "extends", "implements", "try", "catch",
         "throw", "raise", "panic", "recover",
         "finally", "end", "fi", "if", "guard", "do", "else", "then", "new",
-        "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "gen", "generator",
+        "spawn", "stop", "done", "await", "rt", "async", "suspends", "generator",
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
@@ -161,9 +165,9 @@ bool reserved(std::string_view name) {
         "interface", "trait", "struct", "impl", "abstract", "void", "Iterator", "AsyncIterator",
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
-        "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "gpu", "cpu", "quantum", "over", "structural", "int", "bool", "pure",
-        "Some", "None", "Ok", "Err", "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
+        "let", "mut", "self", "true", "false", "null", "obj", "arr",
+        "gpu", "cpu", "quantum", "over", "int", "bool",
+        "Some", "None", "Ok", "Err", "critical-read", "critical-write", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -2198,6 +2202,12 @@ private:
             fail("callable signatures cannot be declared as nominal class types");
         if (entry_builtin_name(result.name))
             fail("builtin Entry is compiler-owned and cannot be declared as a nominal class type");
+        // A class header may look like Java/Rust inheritance syntax, but native
+        // flat-class codegen has no parent layout, dynamic method table, or
+        // checked superclass/interface witness. Reject explicitly, before
+        // producing any LLVM IR, instead of mis-parsing or silently flattening.
+        if (token_.text == "extends" || token_.text == "implements" || token_.text == "impl")
+            fail("NATIVE_CLASS_INHERITANCE_UNSUPPORTED: native class extends/implements needs verified parent layout and virtual/trait method dispatch; no LLVM IR may be emitted");
         require("as");
         std::unordered_set<std::string> seen;
         while (token_.text != "end") {
@@ -2738,7 +2748,7 @@ private:
         }
         // Compatibility spellings remain fail-closed in this first native
         // slice. Canonical bare sync gen* is handled by scalar_generator().
-        if (token_.text == "gen" || token_.text == "generator") {
+        if ((token_.text == "gen" && peek_next().text != "(" && peek_next().text != "<") || token_.text == "generator") {
             fail("native generator v1 requires iterator-frame, ownership and LLVM continuation lowering");
         }
         if (at_unsupported_critical_mode()) {
@@ -3560,7 +3570,7 @@ private:
             while (token_.text != "}" && (!then_scope || (token_.text != "fi" && token_.text != "else" && token_.text != "elif"))) {
                 if (token_.kind == Kind::End || actions.size() == 16)
                     fail("native conditional arm limit exceeded (16)");
-                if (token_.text == "using" && !finally_scope) {
+                if (token_.text == "using" && peek_next().kind == Kind::Identifier && !finally_scope) {
                     actions.push_back(using_telemetry_span()); continue;
                 }
                 if (token_.text == "for" && !finally_scope) {
@@ -4130,7 +4140,7 @@ private:
             }
             if (return_guards_started)
                 fail("native statements cannot follow guarded returns");
-            if (token_.text == "using") {
+            if (token_.text == "using" && peek_next().kind == Kind::Identifier) {
                 if (terminal_try_finally)
                     fail("native telemetry scope inside protected try requires unified unwind proof");
                 value.statements.push_back(using_telemetry_span());

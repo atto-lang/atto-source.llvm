@@ -1281,6 +1281,16 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-generational-reply-test)
     set_tests_properties(native_actor_supervisor_generational_reply_host_only
         PROPERTIES TIMEOUT 30)
+    # Bounded unary + stream reply host proof (NOT compiled Atto guest).
+    add_executable(oreslang-native-actor-reply-v1-test
+        tests/native_actor_reply_protocol_v1_test.cpp)
+    target_include_directories(oreslang-native-actor-reply-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-reply-v1-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-reply-v1-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_actor_reply_v1_host_only COMMAND oreslang-native-actor-reply-v1-test)
+    set_tests_properties(native_actor_reply_v1_host_only PROPERTIES TIMEOUT 40)
     # Host-only instrumented-trace analyzer (not full guest instrumentation).
     add_executable(oreslang-concurrency-race-analyzer-test
         tests/concurrency_race_analyzer_test.cpp)
@@ -1619,6 +1629,12 @@ if(BUILD_TESTING)
         COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_alias_spellings.sh"
             "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_type_alias_spellings PROPERTIES TIMEOUT 120)
+    # Java lexer parity: contextual words (borrow, critical, enum, gen, pure,
+    # requires, serial, structural, suspend, using) are ordinary identifiers.
+    add_test(NAME native_contextual_keyword_identifiers
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_contextual_keyword_identifiers.sh"
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_contextual_keyword_identifiers PROPERTIES TIMEOUT 120)
     # Compiler-backed .atto -> LLVM IR -> Clang -> native guest at O0/O2.
     # Boolean punctuation contract: &&, ||, ^^ and compile-negative cases.
     add_test(NAME native_logical_punctuation_operators
@@ -4237,7 +4253,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_rt_take unsupported-rt-take.ores --diagnostic "unknown parameter")
     oreslang_contract_test(reject_rt_copy unsupported-rt-copy.ores --diagnostic "unknown parameter")
     oreslang_contract_test(reject_rt_share unsupported-rt-share.ores --diagnostic "unknown parameter")
-    oreslang_contract_test(reject_unqualified_borrow_call unsupported-borrow-function.ores --diagnostic "expected int expression")
+    oreslang_contract_test(reject_unqualified_borrow_call unsupported-borrow-function.ores --diagnostic "unknown function or wrong call arity 'borrow'")
     oreslang_contract_test(reject_suspends unsupported-suspends.ores --diagnostic "native suspends declaration requires")
     oreslang_contract_test(reject_critical unsupported-critical.ores --diagnostic "native critical declaration requires")
     oreslang_contract_test(reject_hyphenated_critical_read unsupported-hyphenated-critical-read.ores --diagnostic "native reader/writer critical declaration requires")
@@ -4250,8 +4266,8 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_hyphenated_actor_critical_read_after_fnc unsupported-hyphenated-critical-read-actor-after-fnc.ores --diagnostic "native reader/writer critical declaration requires")
     oreslang_contract_test(reject_hyphenated_actor_critical_write_before_method unsupported-hyphenated-critical-write-actor-method.ores --diagnostic "native reader/writer critical declaration requires")
     # Whitespace/suffix near-misses must not be interpreted as new RW modes.
-    oreslang_contract_test(reject_hyphenated_critical_spaced_as_invalid_name unsupported-hyphenated-critical-spaced.ores --diagnostic "expected non-keyword identifier")
-    oreslang_contract_test(reject_hyphenated_critical_suffix_as_invalid_name unsupported-hyphenated-critical-suffix.ores --diagnostic "expected non-keyword identifier")
+    oreslang_contract_test(reject_hyphenated_critical_spaced_as_invalid_name unsupported-hyphenated-critical-spaced.ores --diagnostic "expected '('")
+    oreslang_contract_test(reject_hyphenated_critical_suffix_as_invalid_name unsupported-hyphenated-critical-suffix.ores --diagnostic "expected '('")
     oreslang_contract_test(reject_hyphenated_nb_select unsupported-hyphenated-nb-select.ores --diagnostic "native async/channel/select boundary unsupported")
     oreslang_contract_test(reject_hyphenated_transform_pipe unsupported-hyphenated-transform-pipe.ores --diagnostic "native transform-pipe actor requires")
     oreslang_contract_test(hyphenated_transform_minus_pipe hyphenated-transform-minus-pipe.ores)
@@ -8415,4 +8431,16 @@ if(BUILD_TESTING)
     add_test(NAME native_fixed_buffer_registry_mailbox_host_only
         COMMAND oreslang-native-fixed-buffer-registry-mailbox-test)
     set_tests_properties(native_fixed_buffer_registry_mailbox_host_only PROPERTIES TIMEOUT 30)
+endif()
+
+
+# Source preflight only. This is not guest compilation or native AOT proof.
+if(BUILD_TESTING)
+    add_executable(oreslang-source-bidi-admission-test tests/source_bidi_admission_test.cpp)
+    target_include_directories(oreslang-source-bidi-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-source-bidi-admission-test PRIVATE cxx_std_17)
+    add_test(NAME llvm_source_bidi_admission_host
+        COMMAND oreslang-source-bidi-admission-test)
+    set_tests_properties(llvm_source_bidi_admission_host PROPERTIES TIMEOUT 20)
 endif()
