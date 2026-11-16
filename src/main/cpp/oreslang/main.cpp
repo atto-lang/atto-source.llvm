@@ -549,7 +549,7 @@ int main(int argc, char** argv) {
                     "sid_77777777777777777777777777777777"}
             };
             const auto ir = oreslang::emit_verified_llvm_ir(
-                program, false, false, false, "", routines, sites);
+                program, false, false, false, "", false, routines, sites);
             if (ir.find("ores_native_telemetry_span_begin") == std::string::npos ||
                 ir.find("ores_native_telemetry_log_info") == std::string::npos ||
                 ir.find("atto.source.site_id.v1") == std::string::npos ||
@@ -561,7 +561,7 @@ int main(int argc, char** argv) {
             auto rejected = [&](const std::vector<oreslang::CheckedLogSiteV1>& proposed) {
                 try {
                     (void)oreslang::emit_verified_llvm_ir(
-                        program, false, false, false, "", routines, proposed);
+                        program, false, false, false, "", false, routines, proposed);
                     return false;
                 } catch (const std::runtime_error&) { return true; }
             };
@@ -592,7 +592,7 @@ int main(int argc, char** argv) {
                     "pub fnc main(int log): int {"
                     " log.info(\"hammer.started\"); return 42; }");
                 (void)oreslang::emit_verified_llvm_ir(
-                    shadow, false, false, false, "",
+                    shadow, false, false, false, "", false,
                     {{"main", 1, "rid_d5f8e146ba97430dac6bf17430477e2a"}},
                     {{"main", 1, "hammer.started",
                       "rid_d5f8e146ba97430dac6bf17430477e2a",
@@ -608,7 +608,7 @@ int main(int argc, char** argv) {
                     "pub fnc foreign(): int { return 42; }");
                 foreign.functions.front().name = "__ores_module_1.foreign";
                 (void)oreslang::emit_verified_llvm_ir(
-                    foreign, false, false, false, "",
+                    foreign, false, false, false, "", false,
                     {{"__ores_module_1.foreign", 0,
                       "rid_d5f8e146ba97430dac6bf17430477e2a"}}, {});
                 std::cerr << "imported function accepted root source identity\n";
@@ -625,7 +625,7 @@ int main(int argc, char** argv) {
                 mutate(candidate.functions.front());
                 try {
                     (void)oreslang::emit_verified_llvm_ir(
-                        candidate, false, false, false, "",
+                        candidate, false, false, false, "", false,
                         {{"main", 1, "rid_d5f8e146ba97430dac6bf17430477e2a"}}, {});
                     return false;
                 } catch (const std::runtime_error& error) {
@@ -670,7 +670,7 @@ int main(int argc, char** argv) {
                 {"main", 0, "rid_d5f8e146ba97430dac6bf17430477e2a"}
             };
             auto emitted = oreslang::emit_verified_llvm_ir(
-                program, false, false, false, "", ok);
+                program, false, false, false, "", false, ok);
             if (emitted.find("atto.source.routine_id.v1") == std::string::npos ||
                 emitted.find("rid_d5f8e146ba97430dac6bf17430477e2a") ==
                     std::string::npos) {
@@ -680,7 +680,7 @@ int main(int argc, char** argv) {
             auto rejects = [&](std::vector<oreslang::CheckedSourceRoutineV1> ids) {
                 try {
                     (void)oreslang::emit_verified_llvm_ir(
-                        program, false, false, false, "", ids);
+                        program, false, false, false, "", false, ids);
                     return false;
                 } catch (const std::runtime_error&) {
                     return true;
