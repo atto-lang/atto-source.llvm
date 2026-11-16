@@ -58,7 +58,33 @@ static void* try_worker(void* arg) {
     return NULL;
 }
 
+/* Distinct actor-owned mailboxes must permit physically simultaneous turns.
+ * This does not authorize concurrent entries on any one mailbox. */
+typedef struct {
+    OresNativeActorMailbox* lane;
+    atomic_int* entered;
+    atomic_int* active;
+    atomic_int* peak;
+    atomic_int* release;
+} IndependentArgs;
+static void* independent_worker(void* raw) {
+    IndependentArgs* a = (IndependentArgs*)raw;
+    if (!ores_native_actor_mailbox_enter(a->lane)) return (void*)(uintptr_t)1;
+    int now = atomic_fetch_add(a->active, 1) + 1;
+    int previous = atomic_load(a->peak);
+    while (now > previous &&
+           !atomic_compare_exchange_weak(a->peak, &previous, now)) { }
+    atomic_fetch_add(a->entered, 1);
+    while (!atomic_load(a->release)) nap();
+    atomic_fetch_sub(a->active, 1);
+    ores_native_actor_mailbox_leave(a->lane);
+    return NULL;
+}
+
 int main(void) {
+    /* Invalid capacities must not allocate an actor mailbox. */
+    check(ores_native_actor_mailbox_open(0) == NULL);
+    check(ores_native_actor_mailbox_open(65537) == NULL);
     OresNativeActorMailbox* lane=ores_native_actor_mailbox_open(THREADS+1);
     check(lane != NULL);
     atomic_int active=0, max_active=0, finished=0, order_index=0;
@@ -142,6 +168,127 @@ int main(void) {
     check(ores_native_actor_mailbox_try_enter(probe)==0);
     check(ores_native_actor_mailbox_try_destroy(probe)==1);
 
-    puts("NATIVE_ACTOR_FIFO_MAILBOX_PASS fifo=12 max_active=1 capacity=1 retire_wake=1 try_admission=1");
+    OresNativeActorMailbox* isolated_a = ores_native_actor_mailbox_open(1);
+    OresNativeActorMailbox* isolated_b = ores_native_actor_mailbox_open(1);
+    check(isolated_a != NULL && isolated_b != NULL);
+    atomic_int distinct_entered = 0, distinct_active = 0, distinct_peak = 0;
+    atomic_int distinct_release = 0;
+    IndependentArgs independent[2] = {
+        {isolated_a, &distinct_entered, &distinct_active, &distinct_peak, &distinct_release},
+        {isolated_b, &distinct_entered, &distinct_active, &distinct_peak, &distinct_release}
+    };
+    pthread_t carriers[2];
+    for (int i = 0; i < 2; i++)
+        check(pthread_create(&carriers[i], NULL, independent_worker, &independent[i]) == 0);
+    int observed_two_live = 0;
+    for (int i = 0; i < 5000; i++) {
+        if (atomic_load(&distinct_entered) == 2) {
+            observed_two_live = 1;
+            break;
+        }
+        nap();
+    }
+    /* Release both carriers on timeout so the test never strands its threads. */
+    atomic_store(&distinct_release, 1);
+    for (int i = 0; i < 2; i++) {
+        void* status = NULL;
+        check(pthread_join(carriers[i], &status) == 0);
+        check(status == NULL);
+    }
+    check(observed_two_live);
+    check(atomic_load(&distinct_peak) == 2);
+    check(atomic_load(&distinct_active) == 0);
+    check(ores_native_actor_mailbox_pending(isolated_a) == 0);
+    check(ores_native_actor_mailbox_pending(isolated_b) == 0);
+    ores_native_actor_mailbox_retire(isolated_a);
+    ores_native_actor_mailbox_retire(isolated_b);
+    check(ores_native_actor_mailbox_try_destroy(isolated_a) == 1);
+    check(ores_native_actor_mailbox_try_destroy(isolated_b) == 1);
+
+    /* Retirement must unblock *all* pre-admitted waiters without allowing
+     * any queued handler to start after the retired marker is set. Test the
+     * maximum small FIFO backlog, not just a single blocked waiter. */
+    OresNativeActorMailbox* retiring_many =
+        ores_native_actor_mailbox_open(THREADS + 1);
+    check(retiring_many != NULL);
+    check(ores_native_actor_mailbox_enter(retiring_many) == 1);
+    atomic_int abandoned_active = 0, abandoned_max = 0, abandoned_finished = 0;
+    ThreadArgs abandoned[THREADS];
+    pthread_t abandoned_threads[THREADS];
+    for (int i = 0; i < THREADS; i++) {
+        abandoned[i] = (ThreadArgs){retiring_many, &abandoned_active,
+            &abandoned_max, &abandoned_finished, &order_index, NULL, i};
+        check(pthread_create(&abandoned_threads[i], NULL, worker,
+                &abandoned[i]) == 0);
+        wait_for_pending(retiring_many, (size_t)i + 2);
+    }
+    check(ores_native_actor_mailbox_pending(retiring_many) == THREADS + 1);
+    /* Already admitted waiters wake on retirement, return denial, and must
+     * never run guest work or decrement the active owner's pending credit. */
+    ores_native_actor_mailbox_retire(retiring_many);
+    ores_native_actor_mailbox_retire(retiring_many); /* idempotent */
+    check(ores_native_actor_mailbox_try_enter(retiring_many) == 0);
+    check(ores_native_actor_mailbox_try_destroy(retiring_many) == 0);
+    for (int i = 0; i < THREADS; i++)
+        check(pthread_join(abandoned_threads[i], NULL) == 0);
+    check(atomic_load(&abandoned_finished) == 0);
+    check(atomic_load(&abandoned_active) == 0);
+    check(atomic_load(&abandoned_max) == 0);
+    check(ores_native_actor_mailbox_pending(retiring_many) == 1);
+    ores_native_actor_mailbox_leave(retiring_many);
+    check(ores_native_actor_mailbox_pending(retiring_many) == 0);
+    check(ores_native_actor_mailbox_try_destroy(retiring_many) == 1);
+
+
+    /* Graceful shutdown: queued tickets finish, late tickets do not enter. */
+    OresNativeActorMailbox* draining=ores_native_actor_mailbox_open(3);
+    check(draining != NULL);
+    check(ores_native_actor_mailbox_enter(draining)==1);
+    int delivered_before=atomic_load(&finished);
+    ThreadArgs admitted={draining,&active,&max_active,&finished,&order_index,NULL,0};
+    pthread_t admitted_thread;
+    check(pthread_create(&admitted_thread,NULL,worker,&admitted)==0);
+    wait_for_pending(draining,2);
+    check(ores_native_actor_mailbox_begin_drain(draining)==1);
+    check(ores_native_actor_mailbox_begin_drain(draining)==0);
+    check(ores_native_actor_mailbox_try_destroy(draining)==0);
+    atomic_int late_entered=1;
+    TryArgs late={draining,&late_entered};
+    pthread_t late_thread;
+    check(pthread_create(&late_thread,NULL,try_worker,&late)==0);
+    check(pthread_join(late_thread,NULL)==0);
+    check(atomic_load(&late_entered)==0);
+    check(ores_native_actor_mailbox_rejected(draining)==1);
+    ores_native_actor_mailbox_leave(draining);
+    check(pthread_join(admitted_thread,NULL)==0);
+    check(atomic_load(&finished)==delivered_before+1);
+    check(ores_native_actor_mailbox_pending(draining)==0);
+    check(ores_native_actor_mailbox_try_enter(draining)==0);
+    check(ores_native_actor_mailbox_try_destroy(draining)==1);
+
+    /* An idle mailbox completes drain synchronously and cannot be revived. */
+    OresNativeActorMailbox* idle=ores_native_actor_mailbox_open(1);
+    check(idle != NULL);
+    check(ores_native_actor_mailbox_begin_drain(idle)==1);
+    check(ores_native_actor_mailbox_enter(idle)==0);
+    check(ores_native_actor_mailbox_try_destroy(idle)==1);
+
+    /* Abort overrides graceful drain, cancelling an already queued ticket. */
+    OresNativeActorMailbox* aborted=ores_native_actor_mailbox_open(2);
+    check(aborted != NULL);
+    check(ores_native_actor_mailbox_enter(aborted)==1);
+    int before_abort=atomic_load(&finished);
+    ThreadArgs cancelled={aborted,&active,&max_active,&finished,&order_index,NULL,0};
+    pthread_t cancelled_thread;
+    check(pthread_create(&cancelled_thread,NULL,worker,&cancelled)==0);
+    wait_for_pending(aborted,2);
+    check(ores_native_actor_mailbox_begin_drain(aborted)==1);
+    ores_native_actor_mailbox_retire(aborted);
+    ores_native_actor_mailbox_leave(aborted);
+    check(pthread_join(cancelled_thread,NULL)==0);
+    check(atomic_load(&finished)==before_abort);
+    check(ores_native_actor_mailbox_try_destroy(aborted)==1);
+
+    puts("NATIVE_ACTOR_FIFO_MAILBOX_PASS fifo=12 max_active=1 distinct_mailbox_overlap=2 retire_waiters=12 capacity=1 retire_wake=1 try_admission=1 graceful_drain=1 abort_precedence=1");
     return 0;
 }

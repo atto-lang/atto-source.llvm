@@ -80,7 +80,81 @@ void verify(const Vector& vec) {
     rejected<std::out_of_range>([&]{(void)p.lower_cell_address(0,3);});
 }
 }
+void check_unicode_names() {
+    std::string emoji;
+    for (int i=0; i<256; ++i) emoji += "\xF0\x9F\x92\xBE";
+    for (const auto& name : {std::string(" "), std::string("β"),
+                             std::string("é"), std::string("e\xCC\x81"),
+                             std::string(1024, 'a'), emoji}) {
+        TypedPhysicalPlan p(LayoutKind::soa, 1, {{name,4,4}});
+        require(p.lower_cell_address(0,0).absolute_offset == 0,
+                "canonical Unicode scalar field name rejected");
+    }
+    TypedPhysicalPlan distinct(LayoutKind::aos, 1,
+        {{"\xC3\xA9",2,2},{"e\xCC\x81",4,4}});
+    require(distinct.lower_cell_address(0,0).absolute_offset !=
+            distinct.lower_cell_address(0,1).absolute_offset,
+            "canonical-equivalent Unicode names were silently normalized");
+    std::string oversize;
+    for (int i=0; i<257; ++i) oversize += "\xF0\x9F\x92\xBE";
+    std::vector<std::string> invalid = {
+        "", std::string(1, '\0'), std::string(1025,'a'),
+        oversize, "\xC0\xAF", "\xED\xA0\x80",
+        "\xF4\x90\x80\x80", "\xF0\x9F", "\x80",
+        "\xE0\x80\xAF", "\xF8\x88\x80\x80\x80"
+    };
+    for (const auto& name : invalid) {
+        rejected<std::invalid_argument>([&] {
+            (void)TypedPhysicalPlan(LayoutKind::aos,1,{{name,4,4}});
+        });
+    }
+    rejected<std::invalid_argument>([] {
+        (void)TypedPhysicalPlan(LayoutKind::aos,1,
+            {{"\xF0\x9F\x92\xBE",4,4},{"\xF0\x9F\x92\xBE",4,4}});
+    });
+}
+
+void check_tail_alignment_geometry() {
+    const std::vector<TypedField> specs = {
+        {"u8",1,1},{"u16",2,4},{"u32",4,8},{"u64",8,16}};
+    const std::array<LayoutKind,4> kinds = {
+        LayoutKind::aos,LayoutKind::soa,LayoutKind::aosoa,LayoutKind::soaos};
+    for (const auto rows : std::array<std::uint64_t,13>{
+            0,1,2,3,4,5,7,8,9,17,31,32,33}) {
+        for (const auto kind : kinds) {
+            const auto lanes = kind == LayoutKind::aosoa ? 4U : 1U;
+            const std::vector<std::vector<std::uint32_t>> groups =
+                kind == LayoutKind::soaos
+                    ? std::vector<std::vector<std::uint32_t>>{{0,2},{3,1}}
+                    : std::vector<std::vector<std::uint32_t>>{};
+            TypedPhysicalPlan p(kind,rows,specs,lanes,groups,100000);
+            std::unordered_set<std::uint64_t> used;
+            for (std::uint64_t row=0;row<rows;++row) {
+                for (std::uint32_t field=0;field<specs.size();++field) {
+                    const auto a=p.lower_cell_address(row,field);
+                    const auto width=specs[field].bytes;
+                    require(a.absolute_offset % specs[field].alignment == 0,
+                            "typed physical scalar is misaligned");
+                    require(a.relative_offset <= p.segments().at(a.segment).bytes &&
+                            width <= p.segments().at(a.segment).bytes - a.relative_offset,
+                            "typed physical cell crosses segment");
+                    require(a.absolute_offset <= p.physical_bytes() &&
+                            width <= p.physical_bytes() - a.absolute_offset,
+                            "typed physical cell outside allocation");
+                    for (std::uint32_t i=0;i<width;++i)
+                        require(used.insert(a.absolute_offset+i).second,
+                                "physical cells overlap");
+                }
+            }
+            if (rows==0) require(p.physical_bytes()==0,"zero-row allocation");
+            else require(p.physical_bytes()>=rows*15,"physical bytes lost");
+        }
+    }
+}
+
 int main() {
+    check_unicode_names();
+    check_tail_alignment_geometry();
     for(const auto& vec:vectors) verify(vec);
     rejected<std::invalid_argument>([]{(void)TypedPhysicalPlan(
         LayoutKind::soaos,5,fields(),1,{{0,2}});});
