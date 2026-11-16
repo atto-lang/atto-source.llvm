@@ -9,8 +9,10 @@ for each reviewed expression, **with no OS main wrapper**. Clang compiles
 the actual generated LLVM IR, links it to a reviewed C harness, and the
 native executable prints an exact 64-bit signed return value using
 `PRId64`. Seven distinct source programs must compile and execute.
-The suite also rejects source division and out-of-range integer literal
-programs with zero emitted IR.
+The suite also keeps main's six strict negatives: source division, the
+out-of-range integer literal and four programs using the reserved legacy
+`%` operator must exit 1 with an `oreslang-llvmc:` diagnostic and zero
+emitted IR (the `%` cases must name the reservation).
 
 A passing CTest proves this bounded scalar compiler / native codegen case
 set, not general compiler parity, JVM equivalence, Wasm correctness,

@@ -20,6 +20,9 @@ BYTES_SHA256 = "39bddbe558ad1c336271f91e6403c4555f2f16a7ed33a3355ee897721b6ab02a
 CORPUS = Path(__file__).resolve().parents[1] / "contracts/v1/source-i64/portable-i64.v1.json"
 IDS = ("precedence","grouping","signed-multiplication","subtraction",
        "negative-result","max-minus-one","signed-minimum")
+# Main strict negatives (edeec90ad): unsupported division, out-of-range literal
+# and the reserved legacy '%' operator must fail before any IR is emitted.
+NEGATIVES = ("3/2","9223372036854775808","7%3","-7%-3","(8%3)*2","-9223372036854775808%-1")
 C_DRIVER = r"""#include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -76,8 +79,10 @@ def main():
     parser.add_argument("--report",type=Path)
     args=parser.parse_args()
     for program in (args.compiler,args.clang):
-        require(program.is_file() and not program.is_symlink(),
-                "real non-symlinked compiler and Clang binaries are required")
+        # CMake's find_program(clang-18) is a distro symlink on Ubuntu;
+        # resolve(strict=True) below pins the real binary that is hashed.
+        require(program.is_file(),
+                "real compiler and Clang binaries are required")
     compiler=args.compiler.resolve(strict=True)
     clang=args.clang.resolve(strict=True)
     manifest=cases()
@@ -114,14 +119,18 @@ def main():
                              "source_sha256":hashlib.sha256(program.encode("utf-8")).hexdigest(),
                              "ir_sha256":hashlib.sha256(compiled.stdout).hexdigest(),
                              "linked_sha256":hashlib.sha256(exe.read_bytes()).hexdigest()})
-        for expression in ("3/2","9223372036854775808"):
+        for expression in NEGATIVES:
             source.write_text("pub fnc portable_i64_probe():int{return "+expression+";}\n")
             rejected=invoke([str(compiler),str(source)])
-            require(rejected.returncode!=0 and rejected.stdout==b"" and rejected.stderr!=b"",
-                    "unsupported or out-of-range native source admitted: "+expression)
+            require(rejected.returncode==1 and rejected.stdout==b"" and
+                    rejected.stderr.startswith(b"oreslang-llvmc: "),
+                    "unexpected LLVM negative outcome (crash/noisy IR/no diagnostic): "+expression)
+            if "%" in expression:
+                require(b"'%' is reserved" in rejected.stderr,
+                        "legacy percent rejection used unrelated compiler error: "+expression)
     receipt={"kind":"llvm-source-i64-full-width-native-compiled-execution",
              "source_corpus_git_blob":BLOB,"total_cases":len(manifest),
-             "executed_cases":len(observed),"negative_cases":2,"skipped":0,
+             "executed_cases":len(observed),"negative_cases":len(NEGATIVES),"skipped":0,
              "compiler_sha256":hashlib.sha256(compiler.read_bytes()).hexdigest(),
              "clang_sha256":hashlib.sha256(clang.read_bytes()).hexdigest(),
              "observed":observed}

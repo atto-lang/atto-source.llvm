@@ -1,0 +1,156 @@
+name: Native source actor ownership and drop exact-head
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.*'
+      - 'src/main/cpp/oreslang/runtime/SourceActorBootstrap.c'
+      - 'tests/source_actor_e2e.py'
+      - 'tests/test_source_actor_receipts.py'
+      - 'tests/fixtures/source-actor-*.ores'
+      - '.github/workflows/source-actor-owned-drop.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-source-actor-owned-drop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout immutable exact PR head (not generated merge commit)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Assert exact checked-out Git head
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --verify HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          test -n "$(git rev-parse 'HEAD^{tree}')"
+
+      - name: Reject forged native receipt prefixes and duplicate fields
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I tests/test_source_actor_receipts.py
+
+      - name: Install LLVM C++ compiler and native linker
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang llvm-dev python3
+
+      - name: Compile actual LLVM source compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --target oreslang-llvmc --parallel 2
+
+      - name: Execute native source actor positive and no-IR negative cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I tests/source_actor_e2e.py \
+            --compiler ./build/oreslang-llvmc \
+            --clang clang --root . | tee "$RUNNER_TEMP/source-actor-owned-drop-release.log"
+          grep -F 'PASS native source actor: source-actor-scoped-owned-i64.ores actors 1' \
+            "$RUNNER_TEMP/source-actor-owned-drop-release.log"
+          grep -F 'PASS native source actor: source-actor-two-owned-heaps.ores actors 2' \
+            "$RUNNER_TEMP/source-actor-owned-drop-release.log"
+          grep -F 'PASS current-source actor lowering and physical heap reclamation' \
+            "$RUNNER_TEMP/source-actor-owned-drop-release.log"
+
+      - name: Execute native source actor tests under ASan and UBSan
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1
+        run: |
+          set -euo pipefail
+          python3 -I tests/source_actor_e2e.py \
+            --compiler ./build/oreslang-llvmc \
+            --clang clang --root . --sanitize |
+            tee "$RUNNER_TEMP/source-actor-owned-drop-sanitized.log"
+          grep -F 'PASS native source actor: source-actor-scoped-owned-i64.ores actors 1' \
+            "$RUNNER_TEMP/source-actor-owned-drop-sanitized.log"
+          grep -F 'PASS native source actor: source-actor-two-owned-heaps.ores actors 2' \
+            "$RUNNER_TEMP/source-actor-owned-drop-sanitized.log"
+          grep -F 'PASS current-source actor lowering and physical heap reclamation' \
+            "$RUNNER_TEMP/source-actor-owned-drop-sanitized.log"
+
+      - name: Produce tested source-head and native-execution receipt
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python3 -I - <<'PY'
+          import json
+          import os
+          import pathlib
+          import subprocess
+
+          def git(*args):
+              return subprocess.check_output(("git", *args), text=True).strip()
+
+          root = pathlib.Path(os.environ["RUNNER_TEMP"])
+          logs = [
+              root / "source-actor-owned-drop-release.log",
+              root / "source-actor-owned-drop-sanitized.log",
+          ]
+          marker = "PASS native source actor: source-actor-scoped-owned-i64.ores actors 1"
+          isolation_marker = "PASS native source actor: source-actor-two-owned-heaps.ores actors 2"
+          final = "PASS current-source actor lowering and physical heap reclamation"
+          for path in logs:
+              output = path.read_text()
+              if (output.count(marker) != 1 or output.count(isolation_marker) != 1
+                      or output.count(final) != 1):
+                  raise SystemExit("source actor native execution marker missing or duplicated")
+          sha = git("rev-parse", "HEAD")
+          if sha != os.environ["EXPECTED_HEAD"]:
+              raise SystemExit("tested commit head changed")
+          files = [
+              "src/main/cpp/oreslang/frontend/Parser.cpp",
+              "src/main/cpp/oreslang/backend/LlvmCodegen.cpp",
+              "src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c",
+              "src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h",
+              "tests/source_actor_e2e.py",
+              "tests/fixtures/source-actor-scoped-owned-i64.ores",
+              "tests/fixtures/source-actor-two-owned-heaps.ores",
+          ]
+          receipt = {
+              "schema": "oreslang.native_source_actor_owned_drop_v1",
+              "head_sha": sha,
+              "tree_sha": git("rev-parse", "HEAD^{tree}"),
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+              "source_blobs": {p: git("hash-object", p) for p in files},
+              "release_native_execution_verified": True,
+              "asan_ubsan_native_execution_verified": True,
+              "two_actor_owned_heaps_native_execution_verified": True,
+              "ffi_await_unwind_ownership_verified": False,
+              "java_net_backend_verified": False,
+              "zero_gc_full_backend_verified": False,
+          }
+          (root / "source-actor-owned-drop-receipt.json").write_text(
+              json.dumps(receipt, sort_keys=True, indent=2) + "\n")
+          PY
+
+      - name: Upload exact-head native source ownership receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: source-actor-owned-drop-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/source-actor-owned-drop-receipt.json
+          if-no-files-found: error
+          retention-days: 7
