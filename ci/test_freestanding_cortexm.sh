@@ -62,9 +62,24 @@ run_guest() {
     echo "FAIL: guest IR has forbidden hosted service" >&2; exit 1
   fi
   "$CLANG" "${arch[@]}" "${no_runtime[@]}" -O1 -x ir -c "$ir" -o "$guest"
+  # LLVM 18 emits an R_ARM_NONE reference to a personality routine in
+  # discarded .ARM.exidx metadata even with -fno-unwind-tables. Remove only
+  # exception tables from relocatable objects, then strip unneeded undefined
+  # symbols. This must never remove a *live* code relocation or define a fake
+  # unwinder; the linked ELF and guest object are audited below.
+  local guest_core="$work/$name.core.o" boot_core="$work/boot.core.o"
+  llvm-objcopy-18 --remove-section=.ARM.exidx --remove-section=.ARM.extab \
+      --strip-unneeded "$guest" "$guest_core"
+  llvm-objcopy-18 --remove-section=.ARM.exidx --remove-section=.ARM.extab \
+      --strip-unneeded "$work/boot.o" "$boot_core"
+  readelf -W -s "$guest_core" | awk '
+    $7 == "UND" && NF >= 8 && $8 != "" {
+      print "GUEST_OBJECT_UNDEFINED: " $8 > "/dev/stderr"; bad=1
+    }
+    END { exit bad ? 1 : 0 }'
   "$CLANG" "${arch[@]}" -nostdlib -fuse-ld=lld \
-      -Wl,-T,tests/freestanding/cortexm_flash.ld -Wl,--no-undefined \
-      -Wl,-Map,"$work/$name.map" "$work/boot.o" "$guest" -o "$elf"
+      -Wl,-T,tests/freestanding/cortexm_flash.ld -Wl,--no-undefined -Wl,--gc-sections \
+      -Wl,-Map,"$work/$name.map" "$boot_core" "$guest_core" -o "$elf"
   verify_elf "$elf" "$name"
   set +e
   timeout 25s qemu-system-arm -M lm3s6965evb -nographic \
