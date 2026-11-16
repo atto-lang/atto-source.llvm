@@ -55,6 +55,36 @@ NODE
   done
 done
 
+# AoS control is a real ordinary source class with two interleaved i64
+# fields. Its scalar result must agree with the SoA swap/reuse fixture.
+# This does not claim structural dense-row/erase semantics for AoS classes.
+"$compiler" --target=wasm32 "$fixtures/aos-two-field-control.atto" \
+  > "$tmp/aos.ll" 2> "$tmp/aos.err"
+test -s "$tmp/aos.ll"
+grep -Fq 'target triple = "wasm32-unknown-unknown"' "$tmp/aos.ll"
+grep -Fq 'define i64 @main()' "$tmp/aos.ll"
+if grep -Eqi 'GC_malloc|GC_collect|Boehm|GC_init' "$tmp/aos.ll"; then
+  echo 'AoS scalar control references tracing GC' >&2; exit 1
+fi
+for opt in 0 2; do
+  "$clang" --target=wasm32 -x ir -O"$opt" -nostdlib \
+    -Wl,--no-entry -Wl,--export=main -Wl,--export-memory \
+    -Wl,--initial-memory=131072 -Wl,--max-memory=131072 \
+    -o "$tmp/aos-$opt.wasm" "$tmp/aos.ll"
+  node --input-type=module - "$tmp/aos-$opt.wasm" <<'NODE'
+import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
+const bytes=readFileSync(process.argv[2]);
+assert.ok(WebAssembly.validate(bytes));
+const module=new WebAssembly.Module(bytes);
+assert.deepEqual(WebAssembly.Module.imports(module),[]);
+assert.deepEqual(WebAssembly.Module.exports(module).map(x=>x.name+":"+x.kind).sort(),
+  ["main:function","memory:memory"]);
+assert.equal(new WebAssembly.Instance(module).exports.main(),42n);
+NODE
+  echo "ATTO_AOS_SCALAR_CONTROL_WASM32_O$opt_EXECUTED"
+done
+
 # Source-level negative cases must be compiler-owned rejections, with no IR.
 cat >"$tmp/unsupported-class.atto" <<'ATTO'
 define inverted class Row as
