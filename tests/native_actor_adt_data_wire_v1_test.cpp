@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -38,6 +39,17 @@ int main() {
     exact(Wire::SomeOk{INT64_MIN}, "415441440101010000000000000080");
     exact(Wire::SomeErr{""}, "415441440101020000");
     exact(Wire::SomeErr{u8"é"}, "415441440101020200c3a9");
+    std::mt19937_64 rng(20261116);
+    for (int i = 0; i < 256; ++i) {
+        const Wire::Value value = Wire::SomeOk{static_cast<std::int64_t>(rng())};
+        if (!(Wire::decode(Wire::encode(value)) == value))
+            throw std::logic_error("random signed i64 payload drift");
+    }
+    for (int i = 0; i <= 256; i += 2) {
+        const Wire::Value value = Wire::SomeErr{std::string(i, 'x')};
+        if (!(Wire::decode(Wire::encode(value)) == value))
+            throw std::logic_error("bounded Err length drift");
+    }
     const auto good = hex("415441440101020200c3a9");
     for (std::size_t i=0; i<good.size(); ++i)
         rejects(Bytes(good.begin(), good.begin()+static_cast<std::ptrdiff_t>(i)));
