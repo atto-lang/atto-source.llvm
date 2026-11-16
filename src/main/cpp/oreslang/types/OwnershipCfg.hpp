@@ -8,6 +8,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -134,6 +135,15 @@ inline void validate_disjoint_place_layout(const State& state) {
             // that marker only on the root segment; '$' never appears in a
             // user identifier or a field projection ("p.$a" stays rejected).
             if (at == 0 && key[at] == '$' && key.size() > 1) ++at;
+            // The ownership checker tracks a fieldless nominal object through
+            // one unspellable proof slot, '<owner>.$identity'. Admit exactly
+            // that compiler-owned leaf; any other '$' projection, or a path
+            // continuing below it, stays rejected.
+            constexpr std::string_view kIdentityLeaf = "$identity";
+            if (at > 0 && key.compare(at, std::string::npos, kIdentityLeaf) == 0) {
+                at = key.size();
+                continue;
+            }
             if (!valid_start(static_cast<unsigned char>(key[at])))
                 violation(key, "unproven CFG place projection syntax");
             ++at;

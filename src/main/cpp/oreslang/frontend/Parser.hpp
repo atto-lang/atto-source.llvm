@@ -463,11 +463,22 @@ struct CooperativeScalarLoop {
     std::size_t offset = 0;
 };
 
+// Generator-v1 delegation is restricted to named, zero-argument, side-effect-
+// free literal generators in the same translation unit. The parser resolves
+// these ordered steps into bounded scalar yields before LLVM emission; general
+// iterator ownership and cleanup have NOT been lowered.
+struct ScalarGeneratorStep {
+    bool delegate = false;
+    std::string target;
+    std::int64_t value = 0;
+};
+
 // Native generator v1 deliberately starts with a value-only, zero-capture
 // Iterator<int> activation. Each activation is represented by a caller-owned,
 // pinned frame in LLVM IR; no native stack or tracing-GC object survives a pull.
 struct ScalarGenerator {
     std::string name;
+    std::vector<ScalarGeneratorStep> steps;
     std::vector<std::int64_t> yields;
     std::size_t offset = 0;
     bool exported = false;

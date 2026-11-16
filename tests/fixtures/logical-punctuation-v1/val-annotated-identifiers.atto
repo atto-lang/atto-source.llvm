@@ -1,0 +1,9 @@
+fnc f(bool a, bool b): bool {
+  val and: bool = a && b;
+  val or: bool = a || b;
+  val xor: bool = a^^b; // and or xor: adjacent ^^ and comment words
+  return and || or && xor;
+}
+pub fnc main(): int {
+  return (f(true, false) && !f(false, false) && f(true, true) ^^ f(false, false)) ? 42 : 7;
+}
