@@ -522,7 +522,7 @@ void authority_is_bound_to_host_and_generation() {
     }
     // v2 tenant IDs are ASCII, <=128 bytes; embedded NUL/non-ASCII must not be
     // silently normalized or accepted as alternate host-root identities.
-    for (const std::string& id : {std::string(129, 'x'), std::string("x\\0y", 3),
+    for (const std::string& id : {std::string(129, 'x'), std::string("x\0y", 3),
                                   std::string(1, static_cast<char>(0x80))}) {
         auto bad = spec(id);
         CHECK_STATUS(one.open(bad).status, Status::InvalidArgument);
