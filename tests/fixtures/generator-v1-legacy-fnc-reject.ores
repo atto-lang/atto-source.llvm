@@ -1,0 +1,1 @@
+pub fnc gen* values(): Iterator<int> { yield 1; return; }

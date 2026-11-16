@@ -1,0 +1,38 @@
+// Proposed shared Java/LLVM .atto actor E2E: NOT_EXECUTED.
+define pub actor Counter as
+  state {
+    count: int = 0;
+  }
+  receive(ActorMail<int> mail): void {
+    const next = self.handle_state(critical-write |s| -> {
+      s.count = s.count + mail.value;
+      return s.count;
+    });
+    self.send(next);
+    self.end();
+    return;
+  }
+end
+
+pub async routine main(): void {
+  val left = spawn Counter();
+  val right = spawn Counter();
+  await left.get_ready();
+  await right.get_ready();
+  left.send(3);
+  right.send(39);
+  val a = (await left.outputs.next()).value.unwrap();
+  val b = (await right.outputs.next()).value.unwrap();
+  if a.value != 3 then
+    stdio.stdout.println("ACTOR_E2E_FAIL|left");
+    return;
+  fi
+  if b.value != 39 then
+    stdio.stdout.println("ACTOR_E2E_FAIL|right");
+    return;
+  fi
+  await left.get_done();
+  await right.get_done();
+  stdio.stdout.println("ACTOR_E2E_OK|42");
+  return;
+}

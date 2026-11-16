@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <atomic>
@@ -368,7 +369,14 @@ static void physically_checked_out_receipt_blocks_finalization_after_stop() {
     inbox.bind_target(actor);
     CHECK(inbox.offer_to(actor, Lane::Normal, 81, 8));
     CHECK(actor.outstanding_resource_loans() == 1);
-    auto checked_out = inbox.try_receive();
+    bool raw_denied = false;
+    try { (void)inbox.try_receive(); }
+    catch (const std::logic_error&) { raw_denied = true; }
+    CHECK(raw_denied);
+    std::optional<Inbox::Delivery> checked_out;
+    CHECK(inbox.dispatch_next(group, actor, [&](Inbox::Delivery& receipt) {
+        checked_out.emplace(std::move(receipt));
+    }) == Inbox::Dispatch::User);
     CHECK(checked_out && checked_out->sequence() == 1);
     CHECK(inbox.used_frames(Lane::Normal) == 1);
     CHECK(!group.finalized(actor)); // handler exited, receipt has not
@@ -444,41 +452,46 @@ static void terminal_retirement_waits_for_inflight_owner_to_ack() {
 static void stale_generation_cannot_reuse_a_live_native_actor_inbox() {
     NativeActorGroup old_group(750, 1), newer_group(750, 1);
     auto old_actor = old_group.adopt(750, 9, 1, [] {});
-    CHECK(old_group.mark_ready(old_actor));
-    // The owner registry forbids overlapping live generations. Prove that
-    // fence before recycling the routing identity after physical DONE.
-    bool duplicate_owner = false;
+    // A newer generation cannot overlap a live incarnation's exclusive owner.
+    bool duplicate_owner_rejected = false;
     try { (void)newer_group.adopt(750, 9, 2, [] {}); }
-    catch (const std::logic_error&) { duplicate_owner = true; }
-    CHECK(duplicate_owner);
-    CHECK(old_group.finalized(old_actor));
+    catch (const std::logic_error&) { duplicate_owner_rejected = true; }
+    CHECK(duplicate_owner_rejected);
+    CHECK(old_group.mark_ready(old_actor));
+    Inbox inbox({2, 16}, {2, 16}, {2, 16});
+    inbox.bind_target(old_actor);
+    CHECK(inbox.offer_to(old_actor, Lane::Normal, 5, 8));
+    // Physical finalization cannot outrun queued resource ownership.
+    CHECK(!old_group.finalized(old_actor));
+    const auto finalizer = old_group.runtime_finalizer(old_actor);
+    old_group.close();
+    CHECK(inbox.retire_queued_after_quiescence(finalizer, old_actor) == 1);
+    CHECK(finalizer.finalized());
     old_actor.get_done().get();
     auto new_actor = newer_group.adopt(750, 9, 2, [] {});
     CHECK(newer_group.mark_ready(new_actor));
-    Inbox inbox({2, 16}, {2, 16}, {2, 16});
-    inbox.bind_target(new_actor);
-    CHECK(inbox.offer_to(new_actor, Lane::Normal, 5, 8));
     int rejected_payload = 17;
     bool rejected = false;
     try {
-        (void)inbox.offer_to(old_actor, Lane::Urgent,
+        (void)inbox.offer_to(new_actor, Lane::Urgent,
                              std::move(rejected_payload), 8);
     } catch (const std::logic_error&) { rejected = true; }
     CHECK(rejected && rejected_payload == 17);
-    CHECK(inbox.dispatch_next(old_group, old_actor, [&](Inbox::Delivery&) {
-        CHECK(false && "stale generation stole new queued message");
+    CHECK(inbox.dispatch_next(newer_group, new_actor, [&](Inbox::Delivery&) {
+        CHECK(false && "new generation stole old queued message");
     }) == Inbox::Dispatch::Retired);
-    CHECK(inbox.snapshot() == 1 && inbox.used_frames(Lane::Normal) == 1);
+    CHECK(inbox.snapshot() == 1 && inbox.used_frames(Lane::Normal) == 0);
     rejected = false;
-    try { inbox.bind_target(old_actor); }
+    try { inbox.bind_target(new_actor); }
     catch (const std::logic_error&) { rejected = true; }
     CHECK(rejected);
-    CHECK(inbox.dispatch_next(newer_group, new_actor, [&](Inbox::Delivery& message) {
-        CHECK(message.value() == 5 && message.sequence() == 1);
-        CHECK(message.acknowledge_released());
-    }) == Inbox::Dispatch::User);
-    CHECK(inbox.completed_through(1));
+    CHECK(inbox.dispatch_next(old_group, old_actor, [&](Inbox::Delivery&) {
+        CHECK(false && "finalized actor executed a queued user callback");
+    }) == Inbox::Dispatch::Retired);
+    CHECK(inbox.retire_queued_after_quiescence(finalizer, old_actor) == 0);
+    CHECK(inbox.drain_status(1) == Inbox::DrainStatus::Aborted);
     CHECK(newer_group.finalized(new_actor));
+    old_actor.get_done().get();
     new_actor.get_done().get();
     inbox.close();
 }
@@ -648,10 +661,14 @@ static void generation_loans_refund_denied_and_throwing_admissions() {
                           std::move(rejected), 8));
     CHECK(rejected.payload == 66);
     CHECK(actor.outstanding_resource_loans() == 1);
-    auto transferred = inbox.try_receive();
-    CHECK(transferred && transferred->value().payload == 55);
-    CHECK(transferred->acknowledge_released());
-    CHECK(!transferred->acknowledge_released());
+    bool received = false;
+    CHECK(inbox.dispatch_next(group, actor, [&](TypedInbox::Delivery& transferred) {
+        CHECK(transferred.value().payload == 55);
+        CHECK(transferred.acknowledge_released());
+        CHECK(!transferred.acknowledge_released());
+        received = true;
+    }) == TypedInbox::Dispatch::User);
+    CHECK(received);
     CHECK(actor.outstanding_resource_loans() == 0);
     CHECK(group.finalized(actor));
     actor.get_done().get();
@@ -746,8 +763,9 @@ static void actor_binding_rejects_unpublished_preparation_and_unguarded_send() {
     CHECK(bound.offer_owned_to(actor, PrepLane::Bulk, owner, 8));
     CHECK(!owner);
     for (int i = 0; i != 2; ++i) {
-        auto item = bound.try_receive();
-        CHECK(item && item->acknowledge_released());
+        CHECK(bound.dispatch_next(group, actor, [&](PrepInbox::Delivery& item) {
+            CHECK(item.acknowledge_released());
+        }) == PrepInbox::Dispatch::User);
     }
     CHECK(bound.completed_through(2));
     bound.close();
@@ -830,31 +848,220 @@ static void owned_handle_admission_never_steals_on_rejection_or_constructor_faul
     FailOnceMove::fail_move = false;
     inbox.close();
 
-    // Generation-fenced unique-ownership path must reject a restarted actor
-    // without touching the sender's still-owned object.
+    // Drain the old incarnation before replacement admission. A restarted
+    // actor must not steal the sender's object through the old inbox ticket.
     NativeActorGroup original(751, 1), replacement(751, 1);
     auto original_ref = original.adopt(751, 11, 1, [] {});
     CHECK(original.mark_ready(original_ref));
+    Inbox target({1, 8}, {1, 8}, {1, 8});
+    target.bind_target(original_ref);
+    auto owned = std::make_unique<int>(7);
+    CHECK(target.offer_owned_to(original_ref, Lane::Urgent, owned, 8));
+    CHECK(!owned);
+    CHECK(target.dispatch_next(original, original_ref, [&](Inbox::Delivery& accepted) {
+        CHECK(accepted.value() == 7 && accepted.acknowledge_released());
+    }) == Inbox::Dispatch::User);
+    CHECK(target.completed_through(1));
     CHECK(original.finalized(original_ref));
     original_ref.get_done().get();
     auto replacement_ref = replacement.adopt(751, 11, 2, [] {});
     CHECK(replacement.mark_ready(replacement_ref));
-    Inbox target({1, 8}, {1, 8}, {1, 8});
-    target.bind_target(replacement_ref);
-    auto owned = std::make_unique<int>(7);
+    owned = std::make_unique<int>(17);
     bool invalid = false;
-    try { (void)target.offer_owned_to(original_ref, Lane::Urgent, owned, 8); }
+    try { (void)target.offer_owned_to(replacement_ref, Lane::Urgent, owned, 8); }
     catch (const std::logic_error&) { invalid = true; }
-    CHECK(invalid && owned && *owned == 7);
-    CHECK(target.snapshot() == 0);
-    CHECK(target.offer_owned_to(replacement_ref, Lane::Urgent, owned, 8));
-    CHECK(!owned);
-    auto accepted = target.try_receive();
-    CHECK(accepted && accepted->value() == 7 && accepted->acknowledge_released());
-    CHECK(target.completed_through(1));
+    CHECK(invalid && owned && *owned == 17);
+    CHECK(target.snapshot() == 1);
     CHECK(replacement.finalized(replacement_ref));
     replacement_ref.get_done().get();
     target.close();
+}
+
+static void stop_vs_bound_send_admission_has_one_winner() {
+    using SendInbox = PriorityActorInbox<PausedPublication>;
+    using SendLane = SendInbox::Lane;
+    std::uint32_t send_wins = 0;
+    std::uint32_t stop_wins = 0;
+
+    for (std::uint32_t trial = 0; trial < 2000; ++trial) {
+        const std::uint64_t runtime = 990000 + trial;
+        NativeActorGroup group(runtime, 1);
+        std::atomic<int> stops{0};
+        auto actor = group.adopt(runtime, 1, 1, [&] {
+            stops.fetch_add(1, std::memory_order_acq_rel);
+        });
+        CHECK(group.mark_ready(actor));
+        auto finalizer = group.runtime_finalizer(actor);
+
+        SendInbox inbox({1, 64}, {1, 64}, {1, 64}, 2);
+        inbox.bind_target(actor);
+        std::atomic<int> moved{0};
+        PausedPublication payload([&] {
+            moved.fetch_add(1, std::memory_order_acq_rel);
+        });
+        std::atomic<int> ready{0};
+        bool accepted = false;
+        bool rejected = false;
+
+        std::thread sender([&] {
+            ready.fetch_add(1, std::memory_order_acq_rel);
+            while (ready.load(std::memory_order_acquire) != 2)
+                std::this_thread::yield();
+            try {
+                accepted = inbox.offer_to(
+                    actor, SendLane::Normal, std::move(payload), 8);
+            } catch (const std::logic_error&) {
+                rejected = true;
+            }
+        });
+        std::thread stopper([&] {
+            ready.fetch_add(1, std::memory_order_acq_rel);
+            while (ready.load(std::memory_order_acquire) != 2)
+                std::this_thread::yield();
+            group.stop_workers();
+        });
+        sender.join();
+        stopper.join();
+
+        CHECK(stops.load(std::memory_order_acquire) == 1);
+        CHECK(accepted != rejected);
+        CHECK((accepted && moved.load(std::memory_order_acquire) == 1)
+              || (rejected && moved.load(std::memory_order_acquire) == 0));
+
+        // STOP is sticky: a second bound send is rejected before moving.
+        std::atomic<int> late_moves{0};
+        PausedPublication late([&] {
+            late_moves.fetch_add(1, std::memory_order_acq_rel);
+        });
+        bool late_rejected = false;
+        try {
+            (void)inbox.offer_to(
+                actor, SendLane::Urgent, std::move(late), 8);
+        } catch (const std::logic_error&) {
+            late_rejected = true;
+        }
+        CHECK(late_rejected);
+        CHECK(late_moves.load(std::memory_order_acquire) == 0);
+
+        if (accepted) {
+            ++send_wins;
+            CHECK(inbox.snapshot() == 1);
+            CHECK(actor.outstanding_resource_loans() == 1);
+            CHECK(!group.finalized(actor));
+        } else {
+            ++stop_wins;
+            CHECK(actor.outstanding_resource_loans() == 0);
+            CHECK(inbox.snapshot() == 0);
+        }
+        // STOP is not an authorized USER dispatch. The winner's queued
+        // message must be retired ABORTED after group/turn quiescence,
+        // never stolen by the raw try_receive() API.
+        group.close();
+        CHECK(finalizer.ready_for_actor_turn_quiescence());
+        CHECK(inbox.retire_queued_after_quiescence(finalizer, actor) ==
+              (accepted ? 1u : 0u));
+        if (accepted) {
+            CHECK(inbox.drain_status(1) == SendInbox::DrainStatus::Aborted);
+            CHECK(!inbox.completed_through(1));
+        }
+        CHECK(inbox.used_frames(SendLane::Normal) == 0);
+        CHECK(actor.outstanding_resource_loans() == 0);
+        CHECK(finalizer.ready_for_resource_reclamation());
+        CHECK(finalizer.finalized());
+        actor.get_done().get();
+        inbox.close();
+    }
+
+    CHECK(send_wins + stop_wins == 2000);
+}
+
+static void stop_vs_bound_owned_send_preserves_sender_ownership() {
+    std::uint32_t send_wins = 0;
+    std::uint32_t stop_wins = 0;
+
+    for (std::uint32_t trial = 0; trial < 2000; ++trial) {
+        const std::uint64_t runtime = 993000 + trial;
+        NativeActorGroup group(runtime, 1);
+        std::atomic<int> stops{0};
+        auto actor = group.adopt(runtime, 1, 1, [&] {
+            stops.fetch_add(1, std::memory_order_acq_rel);
+        });
+        CHECK(group.mark_ready(actor));
+        auto finalizer = group.runtime_finalizer(actor);
+
+        Inbox inbox({1, 64}, {1, 64}, {1, 64}, 2);
+        inbox.bind_target(actor);
+        auto owner = std::make_unique<int>(static_cast<int>(trial));
+        std::atomic<int> ready{0};
+        bool accepted = false;
+        bool rejected = false;
+
+        std::thread sender([&] {
+            ready.fetch_add(1, std::memory_order_acq_rel);
+            while (ready.load(std::memory_order_acquire) != 2)
+                std::this_thread::yield();
+            try {
+                accepted = inbox.offer_owned_to(
+                    actor, Lane::Bulk, owner, sizeof(int));
+            } catch (const std::logic_error&) {
+                rejected = true;
+            }
+        });
+        std::thread stopper([&] {
+            ready.fetch_add(1, std::memory_order_acq_rel);
+            while (ready.load(std::memory_order_acquire) != 2)
+                std::this_thread::yield();
+            group.stop_workers();
+        });
+        sender.join();
+        stopper.join();
+
+        CHECK(stops.load(std::memory_order_acquire) == 1);
+        CHECK(accepted != rejected);
+
+        if (accepted) {
+            ++send_wins;
+            CHECK(!owner);
+            CHECK(inbox.snapshot() == 1);
+            CHECK(actor.outstanding_resource_loans() == 1);
+            CHECK(!group.finalized(actor));
+        } else {
+            ++stop_wins;
+            CHECK(owner && *owner == static_cast<int>(trial));
+            CHECK(actor.outstanding_resource_loans() == 0);
+            CHECK(inbox.snapshot() == 0);
+        }
+
+        auto late_owner = std::make_unique<int>(-1);
+        bool late_rejected = false;
+        try {
+            (void)inbox.offer_owned_to(
+                actor, Lane::Urgent, late_owner, sizeof(int));
+        } catch (const std::logic_error&) {
+            late_rejected = true;
+        }
+        CHECK(late_rejected);
+        CHECK(late_owner && *late_owner == -1);
+
+        // Terminal STOP must not process an accepted message as USER:
+        // a finalizer-authorized retirement aborts queued work instead.
+        group.close();
+        CHECK(finalizer.ready_for_actor_turn_quiescence());
+        CHECK(inbox.retire_queued_after_quiescence(finalizer, actor) ==
+              (accepted ? 1u : 0u));
+        if (accepted) {
+            CHECK(inbox.drain_status(1) == Inbox::DrainStatus::Aborted);
+            CHECK(!inbox.completed_through(1));
+        }
+        CHECK(inbox.used_frames(Lane::Bulk) == 0);
+        CHECK(actor.outstanding_resource_loans() == 0);
+        CHECK(finalizer.ready_for_resource_reclamation());
+        CHECK(finalizer.finalized());
+        actor.get_done().get();
+        inbox.close();
+    }
+
+    CHECK(send_wins + stop_wins == 2000);
 }
 
 static void concurrent_publish_has_unique_global_sequences_and_no_credit_leaks() {
@@ -919,5 +1126,7 @@ int main() {
     actor_binding_rejects_unpublished_preparation_and_unguarded_send();
     stop_cannot_leave_a_preparing_message_unaccounted();
     owned_handle_admission_never_steals_on_rejection_or_constructor_fault();
+    stop_vs_bound_send_admission_has_one_winner();
+    stop_vs_bound_owned_send_preserves_sender_ownership();
     concurrent_publish_has_unique_global_sequences_and_no_credit_leaks();
 }

@@ -20,13 +20,39 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Verify exact source revision
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          echo "EXACT_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
       - name: Install LLVM toolchain and native linker
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev python3
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
       - name: Compile
         run: cmake --build build --parallel 2
+      - name: Check Symbol native host regression separately from whole suite
+        run: ctest --test-dir build -R '^native_shared_symbol_image_host_only_v1$' --output-on-failure --timeout 90
+      - name: Symbol immutable image native memory safety (ASan / UBSan)
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O1 -g -pthread -fno-omit-frame-pointer \
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -fsanitize=address,undefined \
+            -I src/main/cpp \
+            tests/native_shared_symbol_literal_image_v1_test.cpp \
+            -o build/native-shared-symbol-image-sanitized
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+          UBSAN_OPTIONS=halt_on_error=1 \
+            ./build/native-shared-symbol-image-sanitized
       - name: Audit full CTest inventory before treating the suite as verified
         run: |
           set -euo pipefail
