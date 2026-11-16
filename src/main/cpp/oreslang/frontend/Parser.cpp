@@ -107,7 +107,7 @@ std::size_t template_interpolation_close(std::string_view source, std::size_t fr
             at = template_close(source, at + 1, nesting + 1, origin) + 1;
         } else if (source.substr(at, 2) == "//") {
             at += 2;
-            while (at < source.size() && source[at] != '\n') ++at;
+            while (at < source.size() && source[at] != '\n' && source[at] != '\r') ++at;
         } else if (source.substr(at, 2) == "/*") {
             at = skip_template_block_comment(source, at + 2, origin);
         } else if (ch == '{') {
@@ -155,7 +155,7 @@ bool reserved(std::string_view name) {
     static constexpr std::string_view words[] = {
         "define", "class", "pattern", "module", "contract", "conforms", "namespace",
         "import", "from", "as", "extends", "implements", "try", "catch",
-        "throw", "raise", "panic", "recover",
+        "throw", "raise", "panic", "recover", "unsafe",
         "finally", "end", "fi", "if", "guard", "do", "else", "then", "new",
         "spawn", "stop", "done", "await", "rt", "async", "suspends", "generator",
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
@@ -175,7 +175,8 @@ bool reserved(std::string_view name) {
 
 class Lexer {
 public:
-    explicit Lexer(std::string_view source) : source_(source) {}
+    explicit Lexer(std::string_view source, std::size_t unsafe_base_offset = 0)
+        : source_(source), unsafe_base_offset_(unsafe_base_offset) {}
 
     Token next() {
         for (;;) {
@@ -183,7 +184,9 @@ public:
             const unsigned char ch = static_cast<unsigned char>(source_[at_]);
             if (std::isspace(ch)) { ++at_; continue; }
             if (source_.substr(at_, 2) == "//") {
-                const auto end = source_.find('\n', at_ + 2);
+                // A CR-only source file must not hide the next line's
+                // reserved unsafe token inside a line comment.
+                const auto end = source_.find_first_of("\r\n", at_ + 2);
                 at_ = end == std::string_view::npos ? source_.size() : end;
                 continue;
             }
@@ -222,6 +225,15 @@ public:
             // Existing nb-select recognition is intentionally unchanged
             // until native select lowering supports that grammar.
             const auto first = source_.substr(start, at_ - start);
+            // G0: do not parse an unsupported unsafe operation as a normal
+            // identifier, callable or arithmetic expression. Templates are
+            // lexed recursively only for their interpolated expressions.
+            if (first == "unsafe") {
+                throw std::runtime_error(
+                    "unsafe is reserved until checked unsafe effects and backend "
+                    "lowering exist at byte " +
+                    std::to_string(unsafe_base_offset_ + start));
+            }
             if (first == "nb" && source_.substr(at_, 7) == "-select") {
                 const auto end = at_ + 7;
                 if (end == source_.size() ||
@@ -387,6 +399,9 @@ public:
 
 private:
     std::string_view source_;
+    // Only unsafe G0 lexical diagnostics need the absolute interpolation offset.
+    // All normal token/AST offsets remain relative to the parsed source slice.
+    std::size_t unsafe_base_offset_ = 0;
     std::size_t at_ = 0;
 };
 
@@ -859,8 +874,10 @@ class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
                     bool experimental_rt_scalar_loop,
-                    bool verified_namespace_metadata_only = false)
-        : source_(source), lexer_(source), token_(lexer_.next()),
+                    bool verified_namespace_metadata_only = false,
+                    std::size_t unsafe_base_offset = 0)
+        : source_(source), lexer_(source, unsafe_base_offset), token_(lexer_.next()),
+          unsafe_base_offset_(unsafe_base_offset),
           experimental_owned_int_(experimental_owned_int),
           experimental_rt_scalar_loop_(experimental_rt_scalar_loop),
           verified_namespace_metadata_only_(verified_namespace_metadata_only) {
@@ -5991,7 +6008,8 @@ private:
 
     std::unique_ptr<Expression> template_expression(std::string_view source,
                                                     std::size_t base_offset) {
-        Parser nested(source, experimental_owned_int_, experimental_rt_scalar_loop_);
+        Parser nested(source, experimental_owned_int_, experimental_rt_scalar_loop_,
+                      false, unsafe_base_offset_ + base_offset);
         auto expr = nested.expression();
         if (nested.token_.kind != Kind::End)
             nested.fail("expected end of template interpolation expression");
@@ -7777,6 +7795,7 @@ private:
     std::string_view source_;
     Lexer lexer_;
     Token token_;
+    std::size_t unsafe_base_offset_ = 0;
     std::size_t last_token_end_ = 0;
     std::unordered_set<std::string> module_names_;
     std::unordered_map<std::string, MacroKind> macros_;
