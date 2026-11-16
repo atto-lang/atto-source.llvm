@@ -1,6 +1,7 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/PointerIntAot.hpp"
+#include "oreslang/frontend/StaticFfiI64Aot.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ModuleLoader.hpp"
@@ -197,6 +198,8 @@ int main(int argc, char** argv) {
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
     bool experimental_pointer_int_aot = false;
+    bool experimental_static_ffi_i64 = false;
+    bool static_ffi_i64_capability = false;
     bool wasm32_target = false;
     bool cortex_m_target = false;
     bool tenant_vm_guest = false;
@@ -289,8 +292,37 @@ int main(int argc, char** argv) {
                 std::cerr << "duplicate rt scalar loop option\n"; return 2;
             }
             experimental_rt_scalar_loop = true;
+        } else if (arg == "--experimental-static-ffi-i64-aot") {
+            if (experimental_static_ffi_i64) {
+                std::cerr << "duplicate static FFI i64 AOT option\n"; return 2;
+            }
+            experimental_static_ffi_i64 = true;
+        } else if (arg == "--ffi-grant=atto.math.i64.v1") {
+            if (static_ffi_i64_capability) {
+                std::cerr << "duplicate static FFI capability\n"; return 2;
+            }
+            static_ffi_i64_capability = true;
         } else if (arg == "--experimental-pointer-int-aot") {
-            if (experimental_pointer_int_aot) {
+            if (experimental_static_ffi_i64 || static_ffi_i64_capability) {
+            // Host-private static link probe only: does not create a real
+            // actor, loader/supervisor, nor a runtime permission grant.
+            if (!experimental_static_ffi_i64 || !static_ffi_i64_capability ||
+                    experimental_pointer_int_aot || wasm32_target || cortex_m_target ||
+                    tenant_vm_guest || experimental_owned_int ||
+                    experimental_rt_scalar_loop || bounded_allocator_provider ||
+                    tree_shake || !tree_shake_roots.empty() || native_hard_rt_profile ||
+                    rt_check_only || rt_entry_seen || rt_report_seen ||
+                    constraint_descriptors_only) {
+                throw std::runtime_error(
+                    "static FFI i64 AOT proof requires explicit grant and isolated --target=host");
+            }
+            const auto ir = oreslang::static_ffi_i64_aot::compile(text);
+            std::cout << ir;
+            std::cout.flush();
+            return 0;
+        }
+
+        if (experimental_pointer_int_aot) {
                 std::cerr << "duplicate Pointer<int> AOT option\n"; return 2;
             }
             experimental_pointer_int_aot = true;
@@ -369,6 +401,7 @@ int main(int argc, char** argv) {
             (tree_shake || !tree_shake_roots.empty() || native_hard_rt_profile ||
              rt_check_only || rt_entry_seen || rt_report_seen ||
              experimental_owned_int || experimental_rt_scalar_loop || experimental_pointer_int_aot ||
+             experimental_static_ffi_i64 || static_ffi_i64_capability ||
              target_seen || allocator_provider_seen)) {
         std::cerr << "constraint-descriptors is a metadata-only mode and cannot be combined with execution/codegen options\n";
         return 2;
