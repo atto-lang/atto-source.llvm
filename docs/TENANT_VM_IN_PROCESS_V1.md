@@ -233,6 +233,11 @@ Limits on what this means today:
 it could otherwise loop forever. A turn that works does not refill the budget; only time does. Between
 tries the actor waits `restart_backoff_ms`, by default 10 ms, doubling with each failure in the window,
 and its mail waits with it. These numbers are starting values, not measurements.
+A zero-length restart window is refused when opening a VM: otherwise every
+failure would expire immediately and the restart budget could be bypassed.
+A zero restart budget is permitted and means the first confined failure
+terminates the actor. Exponential backoff deadlines saturate rather than
+overflowing when configured delays and restart budgets are large.
 
 One more failure ends that actor. The failed call and each queued call get `ActorTerminated`, and queued
 sends count in `mail_abandoned`. Its memory and quota go back to the VM, and later calls get
@@ -329,6 +334,16 @@ Correcting an earlier claim: "a noisy tenant cannot starve a quiet one" was true
 test, but finding 5 means CPU share was not fair until now.
 
 ## Evidence
+
+**Current draft-head gate (2026-11-16):** the CI job now checks the native runner
+architecture, the checked-out full source SHA and tree, compiler binary digest,
+toolchain versions and executed results from all four required suites. The
+source tree statically registers 43 core host cases (including zero-window
+restart-policy and tenant-ID boundary regressions), 21 lowered cases, and
+the source-contract/admission suites. These counts are **test inventory**, not
+a new runtime result: no hosted exact-head full-suite run was available
+when this gate was written. Historical evidence below is tied to the prior
+local checkpoints and must not be attributed to the new head.
 
 Run on 2026-11-03. **All of it is local**, on macOS 26 arm64 (Apple clang, wabt 1.0.42, wasm-ld 23) and
 Ubuntu 24.04 arm64 in a VM (clang 18, wabt 1.0.34). `.atto` went through `oreslang-llvmc` built against
