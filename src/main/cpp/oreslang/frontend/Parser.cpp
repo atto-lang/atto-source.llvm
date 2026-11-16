@@ -814,6 +814,39 @@ bool namespace_literal_i64_arithmetic(const Expression& expr, std::size_t depth 
     }
 }
 
+/* First real native namespace execution slice: exactly one standalone, pure,
+ * zero-arg scalar main returning checked literal arithmetic. Shared by the
+ * default frontend gate and resolve_and_validate_program so the generic
+ * validator admits exactly the same slice and nothing broader. */
+bool namespace_checked_scalar_main(const Program& program) {
+    return program.imports.empty()
+        && program.functions.size() == 1
+        && program.classes.empty() && program.actors.empty()
+        && program.contracts.empty() && program.conforms.empty()
+        && program.cooperative_loops.empty() && program.generators.empty()
+        && program.type_only_declarations.empty()
+        && program.functions.front().name == "main"
+        && program.functions.front().parameters.empty()
+        && program.functions.front().generic_parameters.empty()
+        && !program.functions.front().returns_void
+        && program.functions.front().return_type == ScalarType::I64
+        && !program.functions.front().async_source_i64
+        && !program.functions.front().has_declared_effects
+        && program.functions.front().result
+        && namespace_literal_i64_arithmetic(*program.functions.front().result)
+        && program.functions.front().result->arguments.empty()
+        && program.functions.front().locals.empty()
+        && program.functions.front().statements.empty()
+        && program.functions.front().early_returns.empty()
+        && program.functions.front().actor_spawns.empty()
+        && program.functions.front().actor_sends.empty()
+        && program.functions.front().actor_stops.empty()
+        && program.functions.front().source_tasks.empty()
+        && program.functions.front().future_pipelines.empty()
+        && program.functions.front().actor_field_writes.empty()
+        && !program.functions.front().caught_throw_value;
+}
+
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
@@ -828,8 +861,6 @@ public:
 
     Program parse() {
         Program program;
-        if (token_.text == "use" && peek_next().text == "namespace")
-            fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native actor namespace header needs typed module/linker identity");
         while (token_.text == "import") {
             advance();
             // Outside the host-only verified-metadata mode, namespace imports stay
@@ -1217,32 +1248,7 @@ public:
             // standalone, pure, zero-arg scalar main returning checked literal arithmetic.
             // No imports, namespace cross-file linking, actors, closures or
             // source FFI can acquire identity/dispatch authority here.
-            const bool checked_scalar_main = program.imports.empty()
-                    && program.functions.size() == 1
-                    && program.classes.empty() && program.actors.empty()
-                    && program.contracts.empty() && program.conforms.empty()
-                    && program.cooperative_loops.empty() && program.generators.empty()
-                    && program.type_only_declarations.empty()
-                    && program.functions.front().name == "main"
-                    && program.functions.front().parameters.empty()
-                    && program.functions.front().generic_parameters.empty()
-                    && !program.functions.front().returns_void
-                    && program.functions.front().return_type == ScalarType::I64
-                    && !program.functions.front().async_source_i64
-                    && !program.functions.front().has_declared_effects
-                    && program.functions.front().result
-                    && namespace_literal_i64_arithmetic(*program.functions.front().result)
-                    && program.functions.front().result->arguments.empty()
-                    && program.functions.front().locals.empty()
-                    && program.functions.front().statements.empty()
-                    && program.functions.front().early_returns.empty()
-                    && program.functions.front().actor_spawns.empty()
-                    && program.functions.front().actor_sends.empty()
-                    && program.functions.front().actor_stops.empty()
-                    && program.functions.front().source_tasks.empty()
-                    && program.functions.front().future_pipelines.empty()
-                    && program.functions.front().actor_field_writes.empty()
-                    && !program.functions.front().caught_throw_value;
+            const bool checked_scalar_main = namespace_checked_scalar_main(program);
             if (!checked_scalar_main)
                 fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: only standalone checked literal-arithmetic i64 main is native-lowered; multi-file actor namespaces remain gated");
         }
@@ -1485,11 +1491,22 @@ private:
         // Exported forward signatures cannot be enforced by this native actor
         // ABI, which has no actor visibility field, so reject them for now.
         if (!already_defined && accept("actor")) {
+            // Under a namespace header an exported declaration is a
+            // manifest-level (cross-file) declared actor, owned by the
+            // declared-actor codegen gate rather than the same-source forward.
+            if (exported && !program.namespace_name.empty())
+                fail("DECLARED_ACTOR_CODEGEN_UNSUPPORTED: native actor receiver, "
+                     "sealed state and mailbox lowering require a verified "
+                     "same-manifest namespace source set");
             if (exported)
                 fail("NATIVE_ACTOR_FORWARD_PUBLIC_UNSUPPORTED: native actor forward visibility needs an actor export ABI");
             const std::string name = nominal_declaration_name();
             if (token_.text == "<")
                 fail("NATIVE_ACTOR_FORWARD_GENERIC_UNSUPPORTED: native actor generics require typed specialization");
+            // As on Java, a forward declaration never carries a body; the
+            // actor's state and handlers belong to its 'define actor'.
+            if (token_.text == "as")
+                fail("NATIVE_ACTOR_FORWARD_BODY: actor forward declaration cannot supply a body");
             require(";");
             if (!actor_forwards_.emplace(name, program.module).second)
                 fail("NATIVE_ACTOR_FORWARD_DUPLICATE: duplicate actor forward '" + name + "'");
@@ -2495,15 +2512,17 @@ private:
         auto found = std::find_if(program.classes.begin(), program.classes.end(),
             [&](const ClassDecl& cls) { return cls.name == owner; });
         if (found == program.classes.end()) {
+            // An already defined actor's state is sealed, even when the same
+            // source also forward-declares it: check that first.
+            const bool actor_target = std::any_of(program.actors.begin(), program.actors.end(),
+                [&](const ActorDecl& actor) { return actor.name == owner; });
+            if (actor_target)
+                fail("NATIVE_MTD_ACTOR_STATE_SEALED: external receiver methods cannot extend an already defined actor's sealed state");
             // A declaration-only actor with type-first methods is valid
             // AttoLang, but cannot yet be represented by native on_message
             // class slots. Reject for missing backend lowering, not grammar.
             if (actor_forwards_.count(owner))
                 fail("NATIVE_ACTOR_MTD_BACKEND_UNSUPPORTED: declaration-only actor receiver needs typed mailbox method lowering");
-            const bool actor_target = std::any_of(program.actors.begin(), program.actors.end(),
-                [&](const ActorDecl& actor) { return actor.name == owner; });
-            if (actor_target)
-                fail("NATIVE_MTD_ACTOR_STATE_SEALED: external receiver methods cannot extend an already defined actor's sealed state");
             fail("NATIVE_MTD_LOCAL_CLASS_REQUIRED: typed receiver must name an already declared ordinary local class");
         }
         const bool prior_active = external_class_receiver_active_;
@@ -7572,11 +7591,14 @@ void resolve_and_validate_program(Program& program) {
     // A host-only, parsed namespace AST is not a codegen authorization.
     // Prevent callers of the general validator from taking a parsed v2
     // namespace source around the default frontend's executable gate.
+    // The single admitted exception is the namespace checked-scalar main
+    // slice, re-proved here from the AST rather than trusted from a flag.
     if (!program.namespace_imports.empty() ||
             (!program.namespace_name.empty() &&
                 (!program.functions.empty() || !program.classes.empty() ||
                  !program.actors.empty() || !program.contracts.empty() ||
-                 !program.cooperative_loops.empty() || !program.generators.empty())))
+                 !program.cooperative_loops.empty() || !program.generators.empty()) &&
+                !namespace_checked_scalar_main(program)))
         throw std::runtime_error(
             "NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: verified namespace AST requires typed cross-unit lowering");
     if (!program.imports.empty())
