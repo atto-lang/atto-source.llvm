@@ -87,7 +87,7 @@ run_guest() {
 run_guest pass-42 0
 run_guest fail-41 1
 
-for name in deny-stdio deny-unbound; do
+for name in deny-stdio deny-unbound deny-alloc deny-process deny-std-import; do
   artifact="$work/$name.ll"
   if "$compiler" "tests/freestanding/$name.atto" -o "$artifact" --emit-llvm \
       >"$work/$name.compiler.log" 2>&1; then
@@ -99,4 +99,4 @@ for name in deny-stdio deny-unbound; do
   echo "PASS: negative no-artifact $name"
 done
 
-echo "FREESTANDING_CORTEXM_GUEST_PASS positive_executed=2 negative_no_artifact=2 libc=0 os=0 allocator=0"
+echo "FREESTANDING_CORTEXM_GUEST_PASS positive_executed=2 negative_no_artifact=5 libc=0 os=0 allocator=0"
