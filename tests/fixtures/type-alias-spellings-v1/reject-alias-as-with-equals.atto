@@ -1,0 +1,3 @@
+// expect: TYPE_ONLY_INCOMPLETE_DEFINITION
+define type alias Count = int;
+pub fnc main(): int { return 42; }

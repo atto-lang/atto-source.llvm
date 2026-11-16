@@ -29,7 +29,8 @@ CASES = {
     # callable declarations and inside nested blocks.
     "gpu-callable": (
         "pub gpu fnc kernel(): int { return 42; }",
-        "native gpu/quantum boundary unsupported",
+        # A gpu fnc is a typed kernel signature (void only); never CPU code.
+        "GPU-LAUNCH-001: GPU kernel must return void; no implicit CPU fallback",
     ),
     "cpu-callable": (
         "pub cpu fnc kernel(): int { return 42; }",
