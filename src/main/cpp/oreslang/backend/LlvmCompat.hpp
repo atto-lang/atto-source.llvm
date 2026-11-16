@@ -14,6 +14,7 @@ inline llvm::Type* native_pointer_type(llvm::LLVMContext& context, llvm::Type* p
     (void)pointee;
     return llvm::PointerType::get(context, 0);
 #else
+    (void)context;
     return pointee->getPointerTo();
 #endif
 }
@@ -39,16 +40,20 @@ inline void native_lifetime_end(llvm::IRBuilder<>& builder, llvm::Value* ptr,
 #endif
 }
 
-inline llvm::Function* native_intrinsic(
-        llvm::Module* module, llvm::Intrinsic::ID id,
-        llvm::ArrayRef<llvm::Type*> overloads = {}) {
+// Centralize the LLVM 19/20+ intrinsic API transition. Checked arithmetic
+// requires one overload type; trap requires none. Keep the choice out of
+// guest lowering so newly added intrinsics do not regress newer LLVM builds.
+inline llvm::Function* native_intrinsic(llvm::Module& module,
+                                        llvm::Intrinsic::ID id,
+                                        llvm::ArrayRef<llvm::Type*> overloads = {}) {
 #if LLVM_VERSION_MAJOR >= 20
-    return llvm::Intrinsic::getOrInsertDeclaration(module, id, overloads);
+    return llvm::Intrinsic::getOrInsertDeclaration(&module, id, overloads);
 #else
-    return llvm::Intrinsic::getDeclaration(module, id, overloads);
+    return llvm::Intrinsic::getDeclaration(&module, id, overloads);
 #endif
 }
+
 inline llvm::Function* native_trap(llvm::Module& module) {
-    return native_intrinsic(&module, llvm::Intrinsic::trap);
+    return native_intrinsic(module, llvm::Intrinsic::trap);
 }
 }  // namespace oreslang
