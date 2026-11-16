@@ -1,0 +1,5 @@
+// Must compile but trap at runtime: LLVM shift by 64 would be poison.
+pub fnc main(): int {
+  let int invalid = 64;
+  return 1 << invalid;
+}

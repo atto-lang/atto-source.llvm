@@ -1,0 +1,4 @@
+pub fnc main(): int {
+    const r = ~();
+    return 0;
+}

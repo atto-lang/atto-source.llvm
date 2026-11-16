@@ -1,0 +1,12 @@
+define enum Alpha as
+    Ready = 1
+end
+define enum Beta as
+    Ready = 1
+end
+define enum Envelope as
+    Wrapped: Alpha = 1
+end
+fnc invalid(): Envelope {
+    return Envelope.Wrapped(Beta.Ready());
+}
