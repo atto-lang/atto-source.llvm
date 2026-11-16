@@ -4981,7 +4981,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(cfg_execute_multifield_call_in_condition cfg-multifield-guard-call.ores --ir "call i64 @observe" --run 42 --clang "${ORE_CLANG}")
     oreslang_contract_test(cfg_reject_missing_fallthrough cfg-guard-missing-final-reject.ores --diagnostic "expected 'return'")
     oreslang_contract_test(cfg_reject_missing_fi cfg-guard-missing-fi-reject.ores --diagnostic "expected 'fi'")
-    oreslang_contract_test(cfg_reject_void_guard cfg-guard-void-reject.ores --diagnostic "guarded early return requires a scalar result")
+    oreslang_contract_test(cfg_reject_void_guard cfg-guard-void-reject.ores --diagnostic "RETURN_VOID_VALUE: void function cannot return a value")
 
 
 

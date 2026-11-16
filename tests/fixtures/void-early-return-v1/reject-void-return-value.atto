@@ -1,4 +1,4 @@
-// expect: native return requires
+// expect: RETURN_VOID_VALUE: void function cannot return a value
 fnc show(int x): void {
   if x > 3 then return x; fi
   return;

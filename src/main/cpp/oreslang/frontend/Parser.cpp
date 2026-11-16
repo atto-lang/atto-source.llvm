@@ -3932,6 +3932,8 @@ private:
                 // whose arm returns (as in Java); the generic branch below parses
                 // `return;` like any other arm statement. Only value-returning
                 // functions use the scalar guarded-return lowering.
+                if (value.returns_void && token_.text == "return" && peek_next().text != ";")
+                    fail("RETURN_VOID_VALUE: void function cannot return a value");
                 if (!value.returns_void && accept("return")) {
                     if (value.early_returns.size() == 8)
                         fail("native guarded return limit exceeded (8)");
