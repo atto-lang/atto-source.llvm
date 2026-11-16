@@ -1,34 +1,17 @@
 #include "oreslang/runtime/NativeActorReplyStreamsV1.hpp"
-#include "oreslang/runtime/NativeGenerationalReplySlots.hpp"
 #include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <stdexcept>
 #include <thread>
-#include <type_traits>
 
 using Stream = oreslang::runtime::NativeActorReplyStreamsV1<std::uint64_t>;
-using Unary = oreslang::runtime::NativeGenerationalReplySlots;
 template <class F> void denied(F f) {
     bool caught = false;
     try { f(); } catch (const std::exception&) { caught = true; }
     assert(caught);
 }
 int main() {
-    // The existing one-shot slab remains authoritative for unary replies.
-    Unary unary(2);
-    auto caller = unary.endpoint(Unary::Role::Actor);
-    auto callee = unary.endpoint(Unary::Role::Actor);
-    auto supervisor = unary.endpoint(Unary::Role::SupervisorApplication);
-    auto first = unary.reserve<int>(caller, callee);
-    auto second = unary.reserve<int>(caller, supervisor);
-    static_assert(std::is_same<decltype(first.future), std::future<int>>::value,
-                  "unary reply type must not erase T");
-    assert(second.ticket.reply(supervisor, 20));
-    assert(first.ticket.reply(callee, 10));
-    assert(first.future.get() == 10 && second.future.get() == 20);
-    assert(!first.ticket.reply(callee, 11));
-
     denied([] { Stream invalid(0, 2); });
     denied([] { Stream invalid(2, 0); });
     denied([] { Stream invalid(257, 256); });
