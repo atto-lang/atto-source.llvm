@@ -21,9 +21,12 @@ public:
     static_assert(sizeof(Offset32) == 4, "guest offset must be four bytes");
 
     // The only host allocation is performed here, before actor admission.
+    // Small actor heaps use 1 KiB slabs to avoid reserving the entire heap
+    // for a single size class; larger heaps use more compact 4 KiB slabs.
     explicit ActorSlabHeap32(Offset32 capacity)
-        : capacity_(capacity), pages_(static_cast<std::size_t>(
-              (std::uint64_t{capacity} + kPageBytes - 1) / kPageBytes)) {}
+        : capacity_(capacity), page_bytes_(capacity < 65536 ? 1024 : kPageBytes),
+          pages_(static_cast<std::size_t>(
+              (std::uint64_t{capacity} + page_bytes_ - 1) / page_bytes_)) {}
     void bind(std::uint8_t* cage, Offset32 base) {
         if (!cage || base == 0 || std::uint64_t{base} + capacity_ >
                 std::numeric_limits<Offset32>::max())
@@ -35,8 +38,8 @@ public:
         if (!cage_ || !valid_request(bytes, alignment)) return 0;
         const std::uint64_t wanted = std::max<std::uint64_t>(bytes, alignment);
         std::uint64_t block = kMinClassBytes;
-        while (block < wanted && block <= kPageBytes) block <<= 1;
-        if (block <= kPageBytes) {
+        while (block < wanted && block <= page_bytes_ block <<= 1;
+        if (block <= page_bytes_) {
             for (std::size_t i = 0; i < pages_.size(); ++i) {
                 if (pages_[i].mode == Mode::Slab && pages_[i].block == block) {
                     auto value = use_slab(i, static_cast<Offset32>(block));
@@ -62,7 +65,7 @@ public:
             const auto start = align_up(page_begin(i), alignment);
             const auto end = start + bytes;
             if (end > std::uint64_t{base_} + capacity_) continue;
-            const auto last = static_cast<std::size_t>((end - base_ + kPageBytes - 1) / kPageBytes);
+            const auto last = static_cast<std::size_t>((end - base_ + page_bytes_ - 1) / page_bytes_);
             if (last <= i || last > pages_.size()) continue;
             bool unused = true;
             for (auto j = i; j < last; ++j) if (pages_[j].mode != Mode::Unused) { unused = false; break; }
@@ -81,7 +84,7 @@ public:
                 std::uint64_t{offset} >= std::uint64_t{base_} + capacity_ ||
                 std::uint64_t{offset} + bytes > std::uint64_t{base_} + capacity_ ||
                 offset % alignment != 0) return false;
-        const auto i = static_cast<std::size_t>((offset - base_) / kPageBytes);
+        const auto i = static_cast<std::size_t>((offset - base_) / page_bytes_);
         auto& page = pages_[i];
         if (page.mode == Mode::Slab) {
             const auto first = aligned_first(i, page.block);
@@ -89,7 +92,7 @@ public:
                     bytes > page.block || alignment > page.block) return false;
             Offset32 expected = kMinClassBytes;
             while (expected < bytes || expected < alignment) {
-                if (expected >= kPageBytes) return false;
+                if (expected >= page_bytes_) return false;
                 expected <<= 1;
             }
             if (expected != page.block) return false;
@@ -136,11 +139,11 @@ private:
         return (v + alignment - 1) & ~std::uint64_t{alignment - 1};
     }
     std::uint64_t page_begin(std::size_t i) const noexcept {
-        return std::uint64_t{base_} + std::uint64_t{i} * kPageBytes;
+        return std::uint64_t{base_} + std::uint64_t{i} * page_bytes_;
     }
     std::uint64_t page_end(std::size_t i) const noexcept {
-        return page_begin(i) + std::min<std::uint64_t>(kPageBytes,
-            capacity_ - std::uint64_t{i} * kPageBytes);
+        return page_begin(i) + std::min<std::uint64_t>(page_bytes_,
+            capacity_ - std::uint64_t{i} * page_bytes_);
     }
     std::uint64_t aligned_first(std::size_t i, Offset32 block) const noexcept {
         return align_up(page_begin(i), block);
@@ -172,6 +175,7 @@ private:
         return 0;
     }
     Offset32 capacity_;
+    Offset32 page_bytes_; // small heaps use 1 KiB slabs to avoid class starvation
     Offset32 base_ = 0;
     std::uint8_t* cage_ = nullptr; // host pointer never guest-visible
     std::vector<Page> pages_; // allocated once, no allocations in alloc/release
