@@ -126,7 +126,7 @@ def main():
         ("reject concrete declare model",
          "declare model M as Pass() end\n" + main_fn, "TYPE_ONLY_INVALID_KIND"),
         ("reject concrete declare actor",
-         "declare actor A as end\n" + main_fn, "TYPE_ONLY_INVALID_KIND"),
+         "declare actor A as end\n" + main_fn, "NATIVE_ACTOR_FORWARD_BODY"),
         ("reject unsupported scalar alias target",
          "declare type Id = string;\n" + main_fn, "TYPE_ALIAS_UNKNOWN_TARGET"),
         ("reject generic trait without native contract proof",

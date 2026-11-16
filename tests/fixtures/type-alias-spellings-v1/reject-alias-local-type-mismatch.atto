@@ -1,0 +1,3 @@
+// expect: requires int, got bool
+type Count = int;
+pub fnc main(): int { val Count c = true; return 7; }

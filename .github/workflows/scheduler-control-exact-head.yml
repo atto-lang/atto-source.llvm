@@ -1,0 +1,94 @@
+name: LLVM scheduler CONTROL exact-head host proof
+
+on:
+  push:
+    branches:
+      - audit/scheduler-control-gate-20261108
+    # No paths filter: any new branch commit invalidates an earlier exact-SHA test.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scheduler-control-exact-head-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  control-and-nio-host-sanitizers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout immutable exact source commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify exact HEAD, clean tree and sanitizer toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --verify HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          command -v gcc
+          command -v g++
+          command -v clang
+          command -v clang++
+          command -v timeout
+          printf 'source_commit=%s\n' "$(git rev-parse HEAD)"
+          printf 'source_tree=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+          printf 'test_script_blob=%s\n' "$(git rev-parse HEAD:scripts/test-native-vm-nio-host-sanitizers.sh)"
+      - name: Execute native scheduler-domain security nonclaim and cross-domain rejection
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_dir="$(mktemp -d)"
+          trap 'rm -rf "$build_dir"' EXIT
+          for cc in gcc clang; do
+            "$cc" -std=c11 -D_GNU_SOURCE -O1 -g -pthread \
+              -Wall -Wextra -Wpedantic -Werror \
+              -fsanitize=address,undefined -fno-omit-frame-pointer \
+              -Isrc/main/cpp \
+              tests/native_ores_vm_test.c \
+              src/main/cpp/oreslang/runtime/NativeOresVM.c \
+              src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+              src/main/cpp/oreslang/runtime/NativeActorFuture.c \
+              -o "$build_dir/native-oresvm-$cc"
+            ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1 \
+              timeout 90s "$build_dir/native-oresvm-$cc" | tee "$build_dir/security-$cc.log"
+            # Do not rely on a zero shell exit alone: this exact fixture emits
+            # the success sentinel only after the negative-domain assertions.
+            grep -Fxq 'NATIVE_ORES_VM_PASS domains=4 default_workers=5 control=priority' \
+              "$build_dir/security-$cc.log"
+            echo "PASS HOST ONLY: $cc native domains not security boundaries"
+          done
+      - name: Execute real native CONTROL/NIO and pthread-failure sanitizer tests
+        shell: bash
+        env:
+          ORES_NIO_EXPECT_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Retain an execution receipt per toolchain and insist on the
+          # CONTROL and injected pthread-create cases independently.
+          proof_log="$(mktemp)"
+          trap 'rm -f "$proof_log"' EXIT
+          bash scripts/test-native-vm-nio-host-sanitizers.sh | tee "$proof_log"
+          for cc in gcc clang; do
+            grep -Fxq "PASS: $cc VM main CONTROL thread startup and retirement (ASan+UBSan)" "$proof_log" \
+              || { echo "::error::Missing CONTROL lifecycle receipt for $cc"; exit 1; }
+            grep -Fxq "PASS: $cc CONTROL pthread-create failure and retry (ASan+UBSan)" "$proof_log" \
+              || { echo "::error::Missing pthread-create retry receipt for $cc"; exit 1; }
+          done
+      - name: Certify executed HOST-only sanitizer gate and source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --verify HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          printf 'PASS HOST ONLY; no compiled .ores guest parity certified\n'
+          printf 'verified_source_commit=%s\n' "$GITHUB_SHA"
+          printf 'verified_source_tree=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+          printf 'native_control_fixture_blob=%s\n' "$(git rev-parse HEAD:tests/native_vm_main_control_loop_test.c)"
+          printf 'pthread_failure_fixture_blob=%s\n' "$(git rev-parse HEAD:tests/native_vm_main_control_create_failure_test.c)"
+          printf 'security_nonclaim_fixture_blob=%s\n' "$(git rev-parse HEAD:tests/native_ores_vm_test.c)"

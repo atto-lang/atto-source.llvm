@@ -1,5 +1,60 @@
 # LLVM #988 — proposed private CI carrier review (NOT an authorization)
 
+
+> **LATEST REFRESH — 2026-10-26 after LLVM #940**
+>
+> This section supersedes earlier claims that #988 is reconciled to the current
+> source `main`.
+>
+> - current LLVM `main`: `aabe47f0eec3434c8456cee85766cad038ecd518`;
+> - exact #988 head remains `2303994172d5918a5bcf96711ca92a2289e799f2`;
+> - exact #988 tree remains `a04b40a3ac493c1791be6576ac69347b0f36ca82`;
+> - current compare: **18 ahead / 2 behind**.
+>
+> Therefore #988 requires another current-main reconciliation before any
+> source-bearing qualification. Earlier source-free and synthetic carrier
+> receipts remain historical control/capability evidence only. This document is
+> **NON-AUTHORIZING / REVIEW ONLY**: it changes neither the destination
+> allowlist nor the carrier contract and grants no private-source export authority.
+>
+
+
+> **CURRENT REFRESH — 2026-10-26**
+>
+> This section supersedes older exact-source identity lines below for any future
+> qualification. LLVM #988 is now reconciled to current source `main`.
+>
+> - current source `main`: `656ccceb564c778b41077f88c7257a0758043a33`
+> - exact #988 head: `2303994172d5918a5bcf96711ca92a2289e799f2`
+> - exact #988 tree: `a04b40a3ac493c1791be6576ac69347b0f36ca82`
+> - parents: previous #988 head `c99e634f2601af90c2f477ec987babe2ae07f472`
+>   and current `main` `656ccceb564c778b41077f88c7257a0758043a33`
+> - GitHub compare: **18 ahead / 0 behind**
+> - the seven non-CMake reviewed #988 blobs are unchanged; `CMakeLists.txt`
+>   is a three-way reconciliation that preserves current-main native
+>   String/CString host-test changes near line ~3896 and the reviewed four
+>   opaque-type CTests near line ~757.
+> - fresh source-hosted runs `40403944009` (conformance; job
+>   `121856737457`) and `40403944639` (compiler/native; job
+>   `121856740429`) both failed with `steps=null`; they are
+>   runner-admission/infrastructure evidence only.
+>
+> Source-side governance hardening #1004 now has stepful alternate-org evidence
+> for its current control bytes. The exact governance bundle tree
+> `6bf04e3034758f24ebcc698a8639f7bb20e7e576` was executed in private
+> `canonical-cloud-test/legacy-mirror-guard-e2e`; run `40402911627`, job
+> `121853155001`, passed 6/6 audit tests, 42/42 publisher tests on each of
+> three consecutive passes, shell syntax/bytecode checks, and the fail-closed
+> structure audit. That run followed a stepful failure that exposed and fixed
+> an exact-key bug in review-bypass validation. Current #1004 head
+> `681261831d032cd3b4ef5b005b5d81a28e8b4326` preserves all ten tested
+> governance/control blob SHAs.
+>
+> This refresh remains review-only. Source `main` still reports
+> `protected=false`; the allowlist remains empty and the live carrier contract
+> does not authorize PR #988. No LLVM private source transfer is authorized.
+
+
 **Disposition: REVIEW ONLY.** This file does not approve any private-source
 transfer, add an allowlist entry, change protected repository policy, or
 authorize automated publication. No LLVM private source has been sent to the
