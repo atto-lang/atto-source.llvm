@@ -251,7 +251,7 @@ pub fnc main(): int { return 42; }
 )");
 
     denied(R"(
-define macro unsafe(Syntax<Expr> value) -> Syntax<Expr> {
+define macro leaky(Syntax<Expr> value) -> Syntax<Expr> {
     return quote(unquote(value) + unquote(other));
 }
 pub fnc main() -> int { return 42; }
