@@ -7,10 +7,15 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 for name in return-get scalar-copy return-early return-fallthrough; do
   "$compiler" --experimental-owned-int "tests/atto-box-main-v1/$name.atto" > "$tmp/$name.ll"
-  grep -q 'oreslang_owned_i64_region_new' "$tmp/$name.ll"
-  grep -q 'oreslang_owned_i64_region_read' "$tmp/$name.ll"
-  grep -q 'oreslang_owned_i64_region_drop' "$tmp/$name.ll"
-  grep -q 'oreslang_owned_i64_region_close' "$tmp/$name.ll"
+  # Declarations/references alone are not evidence of owned region use.
+  # Require actual call sites in each emitted guest IR program: allocation,
+  # read, drop and close. This is independent from the exit-42 oracle.
+  for operation in new read drop close; do
+    if ! grep -Eq "(^|[[:space:]])call[[:space:]][^;]*@oreslang_owned_i64_region_${operation}[[:space:]]*\\(" "$tmp/$name.ll"; then
+      echo "Box AOT $name missing executed-region call: $operation" >&2
+      exit 1
+    fi
+  done
   clang_flags=(-O1 -g -fno-omit-frame-pointer)
   if [ "${ATTO_BOX_SANITIZE:-0}" = "1" ]; then
     clang_flags+=(-fsanitize=address,undefined)
