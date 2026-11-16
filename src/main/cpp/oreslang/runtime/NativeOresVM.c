@@ -271,6 +271,13 @@ OresNativeActorRef ores_native_vm_spawn_supervised(
         /* Serializes with VM stop/retire. The scheduler atomically rejects a
          * reused slot; only a successful spawn can install parentage. */
         child = ores_native_actor_scheduler_spawn(vm->schedulers[domain], actor_slot);
+        /* Per-child terminal receipts require scheduler-side parentage bound
+         * before any USER admission; a fresh child cannot legitimately fail
+         * this, so a refusal is a broken invariant, never a silent fallback. */
+        if (child.scheduler_domain
+            && !ores_native_actor_scheduler_bind_supervisor(
+                vm->schedulers[domain], supervisor, child))
+            abort();
         if (child.scheduler_domain) {
             OresVMSupervisorRegistration* entry =
                 &vm->supervisors[domain][actor_slot];
