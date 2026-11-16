@@ -2151,7 +2151,9 @@ private:
                 signature.mutable_receiver = method.parameters.front().mode == Parameter::Mode::BorrowMut;
                 for (const auto& prior : result.methods)
                     if (prior.name == signature.name && prior.arity == signature.arity)
-                        fail("duplicate native method name/arity");
+                        fail("duplicate native method name/arity '" + signature.name +
+                             "/" + std::to_string(signature.arity) +
+                             "' (self receiver does not count toward arity)");
                 result.methods.push_back(std::move(signature));
                 methods_.push_back(std::move(method));
                 continue;
