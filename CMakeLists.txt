@@ -353,6 +353,20 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-import-path-variables-test)
     set_tests_properties(native_import_path_variables_host_only PROPERTIES TIMEOUT 15)
 
+    # Real binary-safe native String.contains_literal implementation with
+    # embedded NUL, bounds, empty needle, and fail-closed invalid handles.
+    # This C runtime ABI test is distinct from source-to-native Atto execution.
+    add_executable(oreslang-native-string-contains-literal-test
+        tests/native_string_contains_literal_test.c
+        src/main/cpp/oreslang/runtime/NativeStringRegion.c)
+    target_include_directories(oreslang-native-string-contains-literal-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-string-contains-literal-test PRIVATE pthread)
+    target_compile_options(oreslang-native-string-contains-literal-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_string_contains_literal_binary_unit
+        COMMAND oreslang-native-string-contains-literal-test)
+    set_tests_properties(native_string_contains_literal_binary_unit PROPERTIES TIMEOUT 20)
     # Host-only receiver-erased method selector. No LLVM guest execution is
     # implied by this standalone C++ contract test.
     add_executable(oreslang-native-receiver-slot-test
@@ -4697,6 +4711,7 @@ if(BUILD_TESTING)
                 tests/fixtures/native-class-string/routing-option-capture.ores
                 tests/fixtures/native-class-string/ordered-routing-locals.ores
                 tests/fixtures/native-class-string/ordered-array-locals.ores
+                tests/fixtures/native-class-string/copy-option-v1.atto
                 tests/fixtures/native-class-string/routing-path-validation.ores
                 tests/fixtures/native-class-string/typed-array-iteration.ores
                 tests/fixtures/native-class-string/owned-aggregate-return.ores
@@ -6346,7 +6361,7 @@ if(BUILD_TESTING AND ORE_CLANG)
 endif()
 
 if(BUILD_TESTING)
-    oreslang_contract_test(refreshed_actor_abi_actor_collision actor-abi-actor-collision.ores --diagnostic "duplicate actor/class/function symbol")
+    oreslang_contract_test(refreshed_actor_abi_actor_collision actor-abi-actor-collision.ores --diagnostic "NATIVE_ACTOR_DUPLICATE_DEFINITION: duplicate actor 'Counter'")
     oreslang_contract_test(refreshed_actor_abi_func_collision actor-abi-func-collision.ores --diagnostic "reserved native runtime ABI symbol")
     oreslang_contract_test(refreshed_actor_duplicate_field actor-duplicate-field.ores --diagnostic "duplicate actor field")
     oreslang_contract_test(refreshed_actor_field_shadow actor-field-shadow.ores --diagnostic "actor parameter shadows field")
