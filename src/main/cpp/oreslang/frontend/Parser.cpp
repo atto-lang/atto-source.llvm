@@ -2124,7 +2124,7 @@ private:
             // integer literal may be used twice, with fresh AST identities
             // for BOTH emitted occurrences (no shared or reused Expr*).
             if (!argument || argument->kind != Expression::Kind::Integer)
-                fail("NATIVE_MACRO_EXPANDER_REQUIRED: repeated unquote requires a closed integer literal; no ownership/effect duplication or runtime fallback is permitted");
+                fail("NATIVE_MACRO_EXPANDER_REQUIRED: repeated unquote requires a closed integer literal; no ownership/effect duplication is permitted; runtime fallback is forbidden");
             // LLVM's ordinary i64 add wraps unless separately checked. Do
             // not introduce a silently wrapping expression when statically
             // duplicating a proven constant: reject overflow before IR.
