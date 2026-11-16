@@ -1623,6 +1623,12 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
+    # Java TransparentTypeAliasTest parity: `type N = T;`, `define type alias N as T;`
+    # and alias-prefixed scalar locals, compiled to native guests at O0/O2.
+    add_test(NAME native_type_alias_spellings
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_alias_spellings.sh"
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_type_alias_spellings PROPERTIES TIMEOUT 120)
     # Java lexer parity: contextual words (borrow, critical, enum, gen, pure,
     # requires, serial, structural, suspend, using) are ordinary identifiers.
     add_test(NAME native_contextual_keyword_identifiers

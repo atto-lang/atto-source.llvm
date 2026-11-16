@@ -991,10 +991,15 @@ public:
                  "actor entrypoint needs manifest-verified receiver, state "
                  "loan and mailbox MIR");
         while (token_.text == "define" || token_.text == "declare" ||
+               at_bare_type_alias() ||
                 (token_.text == "pub" &&
                  (peek_next().text == "define" || peek_next().text == "declare"))) {
             if (at_type_only_introducer()) {
                 type_only_declaration(program);
+                continue;
+            }
+            if (at_bare_type_alias()) {
+                bare_type_alias(program);
                 continue;
             }
             // Unlike complete defined actors, declaration-only actors require
@@ -1088,6 +1093,10 @@ public:
                 && !(wrapped_module && token_.text == "end")) {
             if (token_.text == "import")
                 fail("native contract imports require a validated cross-unit linker");
+            if (at_bare_type_alias()) {
+                bare_type_alias(program);
+                continue;
+            }
             if (at_type_only_introducer()) {
                 type_only_declaration(program);
                 continue;
@@ -1314,6 +1323,19 @@ private:
                (token_.text == "pub" && peek_next().text == "declare");
     }
 
+    // Java's legacy `type Name = Target;` (and `pub type ...`) is the same
+    // transparent alias as `define type Name = Target;`.
+    bool at_bare_type_alias() const {
+        return (token_.text == "type" && peek_next().kind == Kind::Identifier) ||
+               (token_.text == "pub" && peek_next().text == "type");
+    }
+
+    void bare_type_alias(Program& program) {
+        const bool exported = accept("pub");
+        if (token_.text != "type") fail("expected 'type'");
+        type_only_declaration(program, true, exported);
+    }
+
     // Aliases are compile-time spellings for the existing scalar ABI, never
     // new native structs. Resolve through a bounded chain; a missing target or
     // trait/interface name must fail instead of becoming a forged class.
@@ -1526,7 +1548,18 @@ private:
         TypeOnlyDecl decl;
         decl.module_name = program.module;
         decl.exported = exported;
-        if (accept("type")) decl.kind = TypeOnlyDecl::Kind::Alias;
+        // Java TransparentTypeAliasTest: `define type alias Name as Target;` is
+        // the canonical spelling; `type Name = Target;` and `define type Name =
+        // Target;` are the same transparent alias. `declare` keeps only `=`.
+        bool alias_as_spelling = false;
+        if (accept("type")) {
+            decl.kind = TypeOnlyDecl::Kind::Alias;
+            if (already_defined && token_.text == "alias" &&
+                    peek_next().kind == Kind::Identifier) {
+                advance();
+                alias_as_spelling = true;
+            }
+        }
         else if (accept("trait")) decl.kind = TypeOnlyDecl::Kind::Trait;
         else if (accept("interface")) decl.kind = TypeOnlyDecl::Kind::Interface;
         else fail("TYPE_ONLY_INVALID_KIND: declare admits type, trait or interface; "
@@ -1541,10 +1574,16 @@ private:
                 fail("TYPE_ONLY_GENERIC_UNSUPPORTED: native aliases are non-generic in descriptor v1");
             // 'declare type' and 'define type' share this exact grammar.
             // Incomplete 'declare type Code;' never creates an alias.
-            if (token_.text != "=")
-                fail("TYPE_ONLY_INCOMPLETE_DEFINITION: declare type and define type"
-                     " both require '= <type>'");
-            require("=");
+            if (alias_as_spelling) {
+                if (token_.text != "as")
+                    fail("TYPE_ONLY_INCOMPLETE_DEFINITION: define type alias requires 'as <type>'");
+                advance();
+            } else {
+                if (token_.text != "=")
+                    fail("TYPE_ONLY_INCOMPLETE_DEFINITION: declare type and define type"
+                         " both require '= <type>'");
+                require("=");
+            }
             decl.alias_target = type_alias_target();
             type_alias_constraints(decl);
             require(";");
@@ -3124,14 +3163,29 @@ private:
                 fail("E_CONST_MUT_UNSUPPORTED: scoped owned mutable value lowering is not yet implemented");
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
-            if (type_first_const ||
+            // Java: `val Count c = 42;` with `type Count = int;` is the same
+            // scalar local as `val c: Count = 42;`. Only a declared scalar alias
+            // followed by a binding name takes this path; class names do not.
+            const bool alias_prefixed =
+                    (token_.text == "val" || token_.text == "const" || token_.text == "let") &&
+                    sum_first.kind == Kind::Identifier &&
+                    scalar_alias_targets_.count(std::string(sum_first.text)) &&
+                    sum_look.next().kind == Kind::Identifier;
+            if (alias_prefixed ||
+                    type_first_const ||
                     ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
                     (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string"))) {
                 const std::string mode = type_first_const ? "const" : std::string(token_.text);
                 if (!type_first_const) { advance(); if (mode == "let") accept("mut"); }
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
-                binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
-                if (binding.scalar_type == ScalarType::I64) require("int");
+                if (alias_prefixed) {
+                    binding.pending_type_alias = std::string(token_.text);
+                    advance();
+                    binding.scalar_type = resolve_scalar_alias(binding.pending_type_alias);
+                } else {
+                    binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
+                    if (binding.scalar_type == ScalarType::I64) require("int");
+                }
                 binding.name = identifier();
                 require("=");
                 if (accept("await")) {
