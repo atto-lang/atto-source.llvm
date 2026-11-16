@@ -465,7 +465,8 @@ int main(int argc, char** argv) {
             // specialization with no actor/scheduler/import/FFI capability.
             // Any unrecognized syntax is rejected BEFORE any LLVM text
             // escapes to stdout. Never silently enable for regular sources.
-            if (wasm32_target || cortex_m_target || tenant_vm_guest ||
+            if (static_ffi_i64_capability ||
+                    wasm32_target || cortex_m_target || tenant_vm_guest ||
                     experimental_owned_int || experimental_rt_scalar_loop ||
                     bounded_allocator_provider || tree_shake ||
                     !tree_shake_roots.empty() || native_hard_rt_profile ||
@@ -489,7 +490,7 @@ int main(int argc, char** argv) {
                  native_hard_rt_profile || rt_check_only || rt_entry_seen ||
                  rt_report_seen || tree_shake || !tree_shake_roots.empty() ||
                  experimental_owned_int || experimental_rt_scalar_loop ||
-                 bounded_allocator_provider))
+                 experimental_pointer_int_aot || bounded_allocator_provider))
             throw std::runtime_error(
                 "normal static FFI i64 requires host AOT with isolated approved linker grant");
         auto ast = oreslang::load_native_program(
