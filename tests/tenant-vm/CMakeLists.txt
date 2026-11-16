@@ -5,6 +5,7 @@ find_package(Threads REQUIRED)
 
 option(TENANT_VM_SANITIZE "ASan+UBSan on the host" OFF)
 option(TENANT_VM_TSAN "TSan on the host" OFF)
+option(TENANT_VM_REQUIRE_FULL_COVERAGE "Fail configuration unless lowered Wasm, admission and real .atto source tests can run" OFF)
 
 set(ROOT "${CMAKE_CURRENT_LIST_DIR}/../..")
 set(CMAKE_C_STANDARD 11)
@@ -47,6 +48,23 @@ set(TENANT_VM_ATTO_COMPILER "" CACHE FILEPATH "oreslang-llvmc, to lower real .at
 set(TENANT_VM_ATTO_IR_DIR "" CACHE PATH "IR already emitted by oreslang-llvmc --target=wasm32, one NAME.ll per fixture")
 set(TENANT_VM_WASM_CLANG "${LOWER_CLANG}" CACHE FILEPATH "clang that can target wasm32")
 find_program(TENANT_VM_WASM_LD NAMES wasm-ld wasm-ld-18 wasm-ld-19 wasm-ld-20)
+
+# CI must not report a green core-only build if the lowered guest, admission, or
+# real source toolchain was unavailable. Developer builds remain opt-in.
+if(TENANT_VM_REQUIRE_FULL_COVERAGE)
+    if(NOT WAT2WASM OR NOT WASM2C OR NOT WASM_RT_INCLUDE OR NOT LOWER_CLANG OR NOT Python3_FOUND)
+        message(FATAL_ERROR "Tenant VM full coverage requires wat2wasm, wasm2c, wasm-rt.h, clang and Python3")
+    endif()
+    if(NOT TENANT_VM_WASM_LD OR NOT TENANT_VM_WASM_CLANG)
+        message(FATAL_ERROR "Tenant VM full coverage requires wasm-ld and wasm32 clang")
+    endif()
+    if(NOT TENANT_VM_ATTO_COMPILER OR NOT EXISTS "${TENANT_VM_ATTO_COMPILER}")
+        message(FATAL_ERROR "Tenant VM full coverage requires an existing oreslang-llvmc binary")
+    endif()
+    if(TENANT_VM_ATTO_IR_DIR)
+        message(FATAL_ERROR "Tenant VM full coverage must compile .atto with this checkout's compiler, not prebuilt IR")
+    endif()
+endif()
 
 if(WAT2WASM AND WASM2C AND WASM_RT_INCLUDE AND LOWER_CLANG AND Python3_FOUND)
     set(LOWER "${CMAKE_CURRENT_LIST_DIR}/../../tools/tenant-vm/lower_guest.py")
