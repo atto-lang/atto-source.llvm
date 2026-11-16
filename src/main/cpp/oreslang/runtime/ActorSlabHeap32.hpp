@@ -38,7 +38,7 @@ public:
         if (!cage_ || !valid_request(bytes, alignment)) return 0;
         const std::uint64_t wanted = std::max<std::uint64_t>(bytes, alignment);
         std::uint64_t block = kMinClassBytes;
-        while (block < wanted && block <= page_bytes_ block <<= 1;
+        while (block < wanted && block <= page_bytes_) block <<= 1;
         if (block <= page_bytes_) {
             for (std::size_t i = 0; i < pages_.size(); ++i) {
                 if (pages_[i].mode == Mode::Slab && pages_[i].block == block) {
