@@ -62,7 +62,10 @@ MAX_MAVEN_PREFETCH_ARTIFACTS = 16
 CARRIER_REVIEW_LOGIN = INCIDENT_REVIEW_LOGIN
 CARRIER_REVIEW_USER_ID = INCIDENT_REVIEW_USER_ID
 MAX_GOVERNANCE_FILE = 1024 * 1024
-MAX_FILES = 1024
+# Reviewed snapshot cap for full LLVM trees (1822 blobs at PR #1571).
+# Does NOT authorize transfer: source protection, incidents, carrier identity,
+# reviewed test plan and exact-tree checks remain mandatory.
+MAX_FILES = 2048
 MAX_TREE_ENTRIES = 4096
 MAX_TOTAL = 40 * 1024 * 1024
 MAX_FILE = 10 * 1024 * 1024
