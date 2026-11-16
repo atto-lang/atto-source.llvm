@@ -1,0 +1,67 @@
+name: Compact actor Offset32 host allocator (M2b candidate)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/ActorSlabHeap32.hpp'
+      - 'src/main/cpp/oreslang/runtime/TenantVm.cpp'
+      - 'src/main/cpp/oreslang/runtime/TenantVmGuestAbi.h'
+      - 'tests/compact_actor_heap32_test.cpp'
+      - 'tests/benchmark_ref_width.cpp'
+      - 'docs/ACTOR_COMPACT_HEAP32_M2B.md'
+      - '.github/workflows/compact-actor-heap32.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  checked-host-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Capture exact local tree and available native toolchains
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          git rev-parse HEAD^{tree}
+          git hash-object src/main/cpp/oreslang/runtime/ActorSlabHeap32.hpp
+          uname -m
+          g++ --version | head -1
+          clang++ --version | head -1
+      - name: Compile and execute x86-64 allocator and no-hot-path-new assertions
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -I src/main/cpp tests/compact_actor_heap32_test.cpp -o /tmp/compact-heap64
+          /tmp/compact-heap64 | tee /tmp/heap64.log
+          grep -q 'COMPACT_ACTOR_SLAB_TEST_PASS checks=1285' /tmp/heap64.log
+      - name: Execute AddressSanitizer and UndefinedBehaviorSanitizer
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O1 -g -Wall -Wextra -Werror -pedantic \
+            -fsanitize=address,undefined -fno-omit-frame-pointer -I src/main/cpp \
+            tests/compact_actor_heap32_test.cpp -o /tmp/compact-heap64-san
+          ASAN_OPTIONS=detect_leaks=1 /tmp/compact-heap64-san | tee /tmp/heap64-san.log
+          grep -q 'COMPACT_ACTOR_SLAB_TEST_PASS checks=1285' /tmp/heap64-san.log
+      - name: Compile and execute real i386 ELF32, not simulated 32-bit offsets
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends g++-multilib file
+          g++ -m32 -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -I src/main/cpp \
+            tests/compact_actor_heap32_test.cpp -o /tmp/compact-heap32
+          file /tmp/compact-heap32 | grep -q 'ELF 32-bit'
+          /tmp/compact-heap32 | tee /tmp/heap32.log
+          grep -q 'COMPACT_ACTOR_SLAB_TEST_PASS checks=1285' /tmp/heap32.log
+      - name: Build and execute native tenant VM host integration regressions
+        run: |
+          set -euo pipefail
+          cmake -S tests/tenant-vm -B /tmp/atto-tenant-cmake -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/atto-tenant-cmake --target tenant_vm_test -j 2
+          ctest --test-dir /tmp/atto-tenant-cmake -R '^tenant_vm_test$' --output-on-failure --timeout 300
+      - name: Native reference-width RSS samples (not whole-Atto memory proof)
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic tests/benchmark_ref_width.cpp -o /tmp/bench-refwidth
+          /tmp/bench-refwidth 32 10000000 | tee /tmp/ref32-rss.log
+          /tmp/bench-refwidth 64 10000000 | tee /tmp/ref64-rss.log
+          grep -q 'REFERENCE_RSS_SAMPLE width=32 count=10000000 ref_bytes=40000000' /tmp/ref32-rss.log
+          grep -q 'REFERENCE_RSS_SAMPLE width=64 count=10000000 ref_bytes=80000000' /tmp/ref64-rss.log
