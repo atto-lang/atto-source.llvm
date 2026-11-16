@@ -180,6 +180,24 @@ inline void resolve_native_sums(Program& program) {
             std::vector<Hint> argument_types;
             argument_types.reserve(e.arguments.size());
             for (auto& arg : e.arguments) argument_types.push_back(expression(*arg, env, {}));
+            if (e.kind == E::ArrayCall && e.name == "get_copy") {
+                // Copy<int> is represented as an owned value. Do not turn an
+                // Array<String>, class, nested sum, or foreign scalar into a
+                // forged Option<int> handle. The bounds branch is native AOT.
+                if (!owner.array || owner.element != ScalarType::I64 ||
+                    !owner.element_class.empty() || argument_types.size() != 1 ||
+                    !argument_types[0].sum.empty() ||
+                    !argument_types[0].cls.empty() || argument_types[0].array ||
+                    argument_types[0].scalar != ScalarType::I64)
+                    throw std::runtime_error(
+                        "native Array.get_copy requires Array<int> and a checked int index");
+                const auto sum = add_type(NativeSumType::Kind::Option, ScalarType::I64);
+                if (!expected.empty() && expected != sum)
+                    throw std::runtime_error(
+                        "native Array.get_copy result requires Option<int>, no implicit conversion");
+                e.sum_type = sum;
+                return {ScalarType::I64, sum};
+            }
             if (!owner.sum.empty()) {
                 const NativeSumType type = native_sum(program, owner.sum);
                 const bool option = type.kind == NativeSumType::Kind::Option;

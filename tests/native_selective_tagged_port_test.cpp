@@ -320,8 +320,11 @@ static void randomized_tagged_dequeue() {
 }
 
 // Selective ACK may complete a newer sequence before an earlier queued
-// receipt. The global completion window must stay bounded by the contiguous
-// watermark, even after physical frame credits are refunded out of order.
+// receipt. As in every other port test, the consumer reports each receipt's
+// global completion explicitly after its physical ACK; the port itself only
+// refunds frame/byte credit. The global completion window must stay bounded
+// by the contiguous watermark, even after physical frame credits are
+// refunded out of order.
 static void selective_ack_does_not_skip_global_completion_window() {
     using Port = BoundedActorPort<MoveOnlyMessage>;
     using Ledger = oreslang::runtime::ActorMailboxCompletion;
@@ -336,6 +339,7 @@ static void selective_ack_does_not_skip_global_completion_window() {
     CHECK(newest.status == Port::SelectiveStatus::Matched && newest.delivery);
     CHECK(newest.delivery->sequence() == 3);
     CHECK(newest.delivery->acknowledge_released());
+    ledger->complete(newest.delivery->sequence());
     CHECK(port.used_frames() == 2);
     CHECK(ledger->watermark() == 0);
     CHECK(!port.offer(std::move(four), 8, 23));
@@ -343,6 +347,7 @@ static void selective_ack_does_not_skip_global_completion_window() {
     auto first = port.try_receive();
     CHECK(first && first->sequence() == 1);
     CHECK(first->acknowledge_released());
+    ledger->complete(first->sequence());
     CHECK(ledger->watermark() == 1);
     CHECK(port.offer(std::move(four), 8, 23));
     CHECK(ledger->snapshot() == 4);
@@ -350,10 +355,12 @@ static void selective_ack_does_not_skip_global_completion_window() {
     CHECK(fourth.status == Port::SelectiveStatus::Matched && fourth.delivery);
     CHECK(fourth.delivery->sequence() == 4);
     CHECK(fourth.delivery->acknowledge_released());
+    ledger->complete(fourth.delivery->sequence());
     CHECK(ledger->watermark() == 1);
     auto second = port.try_receive();
     CHECK(second && second->sequence() == 2);
     CHECK(second->acknowledge_released());
+    ledger->complete(second->sequence());
     CHECK(ledger->watermark() == 4);
     CHECK(ledger->completed_through(4));
     CHECK(port.used_frames() == 0 && port.used_bytes() == 0);

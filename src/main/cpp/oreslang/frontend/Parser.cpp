@@ -160,7 +160,7 @@ bool reserved(std::string_view name) {
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
-        "default", "eq", "neq", "and", "or", "xor", "Xor", "nb", "select", "readch", "writech",
+        "default", "eq", "neq", "Xor", "nb", "select", "readch", "writech",
         "cb", "shared", "untrusted", "type", "types", "typeof",
         "interface", "trait", "struct", "impl", "abstract", "void", "Iterator", "AsyncIterator",
         "static", "pub", "private", "return", "defer", "throw", "raise",
@@ -370,7 +370,10 @@ public:
         // Admit '@' as a TOKEN only so existing parameter-local @Default guards
         // can issue their specific fail-closed diagnostic instead of a generic
         // unsupported-token error. No annotation execution is enabled.
-        if (std::string_view("(){},:;+-*/%=.<>@?!").find(ch) != std::string_view::npos) {
+        // '[' / ']' are plain tokens: only the GPU launch geometry and the
+        // GPU kernel body envelope consume them; anywhere else the parser
+        // rejects them before IR exactly like any other unexpected symbol.
+        if (std::string_view("(){}[],:;+-*/%=.<>@?!").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -818,6 +821,39 @@ bool namespace_literal_i64_arithmetic(const Expression& expr, std::size_t depth 
     }
 }
 
+/* First real native namespace execution slice: exactly one standalone, pure,
+ * zero-arg scalar main returning checked literal arithmetic. Shared by the
+ * default frontend gate and resolve_and_validate_program so the generic
+ * validator admits exactly the same slice and nothing broader. */
+bool namespace_checked_scalar_main(const Program& program) {
+    return program.imports.empty()
+        && program.functions.size() == 1
+        && program.classes.empty() && program.actors.empty()
+        && program.contracts.empty() && program.conforms.empty()
+        && program.cooperative_loops.empty() && program.generators.empty()
+        && program.type_only_declarations.empty()
+        && program.functions.front().name == "main"
+        && program.functions.front().parameters.empty()
+        && program.functions.front().generic_parameters.empty()
+        && !program.functions.front().returns_void
+        && program.functions.front().return_type == ScalarType::I64
+        && !program.functions.front().async_source_i64
+        && !program.functions.front().has_declared_effects
+        && program.functions.front().result
+        && namespace_literal_i64_arithmetic(*program.functions.front().result)
+        && program.functions.front().result->arguments.empty()
+        && program.functions.front().locals.empty()
+        && program.functions.front().statements.empty()
+        && program.functions.front().early_returns.empty()
+        && program.functions.front().actor_spawns.empty()
+        && program.functions.front().actor_sends.empty()
+        && program.functions.front().actor_stops.empty()
+        && program.functions.front().source_tasks.empty()
+        && program.functions.front().future_pipelines.empty()
+        && program.functions.front().actor_field_writes.empty()
+        && !program.functions.front().caught_throw_value;
+}
+
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
@@ -832,8 +868,6 @@ public:
 
     Program parse() {
         Program program;
-        if (token_.text == "use" && peek_next().text == "namespace")
-            fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native actor namespace header needs typed module/linker identity");
         while (token_.text == "import") {
             advance();
             // Outside the host-only verified-metadata mode, namespace imports stay
@@ -1207,6 +1241,7 @@ public:
         if (wrapped_module) require("end");
         validate_actor_forwards(program);
         if (token_.kind != Kind::End) fail("unexpected trailing source");
+        resolve_scalar_generator_delegation(program);
         // The package-local host graph is not connected to an authenticated
         // v2 manifest/source loader and native codegen yet. Namespace AST
         // imports must not silently enter the existing relative module linker.
@@ -1221,32 +1256,7 @@ public:
             // standalone, pure, zero-arg scalar main returning checked literal arithmetic.
             // No imports, namespace cross-file linking, actors, closures or
             // source FFI can acquire identity/dispatch authority here.
-            const bool checked_scalar_main = program.imports.empty()
-                    && program.functions.size() == 1
-                    && program.classes.empty() && program.actors.empty()
-                    && program.contracts.empty() && program.conforms.empty()
-                    && program.cooperative_loops.empty() && program.generators.empty()
-                    && program.type_only_declarations.empty()
-                    && program.functions.front().name == "main"
-                    && program.functions.front().parameters.empty()
-                    && program.functions.front().generic_parameters.empty()
-                    && !program.functions.front().returns_void
-                    && program.functions.front().return_type == ScalarType::I64
-                    && !program.functions.front().async_source_i64
-                    && !program.functions.front().has_declared_effects
-                    && program.functions.front().result
-                    && namespace_literal_i64_arithmetic(*program.functions.front().result)
-                    && program.functions.front().result->arguments.empty()
-                    && program.functions.front().locals.empty()
-                    && program.functions.front().statements.empty()
-                    && program.functions.front().early_returns.empty()
-                    && program.functions.front().actor_spawns.empty()
-                    && program.functions.front().actor_sends.empty()
-                    && program.functions.front().actor_stops.empty()
-                    && program.functions.front().source_tasks.empty()
-                    && program.functions.front().future_pipelines.empty()
-                    && program.functions.front().actor_field_writes.empty()
-                    && !program.functions.front().caught_throw_value;
+            const bool checked_scalar_main = namespace_checked_scalar_main(program);
             if (!checked_scalar_main)
                 fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: only standalone checked literal-arithmetic i64 main is native-lowered; multi-file actor namespaces remain gated");
         }
@@ -1489,11 +1499,22 @@ private:
         // Exported forward signatures cannot be enforced by this native actor
         // ABI, which has no actor visibility field, so reject them for now.
         if (!already_defined && accept("actor")) {
+            // Under a namespace header an exported declaration is a
+            // manifest-level (cross-file) declared actor, owned by the
+            // declared-actor codegen gate rather than the same-source forward.
+            if (exported && !program.namespace_name.empty())
+                fail("DECLARED_ACTOR_CODEGEN_UNSUPPORTED: native actor receiver, "
+                     "sealed state and mailbox lowering require a verified "
+                     "same-manifest namespace source set");
             if (exported)
                 fail("NATIVE_ACTOR_FORWARD_PUBLIC_UNSUPPORTED: native actor forward visibility needs an actor export ABI");
             const std::string name = nominal_declaration_name();
             if (token_.text == "<")
                 fail("NATIVE_ACTOR_FORWARD_GENERIC_UNSUPPORTED: native actor generics require typed specialization");
+            // As on Java, a forward declaration never carries a body; the
+            // actor's state and handlers belong to its 'define actor'.
+            if (token_.text == "as")
+                fail("NATIVE_ACTOR_FORWARD_BODY: actor forward declaration cannot supply a body");
             require(";");
             if (!actor_forwards_.emplace(name, program.module).second)
                 fail("NATIVE_ACTOR_FORWARD_DUPLICATE: duplicate actor forward '" + name + "'");
@@ -1594,6 +1615,15 @@ private:
         if (program.type_only_declarations.size() >= 1024)
             fail("TYPE_ONLY_DECL_BUDGET: maximum 1024 type-only declarations");
         program.type_only_declarations.push_back(std::move(decl));
+    }
+
+    // After a comma-body separator: a second ',' is an empty item, while
+    // 'end' means the trailing separator has no following item.
+    void reject_missing_comma_item() const {
+        if (token_.text == ",")
+            fail("native comma expression body contains an empty item");
+        if (token_.text == "end")
+            fail("native comma expression body requires item after ','");
     }
 
     void validate_actor_forwards(const Program& program) const {
@@ -2155,7 +2185,9 @@ private:
                 signature.mutable_receiver = method.parameters.front().mode == Parameter::Mode::BorrowMut;
                 for (const auto& prior : result.methods)
                     if (prior.name == signature.name && prior.arity == signature.arity)
-                        fail("duplicate native method name/arity");
+                        fail("duplicate native method name/arity '" + signature.name +
+                             "/" + std::to_string(signature.arity) +
+                             "' (self receiver does not count toward arity)");
                 result.methods.push_back(std::move(signature));
                 methods_.push_back(std::move(method));
                 continue;
@@ -2406,10 +2438,20 @@ private:
             if (token_.kind == Kind::End)
                 fail("unterminated native generator body");
             if (accept("yield")) {
-                if (accept("*"))
-                    fail("native generator yield* requires delegated iterator ownership and close lowering");
-                generator.yields.push_back(signed_integer_literal());
-                if (generator.yields.size() > 4096)
+                ScalarGeneratorStep step;
+                if (accept("*")) {
+                    // The only safe native v1 delegate is a named generator
+                    // defined in this same source file. No expressions,
+                    // parameters, actor owners or foreign iterator handles.
+                    step.delegate = true;
+                    step.target = identifier();
+                    require("(");
+                    require(")");
+                } else {
+                    step.value = signed_integer_literal();
+                }
+                generator.steps.push_back(std::move(step));
+                if (generator.steps.size() > 4096)
                     fail("native generator v1 exceeds 4096 yielded elements");
                 require(";");
                 continue;
@@ -2424,6 +2466,47 @@ private:
             fail("native sync generator v1 admits only integer yield statements and bare return");
         }
         return generator;
+    }
+
+    // Resolve pure literal yield* delegation once, at compiler admission.
+    // Since neither producer has captures, callbacks, awaits nor cleanup,
+    // static inlining is observationally equivalent to pulling each child in
+    // order. All other forms continue to fail closed in scalar_generator().
+    static void resolve_scalar_generator_delegation(Program& program) {
+        const std::size_t count = program.generators.size();
+        std::unordered_map<std::string, std::size_t> names;
+        for (std::size_t i = 0; i < count; ++i)
+            names.emplace(program.generators[i].name, i);
+        std::vector<unsigned char> state(count, 0);
+        std::function<void(std::size_t)> resolve = [&](std::size_t index) {
+            if (state[index] == 2) return;
+            if (state[index] == 1)
+                throw std::runtime_error("native generator yield* cycle at '" +
+                    program.generators[index].name + "'");
+            state[index] = 1;
+            auto& generator = program.generators[index];
+            std::vector<std::int64_t> result;
+            for (const auto& step : generator.steps) {
+                if (!step.delegate) {
+                    if (result.size() >= 4096)
+                        throw std::runtime_error("native generator v1 exceeds 4096 yielded elements");
+                    result.push_back(step.value);
+                    continue;
+                }
+                const auto target = names.find(step.target);
+                if (target == names.end())
+                    throw std::runtime_error("native generator yield* target is not a same-file literal generator: '" +
+                        step.target + "'");
+                resolve(target->second);
+                const auto& child = program.generators[target->second].yields;
+                if (child.size() > 4096 - result.size())
+                    throw std::runtime_error("native generator v1 exceeds 4096 yielded elements after yield*");
+                result.insert(result.end(), child.begin(), child.end());
+            }
+            generator.yields = std::move(result);
+            state[index] = 2;
+        };
+        for (std::size_t i = 0; i < count; ++i) resolve(i);
     }
 
     CooperativeScalarLoop cooperative_scalar_loop() {
@@ -2499,15 +2582,17 @@ private:
         auto found = std::find_if(program.classes.begin(), program.classes.end(),
             [&](const ClassDecl& cls) { return cls.name == owner; });
         if (found == program.classes.end()) {
+            // An already defined actor's state is sealed, even when the same
+            // source also forward-declares it: check that first.
+            const bool actor_target = std::any_of(program.actors.begin(), program.actors.end(),
+                [&](const ActorDecl& actor) { return actor.name == owner; });
+            if (actor_target)
+                fail("NATIVE_MTD_ACTOR_STATE_SEALED: external receiver methods cannot extend an already defined actor's sealed state");
             // A declaration-only actor with type-first methods is valid
             // AttoLang, but cannot yet be represented by native on_message
             // class slots. Reject for missing backend lowering, not grammar.
             if (actor_forwards_.count(owner))
                 fail("NATIVE_ACTOR_MTD_BACKEND_UNSUPPORTED: declaration-only actor receiver needs typed mailbox method lowering");
-            const bool actor_target = std::any_of(program.actors.begin(), program.actors.end(),
-                [&](const ActorDecl& actor) { return actor.name == owner; });
-            if (actor_target)
-                fail("NATIVE_MTD_ACTOR_STATE_SEALED: external receiver methods cannot extend an already defined actor's sealed state");
             fail("NATIVE_MTD_LOCAL_CLASS_REQUIRED: typed receiver must name an already declared ordinary local class");
         }
         const bool prior_active = external_class_receiver_active_;
@@ -2856,14 +2941,12 @@ private:
                         value.locals.push_back(std::move(binding));
                         if (!accept(","))
                             fail("native comma body local must be followed by ',' and an expression");
-                        if (token_.text == "," || token_.text == "end")
-                            fail("native comma expression body requires item after ','");
+                        reject_missing_comma_item();
                         continue;
                     }
                     auto evaluated = expression();
                     if (accept(",")) {
-                        if (token_.text == "," || token_.text == "end")
-                            fail("native comma expression body requires item after ','");
+                        reject_missing_comma_item();
                         LocalBinding discarded;
                         discarded.name = "$effect" + std::to_string(value.locals.size());
                         discarded.initializer = std::move(evaluated);
@@ -3932,9 +4015,13 @@ private:
                     fail("native protected try guard requires a pure nonthrowing bool expression");
                 const bool then_form = accept_keyword_if_header();
                 if (!then_form) require("{");
-                if (accept("return")) {
-                    if (value.returns_void)
-                        fail("guarded early return requires a scalar result");
+                // In a void function `if c then return; fi` is an ordinary conditional
+                // whose arm returns (as in Java); the generic branch below parses
+                // `return;` like any other arm statement. Only value-returning
+                // functions use the scalar guarded-return lowering.
+                if (value.returns_void && token_.text == "return" && peek_next().text != ";")
+                    fail("RETURN_VOID_VALUE: void function cannot return a value");
+                if (!value.returns_void && accept("return")) {
                     if (value.early_returns.size() == 8)
                         fail("native guarded return limit exceeded (8)");
                     GuardedReturn guard;
@@ -4295,8 +4382,16 @@ private:
 
     std::unique_ptr<Expression> logical_xor() {
         auto left = logical_and();
-        if (token_.text == "^^")
-            fail("'^^' is reserved and is not AttoLang source syntax; use Xor(a, b)");
+        // The lexer emits adjacent ^^ as one token; single ^ remains invalid.
+        // LLVM's existing LogicalXor lowering is eager and bool-only.
+        while (token_.text == "^^") {
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::LogicalXor, offset);
+            expr->left = std::move(left);
+            expr->right = logical_and();
+            left = std::move(expr);
+        }
         return left;
     }
 
@@ -5929,11 +6024,31 @@ private:
                         throw std::runtime_error(
                             "named native array/member arguments require checked lowering at byte " +
                             std::to_string(expr.offset));
+                // String.contains_literal(String) is a scalar, pure,
+                // length-delimited native operation, never an array handle.
+                if (expr.name == "contains_literal") {
+                    if (!expr.left || expr.arguments.size() != 1)
+                        throw std::runtime_error(
+                            "String.contains_literal requires exactly one String argument at byte " +
+                            std::to_string(expr.offset));
+                    if (validate_scalar_expression(*expr.left, variables, functions, depth + 1)
+                            != ScalarType::String)
+                        throw std::runtime_error(
+                            "String.contains_literal requires a String receiver at byte " +
+                            std::to_string(expr.offset));
+                    if (validate_scalar_expression(*expr.arguments.front(), variables, functions, depth + 1)
+                            != ScalarType::String)
+                        throw std::runtime_error(
+                            "String.contains_literal requires a String needle at byte " +
+                            std::to_string(expr.offset));
+                    return expr.resolved_type = ScalarType::Bool;
+                }
                 std::string receiver;
                 if (expr.left) receiver = native_place_key(*expr.left);
                 const auto element_slot = variables.find(receiver + ".$element");
                 const ScalarType element = element_slot == variables.end() ? ScalarType::I64 : element_slot->second;
-                const std::size_t expected = expr.name == "get" || expr.name == "add"
+                const std::size_t expected = expr.name == "get" ||
+                    expr.name == "get_copy" || expr.name == "add"
                     ? 1 : expr.name == "set" ? 2 : 0;
                 if (expected == 0 || expr.arguments.size() != expected)
                     throw std::runtime_error("native Array<int> effect supports only add(value) or set(index,value); scalar expression supports only get(index) at byte " +
@@ -5942,7 +6057,8 @@ private:
                     const auto& argument = expr.arguments[i];
                     const ScalarType actual = validate_scalar_expression(
                         *argument, variables, functions, depth + 1);
-                    const bool index = (expr.name == "get" || expr.name == "set") && i == 0;
+                    const bool index = (expr.name == "get" ||
+                        expr.name == "get_copy" || expr.name == "set") && i == 0;
                     if (actual != (index ? ScalarType::I64 : element))
                         throw std::runtime_error(std::string(element == ScalarType::I64
                             ? "native Array<int> arguments require int, got "
@@ -5950,6 +6066,13 @@ private:
                             std::string(scalar_type_name(actual)) + " at byte " +
                             std::to_string(argument->offset));
                 }
+                // A checked Copy read is an opaque tagged Option<int> sum
+                // with i64 ABI handle. The sum resolver proves the element
+                // kind; it must never become an untagged raw int alias.
+                if (expr.name == "get_copy" &&
+                    (element != ScalarType::I64 || expr.sum_type != "Option<int>"))
+                    throw std::runtime_error(
+                        "native Array.get_copy requires proven Copy<int> and Option<int> sum lowering");
                 return expr.resolved_type = expr.name == "get" ? element : ScalarType::I64;
             }
             case Expression::Kind::RecordConstruct:
@@ -7572,11 +7695,14 @@ void resolve_and_validate_program(Program& program) {
     // A host-only, parsed namespace AST is not a codegen authorization.
     // Prevent callers of the general validator from taking a parsed v2
     // namespace source around the default frontend's executable gate.
+    // The single admitted exception is the namespace checked-scalar main
+    // slice, re-proved here from the AST rather than trusted from a flag.
     if (!program.namespace_imports.empty() ||
             (!program.namespace_name.empty() &&
                 (!program.functions.empty() || !program.classes.empty() ||
                  !program.actors.empty() || !program.contracts.empty() ||
-                 !program.cooperative_loops.empty() || !program.generators.empty())))
+                 !program.cooperative_loops.empty() || !program.generators.empty()) &&
+                !namespace_checked_scalar_main(program)))
         throw std::runtime_error(
             "NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: verified namespace AST requires typed cross-unit lowering");
     if (!program.imports.empty())

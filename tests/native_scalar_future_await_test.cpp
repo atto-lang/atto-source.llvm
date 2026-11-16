@@ -83,17 +83,24 @@ int main() {
     check(reported_failure == 1, "failure result not delivered once");
     check(!failed->complete(failed->id(), 42), "failed future resurrected");
 
-    // Three terminal contenders race. Exactly one wins and no duplicate
-    // resumption is accepted, regardless of scheduling order.
+    // Three contenders race. Exactly one value (success or failure) can
+    // settle, unless cancellation got there first. Cancelling a settled but
+    // undelivered value is the documented revocation (see the queued case
+    // above), not a second settlement: it must leave no callback behind.
     for (std::uint64_t n = 1; n <= 256; ++n) {
         auto raced = NativeScalarFutureAwait::open(owner, 100 + n);
         const auto ticket = raced->id();
-        std::atomic<int> wins{0};
-        std::thread a([&] { if (raced->complete(ticket, 5)) ++wins; });
-        std::thread b([&] { if (raced->fail(ticket, 9)) ++wins; });
-        std::thread c([&] { if (raced->cancel(ticket)) ++wins; });
+        std::atomic<int> settled{0};
+        std::atomic<bool> cancelled{false};
+        std::thread a([&] { if (raced->complete(ticket, 5)) ++settled; });
+        std::thread b([&] { if (raced->fail(ticket, 9)) ++settled; });
+        std::thread c([&] { if (raced->cancel(ticket)) cancelled = true; });
         a.join(); b.join(); c.join();
-        check(wins == 1, "terminal transition did not have one winner");
+        check(settled <= 1, "terminal value settled twice");
+        check(settled == 1 || cancelled, "race ended with no terminal winner");
+        check(!raced->cancel(ticket), "cancelled twice");
+        check(!raced->complete(ticket, 6) && !raced->fail(ticket, 10),
+              "terminal frame accepted a late value");
         if (raced->phase() == NativeScalarFutureAwait::Phase::ready) {
             int callbacks = 0;
             check(raced->try_schedule(ticket, group, owner,
