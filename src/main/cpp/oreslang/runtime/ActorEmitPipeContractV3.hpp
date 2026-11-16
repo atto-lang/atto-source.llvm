@@ -38,6 +38,7 @@ inline void require_actor_emit_scalar_v3(const std::string& type) {
 inline std::vector<PipeConnection> check_actor_emit_pipeline_v3(
         const std::vector<ActorEmitStageV3>& stages) {
     constexpr std::size_t max_stages = 16;
+    constexpr std::size_t max_emit_observations = 1024;
     if (stages.size() < 2 || stages.size() > max_stages)
         throw std::invalid_argument(
             "E_ACTOR_PIPE_LIMIT: pipeline requires 2..16 distinct actor instances");
@@ -54,6 +55,9 @@ inline std::vector<PipeConnection> check_actor_emit_pipeline_v3(
             throw std::invalid_argument(
                 "E_ACTOR_PIPE_IDENTITY: actor type and instance IDs must be strict bounded UTF-8");
         require_actor_emit_scalar_v3(stage.receive_type);
+        if (stage.emit_types.size() > max_emit_observations)
+            throw std::invalid_argument(
+                "E_ACTOR_PIPE_EMIT_LIMIT: actor body exceeds 1024 typed emit observations");
         if (!seen.insert(stage.instance_id).second)
             throw std::invalid_argument(
                 "E_ACTOR_PIPE_DUPLICATE_INSTANCE: actor instance was attached more than once");
