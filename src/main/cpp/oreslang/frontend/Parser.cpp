@@ -4667,6 +4667,20 @@ private:
                     !program.module.empty() || !program.imports.empty())
                 throw std::runtime_error(
                     "M1 ffi grant requires exactly one approved extern and one standalone main");
+            const auto it = std::find_if(program.functions.begin(), program.functions.end(),
+                [](const Function& fn) { return fn.name == "main" && !fn.foreign_import; });
+            const Function& entry = *it; // mains==1 above
+            if (!entry.parameters.empty() || !entry.has_declared_effects ||
+                    entry.declared_effects.bits !=
+                        static_cast<std::uint32_t>(FunctionEffect::Ffi) ||
+                    !entry.locals.empty() || !entry.statements.empty() ||
+                    !entry.early_returns.empty() || !entry.actor_spawns.empty() ||
+                    !entry.actor_actions.empty() || entry.caught_throw_value ||
+                    !entry.result || entry.result->kind != Expression::Kind::Call ||
+                    entry.result->name != "atto_add_i64" ||
+                    entry.result->arguments.size() != 2)
+                throw std::runtime_error(
+                    "M1 ffi grant must be consumed by an exact effect-qualified main call");
         }
         NativeSignatures functions;
         for (const auto& fn : program.functions) {
