@@ -826,7 +826,7 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
             "end-delimited-colon-must-be-arrow",
             "define class X as mtd foo():void :: end end\n\
              pub fnc main():int{return 42;}\n",
-            "native '::' method requires '->' return syntax",
+            "native '::' body requires '->' return syntax",
         ),
         (
             "end-delimited-missing-double-colon",
@@ -844,13 +844,13 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
             "end-delimited-nontrivial-void-body",
             "define class X as mtd foo() -> void :: stdio.println(42); end end\n\
              pub fnc main():int{return 42;}\n",
-            "native end-delimited method supports only one terminal return",
+            "native comma expression body requires a single terminal result",
         ),
         (
             "end-delimited-nonvoid-missing-return",
             "define class X as mtd foo() -> int :: end end\n\
              pub fnc main():int{return 42;}\n",
-            "expected 'return'",
+            "native non-void comma expression body requires a result",
         ),
         (
             "trailing-receiver-comma",
