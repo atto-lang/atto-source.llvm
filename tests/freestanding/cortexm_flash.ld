@@ -10,9 +10,8 @@ SECTIONS
 {
   .isr_vector : { KEEP(*(.isr_vector)) } > FLASH
   .text : { *(.text .text.*) *(.rodata .rodata.*) } > FLASH
-  .ARM.exidx : { *(.ARM.exidx .ARM.exidx.*) } > FLASH
   .data : { *(.data .data.*) } > RAM AT > FLASH
   .bss (NOLOAD) : { *(.bss .bss.*) *(COMMON) } > RAM
   /* No supported foreign unwinder: target trap above is fail-stop only. */
-  /DISCARD/ : { *(.eh_frame*) *(.ARM.extab*) }
+  /DISCARD/ : { *(.eh_frame*) *(.ARM.extab*) *(.ARM.exidx*) }
 }
