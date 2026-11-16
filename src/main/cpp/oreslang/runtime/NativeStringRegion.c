@@ -7,6 +7,7 @@
 #define _DARWIN_C_SOURCE 1
 #endif
 #include "NativeStringRegion.h"
+#include "NativeStringRegionInternal.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -220,6 +221,58 @@ int64_t ores_string_contains_literal(int64_t haystack, int64_t needle) {
     }
     return 0;
 }
+/* Private, immediate-use read-only borrow. Neither pointer nor length
+ * is exposed through any guest function signature. No peer thread may call
+ * into this invocation-owned String region concurrently.
+ */
+int ores_string_region_view(int64_t handle, const char **bytes, size_t *length) {
+    if (!bytes || !length) abort();
+    String value = lookup(handle);
+    if (atomic_load(&region.failed)) return 0;
+    *bytes = value.data;
+    *length = value.size;
+    return 1;
+}
+
+/* All-or-nothing region admission for split-created String views. The
+ * underlying owned allocation is retained by the original source entry
+ * until invocation teardown, even if the metadata vector reallocates.
+ * Slice records have owned=NULL, therefore never double-free source bytes.
+ */
+OresStringViewsStatus ores_string_region_publish_views(
+        int64_t source, const size_t starts[], const size_t lengths[],
+        size_t count, int64_t out_handles[]) {
+    if (!starts || !lengths || !out_handles || !count) abort();
+    Region *r = &region;
+    String base = lookup(source);
+    if (atomic_load(&r->failed)) abort();
+    if (count > STRING_LIMIT - r->count) return ORES_STRING_VIEWS_LIMIT;
+    size_t remaining = BYTE_LIMIT - r->bytes;
+    for (size_t i = 0; i < count; ++i) {
+        if (starts[i] > base.size || lengths[i] > base.size - starts[i])
+            abort(); /* Only trusted splitter code constructs these offsets. */
+        if (lengths[i] > remaining) return ORES_STRING_VIEWS_LIMIT;
+        remaining -= lengths[i];
+    }
+    const size_t required = r->count + count;
+    if (required > r->capacity) {
+        size_t capacity = r->capacity ? r->capacity : 32;
+        while (capacity < required) capacity *= 2;
+        String *larger = realloc(r->strings, capacity * sizeof *larger);
+        if (!larger) return ORES_STRING_VIEWS_NO_MEMORY;
+        r->strings = larger;
+        r->capacity = capacity;
+    }
+    /* No allocation or recoverable failure is possible beyond this point. */
+    for (size_t i = 0; i < count; ++i) {
+        const char *slice = base.data ? base.data + starts[i] : NULL;
+        r->strings[r->count] = (String){slice, lengths[i], NULL};
+        out_handles[i] = (int64_t)++r->count;
+        r->bytes += lengths[i];
+    }
+    return ORES_STRING_VIEWS_OK;
+}
+
 int64_t ores_string_print(int64_t handle, int64_t newline) {
     Region *r = &region;
     String value = lookup(handle);

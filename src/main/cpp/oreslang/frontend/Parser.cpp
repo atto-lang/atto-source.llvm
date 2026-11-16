@@ -2,6 +2,7 @@
 #include "llvm/Support/SHA256.h"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/NativeTelemetryLiteralV1.hpp"
 #include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/types/OwnershipChecker.hpp"
 #include "oreslang/frontend/GpuLaunchSourceMir.hpp"
@@ -376,6 +377,22 @@ public:
         // codegen or pseudo-object fallback. Ordinary unary '~' is likewise
         // unavailable in this restricted native scalar frontend.
         if (ch == '~') {
+            // Only a tilde directly following the source keyword
+            // 'structural' is lexically admitted. Every other tilde spelling
+            // retains the original lexical fail-closed gate (including Map
+            // constructors, unary '~', and bare record patterns).
+            constexpr std::string_view marker = "structural";
+            std::size_t before = start;
+            while (before > 0 &&
+                    std::isspace(static_cast<unsigned char>(source_[before - 1])))
+                --before;
+            if (before >= marker.size() &&
+                    source_.substr(before - marker.size(), marker.size()) == marker &&
+                    (before == marker.size() ||
+                     !identifier_part(source_[before - marker.size() - 1]))) {
+                ++at_;
+                return {Kind::Symbol, source_.substr(start, 1), start};
+            }
             throw std::runtime_error(
                 "native tilde map/record literal unsupported until typed aggregate "
                 "and ownership lowering at byte " + std::to_string(start));
@@ -1107,7 +1124,7 @@ public:
                 accept("as");
                 wrapped_module = true;
             } else {
-                if (accept("class")) { auto cls = class_declaration(); cls.exported = exported; program.classes.push_back(std::move(cls)); }
+                if (accept("class")) { auto cls = class_declaration(); cls.exported = exported; remember_class_scalar_fields(cls); program.classes.push_back(std::move(cls)); }
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else if (accept_transform_pipe_modifier()) {
                     require("actor");
@@ -1277,7 +1294,7 @@ public:
                         fail("native user-defined tagged enum requires ADT layout and constructor lowering; expected 'MaxActorThreads'");
                     built_in_actor_threads_enum();
                 }
-                else if (accept("class")) { auto cls = class_declaration(); cls.exported = public_class; program.classes.push_back(std::move(cls)); }
+                else if (accept("class")) { auto cls = class_declaration(); cls.exported = public_class; remember_class_scalar_fields(cls); program.classes.push_back(std::move(cls)); }
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else if (accept_transform_pipe_modifier()) {
                     require("actor");
@@ -2362,6 +2379,21 @@ private:
         return actor;
     }
 
+    /** Keep only public primitive field descriptors; never copy class bodies. */
+    void remember_class_scalar_fields(const ClassDecl& klass) {
+        if (public_class_fields_.count(klass.name))
+            fail("native structural field contract cannot shadow a prior class");
+        auto& fields = public_class_fields_[klass.name];
+        for (const auto& field : klass.fields) {
+            if (!field.public_member || field.int_array ||
+                    !field.class_name.empty() || !field.sum_type.empty())
+                continue;
+            if (field.scalar_type == ScalarType::I64 ||
+                    field.scalar_type == ScalarType::Bool)
+                fields.emplace(field.name, field.scalar_type);
+        }
+    }
+
     ClassDecl class_declaration() {
         ClassDecl result;
         result.name = nominal_declaration_name();
@@ -2869,6 +2901,12 @@ private:
         method_scope_ = owner;
         struct RestoreReceivers { std::unordered_set<std::string>& target; std::unordered_set<std::string> prior; ~RestoreReceivers() { target = std::move(prior); } } restore_receivers{class_receivers_, std::move(class_receivers_)};
         class_receivers_.clear();
+        struct RestoreClassLocals {
+            std::unordered_map<std::string, std::string>& locals;
+            std::unordered_map<std::string, std::string> saved;
+            ~RestoreClassLocals() { locals = std::move(saved); }
+        } restore_class_locals{class_literal_locals_, std::move(class_literal_locals_)};
+        class_literal_locals_.clear();
         Function value;
         value.method_owner = owner;
         const bool alias_extension = extension_header_active_;
@@ -3324,6 +3362,10 @@ private:
             if (source_future_pipeline_local()) continue;
             if (ready_future_local()) continue;
             LocalBinding binding;
+            // A non-mut let Class is still not a const declaration.
+            // This independent lexical proof prevents mutable/rebindable
+            // class sources from acquiring readonly pattern authority.
+            bool literal_const_class_owner = false;
             binding.offset = token_.offset;
             const bool type_first_const = token_.text == "int" || token_.text == "bool" ||
                     token_.text == "String" || token_.text == "string";
@@ -3425,6 +3467,28 @@ private:
                 } else require("int");
                 require(">"); require("("); require(")");
                 binding.int_array = binding.owner_mutable = true;
+            } else if (token_.text == "val" && [&] {
+                    // An inferred owned Array<String> is admitted only
+                    // for String.split_literal(String); the result has a
+                    // compiler-owned cleanup shadow, never a raw pointer.
+                    Lexer look = lexer_;
+                    const Token name = look.next();
+                    return name.kind == Kind::Identifier &&
+                           look.next().text == "=";
+                }()) {
+                advance();
+                binding.name = identifier();
+                require("=");
+                binding.initializer = expression();
+                if (!binding.initializer ||
+                        binding.initializer->kind != Expression::Kind::ArrayCall ||
+                        binding.initializer->name != "split_literal" ||
+                        !binding.initializer->left ||
+                        binding.initializer->arguments.size() != 1)
+                    fail("inferred native array val requires String.split_literal(String)");
+                binding.int_array = true;
+                binding.owner_mutable = true;
+                binding.array_element_type = ScalarType::String;
             } else if ((token_.text == "val" || token_.text == "const") &&
                     [&] { Lexer look = lexer_; const auto type = look.next();
                         return type.text == "string" || type.text == "String" ||
@@ -3455,6 +3519,7 @@ private:
                         require(")");
                     }
                     binding.new_class = true;
+                    literal_const_class_owner = !mutable_value;
                     }
                 }
             } else if (accept("let")) {
@@ -3619,6 +3684,16 @@ private:
             }
             require(";");
             if (!binding.class_name.empty()) class_receivers_.insert(binding.name);
+            // Only a function-local, stack-constructed const record is
+            // currently eligible for pattern field projection. Parameters,
+            // borrowed aliases, mutable owners and nested scopes are not.
+            // Do not let an ordinary later binding with the same spelling
+            // inherit an earlier class pattern authority.
+            class_literal_locals_.erase(binding.name);
+            if (literal_const_class_owner && binding.new_class &&
+                    !binding.owner_mutable && !binding.class_name.empty()) {
+                class_literal_locals_.emplace(binding.name, binding.class_name);
+            }
             value.locals.push_back(std::move(binding));
         }
         for (const auto& task : value.source_tasks)
@@ -3632,6 +3707,7 @@ private:
         std::function<std::vector<Statement>(bool, bool)> branch_arm;
         std::function<Statement()> dispatch_statement;
         std::function<Statement()> using_telemetry_span;
+        std::function<Statement()> telemetry_log_info;
         std::unordered_set<std::string> active_trace_aliases;
         std::function<Statement()> foreach_statement;
         auto scoped_local = [&]() {
@@ -3643,6 +3719,29 @@ private:
             if (token_.text == "owned") fail("branch-local owned value requires destructor/drop lowering");
             auto local = std::make_unique<LocalBinding>(); local->offset = statement.offset;
             local->assignable = mutable_slot; local->owner_mutable = mutable_referent;
+            // Canonical AttoNATS validates early before creating token
+            // arrays. This ordered, scoped lexical owner must share the
+            // same checked String/Array region semantics as an initial val.
+            // Do not generalize inferred val to untyped scalars/classes.
+            if (!mutable_slot && mutable_referent &&
+                    token_.kind == Kind::Identifier &&
+                    [&] { Lexer look = lexer_; return look.next().text == "="; }()) {
+                local->name = identifier();
+                require("=");
+                local->initializer = expression();
+                if (!local->initializer ||
+                        local->initializer->kind != Expression::Kind::ArrayCall ||
+                        local->initializer->name != "split_literal" ||
+                        !local->initializer->left ||
+                        local->initializer->arguments.size() != 1)
+                    fail("inferred ordered val requires String.split_literal(String)");
+                local->int_array = true;
+                local->array_element_type = ScalarType::String;
+                local->owner_mutable = true;
+                require(";");
+                statement.branch_local = std::move(local);
+                return statement;
+            }
             if (accept("Array")) {
                 local->owner_mutable = mutable_slot ? explicit_mutable : mutable_referent;
                 require("<"); array_element(*local); require(">");
@@ -3729,6 +3828,25 @@ private:
             }
             return false;
         };
+        // First native guest log slice: the message must be a source literal,
+        // not an expression whose to_string could park or run arbitrary code.
+        // Codegen requires a separately bound static (rid,sid) manifest row.
+        telemetry_log_info = [&]() -> Statement {
+            Statement event;
+            event.kind = Statement::Kind::TelemetryLogInfo;
+            event.offset = token_.offset;
+            require("log"); require("."); require("info"); require("(");
+            if (token_.kind != Kind::String)
+                fail("native log.info requires exactly one compile-time literal");
+            event.telemetry_operation = string_literal(token_.text);
+            if (!telemetry::valid_native_log_literal(event.telemetry_operation)) {
+                fail("native log.info literal must be 1..96 bytes without control characters");
+            }
+            advance();
+            require(")"); require(";");
+            return event;
+        };
+
         branch_arm = [&](bool finally_scope, bool then_scope) {
             if (++statement_depth > 16) fail("native structured statement depth exceeds 16");
             struct Depth { std::size_t& n; ~Depth() { --n; } } depth{statement_depth};
@@ -3740,6 +3858,9 @@ private:
                     fail("native conditional arm limit exceeded (16)");
                 if (token_.text == "using" && peek_next().kind == Kind::Identifier && !finally_scope) {
                     actions.push_back(using_telemetry_span()); continue;
+                }
+                if (token_.text == "log" && !module_names_.count("log")) {
+                    actions.push_back(telemetry_log_info()); continue;
                 }
                 if (token_.text == "for" && !finally_scope) {
                     actions.push_back(foreach_statement()); continue;
@@ -3808,7 +3929,25 @@ private:
                     statement.condition = expression();
                     if (accept_keyword_if_header()) {
                         statement.then_statements = branch_arm(false, true);
-                        if (accept("else")) statement.else_statements = branch_arm(false, true);
+                        // Canonical Atto `elif` shares one final fi.
+                        // Lower it to the ordinary path-sensitive nested
+                        // conditional AST; no duplicate condition evaluation.
+                        auto* tail = &statement.else_statements;
+                        for (std::size_t count = 0; token_.text == "elif"; ++count) {
+                            if (count == 16)
+                                fail("native elif chain exceeds 16 arms");
+                            Statement next;
+                            next.kind = Statement::Kind::Conditional;
+                            next.offset = token_.offset;
+                            require("elif");
+                            next.condition = expression();
+                            if (!accept_keyword_if_header())
+                                fail("native elif requires then/do header");
+                            next.then_statements = branch_arm(false, true);
+                            tail->push_back(std::move(next));
+                            tail = &tail->back().else_statements;
+                        }
+                        if (accept("else")) *tail = branch_arm(false, true);
                     } else {
                         require("{"); statement.then_statements = branch_arm(false, false); require("}");
                         if (accept("else")) { require("{"); statement.else_statements = branch_arm(false, false); require("}"); }
@@ -3878,6 +4017,7 @@ private:
             std::vector<Statement> fallback;
             bool has_fallback = false;
             std::unordered_set<std::string> seen;
+            std::string structural_field;
 
             while (token_.text != "end") {
                 if (arms.size() >= 32)
@@ -3904,10 +4044,28 @@ private:
                     require("on");
                     if (accept("default"))
                         fail("native do match fallback must use 'default ->' without 'on'");
-                    // Until native HIR carries a proven record field view,
-                    // never reinterpret a tilde/structural pattern as a
-                    // scalar expression or enable host map projection.
-                    if (token_.text == "structural" || token_.text == "~")
+                    if (token_.text == "structural") {
+                        auto field_test = checked_native_structural_field_test(*subject);
+                        if (!structural_field.empty() &&
+                                structural_field != field_test.field) {
+                            fail("native ordinary structural match cannot prove differently named field arms disjoint");
+                        }
+                        structural_field = field_test.field;
+                        if (!seen.insert("field:" + field_test.field + ":" + field_test.key).second) {
+                            fail("duplicate native structural field match pattern");
+                        }
+                        require("->"); require("{");
+                        Arm arm;
+                        arm.condition = std::move(field_test.condition);
+                        arm.body = branch_arm(false, false); require("}");
+                        arms.push_back(std::move(arm));
+                        continue;
+                    }
+                    if (subject->kind == Expression::Kind::Variable &&
+                            class_literal_locals_.count(subject->name)) {
+                        fail("native class match requires explicit checked structural field patterns");
+                    }
+                    if (token_.text == "~")
                         fail("native structural field pattern requires checked typed aggregate lowering");
                     if (accept("_")) {
                         if (has_fallback)
@@ -4009,8 +4167,8 @@ private:
             if (token_.kind != Kind::String)
                 fail("native using telemetry.span requires one literal operation name");
             scope.telemetry_operation = string_literal(token_.text);
-            if (scope.telemetry_operation.empty() || scope.telemetry_operation.size() > 256)
-                fail("native telemetry span name requires 1..256 UTF-8 bytes");
+            if (!telemetry::valid_native_span_literal(scope.telemetry_operation))
+                fail("native telemetry span name requires 1..256 UTF-8 bytes without control characters");
             advance();
             require(")"); require("as");
             scope.receiver = identifier();
@@ -4312,6 +4470,12 @@ private:
                 if (terminal_try_finally)
                     fail("native telemetry scope inside protected try requires unified unwind proof");
                 value.statements.push_back(using_telemetry_span());
+                continue;
+            }
+            if (token_.text == "log" && !module_names_.count("log")) {
+                if (terminal_try_finally)
+                    fail("native log.info inside protected try requires verified unwind gate");
+                value.statements.push_back(telemetry_log_info());
                 continue;
             }
             if (ready_future_local()) continue;
@@ -4969,6 +5133,56 @@ private:
         return result;
     }
 
+    struct NativeStructuralFieldTest {
+        std::unique_ptr<Expression> condition;
+        std::string field;
+        std::string key;
+    };
+
+    NativeStructuralFieldTest checked_native_structural_field_test(
+            const Expression& subject) {
+        const auto at = token_.offset;
+        require("structural"); require("~"); require("(");
+        std::string field = identifier();
+        require(":");
+        auto literal = expression();
+        const std::string key = native_dispatch_constant_key(*literal);
+        if (key.empty()) {
+            fail("native structural field pattern requires a scalar literal, never a binding");
+        }
+        if (accept(",")) {
+            fail("native structural field pattern supports exactly one field");
+        }
+        require(")");
+        if (token_.text == "when" || token_.text == "as") {
+            fail("native structural field guards/bindings await checked ownership lowering");
+        }
+        if (subject.kind != Expression::Kind::Variable) {
+            fail("native structural field pattern requires a stack-constructed const class local");
+        }
+        const auto owned = class_literal_locals_.find(subject.name);
+        if (owned == class_literal_locals_.end()) {
+            fail("native structural field pattern requires a stack-constructed const class local");
+        }
+        const auto klass = public_class_fields_.find(owned->second);
+        if (klass == public_class_fields_.end()) {
+            fail("native structural field pattern class layout not statically proven");
+        }
+        const auto slot = klass->second.find(field);
+        if (slot == klass->second.end()) {
+            fail("native structural field pattern requires a declared public primitive field");
+        }
+        const bool compatible = (slot->second == ScalarType::I64 && key.rfind("int:", 0) == 0)
+            || (slot->second == ScalarType::Bool && key.rfind("bool:", 0) == 0);
+        if (!compatible) {
+            fail("native structural field pattern literal type does not match declared field");
+        }
+        auto projection = make_expression(Expression::Kind::Field, at);
+        projection->left = clone_native_expression(subject);
+        projection->name = field;
+        return {native_dispatch_equal(*projection, *literal), std::move(field), key};
+    }
+
     std::unique_ptr<Expression> value_match_expression() {
         const auto offset = token_.offset;
         require("match");
@@ -4986,6 +5200,7 @@ private:
         std::vector<Arm> arms;
         std::unique_ptr<Expression> fallback;
         std::unordered_set<std::string> seen;
+        std::string structural_field;
 
         while (token_.text != "end") {
             if (arms.size() >= 32)
@@ -5006,7 +5221,28 @@ private:
             require("on");
             if (accept("default"))
                 fail("native value match fallback must use 'default ->' without 'on'");
-            if (token_.text == "structural" || token_.text == "~")
+            if (token_.text == "structural") {
+                auto field_test = checked_native_structural_field_test(*subject);
+                if (!structural_field.empty() && structural_field != field_test.field) {
+                    fail("native ordinary structural match cannot prove differently named field arms disjoint");
+                }
+                structural_field = field_test.field;
+                if (!seen.insert("field:" + field_test.field + ":" + field_test.key).second) {
+                    fail("duplicate native structural field match pattern");
+                }
+                require("->");
+                arms.push_back({
+                    std::move(field_test.condition),
+                    dispatch_value_arm("native structural field match"),
+                    "field:" + field_test.field + ":" + field_test.key
+                });
+                continue;
+            }
+            if (subject->kind == Expression::Kind::Variable &&
+                    class_literal_locals_.count(subject->name)) {
+                fail("native class match requires explicit checked structural field patterns");
+            }
+            if (token_.text == "~")
                 fail("native structural field pattern requires checked typed aggregate lowering");
             if (accept("_")) {
                 if (fallback)
@@ -6253,6 +6489,26 @@ private:
                         throw std::runtime_error(
                             "named native array/member arguments require checked lowering at byte " +
                             std::to_string(expr.offset));
+                // String.split_literal returns one non-Copy Array<String>
+                // owner. The inferred lexical val binding is the only
+                // admitted place for the opaque native array handle.
+                if (expr.name == "split_literal") {
+                    if (!expr.left || expr.arguments.size() != 1)
+                        throw std::runtime_error(
+                            "String.split_literal requires exactly one String delimiter at byte " +
+                            std::to_string(expr.offset));
+                    if (validate_scalar_expression(*expr.left, variables, functions, depth + 1)
+                            != ScalarType::String)
+                        throw std::runtime_error(
+                            "String.split_literal requires a String receiver at byte " +
+                            std::to_string(expr.offset));
+                    if (validate_scalar_expression(*expr.arguments.front(), variables, functions, depth + 1)
+                            != ScalarType::String)
+                        throw std::runtime_error(
+                            "String.split_literal requires a String delimiter at byte " +
+                            std::to_string(expr.offset));
+                    return expr.resolved_type = ScalarType::I64;
+                }
                 // String.contains_literal(String) is a scalar, pure,
                 // length-delimited native operation, never an array handle.
                 if (expr.name == "contains_literal") {
@@ -6599,6 +6855,10 @@ private:
                 const bool runtime_symbol =
                     fn.name == "abort" ||
                     fn.name == "__oreslang_guest_main" ||
+                    // String region, substring predicate and split iterator
+                    // are compiler-owned C ABIs. A guest function must not
+                    // shadow their linker symbols or provoke LLVM auto-rename.
+                    fn.name.rfind("ores_string_", 0) == 0 ||
                     fn.name.rfind("oreslang_owned_i64_region_", 0) == 0 ||
                     fn.name.rfind("ores_actor_i64_heap_", 0) == 0 ||
                     fn.name.rfind("oreslang_source_actor_", 0) == 0 ||
@@ -7027,6 +7287,12 @@ private:
             using NameSet = std::unordered_set<std::string>;
             std::function<void(const Statement&, NameSet&)> check_statement_names;
             check_statement_names = [&](const Statement& stmt, NameSet& names) {
+                if (stmt.kind == Statement::Kind::TelemetryLogInfo) {
+                    if (stmt.expression || stmt.telemetry_operation.empty() ||
+                        stmt.telemetry_operation.size() > 96)
+                        throw std::runtime_error("unverified static native log site syntax");
+                    return; // exactly one literal; no guest variable lookup
+                }
                 if (stmt.kind == Statement::Kind::UsingTelemetrySpan) {
                     if (names.count(stmt.receiver))
                         throw std::runtime_error(
@@ -7169,6 +7435,9 @@ private:
 
             for (const auto& binding : fn.locals) {
                 if (binding.int_array || binding.new_class || binding.move_class) {
+                    if (binding.int_array && binding.initializer)
+                        require_scalar(*binding.initializer, ScalarType::I64,
+                            "native split array initializer", scalar_types);
                     scalar_types.emplace(binding.name, ScalarType::I64);
                     if (binding.int_array)
                         scalar_types.emplace(binding.name + ".$element", binding.array_element_type);
@@ -7730,6 +7999,9 @@ private:
     std::unordered_set<std::string> function_import_names_;
     std::string method_scope_;
     std::unordered_set<std::string> class_receivers_;
+    std::unordered_map<std::string, std::string> class_literal_locals_;
+    std::unordered_map<std::string,
+        std::unordered_map<std::string, ScalarType>> public_class_fields_;
     std::vector<Function> methods_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
