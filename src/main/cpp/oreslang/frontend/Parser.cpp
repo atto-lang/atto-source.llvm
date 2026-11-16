@@ -175,8 +175,10 @@ bool reserved(std::string_view name) {
 
 class Lexer {
 public:
-    explicit Lexer(std::string_view source, std::size_t unsafe_base_offset = 0)
-        : source_(source), unsafe_base_offset_(unsafe_base_offset) {}
+    explicit Lexer(std::string_view source, std::size_t unsafe_base_offset = 0,
+                   bool allow_caret_return = false)
+        : source_(source), unsafe_base_offset_(unsafe_base_offset),
+          allow_caret_return_(allow_caret_return) {}
 
     Token next() {
         for (;;) {
@@ -390,6 +392,13 @@ public:
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
+        // Keep '^' reserved in the historical Oreslang mode. It becomes a
+        // dedicated return token only under explicit versioned Atto parsing;
+        // expression parsing still rejects it outside a return statement.
+        if (ch == '^' && allow_caret_return_) {
+            ++at_;
+            return {Kind::Symbol, source_.substr(start, 1), start};
+        }
         if (ch == '^')
             throw std::runtime_error("'^' is reserved and is not AttoLang source syntax; use Integer.bitXor(a, b) at byte "
                                      + std::to_string(start));
@@ -402,6 +411,7 @@ private:
     // Only unsafe G0 lexical diagnostics need the absolute interpolation offset.
     // All normal token/AST offsets remain relative to the parsed source slice.
     std::size_t unsafe_base_offset_ = 0;
+    bool allow_caret_return_ = false;
     std::size_t at_ = 0;
 };
 
@@ -876,7 +886,8 @@ public:
                     bool experimental_rt_scalar_loop,
                     bool verified_namespace_metadata_only = false,
                     std::size_t unsafe_base_offset = 0, int language_version = 0)
-        : source_(source), lexer_(source, unsafe_base_offset), token_(lexer_.next()),
+        : source_(source), lexer_(source, unsafe_base_offset, language_version != 0),
+          token_(lexer_.next()),
           unsafe_base_offset_(unsafe_base_offset),
           experimental_owned_int_(experimental_owned_int),
           experimental_rt_scalar_loop_(experimental_rt_scalar_loop),
