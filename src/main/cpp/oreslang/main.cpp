@@ -474,7 +474,7 @@ int main(int argc, char** argv) {
                     constraint_descriptors_only) {
                 throw std::runtime_error(
                     "Pointer<int> AOT M1 requires isolated --target=host "
-                    "without ownership, scheduler, RT, tree shaking or allocator overrides");
+                    "without ownership, scheduler, RT, FFI grant, tree shaking or allocator overrides");
             }
             const auto ir = oreslang::pointer_int_aot::compile(text);
             std::cout << ir;
