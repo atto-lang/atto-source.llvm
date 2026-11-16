@@ -31,6 +31,9 @@ static OreslangStringStatus check(const OreslangNativeString* s) {
     if (!bounded(s->byte_length)) return ORESLANG_STRING_TOO_LARGE;
     return utf8(s->data,s->byte_length)?ORESLANG_STRING_OK:ORESLANG_STRING_INVALID_UTF8;
 }
+OreslangStringStatus oreslang_string_validate(const OreslangNativeString* s) {
+    return check(s);
+}
 static OreslangStringStatus alloc_copy(const unsigned char* s, uint64_t n, OreslangNativeString* out) {
     if (!empty(out) || (!s && n)) return ORESLANG_STRING_INVALID;
     if (!bounded(n)) return ORESLANG_STRING_TOO_LARGE;

@@ -1,0 +1,8 @@
+// A nominal receiver cannot hide a reserved standard-I/O identity.
+define class SocketFacade as
+  pub connect_async(self, int fd): int { return fd; }
+end
+pub fnc main(): int {
+  let SocketFacade socket = new SocketFacade();
+  return socket.connect_async(1);
+}

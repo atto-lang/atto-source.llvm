@@ -1,0 +1,4 @@
+define type alias A as int;
+type B = A;
+define type C = B;
+pub fnc main(): int { val C c = 42; return c; }

@@ -1,0 +1,4 @@
+// AttoLang forbids implicit conversions, including string to integer.
+pub fnc main(): int {
+  return "0";
+}

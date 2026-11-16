@@ -1,0 +1,2 @@
+type Flag = bool;
+pub fnc main(): int { val Flag f = true; return f ? 42 : 7; }

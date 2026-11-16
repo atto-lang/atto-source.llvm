@@ -1,0 +1,15 @@
+define enum Stage as
+    Ready = 1
+    Done = 2
+end
+fnc f(Stage x): int {
+    match x over
+        on Stage.Ready -> { return 0; }
+        on Stage.Done -> { return 9; }
+    end
+}
+pub fnc main(): void {
+    stdio.println(f(Stage.Ready()));
+    stdio.println(f(Stage.Done()));
+    return;
+}

@@ -1,0 +1,22 @@
+// Genuine compiler-generated native Atto actor for bounded Kafka ingress
+// ordering. Integer-only canary; no Kafka TCP/Bytes/fsync/ACK.
+// Readiness must actually resume from native CONTROL before any DATA admits.
+define actor KafkaPartition as {
+  let order_hash: int = 0;
+  pub fnc on_message(int ordinal): int {
+    order_hash = order_hash * 11 + ordinal;
+    return order_hash;
+  }
+}
+
+pub fnc main(): int {
+  const partition: ActorRef<KafkaPartition> = spawn KafkaPartition();
+  await partition.get_ready();
+  partition.send(1);
+  partition.send(2);
+  partition.send(3);
+  partition.send(4);
+  partition.send(5);
+  stop partition;
+  return 43;
+}

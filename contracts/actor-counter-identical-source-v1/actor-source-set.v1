@@ -1,0 +1,11 @@
+atto-declared-actor-source-set-v1
+namespace counter
+actor Counter
+contract CounterContract
+unit package .atto.pkg.toml 500be9437a53a6767002280d60507587c947b92c
+unit actor src/counter/actor.atto 5135f72fac5b9ccb5c2a418f0d9f79bdd3f5ea32
+unit contract src/counter/contract.atto 213541736c415d30fc54bc0f413d8b0f77b623e4
+unit main src/counter/main.atto 90d33cf97bfe553021cf340af8f62e4036a884e1
+unit method src/counter/method.atto e7efbde0987013bc231eef40ec0524eeadc636e8
+unit receive src/counter/receive.atto 14abc5da40fb7c080a76a8d663c6d1b57fbcb466
+unit state src/counter/state.atto 5a63c3a307ec47e19025848fb979ceb42e9980c5

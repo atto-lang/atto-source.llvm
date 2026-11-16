@@ -176,10 +176,49 @@ int64_t ores_string_concat(int64_t left, int64_t right) {
     if (b.size) memcpy(bytes + a.size, b.data, b.size);
     return publish((String){bytes, size, bytes});
 }
+/* Decimal rendering of a signed 64-bit int, as Java prints a long. No libc
+ * formatting so INT64_MIN and locale cannot change the bytes. */
+int64_t ores_string_from_i64(int64_t value) {
+    char digits[20];
+    size_t count = 0;
+    uint64_t magnitude = value < 0 ? (uint64_t)0 - (uint64_t)value : (uint64_t)value;
+    do { digits[count++] = (char)('0' + (int)(magnitude % 10u)); magnitude /= 10u; } while (magnitude);
+    size_t size = count + (value < 0);
+    char *bytes = malloc(size);
+    if (!bytes) { atomic_store(&region.failed, 1); return 0; }
+    size_t at = 0;
+    if (value < 0) bytes[at++] = '-';
+    while (count) bytes[at++] = digits[--count];
+    return publish((String){bytes, size, bytes});
+}
+int64_t ores_string_from_bool(int64_t value) {
+    return value ? ores_string_literal("true", 4) : ores_string_literal("false", 5);
+}
 int64_t ores_string_equal(int64_t left, int64_t right) {
     String a = lookup(left), b = lookup(right);
     if (atomic_load(&region.failed)) return 0;
     return a.size == b.size && (!a.size || memcmp(a.data, b.data, a.size) == 0);
+}
+/* Immutable length-delimited substring predicate, including embedded NUL.
+ * No malloc, pointer escape, mutation or implicit zero-terminator semantics.
+ * Empty needle matches, mirroring ordinary String contains semantics.
+ */
+int64_t ores_string_contains_literal(int64_t haystack, int64_t needle) {
+    String text = lookup(haystack), pattern = lookup(needle);
+    if (atomic_load(&region.failed)) return 0;
+    if (pattern.size == 0) return 1;
+    if (pattern.size > text.size) return 0;
+    size_t start = 0;
+    const size_t last = text.size - pattern.size;
+    while (start <= last) {
+        const char *at = memchr(text.data + start,
+            (unsigned char)pattern.data[0], last - start + 1);
+        if (!at) return 0;
+        const size_t found = (size_t)(at - text.data);
+        if (memcmp(at, pattern.data, pattern.size) == 0) return 1;
+        start = found + 1;
+    }
+    return 0;
 }
 int64_t ores_string_print(int64_t handle, int64_t newline) {
     Region *r = &region;
@@ -193,6 +232,17 @@ int64_t ores_string_print(int64_t handle, int64_t newline) {
     atomic_store_explicit(&r->head, head + 1, memory_order_release);
     wake_writer(r);
     return 0;
+}
+/* A failed unwrap/expect aborts without reaching region_end, which would
+ * otherwise drop output still queued for the writer thread. Drain it first so
+ * text printed before the panic is not lost (Java flushes stdout per write). */
+void ores_string_panic_flush(void) {
+    Region *r = &region;
+    if (!r->active || !r->console) return;
+    atomic_store_explicit(&r->done, 1, memory_order_release);
+    wake_writer(r);
+    (void)pthread_join(r->writer, NULL);
+    r->console = 0;
 }
 int64_t ores_string_region_end(void) {
     Region *r = &region;

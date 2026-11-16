@@ -293,10 +293,18 @@ pub fnc main() -> int { return 42; }
     // executable LLVM IR. This is not a nested-recursion depth check.
     const std::string identity_def =
         "define macro identity(Syntax<Expr> value) -> Syntax<Expr> { return value; }";
+    // Group the sites 16 x 8 so the sum stays within the native expression
+    // depth limit (64); a flat 128-term '+' chain is rejected for depth,
+    // which would mask the expansion budget this case is about.
     std::string uses;
-    for (int i = 0; i < 128; ++i) {
+    for (int group = 0; group < 16; ++group) {
         if (!uses.empty()) uses += "+";
-        uses += "identity!(syntax expr 1)";
+        uses += "(";
+        for (int i = 0; i < 8; ++i) {
+            if (i) uses += "+";
+            uses += "identity!(syntax expr 1)";
+        }
+        uses += ")";
     }
     {
         auto program = parse_program(
