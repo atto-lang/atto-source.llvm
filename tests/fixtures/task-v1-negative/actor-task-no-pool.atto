@@ -1,0 +1,11 @@
+// Native LLVM currently has only a capture-free main Task<int> bridge.
+// Running an actor Task on its unrelated synthetic pool is forbidden.
+define actor Worker as {
+  let int total = 0;
+  pub fnc on_message(int n): int {
+    let Task<int> child = task { return 42; };
+    return total;
+  }
+}
+
+pub fnc main(): int { return 0; }
