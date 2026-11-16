@@ -12,6 +12,31 @@ spec.loader.exec_module(source_actor_e2e)
 parse = source_actor_e2e.parse_actor_receipt
 
 
+class ActorHeapPrefixOracleTest(unittest.TestCase):
+    def test_independent_heap_prefixes(self):
+        # Hand-calculated from total = 2 * (total + message), with
+        # interleaved actor inputs 1..4 and 5..8. Include partial STOPs.
+        for actor, expected in enumerate(((0, 2, 8, 22, 52),
+                                          (0, 10, 32, 78, 172))):
+            for processed, last in enumerate(expected):
+                with self.subTest(actor=actor, processed=processed):
+                    self.assertEqual(last, source_actor_e2e.expected_prefix_last(
+                        "source-actor-two-owned-heaps.ores", actor, processed))
+
+    def test_existing_fixture_prefixes_are_preserved(self):
+        cases = (
+            ("source-actor-scoped-owned-i64.ores", 0, 8, 1004),
+            ("source-actor-fifo-ten.ores", 0, 10, 2853116705),
+            ("source-actor-interleaved-stop.ores", 0, 1, 1),
+            ("source-actor-interleaved-stop.ores", 1, 2, 7),
+            ("source-actor-send.ores", 0, 2, 3),
+        )
+        for name, actor, processed, last in cases:
+            with self.subTest(name=name, actor=actor):
+                self.assertEqual(last, source_actor_e2e.expected_prefix_last(
+                    name, actor, processed))
+
+
 class ActorReceiptParserTest(unittest.TestCase):
     def setUp(self):
         self.good = (
