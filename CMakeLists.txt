@@ -585,7 +585,9 @@ if(BUILD_TESTING)
     add_executable(atto-llvm-intrinsic-compat-test
         tests/llvm_intrinsic_compat_api_test.cpp)
     target_include_directories(atto-llvm-intrinsic-compat-test PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    # SYSTEM: -Werror below is for this test, not for warnings in LLVM headers.
+    target_include_directories(atto-llvm-intrinsic-compat-test SYSTEM PRIVATE
         "${LLVM_INCLUDE_DIRS}")
     target_link_libraries(atto-llvm-intrinsic-compat-test PRIVATE ${ORE_LLVM_LIBS})
     target_compile_options(atto-llvm-intrinsic-compat-test PRIVATE
@@ -1557,18 +1559,26 @@ if(BUILD_TESTING)
         COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_logical_punctuation_operators.sh"
             "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_logical_punctuation_operators PROPERTIES TIMEOUT 120)
+    # Java parity: `if c then return; fi` in void functions/methods is an
+    # ordinary conditional with an early-returning arm (native O0/O2 guests).
+    add_test(NAME native_void_early_return
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_void_early_return.sh"
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_void_early_return PROPERTIES TIMEOUT 120)
     # New real .ores guest span-boundary contract: no host/reference promotion.
     # Uses the production source compiler and Clang AOT executable path.
     add_test(NAME native_tensor_span_source_aot
         COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify-tensor-span-source.sh"
             "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
-    set_tests_properties(native_tensor_span_source_aot PROPERTIES TIMEOUT 120)
+    set_tests_properties(native_tensor_span_source_aot PROPERTIES TIMEOUT 120
+        ENVIRONMENT "ORES_NO_GC_IR_AUDIT=${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit")
     # Real `.ores` Array<int> native region ownership/lane execution.
     # A passing host-side reference model cannot satisfy this gate.
     add_test(NAME native_tensor_owned_array_source_aot
         COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify-tensor-owned-array.sh"
             "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
-    set_tests_properties(native_tensor_owned_array_source_aot PROPERTIES TIMEOUT 120)
+    set_tests_properties(native_tensor_owned_array_source_aot PROPERTIES TIMEOUT 120
+        ENVIRONMENT "ORES_NO_GC_IR_AUDIT=${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit")
     # Pinned portable scalar corpus (shared with java/net) and the five-case
     # zero-assert guest set: source -> LLVM IR -> Clang -> OS exit status,
     # plus fail-closed rejection of removed/forbidden source operators.
@@ -1891,7 +1901,8 @@ if(BUILD_TESTING)
     set_tests_properties(native_linked_queue_harness_adversarial
         PROPERTIES TIMEOUT 30)
     find_package(OpenSSL QUIET COMPONENTS Crypto)
-    if(OpenSSL_FOUND)
+    # NativeIpcAuthenticatedStreamSession.hpp is Linux-only (#error elsewhere).
+    if(OpenSSL_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_executable(oreslang-native-ipc-authenticated-session-failpoint-test
             tests/native_ipc_authenticated_session_failpoint_test.cpp)
         target_include_directories(oreslang-native-ipc-authenticated-session-failpoint-test PRIVATE
@@ -2091,6 +2102,23 @@ if(BUILD_TESTING)
                 --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-rt-scalar-step-positive.ores"
                 --harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_step_harness.c")
         set_tests_properties(native_rt_scalar_frame_aot_two_tasks PROPERTIES TIMEOUT 120)
+        # Frame-integrity gate (forward-port of #1570 onto #1569's batching):
+        # O0/O2/O3 + sanitizer guest matrix, child-signal trap suite and
+        # adversarial mutations of the compiler-emitted LLVM IR. Set
+        # ORE_SANITIZER_CLANG to a clang whose ASan runtime runs on this host
+        # when ORE_CLANG's does not (the gate skips unrunnable sanitizers).
+        set(ORE_SANITIZER_CLANG "" CACHE FILEPATH
+            "Optional extra clang for ASan/UBSan runs of generated native guests")
+        add_test(NAME native_rt_scalar_frame_integrity_aot
+            COMMAND "${CMAKE_COMMAND}"
+                "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                "-DCLANG=${ORE_CLANG}"
+                "-DSAN_CLANG=${ORE_SANITIZER_CLANG}"
+                "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-rt-scalar-step-positive.ores"
+                "-DHARNESS=${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_step_harness.c"
+                "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/native-rt-scalar-frame-integrity"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_frame_integrity_aot.cmake")
+        set_tests_properties(native_rt_scalar_frame_integrity_aot PROPERTIES TIMEOUT 600)
     else()
         message(WARNING "Experimental scalar-loop AOT gate requires clang")
     endif()
@@ -3801,6 +3829,20 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_preallocated_slot_ledger_fence
         COMMAND oreslang-native-slot-ledger-integration-test)
     set_tests_properties(native_actor_preallocated_slot_ledger_fence PROPERTIES TIMEOUT 30)
+
+    # Compiler-executed production port (not a stand-alone slot model):
+    # 100k deterministic operations, selective resume, FIFO, physical ACK.
+    add_executable(oreslang-native-bounded-selective-slot-oracle-test
+        tests/native_bounded_selective_slot_oracle_test.cpp)
+    target_include_directories(oreslang-native-bounded-selective-slot-oracle-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-bounded-selective-slot-oracle-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-bounded-selective-slot-oracle-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-bounded-selective-slot-oracle-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_bounded_selective_slot_oracle
+        COMMAND oreslang-native-bounded-selective-slot-oracle-test)
+    set_tests_properties(native_actor_bounded_selective_slot_oracle PROPERTIES TIMEOUT 30)
     # Compile-negative actor safety gate: custom deleter destructors or moves
     # must not call back into an actor mailbox while the physical lock is held.
     if(UNIX)
@@ -4967,7 +5009,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(cfg_execute_multifield_call_in_condition cfg-multifield-guard-call.ores --ir "call i64 @observe" --run 42 --clang "${ORE_CLANG}")
     oreslang_contract_test(cfg_reject_missing_fallthrough cfg-guard-missing-final-reject.ores --diagnostic "expected 'return'")
     oreslang_contract_test(cfg_reject_missing_fi cfg-guard-missing-fi-reject.ores --diagnostic "expected 'fi'")
-    oreslang_contract_test(cfg_reject_void_guard cfg-guard-void-reject.ores --diagnostic "guarded early return requires a scalar result")
+    oreslang_contract_test(cfg_reject_void_guard cfg-guard-void-reject.ores --diagnostic "RETURN_VOID_VALUE: void function cannot return a value")
 
 
 
@@ -5391,6 +5433,12 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-actor-owned-i64-heap-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-actor-owned-i64-heap-test PRIVATE Threads::Threads)
+    # The test intercepts the runtime object's calloc/free with linker --wrap (GNU ld/lld only).
+    if(APPLE)
+        target_compile_definitions(oreslang-actor-owned-i64-heap-test PRIVATE ORES_HEAP_NO_LINK_WRAP=1)
+    else()
+        target_link_options(oreslang-actor-owned-i64-heap-test PRIVATE -Wl,--wrap=calloc -Wl,--wrap=free)
+    endif()
     target_compile_options(oreslang-actor-owned-i64-heap-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_actor_owned_i64_heap_loan_quiescence

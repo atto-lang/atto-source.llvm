@@ -3928,9 +3928,13 @@ private:
                     fail("native protected try guard requires a pure nonthrowing bool expression");
                 const bool then_form = accept_keyword_if_header();
                 if (!then_form) require("{");
-                if (accept("return")) {
-                    if (value.returns_void)
-                        fail("guarded early return requires a scalar result");
+                // In a void function `if c then return; fi` is an ordinary conditional
+                // whose arm returns (as in Java); the generic branch below parses
+                // `return;` like any other arm statement. Only value-returning
+                // functions use the scalar guarded-return lowering.
+                if (value.returns_void && token_.text == "return" && peek_next().text != ";")
+                    fail("RETURN_VOID_VALUE: void function cannot return a value");
+                if (!value.returns_void && accept("return")) {
                     if (value.early_returns.size() == 8)
                         fail("native guarded return limit exceeded (8)");
                     GuardedReturn guard;
