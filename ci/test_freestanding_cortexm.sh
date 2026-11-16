@@ -88,12 +88,20 @@ run_guest pass-42 0
 run_guest fail-41 1
 
 for name in deny-stdio deny-unbound deny-alloc deny-process deny-std-import; do
+  case "$name" in
+    deny-stdio|deny-process) diagnostic="E_FREESTANDING_HOST_EFFECT" ;;
+    deny-unbound) diagnostic="E_UNBOUND" ;;
+    deny-alloc) diagnostic="E_ALLOCATOR_REQUIRED" ;;
+    deny-std-import) diagnostic="E_FREESTANDING_FORBIDDEN_IMPORT" ;;
+    *) exit 9 ;;
+  esac
   artifact="$work/$name.ll"
   if "$compiler" "tests/freestanding/$name.atto" -o "$artifact" --emit-llvm --freestanding-core \
       >"$work/$name.compiler.log" 2>&1; then
     echo "FAIL: accepted forbidden/unbound source $name" >&2; exit 1
   fi
   cat "$work/$name.compiler.log"
+  grep -q "$diagnostic" "$work/$name.compiler.log"
   test ! -e "$artifact" || { echo "FAIL: negative case emitted LLVM IR"; exit 1; }
   test ! -e "$work/$name.elf" || { echo "FAIL: negative case emitted ELF"; exit 1; }
   echo "PASS: negative no-artifact $name"
