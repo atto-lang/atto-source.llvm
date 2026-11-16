@@ -2814,6 +2814,31 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
+    # Verify deliberate rejection of currently unsupported opaque types.
+    # Source files are exact Git blobs shared with canonical conformance.
+    oreslang_contract_test(native_opaque_any_explicitly_unsupported
+        authority-guard-any-pending.ores
+        --fixture-git-blob 9d8cb47f7631fd41262e2d2c49d548170903e440
+        --diagnostic "native opaque any/unknown unsupported: dynamic tag, ownership and capability-safe lowering required"
+        --parser-diagnostic)
+    oreslang_contract_test(native_opaque_unknown_explicitly_unsupported
+        authority-guard-unknown-pending.ores
+        --fixture-git-blob 5eba2cbdb6f0b61e9718b8ccdd7f37c6918df491
+        --diagnostic "native opaque any/unknown unsupported: dynamic tag, ownership and capability-safe lowering required"
+        --parser-diagnostic)
+
+    # Return-position admission must also fail closed; a parameter-only
+    # parser guard would not protect opaque return value ownership.
+    oreslang_contract_test(native_opaque_any_return_explicitly_unsupported
+        authority-return-any-pending.ores
+        --fixture-git-blob 42dfd69320f3158fa80841022f85c362e0745723
+        --diagnostic "native opaque any/unknown unsupported: dynamic tag, ownership and capability-safe lowering required"
+        --parser-diagnostic)
+    oreslang_contract_test(native_opaque_unknown_return_explicitly_unsupported
+        authority-return-unknown-pending.ores
+        --fixture-git-blob 8c872c29d5b6335be0363aa13b1ddef9320c0332
+        --diagnostic "native opaque any/unknown unsupported: dynamic tag, ownership and capability-safe lowering required"
+        --parser-diagnostic)
     # Actual LLVM IR -> Clang -> native guest execution of shared-source i64 candidates.
     # These CTests must fail (never skip) when the compiler/lowerer lacks parity.
     oreslang_contract_test(native_six_backend_i64_40
