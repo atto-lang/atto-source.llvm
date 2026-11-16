@@ -137,4 +137,35 @@ for name in deny-stdio deny-unbound deny-alloc deny-process deny-std-import; do
   echo "PASS: negative no-artifact $name"
 done
 
-echo "FREESTANDING_CORTEXM_GUEST_PASS positive_executed=2 negative_no_artifact=5 libc=0 os=0 allocator=0"
+# Adversarial linker admission: an unused ARM EHABI R_ARM_NONE annotation
+# is discardable, but a *live* external host call is never discardable.
+# This is synthetic malicious IR, distinct from the two real .atto guests.
+cat > "$work/host-import.ll" <<'IR'
+target triple = "thumbv7m-none-eabi"
+declare i32 @host_io()
+define i32 @main() {
+entry:
+  %value = call i32 @host_io()
+  ret i32 %value
+}
+IR
+"$CLANG" "${arch[@]}" "${no_runtime[@]}" -O1 -x ir -c \
+  "$work/host-import.ll" -o "$work/host-import.o"
+llvm-objcopy-18 --remove-section=.ARM.exidx --remove-section=.ARM.extab \
+  --strip-unneeded "$work/host-import.o" "$work/host-import.core.o"
+readelf -W -s "$work/host-import.core.o" | grep -Eq 'UND[[:space:]]+host_io
+
+if "$CLANG" "${arch[@]}" -nostdlib -fuse-ld=lld \
+    -Wl,-T,tests/freestanding/cortexm_flash.ld -Wl,--no-undefined -Wl,--gc-sections \
+    "$work/boot.core.o" "$work/host-import.core.o" \
+    -o "$work/denied-host-import.elf" >"$work/host-import.log" 2>&1; then
+  echo "FAIL: live host import linked after EHABI cleanup" >&2
+  exit 1
+fi
+grep -q 'host_io' "$work/host-import.log"
+test ! -e "$work/denied-host-import.elf" || {
+  echo "FAIL: invalid host import generated an ELF" >&2; exit 1;
+}
+echo "PASS: live external host_io remains unresolved; no ELF emitted"
+
+echo "FREESTANDING_CORTEXM_GUEST_PASS positive_executed=2 negative_no_artifact=5 live_host_rejected=1 libc=0 os=0 allocator=0"
