@@ -2345,8 +2345,8 @@ if(BUILD_TESTING)
         set_tests_properties(native_source_bool_${mode} PROPERTIES TIMEOUT 120)
     endforeach()
 
-    # Seven pinned native .ores fixtures -> checked LLVM IR -> Clang
-    # (-O0/-O2) -> actual OS guest exit 42; four pinned immutable-default
+    # Six pinned native .ores fixtures -> checked LLVM IR -> Clang
+    # (-O0/-O2) -> actual OS guest exit 42; five pinned immutable-default
     # admission negatives plus two compiler-owned cast negatives.
     # The Rust harness never substitutes host arithmetic for guest execution.
     add_test(NAME native_five_backend_checked_cast_guest

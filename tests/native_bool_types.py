@@ -220,8 +220,10 @@ def main():
         'cast-does-not-convert': 'impossible native cast: int as bool',
         'scalar-alias-cast-mismatch': 'impossible native cast: int as bool',
         'cast-move-use-after-move': 'use of explicitly moved int',
-        'inference-rejects-sum-handle': "native inferred scalar cannot erase owner/nominal type of 'wrapped'",
-        'cast-rejects-sum-handle': "native inferred scalar cannot erase owner/nominal type of 'wrapped'",
+        # main rejects the inferred copy of a tagged local before scalar typing.
+        'inference-rejects-sum-handle': 'native local Option/Result initializer cannot implicitly wrap or erase tagged value',
+        # main's type-first const gate (#1779) rejects this initializer first.
+        'cast-rejects-sum-handle': 'E_NON_CONST_INITIALIZER',
         'inferred-bool-arithmetic': 'arithmetic requires int, got bool',
         'cast-false-to-int': 'impossible native cast: bool as int',
         'cast-zero-to-bool': 'impossible native cast: int as bool',

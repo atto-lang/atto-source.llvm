@@ -14,7 +14,6 @@ pub fn run_cases(compiler: &Path, clang: &Path, fixture_root: &Path) -> Result<(
         ("48-readonly-local-cast.ores", "87d0773504e0d22fc3cf1ee76755b36a2fc415c6"),
         ("49-const-typed-identity.ores", "bff7c6070008c5c6a8b3316e8a289f93d3f8c5b3"),
         ("50-runtime-const-helper.ores", "825767ec1ac57816591c7337ce5d499e64f85b66"),
-        ("51-type-first-helper.ores", "2037906871e51c020153b21f47b59d741c717666"),
     ];
     for (filename, expected_blob) in cases {
         let source = fixture_root.join(filename);
@@ -67,6 +66,9 @@ pub fn run_cases(compiler: &Path, clang: &Path, fixture_root: &Path) -> Result<(
     }
 
     let negative_fixtures = [
+        // Main #1779 (shared Java/.NET .atto fixtures): a type-first scalar
+        // (`int x = e;`) is implicitly const and needs a compile-time value.
+        ("51-type-first-helper.ores", "2037906871e51c020153b21f47b59d741c717666", Some("E_NON_CONST_INITIALIZER")),
         ("52-type-first-reassign.ores", "1211ca68540a2d0d5a00c8e0251bd53df48553dd", None),
         ("53-type-first-type-mismatch.ores", "083ee4f3d6557f0d33d232d099a98e483a064eab", Some("requires int, got bool")),
         ("54-type-first-self-reference.ores", "7ab647ca316e1f4586495c02d63d9ebcd780206d", None),
@@ -125,7 +127,7 @@ pub fn run_cases(compiler: &Path, clang: &Path, fixture_root: &Path) -> Result<(
         )?;
     }
     println!(
-        "LLVM checked i64 identity: seven pinned positive .ores programs at -O0/-O2, four pinned immutable-default negatives, two negative casts"
+        "LLVM checked i64 identity: six pinned positive .ores programs at -O0/-O2, five pinned immutable-default negatives, two negative casts"
     );
     Ok(())
 }

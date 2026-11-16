@@ -497,6 +497,10 @@ std::optional<std::int64_t> native_const_integer_value(
             return std::nullopt;
         return native_const_integer_value(*found->initializer, known, depth + 1);
     }
+    // A checked identity cast is a typing proof, not a conversion: an
+    // int-to-int cast of a compile-time value is the same compile-time value.
+    if (expr.kind == K::Cast && expr.left && expr.cast_target == ScalarType::I64)
+        return native_const_integer_value(*expr.left, known, depth + 1);
     if (expr.kind == K::Negate && expr.left) {
         const auto v = native_const_integer_value(*expr.left, known, depth + 1);
         if (!v) return std::nullopt;
@@ -538,6 +542,10 @@ bool native_const_scalar_tree(
     if (expr.kind == K::Negate && expr.left)
         return native_const_integer_value(expr, known, depth).has_value();
     if (expr.kind == K::LogicalNot && expr.left)
+        return native_const_scalar_tree(*expr.left, known, depth + 1);
+    // Identity casts preserve their operand value (checked by the scalar
+    // type pass); constness is exactly the operand's constness.
+    if (expr.kind == K::Cast && expr.left)
         return native_const_scalar_tree(*expr.left, known, depth + 1);
     if (expr.kind == K::Add || expr.kind == K::Subtract ||
             expr.kind == K::Multiply) {
