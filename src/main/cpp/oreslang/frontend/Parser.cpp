@@ -156,7 +156,7 @@ bool reserved(std::string_view name) {
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
-        "default", "eq", "neq", "and", "or", "xor", "Xor", "nb", "select", "readch", "writech",
+        "default", "eq", "neq", "Xor", "nb", "select", "readch", "writech",
         "cb", "shared", "untrusted", "type", "types", "typeof",
         "interface", "trait", "struct", "impl", "abstract", "void", "Iterator", "AsyncIterator",
         "static", "pub", "private", "return", "defer", "throw", "raise",
@@ -4297,8 +4297,16 @@ private:
 
     std::unique_ptr<Expression> logical_xor() {
         auto left = logical_and();
-        if (token_.text == "^^")
-            fail("'^^' is reserved and is not AttoLang source syntax; use Xor(a, b)");
+        // The lexer emits adjacent ^^ as one token; single ^ remains invalid.
+        // LLVM's existing LogicalXor lowering is eager and bool-only.
+        while (token_.text == "^^") {
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::LogicalXor, offset);
+            expr->left = std::move(left);
+            expr->right = logical_and();
+            left = std::move(expr);
+        }
         return left;
     }
 

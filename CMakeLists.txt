@@ -1586,6 +1586,12 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
+    # Compiler-backed .atto -> LLVM IR -> Clang -> native guest at O0/O2.
+    # Boolean punctuation contract: &&, ||, ^^ and compile-negative cases.
+    add_test(NAME native_logical_punctuation_operators
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_logical_punctuation_operators.sh"
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_logical_punctuation_operators PROPERTIES TIMEOUT 120)
     # Java parity: `if c then return; fi` in void functions/methods is an
     # ordinary conditional with an early-returning arm (native O0/O2 guests).
     add_test(NAME native_void_early_return
