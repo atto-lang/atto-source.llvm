@@ -1,3 +1,7 @@
+#if defined(__linux__) && !defined(_POSIX_C_SOURCE)
+/* fork/waitpid are POSIX, not ISO C11: declare them under -std=c11 -pedantic. */
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,7 +13,10 @@
         abort(); \
     } \
 } while (0)
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
+#define ORESLANG_FRAME_TRAP_PROOF 1
+#endif
+#ifdef ORESLANG_FRAME_TRAP_PROOF
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -26,7 +33,7 @@ typedef struct {
     uint64_t magic;
 } ScalarFrame;
 
-#ifdef __linux__
+#ifdef ORESLANG_FRAME_TRAP_PROOF
 /* Real llvm.trap must fail closed in a child, not silently return a code or
  * produce partially usable data. Exercise one violation per process because
  * production treats all invalid task-frame operations as fatal. */
@@ -51,29 +58,47 @@ static void require_guest_trap(int scenario) {
                 frame.state = 99;
                 (void)oreslang_rt_scalar_frame_step(&frame, 1); break;
         case 7: (void)oreslang_rt_scalar_frame_step(NULL, 1); break;
-        case 8: frame.counter = 1; /* dirty zero-state frame */
-                oreslang_rt_scalar_frame_init(&frame); break;
-        case 9: frame.magic = 7; /* dirty magic cannot resurrect a frame */
-                oreslang_rt_scalar_frame_init(&frame); break;
-        case 10: oreslang_rt_scalar_frame_init(&frame);
-                 frame.counter = 1001; /* cannot skip past upper bound */
-                 (void)oreslang_rt_scalar_frame_step(&frame, 512); break;
-        case 11: oreslang_rt_scalar_frame_init(&frame);
-                 frame.counter = UINT64_MAX; /* signed-negative counter */
-                 (void)oreslang_rt_scalar_frame_step(&frame, 128); break;
+        case 8: oreslang_rt_scalar_frame_init(&frame);
+                frame.counter = UINT64_MAX; /* signed -1: before source initial */
+                (void)oreslang_rt_scalar_frame_step(&frame, 1); break;
+        case 9: oreslang_rt_scalar_frame_init(&frame);
+                frame.counter = 1001; /* past source's exclusive bound */
+                (void)oreslang_rt_scalar_frame_step(&frame, 1); break;
+        /* Dirty-frame zero-init: state==0 alone is not a fresh frame. */
+        case 10: frame.counter = 1; /* dirty counter, zero state */
+                 oreslang_rt_scalar_frame_init(&frame); break;
+        case 11: frame.magic = 7; /* dirty magic cannot resurrect a frame */
+                 oreslang_rt_scalar_frame_init(&frame); break;
+        /* Forged DONE: the scheduler may consume status 0 without result(),
+         * so step, cancel AND result must all verify the committed counter. */
         case 12: oreslang_rt_scalar_frame_init(&frame);
-                 frame.state = 2; frame.counter = 999; /* forged DONE */
-                 (void)oreslang_rt_scalar_frame_result(&frame); break;
+                 frame.state = 2; frame.counter = 999;
+                 (void)oreslang_rt_scalar_frame_step(&frame, 1); break;
         case 13: oreslang_rt_scalar_frame_init(&frame);
-                 frame.counter = 1001;
-                 oreslang_rt_scalar_frame_cancel(&frame);
-                 (void)oreslang_rt_scalar_frame_step(&frame, 1); break;
+                 frame.state = 2; frame.counter = 999;
+                 (void)oreslang_rt_scalar_frame_step(&frame, 0); break;
         case 14: oreslang_rt_scalar_frame_init(&frame);
-                 frame.state = 2; frame.counter = 999; /* forged DONE */
-                 (void)oreslang_rt_scalar_frame_step(&frame, 1); break;
-        case 15: oreslang_rt_scalar_frame_init(&frame);
-                 frame.state = 2; frame.counter = 999; /* forged DONE */
+                 frame.state = 2; frame.counter = 999;
                  oreslang_rt_scalar_frame_cancel(&frame); break;
+        case 15: oreslang_rt_scalar_frame_init(&frame);
+                 frame.state = 2; frame.counter = 999;
+                 (void)oreslang_rt_scalar_frame_result(&frame); break;
+        case 16: oreslang_rt_scalar_frame_init(&frame);
+                 frame.state = 2; frame.counter = 1001; /* overshot terminal */
+                 (void)oreslang_rt_scalar_frame_result(&frame); break;
+        /* Corrupt committed counters in non-active states / cancellation. */
+        case 17: oreslang_rt_scalar_frame_init(&frame);
+                 frame.counter = 1001;
+                 oreslang_rt_scalar_frame_cancel(&frame); break;
+        case 18: oreslang_rt_scalar_frame_init(&frame);
+                 oreslang_rt_scalar_frame_cancel(&frame);
+                 frame.counter = UINT64_MAX; /* corrupt CANCELLED frame */
+                 (void)oreslang_rt_scalar_frame_step(&frame, 1); break;
+        /* Cancellation is distinct from completion: no result is published. */
+        case 19: oreslang_rt_scalar_frame_init(&frame);
+                 (void)oreslang_rt_scalar_frame_step(&frame, 64);
+                 oreslang_rt_scalar_frame_cancel(&frame);
+                 (void)oreslang_rt_scalar_frame_result(&frame); break;
         default: _Exit(99);
         }
         _Exit(0); /* An invalid operation returning constitutes a failure. */
@@ -187,16 +212,18 @@ static void require_cancelled_peer_is_isolated(void) {
     free(cancel);
 }
 
-/* Compiler-backed exact fuel boundaries. The slow fuel decision is
- * outside the loop body; each invocation commits at most the supplied batch.
- * The actual generated ABI must not replay or drop a committed increment. */
-static void require_batch_fuel_boundaries(void) {
-    const uint64_t cases[] = {0, 1, 127, 128, 129, 511, 512};
-    for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); ++i) {
+/* Exact per-dispatch fuel boundaries 0/1/127/128/129/511/512 against the
+ * real generated step. #1569's batch endpoint min(counter + fuel, bound)
+ * must commit exactly `fuel` effects from a fresh frame, and when a batch
+ * reaches the terminal bound it must commit only what remains and return
+ * DONE (never COOPERATE, never an overrun or a replay). */
+static void require_exact_fuel_boundaries(void) {
+    static const uint64_t cases[] = {0, 1, 127, 128, 129, 511, 512};
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        const uint64_t fuel = cases[i];
         ScalarFrame *f = calloc(1, sizeof(*f));
         CHECK(f != NULL);
         oreslang_rt_scalar_frame_init(f);
-        const uint64_t fuel = cases[i];
         CHECK(oreslang_rt_scalar_frame_step(f, fuel) == 1);
         CHECK(f->state == 1 && f->counter == fuel);
         uint64_t before = fuel;
@@ -204,16 +231,89 @@ static void require_batch_fuel_boundaries(void) {
         while (f->state != 2) {
             const uint64_t need = 1000 - before;
             const uint64_t advance = need < 512 ? need : 512;
-            const int result = oreslang_rt_scalar_frame_step(f, 512);
+            const int status = oreslang_rt_scalar_frame_step(f, 512);
             CHECK(f->counter == before + advance);
-            CHECK(result == (f->state == 2 ? 0 : 1));
+            CHECK(status == (f->counter == 1000 ? 0 : 1));
+            CHECK(f->state == (f->counter == 1000 ? 2 : 1));
             before = f->counter;
             CHECK(++dispatches <= 2);
         }
-        CHECK(f->counter == 1000);
         CHECK(oreslang_rt_scalar_frame_result(f) == 1000);
         free(f);
+        if (fuel == 0)
+            continue;
+        /* Terminal-side boundary: start exactly `fuel` and `fuel + 1` short. */
+        for (uint64_t shortfall = fuel; shortfall <= fuel + 1; ++shortfall) {
+            ScalarFrame *t = calloc(1, sizeof(*t));
+            CHECK(t != NULL);
+            oreslang_rt_scalar_frame_init(t);
+            uint64_t target = 1000 - shortfall;
+            while (t->counter < target) {
+                const uint64_t gap = target - t->counter;
+                CHECK(oreslang_rt_scalar_frame_step(t, gap < 512 ? gap : 512) == 1);
+            }
+            CHECK(t->counter == target && t->state == 1);
+            const int status = oreslang_rt_scalar_frame_step(t, fuel);
+            if (shortfall == fuel) {
+                CHECK(status == 0 && t->state == 2 && t->counter == 1000);
+                CHECK(oreslang_rt_scalar_frame_result(t) == 1000);
+            } else {
+                CHECK(status == 1 && t->state == 1 && t->counter == 999);
+            }
+            free(t);
+        }
     }
+}
+
+/* Exactly-once retirement: once DONE (or CANCELLED) a frame stays retired.
+ * Repeated step/cancel never re-run, rewind or reclassify it. */
+static void require_terminal_retirement_is_stable(void) {
+    ScalarFrame *d = calloc(1, sizeof(*d));
+    ScalarFrame *c = calloc(1, sizeof(*c));
+    CHECK(d && c);
+    oreslang_rt_scalar_frame_init(d);
+    oreslang_rt_scalar_frame_init(c);
+    CHECK(oreslang_rt_scalar_frame_step(d, 512) == 1);
+    CHECK(oreslang_rt_scalar_frame_step(d, 512) == 0);
+    CHECK(d->state == 2 && d->counter == 1000);
+    for (int i = 0; i < 3; ++i) {
+        oreslang_rt_scalar_frame_cancel(d); /* no-op: DONE is not CANCELLED */
+        CHECK(d->state == 2 && d->counter == 1000);
+        CHECK(oreslang_rt_scalar_frame_step(d, (uint64_t)(i * 256)) == 0);
+        CHECK(oreslang_rt_scalar_frame_result(d) == 1000);
+    }
+    CHECK(oreslang_rt_scalar_frame_step(c, 64) == 1 && c->counter == 64);
+    oreslang_rt_scalar_frame_cancel(c);
+    for (int i = 0; i < 3; ++i) {
+        /* CANCELLED is a distinct terminal status, never DONE/COOPERATE. */
+        CHECK(oreslang_rt_scalar_frame_step(c, (uint64_t)(i * 256)) == 2);
+        oreslang_rt_scalar_frame_cancel(c);
+        CHECK(c->state == 3 && c->counter == 64);
+    }
+    free(c);
+    free(d);
+}
+
+/* Real compiler-generated guest step: a short/long quantum must commit
+ * exactly its permitted number of effects. In particular, boundary 127/128
+ * and 511/512 never overrun, duplicate or erase the heap continuation. */
+static void require_batch_fuel_boundary_matrix(void) {
+    ScalarFrame *frame = calloc(1, sizeof(*frame));
+    CHECK(frame != NULL);
+    oreslang_rt_scalar_frame_init(frame);
+    static const uint64_t fuel[] = {0, 1, 126, 1, 128, 255, 1, 0, 488};
+    static const uint64_t after[] = {0, 1, 127, 128, 256, 511, 512, 512, 1000};
+    for (size_t i = 0; i < sizeof(fuel) / sizeof(fuel[0]); ++i) {
+        const int status = oreslang_rt_scalar_frame_step(frame, fuel[i]);
+        CHECK(frame->counter == after[i]);
+        CHECK(status == (after[i] == 1000 ? 0 : 1));
+        CHECK(frame->state == (after[i] == 1000 ? 2 : 1));
+    }
+    CHECK(oreslang_rt_scalar_frame_result(frame) == 1000);
+    CHECK(oreslang_rt_scalar_frame_step(frame, 0) == 0);
+    CHECK(oreslang_rt_scalar_frame_step(frame, 512) == 0);
+    CHECK(frame->counter == 1000 && frame->state == 2);
+    free(frame);
 }
 
 int main(void) {
@@ -261,18 +361,18 @@ int main(void) {
     CHECK(oreslang_rt_scalar_frame_result(b) == 1000);
     CHECK(oreslang_rt_scalar_frame_step(a, 512) == 0);
     CHECK(a->counter == 1000);
-#ifdef __linux__
-    for (int scenario = 0; scenario != 16; ++scenario)
+#ifdef ORESLANG_FRAME_TRAP_PROOF
+    for (int scenario = 0; scenario != 20; ++scenario)
         require_guest_trap(scenario);
-    puts("SCALAR_FRAME_AOT_INVALID_FRAME_TRAPS_16_PASS");
-#else
-    fprintf(stderr, "native trap proof requires Linux fork/waitpid/SIGILL\n");
-    return 1;
+    puts("SCALAR_FRAME_AOT_INVALID_FRAME_TRAPS_20_PASS");
 #endif
+    require_batch_fuel_boundary_matrix();
+    require_exact_fuel_boundaries();
+    puts("SCALAR_FRAME_AOT_BATCH_FUEL_BOUNDARIES_PASS");
+    require_terminal_retirement_is_stable();
+    puts("SCALAR_FRAME_AOT_TERMINAL_RETIREMENT_PASS");
     require_bounded_peer_progress();
     require_cancelled_peer_is_isolated();
-    require_batch_fuel_boundaries();
-    puts("SCALAR_FRAME_AOT_BATCH_FUEL_BOUNDARIES_PASS");
     puts("SCALAR_FRAME_AOT_CANCELLED_PEER_ISOLATION_PASS");
     puts("SCALAR_FRAME_AOT_THREE_PEERS_BOUNDED_PROGRESS_PASS");
     puts("SCALAR_FRAME_AOT_TWO_TASKS_PASS");

@@ -4,14 +4,9 @@
 #include <stdexcept>
 #include <string>
 
-#include "llvm/ADT/SCCIterator.h"
-#include "llvm/ADT/SmallPtrSet.h"
-#include "llvm/IR/CFG.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/Dominators.h"
-#include "llvm/IR/Instructions.h"
 #include "llvm/IR/IRBuilder.h"
 #include "oreslang/backend/LlvmCompat.hpp"
 #include "llvm/IR/Intrinsics.h"
@@ -57,6 +52,22 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         fail(b);
         b.SetInsertPoint(ok);
     };
+    // Frame-integrity predicates shared by step/cancel/result. A durable
+    // heap continuation may only ever hold a counter inside the compiler-
+    // proven [initial, upperBound] interval, and the terminal DONE state is
+    // only reachable by committing exactly upperBound. Anything else is a
+    // corrupted, recycled or forged frame and must trap, not be published.
+    auto* initialBound = llvm::ConstantInt::getSigned(i64, loop.initial);
+    auto* terminalBound = llvm::ConstantInt::getSigned(i64, loop.upper_bound);
+    const auto counterInRange = [&](llvm::IRBuilder<>& b, llvm::Value* counter) {
+        return b.CreateAnd(b.CreateICmpSGE(counter, initialBound),
+                           b.CreateICmpSLE(counter, terminalBound), "frame.counter.in.range");
+    };
+    const auto doneIsExact = [&](llvm::IRBuilder<>& b, llvm::Value* state,
+                                 llvm::Value* counter) {
+        return b.CreateOr(b.CreateICmpNE(state, constant(2)),
+                          b.CreateICmpEQ(counter, terminalBound), "frame.done.exact");
+    };
 
     auto* init = llvm::Function::Create(
         llvm::FunctionType::get(voidTy, {ptr}, false),
@@ -68,16 +79,14 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         auto* stateAddress = field(b, frame, 0);
         auto* fresh = llvm::BasicBlock::Create(context, "fresh", init);
         auto* invalid = llvm::BasicBlock::Create(context, "already.initialized", init);
-        // Even though state=0 alone would permit initialization, accepting
-        // dirty frame words can silently resurrect a recycled incarnation.
-        // The ABI explicitly requires a fresh, zero-initialized owned frame.
+        // state == 0 alone is not proof of a fresh frame: accepting dirty
+        // counter/magic words could resurrect a recycled incarnation. The
+        // ABI requires a fresh, fully zero-initialized, exclusively owned frame.
         auto* freshState = b.CreateICmpEQ(b.CreateLoad(i64, stateAddress), constant(0));
-        auto* freshCounter = b.CreateICmpEQ(
-            b.CreateLoad(i64, field(b, frame, 1)), constant(0));
-        auto* freshMagic = b.CreateICmpEQ(
-            b.CreateLoad(i64, field(b, frame, 2)), constant(0));
-        b.CreateCondBr(b.CreateAnd(freshState,
-                                  b.CreateAnd(freshCounter, freshMagic)),
+        auto* freshCounter = b.CreateICmpEQ(b.CreateLoad(i64, field(b, frame, 1)), constant(0));
+        auto* freshMagic = b.CreateICmpEQ(b.CreateLoad(i64, field(b, frame, 2)), constant(0));
+        b.CreateCondBr(b.CreateAnd(freshState, b.CreateAnd(freshCounter, freshMagic),
+                                   "frame.all.zero"),
                        fresh, invalid);
         b.SetInsertPoint(invalid);
         fail(b);
@@ -94,15 +103,6 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
     auto* step = llvm::Function::Create(
         llvm::FunctionType::get(i32, {ptr, i64}, false),
         llvm::Function::ExternalLinkage, "oreslang_rt_scalar_frame_step", module);
-    // Compiler-private proof witnesses. These are the ACTUAL LLVM values,
-    // not strings or guest-provided claims about checkpoint coverage.
-    llvm::BasicBlock* admittedBatchStart = nullptr;
-    llvm::BasicBlock* admittedCommit = nullptr;
-    llvm::BasicBlock* admittedBatchEnd = nullptr;
-    llvm::Value* admittedCounterAddress = nullptr;
-    llvm::Value* admittedBatchLimit = nullptr;
-    llvm::Value* admittedNext = nullptr;
-    llvm::Value* admittedFuel = nullptr;
     {
         auto arg = step->arg_begin();
         llvm::Value* frame = &*arg++;
@@ -120,40 +120,31 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         b.SetInsertPoint(invalid);
         fail(b);
         b.SetInsertPoint(valid);
-        // A corrupted actor frame must not claim DONE by setting its counter
-        // past the source limit, nor run from a negative/stale counter. Check
-        // once per dispatch BEFORE any guest reduction is committed.
-        auto* countAtEntry = b.CreateLoad(i64, counterAddress, "frame.counter");
-        auto* counterInRange = b.CreateAnd(
-            b.CreateICmpSGE(countAtEntry, llvm::ConstantInt::getSigned(i64, loop.initial)),
-            b.CreateICmpSLE(countAtEntry, llvm::ConstantInt::getSigned(i64, loop.upper_bound)));
-        auto* verifiedCounter = llvm::BasicBlock::Create(
-            context, "frame.counter.valid", step);
-        b.CreateCondBr(counterInRange, verifiedCounter, invalid);
-        b.SetInsertPoint(verifiedCounter);
 
         auto* active = llvm::BasicBlock::Create(context, "active", step);
         auto* done = llvm::BasicBlock::Create(context, "done", step);
         auto* cancelled = llvm::BasicBlock::Create(context, "cancelled", step);
         auto* loopHead = llvm::BasicBlock::Create(context, "loop.check", step);
-        auto* budget = llvm::BasicBlock::Create(context, "loop.fuel", step);
-        auto* batchStart = llvm::BasicBlock::Create(context, "batch.start", step);
         auto* advance = llvm::BasicBlock::Create(context, "loop.commit", step);
-        auto* batchEnd = llvm::BasicBlock::Create(context, "batch.end", step);
+        auto* batchExit = llvm::BasicBlock::Create(context, "loop.batch.exit", step);
         auto* exhausted = llvm::BasicBlock::Create(context, "cooperate", step);
         auto* complete = llvm::BasicBlock::Create(context, "loop.complete", step);
         auto* state = b.CreateLoad(i64, stateAddress, "state");
-        // The scheduler consumes DONE without necessarily calling result().
-        // A forged terminal state must therefore trap directly in step(),
-        // even when its counter is otherwise within the legal range.
-        auto* stateConsistent = b.CreateOr(
-            b.CreateICmpNE(state, constant(2)),
-            b.CreateICmpEQ(countAtEntry,
-                llvm::ConstantInt::getSigned(i64, loop.upper_bound)));
-        auto* stateVerified = llvm::BasicBlock::Create(
+        // This counter is part of a long-lived heap continuation. Reject
+        // corruption/stale frame replay in EVERY state, once per dispatch and
+        // before any guest reduction: otherwise i64 wrapping could bypass the
+        // fuel cap, and a cancelled/done frame could carry a bogus counter.
+        auto* first = b.CreateLoad(i64, counterAddress, "counter.at.dispatch");
+        auto* counterValid = llvm::BasicBlock::Create(context, "counter.valid", step);
+        b.CreateCondBr(counterInRange(b, first), counterValid, invalid);
+        b.SetInsertPoint(counterValid);
+        // The scheduler may consume DONE (status 0) without ever calling
+        // result(). A forged terminal state must therefore trap here, in
+        // step(), unless the committed counter is exactly the terminal value.
+        auto* stateConsistent = llvm::BasicBlock::Create(
             context, "frame.state.consistent", step);
-        b.CreateCondBr(stateConsistent, stateVerified, invalid);
-        b.SetInsertPoint(stateVerified);
+        b.CreateCondBr(doneIsExact(b, state, first), stateConsistent, invalid);
+        b.SetInsertPoint(stateConsistent);
         auto* sw = b.CreateSwitch(state, invalid, 3);
         sw->addCase(constant(1), active);
         sw->addCase(constant(2), done);
@@ -164,51 +155,41 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         b.SetInsertPoint(cancelled);
         b.CreateRet(llvm::ConstantInt::get(i32, 2));
         b.SetInsertPoint(active);
+        // Calculate the exclusive endpoint once per dispatch. Both the
+        // source bound and admitted fuel fit safely in signed i64 here.
+        // Loop backedges have NO repeated fuel test, time read or scheduler
+        // callback. The only loop condition is the batch endpoint. `first`
+        // was range-checked above, so first + fuel (<= 1e9 + 512) cannot wrap.
+        auto* upper = terminalBound;
+        auto* byFuel = b.CreateAdd(first, fuel, "dispatch.end.by.fuel");
+        auto* endByFuel = b.CreateICmpULT(byFuel, upper);
+        auto* stop = b.CreateSelect(endByFuel, byFuel, upper, "dispatch.batch.stop");
         b.CreateBr(loopHead);
         b.SetInsertPoint(loopHead);
-        auto* current = b.CreateLoad(i64, counterAddress, "counter.before");
-        auto* upperBound = llvm::ConstantInt::getSigned(i64, loop.upper_bound);
-        b.CreateCondBr(b.CreateICmpSLT(current, upperBound), budget, complete);
+        // The induction value lives in SSA, seeded from the validated
+        // dispatch counter, so the batch length is bounded by
+        // (stop - first) structurally rather than by re-reading the heap
+        // frame on every backedge. Every tick is still committed to the frame.
+        auto* current = b.CreatePHI(i64, 2, "counter.before");
+        current->addIncoming(first, active);
+        b.CreateCondBr(b.CreateICmpSLT(current, stop), advance, batchExit);
 
+        b.SetInsertPoint(batchExit);
+        // The existing frame protocol returns DONE (0) before COOPERATE (1)
+        // when a dispatch ends at exactly the source bound, including fuel=0.
+        b.CreateCondBr(b.CreateICmpSLT(current, upper), exhausted, complete);
         b.SetInsertPoint(complete);
         b.CreateStore(constant(2), stateAddress);
         b.CreateRet(llvm::ConstantInt::get(i32, 0));
-        b.SetInsertPoint(budget);
-        // Charge the dispatch fuel once per call, not on every backedge.
-        // The source body is precisely a proven nonthrowing +1 effect.
-        b.CreateCondBr(b.CreateICmpEQ(fuel, constant(0)), exhausted, batchStart);
-        b.SetInsertPoint(batchStart);
-        // 0 < fuel <= 512, current < upperBound <= 1e9; current + fuel
-        // cannot signed-overflow even for an unexpectedly negative frame.
-        auto* requestedEnd = b.CreateNSWAdd(current, fuel, "batch.requested_end");
-        auto* batchLimit = b.CreateSelect(
-            b.CreateICmpSLT(requestedEnd, upperBound), requestedEnd,
-            upperBound, "batch.limit");
-        // This path has already validated 0 < fuel <= 512, and the
-        // initialized counter is inside [initial, upper_bound <= 1e9].
-        admittedBatchStart = batchStart;
-        admittedCommit = advance;
-        admittedBatchEnd = batchEnd;
-        admittedCounterAddress = counterAddress;
-        admittedBatchLimit = batchLimit;
-        admittedFuel = fuel;
-        b.CreateBr(advance);
         b.SetInsertPoint(exhausted);
         b.CreateRet(llvm::ConstantInt::get(i32, 1));
         b.SetInsertPoint(advance);
-        auto* index = b.CreatePHI(i64, 2, "batch.current");
-        index->addIncoming(current, batchStart);
-        // Commit before deciding to return COOPERATE. The only in-loop test
-        // is the native counted-loop boundary, not a runtime fuel/clock poll.
-        auto* next = b.CreateNSWAdd(index, constant(1), "counter.committed");
-        admittedNext = next;
+        // Source body has exactly one nonthrowing, bounded +1 effect.
+        // Commit the frame counter before a later dispatch can cooperate.
+        auto* next = b.CreateNSWAdd(current, constant(1), "counter.committed");
         b.CreateStore(next, counterAddress);
-        b.CreateCondBr(b.CreateICmpSLT(next, batchLimit), advance, batchEnd);
-        index->addIncoming(next, advance);
-        b.SetInsertPoint(batchEnd);
-        // The last committed tick either completed the source loop or used
-        // exactly the caller-approved fuel. No live guest native stack yields.
-        b.CreateCondBr(b.CreateICmpEQ(next, upperBound), complete, exhausted);
+        b.CreateBr(loopHead);
+        current->addIncoming(next, advance);
     }
 
     auto* cancel = llvm::Function::Create(
@@ -224,18 +205,12 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         auto* invalid = llvm::BasicBlock::Create(context, "invalid", cancel);
         auto* known = b.CreateAnd(b.CreateICmpUGE(s, constant(1)),
                                    b.CreateICmpULE(s, constant(3)));
-        auto* counter = b.CreateLoad(i64, field(b, frame, 1));
-        auto* counterInRange = b.CreateAnd(
-            b.CreateICmpSGE(counter, llvm::ConstantInt::getSigned(i64, loop.initial)),
-            b.CreateICmpSLE(counter, llvm::ConstantInt::getSigned(i64, loop.upper_bound)));
-        auto* doneCounterValid = b.CreateOr(
-            b.CreateICmpNE(s, constant(2)),
-            b.CreateICmpEQ(counter,
-                llvm::ConstantInt::getSigned(i64, loop.upper_bound)));
-        b.CreateCondBr(b.CreateAnd(known,
-            b.CreateAnd(counterInRange,
-                b.CreateAnd(doneCounterValid, b.CreateICmpEQ(
-                    b.CreateLoad(i64, field(b, frame, 2)), constant(kMagic))))),
+        // Cancellation is an idempotent no-op on a terminal frame, so it must
+        // not launder a corrupt counter or a forged DONE into "retired".
+        auto* counter = b.CreateLoad(i64, field(b, frame, 1), "cancel.counter");
+        auto* integrity = b.CreateAnd(counterInRange(b, counter), doneIsExact(b, s, counter));
+        b.CreateCondBr(b.CreateAnd(known, b.CreateAnd(integrity,
+            b.CreateICmpEQ(b.CreateLoad(i64, field(b, frame, 2)), constant(kMagic)))),
             valid, invalid);
         b.SetInsertPoint(invalid);
         fail(b);
@@ -259,107 +234,25 @@ std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop) {
         entryGuard(result, frame, b);
         auto* valid = llvm::BasicBlock::Create(context, "result.ready", result);
         auto* invalid = llvm::BasicBlock::Create(context, "result.invalid", result);
-        // DONE is not enough to authorize a result: a forged terminal
-        // state with an incomplete counter must trap instead of publishing
+        // DONE alone does not authorize a result: a forged terminal state with
+        // an incomplete (or overshot) counter must trap instead of publishing
         // a silently truncated scalar guest result.
-        auto* stateIsDone = b.CreateICmpEQ(
-            b.CreateLoad(i64, field(b, frame, 0)), constant(2));
-        auto* magicValid = b.CreateICmpEQ(
-            b.CreateLoad(i64, field(b, frame, 2)), constant(kMagic));
-        auto* resultComplete = b.CreateICmpEQ(
-            b.CreateLoad(i64, field(b, frame, 1)),
-            llvm::ConstantInt::getSigned(i64, loop.upper_bound));
-        b.CreateCondBr(b.CreateAnd(stateIsDone,
-                                  b.CreateAnd(magicValid, resultComplete)),
+        auto* committed = b.CreateLoad(i64, field(b, frame, 1), "result.counter");
+        auto* stateIsDone = b.CreateICmpEQ(b.CreateLoad(i64, field(b, frame, 0)), constant(2));
+        auto* magicValid = b.CreateICmpEQ(b.CreateLoad(i64, field(b, frame, 2)), constant(kMagic));
+        auto* exact = b.CreateICmpEQ(committed, terminalBound, "result.exact");
+        b.CreateCondBr(b.CreateAnd(stateIsDone, b.CreateAnd(magicValid, exact)),
                        valid, invalid);
         b.SetInsertPoint(invalid);
         fail(b);
         b.SetInsertPoint(valid);
-        b.CreateRet(b.CreateLoad(i64, field(b, frame, 1)));
+        b.CreateRet(committed);
     }
 
     std::string errors;
     llvm::raw_string_ostream diagnostic(errors);
     if (llvm::verifyModule(module, &diagnostic))
         throw std::runtime_error("invalid scalar-loop LLVM IR: " + diagnostic.str());
-    // Fail-closed CFG admission for this narrowly supported opt-in scalar
-    // frame emitter. Verifying LLVM module syntax alone does not prove fuel:
-    // a future optimizer/codegen change could introduce a second cycle or
-    // move the commit past the backedge guard. Check actual SSA/CFG objects
-    // before serialization, and reject ALL other cyclic SCCs (including
-    // irreducible control-flow cycles) rather than guessing they are safe.
-    auto invalidCoverage = [] {
-        throw std::runtime_error(
-            "unverified scalar-loop checkpoint CFG: unbounded/unmetered cycle");
-    };
-    if (!admittedBatchStart || !admittedCommit || !admittedBatchEnd
-            || !admittedCounterAddress || !admittedBatchLimit
-            || !admittedNext || !admittedFuel)
-        invalidCoverage();
-    auto* conditional = llvm::dyn_cast<llvm::BranchInst>(
-        admittedCommit->getTerminator());
-    auto* condition = conditional && conditional->isConditional()
-        ? llvm::dyn_cast<llvm::ICmpInst>(conditional->getCondition()) : nullptr;
-    if (!condition || condition->getPredicate() != llvm::CmpInst::ICMP_SLT
-            || condition->getOperand(0) != admittedNext
-            || condition->getOperand(1) != admittedBatchLimit
-            || conditional->getSuccessor(0) != admittedCommit
-            || conditional->getSuccessor(1) != admittedBatchEnd)
-        invalidCoverage();
-    auto* increment = llvm::dyn_cast<llvm::BinaryOperator>(admittedNext);
-    if (!increment || increment->getOpcode() != llvm::Instruction::Add
-            || !increment->hasNoSignedWrap()
-            || !llvm::isa<llvm::PHINode>(increment->getOperand(0)))
-        invalidCoverage();
-    auto* one = llvm::dyn_cast<llvm::ConstantInt>(increment->getOperand(1));
-    if (!one || !one->equalsInt(1)) invalidCoverage();
-    auto* select = llvm::dyn_cast<llvm::SelectInst>(admittedBatchLimit);
-    auto* requestedEnd = select
-        ? llvm::dyn_cast<llvm::BinaryOperator>(select->getTrueValue()) : nullptr;
-    if (!requestedEnd || requestedEnd->getOpcode() != llvm::Instruction::Add
-            || !requestedEnd->hasNoSignedWrap()
-            || requestedEnd->getOperand(1) != admittedFuel
-            || !llvm::isa<llvm::ConstantInt>(select->getFalseValue()))
-        invalidCoverage();
-    bool committed = false;
-    for (llvm::Instruction& inst : *admittedCommit) {
-        auto* store = llvm::dyn_cast<llvm::StoreInst>(&inst);
-        if (store && store->getValueOperand() == admittedNext
-                && store->getPointerOperand() == admittedCounterAddress)
-            committed = true;
-    }
-    if (!committed) invalidCoverage();
-    llvm::DominatorTree dominance(*step);
-    if (!dominance.dominates(admittedBatchStart, admittedCommit))
-        invalidCoverage();
-    unsigned cycles = 0;
-    for (llvm::Function& fn : module) {
-        if (fn.isDeclaration()) continue;
-        // SCCIterator starts at the entry block. Require complete CFG
-        // reachability, or an unreachable malicious loop could escape the
-        // cycle proof while still being emitted into the object module.
-        llvm::SmallPtrSet<llvm::BasicBlock*, 32> visited;
-        for (auto it = llvm::scc_begin(&fn); !it.isAtEnd(); ++it) {
-            const auto& component = *it;
-            for (auto* node : component) visited.insert(node);
-            bool cyclic = component.size() > 1;
-            if (!cyclic) {
-                for (const auto* successor : llvm::successors(component.front())) {
-                    if (successor == component.front()) cyclic = true;
-                }
-            }
-            if (!cyclic) continue;
-            ++cycles;
-            if (&fn != step || component.size() != 1
-                    || component.front() != admittedCommit)
-                invalidCoverage();
-        }
-        if (visited.size() != fn.size()) invalidCoverage();
-    }
-    if (cycles != 1) invalidCoverage();
-    // This is a bounded opt-in i64 scalar loop, not a proof of general
-    // actor recursion, native FFI revocation or tenant hard-fuel isolation.
-
     std::string output;
     llvm::raw_string_ostream o(output);
     module.print(o, nullptr);

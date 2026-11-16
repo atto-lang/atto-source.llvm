@@ -17,10 +17,7 @@ The generated LLVM module exports four C functions:
   exclusively owned 24-byte frame; state transitions 0 → 1.
 - `int32_t oreslang_rt_scalar_frame_step(void* frame, uint64_t fuel)`: a bounded
   dispatch slice with fuel 0..512, returning 0 DONE, 1 COOPERATE or 2 CANCELLED.
-  The counter is committed before returning 1. The compiler computes the
-  bounded dispatch limit once per step and uses a counted native loop: no
-  fuel-decrement, clock read, scheduler call or FFI poll on each backedge.
-  A cheap loop-bound comparison still executes for every committed tick.
+  The counter is committed before returning 1.
 - `void oreslang_rt_scalar_frame_cancel(void* frame)`: owner-turn cancellation
   transitions active state 1 → 3; terminal states are idempotent.
 - `int64_t oreslang_rt_scalar_frame_result(void* frame)`: requires state 2.
@@ -40,60 +37,36 @@ cancel isolation and exactly-once increments. Subsequent work must integrate
 this frame contract with HungryCarrier, source actors, pinned loans, watchdog
 requests and real task scheduling before expanding the supported grammar.
 
-## Amortized batch hardening
+## Frame integrity (forward-port of #1570 onto #1569's batching)
 
-The opt-in emitter computes `batch.limit = min(counter + fuel, upperBound)`
-before entering `loop.commit`. For all valid fuel values (0..512), the
-loop commits no more than that many increments and returns DONE if it reaches
-the source upper bound or COOPERATE otherwise. No source stack survives a
-handoff. The AOT harness executes real compiled guest code at fuel boundaries
-0/1/127/128/129/511/512 and rejects a generated `fuel.remaining` loop.
+#1569's batched step stays canonical: the endpoint
+`dispatch.batch.stop = min(counter + fuel, upperBound)` is computed once per
+dispatch and the only backedge test compares the SSA induction value
+(`counter.before`, seeded from the validated dispatch counter) against it.
+There is no per-iteration fuel decrement, clock read or scheduler call. Each
+committed tick is still stored to the frame before any COOPERATE return.
 
-This does **not** implement a generic LLVM 128-safepoint compiler pass:
-general actors, recursive call cycles, critical sections and arbitrary loops
-remain fail-closed until ownership-safe continuation and post-optimization
-checkpoint coverage are independently verified.
+On top of that the emitter enforces:
 
+- **Zero-initialised admission.** `init` requires state, counter *and* magic
+  to be zero; `state == 0` alone could resurrect a recycled incarnation.
+- **Counter range in every state.** `step` and `cancel` trap unless the
+  committed counter is inside the compiler-proven `[initial, upperBound]`
+  interval, including for DONE and CANCELLED frames.
+- **No forged completion.** DONE is accepted only with the exact terminal
+  counter `upperBound`, in `step`, `cancel` and `result`. A scheduler may
+  consume status 0 without ever calling `result`, so validating `result`
+  alone would leave a bypass.
+- **Cancellation is not completion.** A cancelled frame returns status 2
+  forever and `result` traps on it.
 
-## Hardened frame admission and optimized regression contract
-
-A frame must be all-zero before initialization, not merely state=0. A live,
-completed or cancelled frame must have a counter in the compiler-proven
-[initial, upperBound] interval before step or cancellation. Published DONE
-results require an exact terminal counter equal to upperBound. Invalid frames
-trap through `llvm.trap`; never skip ahead or return a forged result.
-
-The AOT harness executes 16 independent bad-frame/invalid-operation trap
-scenarios on Linux, the exact 0/1/127/128/129/511/512 dispatch-fuel
-boundaries, and three-frame cancellation/fairness isolation. It must pass at
-Clang `-O0`, `-O2` and `-O3`. All tests require an actual compiler-generated
-LLVM module and linked native guest executable, not host-only mock receipts.
-These tests remain unverified on hosted CI while Actions jobs have zero steps.
-
-A forged state=2 with counter below upperBound now traps in **all** of
-`step`, `cancel` and `result`, since the scheduler can consume a DONE
-status without fetching a result. The harness must print
-`SCALAR_FRAME_AOT_INVALID_FRAME_TRAPS_16_PASS` after completing every
-Linux child-signal trap test; a skipped trap suite or Python `-O` test
-invocation is not acceptable evidence. The complete compiler-produced
-guest harness is run independently with Clang `-O0/-O2/-O3`.
-
-
-## Compiler-generated LLVM IR mutation suite
-
-The opt-in AOT regression driver now produces four syntactically valid
-mutated LLVM modules **from the actual compiler output**, compiles them
-with Clang `-O2` and runs the full native frame oracle. The mutations:
-
-- replace `batch.limit` with the global upper bound (fuel cap bypass);
-- double the committed counter increment (non-exactly-once commit);
-- store the previous counter rather than the committed counter (lost
-  heap continuation state);
-- disguise the `CANCELLED` step status as `DONE` (terminal forgery).
-
-A mutation is accepted as *killed* only when it successfully compiles but
-the native oracle fails; a malformed IR parser error does NOT count. The
-ordinary guest matrix still requires all 16 Linux signal-based trap
-scenarios and seven dispatch-fuel boundaries to pass at O0/O2/O3. Neither
-suite proves the general AttoLang loop/recursive-call safepoint pass,
-which remains unimplemented and fail-closed.
+`native_rt_scalar_frame_integrity_aot` (CTest, `tests/*.cmake`) links the
+compiler-emitted module with the C oracle at Clang `-O0/-O2/-O3`, plus
+UBSan/ASan where a sanitized probe builds and runs (`ORE_SANITIZER_CLANG`
+may name a second clang). It requires 20 child-signal trap scenarios on
+Linux/macOS, the exact dispatch-fuel boundaries 0/1/127/128/129/511/512
+(from a fresh frame and from `fuel`/`fuel + 1` short of the bound), and
+stable DONE/CANCELLED retirement. It then mutates the real emitted IR (fuel
+cap bypass, doubled commit, stale persisted counter, CANCELLED disguised as
+DONE, and removal of each new guard); every mutant must compile and be
+killed by the named oracle check, not by a parser error or a crash.
