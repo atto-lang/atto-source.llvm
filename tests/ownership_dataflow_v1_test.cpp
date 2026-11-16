@@ -246,6 +246,22 @@ static bool rejects_read_during_mutable_borrow() {
     return expect_reject("read via owner during mutable borrow",std::move(g),
         "read conflicts with mutable borrow");
 }
+static bool acquisition_history_survives_move_and_drop() {
+    auto g=graph(4);
+    g.blocks[0].operations={
+        op(OwnershipV1OpKind::Create,0),
+        op(OwnershipV1OpKind::Create,1),
+        op(OwnershipV1OpKind::Take,0,2),
+        op(OwnershipV1OpKind::Drop,1),
+        op(OwnershipV1OpKind::Create,3),
+        op(OwnershipV1OpKind::ExitNormal)};
+    auto r=OwnershipDataflowV1::analyze(g);
+    CHECK(r.normal_exits.size()==1);
+    CHECK(r.normal_exits[0].cleanup_reverse_order.size()==2);
+    CHECK(r.normal_exits[0].cleanup_reverse_order[0]==3);
+    CHECK(r.normal_exits[0].cleanup_reverse_order[1]==2);
+    return true;
+}
 static bool rejects_end_borrow_without_loan() {
     auto g=graph(1);
     g.blocks[0].operations={op(OwnershipV1OpKind::Create),
@@ -591,6 +607,7 @@ int main(int argc, char** argv) {
         {"mutable_borrow_release", &mutable_borrow_release, false},
         {"mutable_borrow_allows_exclusive_write", &mutable_borrow_allows_exclusive_write, false},
         {"cleanup_uses_acquisition_not_declaration_order", &cleanup_uses_acquisition_not_declaration_order, false},
+        {"acquisition_history_survives_move_and_drop", &acquisition_history_survives_move_and_drop, false},
         {"join_identical_ownership_states", &join_identical_ownership_states, false},
         {"borrowed_then_released_diamond_join", &borrowed_then_released_diamond_join, false},
         {"both_branches_drop_before_join", &both_branches_drop_before_join, false},
@@ -639,11 +656,11 @@ int main(int argc, char** argv) {
         {"rejects_join_with_active_borrow_on_one_arm", &rejects_join_with_active_borrow_on_one_arm, true},
         {"rejects_take_to_same_owner", &rejects_take_to_same_owner, true},
     };
-    static_assert(sizeof(cases)/sizeof(cases[0])==54,
+    static_assert(sizeof(cases)/sizeof(cases[0])==55,
         "ownership CFG case registry count changed");
     const auto totals=run_all_cases(cases,sizeof(cases)/sizeof(cases[0]));
-    const bool complete=totals.attempted==54 &&
-        totals.positive==15 && totals.negative==39;
+    const bool complete=totals.attempted==55 &&
+        totals.positive==16 && totals.negative==39;
     std::printf("OWNERSHIP_DATAFLOW_V1|positive=%zu|negative=%zu|attempted=%zu|failed=%zu|result=%s\n",
         totals.positive,totals.negative,totals.attempted,
         totals.failed,(complete && totals.failed==0)?"PASS":"FAIL");

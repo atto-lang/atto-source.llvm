@@ -46,10 +46,14 @@ public:
             OresNativeContinuationStore* continuations,
             OresNativeSuspensionLink link,
             uint64_t expected_code_generation,
-            OresNativeAllocationDomainRef expected_allocation) {
+            OresNativeAllocationDomainRef expected_allocation,
+            OresNativeContinuationBoundary expected_boundary =
+                ORES_CONTINUATION_BOUNDARY_AWAIT) {
         if (!authority || !executions || !continuations ||
                 expected_code_generation == 0 ||
                 expected_allocation.kind == ORES_ALLOCATION_DOMAIN_NONE ||
+                (expected_boundary != ORES_CONTINUATION_BOUNDARY_AWAIT &&
+                 expected_boundary != ORES_CONTINUATION_BOUNDARY_TASK_JOIN) ||
                 !ores_native_store_handle_valid(link.parent) ||
                 !ores_native_store_handle_valid(link.continuation))
             throw std::invalid_argument("invalid native task continuation binding");
@@ -59,10 +63,11 @@ public:
                 continuations, link.continuation, &record) ||
                 record.state != ORES_CONTINUATION_PENDING ||
                 /*
-                 * A Task Future waiter must not borrow supervisor CONTROL,
-                 * spawn, actor-mail or unrelated completion boundaries.
+                 * The default is AWAIT. Native pthread join adapters must
+                 * explicitly opt in to TASK_JOIN; neither may borrow spawn,
+                 * actor-message, CONTROL or each other's continuation.
                  */
-                record.boundary != ORES_CONTINUATION_BOUNDARY_AWAIT ||
+                record.boundary != expected_boundary ||
                 /*
                  * Reject a cross-code-reload or cross-actor/task reuse even
                  * when the logical execution handle itself is valid.

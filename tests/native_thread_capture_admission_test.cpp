@@ -85,7 +85,86 @@ int main() {
     invalid(ThreadCaptureOrigin::MoveOwned, unsafe_nominal, "thread_capture_non_send");
     auto malformed = AutoType{};
     malformed.kind = AutoTypeKind::Box;
-    invalid(ThreadCaptureOrigin::MoveOwned, malformed, "thread_capture_invalid_type");
+    invalid(ThreadCaptureOrigin::MoveOwned, malformed, "thread_capture_invalid_type_shape");
+
+    // Shape/provenance adversarial checks. Previously malformed Scalar or Dyn
+    // nodes could be accepted because their trait rules ignored children.
+    auto scalar_with_hidden_rc = scalar();
+    scalar_with_hidden_rc.parameters = {rc};
+    invalid(ThreadCaptureOrigin::CopyScalar, scalar_with_hidden_rc,
+            "thread_capture_invalid_type_shape");
+    auto scalar_with_fake_dyn = scalar();
+    scalar_with_fake_dyn.dyn_bounds = {AutoTrait::Send};
+    invalid(ThreadCaptureOrigin::CopyScalar, scalar_with_fake_dyn,
+            "thread_capture_invalid_type_shape");
+    auto scalar_with_fake_layout = scalar();
+    scalar_with_fake_layout.complete_nominal_layout = true;
+    invalid(ThreadCaptureOrigin::CopyScalar, scalar_with_fake_layout,
+            "thread_capture_invalid_type_shape");
+    auto scalar_with_fake_domain = scalar();
+    scalar_with_fake_domain.shareable_domain = true;
+    invalid(ThreadCaptureOrigin::CopyScalar, scalar_with_fake_domain,
+            "thread_capture_invalid_type_shape");
+
+    auto dyn_with_hidden_rc = dyn_send;
+    dyn_with_hidden_rc.parameters = {rc};
+    invalid(ThreadCaptureOrigin::MoveOwned,
+            wrapped(AutoTypeKind::Box, dyn_with_hidden_rc),
+            "thread_capture_invalid_type_shape");
+    auto dyn_with_fake_layout = dyn_send;
+    dyn_with_fake_layout.complete_nominal_layout = true;
+    invalid(ThreadCaptureOrigin::MoveOwned,
+            wrapped(AutoTypeKind::Box, dyn_with_fake_layout),
+            "thread_capture_invalid_type_shape");
+    auto box_with_fake_domain = box;
+    box_with_fake_domain.shareable_domain = true;
+    invalid(ThreadCaptureOrigin::MoveOwned, box_with_fake_domain,
+            "thread_capture_invalid_type_shape");
+    auto box_with_fake_layout = box;
+    box_with_fake_layout.complete_nominal_layout = true;
+    invalid(ThreadCaptureOrigin::MoveOwned, box_with_fake_layout,
+            "thread_capture_invalid_type_shape");
+
+    auto arc_two_payloads = arc;
+    arc_two_payloads.parameters.push_back(scalar());
+    invalid(ThreadCaptureOrigin::ShareArc, arc_two_payloads,
+            "thread_capture_invalid_type_shape");
+    auto arc_fake_dyn = arc;
+    arc_fake_dyn.dyn_bounds = {AutoTrait::Share};
+    invalid(ThreadCaptureOrigin::ShareArc, arc_fake_dyn,
+            "thread_capture_invalid_type_shape");
+    auto rc_with_fake_domain = rc;
+    rc_with_fake_domain.shareable_domain = true;
+    invalid(ThreadCaptureOrigin::MoveOwned, rc_with_fake_domain,
+            "thread_capture_invalid_type_shape");
+
+    auto nominal_with_dyn = scalar();
+    nominal_with_dyn.kind = AutoTypeKind::Nominal;
+    nominal_with_dyn.complete_nominal_layout = true;
+    nominal_with_dyn.dyn_bounds = {AutoTrait::Send};
+    invalid(ThreadCaptureOrigin::MoveOwned, nominal_with_dyn,
+            "thread_capture_invalid_type_shape");
+    auto unknown_kind = scalar();
+    unknown_kind.kind = static_cast<AutoTypeKind>(255);
+    invalid(ThreadCaptureOrigin::MoveOwned, unknown_kind,
+            "thread_capture_invalid_type_shape");
+    auto unknown_trait = scalar();
+    unknown_trait.negative.insert(static_cast<AutoTrait>(255));
+    invalid(ThreadCaptureOrigin::CopyScalar, unknown_trait,
+            "thread_capture_invalid_type_shape");
+
+    AutoType too_deep = scalar();
+    for (int i = 0; i < 68; ++i)
+        too_deep = wrapped(AutoTypeKind::Box, std::move(too_deep));
+    invalid(ThreadCaptureOrigin::MoveOwned, too_deep,
+            "thread_capture_type_budget");
+    auto too_wide = scalar();
+    too_wide.kind = AutoTypeKind::Nominal;
+    too_wide.complete_nominal_layout = true;
+    too_wide.parameters.assign(4096, scalar());
+    invalid(ThreadCaptureOrigin::MoveOwned, too_wide,
+            "thread_capture_type_budget");
+
 
     std::cout << "native thread capture admission: OK (compiler-side model only)\n";
 }

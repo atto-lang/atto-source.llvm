@@ -104,7 +104,8 @@ inline std::string emit_actor_region_v1_guest_ir(const Program& program) {
     auto* i8 = llvm::Type::getInt8Ty(context);
     auto* i32 = llvm::Type::getInt32Ty(context);
     auto* i64 = llvm::Type::getInt64Ty(context);
-    auto* ptr = llvm::Type::getInt8PtrTy(context);
+    // LLVM 18 removed Type::getInt8PtrTy; use the opaque address-space-0 pointer.
+    auto* ptr = llvm::PointerType::get(context, 0);
     auto* void_type = llvm::Type::getVoidTy(context);
     const auto native = [&](const char* symbol, llvm::Type* output,
                             std::vector<llvm::Type*> arguments) {

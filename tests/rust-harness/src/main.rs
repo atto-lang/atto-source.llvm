@@ -826,7 +826,7 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
             "end-delimited-colon-must-be-arrow",
             "define class X as mtd foo():void :: end end\n\
              pub fnc main():int{return 42;}\n",
-            "native '::' method requires '->' return syntax",
+            "native '::' body requires '->' return syntax",
         ),
         (
             "end-delimited-missing-double-colon",
@@ -844,13 +844,13 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
             "end-delimited-nontrivial-void-body",
             "define class X as mtd foo() -> void :: stdio.println(42); end end\n\
              pub fnc main():int{return 42;}\n",
-            "native end-delimited method supports only one terminal return",
+            "native comma expression body requires a single terminal result",
         ),
         (
             "end-delimited-nonvoid-missing-return",
             "define class X as mtd foo() -> int :: end end\n\
              pub fnc main():int{return 42;}\n",
-            "expected 'return'",
+            "native non-void comma expression body requires a result",
         ),
         (
             "trailing-receiver-comma",
@@ -895,7 +895,7 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
     let ir = temp.path.join("remainder.ll");
     let executable = temp.path.join("remainder-native");
 
-    // %, ^ and ^^ are reserved. Named Integer operations carry the semantics:
+    // % and single ^ are reserved (^^ is bool XOR). Named Integer operations carry the semantics:
     // rem truncates toward zero, mod is never negative, and a zero divisor traps.
     let min = "(-9223372036854775807 - 1)";
     let rem_fn = "fnc r(int a, int b): int { return Integer.rem(a, b); }\n";
@@ -1002,7 +1002,8 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
     let negatives = [
         ("percent", "pub fnc main(): int { return 17 % 5; }\n", "'%' is reserved"),
         ("caret", "pub fnc main(): int { return 5 ^ 3; }\n", "'^' is reserved"),
-        ("double-caret", "pub fnc main(): int { return (true ^^ false) ? 1 : 0; }\n", "'^^' is reserved"),
+        // `^^` is canonical bool XOR (spec ch.16); int operands are a type error.
+        ("double-caret-int", "pub fnc main(): int { return 7 ^^ 3; }\n", "logical operator requires bool"),
         ("pow-unsupported", "pub fnc main(): int { return Integer.pow(2, 3); }\n", "Integer.pow is unsupported"),
         ("wrong-type", "pub fnc main(): int { return Integer.rem(true, 2); }\n", "arithmetic requires int"),
         ("xor-shadowing", "fnc Xor(bool a, bool b): bool { return a; }\npub fnc main(): int { return 0; }\n", "expected non-keyword identifier"),
