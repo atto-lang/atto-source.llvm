@@ -4621,6 +4621,20 @@ private:
                     });
             if (!approved)
                 throw std::runtime_error("using ffi requires one directly admitted static foreign i64 call");
+            // This first direct-call M1 profile admits literal arguments only.
+            // Check their mathematical sum before any native C code executes:
+            // neither an untrusted foreign function nor signed C overflow is
+            // an acceptable substitute for the checked Atto int contract.
+            const auto signed_literal = [](const Expression& arg) -> std::int64_t {
+                return arg.kind == Expression::Kind::Integer
+                    ? arg.integer : -arg.left->integer;
+            };
+            const __int128 sum =
+                static_cast<__int128>(signed_literal(*call->arguments[0])) +
+                static_cast<__int128>(signed_literal(*call->arguments[1]));
+            if (sum < std::numeric_limits<std::int64_t>::min() ||
+                    sum > std::numeric_limits<std::int64_t>::max())
+                throw std::runtime_error("foreign i64 checked arithmetic overflow");
         }
     }
 
