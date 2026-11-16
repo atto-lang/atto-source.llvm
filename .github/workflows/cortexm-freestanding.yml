@@ -27,7 +27,7 @@ jobs:
           rustup default 1.85.1
           rustc --version
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends clang-18 lld-18 binutils qemu-system-arm
+          sudo apt-get install --yes --no-install-recommends clang-18 lld-18 binutils qemu-system-arm llvm-18
           clang-18 --version | head -n1
           qemu-system-arm --version | head -n1
       - name: Run real Atto frontend, Cortex-M ELF proof and QEMU guest
