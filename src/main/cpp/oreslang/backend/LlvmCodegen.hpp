@@ -9,7 +9,8 @@ namespace oreslang {
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target = false,
                                   bool cortex_m_target = false,
                                   bool bounded_allocator_provider = false,
-                                  const std::string& isolate_entry = {});
+                                  const std::string& isolate_entry = {},
+                                  bool actor_region_v1 = false);
 
 // Opt-in scalar-only continuation IR; external host owns and pins frame storage.
 std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop);

@@ -1,4 +1,4 @@
-name: AttoLang four policy native guest plus six negative cases
+name: AttoLang five policy native guest plus six negative cases
 
 on:
   pull_request:
@@ -47,7 +47,7 @@ jobs:
           cmake --build build --target oreslang-llvmc oreslang-no-gc-ir-audit-build --parallel 2
           test -x build/oreslang-llvmc
           test -x build/oreslang-no-gc-ir-audit
-      - name: Compile eight native AttoLang guest binaries and reject six invalid sources
+      - name: Compile ten native AttoLang guest binaries and reject six invalid sources
         shell: bash
         env:
           ATTO_POLICY_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -62,7 +62,7 @@ jobs:
               and .sourceHead == $head
               and .runId == $id
               and .runAttempt == ($attempt|tonumber)
-              and .nativeGuestCount == 8
+              and .nativeGuestCount == 10
               and .rejectedUndeclaredSymbol == true
               and .negativeCount == 6
               and (.negativeCompilerRejections | length == 6)

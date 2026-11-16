@@ -1,0 +1,22 @@
+// Pending executable native AttoLang source-to-LLVM conformance target.
+// This is deliberately NOT a passing guest: native parser/codegen still only
+// supports scalar actor fields and on_message(int). Never scalarize Bytes or
+// claim Map<Bytes,Bytes> actor ownership from a C++ host-only substrate.
+define actor NativeBytesStore as
+  state {
+    let Map<Bytes, Bytes> entries: Map.new();
+  }
+
+  receive(ActorMail<Bytes> mail): void {
+    // Typed mailbox receive needs owned binary payload transfer.
+    self.handle_state(critical-write |s| -> {
+      s.entries.insert(rt take mail.value, Bytes.empty());
+    });
+    return;
+  }
+end
+
+pub fnc main(): int {
+  val store = spawn NativeBytesStore();
+  return 0;
+}

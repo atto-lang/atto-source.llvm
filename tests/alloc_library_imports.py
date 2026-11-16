@@ -98,6 +98,17 @@ def main():
                 f"allocator-backed module returned {executed.returncode}",
             )
 
+        canonical_source = root / "canonical.atto"
+        canonical_source.write_text(
+            'import module int_buffer from "atto.alloc/int_buffer.atto"; '
+            "pub fnc main():int{return int_buffer.sum_pair(19,23);}\n",
+            encoding="utf-8",
+        )
+        canonical = run([args.compiler, str(canonical_source)])
+        require(canonical.returncode == 0, canonical.stderr)
+        require("define i64 @__ores_module_1.sum_pair" in canonical.stdout,
+                "canonical atto.alloc module was not compiled")
+
         # Optional .ores spelling must keep one compiler-owned unit identity.
         alias_source = root / "alias.ores"
         alias_source.write_text(
@@ -116,6 +127,18 @@ def main():
             "__ores_module_2.sum_pair" not in alias.stdout,
             "alloc alias created a second compiler-owned unit identity",
         )
+
+        mixed_source = root / "mixed_alias.atto"
+        mixed_source.write_text(
+            'import module int_buffer as A from "atto.alloc/int_buffer"; '
+            'import module int_buffer as B from "alloc/int_buffer.ores"; '
+            "pub fnc main():int{return A.sum_pair(1,2)+B.sum_pair(3,4);}\n",
+            encoding="utf-8",
+        )
+        mixed = run([args.compiler, str(mixed_source)])
+        require(mixed.returncode == 0, mixed.stderr)
+        require(mixed.stdout.count("define i64 @__ores_module_1.sum_pair") == 1,
+                "canonical and legacy alloc paths duplicated unit identity")
 
         # The bundle's own body allocates nothing. Its dependency does, so the
         # linked artifact proves the loader followed and retained the transitive

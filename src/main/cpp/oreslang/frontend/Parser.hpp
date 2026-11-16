@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -70,7 +71,31 @@ struct Expression {
     std::vector<GenericTypeArgument> type_arguments;
     bool type_arguments_present = false;
     mutable std::string sum_type;
+    // Records a compiler-produced caller-side trap; never collapse this to
+    // an ordinary Some constructor without independently proving its operand.
+    bool trap_origin = false;
 };
+
+// Phase-one native trap supports only total integer-expression structure.
+// Arithmetic overflow remains a terminal panic. This predicate deliberately
+// rejects calls, variables, dereferences, nested sums, host/actor effects,
+// suspension and all non-integer values until effect and cleanup IR is proven.
+inline bool native_trap_pure_integer(const Expression& e, std::size_t depth = 0) {
+    if (depth > 64) return false;
+    switch (e.kind) {
+        case Expression::Kind::Integer: return true;
+        case Expression::Kind::Negate:
+            return e.left && native_trap_pure_integer(*e.left, depth + 1);
+        case Expression::Kind::Add:
+        case Expression::Kind::Subtract:
+        case Expression::Kind::Multiply:
+            return e.left && e.right &&
+                native_trap_pure_integer(*e.left, depth + 1) &&
+                native_trap_pure_integer(*e.right, depth + 1);
+        default: return false;
+    }
+}
+
 
 struct Parameter {
     enum class Mode { Value, Borrow, BorrowMut };
@@ -439,11 +464,22 @@ struct CooperativeScalarLoop {
     std::size_t offset = 0;
 };
 
+// Generator-v1 delegation is restricted to named, zero-argument, side-effect-
+// free literal generators in the same translation unit. The parser resolves
+// these ordered steps into bounded scalar yields before LLVM emission; general
+// iterator ownership and cleanup have NOT been lowered.
+struct ScalarGeneratorStep {
+    bool delegate = false;
+    std::string target;
+    std::int64_t value = 0;
+};
+
 // Native generator v1 deliberately starts with a value-only, zero-capture
 // Iterator<int> activation. Each activation is represented by a caller-owned,
 // pinned frame in LLVM IR; no native stack or tracing-GC object survives a pull.
 struct ScalarGenerator {
     std::string name;
+    std::vector<ScalarGeneratorStep> steps;
     std::vector<std::int64_t> yields;
     std::size_t offset = 0;
     bool exported = false;
@@ -479,6 +515,41 @@ struct TypeConstraintDescriptor {
     bool validation_required = true;
 };
 
+// Distinct nominal *value-schema* declaration, never an inverted class
+// alias. This parser milestone records type/field/mutability intent only;
+// source lowering remains denied until the production parser and ownership verifier admit it.
+enum class InvertedScalarKind { I64, Bool, F64 };
+struct InvertedStructField {
+    std::string name;
+    InvertedScalarKind type = InvertedScalarKind::I64;
+    bool mutable_field = false; // unmarked fields are implicit immutable val
+    std::size_t offset = 0;
+};
+struct InvertedStructDecl {
+    std::string name;
+    std::vector<InvertedStructField> fields;
+    bool exported = false;
+    std::size_t offset = 0;
+};
+
+// One strictly local and bounded source-to-MIR slice. These are parsed
+// production source operations, NOT LLVM IR or a compiler authorization;
+// an independent typed HIR/MIR verifier must admit the complete stream.
+struct InvertedSourceOperation {
+    enum class Kind { Push, WriteField, EraseSwap, ReturnRead };
+    Kind kind = Kind::Push;
+    std::size_t index = 0;
+    std::string field;
+    std::array<std::int64_t, 2> values{};
+    std::int64_t value = 0;
+};
+struct InvertedSourceMain {
+    std::string schema_name;
+    std::string owner_name;
+    std::size_t capacity = 0;
+    std::vector<InvertedSourceOperation> operations;
+};
+
 struct Program {
     std::vector<ModuleImport> imports;
     std::vector<NamespaceImportSyntax> namespace_imports;
@@ -494,6 +565,10 @@ struct Program {
     std::vector<TypeConstraintDescriptor> type_constraint_descriptors;
     std::vector<std::string> conforms;
     std::vector<NativeSumType> sum_types;
+    // Compiler-owned staged inverted schema/operation descriptors. Current
+    // production source parser still fails closed; this is not a guest feature.
+    std::vector<InvertedStructDecl> inverted_structs;
+    std::optional<InvertedSourceMain> inverted_main;
 };
 
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
