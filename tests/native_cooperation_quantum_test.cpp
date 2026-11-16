@@ -57,31 +57,35 @@ static void reduction_fast_path() {
     Quantum q;
     q.beginDispatch();
     require(FakeClock::reads.load() == 2);
-    for (int i = 1; i <= 512; ++i) {
+    std::uint64_t polls = 0;
+    for (int i = 1; i <= 4096; ++i) {
         const bool checkDue = q.completedBackedgeNeedsCheck();
-        require(checkDue == (i % 64 == 0));
-        if (checkDue) require(q.shouldCooperateAtCheck() == (i == 512));
+        require(checkDue == (i % 128 == 0));
+        if (checkDue) {
+            ++polls;
+            require(q.shouldCooperateAtCheck() == (i >= 512));
+        }
     }
-    require(FakeClock::reads.load() == 9);
-    require(q.completedBackedgesThisDispatch() == 512);
+    require(polls == 32);
+    require(FakeClock::reads.load() == 5); // only first 3 polls read time
+    require(q.completedBackedgesThisDispatch() == 4096);
 }
 
-static void overdue_no_yield_region_checks_every_new_boundary() {
+static void overdue_no_yield_region_checks_only_at_next_boundary() {
     reset_clock();
     Quantum q;
     q.beginDispatch();
-    for (int i = 1; i <= 511; ++i)
-        require(q.completedBackedgeNeedsCheck() == (i % 64 == 0));
+    for (int i = 1; i < 512; ++i)
+        require(q.completedBackedgeNeedsCheck() == (i % 128 == 0));
     require(q.completedBackedgeNeedsCheck());
     require(q.shouldCooperateAtCheck());
-    // The first deadline was skipped while a lexical guard was live.
-    // Once the guard is dropped, the next completed backedge must permit
-    // handoff immediately instead of waiting for another full batch.
-    for (int i = 513; i <= 560; ++i) {
-        require(q.completedBackedgeNeedsCheck());
-        require(q.shouldCooperateAtCheck());
-    }
-    require(q.completedBackedgesThisDispatch() == 560);
+    // An overdue no-yield scope still must not invoke the slow scheduler
+    // path for each new iteration; first subsequent poll is at 640.
+    for (int i = 513; i < 640; ++i)
+        require(!q.completedBackedgeNeedsCheck());
+    require(q.completedBackedgeNeedsCheck());
+    require(q.shouldCooperateAtCheck());
+    require(q.completedBackedgesThisDispatch() == 640);
     require(FakeClock::reads.load() == 2);
 }
 
@@ -89,7 +93,7 @@ static void timer_slow_path() {
     reset_clock();
     Quantum q;
     q.beginDispatch();
-    for (int i = 0; i < 63; ++i) require(!q.completedBackedgeNeedsCheck());
+    for (int i = 0; i < 127; ++i) require(!q.completedBackedgeNeedsCheck());
     FakeClock::nanos.store(2'050'000);
     require(FakeClock::reads.load() == 2);
     require(q.completedBackedgeNeedsCheck());
@@ -101,14 +105,54 @@ static void independent_watchdog_requests_next_safe_boundary() {
     reset_clock();
     Quantum q;
     q.beginDispatch();
-    for (int i = 0; i < 63; ++i)
+    for (int i = 0; i < 127; ++i)
         require(!q.completedBackedgeNeedsCheck());
     require(q.completedBackedgeNeedsCheck());
     require(FakeClock::reads.load() == 2);
     require(q.shouldCooperateAtCheck(true));
-    require(FakeClock::reads.load() == 2); // watcher request needs no clock read
+    require(FakeClock::reads.load() == 2);
     require(!q.shouldCooperateAtCheck(false));
-    require(FakeClock::reads.load() == 3);
+    require(FakeClock::reads.load() == 2); // no second clock read for same ticket
+}
+
+static void direct_slow_path_calls_cannot_skip_sampling_policy() {
+    reset_clock();
+    Quantum q;
+    q.beginDispatch();
+    FakeClock::nanos.store(200'000'000); // overdue in wall-clock time
+    std::uint64_t observed = 0;
+    // Adversarial eager caller invokes the expensive API EVERY iteration.
+    // The API itself must enforce periodicity, including watchdog requests
+    // and already exhausted reduction budgets.
+    for (int i = 1; i <= 100000; ++i) {
+        const bool due = q.completedBackedgeNeedsCheck();
+        require(due == (i % 128 == 0));
+        const bool permitted = q.shouldCooperateAtCheck(true);
+        require(permitted == due);
+        if (permitted) ++observed;
+        require(!q.shouldCooperateAtCheck(true)); // one-shot ticket
+    }
+    require(observed == 100000 / 128);
+    require(q.completedBackedgesThisDispatch() == 100000);
+    require(FakeClock::reads.load() == 2); // watchdog fast return, no clock
+    q.beginDispatch();
+    require(!q.shouldCooperateAtCheck(true)); // reset invalidates stale ticket
+}
+static void time_poll_without_due_ticket_never_samples_clock() {
+    reset_clock();
+    Quantum q;
+    q.beginDispatch();
+    const int baseline = FakeClock::reads.load();
+    for (int i = 1; i < 128; ++i) {
+        require(!q.completedBackedgeNeedsCheck());
+        require(!q.shouldCooperateAtCheck());
+    }
+    require(FakeClock::reads.load() == baseline);
+    require(q.completedBackedgeNeedsCheck());
+    require(!q.shouldCooperateAtCheck());
+    require(FakeClock::reads.load() == baseline + 1);
+    require(!q.shouldCooperateAtCheck());
+    require(FakeClock::reads.load() == baseline + 1);
 }
 
 static void await_is_not_cooperate() {
@@ -119,7 +163,7 @@ static void await_is_not_cooperate() {
     FakeClock::nanos.store(30'000'000'000LL);
     q.beginDispatch();
     require(q.timeSinceLastCooperate() == std::chrono::seconds(30));
-    for (int i = 0; i < 64; ++i) q.completedBackedgeNeedsCheck();
+    for (int i = 0; i < 128; ++i) q.completedBackedgeNeedsCheck();
     require(!q.shouldCooperateAtCheck());
     q.recordedCooperate();
     require(q.timeSinceLastCooperate() == std::chrono::nanoseconds::zero());
@@ -142,10 +186,12 @@ static void repeated_dispatches_keep_task_context() {
 }
 int main() {
     reduction_fast_path();
-    overdue_no_yield_region_checks_every_new_boundary();
+    overdue_no_yield_region_checks_only_at_next_boundary();
     timer_slow_path();
     independent_watchdog_requests_next_safe_boundary();
+    direct_slow_path_calls_cannot_skip_sampling_policy();
+    time_poll_without_due_ticket_never_samples_clock();
     await_is_not_cooperate();
     repeated_dispatches_keep_task_context();
-    std::cout << "native quantum 64/512/2ms: PASS (host-only, no guest await parity)\n";
+    std::cout << "native quantum 128/512/2ms: PASS (host-only, no guest await parity)\n";
 }

@@ -1,0 +1,2 @@
+type alias Count as int;
+pub fnc main(): int { val Count c = 42; return c; }
