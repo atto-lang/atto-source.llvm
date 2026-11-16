@@ -109,6 +109,10 @@ int main(void) {
     state.sibling = ores_native_actor_scheduler_spawn(state.scheduler, ACTOR_B);
     CHECK(state.supervisor.scheduler_domain && state.first.scheduler_domain
           && state.sibling.scheduler_domain);
+    /* Main requires an immutable child->supervisor reservation before the
+     * first child DATA message (preallocated per-child CONTROL receipt). */
+    CHECK(ores_native_actor_scheduler_bind_supervisor(
+        state.scheduler, state.supervisor, state.first));
 
     CHECK(ores_native_actor_scheduler_send(state.scheduler, state.first, 7));
     CHECK(ores_native_actor_scheduler_send(state.scheduler, state.sibling, 42));

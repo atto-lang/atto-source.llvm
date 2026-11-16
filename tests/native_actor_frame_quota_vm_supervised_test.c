@@ -190,9 +190,10 @@ int main(void) {
         .failure_code = 0, .correlation = 702
     };
     CHECK(ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, second));
-    /* The first supervisor CONTROL callback is still executing and the
-     * second notice owns the *one* queued reserved CONTROL slot. A third
-     * finalized child must receive backpressure (no silent event loss). */
+    /* Main preallocates one terminal CONTROL receipt per bound child, so a
+     * third finalized child is admitted even while the first supervisor
+     * CONTROL callback is still executing; parent CONTROL owns delivery.
+     * A duplicate publish of the same receipt is still rejected. */
     CHECK(ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, s.sibling));
     CHECK(ores_native_vm_wait_done(vm, ORES_NATIVE_VM_MAIN, s.sibling));
     CHECK(ores_logical_frames_v1_close(s.b));
@@ -201,14 +202,13 @@ int main(void) {
         .kind = ORES_NATIVE_CONTROL_STOPPED, .child = s.sibling,
         .failure_code = 0, .correlation = 703
     };
-    CHECK(!ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, third));
+    CHECK(ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, third));
     atomic_store_explicit(&s.release_first_notice, 1, memory_order_release);
     for (int i = 0; i < 5000 && atomic_load_explicit(&s.notices, memory_order_acquire) < 2; ++i) {
         const struct timespec nap = {0, 1000000};
         nanosleep(&nap, NULL);
     }
     CHECK(atomic_load_explicit(&s.notices, memory_order_acquire) >= 2);
-    CHECK(ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, third));
     CHECK(!ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, third));
     for (int i = 0; i < 5000 && atomic_load_explicit(&s.notices, memory_order_acquire) < 3; ++i) {
         const struct timespec nap = {0, 1000000};

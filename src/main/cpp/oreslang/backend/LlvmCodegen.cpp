@@ -48,6 +48,11 @@ std::string field_key(const std::string& receiver, const std::string& field) {
 // can escape as a result:
 // native functions return only i64, and the ownership pass restricts rt borrow
 // to nonescaping call arguments.
+struct ActorRegionFieldLowering {
+    llvm::Value* owner_offset_slot = nullptr;
+    std::uint32_t byte_offset = 0;
+};
+
 struct RegionMoveLowering {
     llvm::Value* region = nullptr;
     llvm::FunctionCallee read;
@@ -73,6 +78,8 @@ struct RegionMoveLowering {
     const NativeClassLayouts* layouts = nullptr;
     const Program* sum_program = nullptr;
     llvm::FunctionCallee sum_check;
+    const std::unordered_map<std::string, ActorRegionFieldLowering>* actor_region_fields = nullptr;
+    llvm::FunctionCallee actor_region_read_i64;
     // Compiler-frozen scalar direct targets, never a runtime selector table.
     const NativeI64DispatchImage* frozen_scalar_dispatch = nullptr;
     const std::unordered_map<std::string, llvm::Function*>* frozen_scalar_callees = nullptr;
@@ -136,7 +143,7 @@ llvm::Value* checked_signed_arithmetic(llvm::IRBuilder<>& builder,
     // trap is the current failure ABI; typed actor errors remain separate.
     auto* module = builder.GetInsertBlock()->getModule();
     auto* parent = builder.GetInsertBlock()->getParent();
-    auto* intrinsic = oreslang::native_intrinsic(module, operation, {left->getType()});
+    auto* intrinsic = native_intrinsic(*module, operation, {left->getType()});
     auto* pair = builder.CreateCall(intrinsic, {left, right}, name + ".checked");
     auto* value = builder.CreateExtractValue(pair, {0}, name + ".value");
     auto* overflow = builder.CreateExtractValue(pair, {1}, name + ".overflow");
@@ -144,7 +151,7 @@ llvm::Value* checked_signed_arithmetic(llvm::IRBuilder<>& builder,
     auto* proceed = llvm::BasicBlock::Create(builder.getContext(), name + ".ok", parent);
     builder.CreateCondBr(overflow, failed, proceed);
     builder.SetInsertPoint(failed);
-    builder.CreateCall(oreslang::native_intrinsic(module, llvm::Intrinsic::trap));
+    builder.CreateCall(native_trap(*module));
     builder.CreateUnreachable();
     builder.SetInsertPoint(proceed);
     return value;
@@ -159,6 +166,14 @@ llvm::Value* lower(const Expression& expr,
                    const RegionMoveLowering* moves = nullptr) {
     switch (expr.kind) {
         case Expression::Kind::SumConstruct: {
+            // Independent backend gate: a trap-origin Some may only wrap the
+            // statically total integer subset. Never accidentally catch host,
+            // ordinary guest, panic or cancellation errors by fabricating Some.
+            if (expr.trap_origin && (expr.name != "Some" ||
+                    expr.arguments.size() != 1 ||
+                    !native_trap_pure_integer(*expr.arguments.front()) ||
+                    expr.sum_type != "Option<int>"))
+                throw std::runtime_error("unproved native trap AST reached LLVM codegen");
             const auto& type = native_sum(*moves->sum_program, expr.sum_type);
             const bool option = type.kind == NativeSumType::Kind::Option;
             const std::size_t count = option ? 2 : 3;
@@ -309,6 +324,19 @@ llvm::Value* lower(const Expression& expr,
             return stored;
         }
         case Expression::Kind::Field:
+            if (moves && moves->actor_region_fields) {
+                const auto found = moves->actor_region_fields->find(native_place_key(expr));
+                if (found != moves->actor_region_fields->end()) {
+                    llvm::Value* owner_offset = builder.CreateLoad(
+                        llvm::Type::getInt32Ty(builder.getContext()),
+                        found->second.owner_offset_slot, "actor.region.offset");
+                    return builder.CreateCall(moves->actor_region_read_i64,
+                        {owner_offset, llvm::ConstantInt::get(
+                            llvm::Type::getInt32Ty(builder.getContext()),
+                            found->second.byte_offset)},
+                        expr.left->name + "." + expr.name + ".actor.region.read");
+                }
+            }
             if (expr.name == "size" && expr.left &&
                     expr.left->kind == Expression::Kind::Field) {
                 llvm::Value* handle = builder.CreateLoad(i64,
@@ -330,6 +358,16 @@ llvm::Value* lower(const Expression& expr,
             return builder.CreateLoad(i64, field_storage.at(native_place_key(expr)),
                                       expr.left->name + "." + expr.name + ".read");
         case Expression::Kind::ArrayCall: {
+            if (expr.name == "contains_literal") {
+                if (!expr.left || expr.arguments.size() != 1)
+                    throw std::runtime_error("invalid checked String.contains_literal lowering");
+                auto* text = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+                auto* needle = lower(*expr.arguments.front(), builder, i64, storage, field_storage, functions, moves);
+                auto runtime = builder.GetInsertBlock()->getModule()->getOrInsertFunction(
+                    "ores_string_contains_literal",
+                    llvm::FunctionType::get(i64, {i64, i64}, false));
+                return builder.CreateCall(runtime, {text, needle}, "string.contains.literal");
+            }
             if (!expr.left)
                 throw std::runtime_error("native Array<int> call has no owned receiver");
             llvm::Value* handle = builder.CreateLoad(i64,
@@ -342,6 +380,33 @@ llvm::Value* lower(const Expression& expr,
             if (expr.name == "get" && args.size() == 1)
                 return builder.CreateCall(moves->array_get,
                     {selected_region, handle, args[0]}, "array.get");
+            if (expr.name == "get_copy" && args.size() == 1) {
+                // Native scalar copy is checked before pointer arithmetic.
+                // The C ABI validates region/handle authority even on None,
+                // and writes the payload only for a present element.
+                if (!moves || !moves->sum_program ||
+                        expr.sum_type != "Option<int>" ||
+                        native_sum(*moves->sum_program, expr.sum_type).value_type != ScalarType::I64)
+                    throw std::runtime_error("unproven native Array.get_copy Option<int>");
+                auto* payload_slot = entry_alloca(builder, i64,
+                    llvm::ConstantInt::get(i64, 1), "array.copy.payload");
+                builder.CreateStore(llvm::ConstantInt::get(i64, 0), payload_slot);
+                auto* module = builder.GetInsertBlock()->getModule();
+                auto checked_get = module->getOrInsertFunction(
+                    "oreslang_int_array_try_get_copy",
+                    llvm::FunctionType::get(builder.getInt32Ty(),
+                        {selected_region->getType(), i64, i64, payload_slot->getType()}, false));
+                llvm::Value* present = builder.CreateCall(checked_get,
+                    {selected_region, handle, args[0], payload_slot}, "array.copy.present");
+                auto* fields = entry_alloca(builder, i64,
+                    llvm::ConstantInt::get(i64, 2), "array.copy.option.fields");
+                builder.CreateStore(builder.CreateZExt(present, i64), fields);
+                builder.CreateStore(builder.CreateLoad(i64, payload_slot),
+                    builder.CreateGEP(i64, fields, llvm::ConstantInt::get(i64, 1)));
+                return builder.CreateCall(moves->record_new,
+                    {llvm::ConstantInt::get(i64, moves->record_schemas->at(expr.sum_type)),
+                     llvm::ConstantInt::get(i64, 2), fields}, "array.get_copy.option");
+            }
             if (expr.name == "add" && args.size() == 1) {
                 llvm::Value* status = builder.CreateCall(moves->array_add,
                     {selected_region, handle, args[0]}, "array.add.status");
@@ -477,7 +542,7 @@ llvm::Value* lower(const Expression& expr,
             // Native target currently uses a trap for typed runtime errors.
             // This is fail-closed rather than Java's exception-class parity.
             builder.CreateCall(
-                oreslang::native_intrinsic(module, llvm::Intrinsic::trap));
+                native_trap(*module));
             builder.CreateUnreachable();
             builder.SetInsertPoint(valid);
             if (expr.kind == Expression::Kind::ShiftLeft)
@@ -501,7 +566,7 @@ llvm::Value* lower(const Expression& expr,
             builder.CreateCondBr(builder.CreateICmpEQ(right, llvm::ConstantInt::get(i64, 0), "rem.zero"),
                 failed, proceed);
             builder.SetInsertPoint(failed);
-            builder.CreateCall(oreslang::native_intrinsic(module, llvm::Intrinsic::trap));
+            builder.CreateCall(native_trap(*module));
             builder.CreateUnreachable();
             builder.SetInsertPoint(proceed);
             // Any value modulo -1 is 0, including INT64_MIN, but LLVM srem INT64_MIN, -1
@@ -754,7 +819,8 @@ llvm::Value* lower(const Expression& expr,
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool cortex_m_target,
                                   bool bounded_allocator_provider,
-                                  const std::string& isolate_entry) {
+                                  const std::string& isolate_entry,
+                                  bool actor_region_v1) {
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
@@ -963,6 +1029,77 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 ? "native strings currently require a synchronous host main region without actors, suspension or exception frames"
                 : "native records/owning results currently require a synchronous host main region without actors, suspension or exception frames");
     }
+    std::uint32_t actor_region_slots = 0;
+    std::uint32_t actor_region_stride = 8;
+    if (actor_region_v1) {
+        if (!native_main || !source.actors.empty())
+            throw std::runtime_error("actor-region-v1 requires a synchronous native main without actors");
+        for (const auto& function : source.functions) {
+            if (!function.return_class.empty() ||
+                std::any_of(function.parameters.begin(), function.parameters.end(),
+                    [](const Parameter& parameter) { return !parameter.class_name.empty(); }))
+                throw std::runtime_error(
+                    "actor-region-v1 forbids class-valued function parameters and returns");
+            if (&function != &*main_it &&
+                std::any_of(function.locals.begin(), function.locals.end(),
+                    [](const LocalBinding& local) { return !local.class_name.empty(); }))
+                throw std::runtime_error(
+                    "actor-region-v1 forbids class owners outside native main/0");
+        }
+        for (const auto& local : main_it->locals) {
+            if (local.class_name.empty()) continue;
+            if (!local.new_class || local.record_view || local.move_class ||
+                !local.move_source.empty() || local.heap_owned || local.int_array ||
+                !local.constructor_arguments.empty() || local.owner_mutable ||
+                local.field_mutable)
+                throw std::runtime_error(
+                    "actor-region-v1 direct codegen requires fresh immutable class owners");
+            ++actor_region_slots;
+            const auto cls = std::find_if(source.classes.begin(), source.classes.end(),
+                [&](const ClassDecl& candidate) { return candidate.name == local.class_name; });
+            if (cls == source.classes.end())
+                throw std::runtime_error("actor-region-v1 local has no resolved class layout");
+            if (!cls->methods.empty() || cls->explicit_constructor ||
+                !cls->constructor_parameters.empty() ||
+                cls->fields.empty() || cls->fields.size() > 16)
+                throw std::runtime_error(
+                    "actor-region-v1 direct codegen requires 1..16 fields and no methods or explicit constructor");
+            for (const auto& field : cls->fields) {
+                const auto* initial = field.initializer_expression.get();
+                if (!field.final_field || field.mutable_referent || field.int_array ||
+                    !field.class_name.empty() || !field.sum_type.empty() ||
+                    field.constructor_argument || field.scalar_type == ScalarType::String ||
+                    !initial ||
+                    (initial->kind != Expression::Kind::Integer &&
+                     initial->kind != Expression::Kind::Boolean) ||
+                    initial->left || initial->right || initial->condition ||
+                    initial->condition_lhs || initial->condition_rhs ||
+                    initial->when_true || initial->when_false ||
+                    !initial->arguments.empty() || !initial->argument_names.empty() ||
+                    initial->type_arguments_present || !initial->type_arguments.empty())
+                    throw std::runtime_error(
+                        "actor-region-v1 direct codegen requires immutable literal scalar defaults");
+            }
+            actor_region_stride = std::max(actor_region_stride,
+                static_cast<std::uint32_t>(cls->fields.size() * sizeof(std::int64_t)));
+        }
+        if (!actor_region_slots || actor_region_slots > 4096u ||
+            actor_region_stride > 1024u * 1024u)
+            throw std::runtime_error("actor-region-v1 requires 1..4096 bounded class owners");
+        std::function<void(const Statement&)> reject_branch_owner =
+            [&](const Statement& statement) {
+                if (statement.branch_local && !statement.branch_local->class_name.empty())
+                    throw std::runtime_error(
+                        "actor-region-v1 rejects branch-scoped class owners");
+                for (const auto& child : statement.then_statements)
+                    reject_branch_owner(child);
+                for (const auto& child : statement.else_statements)
+                    reject_branch_owner(child);
+            };
+        for (const auto& function : source.functions)
+            for (const auto& statement : function.statements)
+                reject_branch_owner(statement);
+    }
     if (native_main) {
         if (!main_it->parameters.empty())
             throw std::runtime_error("native main() must have zero arguments");
@@ -1069,6 +1206,32 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             return std::any_of(fn.locals.begin(), fn.locals.end(),
                 [](const LocalBinding& binding) { return binding.heap_owned; });
         });
+    llvm::FunctionCallee actorRegionGuestBegin, actorRegionGuestAlloc;
+    llvm::FunctionCallee actorRegionGuestRead, actorRegionGuestWrite;
+    llvm::FunctionCallee actorRegionGuestDrop, actorRegionGuestEnd;
+    if (actor_region_v1) {
+        auto* voidTy = llvm::Type::getVoidTy(context);
+        auto* i32 = llvm::Type::getInt32Ty(context);
+        actorRegionGuestBegin = module.getOrInsertFunction(
+            "ores_actor_region_guest_v1_begin",
+            llvm::FunctionType::get(voidTy, {i32, i32, i32}, false));
+        actorRegionGuestAlloc = module.getOrInsertFunction(
+            "ores_actor_region_guest_v1_alloc",
+            llvm::FunctionType::get(i32, {i32}, false));
+        actorRegionGuestRead = module.getOrInsertFunction(
+            "ores_actor_region_guest_v1_read_i64",
+            llvm::FunctionType::get(i64, {i32, i32}, false));
+        actorRegionGuestWrite = module.getOrInsertFunction(
+            "ores_actor_region_guest_v1_write_i64",
+            llvm::FunctionType::get(voidTy, {i32, i32, i64}, false));
+        actorRegionGuestDrop = module.getOrInsertFunction(
+            "ores_actor_region_guest_v1_drop",
+            llvm::FunctionType::get(voidTy, {i32}, false));
+        actorRegionGuestEnd = module.getOrInsertFunction(
+            "ores_actor_region_guest_v1_end",
+            llvm::FunctionType::get(voidTy, {}, false));
+    }
+
     llvm::FunctionCallee regionOpen, regionNew, regionRead, regionDrop, regionClose;
     if (has_region_bindings) {
         regionOpen = module.getOrInsertFunction("oreslang_owned_i64_region_open",
@@ -1456,6 +1619,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             std::uint64_t bytes;
             bool int_array = false;
             std::vector<std::string> owned_array_fields;
+            bool actor_region_object = false;
         };
         std::vector<LocalSlot> lexical_slots;
         std::unordered_map<std::string, llvm::Value*> owned_live_flags;
@@ -1553,11 +1717,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             array_region = builder.CreateLoad(native_ptr, open_out, "native.int.array.region");
             }
         }
+        std::unordered_map<std::string, ActorRegionFieldLowering> actor_region_fields;
         RegionMoveLowering region_moves{region, regionRead, regionDrop, &owned_live_flags,
             array_region, arrayAdd, arrayGet, arraySet, arrayLength, &array_names,
             &array_field_keys, array_failure, array_failure_status, &owned_failure_handles,
             &record_classes, &record_schemas, record_new, record_get, record_check,
             &class_array_regions, &class_array_parameters, &owning_results};
+        if (actor_region_v1) {
+            region_moves.actor_region_fields = &actor_region_fields;
+            region_moves.actor_region_read_i64 = actorRegionGuestRead;
+        }
         auto new_checked_array = [&](const std::string& label) -> llvm::Value* {
             if (!array_handle_shadows || next_array_shadow >= array_owner_count)
                 throw std::runtime_error("missing native array failure owner slot");
@@ -1718,6 +1887,41 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 continue;
             }
             if (binding.new_class || binding.move_class) {
+                if (actor_region_v1) {
+                    if (!binding.new_class || binding.move_class)
+                        throw std::runtime_error("actor-region-v1 requires a fresh immutable class owner");
+                    const auto& cls = flat_classes.at(binding.class_name);
+                    const std::uint32_t object_bytes =
+                        static_cast<std::uint32_t>(cls.fields.size() * sizeof(std::int64_t));
+                    auto* i32 = llvm::Type::getInt32Ty(context);
+                    llvm::Value* offset_slot = builder.CreateAlloca(
+                        i32, nullptr, binding.name + ".actor.region.offset.slot");
+                    llvm::Value* offset = builder.CreateCall(
+                        actorRegionGuestAlloc,
+                        {llvm::ConstantInt::get(i32, object_bytes)},
+                        binding.name + ".actor.region.alloc");
+                    builder.CreateStore(offset, offset_slot);
+                    storage.emplace(binding.name, offset_slot);
+                    for (std::size_t field_index = 0; field_index < cls.fields.size(); ++field_index) {
+                        const auto& field = cls.fields[field_index];
+                        if (!field.initializer_expression)
+                            throw std::runtime_error("actor-region-v1 class field initializer missing");
+                        const std::uint32_t byte_offset =
+                            static_cast<std::uint32_t>(field_index * sizeof(std::int64_t));
+                        const std::unordered_map<std::string, llvm::Value*> no_fields;
+                        llvm::Value* initial = lower(*field.initializer_expression,
+                            builder, i64, no_fields, no_fields, declarations, &region_moves);
+                        builder.CreateCall(actorRegionGuestWrite,
+                            {offset, llvm::ConstantInt::get(i32, byte_offset), initial});
+                        actor_region_fields.emplace(field_key(binding.name, field.name),
+                            ActorRegionFieldLowering{offset_slot, byte_offset});
+                    }
+                    const std::uint64_t object_size =
+                        static_cast<std::uint64_t>(cls.fields.size() * sizeof(std::int64_t));
+                    lexical_slots.push_back({binding.name, offset_slot, false,
+                        object_size, false, {}, true});
+                    continue;
+                }
                 if (class_has_arrays.at(binding.class_name))
                     class_array_regions.emplace(binding.name, binding.move_class
                         ? class_array_regions.at(binding.move_source) : array_region);
@@ -2518,7 +2722,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             for (auto it = ordered_root_scopes.rbegin(); it != ordered_root_scopes.rend(); ++it)
                 finish_scope(*it);
             for (auto it = lexical_slots.rbegin(); it != lexical_slots.rend(); ++it) {
-                if (it->int_array) {
+                if (it->actor_region_object) {
+                    auto* i32 = llvm::Type::getInt32Ty(context);
+                    llvm::Value* offset = builder.CreateLoad(i32, it->address,
+                        it->name + ".actor.region.drop.offset");
+                    builder.CreateCall(actorRegionGuestDrop, {offset});
+                    builder.CreateStore(llvm::ConstantInt::get(i32, 0), it->address);
+                } else if (it->int_array) {
                     llvm::Value* handle = builder.CreateLoad(i64,
                         it->address, it->name + ".array.drop.handle");
                     // A lexical rt take disarms its previous owner slot.
@@ -2821,6 +3031,23 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             b.SetInsertPoint(null_invalid);
             return_i32(b, -1);
             b.SetInsertPoint(nonnull);
+            // The next() ABI writes a value through 'out' and advances the
+            // two-word frame. Disallow output aliasing either frame slot:
+            // otherwise out=frame could forge state and out=frame+1 could
+            // overwrite the just-updated index (violating single delivery).
+            auto* frame_index_addr = b.CreateInBoundsGEP(
+                i64, frame, llvm::ConstantInt::get(i64, 1));
+            auto* output_disjoint = b.CreateAnd(
+                b.CreateICmpNE(out, frame),
+                b.CreateICmpNE(out, frame_index_addr));
+            auto* alias_invalid = llvm::BasicBlock::Create(
+                context, "frame.output.alias", next);
+            auto* alias_valid = llvm::BasicBlock::Create(
+                context, "frame.output.disjoint", next);
+            b.CreateCondBr(output_disjoint, alias_valid, alias_invalid);
+            b.SetInsertPoint(alias_invalid);
+            return_i32(b, -1);
+            b.SetInsertPoint(alias_valid);
             auto* state = b.CreateLoad(i64, frame, "state");
             auto* active = llvm::BasicBlock::Create(context, "active", next);
             auto* done = llvm::BasicBlock::Create(context, "done", next);
@@ -3290,8 +3517,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             value, llvm::ConstantInt::get(i64, UINT32_MAX));
         b.CreateCondBr(in_range, accepted, rejected);
         b.SetInsertPoint(rejected);
-        b.CreateCall(oreslang::native_intrinsic(
-            &module, llvm::Intrinsic::trap));
+        b.CreateCall(native_trap(module));
         b.CreateUnreachable();
         b.SetInsertPoint(accepted);
         b.CreateRet(b.CreateTrunc(value, i32));
@@ -3305,6 +3531,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         auto* entry = llvm::BasicBlock::Create(context, "entry", host_main);
         llvm::IRBuilder<> builder(entry);
         llvm::Function* guest = declarations.at(native_function_slot("main", 0));
+        if (actor_region_v1) {
+            auto* i32 = llvm::Type::getInt32Ty(context);
+            builder.CreateCall(actorRegionGuestBegin, {
+                llvm::ConstantInt::get(i32, actor_region_slots),
+                llvm::ConstantInt::get(i32, actor_region_stride),
+                llvm::ConstantInt::get(i32, 64)});
+        }
         llvm::FunctionCallee string_end;
         llvm::FunctionCallee record_end;
         if (string_runtime) {
@@ -3332,6 +3565,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             builder.SetInsertPoint(ready);
         }
         llvm::Value* result = builder.CreateCall(guest);
+        if (actor_region_v1)
+            builder.CreateCall(actorRegionGuestEnd);
         llvm::Value* tasks_ok = has_source_tasks
             ? builder.CreateICmpEQ(
                 builder.CreateCall(taskShutdown),
@@ -3442,8 +3677,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                         : (expr.kind == K::Multiply)
                             ? llvm::Intrinsic::smul_with_overflow
                             : llvm::Intrinsic::sadd_with_overflow;
-                    auto* intrinsic = oreslang::native_intrinsic(
-                        &module, op, {i64});
+                    auto* intrinsic = native_intrinsic(module, op, {i64});
                     auto* pair = b.CreateCall(intrinsic, {lhs, rhs},
                                                "isolate.arithmetic.checked");
                     auto* value = b.CreateExtractValue(pair, {0}, "isolate.arithmetic.value");

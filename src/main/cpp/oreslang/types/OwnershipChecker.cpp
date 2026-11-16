@@ -395,11 +395,21 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             return;
         }
         case Expression::Kind::ArrayCall: {
+            if (expr.name == "contains_literal") {
+                if (!expr.left || expr.arguments.size() != 1)
+                    reject(expr, "String.contains_literal requires one argument");
+                check_value(*expr.left, locals, functions);
+                check_value(*expr.arguments.front(), locals, functions);
+                return;
+            }
             if (!expr.left)
                 reject(expr, "native Array<int> operation requires a named owner");
             array_owner(*expr.left, locals, false);
-            if (expr.name != "get" || expr.arguments.size() != 1)
-                reject(expr, "native Array<int> expression supports only get(index)");
+            if ((expr.name != "get" && expr.name != "get_copy") ||
+                    expr.arguments.size() != 1)
+                reject(expr, "native Array<int> expression supports only get(index) or checked get_copy(index)");
+            if (expr.name == "get_copy" && expr.sum_type != "Option<int>")
+                reject(expr, "Array.get_copy requires proven Option<int> sum authority");
             check_value(*expr.arguments[0], locals, functions);
             return;
         }
@@ -469,6 +479,17 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
             check_pure_guard(*expr.when_true, locals, functions);
             check_pure_guard(*expr.when_false, locals, functions);
             return;
+        case Expression::Kind::ArrayCall:
+            // Only this read-only String literal operation is pure enough
+            // for guarded return conditions; ordinary member/array calls
+            // continue to fail closed.
+            if (expr.name == "contains_literal" && expr.left &&
+                    expr.arguments.size() == 1) {
+                check_pure_guard(*expr.left, locals, functions);
+                check_pure_guard(*expr.arguments.front(), locals, functions);
+                return;
+            }
+            reject(expr, "native guarded condition cannot call an impure member");
         case Expression::Kind::Take:
         case Expression::Kind::Call:
         case Expression::Kind::SumConstruct:
@@ -476,7 +497,6 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
         case Expression::Kind::RecordConstruct:
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut:
-        case Expression::Kind::ArrayCall:
         case Expression::Kind::Console:
             reject(expr, "native guarded condition must be pure and cannot move, call or borrow");
     }
@@ -918,6 +938,8 @@ void validate_i64_ownership(Program& program) {
                     return target.assignable && !target.heap_owned && !target.int_array && target.class_name.empty() &&
                         target.shared_loans == 0 && !target.exclusive_loan;
                 };
+                if (!state.at(stmt.receiver).assignable)
+                    throw std::runtime_error("E_IMMUTABLE_REBIND: cannot reassign fixed scalar binding");
                 if (!writable()) throw std::runtime_error("assignment requires an unloaned mutable scalar slot");
                 check_value(*stmt.expression, state, functions);
                 if (!writable()) throw std::runtime_error("assignment cannot publish through an active loan");

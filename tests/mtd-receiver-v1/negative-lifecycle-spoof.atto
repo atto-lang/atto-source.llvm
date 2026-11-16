@@ -1,0 +1,6 @@
+// An external method must not mint lifecycle authority.
+define class Point as let int x = 40; end
+pub mtd (self: Point) on_start(): void {
+  return;
+}
+pub fnc main(): int { return 0; }
