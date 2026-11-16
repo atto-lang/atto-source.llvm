@@ -303,26 +303,7 @@ int main(int argc, char** argv) {
             }
             static_ffi_i64_capability = true;
         } else if (arg == "--experimental-pointer-int-aot") {
-            if (experimental_static_ffi_i64 || static_ffi_i64_capability) {
-            // Host-private static link probe only: does not create a real
-            // actor, loader/supervisor, nor a runtime permission grant.
-            if (!experimental_static_ffi_i64 || !static_ffi_i64_capability ||
-                    experimental_pointer_int_aot || wasm32_target || cortex_m_target ||
-                    tenant_vm_guest || experimental_owned_int ||
-                    experimental_rt_scalar_loop || bounded_allocator_provider ||
-                    tree_shake || !tree_shake_roots.empty() || native_hard_rt_profile ||
-                    rt_check_only || rt_entry_seen || rt_report_seen ||
-                    constraint_descriptors_only) {
-                throw std::runtime_error(
-                    "static FFI i64 AOT proof requires explicit grant and isolated --target=host");
-            }
-            const auto ir = oreslang::static_ffi_i64_aot::compile(text);
-            std::cout << ir;
-            std::cout.flush();
-            return 0;
-        }
-
-        if (experimental_pointer_int_aot) {
+            if (experimental_pointer_int_aot) {
                 std::cerr << "duplicate Pointer<int> AOT option\n"; return 2;
             }
             experimental_pointer_int_aot = true;
@@ -458,6 +439,25 @@ int main(int argc, char** argv) {
             throw std::runtime_error("native-hard-rt profile currently requires the host target");
         if (native_hard_rt_profile && experimental_owned_int)
             throw std::runtime_error("native-hard-rt profile rejects experimental owned heap lowering");
+
+        if (experimental_static_ffi_i64 || static_ffi_i64_capability) {
+            // Only an isolated host-private static native C link proof.
+            // No actual foreign actor spawn, scheduler or signed artifact.
+            if (!experimental_static_ffi_i64 || !static_ffi_i64_capability ||
+                    experimental_pointer_int_aot || wasm32_target || cortex_m_target ||
+                    tenant_vm_guest || experimental_owned_int ||
+                    experimental_rt_scalar_loop || bounded_allocator_provider ||
+                    tree_shake || !tree_shake_roots.empty() || native_hard_rt_profile ||
+                    rt_check_only || rt_entry_seen || rt_report_seen ||
+                    constraint_descriptors_only) {
+                throw std::runtime_error(
+                    "static FFI i64 AOT proof requires explicit grant and isolated --target=host");
+            }
+            const auto ir = oreslang::static_ffi_i64_aot::compile(text);
+            std::cout << ir;
+            std::cout.flush();
+            return 0;
+        }
 
         if (experimental_pointer_int_aot) {
             // This source profile is deliberately independent of the main
