@@ -1829,6 +1829,8 @@ private:
         // A foreign declaration has no Atto body. Never treat its source
         // spelling as a freely chosen native linker symbol.
         value.foreign_import = owner.empty() && accept("extern");
+        if (value.foreign_import && source_async)
+            fail("async extern FFI is unsupported until a real scheduler-owned foreign continuation exists");
         if (value.foreign_import && value.exported)
             fail("foreign FFI declaration must remain private");
         value.async_source_i64 = source_async;
@@ -4629,11 +4631,12 @@ private:
                 return arg.kind == Expression::Kind::Integer
                     ? arg.integer : -arg.left->integer;
             };
-            const __int128 sum =
-                static_cast<__int128>(signed_literal(*call->arguments[0])) +
-                static_cast<__int128>(signed_literal(*call->arguments[1]));
-            if (sum < std::numeric_limits<std::int64_t>::min() ||
-                    sum > std::numeric_limits<std::int64_t>::max())
+            const std::int64_t lhs = signed_literal(*call->arguments[0]);
+            const std::int64_t rhs = signed_literal(*call->arguments[1]);
+            // Portable even for 32-bit native C++ hosts: no __int128 or
+            // evaluation of an overflowing signed addition is required.
+            if ((rhs > 0 && lhs > std::numeric_limits<std::int64_t>::max() - rhs) ||
+                    (rhs < 0 && lhs < std::numeric_limits<std::int64_t>::min() - rhs))
                 throw std::runtime_error("foreign i64 checked arithmetic overflow");
         }
     }
@@ -4648,13 +4651,31 @@ private:
             if (!classes.insert(cls.name).second)
                 throw std::runtime_error("duplicate class declaration '" + cls.name + "'");
         }
+        // A naked CLI flag must not install ambient FFI authority in an
+        // otherwise ordinary compilation. M1 admits precisely one bound
+        // import and one direct effect-qualified main, no extra call graph.
+        if (program.foreign_i64_granted) {
+            const auto imports = std::count_if(
+                program.functions.begin(), program.functions.end(),
+                [](const Function& f) { return f.foreign_import; });
+            const auto mains = std::count_if(
+                program.functions.begin(), program.functions.end(),
+                [](const Function& f) { return f.name == "main" && !f.foreign_import; });
+            if (imports != 1 || mains != 1 || program.functions.size() != 2 ||
+                    !program.actors.empty() || !program.classes.empty() ||
+                    !program.generators.empty() || !program.cooperative_loops.empty() ||
+                    !program.module.empty() || !program.imports.empty())
+                throw std::runtime_error(
+                    "M1 ffi grant requires exactly one approved extern and one standalone main");
+        }
         NativeSignatures functions;
         for (const auto& fn : program.functions) {
             if (fn.foreign_import) {
                 if (!program.foreign_i64_granted || !program.module.empty() ||
                         !program.imports.empty() || !program.actors.empty() ||
                         !program.classes.empty() || fn.name != "atto_add_i64" ||
-                        fn.exported || fn.native_internal ||
+                        fn.exported || fn.native_internal || fn.async_source_i64 ||
+                        !fn.has_declared_effects ||
                         fn.parameters.size() != 2 || fn.returns_void ||
                         fn.return_type != ScalarType::I64 ||
                         fn.declared_effects.bits !=
