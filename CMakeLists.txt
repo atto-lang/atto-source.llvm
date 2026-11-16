@@ -2961,16 +2961,32 @@ if(BUILD_TESTING)
         --diagnostic "duplicate native do match pattern")
     oreslang_contract_test(native_structural_field_failclosed_1
         dispatch-value-structural-field-reject.ores
-        --diagnostic "native structural field pattern requires checked typed aggregate lowering")
+        --diagnostic "native structural field pattern requires a stack-constructed const class local")
     oreslang_contract_test(native_structural_field_failclosed_2
         dispatch-do-structural-field-reject.ores
-        --diagnostic "native structural field pattern requires checked typed aggregate lowering")
+        --diagnostic "native structural field pattern requires a stack-constructed const class local")
     oreslang_contract_test(native_structural_field_failclosed_3
         dispatch-value-record-field-reject.ores
         --diagnostic "native tilde map/record literal unsupported")
     oreslang_contract_test(native_structural_field_failclosed_4
         dispatch-do-record-field-reject.ores
         --diagnostic "native tilde map/record literal unsupported")
+    oreslang_contract_test(native_structural_local_1
+        dispatch-value-public-class-field-run.ores --ir "ternary.merge")
+    oreslang_contract_test(native_structural_local_2
+        dispatch-do-public-class-field-run.ores --ir "return.snapshot.slot")
+    oreslang_contract_test(native_structural_local_3
+        dispatch-value-private-class-field-reject.ores --diagnostic "native structural field pattern requires a declared public primitive field")
+    oreslang_contract_test(native_structural_local_4
+        dispatch-value-mutable-class-owner-reject.ores --diagnostic "native structural field pattern requires a stack-constructed const class local")
+    oreslang_contract_test(native_structural_local_5
+        dispatch-value-structural-mixed-fields-reject.ores --diagnostic "native ordinary structural match cannot prove differently named field arms disjoint")
+    oreslang_contract_test(native_structural_local_6
+        dispatch-value-structural-duplicate-reject.ores --diagnostic "duplicate native structural field match pattern")
+    oreslang_contract_test(native_structural_local_7
+        dispatch-value-structural-multi-field-reject.ores --diagnostic "native structural field pattern supports exactly one field")
+    oreslang_contract_test(native_structural_local_8
+        dispatch-value-structural-wrong-type-reject.ores --diagnostic "native structural field pattern literal type does not match declared field")
     # Match-default hardening: ensure unmatched arms actually execute the
     # fallback, and reject duplicate/guarded patterns and tilde bypasses.
     oreslang_contract_test(native_value_match_default_fallthrough_ir
