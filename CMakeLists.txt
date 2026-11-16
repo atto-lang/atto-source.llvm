@@ -1221,6 +1221,16 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-generational-reply-test)
     set_tests_properties(native_actor_supervisor_generational_reply_host_only
         PROPERTIES TIMEOUT 30)
+    # Bounded unary + stream reply host proof (NOT compiled Atto guest).
+    add_executable(oreslang-native-actor-reply-v1-test
+        tests/native_actor_reply_protocol_v1_test.cpp)
+    target_include_directories(oreslang-native-actor-reply-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-reply-v1-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-reply-v1-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_actor_reply_v1_host_only COMMAND oreslang-native-actor-reply-v1-test)
+    set_tests_properties(native_actor_reply_v1_host_only PROPERTIES TIMEOUT 40)
     # Host-only instrumented-trace analyzer (not full guest instrumentation).
     add_executable(oreslang-concurrency-race-analyzer-test
         tests/concurrency_race_analyzer_test.cpp)
