@@ -632,7 +632,13 @@ struct TenantVmHost::Core {
         const std::size_t failures = actor.recent_failures_ns.size();
         if (failures > limits.restart_budget) return false;
         if (limits.restart_backoff_ms) {
-            const std::uint64_t delay_ns = (std::uint64_t{limits.restart_backoff_ms} * 1000000) << std::min<std::size_t>(failures - 1, 16);
+            // Saturate instead of wrapping when a host configures a large base delay
+            // and a large restart budget. A wrapped deadline could run a crashing
+            // actor immediately, defeating exponential backoff.
+            const std::uint64_t factor = std::uint64_t{1000000} << std::min<std::size_t>(failures - 1, 16);
+            const std::uint64_t remaining = std::numeric_limits<std::uint64_t>::max() - now;
+            const std::uint64_t base = limits.restart_backoff_ms;
+            const std::uint64_t delay_ns = base > remaining / factor ? remaining : base * factor;
             actor.backoff_until_ns = now + delay_ns;
             std::lock_guard<std::mutex> lock(backoff_mutex);
             backoff.push_back(Backoff{actor.backoff_until_ns, vm, slot, actor.generation});
