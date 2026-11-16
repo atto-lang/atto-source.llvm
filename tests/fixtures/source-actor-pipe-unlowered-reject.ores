@@ -1,0 +1,21 @@
+// Native guest must not silently lower a pipe as independent actor spawns.
+// The only acceptable outcome until typed graph lowering exists: no LLVM IR.
+define actor Source as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+define actor Sink as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const graph = spawn Source() pipe spawn Sink();
+  stop graph;
+  return 43;
+}

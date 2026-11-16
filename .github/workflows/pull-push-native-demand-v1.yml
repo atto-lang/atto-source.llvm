@@ -1,0 +1,40 @@
+name: Pull/push native bounded demand — host adapter
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/NativeDemandI64Port.hpp'
+      - 'tests/native_demand_i64_port_test.cpp'
+      - '.github/workflows/pull-push-native-demand-v1.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-bounded-demand:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+        optimize: ['-O1', '-O2']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact Git tree
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git rev-parse 'HEAD^{tree}'
+          git hash-object src/main/cpp/oreslang/runtime/NativeDemandI64Port.hpp tests/native_demand_i64_port_test.cpp
+      - name: Compile and run real native channel adapter under sanitizers
+        env:
+          CXX: ${{ matrix.compiler }}
+          OPT: ${{ matrix.optimize }}
+        run: |
+          set -euo pipefail
+          "$CXX" -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG "$OPT" -g -pthread -fsanitize=address,undefined -fno-omit-frame-pointer -Isrc/main/cpp tests/native_demand_i64_port_test.cpp -o /tmp/atto-native-demand-test
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 /tmp/atto-native-demand-test

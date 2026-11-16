@@ -1,0 +1,48 @@
+name: Opto Sync exact-byte Atto LLVM native guests
+on:
+  pull_request:
+    paths:
+      - 'tests/fixtures/opto-sync-scalar-v1/**'
+      - 'scripts/test-opto-sync-scalar-v1.sh'
+      - '.github/workflows/opto-sync-scalar-llvm.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  llvm-real-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Exact triggering commit; no persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Assert exact head, tree and clean checkout
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          echo "ATTO_OPTO_LLVM_SOURCE_HEAD=$EXPECTED_HEAD"
+          echo "ATTO_OPTO_LLVM_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Install real native compiler dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends cmake clang llvm-dev ninja-build
+          llvm-config --version
+      - name: Build exact-head native Atto LLVM compiler
+        run: |
+          set -euo pipefail
+          bash -n scripts/test-opto-sync-scalar-v1.sh
+          cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build build --target oreslang-llvmc --parallel 2
+          test -x build/oreslang-llvmc
+          sha256sum build/oreslang-llvmc
+      - name: Execute real LLVM/Clang guest binaries and compiler denials
+        run: |
+          set -euo pipefail
+          bash scripts/test-opto-sync-scalar-v1.sh
+          echo 'LLVM native scalar guest result is NOT full SDK or Java+LLVM parity.'

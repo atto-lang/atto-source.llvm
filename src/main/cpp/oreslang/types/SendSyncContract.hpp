@@ -91,7 +91,12 @@ inline bool worker_marker_proven(const WorkerType& type, WorkerMarker marker,
             return args.empty() && nominal(type, marker);
         // No worker-safe Channel/Arc/Mutex/actor/FFI ABI is proven yet.
         // Even a permissive nominal callback must not enable these.
-        if (n == "Channel" || n == "Arc" || n == "Weak" ||
+        if (n == "Atomic" || n == "AtomicRef" || n == "AtomicBool" ||
+            n == "AtomicInt" || n == "AtomicLong" ||
+            n == "AtomicI8" || n == "AtomicI16" || n == "AtomicI32" ||
+            n == "AtomicI64" || n == "AtomicU8" || n == "AtomicU16" ||
+            n == "AtomicU32" || n == "AtomicU64" || n == "Box" ||
+            n == "Channel" || n == "Arc" || n == "Weak" ||
             n == "Shared" || n == "RwLock" || n == "Mutex" ||
             n == "MutexGuard" || n == "SharedMutex" || n == "Future" ||
             n == "Task" || n == "ActorRef" || n == "ActorMail" ||
