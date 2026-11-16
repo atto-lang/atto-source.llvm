@@ -78,6 +78,13 @@ int main() {
     {
         std::vector<std::uint8_t> memory(8192, 0);
         ActorSlabHeap32 heap(4096); heap.bind(memory.data(), 4096);
+        yes(heap.allocate(100, 16) != 0);
+        yes(heap.allocate(100, 16) != 0);
+        yes(heap.allocate(64, 16) != 0); // distinct small size classes coexist
+    }
+    {
+        std::vector<std::uint8_t> memory(8192, 0);
+        ActorSlabHeap32 heap(4096); heap.bind(memory.data(), 4096);
         const auto before = new_calls;
         for (std::size_t n = 0; n < 1000; ++n) {
             const auto ptr = heap.allocate(32, 16);
