@@ -4662,6 +4662,63 @@ private:
                 if (!parameter.pending_type_alias.empty())
                     throw std::runtime_error("unresolved native scalar parameter type before ABI admission");
             validate_declared_effects(fn, program);
+            // A source function without the declared ffi effect must never
+            // reach the foreign linker, even via nested expression trees or
+            // a pure-looking helper. This gate precedes every codegen path.
+            std::function<bool(const Expression*)> foreign_call;
+            foreign_call = [&](const Expression* expr) -> bool {
+                if (!expr) return false;
+                if (expr->kind == Expression::Kind::Call &&
+                        expr->name == "atto_add_i64") return true;
+                if (foreign_call(expr->left.get()) ||
+                        foreign_call(expr->right.get()) ||
+                        foreign_call(expr->condition.get()) ||
+                        foreign_call(expr->condition_lhs.get()) ||
+                        foreign_call(expr->condition_rhs.get()) ||
+                        foreign_call(expr->when_true.get()) ||
+                        foreign_call(expr->when_false.get())) return true;
+                for (const auto& arg : expr->arguments)
+                    if (foreign_call(arg.get())) return true;
+                return false;
+            };
+            std::function<bool(const Statement&)> statement_has_ffi;
+            statement_has_ffi = [&](const Statement& stmt) {
+                if (foreign_call(stmt.expression.get()) ||
+                        foreign_call(stmt.condition.get()) ||
+                        foreign_call(stmt.condition_lhs.get()) ||
+                        foreign_call(stmt.condition_rhs.get()) ||
+                        foreign_call(stmt.array_commit_length.get()) ||
+                        foreign_call(stmt.loop_step.get()) ||
+                        (stmt.branch_local &&
+                         foreign_call(stmt.branch_local->initializer.get())))
+                    return true;
+                for (const auto& arg : stmt.array_commit_values)
+                    if (foreign_call(arg.get())) return true;
+                for (const auto& nested : stmt.then_statements)
+                    if (statement_has_ffi(nested)) return true;
+                for (const auto& nested : stmt.else_statements)
+                    if (statement_has_ffi(nested)) return true;
+                return false;
+            };
+            bool uses_ffi = foreign_call(fn.result.get()) ||
+                foreign_call(fn.caught_throw_value.get());
+            for (const auto& local : fn.locals)
+                uses_ffi = uses_ffi || foreign_call(local.initializer.get());
+            for (const auto& stmt : fn.statements)
+                uses_ffi = uses_ffi || statement_has_ffi(stmt);
+            for (const auto& guard : fn.early_returns)
+                uses_ffi = uses_ffi || foreign_call(guard.condition.get()) ||
+                    foreign_call(guard.result.get());
+            if (uses_ffi && (!fn.has_declared_effects ||
+                    fn.declared_effects.bits !=
+                        static_cast<std::uint32_t>(FunctionEffect::Ffi) ||
+                    !program.foreign_i64_granted || fn.name != "main" ||
+                    fn.parameters.size() != 0 ||
+                    !fn.result || fn.result->kind != Expression::Kind::Call ||
+                    fn.result->name != "atto_add_i64")) {
+                throw std::runtime_error(
+                    "foreign i64 call requires trusted grant, main using ffi and direct effectful return");
+            }
             std::function<bool(const Statement&)> ordered_frame = [&](const Statement& s) {
                 return s.kind == Statement::Kind::ScopedLocal || s.kind == Statement::Kind::ScalarWrite ||
                     std::any_of(s.then_statements.begin(), s.then_statements.end(), ordered_frame) ||
