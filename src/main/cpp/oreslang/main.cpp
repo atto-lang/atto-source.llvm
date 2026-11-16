@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/NativeSourceLogPathsV1.hpp"
 #include "oreslang/backend/ActorRegionV1Guest.hpp"
 #include "oreslang/backend/ActorRegionV2Guest.hpp"
 #include "oreslang/backend/GpuG1AttoSaxpySource.hpp"
@@ -529,6 +530,182 @@ static void require_actor_region_v1_aot_graph(const oreslang::Program& program) 
 }
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view(argv[1]) == "--selftest-native-log-info-ir") {
+        try {
+            auto program = oreslang::parse_program(
+                "pub fnc main(): int { "
+                "using telemetry.span(\"hammer\") as span {"
+                "log.info(\"hammer.started\"); log.info(\"hammer.finished\");"
+                "} return 42; }");
+            const std::vector<oreslang::CheckedSourceRoutineV1> routines = {
+                {"main", 0, "rid_d5f8e146ba97430dac6bf17430477e2a"}
+            };
+            const std::vector<oreslang::CheckedLogSiteV1> sites = {
+                {"main", 0, "hammer.started",
+                    "rid_d5f8e146ba97430dac6bf17430477e2a",
+                    "sid_652e1632e7464fdb936fc40fe24f1c7b"},
+                {"main", 0, "hammer.finished",
+                    "rid_d5f8e146ba97430dac6bf17430477e2a",
+                    "sid_77777777777777777777777777777777"}
+            };
+            const auto ir = oreslang::emit_verified_llvm_ir(
+                program, false, false, false, "", false, routines, sites);
+            if (ir.find("ores_native_telemetry_span_begin") == std::string::npos ||
+                ir.find("ores_native_telemetry_log_info") == std::string::npos ||
+                ir.find("atto.source.site_id.v1") == std::string::npos ||
+                ir.find("sid_652e1632e7464fdb936fc40fe24f1c7b") == std::string::npos ||
+                ir.find("sid_77777777777777777777777777777777") == std::string::npos) {
+                std::cerr << "native source log callsite/IDs not present in guest LLVM IR\n";
+                return 2;
+            }
+            auto rejected = [&](const std::vector<oreslang::CheckedLogSiteV1>& proposed) {
+                try {
+                    (void)oreslang::emit_verified_llvm_ir(
+                        program, false, false, false, "", false, routines, proposed);
+                    return false;
+                } catch (const std::runtime_error&) { return true; }
+            };
+            auto wrong = sites;
+            wrong[0].site_id = "rid_652e1632e7464fdb936fc40fe24f1c7b";
+            auto duplicate = sites;
+            duplicate[1].site_id = duplicate[0].site_id;
+            auto stale = sites;
+            stale[0].message = "stale.source.site";
+            auto foreign = sites;
+            foreign[0].routine_id = "rid_99999999999999999999999999999999";
+            if (!rejected({}) || !rejected(wrong) || !rejected(duplicate) ||
+                !rejected(stale) || !rejected(foreign) ||
+                !rejected({sites[0]})) {
+                std::cerr << "native LLVM source logging admitted stale/wrong site identities\n";
+                return 2;
+            }
+            try {
+                (void)oreslang::parse_program(
+                    "pub fnc main(): int { log.info(42); return 42; }");
+                std::cerr << "dynamic source logging was incorrectly admitted\n";
+                return 2;
+            } catch (const std::runtime_error&) { }
+            // A guest-owned log parameter must never hijack or spoof the
+            // compiler-owned static logger's site authority.
+            try {
+                auto shadow = oreslang::parse_program(
+                    "pub fnc main(int log): int {"
+                    " log.info(\"hammer.started\"); return 42; }");
+                (void)oreslang::emit_verified_llvm_ir(
+                    shadow, false, false, false, "", false,
+                    {{"main", 1, "rid_d5f8e146ba97430dac6bf17430477e2a"}},
+                    {{"main", 1, "hammer.started",
+                      "rid_d5f8e146ba97430dac6bf17430477e2a",
+                      "sid_652e1632e7464fdb936fc40fe24f1c7b"}});
+                std::cerr << "guest log shadowing was incorrectly admitted\n";
+                return 2;
+            } catch (const std::runtime_error&) { }
+            // Flattened imports may no longer be present in Program.imports.
+            // Never assign root-unit routine IDs to compiler-qualified
+            // functions from a different .atto source file.
+            try {
+                auto foreign = oreslang::parse_program(
+                    "pub fnc foreign(): int { return 42; }");
+                foreign.functions.front().name = "__ores_module_1.foreign";
+                (void)oreslang::emit_verified_llvm_ir(
+                    foreign, false, false, false, "", false,
+                    {{"__ores_module_1.foreign", 0,
+                      "rid_d5f8e146ba97430dac6bf17430477e2a"}}, {});
+                std::cerr << "imported function accepted root source identity\n";
+                return 2;
+            } catch (const std::runtime_error& error) {
+                if (std::string_view(error.what()).find("single-unit")
+                        == std::string_view::npos) throw;
+            }
+            // Manifest `main(int):int` must never authorize a different
+            // typed function just because its name and arity match.
+            auto rejects_wrong_signature = [&](const auto& mutate) {
+                auto candidate = oreslang::parse_program(
+                    "pub fnc main(int n): int { return n; }");
+                mutate(candidate.functions.front());
+                try {
+                    (void)oreslang::emit_verified_llvm_ir(
+                        candidate, false, false, false, "", false,
+                        {{"main", 1, "rid_d5f8e146ba97430dac6bf17430477e2a"}}, {});
+                    return false;
+                } catch (const std::runtime_error& error) {
+                    return std::string_view(error.what()).find("exact int-only")
+                        != std::string_view::npos;
+                }
+            };
+            if (!rejects_wrong_signature([](oreslang::Function& fn) {
+                    fn.parameters.front().scalar_type = oreslang::ScalarType::Bool;
+                }) ||
+                !rejects_wrong_signature([](oreslang::Function& fn) {
+                    fn.parameters.front().mode = oreslang::Parameter::Mode::Borrow;
+                }) ||
+                !rejects_wrong_signature([](oreslang::Function& fn) {
+                    fn.return_type = oreslang::ScalarType::Bool;
+                }) ||
+                !rejects_wrong_signature([](oreslang::Function& fn) {
+                    fn.returns_void = true;
+                }) ||
+                !rejects_wrong_signature([](oreslang::Function& fn) {
+                    fn.parameters.front().pending_type_alias = "Other";
+                })) {
+                std::cerr << "native LLVM source IDs admitted mismatched typed callable signature\n";
+                return 2;
+            }
+            std::cout << "LLVM_NATIVE_LOG_INFO_GUEST_IR_PASS\n";
+            return 0;
+        } catch (const std::exception& error) {
+            std::cerr << "LLVM guest static log selftest failed: ";
+            print_safe_diagnostic(std::cerr, error.what(), 160);
+            std::cerr << '\n';
+            return 2;
+        }
+    }
+    // Internal exact-frontend + LLVM IR regression; not a public source ID
+    // authoring interface, not a native executable/OTel/JIT proof.
+    if (argc == 2 && std::string_view(argv[1]) == "--selftest-source-routine-ir") {
+        try {
+            auto program = oreslang::parse_program(
+                "pub fnc main(): int { return 42; }");
+            const std::vector<oreslang::CheckedSourceRoutineV1> ok = {
+                {"main", 0, "rid_d5f8e146ba97430dac6bf17430477e2a"}
+            };
+            auto emitted = oreslang::emit_verified_llvm_ir(
+                program, false, false, false, "", false, ok);
+            if (emitted.find("atto.source.routine_id.v1") == std::string::npos ||
+                emitted.find("rid_d5f8e146ba97430dac6bf17430477e2a") ==
+                    std::string::npos) {
+                std::cerr << "native LLVM source ID metadata was not emitted\n";
+                return 2;
+            }
+            auto rejects = [&](std::vector<oreslang::CheckedSourceRoutineV1> ids) {
+                try {
+                    (void)oreslang::emit_verified_llvm_ir(
+                        program, false, false, false, "", false, ids);
+                    return false;
+                } catch (const std::runtime_error&) {
+                    return true;
+                }
+            };
+            if (!rejects({{"main", 0,
+                    "sid_d5f8e146ba97430dac6bf17430477e2a"}}) ||
+                !rejects({{"other", 0,
+                    "rid_d5f8e146ba97430dac6bf17430477e2a"}}) ||
+                !rejects({{"main", 0,
+                    "rid_d5f8e146ba97430dac6bf17430477e2a"},
+                    {"main", 0,
+                    "rid_d5f8e146ba97430dac6bf17430477e2a"}})) {
+                std::cerr << "invalid native LLVM source ID binding admitted\n";
+                return 2;
+            }
+            std::cout << "LLVM_SOURCE_ID_COMPILER_IR_METADATA_PASS\n";
+            return 0;
+        } catch (const std::exception& error) {
+            std::cerr << "native LLVM source ID compiler test failed: ";
+            print_safe_diagnostic(std::cerr, error.what(), 160);
+            std::cerr << '\n';
+            return 2;
+        }
+    }
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
     bool actor_region_v1_guest = false; // opt-in compiler-backed native class proof
@@ -554,6 +731,8 @@ int main(int argc, char** argv) {
     std::string rt_entry = "main/0";
     std::string rt_report_path;
     bool tree_shake = false;
+    bool source_log_manifest_seen = false;
+    std::string source_log_manifest_path;
     bool sealed_scalar_aot = false;
     bool sealed_class_fields_aot = false;
     bool actor_region_v1_aot = false;
@@ -686,6 +865,18 @@ int main(int argc, char** argv) {
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
+        } else if (arg.rfind("--source-log-ids=", 0) == 0) {
+            if (source_log_manifest_seen) {
+                std::cerr << "duplicate source-log-ids option\n";
+                return 2;
+            }
+            source_log_manifest_seen = true;
+            source_log_manifest_path =
+                arg.substr(std::string_view("--source-log-ids=").size());
+            if (source_log_manifest_path.empty()) {
+                std::cerr << "source-log-ids path cannot be empty\n";
+                return 2;
+            }
         } else if (arg.rfind("--isolate-entry=", 0) == 0) {
             if (isolate_entry_seen) { std::cerr << "duplicate isolate entry\n"; return 2; }
             isolate_entry_seen = true;
@@ -814,6 +1005,14 @@ int main(int argc, char** argv) {
         std::cerr << "isolate entry supports only ordinary host scalar codegen\n";
         return 2;
     }
+    if (source_log_manifest_seen &&
+        (wasm32_target || cortex_m_target || native_hard_rt_profile ||
+         rt_report_seen || rt_check_only || tree_shake || isolate_entry_seen ||
+         constraint_descriptors_only || bounded_allocator_provider ||
+         experimental_rt_scalar_loop)) {
+        std::cerr << "checked source-log IDs currently require unoptimized hosted scalar LLVM AOT\n";
+        return 2;
+    }
     if (!tree_shake && !tree_shake_roots.empty()) {
         std::cerr << "tree-shake-root requires --tree-shake\n";
         return 2;
@@ -852,6 +1051,32 @@ int main(int argc, char** argv) {
             path, kMaxSourceBytes, source_overflow,
             &source_identity, &expected_source_identity);
         require_valid_source_utf8(text);
+        // Independently identity-check and bound the on-disk manifest. A
+        // source-controlled JSON file does not become trusted runtime input
+        // merely by matching the .atto filename: the compiler revalidates
+        // every exact guest routine/site against the native parsed Program.
+        std::optional<oreslang::CheckedSourceLogManifestV1> checked_source_logs;
+        if (source_log_manifest_seen) {
+            // Source identity is keyed by a physical package-relative path,
+            // not a user-supplied alias or symlink spelling that could assign
+            // two immutable IDs to the same on-disk callable.
+            oreslang::telemetry::require_exact_source_log_paths(
+                std::filesystem::current_path(), path, source_log_manifest_path);
+            if (paths_alias(path, source_log_manifest_path))
+                throw std::runtime_error("source-log manifest must not alias source");
+            const auto* manifest_file = source_log_manifest_path.c_str();
+            constexpr std::size_t manifest_limit = 131072u;
+            const auto immutable_manifest = capture_source_identity(
+                manifest_file, manifest_limit,
+                "checked source-log manifest exceeds 128 KiB");
+            SourceIdentity read_manifest{};
+            const auto manifest_text = read_regular_source(
+                manifest_file, manifest_limit,
+                "checked source-log manifest exceeds 128 KiB",
+                &read_manifest, &immutable_manifest);
+            checked_source_logs = oreslang::parse_checked_source_log_manifest_v1(
+                manifest_text, std::string_view(path));
+        }
         // Target/capability directives are lexical comments in the native
         // subset. Reject rather than silently discard unverified portability
         // constraints before parsing or emitting LLVM IR.
@@ -1319,7 +1544,11 @@ int main(int argc, char** argv) {
         }
         std::cout << oreslang::emit_verified_llvm_ir(
                 ast, wasm32_target, cortex_m_target,
-                bounded_allocator_provider, isolate_entry, actor_region_v1_aot);
+                bounded_allocator_provider, isolate_entry, actor_region_v1_aot,
+                checked_source_logs ? checked_source_logs->routines
+                                    : std::vector<oreslang::CheckedSourceRoutineV1>{},
+                checked_source_logs ? checked_source_logs->sites
+                                    : std::vector<oreslang::CheckedLogSiteV1>{});
         std::cout.flush();
         if (coreLog) coreLog->dump(stderr);
         return 0;
@@ -1330,16 +1559,22 @@ int main(int argc, char** argv) {
                             oreslang::CoreLog::EventId::CompileFailed, 1);
         std::cerr << "oreslang-llvmc: ";
         std::string diagnostic = error.what();
-        if (path != nullptr && *path != '\0') {
-            const std::string source_path(path);
-            // Full host paths are private CI metadata, not error context.
-            // Replace exact input-path occurrences before rendering.
+        // Both source paths and the new manifest path may contain private CI
+        // workspace metadata. Redact the full manifest path first, including
+        // errors from the regular-file/identity-bound admission reader.
+        const auto redact = [&](std::string_view secret, std::string_view replacement) {
+            if (secret.empty()) return;
             std::size_t found = 0;
-            while ((found = diagnostic.find(source_path, found)) != std::string::npos) {
-                diagnostic.replace(found, source_path.size(), "<source>");
-                found += sizeof("<source>") - 1;
+            const std::string substitute(replacement);
+            while ((found = diagnostic.find(secret, found)) != std::string::npos) {
+                diagnostic.replace(found, secret.size(), substitute);
+                found += substitute.size();
             }
-        }
+        };
+        if (source_log_manifest_seen)
+            redact(source_log_manifest_path, "<source-log-manifest>");
+        if (path != nullptr)
+            redact(path, "<source>");
         print_safe_diagnostic(std::cerr, diagnostic, 2048);
         if (path != nullptr) {
             std::string_view source_name(path);
