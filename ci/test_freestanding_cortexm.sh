@@ -153,7 +153,7 @@ IR
   "$work/host-import.ll" -o "$work/host-import.o"
 llvm-objcopy-18 --remove-section=.ARM.exidx --remove-section=.ARM.extab \
   --strip-unneeded "$work/host-import.o" "$work/host-import.core.o"
-readelf -W -s "$work/host-import.core.o" | grep -Eq 'UND[[:space:]]+host_io
+readelf -W -s "$work/host-import.core.o" | grep -Eq "UND[[:space:]]+host_io"
 
 if "$CLANG" "${arch[@]}" -nostdlib -fuse-ld=lld \
     -Wl,-T,tests/freestanding/cortexm_flash.ld -Wl,--no-undefined -Wl,--gc-sections \
