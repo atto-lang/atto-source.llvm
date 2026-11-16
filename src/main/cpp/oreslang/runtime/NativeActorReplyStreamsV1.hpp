@@ -113,7 +113,7 @@ public:
             return fn(*core, core->slots[index_]);
         }
         template<typename Fn> static auto fn_stale(Fn /* unused */) -> decltype(std::declval<Fn>()(std::declval<Core&>(), std::declval<Slot&>())) {
-            using R = decltype(fn(std::declval<Core&>(), std::declval<Slot&>()));
+            using R = decltype(std::declval<Fn>()(std::declval<Core&>(), std::declval<Slot&>()));
             if constexpr (std::is_same<R, Read>::value) return Read{ReadStatus::Stale, T{}};
             else return WriteStatus::Stale;
         }
