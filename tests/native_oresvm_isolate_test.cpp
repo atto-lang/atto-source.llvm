@@ -4,6 +4,10 @@
 #include <type_traits>
 
 // The tenant VM is an actual C++ owner type, but only OresVM may create it.
+static_assert(std::is_same_v<oreslang::runtime::TenantVM,
+                             oreslang::runtime::IsolateVM>);
+static_assert(!std::is_default_constructible<oreslang::runtime::TenantVM>::value,
+              "canonical TenantVM cannot be constructed by guest code");
 static_assert(!std::is_default_constructible<oreslang::runtime::IsolateVM>::value,
               "guest code cannot directly create a tenant IsolateVM");
 static_assert(!std::is_copy_constructible<oreslang::runtime::IsolateVM>::value,
@@ -49,7 +53,7 @@ int main() {
     vm.begin_shutdown(boundary);
     vm.complete_shutdown(boundary);
     vm.destroy(boundary);
-    auto a = vm.create_isolate({"tenant-a", 32, 2});
+    OresVM::TenantVMHandle a = vm.create_tenant_vm({"tenant-a", 32, 2});
     auto b = vm.create_isolate({"tenant-b", 32, 2});
     assert(rejects([&] { vm.create_isolate({"tenant-a", 32, 2}); }));
     assert(rejects([&] { vm.allocate(a, 1); }));

@@ -156,7 +156,7 @@ bool reserved(std::string_view name) {
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
-        "default", "eq", "neq", "and", "or", "xor", "Xor", "nb", "select", "readch", "writech",
+        "default", "eq", "neq", "Xor", "nb", "select", "readch", "writech",
         "cb", "shared", "untrusted", "type", "types", "typeof",
         "interface", "trait", "struct", "impl", "abstract", "void", "Iterator", "AsyncIterator",
         "static", "pub", "private", "return", "defer", "throw", "raise",
@@ -366,7 +366,10 @@ public:
         // Admit '@' as a TOKEN only so existing parameter-local @Default guards
         // can issue their specific fail-closed diagnostic instead of a generic
         // unsupported-token error. No annotation execution is enabled.
-        if (std::string_view("(){},:;+-*/%=.<>@?!").find(ch) != std::string_view::npos) {
+        // '[' / ']' are plain tokens: only the GPU launch geometry and the
+        // GPU kernel body envelope consume them; anywhere else the parser
+        // rejects them before IR exactly like any other unexpected symbol.
+        if (std::string_view("(){}[],:;+-*/%=.<>@?!").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -1592,6 +1595,15 @@ private:
         program.type_only_declarations.push_back(std::move(decl));
     }
 
+    // After a comma-body separator: a second ',' is an empty item, while
+    // 'end' means the trailing separator has no following item.
+    void reject_missing_comma_item() const {
+        if (token_.text == ",")
+            fail("native comma expression body contains an empty item");
+        if (token_.text == "end")
+            fail("native comma expression body requires item after ','");
+    }
+
     void validate_actor_forwards(const Program& program) const {
         std::unordered_set<std::string> declared;
         for (const auto& actor : program.actors) {
@@ -2151,7 +2163,9 @@ private:
                 signature.mutable_receiver = method.parameters.front().mode == Parameter::Mode::BorrowMut;
                 for (const auto& prior : result.methods)
                     if (prior.name == signature.name && prior.arity == signature.arity)
-                        fail("duplicate native method name/arity");
+                        fail("duplicate native method name/arity '" + signature.name +
+                             "/" + std::to_string(signature.arity) +
+                             "' (self receiver does not count toward arity)");
                 result.methods.push_back(std::move(signature));
                 methods_.push_back(std::move(method));
                 continue;
@@ -2852,14 +2866,12 @@ private:
                         value.locals.push_back(std::move(binding));
                         if (!accept(","))
                             fail("native comma body local must be followed by ',' and an expression");
-                        if (token_.text == "," || token_.text == "end")
-                            fail("native comma expression body requires item after ','");
+                        reject_missing_comma_item();
                         continue;
                     }
                     auto evaluated = expression();
                     if (accept(",")) {
-                        if (token_.text == "," || token_.text == "end")
-                            fail("native comma expression body requires item after ','");
+                        reject_missing_comma_item();
                         LocalBinding discarded;
                         discarded.name = "$effect" + std::to_string(value.locals.size());
                         discarded.initializer = std::move(evaluated);
@@ -3991,9 +4003,13 @@ private:
                     fail("native protected try guard requires a pure nonthrowing bool expression");
                 const bool then_form = accept_keyword_if_header();
                 if (!then_form) require("{");
-                if (accept("return")) {
-                    if (value.returns_void)
-                        fail("guarded early return requires a scalar result");
+                // In a void function `if c then return; fi` is an ordinary conditional
+                // whose arm returns (as in Java); the generic branch below parses
+                // `return;` like any other arm statement. Only value-returning
+                // functions use the scalar guarded-return lowering.
+                if (value.returns_void && token_.text == "return" && peek_next().text != ";")
+                    fail("RETURN_VOID_VALUE: void function cannot return a value");
+                if (!value.returns_void && accept("return")) {
                     if (value.early_returns.size() == 8)
                         fail("native guarded return limit exceeded (8)");
                     GuardedReturn guard;
@@ -4354,8 +4370,16 @@ private:
 
     std::unique_ptr<Expression> logical_xor() {
         auto left = logical_and();
-        if (token_.text == "^^")
-            fail("'^^' is reserved and is not AttoLang source syntax; use Xor(a, b)");
+        // The lexer emits adjacent ^^ as one token; single ^ remains invalid.
+        // LLVM's existing LogicalXor lowering is eager and bool-only.
+        while (token_.text == "^^") {
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::LogicalXor, offset);
+            expr->left = std::move(left);
+            expr->right = logical_and();
+            left = std::move(expr);
+        }
         return left;
     }
 
