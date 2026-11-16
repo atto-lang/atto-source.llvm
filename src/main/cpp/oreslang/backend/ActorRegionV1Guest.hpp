@@ -77,7 +77,9 @@ inline std::string emit_actor_region_v1_guest_ir(const Program& program) {
     if (!owner.new_class || owner.class_name != cls.name ||
         owner.record_view || owner.move_class || owner.heap_owned ||
         owner.int_array || owner.owner_mutable || owner.field_mutable ||
-        owner.assignable || !owner.constructor_arguments.empty() ||
+        // A rebindable `let` owner (Java parity) is still fresh: main must
+        // have no statements, so no rebinding can be admitted here.
+        !owner.constructor_arguments.empty() ||
         owner.initializer || owner.name.empty())
         reject("non-fresh, mutable or escaping class owner");
     if (!main_fn.result ||

@@ -134,7 +134,9 @@ inline std::string emit_actor_region_v2_guest_ir(const Program& program) {
         if (!owner.new_class || owner.class_name != cls.name ||
             owner.name.empty() || owner.record_view || owner.move_class ||
             owner.heap_owned || owner.int_array || owner.owner_mutable ||
-            owner.field_mutable || owner.assignable ||
+            // A rebindable `let` owner (Java parity) is still fresh here:
+            // main has no statements, so no rebinding can be admitted.
+            owner.field_mutable ||
             !owner.constructor_arguments.empty() || owner.initializer ||
             !owner.task_await_name.empty() || !owner.future_await_name.empty())
             reject("non-fresh, escaping or mutable owner");

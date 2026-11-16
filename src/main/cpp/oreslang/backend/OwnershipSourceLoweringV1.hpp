@@ -56,7 +56,9 @@ public:
             reject_if(!local.new_class || local.class_name != cls.name ||
                       local.name.empty() || local.record_view || local.move_class ||
                       local.heap_owned || local.int_array || local.owner_mutable ||
-                      local.field_mutable || local.assignable || local.initializer ||
+                      // Rebindable `let` owners are fresh here: statements must be
+                      // empty above, so no rebinding can reach this lowering.
+                      local.field_mutable || local.initializer ||
                       !local.constructor_arguments.empty() ||
                       !local.move_source.empty() || !local.sum_type.empty() ||
                       !local.pending_type_alias.empty() ||

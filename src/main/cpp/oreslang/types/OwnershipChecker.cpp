@@ -254,6 +254,10 @@ void check_call(const Expression& expr, Locals& locals, const Functions& functio
             // freeze the whole owner, preventing sibling-alias escape.
             const std::string actual_class =
                 loan.projected_scalar_field ? std::string{} : !loan.projected_class.empty() ? loan.projected_class : source.class_name;
+            // Only a matching checked Array formal may borrow an owned array;
+            // any other loan keeps main's fail-closed array diagnostic.
+            if (source.int_array && !loan.projected_scalar_field && !parameter.int_array)
+                reject(argument, "ownership violation: native Array<int> cannot be borrowed or escaped");
             if (actual_class != parameter.class_name ||
                     parameter.int_array != (source.int_array && !loan.projected_scalar_field) ||
                     (parameter.int_array && source.array_element_type != parameter.array_element_type))
