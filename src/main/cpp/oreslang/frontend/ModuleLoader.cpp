@@ -46,12 +46,13 @@ class Loader {
     // this compiler invocation; source import resolution never runs a shell.
     std::unordered_map<std::string, std::optional<std::string>> import_environment;
     bool owned, scalar_loop, host;
+    int language_version = 0;
     std::uint32_t root_provider_bits = 0;
 public:
     Loader(bool owned, bool scalar_loop, bool host,
-           std::uint32_t admitted_provider_bits)
+           std::uint32_t admitted_provider_bits, int language_version)
         : owned(owned), scalar_loop(scalar_loop), host(host),
-          root_provider_bits(admitted_provider_bits) {}
+          language_version(language_version), root_provider_bits(admitted_provider_bits) {}
     Program run(const std::string& path, std::string text, SourceIdentity identity) {
         read_bytes = text.size();
         visit(fs::canonical(path), std::move(text), identity, 0, false,
@@ -154,7 +155,11 @@ private:
         unit->compiler_owned_library = compiler_owned_library;
         unit->compiler_library_tier = compiler_library_tier;
         unit->admitted_core_provider_bits = admitted_core_provider_bits;
-        try { unit->program = parse_unresolved_program(text, owned, scalar_loop); }
+        // Compiler-owned core sources are not guest-authored and retain
+        // their existing syntactic contract; project sources share the
+        // selected version across the resolved import graph.
+        try { unit->program = parse_unresolved_program(
+            text, owned, scalar_loop, unit->compiler_owned_library ? 0 : language_version); }
         catch (const std::exception& error) {
             // Preserve historical diagnostics for a standalone entry unit.
             if (!index) throw;
@@ -513,8 +518,8 @@ private:
 } // namespace
 Program load_native_program(const std::string& path, std::string source, SourceIdentity identity,
                             bool owned, bool scalar_loop, bool host,
-                            std::uint32_t admitted_provider_bits) {
-    return Loader(owned, scalar_loop, host, admitted_provider_bits)
+                            std::uint32_t admitted_provider_bits, int language_version) {
+    return Loader(owned, scalar_loop, host, admitted_provider_bits, language_version)
         .run(path, std::move(source), identity);
 }
 frontend::VerifiedNamespaceSourceSnapshotV2 admit_native_namespace_sources_v2(
