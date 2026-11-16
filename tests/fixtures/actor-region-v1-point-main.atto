@@ -1,0 +1,9 @@
+define class Point as
+  pub final int x: 20;
+  pub final int y: 22;
+end
+
+pub fnc main(): int {
+  let Point point = new Point();
+  return point.x + point.y;
+}
