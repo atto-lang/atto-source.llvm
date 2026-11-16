@@ -3906,7 +3906,7 @@ private:
                     actions.push_back(std::move(statement));
                     continue;
                 }
-                if (token_.text == "break" || token_.text == "continue")
+                if ((token_.text == "break" || token_.text == "continue") && !finally_scope)
                     fail("native break/continue in conditional arms requires verified loop continuation lowering");
                 if (finally_scope && (token_.text == "return" ||
                         token_.text == "break" || token_.text == "continue"))
