@@ -51,6 +51,9 @@ struct Expression {
     std::size_t offset = 0;
     std::int64_t integer = 0;
     bool boolean = false;
+    // Minted ONLY by the parser for a compiler-owned Box<int>.get() call.
+    // The raw Box owner is non-Copy and must never lower as an i64 value.
+    bool native_box_read = false;
     mutable ScalarType resolved_type = ScalarType::I64;
     mutable std::string resolved_class;
     std::string name;
@@ -112,6 +115,7 @@ struct LocalBinding {
     std::string name;
     std::unique_ptr<Expression> initializer;
     bool heap_owned = false;
+    bool native_box_i64 = false; // non-Copy Box<int> backed by native owned region
     bool int_array = false; // non-Copy owned i64-slot array local, no escape
     ScalarType array_element_type = ScalarType::I64; // int value or checked immutable String handle
     std::string array_record_class;

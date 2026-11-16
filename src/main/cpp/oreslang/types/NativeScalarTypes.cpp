@@ -8,7 +8,7 @@
 
 namespace oreslang {
 namespace {
-enum class Kind { Int, Bool, String, Class, Array, Sum, Void };
+enum class Kind { Int, Bool, String, Class, Array, Sum, Void, NativeBoxI64 };
 struct Type {
     Kind kind = Kind::Int;
     std::string name;
@@ -39,6 +39,11 @@ Type result_type(const Function& fn) {
         ? scalar(fn.return_type) : Type{Kind::Class, fn.return_class};
 }
 Type local_type(const LocalBinding& local) {
+    if (local.native_box_i64) {
+        if (!local.heap_owned || !local.initializer || local.assignable)
+            throw std::runtime_error("malformed affine Box<int> local");
+        return {Kind::NativeBoxI64, {}};
+    }
     if (!local.sum_type.empty()) return {Kind::Sum, local.sum_type};
     if (local.int_array && local.array_element_type != ScalarType::I64 &&
             local.array_element_type != ScalarType::String)
@@ -117,7 +122,18 @@ void validate_native_scalar_types(const Program& program) {
                 }
                 return {Kind::Void, {}};
             }
-            case E::Variable: return locals.at(e.name);
+            case E::Variable: {
+                const auto it = locals.find(e.name);
+                if (it == locals.end()) fail(e.offset, "unbound scalar or Box name");
+                if (e.native_box_read) {
+                    if (it->second.kind != Kind::NativeBoxI64)
+                        fail(e.offset, "Box<int>.get() requires compiler-owned Box");
+                    return scalar(false);
+                }
+                if (it->second.kind == Kind::NativeBoxI64)
+                    fail(e.offset, "ATTO_BOX_MAIN_V1_REJECT: Box<int> cannot escape as a scalar");
+                return it->second;
+            }
             case E::Field: return field_type(expression(*e.left, locals), e.name, e.offset);
             case E::Copy: case E::Take: case E::Share: case E::Borrow: case E::BorrowMut:
                 return expression(*e.left, locals);
@@ -256,7 +272,10 @@ void validate_native_scalar_types(const Program& program) {
             if (binding.initializer) {
                 const bool discarded_effect = binding.name.rfind("$effect", 0) == 0 &&
                     binding.initializer->kind == Expression::Kind::Console;
-                require(expression(*binding.initializer, locals), discarded_effect ? Type{Kind::Void, {}} : local_type(binding), binding.offset, "local initializer type");
+                require(expression(*binding.initializer, locals), binding.native_box_i64
+                        ? scalar(false)
+                        : discarded_effect ? Type{Kind::Void, {}} : local_type(binding),
+                        binding.offset, "local initializer type");
             }
             for (std::size_t i = 0; i < binding.constructor_arguments.size(); ++i) {
                 const auto& cls = *classes.at(binding.class_name);
