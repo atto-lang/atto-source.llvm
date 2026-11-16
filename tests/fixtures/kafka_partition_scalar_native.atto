@@ -1,0 +1,35 @@
+// Executable Kafka partition *scalar* transition canary for native LLVM.
+// This is NOT an actor, Kafka TCP broker, fsync, replication or recovery test.
+// The real durable broker's offset and ACK authority remains in the Atto actor.
+fnc commit_after_receipt(int next_offset, int prepared, int synced): int {
+  if prepared == next_offset then
+    if synced == prepared then
+      return next_offset + 1;
+    fi
+  fi
+  return next_offset;
+}
+
+fnc fetch_visible(int requested, int committed_next): int {
+  if requested < 0 then return 0; fi
+  if requested < committed_next then return 1; fi
+  return 0;
+}
+
+pub fnc main(): int {
+  let int next_offset = commit_after_receipt(40, 40, 40);
+  if next_offset == 41 then
+    if commit_after_receipt(41, 41, 40) == 41 then
+      if commit_after_receipt(41, 42, 42) == 41 then
+        if fetch_visible(40, next_offset) == 1 then
+          if fetch_visible(41, next_offset) == 0 then
+            if fetch_visible(-1, next_offset) == 0 then
+              return 42;
+            fi
+          fi
+        fi
+      fi
+    fi
+  fi
+  return 1;
+}

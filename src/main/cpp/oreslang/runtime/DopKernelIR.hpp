@@ -59,6 +59,10 @@ struct OpenClArtifact {
     std::uint64_t required_bytes;
     std::uint64_t global_rows;
     std::uint32_t global_fields;
+    std::uint32_t artifact_abi_version;
+    std::uint32_t required_address_bits;
+    bool required_float32;
+    bool required_little_endian;
 };
 
 class HostBuffer {
@@ -305,9 +309,19 @@ inline void execute_cpu(const Kernel& kernel, const HostBuffer& input, HostBuffe
     for (std::uint64_t row = 0; row < kernel.layout.rows(); ++row) {
         for (std::uint32_t field = 0; field < kernel.layout.fields(); ++field) {
             const auto v = loan.read(row, field);
-            const auto result = kernel.operation == Op::Scale ? v * kernel.scale
-                : kernel.operation == Op::Bias ? v + kernel.bias
-                : (v * kernel.scale) + kernel.bias;
+            float result = 0.0f;
+            if (kernel.operation == Op::Scale) {
+                result = v * kernel.scale;
+            } else if (kernel.operation == Op::Bias) {
+                result = v + kernel.bias;
+            } else {
+                // The portable CPU reference semantics require a rounded f32
+                // multiply followed by a rounded f32 add. Do not let a host
+                // compiler contract this into FMA and diverge from Java/OpenCL.
+                volatile float product = v * kernel.scale;
+                result = product + kernel.bias;
+            }
+            // Whole-batch exclusive write loan: no partial batch is observable.
             destination.write(row, field, result);
         }
     }
@@ -404,7 +418,16 @@ inline OpenClArtifact lower_opencl(const Kernel& kernel, GpuTarget target) {
         "  const ulong slot = byteOffset / 4UL;\n"
         "  const float v = src[slot];\n"
         "  dst[slot] = " + rhs + ";\n}\n";
-    return OpenClArtifact{name, source, p.byte_length(), p.rows(), p.fields()};
+    return OpenClArtifact{
+        name,
+        source,
+        p.byte_length(),
+        p.rows(),
+        p.fields(),
+        1,
+        64,
+        true,
+        true};
 }
 
 } // namespace oreslang::dop

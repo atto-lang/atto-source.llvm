@@ -1,0 +1,105 @@
+name: Inverted typed MIR and real source-to-native guest
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/frontend/ModuleLoader.cpp'
+      - 'src/main/cpp/oreslang/main.cpp'
+      - 'contracts/dop-inverted-v1/**'
+      - 'CMakeLists.txt'
+      - 'src/main/cpp/oreslang/types/Inverted*.hpp'
+      - 'tests/native_inverted_*'
+      - '.github/workflows/inverted-typed-mir-current-main.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  cpp17-checked-mir-native-ir:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact source head
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          test -z "$(git status --porcelain)"
+          echo "SOURCE_EXACT_HEAD=$EXPECTED"
+          echo "SOURCE_EXACT_TREE=$(git rev-parse HEAD^{tree})"
+      - name: Execute checked standalone MIR and generated native IR smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tests/native_inverted_mir_codegen_smoke.sh
+          echo 'HOST_MIR_AND_NATIVE_EMITTER_ONLY; production .atto compiler NOT_EXECUTED'
+
+  real-source-inverted-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Validate entire source tree exact PR head
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          test -z "$(git status --porcelain)"
+          echo "REAL_FULL_SOURCE_COMMIT=$EXPECTED"
+          echo "REAL_FULL_SOURCE_TREE=$(git rev-parse HEAD^{tree})"
+      - name: Provision LLVM 18 and build real full-tree compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends cmake ninja-build clang-18 llvm-18-dev
+          cmake -S . -B /tmp/atto-inverted-full -G Ninja -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
+          cmake --build /tmp/atto-inverted-full --target oreslang-llvmc --parallel 2
+          test -x /tmp/atto-inverted-full/oreslang-llvmc
+      - name: Execute source-owned native guest and fail-closed suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tests/native_inverted_source_guest_hardening.sh /tmp/atto-inverted-full/oreslang-llvmc clang-18 contracts/dop-inverted-v1
+          bash tests/native_inverted_source_randomized.sh /tmp/atto-inverted-full/oreslang-llvmc clang-18
+          echo 'REAL_SOURCE_GUEST_FULL_TREE_EXECUTED'
+
+  full-repository-ctest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Validate complete source Git commit and tree
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          test -z "$(git status --porcelain)"
+          echo "FULL_CTEST_COMMIT=$EXPECTED"
+          echo "FULL_CTEST_TREE=$(git rev-parse HEAD^{tree})"
+      - name: Build complete LLVM project and run full CTest suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends cmake ninja-build clang-18 llvm-18-dev
+          cmake -S . -B /tmp/atto-inverted-ctest -G Ninja -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
+          cmake --build /tmp/atto-inverted-ctest --parallel 2
+          ctest --test-dir /tmp/atto-inverted-ctest --output-on-failure --parallel 2
+          echo 'FULL_LLVM_CMAKE_AND_CTEST_EXECUTED'

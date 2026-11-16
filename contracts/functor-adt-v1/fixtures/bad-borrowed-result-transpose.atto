@@ -1,0 +1,7 @@
+// Must reject: transposition cannot move a Box through a shared borrow.
+define class Box as
+  pub val int value = 42;
+end
+fnc wrong(borrow Result<Option<Box>,String> value): Option<Result<Box,String>> {
+  return value.transpose();
+}
