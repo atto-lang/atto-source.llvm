@@ -1,4 +1,5 @@
 #include "oreslang/runtime/NativeActorAdtDataWireV1.hpp"
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
 #include <stdexcept>
