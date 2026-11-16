@@ -184,7 +184,59 @@ static void repeated_dispatches_keep_task_context() {
     require(q.completedBackedgesThisDispatch() == 512);
     require(q.timeSinceLastCooperate() == std::chrono::nanoseconds::zero());
 }
+static void clock_regression_and_positive_wrap_fail_closed() {
+    reset_clock();
+    // After a host clock anomaly, the untrusted fairness timer must not
+    // mistake a wrap for eleven nanoseconds of fresh execution.
+    FakeClock::nanos.store(std::numeric_limits<std::int64_t>::max() - 5);
+    Quantum q;
+    q.beginDispatch();
+    FakeClock::nanos.store(std::numeric_limits<std::int64_t>::min() + 5);
+    for (int n = 1; n < 128; ++n)
+        require(!q.completedBackedgeNeedsCheck());
+    require(q.completedBackedgeNeedsCheck());
+    require(q.shouldCooperateAtCheck());
+    require(q.timeSinceLastCooperate() == std::chrono::nanoseconds::max());
+
+    // A backwards clock jump, even without arithmetic overflow, also
+    // requests a safe soft cooperation rather than extending the quantum.
+    reset_clock();
+    FakeClock::nanos.store(10'000);
+    Quantum backwards;
+    backwards.beginDispatch();
+    FakeClock::nanos.store(9'999);
+    for (int n = 1; n < 128; ++n)
+        require(!backwards.completedBackedgeNeedsCheck());
+    require(backwards.completedBackedgeNeedsCheck());
+    require(backwards.shouldCooperateAtCheck());
+    require(backwards.timeSinceLastCooperate() == std::chrono::nanoseconds::max());
+}
+
+static void enormous_positive_elapsed_time_saturates_without_signed_ub() {
+    reset_clock();
+    FakeClock::nanos.store(std::numeric_limits<std::int64_t>::min() + 10);
+    Quantum q;
+    q.beginDispatch();
+    FakeClock::nanos.store(std::numeric_limits<std::int64_t>::max() - 10);
+    for (int n = 1; n < 128; ++n)
+        require(!q.completedBackedgeNeedsCheck());
+    require(q.completedBackedgeNeedsCheck());
+    require(q.shouldCooperateAtCheck());
+    require(q.timeSinceLastCooperate() == std::chrono::nanoseconds::max());
+
+    // The unsigned representation can express this enormous valid
+    // mathematical delta even though the signed chrono duration cannot.
+    auto now = FakeClock::time_point(
+        FakeClock::duration(std::numeric_limits<std::int64_t>::max() - 10));
+    auto started = FakeClock::time_point(
+        FakeClock::duration(std::numeric_limits<std::int64_t>::min() + 10));
+    require(oreslang::runtime::detail::elapsedClockTicksOrMax<FakeClock>(
+        now, started) == std::numeric_limits<std::uint64_t>::max() - 20);
+}
+
 int main() {
+    clock_regression_and_positive_wrap_fail_closed();
+    enormous_positive_elapsed_time_saturates_without_signed_ub();
     reduction_fast_path();
     overdue_no_yield_region_checks_only_at_next_boundary();
     timer_slow_path();
