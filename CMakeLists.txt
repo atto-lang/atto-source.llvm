@@ -1613,6 +1613,12 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
+    # Java lexer parity: contextual words (borrow, critical, enum, gen, pure,
+    # requires, serial, structural, suspend, using) are ordinary identifiers.
+    add_test(NAME native_contextual_keyword_identifiers
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_contextual_keyword_identifiers.sh"
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_contextual_keyword_identifiers PROPERTIES TIMEOUT 120)
     # Compiler-backed .atto -> LLVM IR -> Clang -> native guest at O0/O2.
     # Boolean punctuation contract: &&, ||, ^^ and compile-negative cases.
     add_test(NAME native_logical_punctuation_operators
@@ -4231,7 +4237,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_rt_take unsupported-rt-take.ores --diagnostic "unknown parameter")
     oreslang_contract_test(reject_rt_copy unsupported-rt-copy.ores --diagnostic "unknown parameter")
     oreslang_contract_test(reject_rt_share unsupported-rt-share.ores --diagnostic "unknown parameter")
-    oreslang_contract_test(reject_unqualified_borrow_call unsupported-borrow-function.ores --diagnostic "expected int expression")
+    oreslang_contract_test(reject_unqualified_borrow_call unsupported-borrow-function.ores --diagnostic "unknown function or wrong call arity 'borrow'")
     oreslang_contract_test(reject_suspends unsupported-suspends.ores --diagnostic "native suspends declaration requires")
     oreslang_contract_test(reject_critical unsupported-critical.ores --diagnostic "native critical declaration requires")
     oreslang_contract_test(reject_hyphenated_critical_read unsupported-hyphenated-critical-read.ores --diagnostic "native reader/writer critical declaration requires")
@@ -4244,8 +4250,8 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_hyphenated_actor_critical_read_after_fnc unsupported-hyphenated-critical-read-actor-after-fnc.ores --diagnostic "native reader/writer critical declaration requires")
     oreslang_contract_test(reject_hyphenated_actor_critical_write_before_method unsupported-hyphenated-critical-write-actor-method.ores --diagnostic "native reader/writer critical declaration requires")
     # Whitespace/suffix near-misses must not be interpreted as new RW modes.
-    oreslang_contract_test(reject_hyphenated_critical_spaced_as_invalid_name unsupported-hyphenated-critical-spaced.ores --diagnostic "expected non-keyword identifier")
-    oreslang_contract_test(reject_hyphenated_critical_suffix_as_invalid_name unsupported-hyphenated-critical-suffix.ores --diagnostic "expected non-keyword identifier")
+    oreslang_contract_test(reject_hyphenated_critical_spaced_as_invalid_name unsupported-hyphenated-critical-spaced.ores --diagnostic "expected '('")
+    oreslang_contract_test(reject_hyphenated_critical_suffix_as_invalid_name unsupported-hyphenated-critical-suffix.ores --diagnostic "expected '('")
     oreslang_contract_test(reject_hyphenated_nb_select unsupported-hyphenated-nb-select.ores --diagnostic "native async/channel/select boundary unsupported")
     oreslang_contract_test(reject_hyphenated_transform_pipe unsupported-hyphenated-transform-pipe.ores --diagnostic "native transform-pipe actor requires")
     oreslang_contract_test(hyphenated_transform_minus_pipe hyphenated-transform-minus-pipe.ores)
