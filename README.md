@@ -1,4 +1,17 @@
-# Oreslang LLVM backend
+# AttoLang Native LLVM backend
+
+> **Security integration (draft):** [AttoLang LLVM wasm32 actor → Volucro authenticated Wasmi Store](docs/ATTO_VOLUCRO_WASM_ACTOR_ISOLATION_V1.md) supplies a real source-to-Wasm-to-Volucro smoke harness, exact-head provenance checks, and documented security gaps. Not production native tenant isolation.
+
+
+**AttoLang** is the current public language name (formerly **Oreslang**).
+This compiler/runtime remains the independent native LLVM implementation; existing tool names, `.ores` fixtures, module identifiers and compiled ABI remain unchanged.
+This branding change does not establish new syntax, source-extension support,
+execution parity, AOT capabilities or zero-GC guarantees. New source SHOULD
+use `.atto` only after this particular backend has passed a real compile/run
+admission test; `.ores` remains supported wherever already implemented.
+Do not rename repositories, dependencies, commands or fixed interfaces merely
+to make their names match the public brand.
+
 
 Native companion to [oreslang-source.java](https://github.com/ores-truffle-oreslang/oreslang-source.java).
 Tracks [LLVM port issue #1](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1).
@@ -16,6 +29,12 @@ Notes on the compiler and runtime:
 * Use 32 bit pointers instead of 64 bit pointers for allocation/heaps. Having separate heaps per actor helps with this. 32 bit pointers helps us save up to 50% on memory/RAM. The 32 bit pointers should be implemented so that it stays 32 bit even on Arm-64 machines, etc etc.
 * OresLang must be built around excellent tree-shaking so we can get final binary executables as small as possible and reduce startup overhead etc.
 
+
+## OresVM root host and tenant IsolateVM architecture
+
+**OresVM** is the root supervisor and tenant admission runtime; each **IsolateVM** is a tenant-owned execution domain containing many Oreslang actors. The OresIsolateContext is a temporary guest-call ABI view, not a separate VM. This distinction and the relevant V8 isolate/context, pointer-compression and security lessons are documented in [OresVM vs IsolateVM](docs/ORESVM_VS_ISOLATEVM.md).
+
+The host uses a concrete, privately owned IsolateVM C++ class. There is also a narrow opt-in synchronous scalar .ores-to-LLVM isolate entry, but general guest source lowering, the actor scheduler and OS-process sandboxing remain outstanding. See [OresVM tenant-isolate substrate status](docs/ORESVM_TENANT_ISOLATES.md).
 
 **Parity commitment: LLVM and Java/GraalVM are first-class Oreslang backends with the same language and observable runtime semantics.** Full feature parity is a standing requirement for the compiler, type system, standard library, actors, supervision, ownership/borrowing, scheduling, async/await, I/O and error handling—not an optional stretch goal. Features added to either backend must be tracked against the other backend and covered by shared conformance tests. LLVM must not be treated as a permanently restricted dialect of Oreslang.
 
@@ -97,13 +116,17 @@ a code within `0..255`; values outside that range return failure status `1`
 rather than silently truncating to an unrelated shell status. Native source
 `std.process.exit()` and exception effects remain unsupported and fail closed.
 
-The `int` to `i64` mapping, wraparound arithmetic and other non-entrypoint
-calling conventions are still **provisional**. Their semantics must be
-reconciled with the shared Oreslang specification and Java/GraalVM behavior,
-then verified by cross-backend differential tests before those features
-are marked parity-complete.
-The native slice does not support `-9223372036854775808` as one literal.
-Wasm32 remains governed by its distinct embedder/WASI entrypoint ABI.
+The `int` to `i64` mapping and other non-entrypoint calling conventions
+remain **provisional**, but default signed i64 add/subtract/multiply and unary
+negation now lower through LLVM checked-overflow intrinsics and trap on overflow;
+they no longer intentionally wrap. Native executable regression cases cover
+runtime and constant-source paths at O1/O2, including the signed minimum
+boundary. This is still a target trap ABI rather than the final typed Oreslang
+`ArithmeticOverflow` error contract, and it does not establish Math/BigInt/
+Decimal or floating-point parity. Cross-backend differential tests remain
+required before numeric parity is marked complete.
+Wasm32 remains governed by its distinct embedder/WASI entrypoint ABI and must
+pin a compiler revision carrying the same checked arithmetic semantics.
 
 ## Build and test
 
@@ -155,7 +178,11 @@ building blocks, not a substitute for the remaining guest-language support.
   capability limits without weakening the full host backend parity target.
 
 The detailed status matrix and open obligations live in the
-[source parity contract](docs/SOURCE_PARITY.md).
+[source parity contract](docs/SOURCE_PARITY.md). The first strict source-level
+Java/GraalVM ↔ LLVM execution gate is documented in
+[Java/LLVM source-execution qualification](docs/JAVA_LLVM_SOURCE_EXECUTION_GATE.md).
+LLVM-only native CTests are important regression evidence, but never count as
+completed Java differential execution without a pinned, executed Java run.
 
 Native I/O API naming: blocking I/O operations will require the `_blocking` suffix; async I/O may use `_async`. This is a documented target contract, **not yet an implemented compiler check**.
 
@@ -267,3 +294,32 @@ artifact.
 The executed CTest gate compiles both shaken and unshaken IR through Clang and
 requires identical process behavior while asserting the dead private symbol is
 absent from the shaken IR.
+
+## AttoLang `.atto` source admission (integer subset)
+
+The LLVM CLI accepts canonical `.atto` source paths as well as legacy `.ores`
+paths; the file extension does not change the current parser or semantics.
+A native executable regression fixture lives at
+`tests/fixtures/numerics-atto-main.atto` and is registered as
+`numerics_atto_integer_guest` when Clang is available. It exercises the
+existing integer-only subset (forward function call and signed i64 addition)
+and must return exit code 42.
+
+This is source-extension admission only. LLVM currently does **not** lower
+floating-point values, floating division, contiguous numerical arrays, or
+tensor kernels. The numerical-library fixtures using `float`, `List<float>`,
+dot products, reductions and matrix multiplication remain unsupported here
+and must fail closed rather than silently map to i64. See the existing
+`native_float_division_unavailable` contract. Java/LLVM numerical parity is
+not claimed by this fixture.
+
+## Repository ownership and migration (2026-11-08)
+
+**Current home:** `ores-truffle-oreslang/oreslang-source.llvm` (legacy Oreslang organization). **Language name:** AttoLang; historical `oreslang-*` CLI/package identities and existing `.ores` files remain compatibility interfaces until independently migrated and tested.
+
+- **What belongs in this repository:** Independent LLVM IR/native AOT compiler backend, target ABI, per-actor memory/runtime integration and native proof.
+- **What belongs elsewhere:** Java/CIL backend implementation, cloud hosting/billing, or inferred guest parity from host-only tests. Shared portable AttoLang language semantics and core/std should be authored in canonical `.atto` modules and reconciled with `oreslang-common-source`; indispensable host compiler, scheduler and ABI primitives remain backend-specific here.
+- **Organization boundary:** language/compiler/tooling/conformance work belongs to [`atto-lang`](https://github.com/atto-lang); commercial deployment, identity, billing, hosted runtime and multi-tenant cloud operations belong to separately governed [`atto-co`](https://github.com/atto-co). The existence of similarly named `atto-*` repositories is **not** proof of a Git repository transfer or tested feature parity.
+- **Proposed first migration:** transfer this *existing repository identity* to `atto-lang/oreslang-source.llvm` retaining its name and history, **only after** individual source/target owner and independent security approvals. No direct transfer to `atto-co` is authorized in the current migration wave. A future product carve-out requires separate approval.
+
+**Maintainer cutover instructions:** coordinate under [migration issue #26](https://github.com/ores-truffle-oreslang/.github/issues/26) and the private [migration runbook draft #25](https://github.com/ores-truffle-oreslang/.github/pull/25); check stable repository numeric ID, exact head SHA/tree, branch protection/rulesets, reviewers, GitHub Apps, secrets, deploys, dependencies, releases, packages, Pages and remote URLs. Transfer using an approved GitHub ownership operation rather than mirroring private source; validate the unchanged ID/tree and rerun exact-head CI at destination. **`steps=[]` or `steps=null` means `NOT_EXECUTED`; host-only tests do not establish native AttoLang guest parity.** Do not combine transfer with forced `.ores`→`.atto` syntax changes, repo renames, CI policy relaxation or AOT/zero-GC claims.

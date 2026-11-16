@@ -94,17 +94,31 @@ public:
                 throw std::overflow_error("future waiter capacity exhausted");
             if (state_->next_id == std::numeric_limits<std::uint64_t>::max())
                 throw std::overflow_error("future waiter identity exhausted");
-            const auto id = state_->next_id++;
-            sub = Subscription(state_, index, id);
+            const auto id = state_->next_id;
             auto& w = state_->waiters[index];
+
+            // std::function copy may allocate and throw. Publish waiter
+            // identity/activeness only after the callback copy succeeds so
+            // subscription admission is failure-atomic and cannot consume an
+            // unusable slot.
+            w.notify = fn;
             w.id = id;
             w.active = true;
-            w.notify = fn;
+            ++state_->next_id;
+            sub = Subscription(state_, index, id);
             immediate = state_->status != Status::Pending;
         }
         if (immediate) {
-            try { fn(sub); }
-            catch (...) { (void)sub.close(); throw; }
+            try {
+                fn(sub);
+                // A terminal Future has no later readiness transition. If the
+                // callback observed readiness without consuming the waiter,
+                // retire it now rather than leaving a permanently inert slot.
+                (void)sub.close();
+            } catch (...) {
+                (void)sub.close();
+                throw;
+            }
         }
         return sub;
     }
@@ -183,8 +197,20 @@ private:
 
         std::exception_ptr first;
         for (std::size_t i = 0; i < count; ++i) {
-            try { fns[i](subs[i]); }
-            catch (...) { if (!first) first = std::current_exception(); }
+            try {
+                fns[i](subs[i]);
+                // Completion is immutable. A callback may consume its waiter
+                // via try_commit(), lose a select and be revoked by the
+                // arbiter, or merely observe readiness. In the observation
+                // case there can never be another readiness edge, so retire
+                // the exact waiter after this one notification.
+                (void)subs[i].close();
+            } catch (...) {
+                // A failed terminal callback is also one-shot and must not
+                // strand an inert waiter.
+                (void)subs[i].close();
+                if (!first) first = std::current_exception();
+            }
         }
         if (first) {
             std::lock_guard<std::mutex> guard(state_->mutex);

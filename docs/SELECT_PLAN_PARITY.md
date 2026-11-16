@@ -169,42 +169,42 @@ runtime contract only:
 - `TaskCancellation` can own the arbiter through a lifetime-safe cancellation
   handle.
 
-This is **not** source-level select support. Generic `Channel<T>`/Future
-registration, typed arm bindings, ownership/borrow checking, blocking
-suspension, continuation scheduling, policy lowering
+This is **not** source-level select support. `Channel<T>`/Future registration,
+typed arm bindings, ownership/borrow checking, blocking suspension,
+continuation scheduling, channel-close semantics, policy lowering
 (`first`/`fair`/`random`), and actor generation fencing are still required.
 Until those layers are wired and tested, source `select`, including both
 `{ ... }` and `over ... end`, must continue to fail closed at the native
 frontend boundary.
 
-## Selectable bounded i64 channel substrate
 
-A stacked runtime slice adds `NativeSelectableI64Channel<Capacity, MaxWaiters>`
-for the first native scalar select profile. It is deliberately narrower than
-source `Channel<T>` and exists to prove the channel/select transaction before
-frontend lowering.
+## Main-stack runtime integration
 
-The runtime contract is:
+The native runtime prerequisites are now carried on a clean branch rooted at the
+live main tree rather than relying on feature branches whose parent PRs had
+already merged.
 
-- fixed-capacity i64 buffering;
-- revocable readable/writable subscriptions with generation-checked identities;
-- readiness callbacks never run while the channel mutex is held;
-- callbacks are advisory/spurious and must recheck through the arbiter;
-- a read removes a value only inside `NativeSelectArbiter::try_win_if`;
-- a write publishes a value only inside `NativeSelectArbiter::try_win_if`;
-- a losing read therefore cannot consume, and a losing write cannot publish;
-- state transitions capture opposite-direction notifications before mutation,
-  then dispatch them after select/channel locks are released;
-- stale captured notifications are harmless because commit validates the
-  subscription identity again;
-- notification callback failures are retained for diagnostics without rolling
-  back a committed channel operation.
+The integrated runtime contract includes:
 
-Channel close/EOF is now part of this slice: close wakes pending readers and
-writers, buffered values drain before EOF, an empty closed channel commits EOF,
-and a selected write against a closed channel commits a terminal closed outcome
-without publication. Unbounded/dynamic channels, typed values beyond native i64,
-fairness/random policy, suspension, actor continuation delivery and source
-syntax remain outside this slice. The frontend must continue to reject source
-static select until those contracts are implemented.
+- bounded selectable signed-i64 channel readiness;
+- channel close/EOF with buffered drain-before-EOF and terminal closed writes;
+- immutable/non-consuming signed-i64 Future readiness with value/failure/cancel;
+- exactly-one select arbitration with loser revocation;
+- actor-generation continuation tickets with ABA-safe identities;
+- a claimed continuation retains a physical execution lease through callback
+  completion;
+- actor generation advance fails while any claimed continuation is still
+  executing;
+- terminal close cancels pending delivery but physical retirement is not
+  reported complete until every claimed continuation has released its lease.
 
+This closes the gap where a scheduler could consume a logical continuation
+ticket and then advance the actor generation before the continuation physically
+returned.
+
+Source-level static select remains fail-closed. The next compiler slice must
+bind typed read/write/Future arms to these runtime transactions, store the
+winner result in compiler-owned continuation storage, revoke borrows before
+suspension, and reacquire/revalidate actor-local state on resume. Parser
+admission must not be enabled before those ownership and suspension checks are
+executable.

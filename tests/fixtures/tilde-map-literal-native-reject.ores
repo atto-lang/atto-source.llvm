@@ -1,0 +1,4 @@
+pub fnc main(): int {
+    const m = ~map("foo" => 42);
+    return 0;
+}

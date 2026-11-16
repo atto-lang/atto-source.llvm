@@ -1,0 +1,3 @@
+pub define activity PublicProvider as
+    charge(int cents) -> int { return cents; }
+end

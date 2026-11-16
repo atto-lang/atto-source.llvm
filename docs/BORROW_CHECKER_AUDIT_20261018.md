@@ -33,3 +33,65 @@ and sanitizer cases. The common 18-case corpus SHA-256 is
 `cc42b9bd3c4ff27033eecb526aae25e29bf8d176915ff0fd9e6abe33167f9cbe`.
 This audit's new changes have local evidence; earlier fallback CI results apply
 only to their recorded source commits, not automatically to this head.
+
+
+## 2026-10-26 static escape regression gate (draft)
+
+`native_compile_time_borrow_escape_admission` registers the existing native
+source harness in CTest, adds by-value call/constructor loan rejection cases,
+and adds a negative generator feature gate. It requires each rejected source
+file to produce nonzero compiler status, no stdout/LLVM IR, and a
+**specific ownership or unsupported-generator diagnostic**.
+It also requires three supported positive controls (shared borrowed parameter,
+owned scalar call and owned class constructor) to produce LLVM IR, preventing
+broken-parser or unconditional-rejection false positives.
+
+This is **not** evidence that native generator lifetime checking is
+implemented: generators are deliberately unsupported by the native
+frontend. Nor does this gate prove Java/Graal parity or runtime zero overhead.
+Exact-head CMake/CTest execution and sanitizer runs are required before merge.
+
+### Mainline Task/Future pipeline reconciliation
+
+The source admission gate is registered on the latest `main` CMake
+configuration without replacing its Task/Future compiler, runtime, or test
+entries. The current native parser explicitly rejects `generator` source
+with the diagnostic `native generator v1 requires iterator-frame, ownership
+and LLVM continuation lowering`; the regression fixture matches that
+specific unsupported-feature admission rather than the earlier generic
+actor/async rejection. This documents **fail-closed native generator support**,
+not a proof that native generator lifetime tracking is implemented.
+
+New native Task/Future support must be separately tested for loan lifetime
+and ownership parity; these fixture checks do not certify that newer source
+subset. CI is required on the merged exact tree.
+
+### Native positive-control anti-vacuity check
+
+Positive admission fixtures require a line beginning with the LLVM IR
+`define` instruction, not merely the substring `define` somewhere in
+compiler stdout. The three valid scalar controls prevent a parser-only
+rejection path from being mistaken for ownership verification. This
+strengthens the *test harness*; it is not a substitute for running it
+against the production compiler on the pinned source tree.
+
+### Rejected-source artifact isolation
+
+Negative compiler admissions now run with their current working directory set
+inside the disposable fixture root, compare the directory contents before
+and after compilation, and verify the input source bytes were not changed.
+A rejected program only passes when its compiler status is nonzero, stdout
+contains no IR, the ownership-specific diagnostic appears, and the compiler
+has not written extra files or modified the fixture. These checks are
+harness hardening, not evidence of native compiler execution.
+
+### Rust admission harness on current main
+
+`tests/native_borrow_admission.rs` replaces the earlier Python runner. It
+preserves the seven original fixtures and three positive controls, with
+per-process time/output bounds, rejected-source directory/file checks and
+input-byte integrity. An additional canonical `gen*` borrowed-yield fixture
+checks the current literal-yield profile's rejection; the legacy generator
+fixture now expects the current grammar diagnostic. Neither generator
+rejection proves general generator loan lifetime analysis. CTest builds both
+the real-compiler runner and predicate tests with Rust warnings denied.
