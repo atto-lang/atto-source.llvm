@@ -1,0 +1,52 @@
+name: Inverted columns native runtime regression
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/DopInvertedColumns.hpp'
+      - 'tests/dop_inverted_columns_test.cpp'
+      - '.github/workflows/inverted-columns-runtime-regression.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cxx20-exact-head:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+        sanitize: [false, true]
+    steps:
+      - name: Checkout exact PR head, without persisted credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Validate exact source commit
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          echo "ATTO_EXACT_TREE=$(git rev-parse 'HEAD^{tree}')"
+          git diff --quiet --exit-code
+      - name: Compile and execute original inverted-column C++20 regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          flags=(-std=c++20 -Wall -Wextra -Werror -pthread -Isrc/main/cpp)
+          if [ "${{ matrix.sanitize }}" = "true" ]; then
+            flags+=(-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer)
+            export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1
+            export UBSAN_OPTIONS=halt_on_error=1
+          else
+            flags+=(-O2)
+          fi
+          "${{ matrix.compiler }}" "${flags[@]}" tests/dop_inverted_columns_test.cpp -o /tmp/atto-inverted-test
+          /tmp/atto-inverted-test
+          echo ATTO_NATIVE_TEST=EXECUTED

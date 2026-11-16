@@ -20,8 +20,10 @@ const name_ok = s => typeof s === 'string' && /^[\x20-\x7e]{1,180}$/.test(s)
   && s.trim() === s && !/\s{2,}/.test(s);
 const housekeeping = new Set(['set up job', 'complete job', 'initialize containers',
   'start containers', 'stop containers']);
+// Advisory step-name classification, not proof of executed compiler guest work.
+const setupOnly = /^(?:(?:run\s+)?actions\/(?:checkout|setup-[a-z0-9_-]+|cache|upload-artifact|download-artifact)(?:@|\/|$)|(?:run\s+)?(?:checkout|check out|setup|set up|cache|restore cache|save cache|upload artifacts?|download artifacts?|install dependencies|npm ci|npm install|pnpm install|yarn install|dotnet restore|cargo fetch)(?:[\s:_-]|$))/i;
 const meaningful = s => name_ok(s) && !housekeeping.has(s.toLowerCase())
-  && !/^(pre|post)\s/i.test(s);
+  && !/^(?:pre|post)(?:[\s:_-]|$)/i.test(s) && !setupOnly.test(s);
 const own = (o, k) => o !== null && typeof o === 'object'
   && Object.prototype.hasOwnProperty.call(o, k);
 
@@ -58,13 +60,18 @@ export function assess(snapshot, backend, number, expected_head) {
     for (const r of reviews) {
       const login = r?.user?.login;
       if (!name_ok(login) || !name_ok(r?.state)) { deny('MALFORMED_REVIEW'); continue; }
-      latest.set(login.toLowerCase(), r);
+      // GitHub COMMENTED does not revoke a prior APPROVED/CHANGES_REQUESTED state.
+      // DISMISSED and later submitted decisive reviews do supersede it.
+      if (r.state !== 'COMMENTED') latest.set(login.toLowerCase(), r);
     }
-    const owner = latest.get('oresoftware');
-    if (!owner || author.toLowerCase() === 'oresoftware'
-        || owner.state !== 'APPROVED' || owner.commit_id !== expected_head) {
-      deny('MISSING_INDEPENDENT_EXACT_HEAD_APPROVAL');
-    }
+    // Exactly one of the designated reviewers may approve, but never the author.
+    // The diagnostic remains advisory and cannot authorize merging.
+    const approved = ['oresoftware', 'the1mills'].some(login => {
+      const r = latest.get(login);
+      return login !== author.toLowerCase()
+        && r?.state === 'APPROVED' && r.commit_id === expected_head;
+    });
+    if (!approved) deny('MISSING_INDEPENDENT_EXACT_HEAD_APPROVAL');
     if ([...latest.values()].some(r => r.state === 'CHANGES_REQUESTED')) {
       deny('OUTSTANDING_CHANGE_REQUEST');
     }
@@ -90,6 +97,7 @@ export function assess(snapshot, backend, number, expected_head) {
         continue;
       }
       const jobIds = new Set();
+      const jobNames = new Set();
       for (const job of jobs) {
         if (!job || !Number.isSafeInteger(job.id) || job.id < 1
             || jobIds.has(job.id) || job.run_id !== run?.id
@@ -100,6 +108,11 @@ export function assess(snapshot, backend, number, expected_head) {
           deny('UNVERIFIED_JOB_OR_RUNNER');
         }
         if (job?.id) jobIds.add(job.id);
+        if (name_ok(job?.name)) {
+          const key = job.name.toLowerCase();
+          if (jobNames.has(key)) deny('DUPLICATE_JOB_NAME');
+          jobNames.add(key);
+        }
         const steps = job?.steps;
         if (!Array.isArray(steps) || steps.length === 0 || steps.length > 200
             || !steps.some(s => s && meaningful(s.name)
@@ -168,7 +181,32 @@ export async function inspect_live(backend, number, expected_head, get = gh_json
         || page.total_count >= 100) throw new Error('incomplete job pagination');
     runs.push({run, jobs: page.jobs});
   }
-  return assess({repo, main, pr, reviews: reviewPage, runs}, backend, number, expected_head);
+  // GitHub's individual GETs are not an atomic snapshot. Fencing the
+  // evidence at both ends prevents a changed PR, reviewer, or main state
+  // from being mistaken for an exact-head admission result.
+  const [repoAfter, mainAfter, prAfter, reviewsAfter] = await Promise.all([
+    get(prefix.slice(0, -1), token),
+    get(prefix + 'branches/main', token),
+    get(prefix + 'pulls/' + number, token),
+    get(prefix + 'pulls/' + number + '/reviews?per_page=100', token),
+  ]);
+  const repoIdentity = r => [r?.id, r?.full_name, r?.private, r?.archived, r?.disabled];
+  const mainIdentity = m => [m?.name, m?.protected, m?.commit?.sha];
+  const prIdentity = p => [p?.number, p?.state, p?.draft, p?.mergeable,
+    p?.base?.ref, p?.base?.sha, p?.base?.repo?.id, p?.head?.sha,
+    p?.head?.repo?.id, p?.user?.login];
+  const reviewIdentity = rs => rs.map(r => [r?.id, r?.user?.login,
+    r?.state, r?.commit_id, r?.submitted_at]);
+  if (!SHA.test(main?.commit?.sha || '') || !SHA.test(pr?.base?.sha || '')
+      || !Array.isArray(reviewsAfter) || reviewsAfter.length >= 100
+      || JSON.stringify(repoIdentity(repo)) !== JSON.stringify(repoIdentity(repoAfter))
+      || JSON.stringify(mainIdentity(main)) !== JSON.stringify(mainIdentity(mainAfter))
+      || JSON.stringify(prIdentity(pr)) !== JSON.stringify(prIdentity(prAfter))
+      || JSON.stringify(reviewIdentity(reviewPage)) !== JSON.stringify(reviewIdentity(reviewsAfter))) {
+    throw new Error('source PR, main, repository, or review drift during evidence capture');
+  }
+  return assess({repo: repoAfter, main: mainAfter, pr: prAfter,
+    reviews: reviewsAfter, runs}, backend, number, expected_head);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

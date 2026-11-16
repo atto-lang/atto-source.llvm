@@ -1,0 +1,6 @@
+pub fnc main(): int {
+  val int serial = 1;
+  val int http = 2;
+  val int tcp = 3;
+  return serial + http + tcp + 36;
+}
