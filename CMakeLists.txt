@@ -543,6 +543,14 @@ llvm_map_components_to_libnames(ORE_LLVM_LIBS core support)
 target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
+if(BUILD_TESTING AND UNIX)
+    # Exercise the production frontend-only compiler path, not a mock compiler.
+    add_test(NAME native_frontend_check_effects_boundary
+        COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_frontend_check_contract.sh"
+            "$<TARGET_FILE:oreslang-llvmc>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+    set_tests_properties(native_frontend_check_effects_boundary PROPERTIES TIMEOUT 30)
+endif()
 if(BUILD_TESTING)
     # This runs the actual native Atto scalar parser + LLVM function IR
     # emitter. It proves checked routine metadata only, NOT an inserted

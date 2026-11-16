@@ -720,6 +720,8 @@ int main(int argc, char** argv) {
     bool allocator_provider_seen = false;
     bool bounded_allocator_provider = false;
     bool rt_check_only = false;
+    bool frontend_check_only = false;
+    bool analyze_requested = false;
     bool gpu_g1_kernel_ir = false;
     bool gpu_g1_other_option = false;
     bool rt_entry_seen = false;
@@ -816,6 +818,12 @@ int main(int argc, char** argv) {
                 return 2;
             }
             native_hard_rt_profile = true;
+        } else if (arg == "--check") {
+            if (frontend_check_only) { std::cerr << "duplicate check option\n"; return 2; }
+            frontend_check_only = true;
+        } else if (arg == "--analyze") {
+            if (analyze_requested) { std::cerr << "duplicate analyze option\n"; return 2; }
+            analyze_requested = true;
         } else if (arg == "--gpu-g1-kernel-ir") {
             if (gpu_g1_kernel_ir) { std::cerr << "duplicate gpu-g1-kernel-ir option\n"; return 2; }
             gpu_g1_kernel_ir = true;
@@ -913,6 +921,23 @@ int main(int argc, char** argv) {
             return 2;
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
+    }
+    // Do not promote frontend admission into typed effect certification.  A
+    // formatter using --analyze must never observe a false successful check.
+    if (analyze_requested) {
+        std::cerr << "LLVM compiler --analyze is unsupported: typed throws/raises/panics "
+                     "and transitive effect diagnostics are not implemented; "
+                     "use atto test --effects for advisory lexical scanning\n";
+        return 2;
+    }
+    if (frontend_check_only &&
+            (rt_check_only || rt_report_seen || rt_entry_seen || native_hard_rt_profile ||
+             tree_shake || !tree_shake_roots.empty() || constraint_descriptors_only ||
+             experimental_owned_int || experimental_rt_scalar_loop ||
+             target_seen || allocator_provider_seen)) {
+        std::cerr << "--check is frontend-only and cannot be combined with codegen, "
+                     "real-time reports, target, or experimental options\n";
+        return 2;
     }
     // Source-set integrity is an independent read-only admission: it never
     // calls the actor parser, emits IR, or grants a mailbox/critical capability.
@@ -1032,7 +1057,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--aot-profile=sealed-scalar-v1|sealed-class-fields-v1|actor-region-v1] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--aot-profile=sealed-scalar-v1|sealed-class-fields-v1|actor-region-v1] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--check|--analyze] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -1175,6 +1200,14 @@ int main(int argc, char** argv) {
         if (sealed_scalar_aot) require_sealed_scalar_aot_graph(ast);
         if (sealed_class_fields_aot) require_sealed_scalar_aot_graph(ast, true);
         if (actor_region_v1_aot) require_actor_region_v1_aot_graph(ast);
+
+        if (frontend_check_only) {
+            // Source decoding, import admission and supported-subset parsing
+            // succeeded. No LLVM IR, executable, or runtime is emitted.
+            // This is NOT type/effect inference or full backend lowering.
+            if (coreLog) coreLog->dump(stderr);
+            return 0;
+        }
 
         // A enabled telemetry scope currently calls CLOCK_MONOTONIC on a
         // native carrier. It has not been subjected to a proven WCET/time
