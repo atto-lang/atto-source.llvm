@@ -25,13 +25,25 @@ for guest in positive-local-class.atto positive-two-actors-forward.atto; do
     exit 1
   fi
 
+  # Actor guests import the native scheduler/VM/actor-heap runtime; link the
+  # same C sources scripts/compile-aot.sh links for source actors.
+  runtime=()
+  if grep -Eq 'declare .*@(oreslang_source_actor_|ores_actor_)' "$tmp/main.ll"; then
+    rt="$repo_root/src/main/cpp/oreslang/runtime"
+    runtime=(-x c -std=c11 -I "$repo_root/src/main/cpp"
+      "$rt/ActorOwnedI64Heap.c" "$rt/NativeActorScheduler.c" "$rt/NativeOresVM.c"
+      "$rt/NativeActorFuture.c" "$rt/SourceActorBootstrap.c"
+      "$rt/NativeExecutionContextStore.c" "$rt/NativeContinuationStore.c"
+      "$rt/NativeAwaitTraceBridge.c" "$rt/NativeLogicalTrace.c" -pthread)
+  fi
+
   # Exercise both optimization and safety configurations.
   for opt in 0 2; do
     args=(-O"$opt")
     if [[ $sanitized == "yes" ]]; then
       args+=(-fsanitize=address,undefined -fno-omit-frame-pointer)
     fi
-    "$clang" "${args[@]}" "$tmp/main.ll" -o "$tmp/main-$opt"
+    "$clang" "${args[@]}" -x ir "$tmp/main.ll" ${runtime[@]+"${runtime[@]}"} -o "$tmp/main-$opt"
     set +e
     "$tmp/main-$opt"
     code=$?
