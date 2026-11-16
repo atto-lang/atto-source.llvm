@@ -1,0 +1,42 @@
+name: Native shared payload through real actor scheduler (exact head)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/native-shared-payload-real-scheduler.yml'
+      - 'tests/ci/verify_shared_payload_real_scheduler.sh'
+      - 'tests/native_actor_shared_payload_scheduler_bridge_test.cpp'
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.c'
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.h'
+      - 'src/main/cpp/oreslang/runtime/NativeActorSharedPayloadBridge.hpp'
+      - 'src/main/cpp/oreslang/runtime/SharedImmutablePayload.hpp'
+
+permissions:
+  contents: read
+
+jobs:
+  actual-scheduler-sanitizers:
+    name: "${{ matrix.compiler }} O${{ matrix.opt }} ASan/UBSan"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 7
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        opt: [1, 2]
+    steps:
+      - name: Checkout exact PR head, not synthetic merge ref
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2 exact public tag
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Compile and execute genuine NativeActorScheduler.c test
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          OPT_LEVEL: ${{ matrix.opt }}
+          CC: ${{ matrix.compiler == 'gcc' && 'gcc' || 'clang' }}
+          CXX: ${{ matrix.compiler == 'gcc' && 'g++' || 'clang++' }}
+        shell: bash
+        run: bash tests/ci/verify_shared_payload_real_scheduler.sh

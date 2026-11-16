@@ -1,0 +1,43 @@
+// LLVM native execution proof for a BOUNDED scalar Redis-style actor state
+// machine. The actor owns state; a real compiler, scheduler and actor heap
+// execute the admitted mails. NOT the binary Bytes/RESP2/TCP server.
+//
+// Commands: 107=SET value 7; 109=SET value 9; 201=GET;
+// 301=DEL; 401=PING. Results are scalar oracle codes:
+// 107/109 SET, 207/209 present GET, 200 missing GET,
+// 301 successful DEL, 300 missing DEL, 401 PONG.
+define actor NativeScalarRedis as {
+  let stored: int = 0;
+  let present: int = 0;
+  let previously_present: int = 0;
+
+  pub fnc on_message(int command): int {
+    // Preserve the pre-DEL presence bit before the state transition.
+    previously_present = present;
+    // Production native actor frontend supports typed pure ternary scalar
+    // expressions. No host-owned KV store or dynamic interpreter fallback.
+    stored = (command eq 107) ? 7 : ((command eq 109) ? 9 : stored);
+    present = (command eq 107) ? 1 :
+      ((command eq 109) ? 1 : ((command eq 301) ? 0 : present));
+    return (command eq 107) ? 107 :
+      ((command eq 109) ? 109 :
+      ((command eq 201) ? ((present eq 1) ? 200 + stored : 200) :
+      ((command eq 301) ? 300 + previously_present :
+      ((command eq 401) ? 401 : -1))));
+  }
+}
+
+pub fnc main(): int {
+  const worker = spawn NativeScalarRedis();
+  await worker.get_ready();
+  worker.send(107);
+  worker.send(201);
+  worker.send(301);
+  worker.send(201);
+  worker.send(109);
+  worker.send(201);
+  worker.send(301);
+  worker.send(401);
+  stop worker;
+  return 43;
+}
