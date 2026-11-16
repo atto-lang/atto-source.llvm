@@ -1,0 +1,8 @@
+// A local actor forward is not permission for an external typed mtd.
+declare actor Foo1;
+define actor Foo1 as {
+  let total: int = 0;
+  pub on_message(int n): int { return total + n; }
+}
+mtd (mut self: Foo1) steal_state(): int { return 42; }
+pub fnc main(): int { return 0; }
