@@ -3564,7 +3564,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_actor_aot_frame_call
         actor-logical-frame-aot-two-actors.atto --ir "call i32 @oreslang_source_actor_frame_push")
     oreslang_contract_test(reject_source_actor_frame_abi_symbol_forgery
-        actor-frame-abi-forgery-reject.atto --diagnostic "reserved native actor frame ABI symbol collision")
+        actor-frame-abi-forgery-reject.atto --diagnostic "reserved native runtime ABI symbol 'oreslang_source_actor_frame_push'")
     oreslang_contract_test(native_actor_suspending_method_gate source-actor-suspend-method-reject.ores
         --diagnostic "native suspends actor method requires continuation lowering")
     oreslang_contract_test(native_actor_final_group_field_gate source-actor-final-group-field-reject.ores
