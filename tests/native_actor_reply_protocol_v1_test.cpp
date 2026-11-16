@@ -33,6 +33,7 @@ int main() {
     denied([] { Stream invalid(2, 0); });
     denied([] { Stream invalid(257, 256); });
     Stream streams(2, 2);
+    denied([&] { (void)streams.endpoint(static_cast<Stream::Role>(99)); });
     auto actor = streams.endpoint(Stream::Role::Actor);
     auto worker = streams.endpoint(Stream::Role::Actor);
     auto app_service = streams.endpoint(Stream::Role::SupervisorApplication);
