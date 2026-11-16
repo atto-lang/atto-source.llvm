@@ -55,7 +55,7 @@ run_guest() {
   local source="tests/freestanding/$name.atto"
   local ir="$work/$name.ll" guest="$work/$name.o"
   local elf="$work/$name.elf"
-  "$compiler" "$source" -o "$ir" --emit-llvm
+  "$compiler" "$source" -o "$ir" --emit-llvm --freestanding-core
   test -s "$ir"
   grep -q 'define i32 @main()' "$ir"
   if grep -Eq '@(atto_actor_|malloc|free|printf|puts|fopen|pthread|__wasi|fd_write)' "$ir"; then
@@ -89,7 +89,7 @@ run_guest fail-41 1
 
 for name in deny-stdio deny-unbound deny-alloc deny-process deny-std-import; do
   artifact="$work/$name.ll"
-  if "$compiler" "tests/freestanding/$name.atto" -o "$artifact" --emit-llvm \
+  if "$compiler" "tests/freestanding/$name.atto" -o "$artifact" --emit-llvm --freestanding-core \
       >"$work/$name.compiler.log" 2>&1; then
     echo "FAIL: accepted forbidden/unbound source $name" >&2; exit 1
   fi
