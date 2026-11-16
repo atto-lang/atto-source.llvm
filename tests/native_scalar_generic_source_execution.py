@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Actual native Oreslang -> LLVM IR -> Clang guest i64 generic conformance.
+"""Historical native LLVM scalar compiler regressions (non-normative).
 
 Stage 1 intentionally admits only generics whose concrete representation is
 int64. This test never treats unsupported classes/actors as generic support.
@@ -29,6 +29,13 @@ pub fnc main(): int { return identity<T=_>(42); }
 """, 42),
     "default-omission": ("""fnc fixed<T=int>(): int { return 42; }
 pub fnc main(): int { return fixed(); }
+""", 42),
+    "specialization-reuse": ("""fnc identity<T>(T value): T { return value; }
+pub fnc main(): int { return identity<int>(20) + identity(22); }
+""", 42),
+    "nested-generic-direct-chain": ("""fnc leaf<T>(T value): T { return value; }
+fnc outer<T>(T value): T { return leaf(value); }
+pub fnc main(): int { return outer<int>(42); }
 """, 42),
     "dependent-chain": ("""fnc sum<A, B=A, C=B, D=C>(A x, B y): int { return x + y; }
 pub fnc main(): int { return sum<A=int, D=int>(19, 23); }
@@ -101,9 +108,8 @@ def _reject_json_constant(token):
     raise AssertionError(f"nonfinite JSON value in generic contract: {token}")
 
 
-def load_shared_conformance(contract=None):
-    if contract is None:
-        contract = Path(__file__).resolve().parents[1] / "contracts/v1/generics-stage1/cases.json"
+def load_shared_conformance(contract):
+    """Validate an explicit synthetic LLVM regression contract only."""
     contract = Path(contract)
     if contract.stat().st_size > 1_048_576:
         raise AssertionError("generic conformance contract exceeds 1 MiB")
@@ -178,13 +184,40 @@ def run(argv):
 def verify(compiler, clang):
     with tempfile.TemporaryDirectory(prefix="oreslang-native-generics-") as tmp:
         tmp = Path(tmp)
-        shared_valid, shared_invalid = load_shared_conformance()
-        for name, (source, exit_code) in {**VALID, **shared_valid}.items():
-            path = tmp / (name + ".ores")
+        for name, (source, exit_code) in VALID.items():
+            path = tmp / (name + ".atto")
             path.write_text(source)
             result = run([str(compiler), str(path)])
             if result.returncode or not result.stdout.startswith(b"; ModuleID"):
                 raise AssertionError(f"{name}: compiler rc={result.returncode}, stderr={result.stderr!r}")
+            # A source-level generic is only an AOT specialization when
+            # LLVM contains a compiler-generated concrete symbol, not an
+            # erased unspecialized generic entry or a runtime lookup.
+            if name == "specialization-reuse":
+                ir = result.stdout.decode("utf-8")
+                symbol = r'@(?:"identity\$atto_g1\$int"|identity\$atto_g1\$int)'
+                definitions = re.findall(
+                    rf'(?m)^define\s+internal\s+[^\n]*?{symbol}\s*\(', ir)
+                direct_calls = re.findall(
+                    rf'\bcall\s+[^\n]*?{symbol}\s*\(', ir)
+                if len(definitions) != 1 or len(direct_calls) != 2:
+                    raise AssertionError(
+                        f"generic AOT must emit one reused exact symbol; "
+                        f"defs={len(definitions)}, calls={len(direct_calls)}")
+                if re.search(r'(?m)^define\s+[^\n]*?@identity\s*\(', ir):
+                    raise AssertionError("uninstantiated generic symbol still emitted")
+            if name == "nested-generic-direct-chain":
+                ir = result.stdout.decode("utf-8")
+                for callee in ("leaf", "outer"):
+                    symbol = rf'@(?:"{callee}\$atto_g1\$int"|{callee}\$atto_g1\$int)'
+                    defs = re.findall(rf'(?m)^define\s+internal\s+[^\n]*?{symbol}\s*\(', ir)
+                    calls = re.findall(rf'\bcall\s+[^\n]*?{symbol}\s*\(', ir)
+                    if len(defs) != 1 or len(calls) != 1:
+                        raise AssertionError(
+                            f"{name}: missing exact frozen static call witness for {callee}: "
+                            f"definitions={len(defs)}, calls={len(calls)}")
+                if re.search(r'(?m)^define\s+[^\n]*?@(leaf|outer)\s*\(', ir):
+                    raise AssertionError("nested generic emitted an unspecialized fallback")
             ll = tmp / (name + ".ll")
             exe = tmp / name
             ll.write_bytes(result.stdout)
@@ -195,8 +228,8 @@ def verify(compiler, clang):
             if executed.returncode != exit_code:
                 raise AssertionError(f"{name}: guest exit {executed.returncode}, expected {exit_code}, stderr={executed.stderr!r}")
             print(f"PASS guest {name}: {exit_code}", flush=True)
-        for name, (source, diagnostic) in {**INVALID, **shared_invalid}.items():
-            path = tmp / (name + ".ores")
+        for name, (source, diagnostic) in INVALID.items():
+            path = tmp / (name + ".atto")
             path.write_text(source)
             result = run([str(compiler), str(path)])
             if result.returncode == 0 or result.returncode < 0 or result.stdout:

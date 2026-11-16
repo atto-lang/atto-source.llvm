@@ -1,0 +1,12 @@
+// Pure guest projection of the lease authority predicate. NOT storage/SQL proof.
+fnc lease_accept(bool positive_generation, bool positive_fence,
+                 bool positive_attempt, bool exact_match): bool {
+  return positive_generation && positive_fence && positive_attempt && exact_match;
+}
+pub fnc main(): int {
+  return lease_accept(true, true, true, true) &&
+    !lease_accept(false, true, true, true) &&
+    !lease_accept(true, false, true, true) &&
+    !lease_accept(true, true, false, true) &&
+    !lease_accept(true, true, true, false) ? 0 : 1;
+}

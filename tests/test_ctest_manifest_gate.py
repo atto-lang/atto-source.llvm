@@ -27,6 +27,10 @@ def fixture():
                         if positive else ["--diagnostic", "private class field"])
         elif name in NATIVE_EXECUTABLES:
             command = ["/work/build/" + NATIVE_EXECUTABLES[name]]
+            if name.startswith("native_borrow_alias_matrix_"):
+                command += ["--compiler", "/work/build/oreslang-llvmc", "--clang", "/usr/bin/clang"]
+                if name.endswith("_sanitizer"):
+                    command.append("--sanitize")
             if name == "portable_target_abi_v1":
                 command.append("/work/src/contracts/architecture/v1/targets.tsv")
         elif name == "native_scalar_generic_source_execution":
@@ -150,6 +154,12 @@ class ManifestAuditTests(unittest.TestCase):
         entry["command"] = ["oreslang-actor-owned-heap-test"]
         with self.assertRaisesRegex(ManifestFailure, "escapes configured build directory"):
             check_manifest(self.manifest, build_dir=Path("/work/build"))
+
+    def test_borrow_matrix_sanitizer_is_mandatory(self):
+        entry = next(x for x in self.manifest["tests"]
+                     if x["name"] == "native_borrow_alias_matrix_sanitizer")
+        entry["command"].remove("--sanitize")
+        self.fail_on("borrow matrix sanitizer missing")
 
     def test_complete_manifest_is_admitted(self):
         self.assertEqual(check_manifest(self.manifest), 260 + len(CRITICAL_TESTS))

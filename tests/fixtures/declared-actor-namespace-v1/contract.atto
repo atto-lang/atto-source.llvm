@@ -1,0 +1,5 @@
+namespace foo;
+define pub contract CounterApi for actor as
+    mtd increment(): void;
+    mtd get_count(): int;
+end
