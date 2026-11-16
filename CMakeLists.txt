@@ -6381,6 +6381,12 @@ if(BUILD_TESTING)
     oreslang_contract_test(refreshed_actor_unsupported_field actor-unsupported-field.ores --diagnostic "expected 'int'")
 endif()
 
+if(BUILD_TESTING)
+    add_test(NAME native_aot_artifact_header_negative
+        COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" aot-artifact-header-selftest)
+    set_tests_properties(native_aot_artifact_header_negative PROPERTIES TIMEOUT 15)
+endif()
+
 if(BUILD_TESTING AND ORE_CLANG)
     add_test(NAME native_actor_hierarchy_ml_source_gate
         COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-actor-hierarchy-ml-admission.sh"
@@ -6451,6 +6457,16 @@ if(BUILD_TESTING AND ORE_CLANG)
         set_tests_properties(native_aot_driver PROPERTIES
             ENVIRONMENT "ORES_NO_GC_IR_AUDIT=${ORE_NO_GC_IR_AUDIT}")
     endif()
+endif()
+
+# Independent source-free publication safety test. It uses fake guest IR and a
+# real linker; native_aot_driver above is the separate actual guest AOT gate.
+if(BUILD_TESTING AND ORE_CLANG AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_test(NAME native_aot_publication_negative
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-compile-aot-publication.sh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh" "${ORE_CLANG}")
+    set_tests_properties(native_aot_publication_negative PROPERTIES TIMEOUT 30
+        ENVIRONMENT "ORES_NO_GC_IR_AUDIT=${ORE_NO_GC_IR_AUDIT}")
 endif()
 
 # Compiler-side nominal enum signature policy (host-only). This does NOT
