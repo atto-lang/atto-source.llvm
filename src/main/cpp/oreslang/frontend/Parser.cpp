@@ -880,8 +880,8 @@ public:
           unsafe_base_offset_(unsafe_base_offset),
           experimental_owned_int_(experimental_owned_int),
           experimental_rt_scalar_loop_(experimental_rt_scalar_loop),
-          verified_namespace_metadata_only_(verified_namespace_metadata_only),
-          language_version_(language_version) {
+          language_version_(language_version),
+          verified_namespace_metadata_only_(verified_namespace_metadata_only) {
         if (language_version_ < 0 || language_version_ > 2)
             throw std::runtime_error("E_LANGUAGE_VERSION: expected 1 or 2");
         reject_unlowered_with_update();
