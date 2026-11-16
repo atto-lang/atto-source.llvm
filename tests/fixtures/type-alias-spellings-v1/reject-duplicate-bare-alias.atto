@@ -1,0 +1,4 @@
+// expect: TYPE_DECL_NAME_COLLISION
+type Count = int;
+type Count = int;
+pub fnc main(): int { return 42; }

@@ -1,0 +1,9 @@
+// expect-exit: 42
+// End-delimited free function uses the return type/body physical newline.
+fnc add_one(int x) -> int
+  return x + 1;
+end
+
+pub fnc main(): int {
+  return add_one(41);
+}

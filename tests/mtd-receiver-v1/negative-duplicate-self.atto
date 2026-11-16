@@ -1,0 +1,6 @@
+// Canonical typed receiver and inline self cannot both bind.
+define class Point as let int x = 40; end
+pub mtd (mut self: Point) bad(mut self): void {
+  return;
+}
+pub fnc main(): int { return 0; }

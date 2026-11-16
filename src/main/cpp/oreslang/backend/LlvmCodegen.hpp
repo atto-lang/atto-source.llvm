@@ -17,6 +17,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target = fa
                                   bool cortex_m_target = false,
                                   bool bounded_allocator_provider = false,
                                   const std::string& isolate_entry = {},
+                                  bool actor_region_v1 = false,
                                   const std::vector<CheckedSourceRoutineV1>& checked_routines = {},
                                   const std::vector<CheckedLogSiteV1>& checked_sites = {});
 
