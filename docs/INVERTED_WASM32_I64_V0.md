@@ -20,7 +20,8 @@ Execute full-tree tests with an actual exact-head compiler:
 ```sh
 bash tests/native_inverted_mir_codegen_smoke.sh
 bash tests/native_inverted_source_guest_hardening.sh /absolute/oreslang-llvmc clang-18 contracts/dop-inverted-v1
-bash tests/native_inverted_wasm32_source_guest.sh /absolute/oreslang-llvmc clang-18 contracts/dop-inverted-v1
+COMPILER_PIN="$(sha256sum /absolute/oreslang-llvmc | cut -d ' ' -f 1)"
+bash tests/native_inverted_wasm32_source_guest.sh /absolute/oreslang-llvmc clang-18 contracts/dop-inverted-v1 "$COMPILER_PIN"
 ```
 
 The wasm32 test compiles three real `.atto` files at `-O0` and `-O2`
@@ -30,7 +31,10 @@ exports, fixed 2-page memory and full i64 values in a fresh guest. It proves
 truncation, and traps on an invalid erased index. It rejects an inverted
 class at the source compiler boundary without partial stdout IR.
 
-The dedicated exact-PR-head workflow appends this gate to existing native
+The dedicated exact-PR-head workflow hashes the built compiler and passes the digest
+as an explicit byte-identity pin to the smoke harness, checking it before and
+after execution. The SHA alone is not independent source-origin approval.
+The workflow appends this gate to existing native
 LLVM tests. CI with no runner job steps, missing toolchain, or no actual
 LLVM compiler remains **NOT_EXECUTED**. This does not prove browser-host
 isolation, native serialized Wasmtime AOT, LLVM/Java/.NET actor parity,
