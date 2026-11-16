@@ -2085,6 +2085,23 @@ if(BUILD_TESTING)
                 --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-rt-scalar-step-positive.ores"
                 --harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_step_harness.c")
         set_tests_properties(native_rt_scalar_frame_aot_two_tasks PROPERTIES TIMEOUT 120)
+        # Frame-integrity gate (forward-port of #1570 onto #1569's batching):
+        # O0/O2/O3 + sanitizer guest matrix, child-signal trap suite and
+        # adversarial mutations of the compiler-emitted LLVM IR. Set
+        # ORE_SANITIZER_CLANG to a clang whose ASan runtime runs on this host
+        # when ORE_CLANG's does not (the gate skips unrunnable sanitizers).
+        set(ORE_SANITIZER_CLANG "" CACHE FILEPATH
+            "Optional extra clang for ASan/UBSan runs of generated native guests")
+        add_test(NAME native_rt_scalar_frame_integrity_aot
+            COMMAND "${CMAKE_COMMAND}"
+                "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                "-DCLANG=${ORE_CLANG}"
+                "-DSAN_CLANG=${ORE_SANITIZER_CLANG}"
+                "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-rt-scalar-step-positive.ores"
+                "-DHARNESS=${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_step_harness.c"
+                "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/native-rt-scalar-frame-integrity"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rt_scalar_frame_integrity_aot.cmake")
+        set_tests_properties(native_rt_scalar_frame_integrity_aot PROPERTIES TIMEOUT 600)
     else()
         message(WARNING "Experimental scalar-loop AOT gate requires clang")
     endif()
