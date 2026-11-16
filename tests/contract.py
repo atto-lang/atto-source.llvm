@@ -186,8 +186,13 @@ def main():
         if args.parser_diagnostic:
             # The native frontend emits one bounded exception line. A matched
             # substring in a wrapper traceback or echoed source is not proof.
+            # Main appends bounded, sanitized [file:]/[module:]/[namespace:]
+            # context after the byte offset (llvmc safe-diagnostic contract).
             expected_line = (r"oreslang-llvmc: " + re.escape(args.diagnostic)
-                             + r" at byte [0-9]+\n")
+                             + r" at byte [0-9]+"
+                             + r"(?: \[file: [^\]\n]{1,128}\])?"
+                             + r"(?: \[module: [^\]\n]{1,128}\])?"
+                             + r"(?: \[namespace: [^\]\n]{1,128}\])?\n")
             require(re.fullmatch(expected_line, compile_result.stderr) is not None,
                     "parser diagnostic did not match exact compiler error line")
         require(not compile_result.stdout, "compiler emitted stdout after rejection")

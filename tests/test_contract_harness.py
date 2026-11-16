@@ -203,6 +203,15 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
             ("oreslang-llvmc: " + expected + " at byte 27", False),
             ("oreslang-llvmc: " + expected + " at byte 27\n"
              "unrelated failure\n", False),
+            # main's llvmc appends bounded source context after the offset.
+            ("oreslang-llvmc: " + expected
+             + " at byte 27 [file: authority-guard-any-pending.ores]\n", True),
+            ("oreslang-llvmc: " + expected
+             + " at byte 27 [file: a.ores] [module: m] [namespace: n]\n", True),
+            ("oreslang-llvmc: " + expected
+             + " at byte 27 [file: a.ores] trailing\n", False),
+            ("oreslang-llvmc: " + expected
+             + " at byte 27 [file: " + "x" * 129 + "]\n", False),
         )
         for stderr, accepted in cases:
             with self.subTest(stderr=stderr):
