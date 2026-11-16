@@ -7,8 +7,8 @@ fnc rhs(): bool {
   return false;
 }
 pub fnc main(): int {
-  bool skipped_and = false && rhs();
-  bool skipped_or = true || rhs();
-  bool eager_xor = lhs() ^^ rhs();
+  val bool skipped_and = false && rhs();
+  val bool skipped_or = true || rhs();
+  val bool eager_xor = lhs() ^^ rhs();
   return (!skipped_and && skipped_or && eager_xor) ? 42 : 7;
 }

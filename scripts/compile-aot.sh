@@ -25,6 +25,17 @@ case "$lto_mode" in
 esac
 source_dir="$(cd "$(dirname "$1")" && pwd -P)"
 source_file="$source_dir/$(basename "$1")"
+# Optional fail-closed scalar-only closed-world check; legacy AOT behavior
+# remains unchanged unless explicitly requested by the caller.
+aot_admission="${ORESLANG_LLVM_AOT_PROFILE:-off}"
+compiler_aot_args=()
+case "$aot_admission" in
+  off) ;;
+  sealed-scalar-v1) compiler_aot_args=(--aot-profile=sealed-scalar-v1) ;;
+  sealed-class-fields-v1) compiler_aot_args=(--aot-profile=sealed-class-fields-v1) ;;
+  actor-region-v1) compiler_aot_args=(--aot-profile=actor-region-v1) ;;
+  *) echo 'ORESLANG_LLVM_AOT_PROFILE must be off, sealed-scalar-v1, sealed-class-fields-v1 or actor-region-v1.' >&2; exit 64 ;;
+esac
 output_dir="$(cd "$(dirname "$2")" && pwd -P)"
 output_file="$output_dir/$(basename "$2")"
 [[ ! -d "$output_file" ]] || { echo 'Output must be a file, not a directory.' >&2; exit 64; }
@@ -74,7 +85,7 @@ ORES_LTO_MAIN
     exit 69
   fi
 fi
-"$compiler" --target=host "$source_file" > "$work/program.ll"
+"$compiler" ${compiler_aot_args[@]+"${compiler_aot_args[@]}"} --target=host "$source_file" > "$work/program.ll"
 # Known tracing-GC IR screen; not a complete linked-image/FFI collector proof.
 "$auditor" "$work/program.ll" >/dev/null
 runtime_sources=()
@@ -99,6 +110,13 @@ if grep -Eq 'declare .*@(oreslang_source_actor_|ores_actor_)' "$work/program.ll"
 fi
 # Native source Task<int> has a runtime ABI even when there is no actor import.
 # Link it on the normal AOT path, not only the bespoke source Task test.
+# ActorRegionGuestV1 currently has NO certified sealed-AOT linker closure.
+# Discover the exact direct C source dependencies so the fail-closed gate below
+# rejects before Clang or output publication; never silently link guest imports.
+if grep -Eq 'declare .*@ores_actor_region_guest_v1_' "$work/program.ll"; then
+  rt="$root/src/main/cpp/oreslang/runtime"
+  runtime_sources+=("$rt/ActorRegionGuestV1.c" "$rt/ActorRegionV1.c" "$rt/ActorArena.c")
+fi
 if grep -Eq 'declare .*@oreslang_source_task_(start_i64|await_i64|runtime_shutdown)' "$work/program.ll"; then
   rt="$root/src/main/cpp/oreslang/runtime"
   runtime_sources+=("$rt/SourceTaskRuntime.c")
@@ -113,6 +131,18 @@ if grep -Eq 'declare .*@oreslang_source_task_(start_i64|await_i64|runtime_shutdo
   if [[ "$scheduler_linked" == 0 ]]; then
     runtime_sources+=("$scheduler_source")
   fi
+fi
+# Full guest AOT + zero-tracing-GC requires a closed *linked* runtime graph,
+# not merely an LLVM IR screen. Preserve the existing string, record, array,
+# actor and Task runtime code for the ordinary AOT profile; none is yet
+# certified as a transitive bounded, deterministic zero-GC sealed dependency.
+# Each native runtime must eventually bring source ownership/drop proofs,
+# actor cancellation/restart quiescence, an FFI symbol audit and guest receipts.
+# Reject after discovering runtime imports but BEFORE invoking Clang or
+# publishing an output. Never treat future native services as implicitly safe.
+if [[ "$aot_admission" != off ]] && (( ${#runtime_sources[@]} > 0 )); then
+  echo 'sealed AOT refuses unchecked native runtime dependency; require a certified zero-GC link closure' >&2
+  exit 65
 fi
 if (( ${#runtime_sources[@]} )); then
   "$clang" "-O${opt_level}" -x ir "$work/program.ll" -x c -std=c11 \

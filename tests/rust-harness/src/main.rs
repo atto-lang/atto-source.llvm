@@ -895,7 +895,7 @@ fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> 
     let ir = temp.path.join("remainder.ll");
     let executable = temp.path.join("remainder-native");
 
-    // %, ^ and ^^ are reserved. Named Integer operations carry the semantics:
+    // % and single ^ are reserved (^^ is bool XOR). Named Integer operations carry the semantics:
     // rem truncates toward zero, mod is never negative, and a zero divisor traps.
     let min = "(-9223372036854775807 - 1)";
     let rem_fn = "fnc r(int a, int b): int { return Integer.rem(a, b); }\n";

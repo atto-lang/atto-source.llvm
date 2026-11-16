@@ -78,6 +78,21 @@ for opt in 0 2; do
     exit 1
   fi
 done
+# Java LogicalPunctuationOperatorTest.tokensAreAdjacentAndWordsRemainOrdinaryIdentifiers:
+# `val and: bool` locals, adjacent `a^^b`, and operator words inside a comment.
+annotated_ir="$tmp/val-annotated-identifiers.ll"
+timeout 40s "$compiler" --target=host "$fixtures/val-annotated-identifiers.atto" >"$annotated_ir"
+test -s "$annotated_ir" || { echo "missing annotated identifier IR" >&2; exit 1; }
+for opt in 0 2; do
+  binary="$tmp/annotated-O$opt"
+  timeout 40s "$clang" "-O$opt" -x ir "$annotated_ir" -o "$binary"
+  status=0
+  timeout 20s "$binary" >"$tmp/annotated-O$opt.stdout" 2>"$tmp/annotated-O$opt.stderr" || status=$?
+  if [[ "$status" -ne 42 || -s "$tmp/annotated-O$opt.stdout" ]]; then
+    echo "annotated identifier guest failed at O$opt: status=$status" >&2
+    exit 1
+  fi
+done
 # A real runtime-trap RHS must be skipped by false && and true ||.
 # These executable tests go beyond the pure truth table and verify CFG behavior.
 short_ir="$tmp/short-circuit-runtime.ll"
