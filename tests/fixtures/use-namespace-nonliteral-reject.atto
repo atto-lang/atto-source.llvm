@@ -1,0 +1,6 @@
+use namespace foo;
+// Runtime variable reads remain blocked until namespace binding is proven.
+pub fnc main(): int {
+    const seed: int = 40;
+    return seed + 2;
+}
