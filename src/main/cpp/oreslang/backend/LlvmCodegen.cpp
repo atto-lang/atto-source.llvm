@@ -1103,6 +1103,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         declarations.emplace(native_function_slot(fn.name, fn.parameters.size()), declaration);
     }
     for (const auto& fn : source.functions) {
+        // Authenticated at the semantic admission layer: the exact, declared
+        // C ABI symbol stays an external declaration. It must be satisfied
+        // by the already-approved statically linked object, never by source
+        // code, an inferred symbol alias, or a generated empty function body.
+        if (fn.foreign_import) continue;
         llvm::Function* function = declarations.at(native_function_slot(fn.name, fn.parameters.size()));
         llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", function);
         llvm::IRBuilder<> builder(entry);
