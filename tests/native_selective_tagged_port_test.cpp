@@ -61,7 +61,13 @@ static void bounded_port_selective() {
     auto selected = p.try_receive_tagged(shutdown, 1, yielded.cursor);
     CHECK(selected.status == Status::Matched && selected.delivery);
     CHECK(selected.inspected == 1 && *selected.delivery->value().value == 300);
-    // Even checked-out receives hold bytes until physical ACK.
+    // Dequeue is custody transfer, not admission credit refund.
+    // Regression: despite a free physical queue slot, an unacknowledged
+    // selected receipt must keep both frame and byte windows saturated.
+    CHECK(p.used_frames() == 3 && p.used_bytes() == 48);
+    MoveOnlyMessage while_inflight(410);
+    CHECK(!p.offer(std::move(while_inflight), 16, payment));
+    CHECK(while_inflight.value && *while_inflight.value == 410);
     CHECK(p.used_frames() == 3 && p.used_bytes() == 48);
     CHECK(selected.delivery->acknowledge_released());
     CHECK(!selected.delivery->acknowledge_released());
@@ -189,6 +195,13 @@ static void bound_actor_turn_selective() {
         (void)inbox.try_receive_tagged(Lane::Normal, 23, 1);
     } catch (const std::logic_error&) { bypass_rejected = true; }
     CHECK(bypass_rejected && inbox.used_frames(Lane::Normal) == 3);
+    // The legacy FIFO probe must also fail closed: accepting an ordinary
+    // receive would allow guest code to bypass supervisor CONTROL entirely.
+    bool fifo_bypass_rejected = false;
+    try {
+        (void)inbox.try_receive();
+    } catch (const std::logic_error&) { fifo_bypass_rejected = true; }
+    CHECK(fifo_bypass_rejected && inbox.used_frames(Lane::Normal) == 3);
 
     Inbox::SelectiveCursor cursor;
     bool processed = false;
@@ -210,6 +223,14 @@ static void bound_actor_turn_selective() {
     CHECK(inbox.dispatch_next_tagged(group, actor, Lane::Normal, 23, 1,
                                     cursor, consumer) == Status::Resume);
     CHECK(!processed && inbox.used_frames(Lane::Normal) == 3);
+    // CONTROL arriving between two bounded scan slices must preempt the
+    // continuation before it can inspect or check out the matching DATA.
+    bool mid_scan_control_executed = false;
+    CHECK(group.enqueue_control(actor, [&] { mid_scan_control_executed = true; }));
+    CHECK(inbox.dispatch_next_tagged(group, actor, Lane::Normal, 23, 1,
+                                    cursor, consumer) == Status::Control);
+    CHECK(mid_scan_control_executed && !processed);
+    CHECK(inbox.used_frames(Lane::Normal) == 3);
     CHECK(inbox.dispatch_next_tagged(group, actor, Lane::Normal, 23, 1,
                                     cursor, consumer) == Status::Resume);
     CHECK(inbox.dispatch_next_tagged(group, actor, Lane::Normal, 23, 1,
