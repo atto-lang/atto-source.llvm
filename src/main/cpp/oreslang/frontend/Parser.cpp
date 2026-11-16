@@ -3015,7 +3015,7 @@ private:
         while (token_.text == "const" || token_.text == "val" || token_.text == "let" ||
                 token_.text == "int" || token_.text == "bool" ||
                 token_.text == "string" || token_.text == "String" ||
-                token_.text == "stdio" || array_effect_ahead()) {
+                token_.text == "mut" || token_.text == "stdio" || array_effect_ahead()) {
             // Typed Future<void> is admitted ONLY as a linear lexical alias
             // for one already-spawned ActorRef.get_ready() lifecycle promise.
             // No scalar/object borrow crosses this suspension, and general
@@ -3023,6 +3023,8 @@ private:
             if (source_task_local()) continue;
             if (source_future_pipeline_local()) continue;
             if (ready_future_local()) continue;
+            if (token_.text == "mut")
+                fail("E_MUT_QUALIFIER: bare mut requires an explicit const, val or let binding");
             LocalBinding binding;
             binding.offset = token_.offset;
             const bool type_first_const = token_.text == "int" || token_.text == "bool" ||
@@ -3030,16 +3032,24 @@ private:
             if (token_.text == "const" && peek_next().text == "mut")
                 fail("E_CONST_MUT_UNSUPPORTED: scoped owned mutable value lowering is not yet implemented");
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
+            // The type-right spelling is an explicit constant, not a runtime
+            // val fallback: const name: int = e == const int name = e.
+            const bool type_right_const = token_.text == "const" &&
+                    sum_first.kind == Kind::Identifier && sum_look.next().text == ":";
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
-            if (type_first_const ||
+            if (type_first_const || type_right_const ||
                     ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
                     (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string"))) {
                 const std::string mode = type_first_const ? "const" : std::string(token_.text);
                 if (!type_first_const) { advance(); if (mode == "let") accept("mut"); }
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
+                if (type_right_const) {
+                    binding.name = identifier();
+                    require(":");
+                }
                 binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
                 if (binding.scalar_type == ScalarType::I64) require("int");
-                binding.name = identifier();
+                if (!type_right_const) binding.name = identifier();
                 require("=");
                 if (accept("await")) {
                     if (mode == "const")
