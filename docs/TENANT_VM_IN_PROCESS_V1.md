@@ -8,15 +8,20 @@ that spawn, send and stop. The language subset is still narrow (see
 [What `.atto` can do](#what-atto-can-do-in-a-vm)). All evidence below is local:
 no GitHub Actions job has run this code. No backend is certified as a production boundary.
 
-**Security hold:** This native in-process topology is a trusted-code research
-experiment, not the default for hostile/untrusted tenants. The C guest ABI itself
-notes that the cage addressing rule is not enforced at its boundary. The native
-loader checks a caller-provided SHA-256 against the bytes it maps, but that
-does not prove source provenance, trustworthy compiler output or that native
-instructions are cage-confined. A malicious native library still has the host
-process's authority. Keep the process-isolated untrusted-tenant contract in force
-until a separately trusted admission/signing chain and executable confinement
-evidence are implemented and independently reviewed.
+**Security hold on this implementation:** This is an experimental native in-process
+runtime, **not yet approved to host hostile tenants**. The C guest ABI does not enforce
+the cage-addressing rule, and a caller-provided SHA-256 verifies byte identity, not
+authorized compiler provenance or confinement of arbitrary native instructions.
+Do not admit tenant-supplied native libraries. Keep the existing deployment-level
+hold for this LLVM path until independently reviewed trusted-origin, admission and
+executable-confinement evidence exists; a separately isolated deployment remains
+available as defense in depth.
+
+This hold is **not** a requirement of the cross-backend contract that every tenant
+have its own OS process. Conformance [tenant-isolation-v2](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/pull/352),
+merged 2026-11-04, permits multiple untrusted **validated-Wasm** VM-isolates in
+one process, accepts shared-process runtime/compiler bugs and excludes side channels.
+It does **not** certify this LLVM loader or replace backend-specific admission gates.
 
 ## What a VM is
 
@@ -280,10 +285,17 @@ code. This reasoning rests on documented platform behaviour, not on a CIL experi
 do not run in parallel. Epochs are per Engine, so a targeted kill is a per-Store flag read by its
 epoch callback.
 
-**Not yet reconciled.** `oreslang-source.net` #348, `oreslang-source.wasm` #276 and conformance #332
-describe process workers for untrusted actors, and `oreslang-platform-conformance`
-`contracts/tenant-isolation-v1.json` requires an OS process sandbox for hostile tenants. Both conflict
-with one process for up to 1000 tenants.
+**Cross-backend architecture decision (ratified, not backend proof).**
+[Conformance #352](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/pull/352)
+merged `tenant-isolation-v2`: an untrusted validated-Wasm guest may run in its own
+VM-isolate within a shared OS process. Process isolation is optional defense in
+depth, not a mandatory v2 prerequisite. Conformance v1 is superseded. Earlier
+process-worker sketches in `oreslang-source.net` #348, `oreslang-source.wasm` #276
+and conformance #332 are historical alternatives, not blockers to this topology.
+The v2 contract's source-free tests cannot establish this backend's safety;
+the compiler/provenance, malicious guest, independent-kill, and exact-head CI
+gates remain open. The separate hold above still applies to this experimental
+native loader.
 
 ## Audit findings
 
