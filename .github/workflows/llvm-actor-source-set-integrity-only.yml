@@ -1,0 +1,73 @@
+name: LLVM Counter source-set integrity only (NO GUEST)
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/main.cpp'
+      - 'src/main/cpp/oreslang/frontend/ActorSourceSetAdmission.hpp'
+      - 'src/main/cpp/oreslang/frontend/SourceInput.hpp'
+      - 'contracts/actor-counter-identical-source-v1/**'
+      - 'tests/cmake/native_actor_source_set_integrity_only.cmake'
+      - 'tools/actor-counter-parity.mjs'
+      - 'tests/native_actor_source_set_integrity_unit_test.cpp'
+      - 'CMakeLists.txt'
+      - '.github/workflows/llvm-actor-source-set-integrity-only.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compiler-source-set-integrity-only:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout immutable PR head, credentials disabled
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Exact source tree and manifest trust anchor
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet
+          test "$(git hash-object contracts/actor-counter-identical-source-v1/actor-source-set.v1)" = e4fd0afea3d21e6fed54f9943abbf0851550e028
+          test "$(git hash-object contracts/actor-counter-identical-source-v1/corpus.json)" = 7b2bd1aaae0ec0d8503dccd49e9902d604722538
+          echo "RECEIPT source_head=$EXPECTED_HEAD"
+          echo "RECEIPT source_tree=$(git rev-parse 'HEAD^{tree}')"
+          echo "RECEIPT source_set_manifest=e4fd0afea3d21e6fed54f9943abbf0851550e028"
+      - name: Provision LLVM18 / Clang and Node
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends cmake ninja-build clang-18 llvm-18-dev libclang-18-dev nodejs
+          node --version
+      - name: Build real LLVM compiler from complete checked-out source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-source-set -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+            -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
+          cmake --build build-source-set --parallel 2 --target oreslang-llvmc oreslang-actor-source-set-admission-unit
+      - name: Require both tests and execute the compiler-backed suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build-source-set -N \
+            -R '^native_actor_counter_source_set_integrity_only$' \
+            | grep -q 'native_actor_counter_source_set_integrity_only'
+          ctest --test-dir build-source-set -N \
+            -R '^native_actor_source_set_git_blob_and_paths_host_only$' \
+            | grep -q 'native_actor_source_set_git_blob_and_paths_host_only'
+          ctest --test-dir build-source-set --output-on-failure --no-tests=error \
+            -R '^(native_actor_counter_source_set_integrity_only|native_actor_source_set_git_blob_and_paths_host_only)$'
+          echo 'RECEIPT LLVM_ACTOR_SOURCE_SET_INTEGRITY_ONLY=EXECUTED'
+          echo 'RECEIPT GUEST_ACTOR_EXECUTED=NO'

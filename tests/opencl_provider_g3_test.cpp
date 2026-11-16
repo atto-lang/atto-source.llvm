@@ -303,6 +303,15 @@ int main() {
         expect_throw<std::runtime_error>([&] {
             (void)provider.begin(prepared, f.input, f.output, f.host);
         });
+        check(f.input_fence.status() == Status::InFlight);
+        check(f.output_fence.status() == Status::InFlight);
+        check(provider.usage().resident_bytes > 0);
+        check(api.released_buffers == 0);
+        check(!provider.recover_ambiguous_begin_after_quiescence());
+        check(api.released_buffers == 0);
+        expect_throw<std::logic_error>([&] { prepared.close(); });
+        api.device_loss_quiescent = true;
+        check(provider.recover_ambiguous_begin_after_quiescence());
         check(f.input_fence.status() == Status::Idle);
         check(f.output_fence.status() == Status::Idle);
         check(provider.usage() == oreslang::opencl::Usage{0, 0, 0, 0});
@@ -320,8 +329,16 @@ int main() {
                 prepared, f.input, f.output, f.host);
 
         expect_throw<std::runtime_error>([&] { (void)provider.poll(*operation); });
+        check(operation->state() == Provider::OperationState::UnknownEnqueue);
         check(f.input_fence.status() == Status::Poisoned);
         check(f.output_fence.status() == Status::Poisoned);
+        check(provider.usage().resident_bytes > 0);
+        check(api.released_buffers == 0);
+        check(!provider.recover_ambiguous_kernel_after_quiescence(*operation));
+        check(provider.usage().resident_bytes > 0);
+        expect_throw<std::logic_error>([&] { prepared.close(); });
+        api.device_loss_quiescent = true;
+        check(provider.recover_ambiguous_kernel_after_quiescence(*operation));
         check(provider.usage() == oreslang::opencl::Usage{0, 0, 0, 0});
 
         f.input_fence.retire_after_backend_release({"tenant-a", "gpu0", 101});
@@ -477,15 +494,18 @@ int main() {
         expect_throw<std::runtime_error>([&] {
             (void)provider.begin(prepared, f.input, f.output, f.host);
         });
-        check(f.input_fence.status() == Status::Idle);
-        check(f.output_fence.status() == Status::Idle);
+        check(f.input_fence.status() == Status::InFlight);
+        check(f.output_fence.status() == Status::InFlight);
         check(provider.usage().resident_bytes > 0);
         expect_throw<std::logic_error>([&] { prepared.close(); });
         expect_throw<std::logic_error>([&] {
             (void)provider.begin(prepared, f.input, f.output, f.host);
         });
-
-        provider.retry_pre_enqueue_cleanup();
+        check(!provider.recover_ambiguous_begin_after_quiescence());
+        api.device_loss_quiescent = true;
+        check(!provider.recover_ambiguous_begin_after_quiescence());
+        check(provider.usage().resident_bytes > 0);
+        check(provider.recover_ambiguous_begin_after_quiescence());
         check(provider.usage() == oreslang::opencl::Usage{0, 0, 0, 0});
         prepared.close();
     }

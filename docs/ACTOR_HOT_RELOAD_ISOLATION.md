@@ -105,3 +105,118 @@ schema migration; actor-owned FFI lease wiring; ORC shared-object loader and
 resource tracking; sandboxed UNTRUSTED image JIT E2E; production canary/revert;
 cross-backend conformance and adversarial/ASan/UBSan native CI. Do not mark
 these complete based on the host-only test.
+
+## Native actor code-only gate (stacked implementation)
+
+The new `NativeActorHotUpgradeGate<CodeImage>` is a **trusted, host-owned
+runtime primitive** built on `NativeSupervisorCodeSlot`. It binds a fixed
+`ActorHeapIdentity {runtime, actor, epoch}`, actor isolation kind, mailbox ABI,
+state schema, shared-cell ABI and capability ABI to the code slot. A turn,
+suspended `await` frame or external FFI callback must hold a move-only
+`Pin` for its whole lifetime. `freeze(expectedRevision)` closes new DATA
+admission, `quiesced(ticket)` rejects promotion until every pin is released,
+and `promote(ticket, exactShape, code, cleanup)` performs the revision CAS.
+Failed candidate images are reclaimed outside the actor gate/CONTROL mutex;
+`abort` leaves the old image active. `close` seals new admission, but existing
+pins keep old code alive until the final lease closes.
+
+`CodeImage` is an immutable description supplied by the host. In the current
+native CTest it is a string. The native source compiler **does not yet
+attach these pins to actual guest call/await/FFI paths**, and the test does
+not perform dynamic machine code loading. All three actor kinds are tested as
+logical shape/identity categories, not verified physical isolation tiers.
+
+The implementation deliberately **rejects any state-schema/layout change**.
+A nontrivial state upgrade still needs separately verified storage snapshots,
+typed migration, rollback, shared-cell reader grace periods and a supervisor
+health gate. This code-only primitive must never be repurposed to permit guest
+raw pointers to cross generations, or to change an untrusted actor's execution
+domain simply by changing `Kind`.
+
+Exact mirrored host regression (GCC -O2 and Clang ASan+UBSan):
+https://github.com/scintilla-run-test/gleam-runner-conformance/actions/runs/39090397220
+The test validates code-only AOT/JIT/AOT generation labels and ownership
+bookkeeping. **It does not execute AOT/JIT generated guest machine code.**
+
+## Reclamation ordering / abandoned release safety audit
+
+Native image ownership now starts at the code slot's API boundary, not
+only after ABI checks or candidate allocation. For every accepted or rejected
+image the host-owned `CodeImage` wrapper must be destroyed **before** the
+reclamation callback may unload a shared object or ORC ResourceTracker.
+Consequently the runtime requires `CodeImage` to be **nothrow movable and
+nothrow destructible**. The callbacks must only schedule trusted host-side
+cleanup, never execute guest code. A callback throwing during reclamation is
+suppressed by the C++ destructor; actual unload failure reporting and
+quarantine still need a runtime-managed error sink before production release.
+
+The supervisor `Ticket` is move-only and has RAII rollback. When an
+uncommitted ticket is abandoned by an exception, its destructor reopens
+DATA admission, but only if its token still matches the currently frozen
+generation. Terminally closed actors and active publication transactions are
+never reopened. Releasing a stale ticket cannot undo a later freeze.
+
+Any compilation, ABI encoding, or image staging that may allocate must be
+performed **before** transferring code and cleanup ownership to the
+underlying immutable code slot. Stage/activate must not assume C++
+function argument evaluation order will automatically preserve callback
+ownership if an earlier expression throws.
+
+Evidence: exact-source private mirror [run #39091951068](https://github.com/scintilla-run-test/gleam-runner-conformance/actions/runs/39091951068)
+covers policy destruction-before-unload, early/invalid admission, throwing
+`std::function` copies, abandoned frozen tickets and held continuation pins.
+Full executable image teardown, source compiler lowering, and runtime-owned
+error quarantine remain explicit release blockers.
+
+
+## Concurrent terminal close during image publication
+
+Terminal `close()` must never wait for `promote()`: a retired image may
+invoke a trusted cleanup callback synchronously from publication and that
+callback may request terminal shutdown. Waiting on the publishing thread
+would deadlock the same publishing thread. The gate now seals further DATA
+and code admission under its mutex, returns without waiting, and leaves the
+in-progress publisher responsible for final code-slot closure after its
+publish/fail path releases the actor mutex. A concurrent terminal close must
+not reopen `frozen` or permit another turn, even if a code revision was
+already atomically installed before shutdown.
+
+### Exact-source CI verification (October 18, 2026)
+
+[Private-carrier run #39138131052](https://github.com/scintilla-run-test/gleam-runner-conformance/actions/runs/39138131052)
+**passed both GCC C++17 -O2 and Clang C++17 ASan+UBSan** with source Git-blob
+SHA verification before compiling. Both jobs executed four binaries:
+
+1. `native_supervisor_code_slot_test.cpp`: copy-failure injection,
+   image-wrapper destructor-before-reclaim ordering, and revision leases.
+2. `native_actor_hot_upgrade_gate_test.cpp`: admission/freeze,
+   quiescence, concurrent turns, abandoned ticket recovery, failure
+   during callback copying, and abandonment during active publication.
+3. `native_actor_code_execution_test.cpp`: actually invokes three
+   statically compiled native function-pointer revisions through generation
+   pins (including 1,600 concurrent calls per actor kind).
+4. `native_actor_hot_upgrade_reentrancy_test.cpp`: callback-triggered
+   terminal `close()` during retirement, and 256 concurrent close/publish
+   interleavings. This fourth binary is registered in CTest with timeout.
+
+The workflow archived a manifest and step-outcome report **for each compiler**
+as GitHub Actions artifacts. Source PR head at test time includes
+`NativeActorHotUpgradeGate.hpp` blob
+`7383a51eda7db2e8869e8053379481f932906fd3`,
+gate test blob `f8f7caa5bca6c697545dfd132a656d34687b5993`,
+static-callable test blob `b48d857df182c8dbf44dd5804a63813e233c3ab7`,
+and reentrancy test blob `37eddb2fc1934882ff1d1cd0aded972fb4e7db41`.
+
+The ticket now has `abandon()` for explicit CONTROL release. If the
+last ticket goes away while `promote()` is publishing, the publisher owns
+deferred freeze cleanup: failure reopens DATA; successful publication
+commits normally; terminally closed actors stay closed. Cleanup actions
+do not interrupt an active publisher.
+
+**Scope limit:** These are host-only native tests of a trusted code-image
+substrate, **not** Oreslang `.ores` compiler lowering or a runtime-bound
+`await`/FFI continuation. Static AOT function pointer tests do not load
+new PIC code or exercise ORC JIT. Host-only `untrusted` enum coverage is
+not a sandbox or a second Graal isolate. Real loader/callback failure
+quarantine and full source-repository CI are still required; retain DRAFT.
+
