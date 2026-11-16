@@ -95,7 +95,8 @@ inline plan prove(const source& actual, const std::vector<required_field>& reque
         if (found->sealed_actor_state) {
             throw std::invalid_argument("protected actor field");
         }
-        if (!found->is_public || !found->immutable || !found->effect_free ||
+        if (wanted.type != scalar::i64 || found->type != scalar::i64 ||
+            !found->is_public || !found->immutable || !found->effect_free ||
             found->type != wanted.type) {
             throw std::invalid_argument("public immutable field type mismatch");
         }
