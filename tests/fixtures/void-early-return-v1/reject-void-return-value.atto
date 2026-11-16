@@ -1,0 +1,6 @@
+// expect: native return requires
+fnc show(int x): void {
+  if x > 3 then return x; fi
+  return;
+}
+pub fnc main(): int { show(1); return 42; }
