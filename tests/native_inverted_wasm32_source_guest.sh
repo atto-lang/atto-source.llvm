@@ -82,7 +82,7 @@ assert.deepEqual(WebAssembly.Module.exports(module).map(x=>x.name+":"+x.kind).so
   ["main:function","memory:memory"]);
 assert.equal(new WebAssembly.Instance(module).exports.main(),42n);
 NODE
-  echo "ATTO_AOS_SCALAR_CONTROL_WASM32_O$opt_EXECUTED"
+  echo "ATTO_AOS_SCALAR_CONTROL_WASM32_O${opt}_EXECUTED"
 done
 
 # Source-level negative cases must be compiler-owned rejections, with no IR.
