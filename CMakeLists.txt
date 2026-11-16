@@ -517,6 +517,29 @@ if(ORES_RECEIVER_SLOT_HOST_ONLY)
     return()
 endif()
 
+# Tiny dependency-free C11 actor logical-frame ABI test entrypoint.
+# This runs the *real native host primitive*, not guest .atto/AOT lowering.
+option(ATTO_ACTOR_LOGICAL_FRAMES_HOST_ONLY
+    "Build actor-owned logical-frame native host regression without LLVM" OFF)
+if(ATTO_ACTOR_LOGICAL_FRAMES_HOST_ONLY)
+    include(CTest)
+    find_package(Threads REQUIRED)
+    add_executable(atto-native-actor-logical-frames-host-test
+    tests/native_actor_logical_frames_v1_test.c
+    src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c)
+    target_include_directories(atto-native-actor-logical-frames-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(atto-native-actor-logical-frames-host-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(atto-native-actor-logical-frames-host-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(atto-native-actor-logical-frames-host-test PRIVATE Threads::Threads)
+    add_test(NAME actor_logical_frames_v1_native_host
+        COMMAND atto-native-actor-logical-frames-host-test)
+    set_tests_properties(actor_logical_frames_v1_native_host PROPERTIES TIMEOUT 20)
+    return()
+endif()
+
 find_package(LLVM CONFIG REQUIRED)
 if(LLVM_VERSION_MAJOR LESS 14)
     message(FATAL_ERROR "Oreslang requires LLVM 14 or newer; found ${LLVM_PACKAGE_VERSION}")
@@ -543,6 +566,14 @@ llvm_map_components_to_libnames(ORE_LLVM_LIBS core support)
 target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
+if(BUILD_TESTING AND UNIX)
+    # Exercise the production frontend-only compiler path, not a mock compiler.
+    add_test(NAME native_frontend_check_effects_boundary
+        COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_frontend_check_contract.sh"
+            "$<TARGET_FILE:oreslang-llvmc>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+    set_tests_properties(native_frontend_check_effects_boundary PROPERTIES TIMEOUT 30)
+endif()
 if(BUILD_TESTING)
     # Real compiler / Clang native guest lane for file-level exports.
     find_program(ORESLANG_EXPORT_CLANG NAMES clang)
@@ -554,6 +585,23 @@ if(BUILD_TESTING)
                 "${ORESLANG_EXPORT_CLANG}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/declarative-exports")
     endif()
+
+    # The same production C11 preallocated logical-frame ABI is tested in the
+    # full LLVM build, but this is host-runtime proof, not guest compiler output.
+    add_executable(oreslang-native-actor-logical-frames-v1-test
+    tests/native_actor_logical_frames_v1_test.c
+    src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c)
+    target_include_directories(oreslang-native-actor-logical-frames-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-actor-logical-frames-v1-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(oreslang-native-actor-logical-frames-v1-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-actor-logical-frames-v1-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_logical_frames_v1
+        COMMAND oreslang-native-actor-logical-frames-v1-test)
+    set_tests_properties(native_actor_logical_frames_v1 PROPERTIES TIMEOUT 20)
+
     # This runs the actual native Atto scalar parser + LLVM function IR
     # emitter. It proves checked routine metadata only, NOT an inserted
     # guest runtime site, linked AOT binary, JIT, or OTel export.
@@ -2816,6 +2864,31 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
+    # Verify deliberate rejection of currently unsupported opaque types.
+    # Source files are exact Git blobs shared with canonical conformance.
+    oreslang_contract_test(native_opaque_any_explicitly_unsupported
+        authority-guard-any-pending.ores
+        --fixture-git-blob 9d8cb47f7631fd41262e2d2c49d548170903e440
+        --diagnostic "native opaque any/unknown unsupported: dynamic tag, ownership and capability-safe lowering required"
+        --parser-diagnostic)
+    oreslang_contract_test(native_opaque_unknown_explicitly_unsupported
+        authority-guard-unknown-pending.ores
+        --fixture-git-blob 5eba2cbdb6f0b61e9718b8ccdd7f37c6918df491
+        --diagnostic "native opaque any/unknown unsupported: dynamic tag, ownership and capability-safe lowering required"
+        --parser-diagnostic)
+
+    # Return-position admission must also fail closed; a parameter-only
+    # parser guard would not protect opaque return value ownership.
+    oreslang_contract_test(native_opaque_any_return_explicitly_unsupported
+        authority-return-any-pending.ores
+        --fixture-git-blob 42dfd69320f3158fa80841022f85c362e0745723
+        --diagnostic "native opaque any/unknown unsupported: dynamic tag, ownership and capability-safe lowering required"
+        --parser-diagnostic)
+    oreslang_contract_test(native_opaque_unknown_return_explicitly_unsupported
+        authority-return-unknown-pending.ores
+        --fixture-git-blob 8c872c29d5b6335be0363aa13b1ddef9320c0332
+        --diagnostic "native opaque any/unknown unsupported: dynamic tag, ownership and capability-safe lowering required"
+        --parser-diagnostic)
     # Actual LLVM IR -> Clang -> native guest execution of shared-source i64 candidates.
     # These CTests must fail (never skip) when the compiler/lowerer lacks parity.
     oreslang_contract_test(native_six_backend_i64_40

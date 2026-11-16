@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """A -O / PYTHONOPTIMIZE run must enforce, not erase, native contract checks."""
 import ast
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -78,6 +79,13 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
              "--compiler", str(compiler), "--fixture", str(self.fixture), *flags],
             capture_output=True, text=True, check=False, timeout=15, env=env,
         )
+
+    @staticmethod
+    def git_blob_sha(path):
+        payload = path.read_bytes()
+        return hashlib.sha1(
+            f"blob {len(payload)}\0".encode("ascii") + payload
+        ).hexdigest()
 
     def test_native_security_gates_cannot_reintroduce_bare_assert(self):
         # Python strips ast.Assert entirely under -O/-OO. A security
@@ -158,6 +166,125 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         clang = self.linker(link_status=1, link_error="ld.lld: undefined symbol: main")
         p = self.run_contract(compiler, "--no-main-link", "--clang", str(clang))
         self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_negative_rejects_infrastructure_failure_even_with_exact_diagnostic(self):
+        expected = "native opaque any/unknown unsupported"
+        failures = (
+            "Traceback (most recent call last):\\nFileNotFoundError: missing compiler",
+            "/bin/sh: compiler: command not found",
+            "fatal: No such file or directory",
+            "==1==ERROR: AddressSanitizer: heap-use-after-free",
+            "UndefinedBehaviorSanitizer: runtime error: invalid shift",
+            "Segmentation fault",
+        )
+        for failure in failures:
+            with self.subTest(failure=failure):
+                compiler = self.compiler(status=1, stderr=expected + "\\n" + failure)
+                for optimize in ("-O", "-OO"):
+                    with self.subTest(optimize=optimize):
+                        p = self.run_contract(compiler, "--diagnostic", expected,
+                                              optimize=optimize)
+                        self.assertNotEqual(p.returncode, 0)
+                        self.assertIn(
+                            "infrastructure failure cannot certify compiler rejection",
+                            p.stderr,
+                        )
+
+    def test_parser_diagnostic_requires_a_single_compiler_error_line(self):
+        expected = ("native opaque any/unknown unsupported: dynamic tag, "
+                    "ownership and capability-safe lowering required")
+        correct = "oreslang-llvmc: " + expected + " at byte 27\n"
+        cases = (
+            (correct, True),
+            (expected + "\n", False),
+            ("wrapper: " + correct, False),
+            (correct + "fatal: signal 11\n", False),
+            ("oreslang-llvmc: " + expected + " at byte -1\n", False),
+            ("oreslang-llvmc: " + expected + " at byte 27", False),
+            ("oreslang-llvmc: " + expected + " at byte 27\n"
+             "unrelated failure\n", False),
+            # main's llvmc appends bounded source context after the offset.
+            ("oreslang-llvmc: " + expected
+             + " at byte 27 [file: authority-guard-any-pending.ores]\n", True),
+            ("oreslang-llvmc: " + expected
+             + " at byte 27 [file: a.ores] [module: m] [namespace: n]\n", True),
+            ("oreslang-llvmc: " + expected
+             + " at byte 27 [file: a.ores] trailing\n", False),
+            ("oreslang-llvmc: " + expected
+             + " at byte 27 [file: " + "x" * 129 + "]\n", False),
+        )
+        for stderr, accepted in cases:
+            with self.subTest(stderr=stderr):
+                compiler = self.compiler(status=1, stderr=stderr)
+                for optimize in ("-O", "-OO"):
+                    with self.subTest(optimize=optimize):
+                        p = self.run_contract(
+                            compiler, "--diagnostic", expected,
+                            "--parser-diagnostic", optimize=optimize,
+                        )
+                        self.assertEqual(p.returncode == 0, accepted, p.stderr)
+
+    def test_parser_diagnostic_cannot_be_requested_without_diagnostic(self):
+        compiler = self.compiler(status=1, stderr="anything")
+        p = self.run_contract(compiler, "--parser-diagnostic")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("--parser-diagnostic requires --diagnostic", p.stderr)
+
+    def test_fixture_git_blob_identity_is_enforced_under_optimization(self):
+        expected = "private class field"
+        compiler = self.compiler(status=1, stderr=expected)
+        reviewed_blob = self.git_blob_sha(self.fixture)
+        for optimize in ("-O", "-OO"):
+            with self.subTest(optimize=optimize, state="exact"):
+                p = self.run_contract(
+                    compiler, "--diagnostic", expected,
+                    "--fixture-git-blob", reviewed_blob, optimize=optimize,
+                )
+                self.assertEqual(p.returncode, 0, p.stderr)
+        self.fixture.write_text("mutated after review", encoding="utf-8")
+        for optimize in ("-O", "-OO"):
+            with self.subTest(optimize=optimize, state="mutated"):
+                p = self.run_contract(
+                    compiler, "--diagnostic", expected,
+                    "--fixture-git-blob", reviewed_blob, optimize=optimize,
+                )
+                self.assertNotEqual(p.returncode, 0)
+                self.assertIn("fixture Git blob SHA mismatch", p.stderr)
+
+    def test_fixture_git_blob_argument_is_strict(self):
+        compiler = self.compiler(status=1, stderr="private class field")
+        p = self.run_contract(
+            compiler, "--diagnostic", "private class field",
+            "--fixture-git-blob", "A" * 40,
+        )
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("requires lowercase 40-hex Git SHA-1", p.stderr)
+
+    def test_missing_compiler_os_error_redacts_private_path(self):
+        missing = self.root / "private-source-SECRET-compiler"
+        for optimize in ("-O", "-OO"):
+            with self.subTest(optimize=optimize):
+                p = self.run_contract(missing, optimize=optimize)
+                self.assertNotEqual(p.returncode, 0)
+                self.assertIn("contract test failed: operating-system failure", p.stderr)
+                self.assertNotIn(str(missing), p.stderr)
+                self.assertNotIn("private-source-SECRET", p.stderr)
+
+    def test_missing_fixture_os_error_redacts_private_path(self):
+        reviewed_blob = self.git_blob_sha(self.fixture)
+        compiler = self.compiler(status=1, stderr="private class field")
+        private_fixture = self.root / "private-fixture-SECRET.ores"
+        self.fixture = private_fixture
+        for optimize in ("-O", "-OO"):
+            with self.subTest(optimize=optimize):
+                p = self.run_contract(
+                    compiler, "--diagnostic", "private class field",
+                    "--fixture-git-blob", reviewed_blob, optimize=optimize,
+                )
+                self.assertNotEqual(p.returncode, 0)
+                self.assertIn("contract test failed: operating-system failure", p.stderr)
+                self.assertNotIn(str(private_fixture), p.stderr)
+                self.assertNotIn("private-fixture-SECRET", p.stderr)
 
     def test_valid_negative_still_passes_under_optimization(self):
         compiler = self.compiler(status=1, stderr="private class field")

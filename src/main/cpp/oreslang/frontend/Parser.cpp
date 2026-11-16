@@ -6080,6 +6080,8 @@ private:
     }
 
     std::string type_identifier() {
+        if (token_.text == "any" || token_.text == "unknown")
+            fail("native opaque any/unknown unsupported: dynamic tag, ownership and capability-safe lowering required");
         auto name = identifier();
         if ((name == "Option" || name == "Result") && accept("<")) {
             NativeSumType type; type.kind = name == "Option" ? NativeSumType::Kind::Option : NativeSumType::Kind::Result;
