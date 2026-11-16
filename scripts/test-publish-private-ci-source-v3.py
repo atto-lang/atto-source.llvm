@@ -3,6 +3,7 @@
 import base64
 import datetime as dt
 import hashlib
+import io
 import importlib.util
 import json
 from pathlib import Path
@@ -13,6 +14,10 @@ SCRIPT = Path(__file__).with_name("publish-private-ci-source-v3.py")
 SPEC = importlib.util.spec_from_file_location("llvm_private_ci_v3", SCRIPT)
 v3 = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(v3)
+
+# The real guard is retained for the production-denial regressions. Existing
+# simulated positive-path tests override it ONLY in this unittest fixture.
+REAL_PRODUCTION_ROLLBACK_GUARD = v3.require_atomic_ref_rollback
 
 SOURCE_TREE = "a" * 40
 BASE_TREE = "b" * 40
@@ -66,8 +71,163 @@ def carrier_contract(review_pr=None):
 
 
 class LlvmPrivateCiV3Test(unittest.TestCase):
+    def test_2048_blob_capacity_acceptance_and_2049_pre_fetch_denial(self):
+        # Entirely synthetic, source-free tree metadata and identical test
+        # blobs. No GitHub transfer, source checkout or real carrier access.
+        self.assertEqual(v3.MAX_FILES, 2048)
+        self.assertEqual(v3.MAX_TREE_ENTRIES, 4096)
+        self.assertEqual(v3.MAX_TOTAL, 40 * 1024 * 1024)
+        self.assertEqual(v3.MAX_FILE, 10 * 1024 * 1024)
+        head = "9" * 40
+        def simulate(count):
+            entries = [
+                {
+                    "path": "src/synthetic/file_%04d.ores" % n,
+                    "type": "blob", "mode": "100644",
+                    "sha": BLOB, "size": len(DATA),
+                }
+                for n in range(count)
+            ]
+            routes = []
+            def api(route, method="GET", payload=None):
+                routes.append(route)
+                if route == f"repos/{v3.SOURCE_REPO}/git/commits/{head}":
+                    return {"sha": head, "tree": {"sha": SOURCE_TREE}}
+                if route == f"repos/{v3.SOURCE_REPO}/git/trees/{SOURCE_TREE}?recursive=1":
+                    return {"sha": SOURCE_TREE, "truncated": False, "tree": entries}
+                if route == f"repos/{v3.SOURCE_REPO}/git/blobs/{BLOB}":
+                    return {
+                        "sha": BLOB,
+                        "encoding": "base64",
+                        "content": base64.b64encode(DATA).decode("ascii"),
+                    }
+                raise AssertionError("unexpected API request")
+            with (
+                patch.object(v3, "verify_source_pr", return_value=v3.SOURCE_REPO_ID),
+                patch.object(v3, "gh_api", side_effect=api),
+            ):
+                if count > v3.MAX_FILES:
+                    with self.assertRaisesRegex(v3.Denied, "bounded capacity"):
+                        v3.exact_source_tree(669, head)
+                    self.assertFalse(any("/git/blobs/" in value for value in routes))
+                else:
+                    tree, files, rows, digest = v3.exact_source_tree(669, head)
+                    self.assertEqual(tree, SOURCE_TREE)
+                    self.assertEqual(len(files), count)
+                    self.assertEqual(len(rows), count)
+                    self.assertEqual(
+                        digest, hashlib.sha256(v3.canonical_bytes(rows)).hexdigest()
+                    )
+                    self.assertEqual(
+                        sum(1 for value in routes if "/git/blobs/" in value), count
+                    )
+        simulate(2048)
+        simulate(2049)
+
+    def setUp(self):
+        # Preserve modeled handoff state-machine coverage while production is
+        # unconditionally disabled. This patch exists only inside tests.
+        modeled = patch.object(v3, "require_atomic_ref_rollback", return_value=None)
+        modeled.start()
+        self.addCleanup(modeled.stop)
+
+    def test_production_publish_denied_before_source_read_or_destination_write(self):
+        with (
+            patch.object(v3, "require_atomic_ref_rollback",
+                         side_effect=REAL_PRODUCTION_ROLLBACK_GUARD),
+            patch.object(v3, "protected_authority") as authority,
+            patch.object(v3, "exact_source_tree") as source_read,
+            patch.object(v3, "gh_api") as github_api,
+            patch.object(v3, "run_bounded_gh") as command,
+            patch.dict(v3.os.environ, {"ORES_PRIVATE_CI_ENABLE": "1",
+                                       "PRIVATE_CI_EXPORT_ENABLED": "true"}),
+        ):
+            with self.assertRaisesRegex(v3.Denied, "private CI export disabled"):
+                v3.publish("trusted/ci", 669, "9" * 40,
+                           "ci/test-plans/llvm-pr669.json")
+            authority.assert_not_called()
+            source_read.assert_not_called()
+            github_api.assert_not_called()
+            command.assert_not_called()
+
+    def test_production_cli_denies_without_source_or_destination_access(self):
+        with (
+            patch.object(v3, "require_atomic_ref_rollback",
+                         side_effect=REAL_PRODUCTION_ROLLBACK_GUARD),
+            patch.object(v3, "gh_api") as github_api,
+            patch.object(v3, "run_bounded_gh") as command,
+            patch("sys.stderr", new_callable=io.StringIO) as stderr,
+        ):
+            code = v3.main(["trusted/ci", "--source-pr", "669",
+                            "--source-commit", "9" * 40,
+                            "--test-plan", "ci/test-plans/llvm-pr669.json"])
+            self.assertEqual(code, 1)
+            self.assertIn("private CI export disabled", stderr.getvalue())
+            github_api.assert_not_called()
+            command.assert_not_called()
+
+    def test_rest_ref_delete_rejected_without_network(self):
+        with patch.object(v3, "run_bounded_gh") as command:
+            with self.assertRaisesRegex(v3.Denied, "deletion is forbidden"):
+                v3._gh_ref_request(
+                    "trusted/ci", "ci/authorized-" + CARRIER_COMMIT, "DELETE"
+                )
+            command.assert_not_called()
+
+    def test_matching_ref_cleanup_always_denied_without_network(self):
+        with (
+            patch.object(v3, "live_ref_sha", return_value=CARRIER_COMMIT) as live,
+            patch.object(v3, "_gh_ref_request") as ref_request,
+            patch.object(v3, "run_bounded_gh") as command,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "atomic compare-and-delete required"):
+                v3.delete_exact_ref(
+                    "trusted/ci", "ci/oreslang-" + SOURCE_TREE,
+                    CARRIER_COMMIT, 1323598177
+                )
+            live.assert_not_called()
+            ref_request.assert_not_called()
+            command.assert_not_called()
+
+    def test_incident_gate_contract_is_complete_and_unique(self):
+        expected = (
+            (22, 5832921751,
+             "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/22"),
+            (77, 5904679716,
+             "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/77"),
+            (127, 5935338521,
+             "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/127"),
+            (212, 6087989978,
+             "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/212"),
+            (222, 6092501448,
+             "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/222"),
+        )
+        self.assertEqual(v3.INCIDENT_GATES, expected)
+        self.assertEqual(len({number for number, _id, _url in expected}), len(expected))
+        self.assertEqual(len({_id for _number, _id, _url in expected}), len(expected))
+        self.assertEqual(len({_url for _number, _id, _url in expected}), len(expected))
+
+    def test_incident_gate_rejects_malformed_runtime_configuration(self):
+        original = v3.INCIDENT_GATES
+        cases = (
+            original + (original[-1],),
+            list(original),
+            original[:-1] + ((222, 6092501448, "https://github.com/other/repo/issues/222"),),
+            original[:-1] + ((True, 6092501448,
+                              "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/1"),),
+            original[:-1] + ((222, 0,
+                              "https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/222"),),
+            original[:-1] + ((222, 6092501448),),
+        )
+        for gates in cases:
+            with self.subTest(gates=gates), patch.object(v3, "INCIDENT_GATES", gates):
+                with self.assertRaisesRegex(v3.Denied, "configuration is invalid"):
+                    v3.require_incident_closure()
+
     def test_incident_gate_requires_exact_completed_identity(self):
-        def issue(number, issue_id, state="closed", reason="completed", url=None):
+        def issue(number, issue_id, state="closed", reason="completed", url=None,
+                  closer_login=v3.INCIDENT_REVIEW_LOGIN,
+                  closer_id=v3.INCIDENT_REVIEW_USER_ID):
             return {
                 "id": issue_id,
                 "number": number,
@@ -77,12 +237,18 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 ),
                 "state": state,
                 "state_reason": reason,
+                "closed_by": {
+                    "login": closer_login,
+                    "id": closer_id,
+                } if state == "closed" else None,
             }
 
         good = {
             22: issue(22, 5832921751),
             77: issue(77, 5904679716),
             127: issue(127, 5935338521),
+            212: issue(212, 6087989978),
+            222: issue(222, 6092501448),
         }
 
         def api_for(values):
@@ -97,6 +263,13 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             self.assertTrue(v3.require_incident_closure())
 
         cases = []
+        latest_incident_open = dict(good)
+        latest_incident_open[222] = issue(222, 6092501448, state="open", reason=None)
+        cases.append(latest_incident_open)
+
+        prior_latest_incident_open = dict(good)
+        prior_latest_incident_open[212] = issue(212, 6087989978, state="open", reason=None)
+        cases.append(prior_latest_incident_open)
         opened = dict(good)
         opened[22] = issue(22, 5832921751, state="open", reason=None)
         cases.append(opened)
@@ -112,6 +285,19 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         pr_object = dict(good)
         pr_object[77] = {**issue(77, 5904679716), "pull_request": {}}
         cases.append(pr_object)
+        wrong_closer_login = dict(good)
+        wrong_closer_login[212] = issue(
+            212, 6087989978, closer_login="the1mills"
+        )
+        cases.append(wrong_closer_login)
+        wrong_closer_id = dict(good)
+        wrong_closer_id[222] = issue(
+            222, 6092501448, closer_id=1
+        )
+        cases.append(wrong_closer_id)
+        missing_closer = dict(good)
+        missing_closer[127] = {**issue(127, 5935338521), "closed_by": None}
+        cases.append(missing_closer)
 
         for values in cases:
             with self.subTest(values=values):
@@ -879,6 +1065,76 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             digest, hashlib.sha256(v3.canonical_bytes(rows)).hexdigest()
         )
 
+    def test_source_tree_rejects_ambiguous_paths_before_blob_read(self):
+        valid = {
+            "path": "src/synthetic.cpp", "type": "blob",
+            "mode": "100644", "sha": BLOB, "size": len(DATA),
+        }
+        rejected = [
+            ("double-slash", [{**valid, "path": "src//sneak.cpp"}],
+             "path unsafe"),
+            ("dot-segment", [{**valid, "path": "src/./sneak.cpp"}],
+             "path unsafe"),
+            ("parent-segment", [{**valid, "path": "src/../sneak.cpp"}],
+             "path unsafe"),
+            ("trailing-slash", [{**valid, "path": "src/sneak.cpp/"}],
+             "path unsafe"),
+            ("git-directory", [{**valid, "path": "src/.GiT/config"}],
+             "path unsafe"),
+            ("backslash", [{**valid, "path": r"src\config"}],
+             "path unsafe"),
+            ("control", [{**valid, "path": "src/\x7fbad.cpp"}],
+             "path unsafe"),
+            ("casefold-collision", [
+                valid, {**valid, "path": "src/SYNTHETIC.cpp"}
+            ], "duplicate/case-colliding"),
+            ("duplicate-path", [valid, dict(valid)],
+             "duplicate/case-colliding"),
+            ("bad-directory-mode", [
+                {**valid, "path": "src", "type": "tree",
+                 "mode": "100644"},
+                valid
+            ], "directory mode invalid"),
+            ("bad-directory-sha", [
+                {**valid, "path": "src", "type": "tree",
+                 "mode": "040000", "sha": "not-a-sha"},
+                valid
+            ], "source directory SHA"),
+            ("casefold-directory-collision", [
+                {**valid, "path": "src", "type": "tree",
+                 "mode": "040000"},
+                {**valid, "path": "SRC", "type": "tree",
+                 "mode": "040000"},
+                valid
+            ], "duplicate/case-colliding"),
+        ]
+        for label, tree_entries, message in rejected:
+            calls = []
+
+            def api(route, method="GET", payload=None):
+                calls.append(route)
+                if route == f"repos/{v3.SOURCE_REPO}/pulls/669":
+                    return {
+                        "number": 669, "state": "open",
+                        "head": {"sha": "9" * 40,
+                                 "repo": {"full_name": v3.SOURCE_REPO}},
+                        "base": {"ref": "main"},
+                    }
+                if route == f"repos/{v3.SOURCE_REPO}/git/commits/" + "9" * 40:
+                    return {"sha": "9" * 40,
+                            "tree": {"sha": SOURCE_TREE}}
+                if route == f"repos/{v3.SOURCE_REPO}/git/trees/{SOURCE_TREE}?recursive=1":
+                    return {"sha": SOURCE_TREE, "truncated": False,
+                            "tree": tree_entries}
+                raise AssertionError(route)
+
+            with self.subTest(label=label):
+                with patch.object(v3, "gh_api", side_effect=api):
+                    with self.assertRaisesRegex(v3.Denied, message):
+                        v3.exact_source_tree(669, "9" * 40)
+                self.assertFalse(any("/git/blobs/" in route for route in calls),
+                                 "unsafe source path caused private blob read")
+
     def test_source_tree_rejects_oversized_declared_blob_before_blob_read(self):
         seen = []
         def api(route, method="GET", payload=None):
@@ -1120,14 +1376,19 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 )
 
     def test_delete_exact_ref_refuses_moved_ref(self):
-        with patch.object(v3, "live_ref_sha", return_value="9" * 40):
-            with self.assertRaisesRegex(v3.Denied, "moved"):
+        with (
+            patch.object(v3, "live_ref_sha", return_value="9" * 40) as live,
+            patch.object(v3, "_gh_ref_request") as ref_request,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "atomic compare-and-delete required"):
                 v3.delete_exact_ref(
                     "trusted/ci",
                     "ci/oreslang-" + SOURCE_TREE,
                     CARRIER_COMMIT,
                     1323598177,
                 )
+            live.assert_not_called()
+            ref_request.assert_not_called()
 
     def _publish_fixture(self, api, verify_source_pr=None, require_exact_ref=None,
                          delete_exact_ref=None):

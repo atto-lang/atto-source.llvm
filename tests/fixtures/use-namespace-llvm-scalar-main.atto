@@ -1,0 +1,5 @@
+// Same contextual header spelling that Java accepts. Native AOT smoke.
+use namespace foo;
+pub fnc main(): int {
+    return 42;
+}

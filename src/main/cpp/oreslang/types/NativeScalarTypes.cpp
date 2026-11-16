@@ -95,17 +95,28 @@ void validate_native_scalar_types(const Program& program) {
                 const auto& type = native_sum(program, e.sum_type);
                 const bool option = type.kind == NativeSumType::Kind::Option;
                 const bool query = option ? e.name == "is_some" || e.name == "is_none" : e.name == "is_ok" || e.name == "is_err";
-                if ((!query && e.name != "unwrap" && e.name != "unwrap_or") || e.arguments.size() != (e.name == "unwrap_or" ? 1u : 0u))
+                const bool with_argument = e.name == "unwrap_or" || e.name == "expect";
+                if ((!query && e.name != "unwrap" && e.name != "unwrap_or" && e.name != "expect") || e.arguments.size() != (with_argument ? 1u : 0u))
                     fail(e.offset, "sum member or payload arity");
+                if (e.name == "expect") require(expression(*e.arguments.at(0), locals), scalar(ScalarType::String), e.offset, "expect message type");
                 if (e.name == "unwrap_or") require(expression(*e.arguments.at(0), locals), scalar(type.value_type), e.offset, "sum fallback type");
                 return query ? scalar(true) : scalar(type.value_type);
             }
             case E::Integer: return scalar(false);
             case E::Boolean: return scalar(true);
             case E::String: return scalar(ScalarType::String);
-            case E::Console:
-                require(expression(*e.left, locals), scalar(ScalarType::String), e.offset, "stdio requires string");
+            case E::Console: {
+                // Java renders any value; the native slice admits String, int and
+                // bool and records which so codegen can format int/bool as text.
+                const Type argument = expression(*e.left, locals);
+                if (argument.kind == Kind::Int) e.resolved_type = ScalarType::I64;
+                else if (argument.kind == Kind::Bool) e.resolved_type = ScalarType::Bool;
+                else {
+                    require(argument, scalar(ScalarType::String), e.offset, "stdio requires string, int or bool");
+                    e.resolved_type = ScalarType::String;
+                }
                 return {Kind::Void, {}};
+            }
             case E::Variable: return locals.at(e.name);
             case E::Field: return field_type(expression(*e.left, locals), e.name, e.offset);
             case E::Copy: case E::Take: case E::Share: case E::Borrow: case E::BorrowMut:
@@ -145,7 +156,8 @@ void validate_native_scalar_types(const Program& program) {
                 if (left.kind != Kind::Int && left.kind != Kind::String) fail(e.offset, "addition requires int or string");
                 return left;
             }
-            case E::Subtract: case E::Multiply: case E::Remainder:
+            case E::Subtract: case E::Multiply: case E::Remainder: case E::Modulo: case E::BitXor:
+            case E::ShiftLeft: case E::ShiftRight: case E::ShiftUnsignedRight:
                 require(expression(*e.left, locals), scalar(false), e.offset, "arithmetic requires int");
                 require(expression(*e.right, locals), scalar(false), e.offset, "arithmetic requires int");
                 return scalar(false);
@@ -155,7 +167,8 @@ void validate_native_scalar_types(const Program& program) {
                 const Type element = owner.name == "String" ? scalar(ScalarType::String) : owner.name == "int" ? scalar(false)
                     : Type{Kind::Class, immutable_record(owner.name).name};
                 for (std::size_t i = 0; i < e.arguments.size(); ++i) {
-                    const bool index = (e.name == "get" || e.name == "set") && i == 0;
+                    const bool index = (e.name == "get" ||
+                        e.name == "get_copy" || e.name == "set") && i == 0;
                     if (!index && element.kind == Kind::Class &&
                             e.arguments[i]->kind != E::RecordConstruct &&
                             e.arguments[i]->kind != E::Call && e.arguments[i]->kind != E::Conditional &&
@@ -163,6 +176,12 @@ void validate_native_scalar_types(const Program& program) {
                         fail(e.offset, "record arrays require a new immutable record or existing array element");
                     require(expression(*e.arguments[i], locals), index ? scalar(false) : element,
                             e.arguments[i]->offset, index ? "array index requires int" : "array element type mismatch");
+                }
+                if (e.name == "get_copy") {
+                    if (owner.name != "int" || e.sum_type != "Option<int>" ||
+                        e.arguments.size() != 1)
+                        fail(e.offset, "Array.get_copy requires exact Copy<int> and tagged Option<int>");
+                    return {Kind::Sum, "Option<int>"};
                 }
                 return e.name == "get" ? element : scalar(false);
             }
@@ -258,7 +277,15 @@ void validate_native_scalar_types(const Program& program) {
         std::function<void(const std::vector<Statement>&, Locals&)> statements;
         statements = [&](const std::vector<Statement>& items, Locals& scope) {
             for (const auto& item : items) {
-                if (item.kind == Statement::Kind::ForIndex) {
+                if (item.kind == Statement::Kind::UsingTelemetrySpan) {
+                    // Compiler-owned AOT tracing token is not a scalar,
+                    // class, field receiver or guest-visible local. Recurse
+                    // through its lexical body under a child type scope
+                    // without inventing a type for the opaque alias. Other
+                    // admission passes enforce nonescape and affine safety.
+                    Locals body = scope;
+                    statements(item.then_statements, body);
+                } else if (item.kind == Statement::Kind::ForIndex) {
                     require(expression(*item.branch_local->initializer, scope), scalar(false), item.offset, "index initializer requires int");
                     Locals body = scope; body.emplace(item.branch_local->name, scalar(false));
                     require(expression(*item.condition, body), scalar(true), item.offset, "index condition requires bool");

@@ -1,0 +1,6 @@
+fnc increment(int value): int {
+    return value + 1;
+}
+pub fnc main(): int {
+    return 1 |> increment(2);
+}
