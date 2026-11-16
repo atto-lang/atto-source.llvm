@@ -38,7 +38,7 @@ done
 unset ORESLANG_LLVM_AOT_OPT_LEVEL
 # Compiler-semantic source rejections from the existing native source Task E2E corpus.
 # Each must fail before a guest artifact is published. Never launch these.
-for name in missing-await double-await producer-call second-task; do
+for name in missing-await double-await producer-call second-task actor-task-no-pool; do
   path="$root/tests/fixtures/task-v1-negative/$name.atto"
   [[ -f "$path" && ! -L "$path" ]] || { echo "Missing negative fixture: $name" >&2; exit 78; }
   [[ "$(git -C "$root" rev-parse "HEAD:tests/fixtures/task-v1-negative/$name.atto")" == "$(git hash-object --no-filters "$path")" ]] || { echo "Negative fixture differs from HEAD: $name" >&2; exit 78; }
@@ -47,6 +47,7 @@ for name in missing-await double-await producer-call second-task; do
     double-await) expected="requires await to immediately consume" ;;
     producer-call) expected="producer must be capture-free and scalar" ;;
     second-task) expected="supports exactly one source Task" ;;
+    actor-task-no-pool) expected="native actor task blocks require actor-owned scheduler continuation lowering; foreign Task pool is forbidden" ;;
   esac
   artifact="$tmp/rejected-$name"
   code=0
