@@ -3227,15 +3227,18 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_try_throw_capable_return
         native-try-throw-capable-return-reject.ores
         --diagnostic "native protected try return requires nonthrowing scalar/field read")
+    # `trap e` now lowers to Option<int> (pure integer operand only). Using
+    # it where an int is required must still reject, as on Java: there is no
+    # implicit Option flatten/erase into a result, argument or operand.
     oreslang_contract_test(reject_unadmitted_trap_expression
         unsupported-trap-expression.ores
-        --diagnostic "native trap expression unsupported: typed throw effects and cleanup lowering required")
+        --diagnostic "native result cannot implicitly wrap or erase Option/Result")
     oreslang_contract_test(reject_nested_unadmitted_trap_expression
         unsupported-trap-nested-call.ores
-        --diagnostic "native trap expression unsupported: typed throw effects and cleanup lowering required")
+        --diagnostic "native call argument cannot implicitly wrap or erase Option/Result")
     oreslang_contract_test(reject_binary_operand_trap_expression
         unsupported-trap-binary-operand.ores
-        --diagnostic "native trap expression unsupported: typed throw effects and cleanup lowering required")
+        --diagnostic "native tagged Option/Result is not an integer arithmetic operand")
     # Native source if/else CFG: separate branch states must join safely.
     # Real Clang execution, ASan/UBSan and no-partial-IR rejection matrix.
     if(ORE_CLANG)

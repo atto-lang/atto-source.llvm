@@ -1595,6 +1595,15 @@ private:
         program.type_only_declarations.push_back(std::move(decl));
     }
 
+    // After a comma-body separator: a second ',' is an empty item, while
+    // 'end' means the trailing separator has no following item.
+    void reject_missing_comma_item() const {
+        if (token_.text == ",")
+            fail("native comma expression body contains an empty item");
+        if (token_.text == "end")
+            fail("native comma expression body requires item after ','");
+    }
+
     void validate_actor_forwards(const Program& program) const {
         std::unordered_set<std::string> declared;
         for (const auto& actor : program.actors) {
@@ -2857,14 +2866,12 @@ private:
                         value.locals.push_back(std::move(binding));
                         if (!accept(","))
                             fail("native comma body local must be followed by ',' and an expression");
-                        if (token_.text == "," || token_.text == "end")
-                            fail("native comma expression body requires item after ','");
+                        reject_missing_comma_item();
                         continue;
                     }
                     auto evaluated = expression();
                     if (accept(",")) {
-                        if (token_.text == "," || token_.text == "end")
-                            fail("native comma expression body requires item after ','");
+                        reject_missing_comma_item();
                         LocalBinding discarded;
                         discarded.name = "$effect" + std::to_string(value.locals.size());
                         discarded.initializer = std::move(evaluated);
