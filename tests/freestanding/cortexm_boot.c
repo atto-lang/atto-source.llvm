@@ -22,12 +22,3 @@ void Reset_Handler(void) {
     // unrelated linkable object or a generated host-language stub.
     report_to_test_runner(main() == 42 ? 0u : 1u);
 }
-
-// LLVM's ARM IR assembler can emit a zero-type R_ARM_NONE personality
-// reference even with unwind tables disabled. Supply an explicit fatal
-// target trap, never a host unwinder/exception runtime.
-__attribute__((noreturn))
-void __aeabi_unwind_cpp_pr0(void) {
-    __asm__ volatile ("udf #0");
-    for (;;) {}
-}
