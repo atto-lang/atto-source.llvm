@@ -7867,6 +7867,21 @@ if(BUILD_TESTING)
     set_tests_properties(native_select_continuation_generation_fence PROPERTIES TIMEOUT 30)
 endif()
 
+# C ABI bridge over the fixed two-arm NativeSelectArbiter (host-only).
+if(BUILD_TESTING)
+    add_executable(oreslang-native-select-c-abi-test
+        tests/native_select_c_abi_test.cpp
+        src/main/cpp/oreslang/runtime/NativeSelectAbi.cpp)
+    target_include_directories(oreslang-native-select-c-abi-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-select-c-abi-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-select-c-abi-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_select_c_abi_bridge
+        COMMAND oreslang-native-select-c-abi-test)
+    set_tests_properties(native_select_c_abi_bridge PROPERTIES TIMEOUT 30)
+endif()
+
 # HOST-ONLY AI dispatch fencing parity v1; NOT an Oreslang guest / durable store.
 if(BUILD_TESTING)
   add_executable(ores_agent_host_dispatch_parity_v1
