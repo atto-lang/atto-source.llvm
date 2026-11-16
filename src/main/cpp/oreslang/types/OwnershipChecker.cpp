@@ -960,6 +960,14 @@ void validate_i64_ownership(Program& program) {
                 state.at(stmt.receiver).moved = false;
                 return;
             }
+            if (stmt.kind == Statement::Kind::TelemetryLogInfo) {
+                // Source literal and exact checked runtime descriptor are
+                // validated by the parser and backend-specific IR admission.
+                // This statement reads/moves no guest-owned state.
+                if (!stmt.expression && stmt.telemetry_operation.size() > 0 &&
+                    stmt.telemetry_operation.size() <= 96) return;
+                throw std::runtime_error("unverified native static log.info ownership effect");
+            }
             if (stmt.kind == Statement::Kind::UsingTelemetrySpan) {
                 // Token is compiler-owned and unrepresentable in Locals.
                 // Do not permit a borrowed/moved owner to cross this

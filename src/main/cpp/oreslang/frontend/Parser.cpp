@@ -2,6 +2,7 @@
 #include "llvm/Support/SHA256.h"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/NativeTelemetryLiteralV1.hpp"
 #include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/types/OwnershipChecker.hpp"
 #include "oreslang/frontend/GpuLaunchSourceMir.hpp"
@@ -3706,6 +3707,7 @@ private:
         std::function<std::vector<Statement>(bool, bool)> branch_arm;
         std::function<Statement()> dispatch_statement;
         std::function<Statement()> using_telemetry_span;
+        std::function<Statement()> telemetry_log_info;
         std::unordered_set<std::string> active_trace_aliases;
         std::function<Statement()> foreach_statement;
         auto scoped_local = [&]() {
@@ -3826,6 +3828,25 @@ private:
             }
             return false;
         };
+        // First native guest log slice: the message must be a source literal,
+        // not an expression whose to_string could park or run arbitrary code.
+        // Codegen requires a separately bound static (rid,sid) manifest row.
+        telemetry_log_info = [&]() -> Statement {
+            Statement event;
+            event.kind = Statement::Kind::TelemetryLogInfo;
+            event.offset = token_.offset;
+            require("log"); require("."); require("info"); require("(");
+            if (token_.kind != Kind::String)
+                fail("native log.info requires exactly one compile-time literal");
+            event.telemetry_operation = string_literal(token_.text);
+            if (!telemetry::valid_native_log_literal(event.telemetry_operation)) {
+                fail("native log.info literal must be 1..96 bytes without control characters");
+            }
+            advance();
+            require(")"); require(";");
+            return event;
+        };
+
         branch_arm = [&](bool finally_scope, bool then_scope) {
             if (++statement_depth > 16) fail("native structured statement depth exceeds 16");
             struct Depth { std::size_t& n; ~Depth() { --n; } } depth{statement_depth};
@@ -3837,6 +3858,9 @@ private:
                     fail("native conditional arm limit exceeded (16)");
                 if (token_.text == "using" && peek_next().kind == Kind::Identifier && !finally_scope) {
                     actions.push_back(using_telemetry_span()); continue;
+                }
+                if (token_.text == "log" && !module_names_.count("log")) {
+                    actions.push_back(telemetry_log_info()); continue;
                 }
                 if (token_.text == "for" && !finally_scope) {
                     actions.push_back(foreach_statement()); continue;
@@ -4143,8 +4167,8 @@ private:
             if (token_.kind != Kind::String)
                 fail("native using telemetry.span requires one literal operation name");
             scope.telemetry_operation = string_literal(token_.text);
-            if (scope.telemetry_operation.empty() || scope.telemetry_operation.size() > 256)
-                fail("native telemetry span name requires 1..256 UTF-8 bytes");
+            if (!telemetry::valid_native_span_literal(scope.telemetry_operation))
+                fail("native telemetry span name requires 1..256 UTF-8 bytes without control characters");
             advance();
             require(")"); require("as");
             scope.receiver = identifier();
@@ -4446,6 +4470,12 @@ private:
                 if (terminal_try_finally)
                     fail("native telemetry scope inside protected try requires unified unwind proof");
                 value.statements.push_back(using_telemetry_span());
+                continue;
+            }
+            if (token_.text == "log" && !module_names_.count("log")) {
+                if (terminal_try_finally)
+                    fail("native log.info inside protected try requires verified unwind gate");
+                value.statements.push_back(telemetry_log_info());
                 continue;
             }
             if (ready_future_local()) continue;
@@ -7257,6 +7287,12 @@ private:
             using NameSet = std::unordered_set<std::string>;
             std::function<void(const Statement&, NameSet&)> check_statement_names;
             check_statement_names = [&](const Statement& stmt, NameSet& names) {
+                if (stmt.kind == Statement::Kind::TelemetryLogInfo) {
+                    if (stmt.expression || stmt.telemetry_operation.empty() ||
+                        stmt.telemetry_operation.size() > 96)
+                        throw std::runtime_error("unverified static native log site syntax");
+                    return; // exactly one literal; no guest variable lookup
+                }
                 if (stmt.kind == Statement::Kind::UsingTelemetrySpan) {
                     if (names.count(stmt.receiver))
                         throw std::runtime_error(

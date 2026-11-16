@@ -5,6 +5,151 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Standalone native IR ABI test: hand-authored source-free LLVM IR links with
+# the real C telemetry runtime and returns 42. This is NOT Atto compiler IR.
+# Limit the fixture to its pinned x86_64 Linux triple and a local Clang driver.
+function(atto_add_static_source_log_ir_abi_test target test_name)
+  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR
+     NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
+    return()
+  endif()
+  find_program(ATTO_SOURCE_LOG_IR_CLANG NAMES clang clang-20 clang-19 clang-18 clang-17)
+  if(NOT ATTO_SOURCE_LOG_IR_CLANG)
+    return()
+  endif()
+  set(atto_ir_object "${CMAKE_CURRENT_BINARY_DIR}/${target}.o")
+  add_custom_command(OUTPUT "${atto_ir_object}"
+    COMMAND "${ATTO_SOURCE_LOG_IR_CLANG}" -x ir -O1 -c
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_static_source_log_ir_abi_v1.ll"
+      -o "${atto_ir_object}"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_static_source_log_ir_abi_v1.ll"
+    VERBATIM)
+  set_source_files_properties("${atto_ir_object}" PROPERTIES
+    GENERATED TRUE EXTERNAL_OBJECT TRUE)
+  add_executable(${target}
+    tests/native_static_source_log_ir_abi_harness_v1.c
+    src/main/cpp/oreslang/runtime/NativeTelemetrySpan.c
+    "${atto_ir_object}")
+  target_include_directories(${target} PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  set_target_properties(${target} PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  target_compile_options(${target} PRIVATE
+    $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+  add_test(NAME ${test_name} COMMAND ${target})
+  set_tests_properties(${test_name} PROPERTIES
+    PASS_REGULAR_EXPRESSION "LLVM_STATIC_SOURCE_LOG_IR_ABI_LINK_HOST_PASS"
+    TIMEOUT 20)
+endfunction()
+
+# Source identity cold-path admission can be tested without an LLVM SDK.
+# This is HOST-ONLY, not compiler-inserted Atto guest instrumentation.
+option(ATTO_SOURCE_IDS_HOST_ONLY
+  "Build only the standalone native source-ID descriptor verification" OFF)
+if(ATTO_SOURCE_IDS_HOST_ONLY)
+  include(CTest)
+  add_executable(atto_source_id_v1_host_test
+    tests/native_source_identity_v1_test.cpp)
+  target_include_directories(atto_source_id_v1_host_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_features(atto_source_id_v1_host_test PRIVATE cxx_std_17)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(atto_source_id_v1_host_test PRIVATE
+      -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+  endif()
+  add_test(NAME source_id_v1_host_metadata_only
+    COMMAND atto_source_id_v1_host_test)
+
+  add_executable(atto_source_id_v1_fuzz_host_test
+    tests/native_source_identity_fuzz_v1_test.cpp)
+  target_include_directories(atto_source_id_v1_fuzz_host_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_features(atto_source_id_v1_fuzz_host_test PRIVATE cxx_std_17)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(atto_source_id_v1_fuzz_host_test PRIVATE
+      -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+  endif()
+  add_test(NAME source_id_v1_fuzz_host_metadata_only
+    COMMAND atto_source_id_v1_fuzz_host_test)
+  add_executable(atto_source_log_manifest_host_test
+    tests/native_source_log_manifest_v1_test.cpp)
+  target_include_directories(atto_source_log_manifest_host_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_definitions(atto_source_log_manifest_host_test PRIVATE
+    ATTO_SOURCE_LOG_MANIFEST_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/examples/telemetry/log-info-ids.json")
+  target_compile_features(atto_source_log_manifest_host_test PRIVATE cxx_std_17)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(atto_source_log_manifest_host_test PRIVATE
+      -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+  endif()
+  add_test(NAME source_log_manifest_host_only
+    COMMAND atto_source_log_manifest_host_test)
+  add_executable(atto_native_telemetry_literal_host_test
+    tests/native_telemetry_literal_v1_test.cpp)
+  target_include_directories(atto_native_telemetry_literal_host_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_features(atto_native_telemetry_literal_host_test PRIVATE cxx_std_17)
+  target_compile_options(atto_native_telemetry_literal_host_test PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+  add_test(NAME native_telemetry_literal_10k_host_only
+    COMMAND atto_native_telemetry_literal_host_test)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(atto_source_log_paths_host_test
+      tests/native_source_log_paths_v1_test.cpp)
+    target_include_directories(atto_source_log_paths_host_test PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(atto_source_log_paths_host_test PRIVATE cxx_std_17)
+    target_compile_options(atto_source_log_paths_host_test PRIVATE
+      -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME source_log_paths_host_only
+      COMMAND atto_source_log_paths_host_test)
+  endif()
+  atto_add_static_source_log_ir_abi_test(
+    atto_static_source_log_ir_link_host_test
+    source_free_static_log_ir_link_host_only)
+
+  # C11 host-native ring verification; no LLVM SDK or guest compiler needed.
+  add_executable(atto_static_log_ring_v1_host_test
+    tests/native_static_log_ring_v1_test.c
+    src/main/cpp/oreslang/runtime/NativeTelemetrySpan.c)
+  target_include_directories(atto_static_log_ring_v1_host_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  set_target_properties(atto_static_log_ring_v1_host_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(atto_static_log_ring_v1_host_test PRIVATE
+      -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+  endif()
+  add_test(NAME static_guest_log_ring_host_only
+    COMMAND atto_static_log_ring_v1_host_test)
+  add_executable(atto_static_log_model_v1_host_test
+    tests/native_static_log_model_v1_test.c
+    src/main/cpp/oreslang/runtime/NativeTelemetrySpan.c)
+  target_include_directories(atto_static_log_model_v1_host_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  set_target_properties(atto_static_log_model_v1_host_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  target_compile_options(atto_static_log_model_v1_host_test PRIVATE
+    $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+  add_test(NAME static_log_50k_model_host_only COMMAND atto_static_log_model_v1_host_test)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Threads REQUIRED)
+    add_executable(atto_static_log_carriers_v1_host_test
+      tests/native_static_log_carriers_v1_test.c
+      src/main/cpp/oreslang/runtime/NativeTelemetrySpan.c)
+    target_include_directories(atto_static_log_carriers_v1_host_test PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(atto_static_log_carriers_v1_host_test PRIVATE Threads::Threads)
+    set_target_properties(atto_static_log_carriers_v1_host_test PROPERTIES
+      C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(atto_static_log_carriers_v1_host_test PRIVATE
+      -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME static_log_eight_carriers_host_only
+      COMMAND atto_static_log_carriers_v1_host_test)
+  endif()
+  return()
+endif()
+
 # ActorRegionV1 verification can be built against the REAL ActorArena.c
 # without LLVM headers or the compiler. This is host-runtime evidence ONLY,
 # never proof that an AttoLang .atto guest was compiled or ran.
@@ -363,6 +508,78 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # This runs the actual native Atto scalar parser + LLVM function IR
+    # emitter. It proves checked routine metadata only, NOT an inserted
+    # guest runtime site, linked AOT binary, JIT, or OTel export.
+    add_executable(oreslang-native-source-log-manifest-test
+        tests/native_source_log_manifest_v1_test.cpp)
+    target_include_directories(oreslang-native-source-log-manifest-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_definitions(oreslang-native-source-log-manifest-test PRIVATE
+        ATTO_SOURCE_LOG_MANIFEST_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/examples/telemetry/log-info-ids.json")
+    target_compile_features(oreslang-native-source-log-manifest-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-source-log-manifest-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_source_log_manifest_admission
+        COMMAND oreslang-native-source-log-manifest-test)
+    add_executable(oreslang-native-telemetry-literal-test
+        tests/native_telemetry_literal_v1_test.cpp)
+    target_include_directories(oreslang-native-telemetry-literal-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-telemetry-literal-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-telemetry-literal-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_telemetry_literal_10k_sdk
+        COMMAND oreslang-native-telemetry-literal-test)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(oreslang-native-source-log-paths-test
+            tests/native_source_log_paths_v1_test.cpp)
+        target_include_directories(oreslang-native-source-log-paths-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features(oreslang-native-source-log-paths-test PRIVATE cxx_std_17)
+        target_compile_options(oreslang-native-source-log-paths-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_source_log_physical_paths_admission
+            COMMAND oreslang-native-source-log-paths-test)
+    endif()
+    atto_add_static_source_log_ir_abi_test(
+        oreslang-native-static-source-log-ir-link-test
+        source_free_native_static_log_ir_link_host_only)
+
+    add_test(NAME native_source_routine_id_compiler_ir
+        COMMAND oreslang-llvmc --selftest-source-routine-ir)
+    set_tests_properties(native_source_routine_id_compiler_ir PROPERTIES
+        PASS_REGULAR_EXPRESSION "LLVM_SOURCE_ID_COMPILER_IR_METADATA_PASS"
+        TIMEOUT 30)
+
+    add_test(NAME native_guest_log_info_verified_llvm_ir
+        COMMAND oreslang-llvmc --selftest-native-log-info-ir)
+    set_tests_properties(native_guest_log_info_verified_llvm_ir PROPERTIES
+        PASS_REGULAR_EXPRESSION "LLVM_NATIVE_LOG_INFO_GUEST_IR_PASS"
+        TIMEOUT 30)
+
+    # Full compiler proof: this target invokes oreslang-llvmc on the actual
+    # reviewed .atto source + JSON manifest, compiles the emitted LLVM IR,
+    # links the production C runtime and checks exit 42 + both real receipts.
+    # It is NOT the standalone source-free IR ABI regression above.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
+       CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
+        find_program(ATTO_NATIVE_LOG_GUEST_CLANG
+            NAMES clang clang-20 clang-19 clang-18 clang-17)
+        if(ATTO_NATIVE_LOG_GUEST_CLANG)
+            add_test(NAME native_log_info_compiler_linked_guest_full_aot
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DATTO_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+                    "-DATTO_COMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                    "-DATTO_CLANG=${ATTO_NATIVE_LOG_GUEST_CLANG}"
+                    "-DATTO_WORK=${CMAKE_CURRENT_BINARY_DIR}/native-log-guest-check"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_guest_log_info_full_aot.cmake")
+            set_tests_properties(native_log_info_compiler_linked_guest_full_aot PROPERTIES
+                PASS_REGULAR_EXPRESSION "LLVM_NATIVE_LOG_INFO_LINKED_ATTO_GUEST_PASS:42"
+                TIMEOUT 45)
+        endif()
+    endif()
+
     # Static byte/bit/packet match plan host proof, NOT compiled .atto guest AOT.
     add_executable(oreslang-atto-byte-bit-pattern-plan-test
         tests/atto_byte_bit_pattern_plan_test.cpp)
@@ -1085,6 +1302,50 @@ if(BUILD_TESTING)
     add_test(NAME native_telemetry_dormant_span_runtime
         COMMAND oreslang-native-telemetry-span-runtime-test)
     set_tests_properties(native_telemetry_dormant_span_runtime PROPERTIES TIMEOUT 20)
+
+    # Concrete C runtime for compiler-emitted literal log.info AOT probes.
+    # This host/native CTest does NOT replace compiler IR or linked guest proof.
+    add_executable(oreslang-native-static-log-ring-test
+        tests/native_static_log_ring_v1_test.c
+        src/main/cpp/oreslang/runtime/NativeTelemetrySpan.c)
+    target_include_directories(oreslang-native-static-log-ring-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-static-log-ring-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(oreslang-native-static-log-ring-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_literal_guest_log_ring_runtime
+        COMMAND oreslang-native-static-log-ring-test)
+    set_tests_properties(native_literal_guest_log_ring_runtime PROPERTIES TIMEOUT 20)
+    add_executable(oreslang-native-static-log-model-test
+        tests/native_static_log_model_v1_test.c
+        src/main/cpp/oreslang/runtime/NativeTelemetrySpan.c)
+    target_include_directories(oreslang-native-static-log-model-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-static-log-model-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(oreslang-native-static-log-model-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_literal_log_50k_model_runtime
+        COMMAND oreslang-native-static-log-model-test)
+    set_tests_properties(native_literal_log_50k_model_runtime PROPERTIES TIMEOUT 20)
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(oreslang-native-static-log-carriers-test
+            tests/native_static_log_carriers_v1_test.c
+            src/main/cpp/oreslang/runtime/NativeTelemetrySpan.c)
+        target_include_directories(oreslang-native-static-log-carriers-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-static-log-carriers-test PRIVATE Threads::Threads)
+        set_target_properties(oreslang-native-static-log-carriers-test PROPERTIES
+            C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+        target_compile_options(oreslang-native-static-log-carriers-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_literal_guest_log_eight_carriers_runtime
+            COMMAND oreslang-native-static-log-carriers-test)
+        set_tests_properties(native_literal_guest_log_eight_carriers_runtime
+            PROPERTIES TIMEOUT 20)
+    endif()
 
     # Real POSIX carrier isolation: compare unique span IDs across pthreads,
     # then prove the wrong-carrier close receives SIGABRT in a forked child.
