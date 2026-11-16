@@ -440,7 +440,7 @@ int main(int argc, char** argv) {
         if (native_hard_rt_profile && experimental_owned_int)
             throw std::runtime_error("native-hard-rt profile rejects experimental owned heap lowering");
 
-        if (experimental_static_ffi_i64 || static_ffi_i64_capability) {
+        if (experimental_static_ffi_i64) {
             // Only an isolated host-private static native C link proof.
             // No actual foreign actor spawn, scheduler or signed artifact.
             if (!experimental_static_ffi_i64 || !static_ffi_i64_capability ||
@@ -481,10 +481,21 @@ int main(int argc, char** argv) {
             return 0;
         }
 
+        // The normal front-end may receive precisely one compiler-approved
+        // native C symbol through the semantic FFI gate. A CLI grant is a
+        // bounded test authority, not yet a signed supervisor capability.
+        if (static_ffi_i64_capability &&
+                (wasm32_target || cortex_m_target || tenant_vm_guest ||
+                 native_hard_rt_profile || rt_check_only || rt_entry_seen ||
+                 rt_report_seen || tree_shake || !tree_shake_roots.empty() ||
+                 experimental_owned_int || experimental_rt_scalar_loop ||
+                 bounded_allocator_provider))
+            throw std::runtime_error(
+                "normal static FFI i64 requires host AOT with isolated approved linker grant");
         auto ast = oreslang::load_native_program(
             path, text, source_identity, experimental_owned_int,
             experimental_rt_scalar_loop, !wasm32_target && !cortex_m_target,
-            admitted_provider_bits);
+            admitted_provider_bits, static_ffi_i64_capability);
         source_module = ast.module;
         source_namespace = ast.namespace_name;
 
