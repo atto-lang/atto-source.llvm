@@ -47,6 +47,9 @@ def parse_actor_receipt(line):
     expected = {
         "constructor_on_worker", "released", "ready",
         "accepted", "processed", "abandoned", "last",
+        # Failed-receive accounting (#1819): turns that completed, turns
+        # that failed, and the last typed failure code.
+        "successful", "failed", "failure_code",
     }
     fields = {}
     for field in parts[1:]:
