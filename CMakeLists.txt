@@ -8416,3 +8416,15 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-fixed-buffer-registry-mailbox-test)
     set_tests_properties(native_fixed_buffer_registry_mailbox_host_only PROPERTIES TIMEOUT 30)
 endif()
+
+
+# Source preflight only. This is not guest compilation or native AOT proof.
+if(BUILD_TESTING)
+    add_executable(oreslang-source-bidi-admission-test tests/source_bidi_admission_test.cpp)
+    target_include_directories(oreslang-source-bidi-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-source-bidi-admission-test PRIVATE cxx_std_17)
+    add_test(NAME llvm_source_bidi_admission_host
+        COMMAND oreslang-source-bidi-admission-test)
+    set_tests_properties(llvm_source_bidi_admission_host PROPERTIES TIMEOUT 20)
+endif()
