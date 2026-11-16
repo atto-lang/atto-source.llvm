@@ -1498,7 +1498,8 @@ VmOpenResult TenantVmHost::open(VmSpec spec) {
     if (!valid_tenant_id(spec.tenant_id) || !valid_module(spec.module) || l.heap_bytes == 0 ||
         l.heap_bytes > kAddressableBytes - (std::uint64_t{1} << 20) || l.max_actors == 0 ||
         l.mailbox_capacity == 0 || l.max_inflight == 0 || l.max_parallel_turns == 0 ||
-        l.max_payload_bytes == 0 || l.max_reply_bytes == 0 || l.turn_deadline_ms == 0)
+        l.max_payload_bytes == 0 || l.max_reply_bytes == 0 || l.turn_deadline_ms == 0 ||
+        l.restart_window_ms == 0)
         return refuse(Status::InvalidArgument);
     if (!handlers_are_ours()) return refuse(Status::SignalHandlerLost);
 
