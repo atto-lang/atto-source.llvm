@@ -585,7 +585,9 @@ if(BUILD_TESTING)
     add_executable(atto-llvm-intrinsic-compat-test
         tests/llvm_intrinsic_compat_api_test.cpp)
     target_include_directories(atto-llvm-intrinsic-compat-test PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    # SYSTEM: -Werror below is for this test, not for warnings in LLVM headers.
+    target_include_directories(atto-llvm-intrinsic-compat-test SYSTEM PRIVATE
         "${LLVM_INCLUDE_DIRS}")
     target_link_libraries(atto-llvm-intrinsic-compat-test PRIVATE ${ORE_LLVM_LIBS})
     target_compile_options(atto-llvm-intrinsic-compat-test PRIVATE
@@ -1885,7 +1887,8 @@ if(BUILD_TESTING)
     set_tests_properties(native_linked_queue_harness_adversarial
         PROPERTIES TIMEOUT 30)
     find_package(OpenSSL QUIET COMPONENTS Crypto)
-    if(OpenSSL_FOUND)
+    # NativeIpcAuthenticatedStreamSession.hpp is Linux-only (#error elsewhere).
+    if(OpenSSL_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_executable(oreslang-native-ipc-authenticated-session-failpoint-test
             tests/native_ipc_authenticated_session_failpoint_test.cpp)
         target_include_directories(oreslang-native-ipc-authenticated-session-failpoint-test PRIVATE
@@ -5399,6 +5402,12 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-actor-owned-i64-heap-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-actor-owned-i64-heap-test PRIVATE Threads::Threads)
+    # The test intercepts the runtime object's calloc/free with linker --wrap (GNU ld/lld only).
+    if(APPLE)
+        target_compile_definitions(oreslang-actor-owned-i64-heap-test PRIVATE ORES_HEAP_NO_LINK_WRAP=1)
+    else()
+        target_link_options(oreslang-actor-owned-i64-heap-test PRIVATE -Wl,--wrap=calloc -Wl,--wrap=free)
+    endif()
     target_compile_options(oreslang-actor-owned-i64-heap-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_actor_owned_i64_heap_loan_quiescence
