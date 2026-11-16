@@ -496,6 +496,34 @@ fn main() {
             "",
         ),
         (
+            "nats-string-contains-literal-binary",
+            r#"fnc valid_subject_token(String token):bool {
+                  if token == "" then return false; fi
+                  if token.contains_literal(" ") || token.contains_literal("\t") ||
+                     token.contains_literal("\r") || token.contains_literal("\n") ||
+                     token.contains_literal("\u0000") then return false; fi
+                  return true;
+                }
+                pub routine main():int {
+                  val String subject="orders.created.eu";
+                  val String nul="a\u0000b";
+                  val String utf="é\u0000stop";
+                  return valid_subject_token("orders") &&
+                    !valid_subject_token("") &&
+                    !valid_subject_token("bad subject") &&
+                    !valid_subject_token(nul) &&
+                    subject.contains_literal("created") &&
+                    subject.contains_literal(".") &&
+                    subject.contains_literal("") &&
+                    !subject.contains_literal("payments") &&
+                    !subject.contains_literal("orders.created.eu.extra") &&
+                    nul.contains_literal("\u0000") &&
+                    utf.contains_literal("\u0000") &&
+                    !subject.contains_literal("\u0000") ? 0 : 1;
+                }"#,
+            "",
+        ),
+        (
             "string-content-equality",
             r#"fnc same(string a,string b):bool{return a == b;}
               pub routine main():int {
@@ -962,6 +990,10 @@ fn main() {
         ("string-record-private-field", "define class Segment as val String value; end pub fnc main():int{val Segment s=new Segment(\"secret\");return s.value==\"secret\"?0:1;}".to_owned(), foo.to_owned()),
         ("string-record-final-field-write", "define class Segment as pub val String value; end pub fnc main():int{let mut Segment s=new Segment(\"first\");s.value=\"other\";return 0;}".to_owned(), foo.to_owned()),
         ("string-record-untyped-handle-return", "define class Segment as pub val String value; end pub fnc main():int{val Segment s=new Segment(\"first\");return s.value;}".to_owned(), foo.to_owned()),
+        ("nats-string-contains-int-receiver", "pub routine main():int{val n: int = 42;return n.contains_literal(\"4\")?0:1;}".to_owned(), foo.to_owned()),
+        ("nats-string-contains-int-needle", "pub routine main():int{val String s=\"abc\";return s.contains_literal(42)?0:1;}".to_owned(), foo.to_owned()),
+        ("nats-string-contains-wrong-arity", "pub routine main():int{val String s=\"abc\";return s.contains_literal(\"a\",\"b\")?0:1;}".to_owned(), foo.to_owned()),
+        ("nats-string-contains-named-needle-rejected", "pub routine main():int{val String s=\"abc\";return s.contains_literal(needle:\"a\")?0:1;}".to_owned(), foo.to_owned()),
         ("string-array-integer-add", "pub fnc main():int{val Array<String> a=new Array<String>();a.add(42);return 0;}".to_owned(), foo.to_owned()),
         ("integer-array-string-add", "pub fnc main():int{val Array<int> a=new Array<int>();a.add(\"bad\");return 0;}".to_owned(), foo.to_owned()),
         ("string-array-string-index", "pub fnc main():int{val Array<String> a=new Array<String>();return a.get(\"bad\")==\"x\"?0:1;}".to_owned(), foo.to_owned()),

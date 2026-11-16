@@ -358,6 +358,16 @@ llvm::Value* lower(const Expression& expr,
             return builder.CreateLoad(i64, field_storage.at(native_place_key(expr)),
                                       expr.left->name + "." + expr.name + ".read");
         case Expression::Kind::ArrayCall: {
+            if (expr.name == "contains_literal") {
+                if (!expr.left || expr.arguments.size() != 1)
+                    throw std::runtime_error("invalid checked String.contains_literal lowering");
+                auto* text = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+                auto* needle = lower(*expr.arguments.front(), builder, i64, storage, field_storage, functions, moves);
+                auto runtime = builder.GetInsertBlock()->getModule()->getOrInsertFunction(
+                    "ores_string_contains_literal",
+                    llvm::FunctionType::get(i64, {i64, i64}, false));
+                return builder.CreateCall(runtime, {text, needle}, "string.contains.literal");
+            }
             if (!expr.left)
                 throw std::runtime_error("native Array<int> call has no owned receiver");
             llvm::Value* handle = builder.CreateLoad(i64,
