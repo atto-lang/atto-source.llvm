@@ -404,11 +404,58 @@ impl<'a> FunctionEmitter<'a> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LibraryProfile {
+    Hosted,
+    FreestandingCore,
+}
+
+// Admission is performed on the *actual compiler tokens*, not on regexes
+// over raw source. Comments and literals cannot smuggle imports or produce
+// false host-API matches. This scalar-first profile deliberately denies all
+// source imports until the typed module resolver enforces layer provenance.
+fn admit_freestanding_tokens(
+    tokens: &[atto_compiler::lexer::Token],
+) -> Result<(), String> {
+    use atto_compiler::lexer::Tok;
+    for (index, token) in tokens.iter().enumerate() {
+        let Tok::Ident(word) = &token.tok else { continue };
+        match word.as_str() {
+            "import" | "using" => {
+                return Err(format!("E_FREESTANDING_FORBIDDEN_IMPORT: {word} is not admitted"));
+            }
+            "extern" | "foreign" | "ffi" | "syscall" | "dlopen" => {
+                return Err(format!("E_FREESTANDING_HOST_EFFECT: {word}"));
+            }
+            "new" => return Err("E_ALLOCATOR_REQUIRED: 'new' in core-only profile".into()),
+            "Array" | "List" | "Map" | "Set" | "Box" | "Arc" | "String" => {
+                return Err(format!("E_ALLOCATOR_REQUIRED: heap-backed {word} in core-only profile"));
+            }
+            "stdio" | "process" | "filesystem" | "socket" | "thread" | "std" |
+            "wasi" | "libc" | "java" | "dotnet" | "System" | "net" | "os" => {
+                if matches!(tokens.get(index + 1).map(|x| &x.tok),
+                            Some(Tok::Dot | Tok::ColonColon)) {
+                    return Err(format!("E_FREESTANDING_HOST_EFFECT: {word} qualified host API"));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 pub fn compile_ir(source: &str) -> Result<String, String> {
+    compile_ir_with_profile(source, LibraryProfile::Hosted)
+}
+
+fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<String, String> {
     if source.len() > atto_compiler::SOURCE_CAP {
         return Err("E_SOURCE_LIMIT: native Atto input exceeds 64 KiB".into());
     }
     let toks = atto_compiler::lexer::lex(source).map_err(|e|e.to_string())?;
+    if profile == LibraryProfile::FreestandingCore {
+        admit_freestanding_tokens(&toks)?;
+    }
     let program = if target_native::requires_target_link(&toks) {
         target_native::lower(&toks)?
     } else {
@@ -416,6 +463,18 @@ pub fn compile_ir(source: &str) -> Result<String, String> {
             .map_err(|e|e.to_string())?
     };
     let typed = check::check(&program).map_err(|e|e.to_string())?;
+    if profile == LibraryProfile::FreestandingCore {
+        if !typed.imports.is_empty() {
+            return Err("E_FREESTANDING_FORBIDDEN_IMPORT: typed host imports".into());
+        }
+        if typed.heap || typed.strings || typed.guest_eh || !typed.data.is_empty() {
+            return Err("E_ALLOCATOR_REQUIRED: non-scalar runtime payload in core-only profile".into());
+        }
+        if !typed.actors.is_empty() || !typed.globals.is_empty() ||
+           !typed.generators.is_empty() {
+            return Err("E_FREESTANDING_RUNTIME: implicit actor/executor/global runtime".into());
+        }
+    }
     let native_actor_mode = !typed.actors.is_empty();
     if !typed.generators.is_empty() || typed.heap || typed.strings ||
        typed.guest_eh || !typed.data.is_empty() {
@@ -634,16 +693,22 @@ fn validate_native_artifact(path: &std::path::Path) -> Result<(), String> {
 
 fn cli() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (src, out, emit_only) = match args.as_slice() {
-        [src, flag, out] if flag == "-o" => (src, out, false),
-        [src, flag, out, mode] if flag == "-o" && mode == "--emit-llvm" => (src, out, true),
-        _ => return Err("usage: atto-llvm input.atto -o output [--emit-llvm]".into()),
+    let (src, out, emit_only, profile) = match args.as_slice() {
+        [src, flag, out] if flag == "-o" => (src, out, false, LibraryProfile::Hosted),
+        [src, flag, out, mode] if flag == "-o" && mode == "--emit-llvm" =>
+            (src, out, true, LibraryProfile::Hosted),
+        [src, flag, out, mode, profile]
+            if flag == "-o" && mode == "--emit-llvm" && profile == "--freestanding-core" =>
+            (src, out, true, LibraryProfile::FreestandingCore),
+        _ => return Err(
+            "usage: atto-llvm input.atto -o output [--emit-llvm [--freestanding-core]]".into()
+        ),
     };
     if !src.ends_with(".atto") {
         return Err("E_SOURCE: input must have the .atto extension".into());
     }
     let content = std::fs::read_to_string(src).map_err(|e|format!("E_INPUT: {e}"))?;
-    let ir = compile_ir(&content)?;
+    let ir = compile_ir_with_profile(&content, profile)?;
     let (staged, mut stage_file) = OutputStage::create(
         std::path::Path::new(src), std::path::Path::new(out)
     )?;
@@ -720,5 +785,35 @@ mod tests {
     #[test]
     fn rejects_runtime_printing_without_native_abi() {
         assert!(compile_ir("pub fnc main(): int { stdio.println(1); return 42; }").is_err());
+    }
+    #[test]
+    fn freestanding_core_compiles_checked_scalar_without_host_runtime() {
+        let ir = compile_ir_with_profile(
+            "pub fnc add_one(int x): int { return x + 1; } pub fnc main(): int { return add_one(41); }",
+            LibraryProfile::FreestandingCore,
+        ).unwrap();
+        assert!(ir.contains("define i32 @main()"));
+        assert!(ir.contains("llvm.sadd.with.overflow.i64"));
+        assert!(!ir.contains("@atto_actor_"));
+        assert!(!ir.contains("@malloc"));
+    }
+    #[test]
+    fn freestanding_core_ignores_host_names_in_comments() {
+        let source = "// import std; stdio.out; new Array<int>;\npub fnc main(): int { return 42; }";
+        assert!(compile_ir_with_profile(source, LibraryProfile::FreestandingCore).is_ok());
+    }
+    #[test]
+    fn freestanding_core_rejects_imports_and_host_dependencies() {
+        let samples = [
+            ("import module host from \"stdlib/std/file.atto\"; pub fnc main(): int { return 42; }", "E_FREESTANDING_FORBIDDEN_IMPORT"),
+            ("pub fnc main(): int { stdio.println(1); return 42; }", "E_FREESTANDING_HOST_EFFECT"),
+            ("pub fnc main(): int { process.spawn(\"a\"); return 42; }", "E_FREESTANDING_HOST_EFFECT"),
+            ("pub fnc main(): int { val x = Array.of(1); return 42; }", "E_ALLOCATOR_REQUIRED"),
+            ("pub fnc main(): int { val x = new Error(\"x\"); return 42; }", "E_ALLOCATOR_REQUIRED"),
+        ];
+        for (source, code) in samples {
+            let err = compile_ir_with_profile(source, LibraryProfile::FreestandingCore).unwrap_err();
+            assert!(err.contains(code), "{code} got {err}");
+        }
     }
 }
