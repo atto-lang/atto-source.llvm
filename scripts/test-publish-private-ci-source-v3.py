@@ -3,6 +3,7 @@
 import base64
 import datetime as dt
 import hashlib
+import io
 import importlib.util
 import json
 from pathlib import Path
@@ -13,6 +14,10 @@ SCRIPT = Path(__file__).with_name("publish-private-ci-source-v3.py")
 SPEC = importlib.util.spec_from_file_location("llvm_private_ci_v3", SCRIPT)
 v3 = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(v3)
+
+# The real guard is retained for the production-denial regressions. Existing
+# simulated positive-path tests override it ONLY in this unittest fixture.
+REAL_PRODUCTION_ROLLBACK_GUARD = v3.require_atomic_ref_rollback
 
 SOURCE_TREE = "a" * 40
 BASE_TREE = "b" * 40
@@ -66,6 +71,71 @@ def carrier_contract(review_pr=None):
 
 
 class LlvmPrivateCiV3Test(unittest.TestCase):
+    def setUp(self):
+        # Preserve modeled handoff state-machine coverage while production is
+        # unconditionally disabled. This patch exists only inside tests.
+        modeled = patch.object(v3, "require_atomic_ref_rollback", return_value=None)
+        modeled.start()
+        self.addCleanup(modeled.stop)
+
+    def test_production_publish_denied_before_source_read_or_destination_write(self):
+        with (
+            patch.object(v3, "require_atomic_ref_rollback",
+                         side_effect=REAL_PRODUCTION_ROLLBACK_GUARD),
+            patch.object(v3, "protected_authority") as authority,
+            patch.object(v3, "exact_source_tree") as source_read,
+            patch.object(v3, "gh_api") as github_api,
+            patch.object(v3, "run_bounded_gh") as command,
+            patch.dict(v3.os.environ, {"ORES_PRIVATE_CI_ENABLE": "1",
+                                       "PRIVATE_CI_EXPORT_ENABLED": "true"}),
+        ):
+            with self.assertRaisesRegex(v3.Denied, "private CI export disabled"):
+                v3.publish("trusted/ci", 669, "9" * 40,
+                           "ci/test-plans/llvm-pr669.json")
+            authority.assert_not_called()
+            source_read.assert_not_called()
+            github_api.assert_not_called()
+            command.assert_not_called()
+
+    def test_production_cli_denies_without_source_or_destination_access(self):
+        with (
+            patch.object(v3, "require_atomic_ref_rollback",
+                         side_effect=REAL_PRODUCTION_ROLLBACK_GUARD),
+            patch.object(v3, "gh_api") as github_api,
+            patch.object(v3, "run_bounded_gh") as command,
+            patch("sys.stderr", new_callable=io.StringIO) as stderr,
+        ):
+            code = v3.main(["trusted/ci", "--source-pr", "669",
+                            "--source-commit", "9" * 40,
+                            "--test-plan", "ci/test-plans/llvm-pr669.json"])
+            self.assertEqual(code, 1)
+            self.assertIn("private CI export disabled", stderr.getvalue())
+            github_api.assert_not_called()
+            command.assert_not_called()
+
+    def test_rest_ref_delete_rejected_without_network(self):
+        with patch.object(v3, "run_bounded_gh") as command:
+            with self.assertRaisesRegex(v3.Denied, "deletion is forbidden"):
+                v3._gh_ref_request(
+                    "trusted/ci", "ci/authorized-" + CARRIER_COMMIT, "DELETE"
+                )
+            command.assert_not_called()
+
+    def test_matching_ref_cleanup_always_denied_without_network(self):
+        with (
+            patch.object(v3, "live_ref_sha", return_value=CARRIER_COMMIT) as live,
+            patch.object(v3, "_gh_ref_request") as ref_request,
+            patch.object(v3, "run_bounded_gh") as command,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "atomic compare-and-delete required"):
+                v3.delete_exact_ref(
+                    "trusted/ci", "ci/oreslang-" + SOURCE_TREE,
+                    CARRIER_COMMIT, 1323598177
+                )
+            live.assert_not_called()
+            ref_request.assert_not_called()
+            command.assert_not_called()
+
     def test_incident_gate_contract_is_complete_and_unique(self):
         expected = (
             (22, 5832921751,
@@ -1253,14 +1323,19 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 )
 
     def test_delete_exact_ref_refuses_moved_ref(self):
-        with patch.object(v3, "live_ref_sha", return_value="9" * 40):
-            with self.assertRaisesRegex(v3.Denied, "moved"):
+        with (
+            patch.object(v3, "live_ref_sha", return_value="9" * 40) as live,
+            patch.object(v3, "_gh_ref_request") as ref_request,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "atomic compare-and-delete required"):
                 v3.delete_exact_ref(
                     "trusted/ci",
                     "ci/oreslang-" + SOURCE_TREE,
                     CARRIER_COMMIT,
                     1323598177,
                 )
+            live.assert_not_called()
+            ref_request.assert_not_called()
 
     def _publish_fixture(self, api, verify_source_pr=None, require_exact_ref=None,
                          delete_exact_ref=None):
