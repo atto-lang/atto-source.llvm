@@ -652,7 +652,7 @@ struct TenantVmHost::Core {
     void reset_actor_locked(Vm& vm, Actor& actor) {
         std::memset(vm.cage + actor.region, 0, actor.region_bytes);
         if (actor.kind->instance_bytes) std::memset(actor.instance.get(), 0, actor.kind->instance_bytes);
-        actor.heap_allocator->reset();
+        if (actor.heap_allocator) actor.heap_allocator->reset();
     }
 
     FailReason classify(const Vm& vm, Carrier* c, std::uint64_t& fault_offset) const {
@@ -824,7 +824,9 @@ struct TenantVmHost::Core {
         if (instance_total) instance.reset(new std::uint8_t[instance_total]());
         // Allocate trusted sidecars BEFORE region admission: no host allocation
         // occurs when this actor calls alloc/free or after a guest restart.
-        auto heap_allocator = std::make_unique<ActorSlabHeap32>(kind->heap_bytes);
+        std::unique_ptr<ActorSlabHeap32> heap_allocator;
+        if (kind->heap_bytes != 0)
+            heap_allocator = std::make_unique<ActorSlabHeap32>(kind->heap_bytes);
         std::uint32_t region = 0;
         if (!allocate_region_locked(v, bytes, region)) return Status::HeapBudget;
         std::uint32_t slot;
@@ -839,7 +841,7 @@ struct TenantVmHost::Core {
         actor.kind = kind;
         actor.region = region;
         actor.region_bytes = bytes;
-        heap_allocator->bind(v.cage, static_cast<std::uint32_t>(
+        if (heap_allocator) heap_allocator->bind(v.cage, static_cast<std::uint32_t>(
             std::uint64_t{region} + kind->state_bytes));
         actor.heap_allocator = std::move(heap_allocator);
         actor.instance = std::move(instance);
