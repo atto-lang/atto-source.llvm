@@ -142,6 +142,22 @@ public:
         }
     }
 
+    // A failed clGetEventInfo call does not prove the command is quiescent.
+    // Only a successful terminal event-status query may authorize GPU buffer
+    // cleanup. Device loss requires separate clFinish/recovery proof.
+    static EventStatus classify_event_query(
+            std::int32_t query_result, std::int32_t command_status) noexcept {
+        if (query_result == CL_DEVICE_NOT_AVAILABLE)
+            return EventStatus::DeviceLost;
+        if (query_result != CL_SUCCESS)
+            return EventStatus::Pending; // uncertain query: never release
+        if (command_status == CL_COMPLETE)
+            return EventStatus::Complete;
+        if (command_status < 0)
+            return EventStatus::Failed; // native command terminal error
+        return EventStatus::Pending;
+    }
+
     const std::string& device_name() const noexcept {
         return device_name_;
     }
@@ -369,15 +385,7 @@ public:
                 sizeof(execution),
                 &execution,
                 nullptr);
-        if (status == CL_DEVICE_NOT_AVAILABLE)
-            return EventStatus::DeviceLost;
-        if (status != CL_SUCCESS)
-            return EventStatus::Failed;
-        if (execution == CL_COMPLETE)
-            return EventStatus::Complete;
-        if (execution < 0)
-            return EventStatus::Failed;
-        return EventStatus::Pending;
+        return classify_event_query(status, execution);
     }
 
     void release_event(Handle event_handle) override {

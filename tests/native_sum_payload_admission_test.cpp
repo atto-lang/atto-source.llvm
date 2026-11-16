@@ -147,28 +147,28 @@ int main() {
         // descriptor may reach the i64 handle code generator.
         require_invalid_registry([](Program& p) {
             p.sum_types.front().value_type = ScalarType::String;
-        }, "descriptor name/payload mismatch", "forged Option<int> with String payload");
+        }, "type-shape mismatch", "forged Option<int> with String payload");
         require_invalid_registry([](Program& p) {
             p.sum_types.push_back(p.sum_types.front());
-        }, "duplicate native sum descriptor", "duplicate identical nominal descriptor");
+        }, "duplicate native sum type descriptor", "duplicate identical nominal descriptor");
         require_invalid_registry([](Program& p) {
             p.sum_types.front().kind = NativeSumType::Kind::Result;
-        }, "descriptor name/payload mismatch", "Option name with Result kind");
+        }, "type-shape mismatch", "Option name with Result kind");
         require_invalid_registry([](Program& p) {
             p.sum_types.front().kind = static_cast<NativeSumType::Kind>(255);
-        }, "invalid native sum descriptor kind", "invalid nominal kind byte");
+        }, "invalid native sum scalar ABI descriptor", "invalid nominal kind byte");
         require_invalid_registry([](Program& p) {
             p.sum_types.front().value_type = static_cast<ScalarType>(255);
-        }, "invalid native sum scalar payload kind", "invalid sum scalar kind byte");
+        }, "invalid native sum scalar ABI descriptor", "invalid sum scalar kind byte");
         require_invalid_registry([](Program& p) {
             p.sum_types.front().error_type = ScalarType::Bool;
-        }, "noncanonical error slot", "Option has no error payload type");
+        }, "invalid native sum scalar ABI descriptor", "Option has no error payload type");
         require_invalid_registry([](Program& p) {
             p.sum_types.back().error_type = ScalarType::I64;
-        }, "descriptor name/payload mismatch", "Result error payload doesn't match name");
+        }, "type-shape mismatch", "Result error payload doesn't match name");
         require_invalid_registry([](Program& p) {
             p.sum_types.back().error_type = static_cast<ScalarType>(255);
-        }, "invalid native sum scalar payload kind", "invalid Result error payload byte");
+        }, "invalid native sum scalar ABI descriptor", "invalid Result error payload byte");
 
         // Malformed compiler-AST mutations must produce stable typed errors.
         {
@@ -298,6 +298,47 @@ int main() {
         }
 
         std::cout << "native sum typed payload admission: PASS 52 assertions (host-only)\n";
+        // Real native typed sum resolver: caller-side trap is only a
+        // compiler-proved Some(int), never implicit Result/Option coercion.
+        {
+            auto p = initial("Option<int>", "Some", scalar(Kind::Integer));
+            p.functions.front().locals.front().initializer->trap_origin = true;
+            require_success(std::move(p), "pure int trap admitted into Option<int>");
+        }
+        {
+            auto p = initial("Option<int>", "Some", scalar(Kind::Boolean));
+            p.functions.front().locals.front().initializer->trap_origin = true;
+            require_rejection(std::move(p), "pure i64 expression",
+                "bool is not a proven native trap int payload");
+        }
+        {
+            auto p = initial("Option<String>", "Some", scalar(Kind::String));
+            p.functions.front().locals.front().initializer->trap_origin = true;
+            require_rejection(std::move(p), "pure i64 expression",
+                "string cannot be silently trapped into Option<String>");
+        }
+        {
+            auto p = initial("Result<int,String>", "Some", scalar(Kind::Integer));
+            p.functions.front().locals.front().initializer->trap_origin = true;
+            require_rejection(std::move(p), "exactly Option<int>",
+                "trap never flattens to bare Result");
+        }
+        {
+            auto p = initial("", "Some", scalar(Kind::Integer));
+            p.functions.front().locals.front().initializer->trap_origin = true;
+            require_rejection(std::move(p), "cannot implicitly wrap or erase",
+                "trap cannot inhabit a scalar local");
+        }
+        {
+            auto p = initial("Option<int>", "Some", scalar(Kind::Integer));
+            p.functions.front().locals.front().initializer->trap_origin = true;
+            auto arithmetic = scalar(Kind::Add);
+            arithmetic->left = std::move(p.functions.front().locals.front().initializer);
+            arithmetic->right = scalar(Kind::Integer);
+            p.functions.front().locals.front().initializer = std::move(arithmetic);
+            require_rejection(std::move(p), "not an integer arithmetic operand",
+                "tagged Option cannot silently become i64");
+        }
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "native sum typed payload admission: " << e.what() << '\n';

@@ -2,7 +2,7 @@
 
 This lane **compiles real .atto source** with `build/oreslang-llvmc`,
 passes emitted LLVM IR through the no-tracing-GC auditor and Clang at
-both O0 and O2, executes the resulting eight native binaries, and rejects
+both O0 and O2, executes the resulting ten native binaries, and rejects
 six malformed sources at the real compiler boundary with **no IR output**.
 The negative set includes undeclared function and value references, forbidden
 legacy `async` and both orders of `critical` + `suspends` function modifiers,
@@ -11,14 +11,17 @@ requires a normal nonzero compiler exit and diagnostic (not a crash), and is
 recorded in the receipt. There is no host-model fallback and no permissive "skip if
 unavailable".
 
-The four independent *pure predicates* correspond to:
+The five independent *pure predicates* correspond to:
 - `lease-fencing.atto`: exact positive authority triple and equal fence.
 - `nats-token.atto`: deny empty, dotted, wildcard, whitespace or control tokens.
 - `auth-destination.atto`: require TLS, admitted DNS, pinned socket and no redirects.
 - `epoch-atomicity.atto`: necessary preconditions for a staged epoch commit.
+- `dnd-drop-admission.atto`: exhaustively checks a pure six-boolean DnD provider/drop gate against all 64 source-level states. Exactly two states pass; actual transferred payload bytes, current UI target and host side effects remain external responsibilities.
 
 Each `main(): int` returns 0 only when both its admitted case and the
-explicit forbidden mutations have the expected boolean results. These
+explicit forbidden mutations have the expected boolean results (or, for DnD,
+when every one of the 64 selector/authorization states matches its independent
+expected verdict). These
 source programs do **not** call product Rust implementations, perform DNS,
 access storage, prove NATS transport isolation, or exercise actor scheduling.
 They are the first compiled guest *scalar projection* milestone, not complete

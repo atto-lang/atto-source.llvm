@@ -240,6 +240,7 @@ fn main() {
         ("ordered-record-array-loop", "define class EntryValue as pub val int value;end fnc touch():void{return;}pub fnc main():int{touch();let int total=0;for(let int i=0;i<100;i=i+1){val Array<EntryValue> values=new Array<EntryValue>();values.add(new EntryValue(i));val EntryValue entry=values.get(0);total=total+entry.value;}return total==4950?0:1;}", ""),
 
         ("ordered-array-scopes-loop-and-early-return", include_str!("fixtures/native-class-string/ordered-array-locals.ores"), ""),
+        ("checked-copy-option-guest", include_str!("fixtures/native-class-string/copy-option-v1.atto"), "7:42:true:true:true:true:9"),
         ("ordered-val-keeps-exclusive-referent-capability", "fnc touch():void{return;}fnc observe(borrow mut int value):int{return 42;}pub fnc main():int{touch();val int value=42;return observe(rt mut borrow value)==42?0:1;}", ""),
         ("ordered-initial-and-later-mutable-slots", "fnc touch():void{return;}pub fnc main():int{let int initial=1;touch();let int later=2;initial=initial+later;return initial==3?0:1;}", ""),
         ("ordered-routing-counters-and-skipped-initializers", include_str!("fixtures/native-class-string/ordered-routing-locals.ores"), "enter;enter;initialize;finish;done;"),
@@ -497,6 +498,34 @@ fn main() {
                 values.set(0, "changed");
                 return values.size == 2 && values.get(1) == "a"+"\u0000b" && values.get(0) == "changed" ? 0 : 1;
               }"#,
+            "",
+        ),
+        (
+            "nats-string-contains-literal-binary",
+            r#"fnc valid_subject_token(String token):bool {
+                  if token == "" then return false; fi
+                  if token.contains_literal(" ") || token.contains_literal("\t") ||
+                     token.contains_literal("\r") || token.contains_literal("\n") ||
+                     token.contains_literal("\u0000") then return false; fi
+                  return true;
+                }
+                pub routine main():int {
+                  val String subject="orders.created.eu";
+                  val String nul="a\u0000b";
+                  val String utf="é\u0000stop";
+                  return valid_subject_token("orders") &&
+                    !valid_subject_token("") &&
+                    !valid_subject_token("bad subject") &&
+                    !valid_subject_token(nul) &&
+                    subject.contains_literal("created") &&
+                    subject.contains_literal(".") &&
+                    subject.contains_literal("") &&
+                    !subject.contains_literal("payments") &&
+                    !subject.contains_literal("orders.created.eu.extra") &&
+                    nul.contains_literal("\u0000") &&
+                    utf.contains_literal("\u0000") &&
+                    !subject.contains_literal("\u0000") ? 0 : 1;
+                }"#,
             "",
         ),
         (
@@ -841,6 +870,9 @@ fn main() {
         ("ordered-array-readonly-cannot-mutate", "fnc touch():void{return;}pub fnc main():int{touch();const Array<int> values=new Array<int>();values.add(1);return 0;}".to_owned(), foo.to_owned()),
         ("ordered-array-constructor-type-mismatch", "fnc touch():void{return;}pub fnc main():int{touch();val Array<int> values=new Array<String>();return 0;}".to_owned(), foo.to_owned()),
         ("ordered-array-element-type-mismatch", "fnc touch():void{return;}pub fnc main():int{touch();val Array<String> values=new Array<String>();values.add(1);return 0;}".to_owned(), foo.to_owned()),
+        ("checked-copy-option-reject-string", "pub routine main():int{val Array<String> values=new Array<String>();values.add(\"x\");val Option<int> forged=values.get_copy(0);return 0;}".to_owned(), foo.to_owned()),
+        ("checked-copy-option-reject-bool-index", "pub routine main():int{val Array<int> values=new Array<int>();values.add(42);val Option<int> forged=values.get_copy(true);return 0;}".to_owned(), foo.to_owned()),
+        ("checked-copy-option-reject-arity", "pub routine main():int{val Array<int> values=new Array<int>();val Option<int> forged=values.get_copy();return 0;}".to_owned(), foo.to_owned()),
         ("ordered-array-loop-cannot-retain-borrow", "fnc touch():void{return;}pub fnc main():int{touch();for(let int i=0;i<2;i=i+1){val Array<int> values=new Array<int>();values.add(i);}return values.get(0);}".to_owned(), foo.to_owned()),
 
         ("legacy-mut-borrow-spelling-stays-rejected", "pub fnc main():int{val int owner=1;return rt borrow mut owner;}".to_owned(), foo.to_owned()),
@@ -979,6 +1011,10 @@ fn main() {
         ("string-record-private-field", "define class Segment as val String value; end pub fnc main():int{val Segment s=new Segment(\"secret\");return s.value==\"secret\"?0:1;}".to_owned(), foo.to_owned()),
         ("string-record-final-field-write", "define class Segment as pub val String value; end pub fnc main():int{let mut Segment s=new Segment(\"first\");s.value=\"other\";return 0;}".to_owned(), foo.to_owned()),
         ("string-record-untyped-handle-return", "define class Segment as pub val String value; end pub fnc main():int{val Segment s=new Segment(\"first\");return s.value;}".to_owned(), foo.to_owned()),
+        ("nats-string-contains-int-receiver", "pub routine main():int{val n: int = 42;return n.contains_literal(\"4\")?0:1;}".to_owned(), foo.to_owned()),
+        ("nats-string-contains-int-needle", "pub routine main():int{val String s=\"abc\";return s.contains_literal(42)?0:1;}".to_owned(), foo.to_owned()),
+        ("nats-string-contains-wrong-arity", "pub routine main():int{val String s=\"abc\";return s.contains_literal(\"a\",\"b\")?0:1;}".to_owned(), foo.to_owned()),
+        ("nats-string-contains-named-needle-rejected", "pub routine main():int{val String s=\"abc\";return s.contains_literal(needle:\"a\")?0:1;}".to_owned(), foo.to_owned()),
         ("string-array-integer-add", "pub fnc main():int{val Array<String> a=new Array<String>();a.add(42);return 0;}".to_owned(), foo.to_owned()),
         ("integer-array-string-add", "pub fnc main():int{val Array<int> a=new Array<int>();a.add(\"bad\");return 0;}".to_owned(), foo.to_owned()),
         ("string-array-string-index", "pub fnc main():int{val Array<String> a=new Array<String>();return a.get(\"bad\")==\"x\"?0:1;}".to_owned(), foo.to_owned()),
@@ -1107,6 +1143,9 @@ fn main() {
         assert!(rejected.stdout.is_empty(), "{name}: emitted partial IR");
         let expected_boundary = match *name {
             "legacy-mut-borrow-spelling-stays-rejected" => Some("legacy 'rt borrow mut value' is not accepted"),
+            "checked-copy-option-reject-string" |
+            "checked-copy-option-reject-bool-index" |
+            "checked-copy-option-reject-arity" => Some("native Array.get_copy requires Array<int> and a checked int index"),
             "ordered-owning-array-not-hoisted" => Some("ordered owning local requires scoped region/drop lowering"),
             "ordered-async-frame-not-on-stack" => Some("continuation-aware statement lowering"),
             "sum-contract-not-int-parameter" => Some("contract ownership mode mismatch"),
