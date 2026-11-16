@@ -23,6 +23,7 @@ namespace oreslang::runtime {
 template <typename T> class NativeActorReplyStreamsV1 final {
     static_assert(std::is_trivially_copyable<T>::value &&
                       std::is_default_constructible<T>::value &&
+                      std::is_copy_assignable<T>::value &&
                       !std::is_pointer<T>::value && sizeof(T) <= 256,
                   "stream reply V1 requires bounded inline non-pointer payload");
 public:
@@ -59,11 +60,14 @@ private:
         std::uint32_t free = 0;
         std::size_t active = 0;
         bool closed = false;
-        explicit Core(std::size_t capacity, std::size_t items)
-            : slots(capacity), generations(capacity, 0), next(capacity) {
+        static std::size_t validated(std::size_t capacity, std::size_t items) {
             if (capacity == 0 || capacity > 65536 || items == 0 || items > 256 ||
                 capacity > 65536 / items)
                 throw std::invalid_argument("invalid bounded reply stream budget");
+            return capacity;
+        }
+        explicit Core(std::size_t capacity, std::size_t items)
+            : slots(validated(capacity, items)), generations(capacity, 0), next(capacity) {
             for (std::size_t i = 0; i < capacity; ++i) {
                 slots[i].ring.resize(items);
                 next[i] = (i + 1 == capacity) ? invalid_ : static_cast<std::uint32_t>(i + 1);
@@ -108,7 +112,7 @@ public:
                 core->slots[index_].callee != callee_) return fn_stale(fn);
             return fn(*core, core->slots[index_]);
         }
-        template<typename Fn> static auto fn_stale(Fn fn) -> decltype(fn(std::declval<Core&>(), std::declval<Slot&>())) {
+        template<typename Fn> static auto fn_stale(Fn /* unused */) -> decltype(std::declval<Fn>()(std::declval<Core&>(), std::declval<Slot&>())) {
             using R = decltype(fn(std::declval<Core&>(), std::declval<Slot&>()));
             if constexpr (std::is_same<R, Read>::value) return Read{ReadStatus::Stale, T{}};
             else return WriteStatus::Stale;
