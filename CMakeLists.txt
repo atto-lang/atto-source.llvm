@@ -1900,6 +1900,22 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_owned_heap_contract
         COMMAND oreslang-actor-owned-heap-test)
 
+    # Bounded size-class actor allocator (Offset32 + Handle32), host runtime.
+    # Not yet wired to compiled .atto allocation; see docs/ACTOR_SLAB_HEAP.md.
+    add_executable(oreslang-actor-slab-heap-test tests/actor_slab_heap_test.cpp)
+    target_include_directories(oreslang-actor-slab-heap-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-slab-heap-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_slab_heap_contract
+        COMMAND oreslang-actor-slab-heap-test)
+    set_tests_properties(native_actor_slab_heap_contract PROPERTIES TIMEOUT 120)
+    add_executable(oreslang-actor-slab-heap-bench tests/actor_slab_heap_bench.cpp)
+    target_include_directories(oreslang-actor-slab-heap-bench PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-slab-heap-bench PRIVATE
+        -O2 -Wall -Wextra -Wpedantic -Werror)
+
     # Host-only regression: one native callback runs on independent actor
     # heaps and supervisor state. This does not certify compiled .atto actor
     # execution, read-only OS code mappings, or compiler borrow checking.
