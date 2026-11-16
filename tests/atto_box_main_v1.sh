@@ -11,7 +11,7 @@ for name in return-get scalar-copy return-early return-fallthrough; do
   # Require actual call sites in each emitted guest IR program: allocation,
   # read, drop and close. This is independent from the exit-42 oracle.
   for operation in new read drop close; do
-    if ! grep -Eq "(^|[[:space:]])call[[:space:]][^;]*@oreslang_owned_i64_region_${operation}[[:space:]]*\(" "$tmp/$name.ll"; then
+    if ! grep -Eq "^[[:space:]]*(%[^[:space:]=]+[[:space:]]*=[[:space:]]*)?((tail|musttail|notail)[[:space:]]+)?call[[:space:]]+[^;]*@oreslang_owned_i64_region_${operation}[[:space:]]*\(" "$tmp/$name.ll"; then
       echo "Box AOT $name missing executed-region call: $operation" >&2
       exit 1
     fi

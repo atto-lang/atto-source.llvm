@@ -48,10 +48,15 @@ if [[ "${MOCK_IR_CASE:-calls}" == declarations ]]; then exit 0; fi
 printf 'define i64 @main() {\nentry:\n'
 for operation in new read drop close; do
   if [[ "${MOCK_IR_CASE:-calls}" == no_drop && "$operation" == drop ]]; then continue; fi
-  if [[ "$operation" == new || "$operation" == read ]]; then
-    printf '  %%v_%s = call i64 @oreslang_owned_i64_region_%s()\n' "$operation" "$operation"
+  if [[ "${MOCK_IR_CASE:-calls}" == comment_calls ]]; then
+    prefix='  ; '
   else
-    printf '  call void @oreslang_owned_i64_region_%s()\n' "$operation"
+    prefix='  '
+  fi
+  if [[ "$operation" == new || "$operation" == read ]]; then
+    printf '%s%%v_%s = call i64 @oreslang_owned_i64_region_%s()\n' "$prefix" "$operation" "$operation"
+  else
+    printf '%scall void @oreslang_owned_i64_region_%s()\n' "$prefix" "$operation"
   fi
 done
 printf '  ret i64 42\n}\n'
@@ -74,8 +79,9 @@ run_case() {
 run_case valid_calls calls valid 0 ATTO_MAIN_BOX_I64_AOT_PASS
 run_case declarations_only declarations valid 1 'missing executed-region call: new'
 run_case missing_drop no_drop valid 1 'missing executed-region call: drop'
+run_case commented_calls comment_calls valid 1 'missing executed-region call: new'
 run_case compiler_crash calls crash 1 'abnormal compiler exit 139'
 run_case generic_error calls generic 1 'lacked expected semantic diagnostic'
 run_case partial_ir calls partial_ir 1 'negative fixture emitted LLVM IR'
 run_case false_success calls successful_negative 1 'unsafe Box source compiled'
-echo ATTO_BOX_MAIN_V1_ORACLE_SELF_TEST_7_PASS
+echo ATTO_BOX_MAIN_V1_ORACLE_SELF_TEST_8_PASS
