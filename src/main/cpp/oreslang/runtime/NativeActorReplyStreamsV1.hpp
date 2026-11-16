@@ -175,6 +175,8 @@ public:
     ~NativeActorReplyStreamsV1() { close(); }
 
     EndpointRef endpoint(Role role) {
+        if (role != Role::Actor && role != Role::SupervisorApplication)
+            throw std::invalid_argument("CONTROL is not a reply endpoint");
         std::lock_guard<std::mutex> lock(core_->mu);
         if (core_->closed) throw std::logic_error("reply stream registry closed");
         EndpointRef e(new Endpoint(role));
