@@ -37,8 +37,14 @@ typedef struct {
     uint32_t abi_version;
     /* Allocate from this actor's heap. 0 when its budget is spent. */
     uint32_t (*alloc)(uint32_t bytes, uint32_t alignment);
-    /* Return a block to this actor's heap, with the size and alignment it was allocated with.
-     * A wrong value can only confuse this actor's own heap. 1 if accepted. */
+    /* Return an allocated block in this actor's private region. Trusted runtime
+     * bitmap sidecars reject free of unallocated slots, bad alignment, bad block
+     * boundaries and repeated free. For slab blocks, the supplied size/alignment
+     * must resolve to the same size class (exact original payload size is not
+     * recorded by ABI v4). 1 if accepted. ABI v4 still uses raw Offset32:
+     * reusing an offset can make a stale value appear valid. The compiler
+     * must enforce owned lifetimes; future generational handles require a
+     * separate ABI version. Never treat an Offset32 as an ActorRef. */
     int (*free)(uint32_t offset, uint32_t bytes, uint32_t alignment);
     /* Copy [offset, offset+length) to an actor in THIS VM. 1 if admitted. Other tenants'
      * actors cannot be named: a reference only resolves within the caller's VM. */
