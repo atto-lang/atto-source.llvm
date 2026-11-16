@@ -27,8 +27,9 @@ does not yet provide Java's panic frames or lexical unwind behavior.
 
 The compiler supports typed locals, value/borrowed parameters, results, and
 class fields. Then-form early returns lower at their source position so a
-following loop or effect cannot run before the guard. General declarations
-after arbitrary root statements remain a separate compiler limitation.
+following loop or effect cannot run before the guard. [Ordered scalar/sum
+locals](NATIVE_ORDERED_LOCALS.md) can follow root statements; late owning
+collections still require scoped drop lowering.
 
 ## Storage and checks
 
