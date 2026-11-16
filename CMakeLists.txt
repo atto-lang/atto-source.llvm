@@ -1678,7 +1678,7 @@ if(BUILD_TESTING)
             "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_compiler_source_budget PROPERTIES TIMEOUT 25)
     # End-to-end source -> LLVM IR -> Clang -> actual native OS process.
-    # Four portable cases have lossless exit status; DO NOT claim seven.
+    # Exact signed i64 results observed through a full-width C ABI harness, not lossy exit status.
     find_program(ORE_SOURCE_I64_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
     if(NOT ORE_SOURCE_I64_CLANG)
         message(WARNING "Portable native i64 execution gate will fail: Clang not found")
@@ -1702,12 +1702,12 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}")
     set_tests_properties(native_telemetry_using_scope_aot_guest PROPERTIES TIMEOUT 150)
 
-    add_test(NAME native_source_i64_os_exit_subset
+    add_test(NAME native_source_i64_fullwidth_execution
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_source_i64_executable.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
-    set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
+    set_tests_properties(native_source_i64_fullwidth_execution PROPERTIES TIMEOUT 120)
     # Java TransparentTypeAliasTest parity: `type N = T;`, `define type alias N as T;`
     # and alias-prefixed scalar locals, compiled to native guests at O0/O2.
     add_test(NAME native_type_alias_spellings
