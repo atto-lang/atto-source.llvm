@@ -342,7 +342,7 @@ public:
         }
         // Contiguous comparison/logical operators are single tokens, matching
         // the Java/Graal precedence grammar.
-        for (std::string_view op : {"->", "::", "|>", "==", "!=", "<=", ">=", "&&", "||", "^^"}) {
+        for (std::string_view op : {"->", "::", "|>", "<|", "==", "!=", "<=", ">=", "&&", "||", "^^"}) {
             if (source_.substr(at_, 2) == op) {
                 at_ += 2;
                 return {Kind::Symbol, source_.substr(start, 2), start};
@@ -3607,8 +3607,9 @@ private:
                     // atomic connections, bounded DATA, distinct supervisor
                     // CONTROL, and physical shutdown barriers. Never lower
                     // a partial chain as an ordinary actor spawn.
-                    if (token_.text == "pipe")
-                        fail("NATIVE_ACTOR_PIPE_UNSUPPORTED: typed actor pipe requires guest port, mailbox and supervisor lowering");
+                    if (token_.text == "pipe" || token_.text == "rpipe")
+                        fail("NATIVE_ACTOR_PIPE_UNSUPPORTED: typed continuous pipe/rpipe requires "
+                             "guest port, mailbox, checked error completion and supervisor lowering");
                     require(";");
                     value.actor_spawns.push_back(std::move(spawned));
                     continue;
@@ -4546,8 +4547,8 @@ private:
         return value;
     }
 
-    // Eager scalar |> pipelines desugar to ordinary checked calls.
-    // Infix actor 'pipe' is a different, unimplemented transport operation.
+    // Eager scalar |> / <| pipelines are one-value callable application.
+    // The reverse form is right-associative; neither is an actor/stream pipe.
     std::unique_ptr<Expression> expression() {
         auto value = conditional();
         std::size_t stages = 0;
@@ -4565,9 +4566,40 @@ private:
             stage->argument_names.insert(stage->argument_names.begin(), "");
             value = std::move(stage);
         }
-        if (token_.text == "pipe")
-            fail("actor pipe expressions require typed roles, supervisor "
-                 "exclusion, bounded edge transport and ownership lowering");
+        if (token_.text == "<|" && stages != 0)
+            fail("E_PIPE_DIRECTION: mixed |> and <| need explicit grouping");
+        if (accept("<|")) {
+            std::vector<std::unique_ptr<Expression>> reverse_stages;
+            reverse_stages.push_back(std::move(value));
+            for (;;) {
+                if (reverse_stages.size() > kMaxNativeExpressionDepth)
+                    fail("native reverse functional pipeline exceeds 64 stages");
+                auto right = conditional();
+                if (accept("<|")) {
+                    reverse_stages.push_back(std::move(right));
+                    continue;
+                }
+                if (token_.text == "|>")
+                    fail("E_PIPE_DIRECTION: mixed <| and |> need explicit grouping");
+                for (auto it = reverse_stages.rbegin(); it != reverse_stages.rend(); ++it) {
+                    auto stage = std::move(*it);
+                    if (stage->kind != Expression::Kind::Variable &&
+                            stage->kind != Expression::Kind::Call)
+                        fail("native reverse pipeline stage must be a named function");
+                    stage->kind = Expression::Kind::Call;
+                    stage->arguments.insert(stage->arguments.begin(), std::move(right));
+                    stage->argument_names.insert(stage->argument_names.begin(), "");
+                    right = std::move(stage);
+                }
+                value = std::move(right);
+                break;
+            }
+        }
+        if (token_.text == "pipe" || token_.text == "rpipe")
+            fail("NATIVE_ACTOR_PIPE_UNSUPPORTED: pipe flows left-to-right, "
+                 "rpipe right-to-left; typed source/sink roles, owned bounded "
+                 "stream transport, checked completion, supervisor control "
+                 "and native guest lowering are required");
         return value;
     }
 
