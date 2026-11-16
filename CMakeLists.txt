@@ -3989,6 +3989,20 @@ if(BUILD_TESTING)
     set_tests_properties(dop_heterogeneous_four_layout_checked_geometry
         PROPERTIES TIMEOUT 20)
 
+    # Precompiled AoS/SoA/AoSoA function table and owner+epoch guard.
+    # Native host component only; not JIT or .atto guest lowering.
+    add_executable(oreslang-dop-precompiled-kernel-region-test
+        tests/dop_precompiled_kernel_region_test.cpp)
+    target_include_directories(oreslang-dop-precompiled-kernel-region-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-dop-precompiled-kernel-region-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-dop-precompiled-kernel-region-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_dop_precompiled_kernel_region_host_only
+        COMMAND oreslang-dop-precompiled-kernel-region-test)
+    set_tests_properties(native_dop_precompiled_kernel_region_host_only
+        PROPERTIES TIMEOUT 20)
+
     # Host-only physical AoS/SoA/AoSoA storage and checked opaque row identity.
     # No guest Ref<T> lowering or actor execution authority is implied.
     add_executable(oreslang-dop-checked-region-test tests/dop_checked_region_test.cpp)
