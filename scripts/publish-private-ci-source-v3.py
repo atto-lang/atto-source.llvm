@@ -62,7 +62,10 @@ MAX_MAVEN_PREFETCH_ARTIFACTS = 16
 CARRIER_REVIEW_LOGIN = INCIDENT_REVIEW_LOGIN
 CARRIER_REVIEW_USER_ID = INCIDENT_REVIEW_USER_ID
 MAX_GOVERNANCE_FILE = 1024 * 1024
-MAX_FILES = 1024
+# Reviewed snapshot cap for full LLVM trees (1822 blobs at PR #1571).
+# Does NOT authorize transfer: source protection, incidents, carrier identity,
+# reviewed test plan and exact-tree checks remain mandatory.
+MAX_FILES = 2048
 MAX_TREE_ENTRIES = 4096
 MAX_TOTAL = 40 * 1024 * 1024
 MAX_FILE = 10 * 1024 * 1024
@@ -1038,22 +1041,38 @@ def exact_source_tree(source_pr, source_commit):
     # base64 blob response.
     declared = []
     declared_total = 0
+    # Reject ambiguous paths and malformed *directory* entries before
+    # downloading even one private blob. PurePosixPath alone normalizes
+    # duplicate slashes and dot segments, so compare with the raw spelling.
+    seen_paths = set()
     for entry in entries:
         if not isinstance(entry, dict):
             raise Denied("malformed source tree entry")
-        kind = entry.get("type")
-        if kind == "tree":
-            continue
-        mode = entry.get("mode")
         path = entry.get("path")
-        if kind != "blob" or mode not in ("100644", "100755"):
-            raise Denied("source tree contains symlink/submodule/unsupported mode")
         if not isinstance(path, str) or not path:
             raise Denied("source tree path invalid")
-        parts = PurePosixPath(path).parts
-        if (path.startswith("/") or ".." in parts or ".git" in parts
-                or "\\" in path or any(ord(c) < 32 or ord(c) == 127 for c in path)):
+        canonical = PurePosixPath(path)
+        parts = canonical.parts
+        if (not parts or path.startswith("/")
+                or canonical.as_posix() != path
+                or any(part.casefold() == ".git" or part in (".", "..")
+                       for part in parts)
+                or "\\" in path
+                or any(ord(c) < 32 or ord(c) == 127 for c in path)):
             raise Denied("source tree path unsafe")
+        identity = path.casefold()
+        if identity in seen_paths:
+            raise Denied("source tree contains duplicate/case-colliding path")
+        seen_paths.add(identity)
+        kind = entry.get("type")
+        mode = entry.get("mode")
+        if kind == "tree":
+            if mode != "040000":
+                raise Denied("source tree directory mode invalid")
+            valid_sha(entry.get("sha"), "source directory SHA")
+            continue
+        if kind != "blob" or mode not in ("100644", "100755"):
+            raise Denied("source tree contains symlink/submodule/unsupported mode")
         sha = valid_sha(entry.get("sha"), "source blob SHA")
         size = entry.get("size")
         if (not isinstance(size, int) or isinstance(size, bool)
@@ -1156,15 +1175,16 @@ def recheck_destination_identity(repository, contract):
 
 
 def _gh_ref_request(repository, ref_name, method):
+    if not isinstance(repository, str) or not NAME.fullmatch(repository):
+        raise Denied("carrier ref repository is invalid")
     if not isinstance(ref_name, str) or not HANDOFF_REF.fullmatch(ref_name):
         raise Denied("ref cleanup target is invalid")
-    if method not in ("GET", "DELETE"):
-        raise Denied("ref cleanup method is invalid")
+    if method != "GET":
+        raise Denied("name-based carrier ref deletion is forbidden (#1154)")
     encoded = ref_name.replace("/", "%2F")
-    family = "ref" if method == "GET" else "refs"
     argv = [
         trusted_github_cli(), "api", "--method", method,
-        f"repos/{repository}/git/{family}/heads/{encoded}",
+        f"repos/{repository}/git/ref/heads/{encoded}",
         "--header", "Accept: application/vnd.github+json",
     ]
     return run_bounded_gh(
@@ -1220,21 +1240,21 @@ def require_exact_ref(repository, ref_name, expected_sha, expected_repository_id
 
 
 def delete_exact_ref(repository, ref_name, expected_sha, expected_repository_id):
-    expected_sha = valid_sha(expected_sha, "invalid rollback commit SHA")
-    actual = live_ref_sha(repository, ref_name, expected_repository_id)
-    if actual is None:
-        return False
-    if actual != expected_sha:
-        raise Denied("carrier ref moved; refusing rollback")
-    result = _gh_ref_request(repository, ref_name, "DELETE")
-    if result.returncode != 0 and not _is_http_status(result.stderr, 404):
-        raise Denied("carrier ref rollback failed")
-    if live_ref_sha(repository, ref_name, expected_repository_id) is not None:
-        raise Denied("carrier ref still exists after rollback")
-    return True
+    # REST DELETE only identifies the ref name; GET + DELETE is not a lease.
+    # Do not delete even a matching ref until atomic cleanup and ownership
+    # enforcement are independently approved (security issue #1154).
+    raise Denied("automatic carrier ref deletion disabled: atomic compare-and-delete required (#1154)")
+
+
+def require_atomic_ref_rollback():
+    # This is an unconditional, production-only safety hold. No env flag,
+    # caller option, source allowlist entry, or healthy CI runner may bypass it.
+    raise Denied("private CI export disabled: atomic ref cleanup not approved (#1154)")
 
 
 def publish(repository, source_pr, source_commit, test_plan, now=None):
+    # This MUST remain the first action, before private reads or writes.
+    require_atomic_ref_rollback()
     if not NAME.fullmatch(repository):
         raise Denied("invalid destination repository")
     if not isinstance(source_pr, int) or isinstance(source_pr, bool) or source_pr <= 0:

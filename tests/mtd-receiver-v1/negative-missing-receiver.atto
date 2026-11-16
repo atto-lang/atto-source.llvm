@@ -1,0 +1,5 @@
+// Cannot extend an undeclared class or a type from a foreign source.
+pub mtd (self: Missing) read_x(): int {
+  return 1;
+}
+pub fnc main(): int { return 0; }

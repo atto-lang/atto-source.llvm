@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cerrno>
 #include <stdexcept>
 #include <system_error>
 #include <sys/wait.h>
@@ -19,6 +20,23 @@ int main() {
     assert(dir != nullptr);
     const int root = ::open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     assert(root >= 0);
+#if defined(__linux__)
+    // O_PATH is a valid directory-relative lookup authority, but not a
+    // syncable directory FD. Open must fail rather than issue a WAL owner
+    // whose just-created filename has no parent-directory fsync receipt.
+    const int path_only = ::open(dir, O_PATH | O_DIRECTORY | O_CLOEXEC);
+    assert(path_only >= 0);
+    bool unsynced_denied = false;
+    try {
+        (void)DbDurableWalFile::open_trusted(
+                path_only, "unsynced.odb", 7);
+    } catch (const std::system_error& error) {
+        unsynced_denied = error.code().value() == EBADF;
+    }
+    assert(unsynced_denied);
+    assert(::close(path_only) == 0);
+    assert(::unlinkat(root, "unsynced.odb", 0) == 0);
+#endif
     std::array<std::uint8_t, 31> frame {};
     frame.fill(0x5a);
     {

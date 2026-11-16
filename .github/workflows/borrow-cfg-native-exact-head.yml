@@ -1,0 +1,72 @@
+name: LLVM borrow CFG exact-head native gate
+on:
+  pull_request:
+    paths:
+      - "src/main/cpp/oreslang/types/OwnershipCfg.hpp"
+      - "tests/ownership_cfg_dataflow_test.cpp"
+      - ".github/workflows/borrow-cfg-native-exact-head.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-ownership-cfg:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact PR HEAD without persisted token
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source objects and event identity before tests
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          mkdir -p target/borrow-cfg-native-evidence
+          printf "head=%s\ntree=%s\nstatus=HOST_NATIVE_ONLY\n" "$EXPECTED_HEAD" "$(git rev-parse HEAD^{tree})" > target/borrow-cfg-native-evidence/identity.txt
+          test "$(git rev-parse HEAD:src/main/cpp/oreslang/types/OwnershipCfg.hpp)" = "2eece42bf529b5e2e21b40e88a8c5cad756aaf16"
+          test "$(git rev-parse HEAD:tests/ownership_cfg_dataflow_test.cpp)" = "5bbb19fbea3e9273f9ae39e423ac954c618d9f58"
+          for source in src/main/cpp/oreslang/types/OwnershipCfg.hpp tests/ownership_cfg_dataflow_test.cpp; do
+            test "$(git rev-parse "HEAD:$source")" = "$(git hash-object --no-filters "$source")"
+            printf "%s %s\n" "$source" "$(git rev-parse "HEAD:$source")" >> target/borrow-cfg-native-evidence/identity.txt
+          done
+      - name: Execute real native tests (GCC, Clang, Debug, Release, ASan, UBSan)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/borrow-cfg-native-bin
+          for CXX in g++ clang++; do
+            command -v "$CXX"
+            case "$CXX" in g++) compiler_id=gcc ;; clang++) compiler_id=clang ;; esac
+            "$CXX" --version | head -n 1 >> target/borrow-cfg-native-evidence/versions.txt
+            for profile in debug optimized release sanitized; do
+              case "$profile" in
+                debug) flags=(-O0) ;;
+                optimized) flags=(-O2) ;;
+                release) flags=(-O2 -DNDEBUG) ;;
+                sanitized) flags=(-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all) ;;
+              esac
+              executable="target/borrow-cfg-native-bin/${compiler_id}-${profile}"
+              log="target/borrow-cfg-native-evidence/${compiler_id}-${profile}.log"
+              "$CXX" -std=c++17 -Wall -Wextra -Wpedantic -Werror "${flags[@]}" \
+                -I src/main/cpp tests/ownership_cfg_dataflow_test.cpp -o "$executable" > "$log" 2>&1 || { cat "$log"; exit 1; }
+              ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+                "$executable" >> "$log" 2>&1 || { cat "$log"; exit 1; }
+              sha256sum "$executable" >> target/borrow-cfg-native-evidence/binaries.sha256
+              printf "PASS %s %s\n" "$compiler_id" "$profile" | tee -a target/borrow-cfg-native-evidence/results.txt
+            done
+          done
+          printf "NOT_A_COMPILED_ATTO_GUEST_OR_RUST_DIFFERENTIAL\n" >> target/borrow-cfg-native-evidence/identity.txt
+      - name: Preserve identity and non-source test receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: borrow-cfg-native-HOST-ONLY-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/borrow-cfg-native-evidence/
+          if-no-files-found: warn
+          retention-days: 7
