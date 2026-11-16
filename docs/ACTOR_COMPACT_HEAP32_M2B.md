@@ -8,7 +8,7 @@ Do not claim five-backend parity or whole-process GC elimination.
 ## Implemented native runtime path
 
 - Replaces the existing tenant-VM actor heap's **guest-writeable intrusive free-list**
-  with a trusted sidecar of compact 4 KiB slab descriptors outside the VM cage.
+  with a trusted sidecar of compact 1 KiB (small actor heaps) or 4 KiB (larger actor heaps) slab descriptors outside the VM cage.
 - Each descriptor stores 256 live bits plus class/count information; `sizeof(Page) <= 64`.
   Sidecar allocation is performed once before actor admission. No `new`, malloc or
   vector reallocation occurs in the actor allocation/free hot path.
@@ -50,8 +50,8 @@ RSS per actor and optional dedicated class pools remain release gates.
 
 ## Verification
 
-Local x86-64 C++17 Clang optimized model: **1,285 checks passed**.
-Local x86-64 Clang ASan+UBSan: **1,285 checks passed**.
+Local x86-64 C++17 Clang optimized model: **1,288 checks passed**.
+Local x86-64 Clang ASan+UBSan: **1,288 checks passed**.
 This includes 1,000 allocate/release cycles with an instrumented global
 operator-new counter, guaranteeing zero host new calls after heap initialization
 *for that tested loop*. Existing native tenant-VM regression code was modified
@@ -103,3 +103,15 @@ clang++ -std=c++17 -O1 -g -Wall -Wextra -Werror -pedantic \
     -Isrc/main/cpp tests/compact_actor_heap32_test.cpp -o /tmp/heap-test-san
 ASAN_OPTIONS=detect_leaks=1 /tmp/heap-test-san
 ```
+
+
+## Follow-up to first real native tenant regression (2026-11-16)
+
+Exact-blob carrier #25 first reported a genuine small-heap class-starvation
+regression: a 4 KiB actor heap occupied by two 100-byte allocations could not
+admit any additional 64-byte class allocations. Two child-process test failures
+were also reported after the first failure; those children inherit the parent
+test process's cumulative failure counter and may be cascading results.
+We changed small actor heaps (<64 KiB) to 1 KiB slab granularity, with 4 KiB
+slabs retained at >=64 KiB. Added a mixed-size tiny-heap allocation regression.
+**This fix is not certified until the exact patched host test suite reruns.**
