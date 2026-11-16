@@ -15,6 +15,8 @@ command -v timeout >/dev/null || { echo "MISSING timeout" >&2; exit 2; }
 "$CLANG" --version | head -n1
 qemu-system-arm --version | head -n1
 
+# Execute source-owned Rust/unit checks before claiming native guest execution.
+cargo test --offline
 compiler="${ATTO_LLVM:-target/release/atto-llvm}"
 if [[ ! -x "$compiler" ]]; then
   cargo build --offline --release --bin atto-llvm
@@ -58,6 +60,9 @@ run_guest() {
   "$compiler" "$source" -o "$ir" --emit-llvm --freestanding-core
   test -s "$ir"
   grep -q 'define i32 @main()' "$ir"
+  if [[ "$name" == "pass-42" ]]; then
+    grep -q 'llvm.sadd.with.overflow.i64' "$ir"
+  fi
   if grep -Eq '@(atto_actor_|malloc|free|printf|puts|fopen|pthread|__wasi|fd_write)' "$ir"; then
     echo "FAIL: guest IR has forbidden hosted service" >&2; exit 1
   fi
