@@ -3044,10 +3044,16 @@ private:
             LocalBinding binding;
             binding.offset = token_.offset;
             binding.native_box_i64 = binding.heap_owned = true;
-            require("val"); require("Box"); require("<"); require("int"); require(">");
+            require("val"); require("Box"); require("<");
+            if (!accept("int"))
+                fail("ATTO_BOX_MAIN_V1_REJECT: only Box<int> is supported");
+            require(">");
             binding.name = identifier();
             require("=");
-            require("Box"); require("<"); require("int"); require(">"); require("(");
+            require("Box"); require("<");
+            if (!accept("int"))
+                fail("ATTO_BOX_MAIN_V1_REJECT: only Box<int> constructor is supported");
+            require(">"); require("(");
             auto initial = make_expression(Expression::Kind::Integer, token_.offset);
             initial->integer = signed_integer_literal();
             binding.initializer = std::move(initial);
