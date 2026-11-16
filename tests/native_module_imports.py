@@ -72,6 +72,14 @@ def main():
             'b.ores': 'define module B as pub fnc answer(borrow int x):int{return rt copy x;} end',
         }, 42),
     ]
+    # Executable precursor for namespace linking: two physical provider
+    # source files are compiled into one native guest. These are existing
+    # module imports, NOT import namespace and NOT package/manifest admission.
+    positives.append(('cross-file-scalar-43', {
+        'main.ores': 'import module Charges from "./charges"; import module Balances from "./balances"; pub fnc main():int{return Charges.charge(40)+Balances.balance();}',
+        'charges.ores': 'define module Charges as pub fnc charge(int cents):int{return cents+1;} end',
+        'balances.ores': 'define module Balances as pub fnc balance():int{return 2;} end',
+    }, 43))
     positives.append(('project-root', {
         'main.ores': 'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}',
         '.ores.pkg.toml': 'schema_version = "1"\n',
@@ -119,6 +127,41 @@ def main():
             'base.atto': 'define module Base as pub fnc answer():int{return 21;} end',
         }, 42),
     ])
+    # These are native .atto executable guest cases: "repo" is an actual
+    # environment variable, unrelated to the independent +/ root operator.
+    positives.extend([
+        ('atto-env-absolute-repo', {
+            'main.atto': 'import module Lib from "${repo}/lib"; pub fnc main():int{return Lib.answer();}',
+            '.ores.pkg.toml': 'schema_version = "1"\n',
+            'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+        }, 42),
+        ('atto-env-project-root-component', {
+            'main.atto': 'import module Lib from "+/${MODULE}"; pub fnc main():int{return Lib.answer();}',
+            '.ores.pkg.toml': 'schema_version = "1"\n',
+            'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+        }, 42),
+        ('atto-env-multiple-variables', {
+            'main.atto': 'import module Lib from "${repo}/${MODULE}"; pub fnc main():int{return Lib.answer();}',
+            '.ores.pkg.toml': 'schema_version = "1"\n',
+            'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+        }, 42),
+        ('atto-env-root-and-env-independent-graph', {
+            'main.atto': 'import module Root from "+/root"; import module Env from "${repo}/env"; pub fnc main():int{return Root.answer()+Env.answer();}',
+            '.ores.pkg.toml': 'schema_version = "1"\n',
+            'root.atto': 'define module Root as pub fnc answer():int{return 19;} end',
+            'env.atto': 'define module Env as pub fnc answer():int{return 23;} end',
+        }, 42),
+        ('atto-zed-package-marker-root-guest', {
+            'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}',
+            '.ores.pkg.toml': '[package]\nname = "consumer"\n',
+            'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+        }, 42),
+        ('atto-manifest-configured-project-root-guest', {
+            'application/main.atto': 'import module Lib from "+/src/lib"; pub fnc main():int{return Lib.answer();}',
+            '.ores.pkg.toml': 'schema_version = "1"\n[project]\nroot = "application"\n',
+            'application/src/lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+        }, 42),
+    ])
     library = 'define module Lib as fnc secret():int{return 41;} pub fnc answer():int{return secret()+1;} end'
     positives.append(('conditional-import-calls', {
         'main.ores': 'import module Lib from "./lib";pub fnc main():int{return Lib.ready() ? Lib.answer(21) : 0;}',
@@ -129,6 +172,15 @@ def main():
         'lib.ores': 'define module Lib as define class Flag as const bool ready=true;pub enabled():bool{return self.ready;}pub result():int{return 42;}end pub fnc answer():int{let Flag f=new Flag();return f.enabled() ? f.result() : 0;}end',
     },42))
     negatives = [
+        # Import namespaces have a distinct AST identity; before checked v2
+        # package-manifest integration they must emit no LLVM IR, regardless
+        # of whether the quoted selector is local or a pinned dependency.
+        ('namespace-local-unlinked', 'import namespace billing as pay from "+/"; pub fnc main():int{return pay.answer();}', library, 'NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED'),
+        ('namespace-pinned-unlinked', 'import namespace billing as pay from "checkout"; pub fnc main():int{return pay.answer();}', library, 'NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED'),
+        ('namespace-traversal-selector', 'import namespace billing as pay from "../other"; pub fnc main():int{return 0;}', library, 'invalid native namespace package alias'),
+        ('namespace-empty-selector', 'import namespace billing as pay from ""; pub fnc main():int{return 0;}', library, 'namespace package selector'),
+        ('namespace-duplicate-local-alias', 'import namespace billing as pay from "+/"; import namespace other as pay from "checkout"; pub fnc main():int{return 0;}', library, 'duplicate imported namespace binding'),
+        ('namespace-module-alias-collision', 'import module Lib as pay from "./lib"; import namespace billing as pay from "+/"; pub fnc main():int{return 0;}', library, 'duplicate imported namespace binding'),
         ('private-export', 'import module Lib from "./lib"; pub fnc main():int{return Lib.secret();}', library, 'imported function is private'),
         ('wrong-selection', 'import module Other from "./lib"; pub fnc main():int{return 0;}', library, 'does not declare selected module'),
         ('wrong-arity', 'import module Lib from "./lib"; pub fnc main():int{return Lib.answer(2);}', library, 'wrong call arity'),
@@ -169,12 +221,29 @@ def main():
         root = Path(temporary)
         for name, files, expected in positives:
             directory = root/name; directory.mkdir()
-            for path, source in files.items(): (directory/path).write_text(source)
-            entry = 'main.atto' if 'main.atto' in files else 'main.ores'
-            result = run([a.compiler, str(directory/entry)])
+            for path, source in files.items():
+                (directory/path).parent.mkdir(parents=True, exist_ok=True)
+                (directory/path).write_text(source)
+            entry = ('application/main.atto' if 'application/main.atto' in files
+                     else ('main.atto' if 'main.atto' in files else 'main.ores'))
+            compiler_env = os.environ.copy()
+            if name.startswith('atto-env-'):
+                compiler_env.update({'repo': str(directory), 'MODULE': 'lib'})
+            result = run([a.compiler, str(directory/entry)], env=compiler_env)
             if result.returncode: raise AssertionError((name, result.stderr))
             if name == 'private-helper' and 'define internal i64 @__ores_module_1.delta(' not in result.stdout:
                 raise AssertionError('private imported helper leaked as an external ABI symbol')
+            if name == 'cross-file-scalar-43':
+                # A successful native process alone would not prove each
+                # provider was compiled and called through the correct ABI.
+                for signature in ('define i64 @__ores_module_1.charge(',
+                                  'define i64 @__ores_module_2.balance('):
+                    if signature not in result.stdout:
+                        raise AssertionError(('missing physical provider IR', signature))
+                for call in ('call i64 @__ores_module_1.charge(',
+                             'call i64 @__ores_module_2.balance('):
+                    if call not in result.stdout:
+                        raise AssertionError(('missing cross-file scalar call', call))
             (directory/'guest.ll').write_text(result.stdout)
             built = run([a.clang, str(directory/'guest.ll'), '-O2', '-o', str(directory/'guest')])
             if built.returncode: raise AssertionError((name, built.stderr))
@@ -188,6 +257,41 @@ def main():
                 if reference.returncode != expected: raise AssertionError(('Java differential', name, reference.returncode, reference.stderr))
                 compared += 1
             passed += 1
+        (root / 'lib.atto').write_text('define module Lib as pub fnc answer():int{return 42;} end')
+        # Negative compiler graph cases must emit no LLVM IR, never an
+        # apparently successful package graph or partially linked source.
+        for label, specifier, variables, expected in [
+            ('missing-variable', '${ATTO_MISSING_TEST_997}/lib', {}, 'missing or empty import environment variable'),
+            ('empty-variable', '${repo}/lib', {'repo': ''}, 'missing or empty import environment variable'),
+            ('invalid-name', '${bad-name}/lib', {}, 'invalid ${NAME} import variable name'),
+            ('nested-variable', '${repo}/lib', {'repo': '${OTHER}'}, 'invalid import environment variable value'),
+            ('control-byte', '${repo}/lib', {'repo': 'bad\npath'}, 'control characters'),
+            ('too-large', '${repo}/lib', {'repo': 'x' * 4097}, 'invalid import environment variable value'),
+            ('root-traversal-variable', '+/${MODULE}', {'MODULE': '../outside'}, 'empty/dot/traversal'),
+            ('env-outside-package-denied', '${repo}/lib', {'repo': str(root)}, 'escapes physical package root'),
+            ('env-missing-manifest-denied', '${repo}/lib', {'repo': str(root / 'env-negative-env-missing-manifest-denied')}, 'absolute import requires nearest .ores.pkg.toml'),
+            ('unbraced-dollar-not-alias', '$repo/lib', {'repo': str(root)}, 'native imports require'),
+            ('remote-not-verified', 'https://example.test/lib.atto', {}, 'remote imports require locked'),
+            ('file-uri-not-source', 'file:///tmp/lib.atto', {}, 'unsupported import URI scheme'),
+            ('interpolated-java-uri-not-source', '${repo}/lib',
+             {'repo': 'java:java.lang.Runtime'}, 'unsupported import URI scheme'),
+        ]:
+            directory = root / ('env-negative-' + label)
+            directory.mkdir()
+            if label != 'env-missing-manifest-denied':
+                (directory / '.ores.pkg.toml').write_text('schema_version = "1"\n')
+            (directory / 'main.atto').write_text(
+                'import module Lib from "' + specifier + '"; pub fnc main():int{return 0;}')
+            (directory / 'lib.atto').write_text(
+                'define module Lib as pub fnc answer():int{return 42;} end')
+            env = os.environ.copy()
+            env.pop('ATTO_MISSING_TEST_997', None)
+            env.update(variables)
+            result = run([a.compiler, str(directory / 'main.atto')], env=env)
+            if result.returncode == 0 or result.stdout or expected not in result.stderr:
+                raise AssertionError((label, result.returncode, result.stdout[:150], result.stderr))
+            passed += 1
+
         # Extensionless migration twins are ambiguous by policy. They must
         # fail before LLVM IR is emitted; explicit suffixes remain selectable.
         for name, main_source, project_root in (
