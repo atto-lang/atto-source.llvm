@@ -25,6 +25,16 @@ test -x "$compiler"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
+# The new freestanding profile is deliberately IR-only: accidentally using
+# the legacy Linux executable linker must never silently create a hosted ELF.
+if "$compiler" tests/freestanding/pass-42.atto -o "$work/hosted-fallback.exe" \
+    --freestanding-core >"$work/deny-profile-mode.log" 2>&1; then
+  echo "FAIL: freestanding mode silently fell back to the hosted executable linker" >&2
+  exit 1
+fi
+test ! -e "$work/hosted-fallback.exe"
+grep -q 'usage:' "$work/deny-profile-mode.log"
+
 arch=(-target armv7m-none-eabi -mcpu=cortex-m3 -mthumb)
 no_runtime=(-ffreestanding -fno-builtin -fno-stack-protector -fno-exceptions
             -fno-unwind-tables -fno-asynchronous-unwind-tables)
