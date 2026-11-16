@@ -2,10 +2,18 @@
 # Real .atto -> oreslang-llvmc --target=wasm32 -> LLVM IR -> Clang wasm32
 # -> import-free WebAssembly main:()->i64. Not an actor or inverted-class ABI.
 set -euo pipefail
+# The source checkout must be independently verified against the PR head.
+# This SHA pin checks compiler *byte identity* across this run; it is not
+# standalone evidence that a compiler was produced from the approved source.
+test "$#" -eq 4
 compiler="$1"
 clang="$2"
 fixtures="$3"
+compiler_pin="$4"
+[[ "$compiler_pin" =~ ^[a-f0-9]{64}$ ]] || { echo "invalid compiler SHA-256 pin" >&2; exit 1; }
 test -x "$compiler" && test -f "$compiler" && test ! -L "$compiler"
+[[ "$(sha256sum "$compiler" | cut -d ' ' -f 1)" == "$compiler_pin" ]] ||
+  { echo "compiler SHA-256 pin mismatch before guest compilation" >&2; exit 1; }
 test -d "$fixtures"
 command -v node >/dev/null
 tmp="$(mktemp -d)"
@@ -98,4 +106,7 @@ fi
 test ! -s "$tmp/rejected.ll"
 grep -Fq 'DOP_INVERTED_CLASS_UNSUPPORTED' "$tmp/rejected.err"
 
+[[ "$(sha256sum "$compiler" | cut -d ' ' -f 1)" == "$compiler_pin" ]] ||
+  { echo "compiler SHA-256 pin mismatch after guest compilation" >&2; exit 1; }
+echo "ATTO_LLVM_COMPILER_SHA256=$compiler_pin"
 echo 'REAL_ATTO_INVERTED_WASM32_SOURCE_GUEST_PASS; two_i64_stack_local_only; O0+O2; full_i64; bounds_trap'
