@@ -16,7 +16,12 @@ pub routine main(): int {
 }
 ```
 
-Constructors use positional payloads and a declared contextual type. Option
+Constructors use positional payloads and a declared contextual type. For a
+conditional expression whose branches carry an Option or Result, both arms
+must resolve to the same declared sum type; a raw scalar cannot stand in
+for the other arm's checked descriptor. This is enforced in the source sum
+resolver before LLVM IR generation, not left to native runtime tag checks.
+Option
 provides `is_some`, `is_none`, `unwrap`, and `unwrap_or`; Result provides
 `is_ok`, `is_err`, `unwrap`, and `unwrap_or`. Fallback arguments evaluate
 eagerly, matching Java. `Some(0)`, `Some(false)`, `Some("")`, and `Ok(false)`
@@ -79,3 +84,15 @@ lifetime-aware sum ABI. Borrowed subobject results, such as the router's
 owner is not a substitute. The actual Spin server still requires typed HTTP
 mailboxes, await frames, request-scoped storage and the remaining route graph.
 This milestone does not establish server parity or a performance result.
+
+## Conditional-sum source-to-native parity gate
+
+The existing `native_class_string_parity` Rust executable harness includes
+five canonical `.atto` conditional-sum fixtures: two valid Option/Result
+tagged-branch guests executed through `oreslang-llvmc`, Clang/native O1,
+and the harness sanitizer configuration; and three negative mixed scalar/
+tagged conditionals requiring the **exact semantic rejection** and no
+emitted LLVM IR. Legacy fixtures remain `.ores`.
+
+These are test definitions, not executed evidence. The exact-head compiler,
+native guest stdout/exit, and ASan/UBSan receipts remain required.

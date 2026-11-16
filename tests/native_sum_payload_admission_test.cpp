@@ -59,6 +59,17 @@ Program fallback(const std::string& sum, Kind argumentKind) {
     program.functions.front().locals.push_back(std::move(next));
     return program;
 }
+Program conditional(const std::string& sum,
+                    std::unique_ptr<Expression> yes,
+                    std::unique_ptr<Expression> no) {
+    Program program = initial(sum, "None");
+    auto choose = scalar(Kind::Conditional);
+    choose->condition = scalar(Kind::Boolean);
+    choose->when_true = std::move(yes);
+    choose->when_false = std::move(no);
+    program.functions.front().locals.front().initializer = std::move(choose);
+    return program;
+}
 void require_success(Program p, const std::string& label) {
     try { resolve_native_sums(p); }
     catch (const std::exception& e) {
@@ -86,6 +97,15 @@ int main() {
         require_success(initial("Result<int,String>", "Err", scalar(Kind::String)), "Err<String>");
         require_success(fallback("Option<int>", Kind::Integer), "Option unwrap_or int");
         require_success(fallback("Result<int,String>", Kind::Integer), "Result unwrap_or int");
+        require_success(conditional("Option<int>",
+            constructor("Some", scalar(Kind::Integer)), constructor("None")),
+            "Option<int> Some/None conditional");
+        require_success(conditional("Option<int>",
+            constructor("None"), constructor("Some", scalar(Kind::Integer))),
+            "Option<int> None/Some conditional");
+        require_success(conditional("Result<int,String>",
+            constructor("Ok", scalar(Kind::Integer)), constructor("Err", scalar(Kind::String))),
+            "Result<int,String> Ok/Err conditional");
 
         require_rejection(initial("Option<int>", "Some", scalar(Kind::String)),
             "payload type does not match", "no String in Option<int>");
@@ -106,6 +126,15 @@ int main() {
             "fallback type does not match", "Option unwrap_or mismatch");
         require_rejection(fallback("Result<int,String>", Kind::String),
             "fallback type does not match", "Result unwrap_or mismatch");
+        require_rejection(conditional("Option<int>",
+            constructor("Some", scalar(Kind::Integer)), scalar(Kind::Integer)),
+            "conditional sum branches", "reject Some vs raw int");
+        require_rejection(conditional("Option<int>",
+            scalar(Kind::Integer), constructor("None")),
+            "conditional sum branches", "reject raw int vs None");
+        require_rejection(conditional("Result<int,String>",
+            constructor("Ok", scalar(Kind::Integer)), scalar(Kind::Integer)),
+            "conditional sum branches", "reject Ok vs raw int");
         // Real native typed sum resolver: caller-side trap is only a
         // compiler-proved Some(int), never implicit Result/Option coercion.
         {

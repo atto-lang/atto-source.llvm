@@ -228,7 +228,18 @@ inline void resolve_native_sums(Program& program) {
             if (e.condition_lhs) expression(*e.condition_lhs, env, {});
             if (e.condition_rhs) expression(*e.condition_rhs, env, {});
             const auto yes = expression(*e.when_true, env, expected);
-            expression(*e.when_false, env, expected.empty() ? yes.sum : expected);
+            const auto no = expression(*e.when_false, env, expected.empty() ? yes.sum : expected);
+            // The conditional expression is one value. A scalar arm cannot
+            // masquerade as an Option/Result descriptor, and two different
+            // nominal sums cannot share an untyped i64 return slot.
+            // Check both arms even when the surrounding context supplied a
+            // sum type; nominal runtime checks are not a compiler type proof.
+            if (!yes.sum.empty() || !no.sum.empty() || !expected.empty()) {
+                if (yes.sum.empty() || no.sum.empty() || yes.sum != no.sum ||
+                    (!expected.empty() && yes.sum != expected))
+                    throw std::runtime_error(
+                        "native conditional sum branches must resolve to the same declared sum type");
+            }
             return yes;
         }
         Hint left, right;
