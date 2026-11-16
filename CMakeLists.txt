@@ -3795,6 +3795,20 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_preallocated_slot_ledger_fence
         COMMAND oreslang-native-slot-ledger-integration-test)
     set_tests_properties(native_actor_preallocated_slot_ledger_fence PROPERTIES TIMEOUT 30)
+
+    # Compiler-executed production port (not a stand-alone slot model):
+    # 100k deterministic operations, selective resume, FIFO, physical ACK.
+    add_executable(oreslang-native-bounded-selective-slot-oracle-test
+        tests/native_bounded_selective_slot_oracle_test.cpp)
+    target_include_directories(oreslang-native-bounded-selective-slot-oracle-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-bounded-selective-slot-oracle-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-bounded-selective-slot-oracle-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-bounded-selective-slot-oracle-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_bounded_selective_slot_oracle
+        COMMAND oreslang-native-bounded-selective-slot-oracle-test)
+    set_tests_properties(native_actor_bounded_selective_slot_oracle PROPERTIES TIMEOUT 30)
     # Compile-negative actor safety gate: custom deleter destructors or moves
     # must not call back into an actor mailbox while the physical lock is held.
     if(UNIX)
