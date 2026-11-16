@@ -1,11 +1,33 @@
 #include "oreslang/runtime/DopPrecompiledKernelRegion.hpp"
 
 #include <cassert>
+#include <atomic>
+#include <cstdlib>
+#include <new>
 #include <cstdint>
 #include <stdexcept>
 #include <type_traits>
 
 using namespace oreslang::dop;
+
+// Count the C++ allocation boundary on the admitted read/write path only.
+// CheckedRegion allocation during construction / explicit relayout is allowed.
+static std::atomic<std::uint64_t> host_new_calls{0};
+void* operator new(std::size_t size) {
+    host_new_calls.fetch_add(1, std::memory_order_relaxed);
+    if (auto* p = std::malloc(size ? size : 1)) return p;
+    throw std::bad_alloc();
+}
+void* operator new[](std::size_t size) {
+    host_new_calls.fetch_add(1, std::memory_order_relaxed);
+    if (auto* p = std::malloc(size ? size : 1)) return p;
+    throw std::bad_alloc();
+}
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete[](void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
+
 
 static_assert(!std::is_default_constructible_v<DopPrecompiledKernelRegion::Ticket>);
 static_assert(!std::is_copy_constructible_v<DopPrecompiledKernelRegion>);
@@ -97,7 +119,20 @@ void negative_security() {
     });
 }
 
+void allocation_free_hot_path() {
+    DopPrecompiledKernelRegion region(plan(Layout::AoSoA));
+    const auto ticket = region.ticket();
+    const auto row = region.row(8);
+    const auto before = host_new_calls.load(std::memory_order_relaxed);
+    for (int i = 0; i < 10000; ++i) {
+        region.write(ticket, row, 1, static_cast<std::uint32_t>(i));
+        assert(region.read(ticket, row, 1) == static_cast<std::uint32_t>(i));
+    }
+    assert(host_new_calls.load(std::memory_order_relaxed) == before);
+}
+
 int main() {
     positive_matrix();
     negative_security();
+    allocation_free_hot_path();
 }
