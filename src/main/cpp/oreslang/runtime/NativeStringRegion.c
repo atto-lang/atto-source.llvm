@@ -7,6 +7,7 @@
 #define _DARWIN_C_SOURCE 1
 #endif
 #include "NativeStringRegion.h"
+#include "NativeStringRegionInternal.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
@@ -288,22 +289,15 @@ int64_t ores_string_equal(int64_t left, int64_t right) {
     if (atomic_load(&region.failed)) return 0;
     return a.size == b.size && (!a.size || memcmp(a.data, b.data, a.size) == 0);
 }
-/* A producer faster than stdout waits for the reactor instead of losing output.
- * The console exists only in the synchronous host main region, never on an
- * actor carrier, and the wait carries the same 5 s stall bound as the writer. */
+/* Zero-blocking guest stdout (main invariant): a full bounded queue is a
+ * failed publish, never a producer wait or poll on the guest path. */
 static Output *reserve_output(Region *r) {
     const size_t head = atomic_load_explicit(&r->head, memory_order_relaxed);
-    if (!r->console) { atomic_store(&r->failed, 1); return NULL; }
-    int64_t started = -1;
-    while (head - atomic_load_explicit(&r->tail, memory_order_acquire) == OUTPUT_SLOTS) {
-        if (atomic_load(&r->failed)) return NULL;
-        const int64_t now = milliseconds();
-        if (started < 0) started = now;
-        if (now < 0 || now - started >= 5000) { atomic_store(&r->failed, 1); return NULL; }
-        wake_writer(r);
-        (void)poll(NULL, 0, 1);
+    if (!r->console || atomic_load(&r->failed) ||
+            head - atomic_load_explicit(&r->tail, memory_order_acquire) == OUTPUT_SLOTS) {
+        atomic_store(&r->failed, 1); return NULL;
     }
-    return atomic_load(&r->failed) ? NULL : &r->output[head % OUTPUT_SLOTS];
+    return &r->output[head % OUTPUT_SLOTS];
 }
 static void publish_output(Region *r) {
     atomic_fetch_add_explicit(&r->head, 1, memory_order_release);
@@ -330,14 +324,71 @@ int64_t ores_string_contains_literal(int64_t haystack, int64_t needle) {
     }
     return 0;
 }
+/* Private, immediate-use read-only borrow. Neither pointer nor length
+ * is exposed through any guest function signature. No peer thread may call
+ * into this invocation-owned String region concurrently.
+ */
+int ores_string_region_view(int64_t handle, const char **bytes, size_t *length) {
+    if (!bytes || !length) abort();
+    String value = lookup(handle);
+    if (atomic_load(&region.failed)) return 0;
+    *bytes = value.data;
+    *length = value.size;
+    return 1;
+}
+
+/* All-or-nothing region admission for split-created String views. The
+ * underlying owned allocation is retained by the original source entry
+ * until invocation teardown, even if the metadata vector reallocates.
+ * Slice records have owned=NULL, therefore never double-free source bytes.
+ */
+OresStringViewsStatus ores_string_region_publish_views(
+        int64_t source, const size_t starts[], const size_t lengths[],
+        size_t count, int64_t out_handles[]) {
+    if (!starts || !lengths || !out_handles || !count) abort();
+    Region *r = &region;
+    String base = lookup(source);
+    if (atomic_load(&r->failed)) abort();
+    if (count > STRING_LIMIT - r->count) return ORES_STRING_VIEWS_LIMIT;
+    size_t remaining = BYTE_LIMIT - r->bytes;
+    for (size_t i = 0; i < count; ++i) {
+        if (starts[i] > base.size || lengths[i] > base.size - starts[i])
+            abort(); /* Only trusted splitter code constructs these offsets. */
+        if (lengths[i] > remaining) return ORES_STRING_VIEWS_LIMIT;
+        remaining -= lengths[i];
+    }
+    const size_t required = r->count + count;
+    if (required > r->capacity) {
+        size_t capacity = r->capacity ? r->capacity : 32;
+        while (capacity < required) capacity *= 2;
+        String *larger = realloc(r->strings, capacity * sizeof *larger);
+        if (!larger) return ORES_STRING_VIEWS_NO_MEMORY;
+        r->strings = larger;
+        r->capacity = capacity;
+    }
+    /* No allocation or recoverable failure is possible beyond this point. */
+    for (size_t i = 0; i < count; ++i) {
+        const char *slice = base.data ? base.data + starts[i] : NULL;
+        r->strings[r->count] = (String){slice, lengths[i], NULL};
+        out_handles[i] = (int64_t)++r->count;
+        r->bytes += lengths[i];
+    }
+    return ORES_STRING_VIEWS_OK;
+}
+
 int64_t ores_string_print(int64_t handle, int64_t newline) {
     Region *r = &region;
     String value = lookup(handle);
-    Output *slot = reserve_output(r);
-    if (!slot) return 1;
+    size_t head = atomic_load_explicit(&r->head, memory_order_relaxed);
+    if (!r->console || atomic_load(&r->failed) ||
+            head - atomic_load_explicit(&r->tail, memory_order_acquire) == OUTPUT_SLOTS) {
+        atomic_store(&r->failed, 1); return 1;
+    }
+    Output *slot = &r->output[head % OUTPUT_SLOTS];
     slot->value = value;
     slot->newline = newline != 0;
-    publish_output(r);
+    atomic_store_explicit(&r->head, head + 1, memory_order_release);
+    wake_writer(r);
     return 0;
 }
 /* Scalar text lives in the queue slot, so a print loop consumes no region entry. */

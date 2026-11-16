@@ -3,6 +3,7 @@
 
 #include <stdatomic.h>
 #include <stddef.h>
+#include <string.h>
 #include <stdlib.h>
 #include <time.h>
 
@@ -25,6 +26,10 @@ typedef struct {
     uint64_t dropped;
     uint64_t last_duration_ns;
     OresNativeTelemetryFrame frames[ORES_TRACE_MAX_DEPTH];
+    uint64_t log_written;
+    uint64_t log_consumed;
+    uint64_t log_dropped;
+    OresNativeTelemetryLogEvent log_events[ORES_NATIVE_TELEMETRY_LOG_CAPACITY];
 } OresNativeTelemetryCarrier;
 
 static atomic_int ores_telemetry_enabled = 0;
@@ -111,4 +116,75 @@ OresNativeTelemetrySnapshot ores_native_telemetry_snapshot(void) {
         c->last_duration_ns
     };
     return result;
+}
+
+/* Every receipt is copied into a carrier-local fixed array. No heap,
+ * formatter, output sink or waiting when guest actor code publishes. */
+static void ores_native_telemetry_log_drop(OresNativeTelemetryCarrier* c) {
+    if (c->log_dropped != UINT64_MAX) ++c->log_dropped;
+}
+
+int ores_native_telemetry_log_info(uint64_t routine_high, uint64_t routine_low,
+                                  uint64_t site_high, uint64_t site_low,
+                                  const char* message, uint64_t length) {
+    if (!atomic_load_explicit(&ores_telemetry_enabled, memory_order_relaxed))
+        return 0;
+    OresNativeTelemetryCarrier* c = &ores_telemetry_carrier;
+    if ((routine_high | routine_low) == 0 ||
+        (site_high | site_low) == 0 ||
+        message == NULL || length == 0 ||
+        length > ORES_NATIVE_TELEMETRY_LOG_MESSAGE_BYTES ||
+        c->log_written == UINT64_MAX) {
+        ores_native_telemetry_log_drop(c);
+        return 0;
+    }
+    for (uint64_t i = 0; i < length; ++i) {
+        const unsigned char byte = (unsigned char)message[i];
+        if (byte < 32 || byte == 127) {
+            ores_native_telemetry_log_drop(c);
+            return 0;
+        }
+    }
+    if (c->log_written - c->log_consumed >=
+        ORES_NATIVE_TELEMETRY_LOG_CAPACITY) {
+        ores_native_telemetry_log_drop(c);
+        return 0;
+    }
+    OresNativeTelemetryLogEvent* event =
+        &c->log_events[c->log_written % ORES_NATIVE_TELEMETRY_LOG_CAPACITY];
+    event->routine_high = routine_high;
+    event->routine_low = routine_low;
+    event->site_high = site_high;
+    event->site_low = site_low;
+    event->native_scope_token =
+        c->depth > 0 ? c->frames[c->depth - 1].token : 0;
+    event->message_length = (uint32_t)length;
+    memcpy(event->message, message, (size_t)length);
+    event->message[length] = '\0';
+    ++c->log_written;
+    return 1;
+}
+
+uint64_t ores_native_telemetry_log_drain(
+    OresNativeTelemetryLogEvent* destination, uint64_t max_events) {
+    if (destination == NULL || max_events == 0) return 0;
+    OresNativeTelemetryCarrier* c = &ores_telemetry_carrier;
+    uint64_t taken = 0;
+    while (taken < max_events && c->log_consumed < c->log_written) {
+        OresNativeTelemetryLogEvent* next =
+            &c->log_events[c->log_consumed % ORES_NATIVE_TELEMETRY_LOG_CAPACITY];
+        destination[taken++] = *next;
+        memset(next, 0, sizeof(*next)); /* erase stale literal and IDs */
+        ++c->log_consumed;
+    }
+    return taken;
+}
+
+OresNativeTelemetryLogStats ores_native_telemetry_log_stats(void) {
+    const OresNativeTelemetryCarrier* c = &ores_telemetry_carrier;
+    OresNativeTelemetryLogStats stats = {
+        c->log_written, c->log_dropped,
+        c->log_written - c->log_consumed
+    };
+    return stats;
 }

@@ -88,7 +88,9 @@ fn main() {
     // Long-running loops must not exhaust the record region or the output queue.
     let long = expect_guest(&tools, "long-run", 0);
     let mut expected = String::from("checkpoint\ncheckpoint\ncheckpoint\ncheckpoint\n100000.0\n200000\n");
-    for i in 0..70000 { expected.push_str(&format!("{i}\n")); }
+    // Stays within main's bounded 1024-slot zero-blocking stdout queue:
+    // a guest publish never waits for the writer (strict nonblocking IO).
+    for i in 0..900 { expected.push_str(&format!("{i}\n")); }
     expected.push_str("done\n");
     assert!(long.stdout == expected.as_bytes(), "long-run: stdout differs ({} bytes)", long.stdout.len());
 

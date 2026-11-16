@@ -311,7 +311,7 @@ struct ActorFieldWrite {
 };
 
 struct Statement {
-    enum class Kind { Call, FieldWrite, ScalarWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return, UsingTelemetrySpan, Break, Continue };
+    enum class Kind { Call, FieldWrite, ScalarWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return, UsingTelemetrySpan, TelemetryLogInfo, Break, Continue };
     Kind kind;
     // Scoped scalar or readonly leaf record. ForEach uses an implicit element
     // binding (no initializer); expression is its named array source and
@@ -320,7 +320,8 @@ struct Statement {
     std::unique_ptr<Expression> expression;
     std::string receiver;
     std::string field;
-    // UsingTelemetrySpan: literal operation name, alias is compile-time-only;
+    // UsingTelemetrySpan or TelemetryLogInfo: literal operation/log message;
+    // alias is compile-time-only;
     // no guest-visible pointer, dynamic handle or actor message transfer.
     std::string telemetry_operation;
     // ForIndex: branch_local initializer, condition and checked next value.

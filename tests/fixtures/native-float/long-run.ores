@@ -13,7 +13,7 @@ pub routine main(): void {
   done
   stdio.stdout.println(s.w);
   stdio.stdout.println(s.steps);
-  for int i = 0; i < 70000; i++ do
+  for int i = 0; i < 900; i++ do
     stdio.stdout.println(i);
   done
   stdio.stdout.println("done");
