@@ -3743,6 +3743,10 @@ private:
             Statement stmt;
             stmt.kind = Statement::Kind::Loop;
             stmt.offset = token_.offset;
+            // Only the braced scalar island is admitted; `loop do ... done` and
+            // other loop forms keep main's fail-closed continuation diagnostic.
+            if (peek_next().text != "{")
+                fail("native realtime source loop requires verified LLVM continuation lowering");
             require("loop"); require("{");
             if (++scalar_loop_depth > 16)
                 fail("native scalar loop nesting exceeds 16");
