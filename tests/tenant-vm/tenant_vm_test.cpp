@@ -520,6 +520,17 @@ void authority_is_bound_to_host_and_generation() {
         bad.tenant_id = id;
         CHECK_STATUS(one.open(bad).status, Status::InvalidArgument);
     }
+    // v2 tenant IDs are ASCII, <=128 bytes; embedded NUL/non-ASCII must not be
+    // silently normalized or accepted as alternate host-root identities.
+    for (const std::string& id : {std::string(129, 'x'), std::string("x\\0y", 3),
+                                  std::string(1, static_cast<char>(0x80))}) {
+        auto bad = spec(id);
+        CHECK_STATUS(one.open(bad).status, Status::InvalidArgument);
+    }
+    auto edge = one.open(spec(std::string(128, 'x')));
+    REQUIRE_OK(edge);
+    CHECK_STATUS(one.kill(edge.handle), Status::Ok);
+    one.wait_closed(edge.handle);
     auto no_module = spec("x");
     no_module.module = nullptr;
     CHECK_STATUS(one.open(no_module).status, Status::InvalidArgument);
@@ -1224,6 +1235,44 @@ void repeated_failures_end_only_that_actor() {
     CHECK_EQ(terminal.mail_abandoned, std::uint64_t{1});
 }
 
+// A zero-length window would discard each failure before the next one, so the
+// restart budget would never be exhausted. Reject it at VM admission. A zero
+// restart *budget*, however, is valid: the first failed turn ends only its actor.
+void zero_restart_window_is_rejected_and_zero_budget_is_bounded() {
+    TenantVmHost host;
+    VmSpec invalid = spec("zero-window");
+    invalid.limits.restart_window_ms = 0;
+    CHECK_STATUS(host.open(invalid).status, Status::InvalidArgument);
+    CHECK_EQ(host.stats().live_vms, std::size_t{0});
+
+    VmSpec no_restarts = spec("zero-budget");
+    no_restarts.limits.restart_budget = 0;
+    no_restarts.limits.restart_backoff_ms = 0;
+    auto vm = host.open(no_restarts);
+    REQUIRE_OK(vm);
+    auto failing = host.spawn_actor(vm.handle, KIND_RESTARTABLE);
+    auto sibling = host.spawn_actor(vm.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(failing);
+    REQUIRE_OK(sibling);
+
+    const TurnResult failed = host.call(failing.actor, words({RESTART_ADD_THEN_TRAP, 1})).get();
+    CHECK_STATUS(failed.status, Status::ActorTerminated);
+    CHECK_REASON(failed.failure, FailReason::Trap);
+    CHECK_STATUS(host.call(failing.actor, words({RESTART_ADD, 1})).get().status, Status::ActorTerminated);
+    CHECK_EQ(word(host.call(sibling.actor, words({RESTART_ADD, 7})).get().payload), std::int64_t{7});
+    const VmSnapshot snapshot = host.snapshot(vm.handle);
+    CHECK(snapshot.phase == Phase::Running);
+    CHECK_EQ(snapshot.live_actors, std::size_t{1});
+    CHECK_EQ(snapshot.actor_restarts, std::uint64_t{0});
+    CHECK_EQ(snapshot.actors_terminated, std::uint64_t{1});
+
+    CHECK_STATUS(host.begin_shutdown(vm.handle), Status::Ok);
+    const VmTerminal terminal = host.wait_closed(vm.handle);
+    CHECK(terminal.phase == Phase::Stopped);
+    CHECK_EQ(terminal.actor_restarts, std::uint64_t{0});
+    CHECK_EQ(terminal.actors_terminated, std::uint64_t{1});
+}
+
 // The budget counts failures in a window, so old failures stop counting.
 void the_restart_budget_refills_with_time() {
     TenantVmHost host;
@@ -1532,6 +1581,7 @@ const Case cases[] = {
     {"a_confined_fault_restarts_only_that_actor", a_confined_fault_restarts_only_that_actor},
     {"a_deadline_stops_one_turn_not_its_siblings", a_deadline_stops_one_turn_not_its_siblings},
     {"repeated_failures_end_only_that_actor", repeated_failures_end_only_that_actor},
+    {"zero_restart_window_is_rejected_and_zero_budget_is_bounded", zero_restart_window_is_rejected_and_zero_budget_is_bounded},
     {"the_restart_budget_refills_with_time", the_restart_budget_refills_with_time},
     {"a_restart_waits_before_the_next_turn", a_restart_waits_before_the_next_turn},
     {"an_unconfined_fault_still_fails_the_vm", an_unconfined_fault_still_fails_the_vm},
