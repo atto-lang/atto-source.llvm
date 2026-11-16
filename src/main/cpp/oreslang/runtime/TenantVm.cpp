@@ -116,6 +116,22 @@ std::uint64_t align_up(std::uint64_t value, std::uint64_t alignment) {
     return (value + alignment - 1) & ~(alignment - 1);
 }
 
+// Checked arithmetic for actor-restart scheduling: a large user-configured
+// backoff must never wrap into an earlier deadline and accelerate a crash loop.
+constexpr std::uint64_t restart_backoff_deadline_ns(std::uint64_t now, std::uint32_t base_ms,
+                                                     std::size_t failure_count) {
+    const std::size_t exponent = std::min<std::size_t>(failure_count ? failure_count - 1 : 0, 16);
+    const std::uint64_t factor = std::uint64_t{1000000} << exponent;
+    const std::uint64_t remaining = std::numeric_limits<std::uint64_t>::max() - now;
+    return base_ms > remaining / factor ? std::numeric_limits<std::uint64_t>::max()
+                                        : now + std::uint64_t{base_ms} * factor;
+}
+static_assert(restart_backoff_deadline_ns(100, 10, 1) == 10000100, "initial restart backoff");
+static_assert(restart_backoff_deadline_ns(100, 10, 2) == 20000100, "exponential restart backoff");
+static_assert(restart_backoff_deadline_ns(std::numeric_limits<std::uint64_t>::max() - 1,
+                                         300000, 17) == std::numeric_limits<std::uint64_t>::max(),
+              "restart backoff saturates instead of overflowing");
+
 bool valid_tenant_id(const std::string& id) {
     if (id.empty() || id.size() > 128 || id == "." || id == "..") return false;
     return std::all_of(id.begin(), id.end(), [](unsigned char c) {
@@ -632,14 +648,7 @@ struct TenantVmHost::Core {
         const std::size_t failures = actor.recent_failures_ns.size();
         if (failures > limits.restart_budget) return false;
         if (limits.restart_backoff_ms) {
-            // Saturate instead of wrapping when a host configures a large base delay
-            // and a large restart budget. A wrapped deadline could run a crashing
-            // actor immediately, defeating exponential backoff.
-            const std::uint64_t factor = std::uint64_t{1000000} << std::min<std::size_t>(failures - 1, 16);
-            const std::uint64_t remaining = std::numeric_limits<std::uint64_t>::max() - now;
-            const std::uint64_t base = limits.restart_backoff_ms;
-            const std::uint64_t delay_ns = base > remaining / factor ? remaining : base * factor;
-            actor.backoff_until_ns = now + delay_ns;
+            actor.backoff_until_ns = restart_backoff_deadline_ns(now, limits.restart_backoff_ms, failures);
             std::lock_guard<std::mutex> lock(backoff_mutex);
             backoff.push_back(Backoff{actor.backoff_until_ns, vm, slot, actor.generation});
             std::push_heap(backoff.begin(), backoff.end());
