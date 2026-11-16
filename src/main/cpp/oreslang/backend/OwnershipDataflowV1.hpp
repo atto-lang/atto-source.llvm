@@ -64,6 +64,12 @@ struct OwnershipV1Result {
 
 class OwnershipDataflowV1 final {
 public:
+    // Optional same-pass observer. Each successful operation is reported from
+    // the *existing* typed CFG verifier, without a second graph traversal.
+    // Shadow events are not independently authenticated borrow proofs.
+    using ShadowSinkV0 = void (*)(void* context, std::size_t block,
+                                  std::size_t operation,
+                                  OwnershipV1OpKind kind, std::size_t owner);
     static constexpr std::size_t NoOwner = static_cast<std::size_t>(-1);
     static constexpr std::size_t MaxOwners = 64;
     static constexpr std::size_t MaxBlocks = 4096;
@@ -71,7 +77,9 @@ public:
     static constexpr std::size_t MaxOperationsPerBlock = 1024;
     static constexpr std::size_t MaxBorrowsPerOwner = 65535;
 
-    static OwnershipV1Result analyze(const OwnershipV1Graph& graph) {
+    static OwnershipV1Result analyze(const OwnershipV1Graph& graph,
+                                     ShadowSinkV0 shadow = nullptr,
+                                     void* shadow_context = nullptr) {
         if (graph.owners.empty() || graph.owners.size() > MaxOwners)
             fail("owner count outside bounded analysis limit");
         if (graph.blocks.empty() || graph.blocks.size() > MaxBlocks ||
@@ -151,10 +159,14 @@ public:
                                    state[rhs].acquisition_order;
                         });
                     result.normal_exits.push_back(std::move(plan));
+                    if (shadow != nullptr)
+                        shadow(shadow_context, index, op_index, op.kind, op.owner);
                     has_exit = true;
                     break;
                 }
                 apply(op, state, graph.owners.size(), next_acquisition_order);
+                if (shadow != nullptr)
+                    shadow(shadow_context, index, op_index, op.kind, op.owner);
             }
             if (has_exit) continue;
             if (block.successors.empty())
@@ -297,16 +309,19 @@ private:
                     fail("take destination is already initialized");
                 destination.state = OwnerState::Owned;
                 destination.acquisition_order = owner.acquisition_order;
+                // Retain the historical sequence on the moved source slot.
+                // The destination inherits this same resource identity; keeping
+                // history prevents later allocations from reusing an old order.
                 owner.state = OwnerState::Moved;
-                owner.acquisition_order = 0;
                 break;
             }
             case OwnershipV1OpKind::Drop:
                 require_owned(owner);
                 if (owner.shared_borrows || owner.mutable_borrow)
                     fail("drop while borrow is outstanding");
+                // Keep acquisition history after destruction. A subsequent
+                // allocation on this path must receive a strictly newer order.
                 owner.state = OwnerState::Destroyed;
-                owner.acquisition_order = 0;
                 break;
             case OwnershipV1OpKind::ExitNormal:
             case OwnershipV1OpKind::ExitExceptional:

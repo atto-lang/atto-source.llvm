@@ -31,6 +31,16 @@
 
 namespace oreslang::runtime {
 
+// File-data sync for the WAL. macOS has no fdatasync(); F_FULLFSYNC is its durable
+// equivalent (plain fsync may stop at the drive cache), falling back to fsync.
+inline int db_wal_datasync(int fd) noexcept {
+#if defined(__APPLE__)
+    return ::fcntl(fd, F_FULLFSYNC) == 0 ? 0 : ::fsync(fd);
+#else
+    return ::fdatasync(fd);
+#endif
+}
+
 class DbDurableWalFile final {
 public:
     static constexpr std::size_t min_frame = 31;
@@ -67,6 +77,14 @@ public:
                 throw std::runtime_error("WAL is not single-linked regular file");
             if (::flock(fd, LOCK_EX | LOCK_NB) != 0)
                 throw_os_error("exclusive WAL lock");
+            // fdatasync(fd) does NOT durably link a newly created WAL
+            // filename into the parent directory. Require the already-
+            // authenticated directory FD to complete fsync before this
+            // owner can issue any physical append/sync receipt.
+            // Unsupported filesystems or un-syncable directory FDs fail
+            // closed; do not silently downgrade to file-only durability.
+            if (::fsync(directory_fd) != 0)
+                throw_os_error("WAL parent directory fsync");
             return std::unique_ptr<DbDurableWalFile>(
                     new DbDurableWalFile(fd, generation));
         } catch (...) {
@@ -188,7 +206,7 @@ public:
         }
         // fdatasync() completion is a necessary file-data sync condition,
         // not a parent directory sync or end-to-end database commit.
-        if (::fdatasync(fd_) != 0) {
+        if (db_wal_datasync(fd_) != 0) {
             uncertain_ = true;
             throw_os_error("WAL fdatasync");
         }
