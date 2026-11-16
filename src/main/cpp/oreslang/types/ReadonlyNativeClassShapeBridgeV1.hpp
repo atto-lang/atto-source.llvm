@@ -13,6 +13,12 @@ inline plan prove_native_class_layout(
         std::uint64_t checked_layout_epoch,
         std::uint64_t checked_loan_id,
         const std::vector<required_field>& expected) {
+    const auto declared = std::find_if(
+        checked_program.classes.begin(), checked_program.classes.end(),
+        [&](const ClassDecl& cls) { return cls.name == actual_class_name; });
+    if (declared == checked_program.classes.end()) {
+        throw std::invalid_argument("unknown checked native class source");
+    }
     NativeClassLayouts checked_layouts(checked_program);
     const NativeClassLayout& layout = checked_layouts.at(actual_class_name);
     const ClassDecl& original = checked_layouts.source(actual_class_name);
