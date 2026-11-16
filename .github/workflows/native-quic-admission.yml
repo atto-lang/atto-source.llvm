@@ -1,0 +1,25 @@
+name: Native QUIC host admission (not wire parity)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/NativeQuicAdmission.hpp'
+      - 'tests/native_quic_admission_test.cpp'
+      - 'src/main/cpp/oreslang/runtime/NativeQuicLeaseLedger.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeQuicLoopbackUdp.hpp'
+      - 'tests/native_quic_lease_ledger_test.cpp'
+      - 'tests/native_quic_loopback_udp_test.cpp'
+      - 'scripts/test-native-quic-admission.sh'
+      - '.github/workflows/native-quic-admission.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-quic-admission:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Compile C++17 host QUIC admission and bounded native I/O ledger
+        run: bash scripts/test-native-quic-admission.sh

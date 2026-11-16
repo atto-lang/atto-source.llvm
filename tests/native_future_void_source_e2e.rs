@@ -30,10 +30,20 @@ fn expected_trace(stderr: &str, source: &str) {
     let spawned = lines.iter().filter(|x| x.contains("SOURCE_ACTOR_SPAWN_STOP_VERIFIED"))
         .collect::<Vec<_>>();
     assert_eq!(spawned.len(), 1, "{source}: wrong actor count: {stderr}");
-    assert!(spawned[0].contains("constructor_on_worker=1 released=1")
-         && spawned[0].contains("processed=2")
-         && spawned[0].contains("last=3"),
-        "{source}: wrong actor effects: {stderr}");
+let receipt = |name: &str| -> u64 {
+    spawned[0].split_whitespace().find_map(|field| {
+        field.strip_prefix(&format!("{name}=")).map(|value| value.parse().unwrap())
+    }).unwrap_or_else(|| panic!("{source}: missing {name}: {stderr}"))
+};
+assert!(spawned[0].contains("constructor_on_worker=1 released=1"));
+// stop() may abandon queued DATA; get_ready() promises initialization,
+// not completion of subsequent messages. Require an exact FIFO prefix
+// and account for every admitted message instead of assuming a drain.
+let processed = receipt("processed");
+assert_eq!(receipt("accepted"), 2);
+assert!(processed <= 2);
+assert_eq!(receipt("abandoned"), 2 - processed);
+assert_eq!(receipt("last"), [0, 1, 3][processed as usize]);
     let routed = lines.iter().filter(|x| x.contains("SOURCE_ACTOR_VM_ROUTING_VERIFIED"))
         .collect::<Vec<_>>();
     assert_eq!(routed.len(), 1, "{source}: VM route count: {stderr}");

@@ -1,0 +1,4 @@
+// Reversing the illegal modifiers must be rejected too.
+suspends critical fnc main(): int {
+  return 0;
+}

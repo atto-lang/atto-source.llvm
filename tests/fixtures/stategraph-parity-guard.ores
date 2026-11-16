@@ -1,0 +1,8 @@
+// LLVM source guest: bounded graph-step guard; no implicit conversion.
+pub fnc advance(int count, int max_steps): int {
+  if (count >= max_steps) { return count; } fi
+  return count + 1;
+}
+pub fnc main(): int {
+  return advance(41, 42);
+}

@@ -1,3 +1,5 @@
+mod checked_i64;
+
 use std::{
     env,
     ffi::OsStr,
@@ -348,6 +350,93 @@ fn aot_driver(driver: &Path, compiler: &Path, clang: &Path) -> Result<(), String
     )?;
 
     let original = fs::read(&output).map_err(|e| e.to_string())?;
+    // A host-side trampoline that always returns 42 can pass one smoke test.
+    // Distinct guest programs must produce distinct, independently runnable
+    // linked artifacts, with the compiler and PATH unavailable at execution.
+    // These tests establish only the currently implemented scalar guest slice,
+    // not full language/actor AOT parity.
+    for (label, program, expected_exit) in [
+        ("zero", "pub routine main(): int { return 0; }\n", 0),
+        ("one", "pub routine main(): int { return 1; }\n", 1),
+        ("module", "define module demo as\n  pub fnc main(): int { return 7; }\nend\n", 7),
+        ("forward-call", "pub fnc main(): int { return add(40, 2); }\nfnc add(int a, int b): int { return a + b; }\n", 42),
+    ] {
+        fs::write(&source, program).map_err(|e| format!("{label}: write guest: {e}"))?;
+        let built = Command::new(driver)
+            .arg(&source).arg(&output)
+            .env("ORESLANG_LLVMC", compiler).env("CLANG", clang)
+            .output().map_err(|e| format!("{label}: AOT driver: {e}"))?;
+        require(built.status.success(),
+            format!("{label}: native link failed: {}", stderr(&built)))?;
+        let executed = Command::new(&output)
+            .env_clear().env("PATH", "/nonexistent")
+            .output().map_err(|e| format!("{label}: native entrypoint: {e}"))?;
+        require(executed.status.code() == Some(expected_exit),
+            format!("{label}: native guest returned {:?} instead of {expected_exit}: {}",
+                executed.status.code(), stderr(&executed)))?;
+        require(executed.stdout.is_empty() && executed.stderr.is_empty(),
+            format!("{label}: unexpected guest I/O or host interpreter diagnostics"))?;
+        if expected_exit != 42 {
+            require(fs::read(&output).map_err(|e| e.to_string())? != original,
+                format!("{label}: artifact identical to baseline despite distinct guest return"))?;
+        }
+    }
+    // Source actors through the same driver: the IR declares the native actor
+    // runtime, so the driver must link the scheduler/VM/actor heap itself.
+    // Two distinct returns prove the exit code comes from the guest.
+    let actor_source = temp.path.join("actor.atto");
+    for (label, done_await, expected_exit) in [("actor-ready", false, 44), ("actor-done", true, 45)] {
+        let program = format!(
+            "define actor Worker as {{\n  let total: int = 0;\n  pub fnc on_message(int n): int {{\n    total = total + n;\n    return total;\n  }}\n}}\n\
+             pub fnc main(): int {{\n  const worker: ActorRef<Worker> = spawn Worker();\n{}  stop worker;\n{}  return {expected_exit};\n}}\n",
+            if done_await { "" } else {
+                "  const Future<void> ready = worker.get_ready();\n  await ready;\n  worker.send(1);\n  worker.send(2);\n"
+            },
+            if done_await { "  await worker.get_done();\n" } else { "" });
+        fs::write(&actor_source, program).map_err(|e| format!("{label}: write guest: {e}"))?;
+        let built = Command::new(driver)
+            .arg(&actor_source).arg(&output)
+            .env("ORESLANG_LLVMC", compiler).env("CLANG", clang)
+            .output().map_err(|e| format!("{label}: AOT driver: {e}"))?;
+        require(built.status.success(),
+            format!("{label}: actor runtime link failed: {}", stderr(&built)))?;
+        let executed = Command::new(&output)
+            .env_clear().env("PATH", "/nonexistent")
+            .output().map_err(|e| format!("{label}: native entrypoint: {e}"))?;
+        require(executed.status.code() == Some(expected_exit),
+            format!("{label}: native actor guest returned {:?} instead of {expected_exit}: {}",
+                executed.status.code(), stderr(&executed)))?;
+    }
+
+    // Canonical spelling shared with the Java frontend: `as ... end`, a
+    // type-first field, `self.field`, a bare method and `worker.stop()`.
+    // The same bytes must run on both backends.
+    fs::write(&actor_source, "define actor Worker as\n  let int total = 0;\n  pub on_message(int n): int {\n    self.total = self.total + n;\n    return self.total;\n  }\nend\n\
+pub fnc main(): int {\n  const worker: ActorRef<Worker> = spawn Worker();\n  worker.stop();\n  await worker.get_done();\n  return 46;\n}\n")
+        .map_err(|e| format!("canonical actor: write guest: {e}"))?;
+    let built = Command::new(driver)
+        .arg(&actor_source).arg(&output)
+        .env("ORESLANG_LLVMC", compiler).env("CLANG", clang)
+        .output().map_err(|e| format!("canonical actor: AOT driver: {e}"))?;
+    require(built.status.success(),
+        format!("canonical actor: compile/link failed: {}", stderr(&built)))?;
+    let executed = Command::new(&output)
+        .env_clear().env("PATH", "/nonexistent")
+        .output().map_err(|e| format!("canonical actor: native entrypoint: {e}"))?;
+    require(executed.status.code() == Some(46),
+        format!("canonical actor guest returned {:?} instead of 46", executed.status.code()))?;
+
+    // Rebuild the original image before negative cases: they must preserve
+    // exactly these published bytes and never publish a partial executable.
+    fs::write(&source, "fnc main(): int { return 42; }\n")
+        .map_err(|e| e.to_string())?;
+    let restored = Command::new(driver)
+        .arg(&source).arg(&output)
+        .env("ORESLANG_LLVMC", compiler).env("CLANG", clang)
+        .output().map_err(|e| format!("restore linked guest: {e}"))?;
+    require(restored.status.success(),
+        format!("restore linked guest failed: {}", stderr(&restored)))?;
+    let original = fs::read(&output).map_err(|e| e.to_string())?;
     for text in [
         "import module spin from \"spin\";\n",
         "this is not Oreslang\n",
@@ -367,6 +456,43 @@ fn aot_driver(driver: &Path, compiler: &Path, clang: &Path) -> Result<(), String
             "failed compile changed existing native output",
         )?;
     }
+
+    // The IR screen is a release gate, not linked-image certification. A compiler
+    // emitting collector IR must be stopped before Clang, by this specific gate.
+    fs::write(&source, "fnc main(): int { return 42; }\n").map_err(|e| e.to_string())?;
+    let fake = temp.path.join("fake-ir-compiler.sh");
+    for ir in [
+        r#"define void @guest() gc "shadow-stack" { ret void }"#,
+        r#"define void @"safe;label"() gc "shadow-stack" { ret void }"#,
+        "declare void @llvm.gcroot(ptr, ptr)",
+        "declare token @llvm.gc.statepoint.p0(i64, i32, ptr, i32, i32, ...)",
+        "declare ptr @GC_malloc(i64)",
+        "declare void @gc_collect()",
+        r#"declare void @"llvm.g\63root"(ptr, ptr)"#,
+    ] {
+        fs::write(&fake, format!("#!/bin/sh\ncat <<'IR'\n{ir}\nIR\n")).map_err(|e| e.to_string())?;
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+        }
+        let out = Command::new(driver)
+            .arg(&source)
+            .arg(&output)
+            .env("ORESLANG_LLVMC", &fake)
+            .env("CLANG", clang)
+            .output()
+            .map_err(|e| format!("run collector IR case: {e}"))?;
+        require(!out.status.success(), format!("collector IR admitted: {ir}"))?;
+        require(
+            stderr(&out).contains("STRICT_NO_GC_IR_REJECTED"),
+            format!("{ir}: rejected by something other than the gate: {}", stderr(&out)),
+        )?;
+        require(
+            fs::read(&output).map_err(|e| e.to_string())? == original,
+            "collector IR changed existing native output",
+        )?;
+    }
+    fs::remove_file(&fake).map_err(|e| e.to_string())?;
 
     for entry in fs::read_dir(&temp.path).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
@@ -700,7 +826,7 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
             "end-delimited-colon-must-be-arrow",
             "define class X as mtd foo():void :: end end\n\
              pub fnc main():int{return 42;}\n",
-            "native '::' method requires '->' return syntax",
+            "native '::' body requires '->' return syntax",
         ),
         (
             "end-delimited-missing-double-colon",
@@ -718,13 +844,13 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
             "end-delimited-nontrivial-void-body",
             "define class X as mtd foo() -> void :: stdio.println(42); end end\n\
              pub fnc main():int{return 42;}\n",
-            "native end-delimited method supports only one terminal return",
+            "native comma expression body requires a single terminal result",
         ),
         (
             "end-delimited-nonvoid-missing-return",
             "define class X as mtd foo() -> int :: end end\n\
              pub fnc main():int{return 42;}\n",
-            "expected 'return'",
+            "native non-void comma expression body requires a result",
         ),
         (
             "trailing-receiver-comma",
@@ -760,6 +886,146 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
     Ok(())
 }
 
+// Compiler -> LLVM IR -> Clang -> actual process. This deliberately closes
+// only the safe int % nonzero signed-literal subset; dynamic and zero divisors
+// remain rejected until Oreslang's checked failure/effects ABI is available.
+fn native_remainder_parity(compiler: &Path, clang: &Path) -> Result<(), String> {
+    let temp = TempDir::new("ores-remainder-parity-").map_err(|e| e.to_string())?;
+    let source = temp.path.join("remainder.ores");
+    let ir = temp.path.join("remainder.ll");
+    let executable = temp.path.join("remainder-native");
+
+    // % and single ^ are reserved (^^ is bool XOR). Named Integer operations carry the semantics:
+    // rem truncates toward zero, mod is never negative, and a zero divisor traps.
+    let min = "(-9223372036854775807 - 1)";
+    let rem_fn = "fnc r(int a, int b): int { return Integer.rem(a, b); }\n";
+    let mod_fn = "fnc m(int a, int b): int { return Integer.mod(a, b); }\n";
+    let positives: Vec<(&str, String, i32)> = vec![
+        ("positive", "pub fnc main(): int { return Integer.rem(17, 5); }\n".into(), 2),
+        ("negative-dividend", "pub fnc main(): int { return Integer.rem(-17, 5) + 10; }\n".into(), 8),
+        ("precedence", "pub fnc main(): int { return 4 + Integer.rem(17, 5) * 3; }\n".into(), 10),
+        ("nested", "pub fnc main(): int { return Integer.rem(Integer.rem(20, 6), 4); }\n".into(), 2),
+        ("function-param", "fnc rem(int n): int { return Integer.rem(n, 7); }\n\
+            pub fnc main(): int { return rem(52); }\n".into(), 3),
+        ("exact-divisor", "pub fnc main(): int { return Integer.rem(64, 8); }\n".into(), 0),
+        ("divisor-one", "pub fnc main(): int { return Integer.rem(-14, 1) + 6; }\n".into(), 6),
+        ("signed-min-divisor-one", format!("pub fnc main(): int {{ return Integer.rem({min}, 1) + 11; }}\n"), 11),
+        ("negative-divisor", "pub fnc main(): int { return Integer.rem(17, -5); }\n".into(), 2),
+        ("both-negative", "pub fnc main(): int { return Integer.rem(-17, -5) + 10; }\n".into(), 8),
+        ("negative-minus-one", "pub fnc main(): int { return Integer.rem(5, -1); }\n".into(), 0),
+        ("min-dividend-minus-one", format!("pub fnc main(): int {{ return Integer.rem({min}, -1) + 13; }}\n"), 13),
+        ("signed-min-divisor", format!("pub fnc main(): int {{ return Integer.rem(5, {min}); }}\n"), 5),
+        ("min-both-sides", format!("pub fnc main(): int {{ return Integer.rem({min}, {min}) + 17; }}\n"), 17),
+        // Full signed-i64 equality returns 0/1; POSIX process exit status
+        // otherwise truncates an incorrect large result modulo 256.
+        ("full-width-min-negative-seven", format!("pub fnc main(): int {{ return (Integer.rem({min}, -7) == -1) ? 0 : 1; }}\n"), 0),
+        ("full-width-max-negative-seven", "pub fnc main(): int { return (Integer.rem(9223372036854775807, -7) == 0) ? 0 : 1; }\n".into(), 0),
+        ("runtime-divisor", format!("{rem_fn}pub fnc main(): int {{ return r(52, 7); }}\n"), 3),
+        ("runtime-negative-divisor", format!("{rem_fn}pub fnc main(): int {{ return r(-17, -5) + 10; }}\n"), 8),
+        ("runtime-min-minus-one", format!("{rem_fn}pub fnc main(): int {{ return r({min}, -1) + 21; }}\n"), 21),
+        ("mod-negative-dividend", "pub fnc main(): int { return Integer.mod(-9, 4); }\n".into(), 3),
+        ("mod-both-negative", "pub fnc main(): int { return Integer.mod(-9, -4); }\n".into(), 3),
+        ("mod-negative-divisor", "pub fnc main(): int { return Integer.mod(9, -4); }\n".into(), 1),
+        ("mod-runtime", format!("{mod_fn}pub fnc main(): int {{ return m(-9, 4); }}\n"), 3),
+        ("mod-runtime-min-minus-one", format!("{mod_fn}pub fnc main(): int {{ return m({min}, -1) + 5; }}\n"), 5),
+        ("mod-full-width", format!("{mod_fn}pub fnc main(): int {{ return (m(-1, {min}) == 9223372036854775807) ? 0 : 1; }}\n"), 0),
+        ("bitxor", "pub fnc main(): int { return Integer.bitXor(5, 3); }\n".into(), 6),
+        ("bitxor-full-width", format!("pub fnc main(): int {{ return (Integer.bitXor({min}, 9223372036854775807) == -1) ? 0 : 1; }}\n"), 0),
+        ("bool-xor", "pub fnc main(): int { return (Xor(true, false) && !Xor(true, true)) ? 0 : 1; }\n".into(), 0),
+    ];
+    for (name, program, expected) in &positives {
+        let (name, expected) = (*name, *expected);
+        fs::write(&source, program).map_err(|e| format!("{name}: write: {e}"))?;
+        let compiled = run(compiler, [source.as_os_str()])?;
+        require(
+            compiled.status.success() && stdout(&compiled).starts_with("; ModuleID"),
+            format!("{name}: native frontend rejected source: {}", stderr(&compiled)),
+        )?;
+        let llvm_ir = stdout(&compiled);
+        if name == "function-param" || name == "runtime-divisor" {
+            require(
+                llvm_ir.contains("srem i64 "),
+                format!("{name}: emitted IR lacks runtime signed remainder"),
+            )?;
+        }
+        if name == "runtime-min-minus-one" {
+            require(
+                llvm_ir.contains("rem.divisor"),
+                format!("{name}: missing the -1 divisor guard that avoids srem poison"),
+            )?;
+        }
+        fs::write(&ir, &compiled.stdout).map_err(|e| format!("{name}: IR: {e}"))?;
+        for level in ["-O0", "-O2"] {
+            let linked = run(
+                clang,
+                [
+                    OsStr::new(level),
+                    ir.as_os_str(),
+                    OsStr::new("-o"),
+                    executable.as_os_str(),
+                ],
+            )?;
+            require(
+                linked.status.success(),
+                format!("{name} {level}: Clang failed: {}", stderr(&linked)),
+            )?;
+            let executed = run(&executable, std::iter::empty::<&str>())?;
+            require(
+                executed.status.code() == Some(expected)
+                    && executed.stdout.is_empty()
+                    && executed.stderr.is_empty(),
+                format!("{name} {level}: observed {:?}, expected {expected}",
+                    executed.status.code()),
+            )?;
+        }
+    }
+    let traps: Vec<(&str, String)> = vec![
+        ("zero-literal-divisor", "pub fnc main(): int { return Integer.rem(5, 0); }\n".into()),
+        ("zero-runtime-divisor", format!("{rem_fn}pub fnc main(): int {{ return r(5, 0); }}\n")),
+        ("mod-zero-runtime-divisor", format!("{mod_fn}pub fnc main(): int {{ return m(5, 0); }}\n")),
+    ];
+    for (name, program) in &traps {
+        fs::write(&source, program).map_err(|e| format!("{name}: write: {e}"))?;
+        let compiled = run(compiler, [source.as_os_str()])?;
+        require(compiled.status.success(),
+            format!("{name}: native frontend rejected source: {}", stderr(&compiled)))?;
+        fs::write(&ir, &compiled.stdout).map_err(|e| format!("{name}: IR: {e}"))?;
+        for level in ["-O0", "-O2"] {
+            let linked = run(clang, [OsStr::new(level), ir.as_os_str(), OsStr::new("-o"), executable.as_os_str()])?;
+            require(linked.status.success(), format!("{name} {level}: Clang failed: {}", stderr(&linked)))?;
+            let executed = run(&executable, std::iter::empty::<&str>())?;
+            // A zero divisor must stop the program, never return a value.
+            require(executed.status.code().is_none(),
+                format!("{name} {level}: expected a trap, observed exit {:?}", executed.status.code()))?;
+        }
+    }
+    let negatives = [
+        ("percent", "pub fnc main(): int { return 17 % 5; }\n", "'%' is reserved"),
+        ("caret", "pub fnc main(): int { return 5 ^ 3; }\n", "'^' is reserved"),
+        // `^^` is canonical bool XOR (spec ch.16); int operands are a type error.
+        ("double-caret-int", "pub fnc main(): int { return 7 ^^ 3; }\n", "logical operator requires bool"),
+        ("pow-unsupported", "pub fnc main(): int { return Integer.pow(2, 3); }\n", "Integer.pow is unsupported"),
+        ("wrong-type", "pub fnc main(): int { return Integer.rem(true, 2); }\n", "arithmetic requires int"),
+        ("xor-shadowing", "fnc Xor(bool a, bool b): bool { return a; }\npub fnc main(): int { return 0; }\n", "expected non-keyword identifier"),
+    ];
+    for (name, program, diagnostic) in negatives {
+        fs::write(&source, program).map_err(|e| format!("{name}: write: {e}"))?;
+        let rejected = run(compiler, [source.as_os_str()])?;
+        require(
+            !rejected.status.success()
+                && rejected.stdout.is_empty()
+                && stderr(&rejected).contains(diagnostic),
+            format!("{name}: missing fail-closed diagnostic {diagnostic:?}: {}",
+                stderr(&rejected)),
+        )?;
+    }
+    println!(
+        "Native Integer.rem/mod/bitXor: {} compiled cases and {} zero-divisor traps at -O0/-O2, {} reserved-operator negatives",
+        positives.len(), traps.len(), negatives.len()
+    );
+    Ok(())
+}
+
 fn path_arg(args: &[String], index: usize, usage: &str) -> Result<PathBuf, String> {
     args.get(index)
         .map(PathBuf::from)
@@ -769,6 +1035,11 @@ fn path_arg(args: &[String], index: usize, usage: &str) -> Result<PathBuf, Strin
 fn real_main() -> Result<(), String> {
     let args: Vec<String> = env::args().collect();
     match args.get(1).map(String::as_str) {
+        Some("checked-i64") => {
+            let compiler = path_arg(&args, 2, "usage: checked-i64 <compiler> <clang>")?;
+            let clang = path_arg(&args, 3, "usage: checked-i64 <compiler> <clang>")?;
+            checked_i64::run_cases(&compiler, &clang)
+        }
         Some("realtime-profile") => {
             let compiler = path_arg(&args, 2, "usage: realtime-profile <compiler>")?;
             realtime_profile(&compiler)
@@ -789,6 +1060,11 @@ fn real_main() -> Result<(), String> {
         Some("native-async-io-boundary") => {
             let compiler = path_arg(&args, 2, "usage: native-async-io-boundary <compiler>")?;
             native_async_io_boundary(&compiler)
+        }
+        Some("native-remainder-parity") => {
+            let compiler = path_arg(&args, 2, "usage: native-remainder-parity <compiler> <clang>")?;
+            let clang = path_arg(&args, 3, "usage: native-remainder-parity <compiler> <clang>")?;
+            native_remainder_parity(&compiler, &clang)
         }
         Some("named-call-order") => {
             let compiler = path_arg(&args, 2, "usage: named-call-order <compiler> <fixture>")?;
@@ -813,7 +1089,7 @@ fn real_main() -> Result<(), String> {
             aot_driver(&driver, &compiler, &clang)
         }
         _ => Err(
-            "usage: oreslang-llvm-test-harness <realtime-profile|callable-nominal|nominal-type-binders|aot-driver|named-call-order|actor-persistent-fields|tagged-message-wire|native-async-io-boundary|native-inline-self-arity> ..."
+            "usage: oreslang-llvm-test-harness <realtime-profile|callable-nominal|nominal-type-binders|aot-driver|native-remainder-parity|named-call-order|actor-persistent-fields|tagged-message-wire|native-async-io-boundary|native-inline-self-arity> ..."
                 .to_string(),
         ),
     }
@@ -825,3 +1101,4 @@ fn main() {
         std::process::exit(1);
     }
 }
+
