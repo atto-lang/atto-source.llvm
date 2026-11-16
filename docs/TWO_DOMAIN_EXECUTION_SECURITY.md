@@ -8,9 +8,15 @@ Decision: 2026-10-12. Security audit / integration contract.
 > containment boundary for hostile native code: the guest ABI expressly states
 > that its memory-addressing rule is not enforced by the ABI, and a caller-supplied
 > SHA-256 only verifies byte identity, not compiler provenance or authorization.
-> Keep hostile/untrusted tenants under the separately governed process-isolated
-> execution contract until independent proof, negative tests and review establish
-> a safe alternative. The existing Java topology is not changed by this proposal.
+> Conformance [tenant-isolation-v2](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/pull/352)
+> supersedes v1's mandatory per-tenant OS sandbox: validated-Wasm tenants may share
+> a process when each has a genuinely enforced VM-isolate. **That architecture
+> decision is not approval of this LLVM implementation.** Continue to refuse
+> hostile native libraries; retain the existing deployment-level security hold
+> for this experimental loader until authenticated compiler provenance,
+> confinement/admission negative tests and independent review have passed.
+> Separately deployed process isolation may remain defense in depth. The
+> existing Java topology is not changed by this proposal.
 
 ## Topology
 
