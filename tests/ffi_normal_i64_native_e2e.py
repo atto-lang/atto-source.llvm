@@ -130,7 +130,18 @@ class NormalCompilerStaticI64(unittest.TestCase):
             ("overflow_literal",source("9223372036854775808","0"),True,"host"),
             ("foreign_signed_overflow",source("9223372036854775807","1"),True,"host"),
             ("foreign_signed_underflow",source("-9223372036854775807","-2"),True,"host"),
-            ("unknown_effect",source(effects="using foo"),True,"host")
+            ("unknown_effect",source(effects="using foo"),True,"host"),
+            ("async_extern",source(declaration=DECLARE.replace("extern fnc", "async extern fnc")),True,"host"),
+            ("async_ffi_symbol",source(declaration=DECLARE.replace("extern fnc", "extern async fnc")),True,"host"),
+            ("granted_missing_extern",source(declaration=""),True,"host"),
+            ("granted_unused_extern",DECLARE+"pub fnc main(): int using ffi { return 42; }\n",True,"host"),
+            ("granted_without_effectful_call",DECLARE+"pub fnc main(): int { return 42; }\n",True,"host"),
+            ("granted_extra_helper",DECLARE+
+                "fnc helper(): int { return 2; }\n"
+                "pub fnc main(): int using ffi { return atto_add_i64(20,22); }\n",True,"host"),
+            ("duplicate_ffi_declaration",DECLARE+source(),True,"host"),
+            ("duplicated_ffi_effect",source(declaration=DECLARE.replace("using ffi", "using ffi, ffi")),True,"host"),
+            ("export_foreign",source(declaration=DECLARE.replace("extern fnc", "pub extern fnc")),True,"host")
         ]
         for label,txt,grant,target in negatives:
             with self.subTest(label=label):
@@ -139,6 +150,41 @@ class NormalCompilerStaticI64(unittest.TestCase):
                     f"{label} unsafe source was accepted")
                 self.assertEqual(compiled.stdout,b"",f"{label} leaked partial LLVM IR")
                 print("NORMAL_FFI_NO_IR_REJECT="+label,flush=True)
+
+    def test_ffi_grant_does_not_enable_pointer_profile(self):
+        # A formerly missing guard admitted the FFI grant through the
+        # early-return Pointer<int> compiler before M1 effect validation.
+        # Use a genuinely supported pointer source, not invalid FFI source.
+        source_text=(
+            "pub fnc main(): int {\n"
+            "  let mut Pointer<int> p = Pointer.alloc<int>(1);\n"
+            "  p.write_at(0, 42);\n"
+            "  val int first = p.read_at(0);\n"
+            "  p.close();\n"
+            "  return first;\n"
+            "}\n"
+        )
+        path=self.root/"pointer-grant-bypass.atto"
+        path.write_text(source_text, encoding="utf-8")
+        without_grant=run(str(COMPILER),"--target=host",
+            "--experimental-pointer-int-aot",str(path))
+        self.assertEqual(without_grant.returncode,0,
+            without_grant.stderr.decode(errors="replace"))
+        self.assertIn(b"define",without_grant.stdout)
+        denied=run(str(COMPILER),"--target=host",
+            "--experimental-pointer-int-aot","--ffi-grant=atto.math.i64.v1",str(path))
+        self.assertNotEqual(denied.returncode,0)
+        self.assertEqual(denied.stdout,b"")
+        self.assertIn(b"FFI",denied.stderr)
+        print("NORMAL_FFI_POINTER_GRANT_BYPASS_REJECT=PASS",flush=True)
+
+    def test_ffi_grant_is_not_ambient_authority(self):
+        src="pub fnc main(): int { return 42; }\n"
+        result=self.compile("ambient-ffi-grant",src,grant=True)
+        self.assertNotEqual(result.returncode,0)
+        self.assertEqual(result.stdout,b"")
+        self.assertIn(b"grant",result.stderr)
+        print("NORMAL_FFI_AMBIENT_GRANT_REJECT=PASS",flush=True)
 
     def test_no_foreign_symbols_can_be_forged_without_authority(self):
         # In the absence of FFI, all ordinary main source behavior remains.
