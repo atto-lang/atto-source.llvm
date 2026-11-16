@@ -1682,6 +1682,13 @@ if(BUILD_TESTING)
         COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_void_early_return.sh"
             "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_void_early_return PROPERTIES TIMEOUT 120)
+    # Explicit v1/v2 Atto callable-body grammar through the production native
+    # source parser, LLVM IR generator, Clang guest and negative no-IR checks.
+    add_test(NAME native_atto_callable_language_versions
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_atto_callable_versions.sh"
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_atto_callable_language_versions
+        PROPERTIES TIMEOUT 120 LABELS "native-guest;atto-callable-version")
     # New real .ores guest span-boundary contract: no host/reference promotion.
     # Uses the production source compiler and Clang AOT executable path.
     add_test(NAME native_tensor_span_source_aot
