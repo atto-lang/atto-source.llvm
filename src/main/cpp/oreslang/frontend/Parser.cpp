@@ -875,12 +875,15 @@ public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
                     bool experimental_rt_scalar_loop,
                     bool verified_namespace_metadata_only = false,
-                    std::size_t unsafe_base_offset = 0)
+                    std::size_t unsafe_base_offset = 0, int language_version = 0)
         : source_(source), lexer_(source, unsafe_base_offset), token_(lexer_.next()),
           unsafe_base_offset_(unsafe_base_offset),
           experimental_owned_int_(experimental_owned_int),
           experimental_rt_scalar_loop_(experimental_rt_scalar_loop),
-          verified_namespace_metadata_only_(verified_namespace_metadata_only) {
+          verified_namespace_metadata_only_(verified_namespace_metadata_only),
+          language_version_(language_version) {
+        if (language_version_ < 0 || language_version_ > 2)
+            throw std::runtime_error("E_LANGUAGE_VERSION: expected 1 or 2");
         reject_unlowered_with_update();
     }
 
@@ -3107,11 +3110,27 @@ private:
         // body token begins on a later physical source line than its complete
         // return type; the body is then the same expression sequence.
         const bool explicit_end_body = token_.text == "::";
-        const bool newline_end_body = owner.empty() && arrow_return_type &&
-            token_.text != "{" && last_token_end_ <= token_.offset &&
+        const bool unmarked_end_candidate = owner.empty() && arrow_return_type &&
+            token_.text != "{" && token_.text != "::";
+        const bool newline_end_body = unmarked_end_candidate && last_token_end_ <= token_.offset &&
             source_.substr(last_token_end_, token_.offset - last_token_end_)
                 .find_first_of("\r\n") != std::string_view::npos;
-        if (explicit_end_body || newline_end_body) {
+        // Version 2's unmarked end is a statement body, never a comma tail.
+        // The verified LLVM scalar slice handles one explicit scalar return.
+        if (language_version_ == 2 && unmarked_end_candidate) {
+            if (!accept("return") && !accept("^"))
+                fail("E_LANGUAGE_VERSION: v2 unmarked body requires explicit return; comma tails require '::'");
+            if (value.returns_void)
+                fail("E_UNSUPPORTED: native v2 void body needs typed lowering");
+            value.result = expression();
+            if (token_.text == ",")
+                fail("E_LANGUAGE_VERSION: v2 comma tail requires '::'");
+            require(";");
+            require("end");
+            return value;
+        }
+        if (explicit_end_body || newline_end_body ||
+                (language_version_ == 1 && unmarked_end_candidate)) {
             if (!arrow_return_type)
                 fail("native '::' body requires '->' return syntax");
             if (explicit_end_body) require("::");
@@ -7733,6 +7752,8 @@ private:
     std::vector<Function> methods_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
+    // 0 preserves legacy syntax, 1/2 require explicit backend version selection.
+    int language_version_ = 0;
     // Restricted host-only AST pass, never set by the ordinary CLI parser.
     bool verified_namespace_metadata_only_ = false;
     // Type-only declarations retain source alias identity until checked
@@ -7910,9 +7931,9 @@ Program parse_verified_namespace_source_unresolved(
 }
 
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int,
-                      bool experimental_rt_scalar_loop) {
+                      bool experimental_rt_scalar_loop, int language_version) {
     Program program = Parser(source, experimental_owned_int,
-                             experimental_rt_scalar_loop).parse();
+                             experimental_rt_scalar_loop, false, 0, language_version).parse();
     if (experimental_rt_scalar_loop &&
             (program.functions.size() != 1 || !program.functions.front().scalar_while ||
              !program.classes.empty() || !program.actors.empty() ||
@@ -7965,8 +7986,9 @@ void resolve_and_validate_program(Program& program) {
 }
 
 Program parse_program(std::string_view source, bool experimental_owned_int,
-                      bool experimental_rt_scalar_loop) {
-    auto program = parse_unresolved_program(source, experimental_owned_int, experimental_rt_scalar_loop);
+                      bool experimental_rt_scalar_loop, int language_version) {
+    auto program = parse_unresolved_program(source, experimental_owned_int,
+                                            experimental_rt_scalar_loop, language_version);
     resolve_and_validate_program(program);
     return program;
 }
