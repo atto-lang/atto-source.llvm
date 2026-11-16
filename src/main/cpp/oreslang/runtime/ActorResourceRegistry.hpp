@@ -276,9 +276,9 @@ private:
 
     void release(std::unordered_set<std::uint64_t>& set, Activity role, Ticket token) {
         std::lock_guard<std::mutex> guard(mutex_);
-        // Authenticate the exact issuing registry before erasing any pin.
-        // Equal actor/incarnation/nonce/role values (including handoff) are
-        // insufficient across runtimes or same-address registry replacement.
+        // Check the issuing registry before erasing anything. A stale ticket
+        // must not release a replacement registry's activity at the same
+        // address, even with equal actor/incarnation/nonce/role values.
         if (token.registry_domain != registry_domain_
                 || token.actor_id != actor_id_ || token.incarnation != incarnation_
                 || token.activity != role || set.erase(token.nonce) != 1)
@@ -322,3 +322,4 @@ inline ActorResourceRegistry::~ActorResourceRegistry() noexcept {
 }
 
 } // namespace oreslang::runtime
+

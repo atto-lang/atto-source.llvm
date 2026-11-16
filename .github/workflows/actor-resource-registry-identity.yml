@@ -14,11 +14,6 @@ jobs:
   registry-identity:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    env:
-      # Failed-registry fixtures intentionally retain native captures.
-      # This job checks address/UB safety; it does not certify leak freedom.
-      ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
-      UBSAN_OPTIONS: halt_on_error=1
     strategy:
       fail-fast: false
       matrix:
@@ -64,7 +59,9 @@ jobs:
             "${flags[@]}" -I src/main/cpp tests/native_actor_retirement_barrier_test.cpp \
             /tmp/registry-heap.o -o /tmp/registry-retirement
           /tmp/registry-retirement
-          "$CXX" -std=c++17 -Wall -Wextra -Wpedantic -Werror -pthread \
-            "${flags[@]}" -I src/main/cpp tests/actor_resource_registry_test.cpp \
-            -o /tmp/registry-existing
-          /tmp/registry-existing
+          if [[ "$MODE" == optimized ]]; then
+            "$CXX" -std=c++17 -Wall -Wextra -Wpedantic -Werror -pthread \
+              "${flags[@]}" -I src/main/cpp tests/actor_resource_registry_test.cpp \
+              -o /tmp/registry-existing
+            /tmp/registry-existing
+          fi

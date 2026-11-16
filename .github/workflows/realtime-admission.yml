@@ -1,0 +1,86 @@
+name: realtime-admission
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/HardRealtimeAdmission.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorArena.c'
+      - 'src/main/cpp/oreslang/runtime/ActorArena.h'
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.c'
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.h'
+      - 'tests/realtime_admission_test.cpp'
+      - 'tests/actor_arena_prefault_test.c'
+      - 'tests/native_actor_scheduler_test.c'
+      - 'tests/native_actor_carrier_create_failure_test.c'
+      - 'tests/native_actor_realtime_policy_test.c'
+      - 'src/main/cpp/oreslang/runtime/LinuxRealtimeEnvironment.c'
+      - 'src/main/cpp/oreslang/runtime/LinuxRealtimeEnvironment.h'
+      - 'tests/linux_realtime_environment_test.c'
+      - '.github/workflows/realtime-admission.yml'
+  workflow_dispatch:
+
+jobs:
+  admission:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile hard-RT admission test
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror
+          -Isrc/main/cpp tests/realtime_admission_test.cpp
+          -o /tmp/ores-rt-admission
+      - name: Run hard-RT admission test
+        run: /tmp/ores-rt-admission
+
+      - name: Compile actor arena prefault test
+        run: >-
+          cc -std=c11 -Wall -Wextra -Wpedantic -Werror
+          -Isrc/main/cpp
+          tests/actor_arena_prefault_test.c
+          src/main/cpp/oreslang/runtime/ActorArena.c
+          -o /tmp/ores-arena-prefault
+      - name: Run actor arena prefault test
+        run: /tmp/ores-arena-prefault
+
+      - name: Compile prestarted native scheduler test
+        run: >-
+          cc -std=c11 -Wall -Wextra -Wpedantic -Werror -pthread
+          -Isrc/main/cpp
+          tests/native_actor_scheduler_test.c
+          src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+          -o /tmp/ores-native-scheduler
+      - name: Run prestarted native scheduler test
+        run: /tmp/ores-native-scheduler
+
+      - name: Compile carrier-start failure fence
+        run: >-
+          cc -std=c11 -Wall -Wextra -Wpedantic -Werror -pthread
+          -DORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE=1
+          -Isrc/main/cpp
+          tests/native_actor_carrier_create_failure_test.c
+          src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+          -o /tmp/ores-carrier-failure
+      - name: Run carrier-start failure fence
+        run: /tmp/ores-carrier-failure
+
+      - name: Compile SCHED_FIFO bootstrap policy test
+        run: >-
+          cc -std=c11 -Wall -Wextra -Wpedantic -Werror -pthread
+          -Isrc/main/cpp
+          tests/native_actor_realtime_policy_test.c
+          src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+          -o /tmp/ores-realtime-policy
+      - name: Run SCHED_FIFO bootstrap policy test
+        run: /tmp/ores-realtime-policy
+
+      - name: Compile Linux realtime memory-lock test
+        run: >-
+          cc -std=c11 -Wall -Wextra -Wpedantic -Werror
+          -Isrc/main/cpp
+          tests/linux_realtime_environment_test.c
+          src/main/cpp/oreslang/runtime/LinuxRealtimeEnvironment.c
+          -o /tmp/ores-linux-realtime-environment
+      - name: Run Linux realtime memory-lock test
+        run: /tmp/ores-linux-realtime-environment
+

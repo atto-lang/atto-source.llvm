@@ -61,7 +61,7 @@ class SystemApi final : public Api {
     static constexpr cl_uint CL_DEVICE_SINGLE_FP_CONFIG = 0x101B;
     static constexpr cl_uint CL_DEVICE_ENDIAN_LITTLE = 0x1026;
     static constexpr cl_uint CL_DEVICE_NAME = 0x102B;
-    static constexpr cl_uint CL_EVENT_COMMAND_EXECUTION_STATUS = 0x1283;
+    static constexpr cl_uint CL_EVENT_COMMAND_EXECUTION_STATUS = 0x11D3;
 
     using ContextNotify = void (*)(
             const char*, const void*, std::size_t, void*);
@@ -140,6 +140,22 @@ public:
         } catch (...) {
             return nullptr;
         }
+    }
+
+    // A failed clGetEventInfo call does not prove the command is quiescent.
+    // Only a successful terminal event-status query may authorize GPU buffer
+    // cleanup. Device loss requires separate clFinish/recovery proof.
+    static EventStatus classify_event_query(
+            std::int32_t query_result, std::int32_t command_status) noexcept {
+        if (query_result == CL_DEVICE_NOT_AVAILABLE)
+            return EventStatus::DeviceLost;
+        if (query_result != CL_SUCCESS)
+            return EventStatus::Pending; // uncertain query: never release
+        if (command_status == CL_COMPLETE)
+            return EventStatus::Complete;
+        if (command_status < 0)
+            return EventStatus::Failed; // native command terminal error
+        return EventStatus::Pending;
     }
 
     const std::string& device_name() const noexcept {
@@ -369,15 +385,7 @@ public:
                 sizeof(execution),
                 &execution,
                 nullptr);
-        if (status == CL_DEVICE_NOT_AVAILABLE)
-            return EventStatus::DeviceLost;
-        if (status != CL_SUCCESS)
-            return EventStatus::Failed;
-        if (execution == CL_COMPLETE)
-            return EventStatus::Complete;
-        if (execution < 0)
-            return EventStatus::Failed;
-        return EventStatus::Pending;
+        return classify_event_query(status, execution);
     }
 
     void release_event(Handle event_handle) override {

@@ -201,7 +201,10 @@ int main(void) {
     /* DONE plus finalized still owes terminal CONTROL. */
     check(!ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, parent));
     check(ores_native_vm_publish_control(vm, ORES_NATIVE_VM_MAIN, parent, 21));
-    check(!ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, failure));
+    /* Per-child terminal receipts are preallocated (#1705): a queued generic
+     * CONTROL no longer blocks the child failure, so that old rejection is
+     * not asserted here; the duplicate-publish race below still proves the
+     * failure is claimed exactly once. */
     check(!ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_SHARED, failure));
     check(!ores_native_vm_publish_supervised_failure(vm, (enum OresNativeVMDomain)99, failure));
     failure.child = fake;

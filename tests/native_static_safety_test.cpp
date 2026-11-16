@@ -88,5 +88,26 @@ int main() {
         p.actors.push_back(std::move(actor));
         assert(has_rule(analyze_native_static_safety(p), "ORES-ANALYSIS-001"));
     }
+    {
+        Program p;
+        Function fn = recursive_function();
+        // A wide expression avoids a test-only deep recursive AST. The
+        // scanner must reject overflow rather than omit the final call.
+        for (std::size_t i = 0; i < 30000; ++i) {
+            auto call = std::make_unique<Expression>();
+            call->kind = Expression::Kind::Call;
+            call->name = "again";
+            fn.result->arguments.push_back(std::move(call));
+        }
+        p.functions.push_back(std::move(fn));
+        bool rejected = false;
+        try {
+            (void)analyze_native_static_safety(p);
+        } catch (const std::runtime_error& error) {
+            rejected = std::string(error.what()) ==
+                "native static safety graph budget exceeded";
+        }
+        assert(rejected);
+    }
     return 0;
 }

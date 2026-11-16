@@ -1,0 +1,394 @@
+{
+  "schemaVersion": 1,
+  "scope": "JS program-v2 checked-i64 source corpus; candidate only, not cross-backend verified",
+  "integerModel": "signed-i64-checked-provisional",
+  "cases": [
+    {
+      "id": "zero",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 0;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "0"
+      }
+    },
+    {
+      "id": "one",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 1;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "1"
+      }
+    },
+    {
+      "id": "negative-one",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return -1;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "-1"
+      }
+    },
+    {
+      "id": "answer",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 42;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "42"
+      }
+    },
+    {
+      "id": "add",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 19+23;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "42"
+      }
+    },
+    {
+      "id": "subtract",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 63-21;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "42"
+      }
+    },
+    {
+      "id": "multiply",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 6*7;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "42"
+      }
+    },
+    {
+      "id": "parentheses",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return (20+1)*2;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "42"
+      }
+    },
+    {
+      "id": "add-after-multiply",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 7*5+7;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "42"
+      }
+    },
+    {
+      "id": "multiply-parentheses",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 7*(5+1);}\n",
+      "expected": {
+        "kind": "value",
+        "value": "42"
+      }
+    },
+    {
+      "id": "negated-group",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return -(7*6);}\n",
+      "expected": {
+        "kind": "value",
+        "value": "-42"
+      }
+    },
+    {
+      "id": "max",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 9223372036854775807;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "9223372036854775807"
+      }
+    },
+    {
+      "id": "min",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return -9223372036854775808;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "-9223372036854775808"
+      }
+    },
+    {
+      "id": "max-minus-one",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 9223372036854775807-1;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "9223372036854775806"
+      }
+    },
+    {
+      "id": "min-plus-one",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return -9223372036854775808+1;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "-9223372036854775807"
+      }
+    },
+    {
+      "id": "multiply-by-zero",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 9223372036854775807*0;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "0"
+      }
+    },
+    {
+      "id": "composite",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return (1+2)*(3+4);}\n",
+      "expected": {
+        "kind": "value",
+        "value": "21"
+      }
+    },
+    {
+      "id": "subtract-zero",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 0-0;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "0"
+      }
+    },
+    {
+      "id": "product-of-sums",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return (2+3)*(4+5);}\n",
+      "expected": {
+        "kind": "value",
+        "value": "45"
+      }
+    },
+    {
+      "id": "negate-then-add",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return -(5+4)+51;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "42"
+      }
+    },
+    {
+      "id": "nested-products",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return (2*(3+4))*(1+2);}\n",
+      "expected": {
+        "kind": "value",
+        "value": "42"
+      }
+    },
+    {
+      "id": "negative-minus-positive",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return -3-39;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "-42"
+      }
+    },
+    {
+      "id": "near-max-difference",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return (9223372036854775807-9223372036854775806);}\n",
+      "expected": {
+        "kind": "value",
+        "value": "1"
+      }
+    },
+    {
+      "id": "min-plus-max",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return -9223372036854775808+9223372036854775807;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "-1"
+      }
+    },
+    {
+      "id": "plus-zero",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return (20+22)+0;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "42"
+      }
+    },
+    {
+      "id": "sum-pair-0",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 0+42;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "42"
+      }
+    },
+    {
+      "id": "sum-pair-1",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 1+41;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "42"
+      }
+    },
+    {
+      "id": "sum-pair-2",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 2+40;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "42"
+      }
+    },
+    {
+      "id": "sum-pair-3",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 3+39;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "42"
+      }
+    },
+    {
+      "id": "sum-pair-4",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 4+38;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "42"
+      }
+    },
+    {
+      "id": "sum-pair-5",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 5+37;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "42"
+      }
+    },
+    {
+      "id": "sum-pair-6",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 6+36;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "42"
+      }
+    },
+    {
+      "id": "sum-pair-7",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 7+35;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "42"
+      }
+    },
+    {
+      "id": "sum-pair-8",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 8+34;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "42"
+      }
+    },
+    {
+      "id": "sum-pair-9",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 9+33;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "42"
+      }
+    },
+    {
+      "id": "sum-pair-10",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 10+32;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "42"
+      }
+    },
+    {
+      "id": "sum-pair-11",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 11+31;}\n",
+      "expected": {
+        "kind": "value",
+        "value": "42"
+      }
+    },
+    {
+      "id": "max-plus-one",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 9223372036854775807+1;}\n",
+      "expected": {
+        "kind": "checked-overflow"
+      }
+    },
+    {
+      "id": "min-minus-one",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return -9223372036854775808-1;}\n",
+      "expected": {
+        "kind": "checked-overflow"
+      }
+    },
+    {
+      "id": "max-times-two",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 9223372036854775807*2;}\n",
+      "expected": {
+        "kind": "checked-overflow"
+      }
+    },
+    {
+      "id": "cancel-after-overflow",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return (9223372036854775807+1)-1;}\n",
+      "expected": {
+        "kind": "checked-overflow"
+      }
+    },
+    {
+      "id": "zero-after-overflow",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return (9223372036854775807*2)*0;}\n",
+      "expected": {
+        "kind": "checked-overflow"
+      }
+    },
+    {
+      "id": "negate-min",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return -(-9223372036854775808);}\n",
+      "expected": {
+        "kind": "checked-overflow"
+      }
+    },
+    {
+      "id": "min-times-neg-one",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return -9223372036854775808*-1;}\n",
+      "expected": {
+        "kind": "checked-overflow"
+      }
+    },
+    {
+      "id": "square-overflow",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 3037000500*3037000500;}\n",
+      "expected": {
+        "kind": "checked-overflow"
+      }
+    },
+    {
+      "id": "max-plus-two",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 9223372036854775807+2;}\n",
+      "expected": {
+        "kind": "checked-overflow"
+      }
+    },
+    {
+      "id": "min-times-two",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return -9223372036854775808*2;}\n",
+      "expected": {
+        "kind": "checked-overflow"
+      }
+    },
+    {
+      "id": "subtract-min",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return 0-(-9223372036854775808);}\n",
+      "expected": {
+        "kind": "checked-overflow"
+      }
+    },
+    {
+      "id": "negate-min-after-zero",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return -(-9223372036854775808+0);}\n",
+      "expected": {
+        "kind": "checked-overflow"
+      }
+    },
+    {
+      "id": "near-max-plus-two",
+      "source": "// oreslang:checked-i64-v1\npub fnc main(): int {return (9223372036854775807-1)+2;}\n",
+      "expected": {
+        "kind": "checked-overflow"
+      }
+    }
+  ]
+}
