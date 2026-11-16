@@ -192,9 +192,13 @@ private:
                 if (!library) {
                     if (frontend::is_reserved_core_import(raw))
                         fail(current,
-                            "unknown compiler-owned ores.core module '" + raw + "'");
+                            (raw.rfind("atto.core", 0) == 0
+                                ? "unknown compiler-owned atto.core module '" :
+                                  "unknown compiler-owned ores.core module '") + raw + "'");
                     fail(current,
-                        "unknown compiler-owned alloc module '" + raw + "'");
+                        (raw.rfind("atto.alloc", 0) == 0
+                            ? "unknown compiler-owned atto.alloc module '" :
+                              "unknown compiler-owned alloc module '") + raw + "'");
                 }
                 if (current.compiler_owned_library &&
                         !frontend::compiler_library_dependency_allowed(
@@ -252,7 +256,9 @@ private:
                     fail(current,
                         "compiler-owned library modules may import only ores.core/* or alloc/*");
                 if (frontend::is_reserved_std_import(raw))
-                    fail(current, "native ores.std package resolution remains unsupported");
+                    fail(current, raw.rfind("atto.std", 0) == 0
+                        ? "native atto.std package resolution remains unsupported"
+                        : "native ores.std package resolution remains unsupported");
                 if (!host)
                     fail(current,
                         "freestanding native imports require compiler-owned ores.core/* modules");
