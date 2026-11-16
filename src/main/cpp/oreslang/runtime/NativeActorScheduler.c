@@ -1178,7 +1178,8 @@ OresNativeTaskAdmissionStatus ores_native_actor_scheduler_try_schedule_task(
         } else if (lane->task_queued >= ORES_NATIVE_TASK_SLOTS_PER_ACTOR) {
             status = ORES_NATIVE_TASK_MAILBOX_FULL;
         } else if (s->accepted >= UINT64_MAX - s->reserved_wakes
-                || s->outstanding == UINT64_MAX
+                /* size_t: UINT64_MAX made this guard dead on 32-bit hosts */
+                || s->outstanding == SIZE_MAX
                 || !execution_slot_available_locked(s)) {
             status = ORES_NATIVE_TASK_RESOURCE_EXHAUSTED;
         } else {
