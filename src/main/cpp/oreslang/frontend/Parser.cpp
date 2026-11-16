@@ -7451,7 +7451,7 @@ private:
                     const auto permission = assignable.find(stmt.receiver);
                     if (permission == assignable.end() || !permission->second)
                         throw std::runtime_error(
-                            "cannot reassign immutable scalar local '" + stmt.receiver + "'");
+                            "E_IMMUTABLE_REBIND: cannot reassign immutable scalar local '" + stmt.receiver + "'");
                     require_scalar(*stmt.expression, env.at(stmt.receiver),
                         "native scalar assignment", env);
                     return;

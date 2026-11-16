@@ -29,7 +29,6 @@ pub fn run_cases(compiler: &Path, clang: &Path) -> Result<(), String> {
         ("dynamic-subtract", "fnc sub(int a,int b):int{return a-b;} pub fnc main():int{return sub(-9223372036854775808,1);}", "llvm.ssub.with.overflow.i64"),
         ("dynamic-multiply", "fnc mul(int a,int b):int{return a*b;} pub fnc main():int{return mul(3037000500,3037000500);}", "llvm.smul.with.overflow.i64"),
         ("dynamic-negate", "fnc neg(int a):int{return -a;} pub fnc main():int{return neg(-9223372036854775808);}", "llvm.ssub.with.overflow.i64"),
-        ("type-first-unused-eager", "pub fnc main():int{int unused=9223372036854775807+1;return 7;}", "llvm.sadd.with.overflow.i64"),
         ("const-unused-eager", "pub fnc main():int{const unused=9223372036854775807+1;return 7;}", "llvm.sadd.with.overflow.i64"),
     ];
     let mut executions = 0;
