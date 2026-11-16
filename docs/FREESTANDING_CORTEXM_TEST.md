@@ -29,7 +29,9 @@ bash ci/test_freestanding_cortexm.sh
 
 `cortexm_boot.c` and `cortexm_flash.ld` are **test-only platform code**, not `atto.core`, `atto.alloc`, a new language runtime or production startup. The harness communicates the result back to QEMU using ARM semihosting `SYS_EXIT_EXTENDED` and a breakpoint. This instrumented exit path is not a source-level OS or standard-library dependency of the Atto guest. Production firmware must provide its own device startup and termination policy.
 
-LLVM's ARM assembler can emit an `R_ARM_NONE` annotation referencing `__aeabi_unwind_cpp_pr0`; the test startup supplies a fail-stop `udf` symbol solely to avoid implicit foreign unwinding. The guest does not have exception unwinding or a host runtime.
+**ARM EHABI hardening:** Clang 18 emits an `R_ARM_NONE` personality reference to `__aeabi_unwind_cpp_pr0` in an otherwise-unused `.ARM.exidx` section even when source unwinding is disabled. The test now uses LLVM objcopy to remove only these exception-table sections from relocatable inputs, then uses `--strip-unneeded` to discard the dead symbol. Crucially, actual guest object undefined symbols and final ELF undefined symbols must still be empty, no replacement unwinder function is provided, and lld has `--no-undefined`. This is a test-only no-unwind target policy; if a future guest requires real unwinding, it must fail rather than silently use an OS library.
+
+**Compiler admission:** `atto-llvm input.atto -o out.ll --emit-llvm --freestanding-core` explicitly selects the bounded freestanding scalar profile. The normal Linux native executable path remains hosted. Freestanding admission runs on compiler tokens and the typed program and rejects imports, host I/O, actor/executor dependencies, heap-backed types, and unsupported guest runtime needs with stable diagnostic families. No automatically injected `std` or allocator is permitted in this profile. The current profile does **not** yet support importing arbitrary `core` modules.
 
 ## Scope / limitations
 
