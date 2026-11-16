@@ -29,6 +29,12 @@ def program(guard, value=42):
     return "pub fnc main(): int {\n" + guard + "\n return " + str(value) + ";\n}\n"
 
 POSITIVE = [
+    ("caret_return_statement", "pub fnc main(): int { ^ 42; }", 42),
+    ("caret_guard_false_exits", program("guard false { ^ 7; }"), 7),
+    ("caret_guard_true_falls_through", "pub fnc main(): int { guard true { ^ 7; } ^ 42; }", 42),
+    ("caret_guard_in_helper", "fnc pick(bool ready): int { guard ready { ^ 7; } ^ 42; } "
+                              "pub fnc main(): int { ^ pick(false); }", 7),
+
     ("literal_false_exits", program("guard false { return 7; }"), 7),
     ("literal_true_falls_through", program("guard true { return 7; }"), 42),
     ("positive_numeric_comparison", program("guard 5 > 0 { return 7; }"), 42),
@@ -50,6 +56,12 @@ POSITIVE = [
                                   "pub fnc main(): int { return choose(false); }\n", 7),
 ]
 NEGATIVE = [
+    ("caret_infix_cannot_xor", "pub fnc main(): int { ^ 41 ^ 1; }", None),
+    ("caret_cannot_be_expression", "pub fnc main(): int { return ^ 42; }", None),
+    ("double_caret_cannot_return", "pub fnc main(): int { ^^ 42; }", None),
+    ("caret_nonvoid_requires_value", "pub fnc main(): int { ^; }", None),
+    ("caret_guard_requires_one_terminal_exit", "pub fnc main(): int { guard false { ^ 7; ^ 8; } ^ 42; }", None),
+
     ("int_truthiness", program("guard 1 { return 7; }"), "bool"),
     ("int_param_truthiness", "fnc f(int x): int { guard x { return 7; } return 42; }\n"
                              "pub fnc main(): int { return f(1); }\n", "bool"),
