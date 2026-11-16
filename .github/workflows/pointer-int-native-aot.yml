@@ -4,9 +4,15 @@ on:
     paths:
       - 'src/main/cpp/oreslang/frontend/PointerIntAot.hpp'
       - 'src/main/cpp/oreslang/frontend/StaticFfiI64Aot.hpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      - 'src/main/cpp/oreslang/frontend/ModuleLoader.cpp'
+      - 'src/main/cpp/oreslang/frontend/ModuleLoader.hpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
       - 'src/main/cpp/oreslang/main.cpp'
       - 'tests/pointer_int_native_e2e.py'
       - 'tests/static_ffi_i64_native_e2e.py'
+      - 'tests/ffi_normal_i64_native_e2e.py'
       - 'docs/STATIC_FFI_I64_NATIVE_AOT_M0.md'
       - 'tests/guard_native_e2e.py'
       - 'docs/POINTER_INT_AOT_M1.md'
@@ -34,7 +40,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           test "$(git hash-object src/main/cpp/oreslang/frontend/PointerIntAot.hpp)" = 46976e217186637eb45b4f7faf559d4bd9e23bf1
           test "$(git hash-object tests/pointer_int_native_e2e.py)" = c33e9de3c03eb6072f882ee2893c13f3114bd453
-          test "$(git hash-object src/main/cpp/oreslang/main.cpp)" = d5d9db4246357f16693592867bcdf551b7026feb
+          test "$(git hash-object src/main/cpp/oreslang/main.cpp)" = a827c2c8abc44a6fb6e902616ece0e0b781accec
           git rev-parse HEAD HEAD^{tree}
           git status --porcelain
       - name: Install LLVM18 and Clang18 real native toolchain
@@ -62,6 +68,10 @@ jobs:
         run: |
           set -euo pipefail
           python3 tests/static_ffi_i64_native_e2e.py --compiler build/pointer-m1/oreslang-llvmc --clang /usr/bin/clang-18
+      - name: Execute normal compiler FFI i64 source through signed C AOT ABI
+        run: |
+          set -euo pipefail
+          python3 tests/ffi_normal_i64_native_e2e.py --compiler build/pointer-m1/oreslang-llvmc --clang /usr/bin/clang-18
       - name: Accurate evidence limits
         run: |
           echo 'POINTER_INT_STACK_AOT=RESTRICTED_OPT_IN_ONLY'
