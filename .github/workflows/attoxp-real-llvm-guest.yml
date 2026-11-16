@@ -1,0 +1,133 @@
+name: AttoXP official LLVM compiler scalar guest exact-head receipt
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  attoxp-real-llvm-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # immutable v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Record exact source head and tree
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          echo "SOURCE_HEAD=$(git rev-parse HEAD)"
+          echo "SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+          echo "RUN_ID=$GITHUB_RUN_ID"
+          echo "RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT"
+      - name: Install native LLVM build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang llvm-dev python3
+          cmake --version
+          clang --version
+      - name: Verify unchanged AttoXP scalar fixture hashes (host manifest only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/attoxp_scalar_manifest_test.py
+          sha256sum contracts/attoxp-scalar-v1/*.atto
+          sha256sum tests/fixtures/attoxp-counter-{main,reset,decrement}.atto
+      - name: Build official production compiler from exact source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --parallel 2 --target oreslang-llvmc
+          test -x build/oreslang-llvmc
+          sha256sum build/oreslang-llvmc
+      - name: Pin Node 22 for compiler-negative source conformance
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Reject eight invalid .atto programs using production LLVM frontend
+        shell: bash
+        env:
+          ATTO_EXPECTED_LLVM_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          ATTO_REQUIRE_NATIVE_LLVM_FRONTEND: '1'
+        run: |
+          set -euo pipefail
+          export ORESLANG_LLVMC="$PWD/build/oreslang-llvmc"
+          test -x "$ORESLANG_LLVMC"
+          export ATTO_EXPECTED_LLVM_COMPILER_SHA256="$(sha256sum "$ORESLANG_LLVMC" | cut -d' ' -f1)"
+          node --test tests/native_frontend_negative_evidence.test.mjs
+      - name: Require every named compiler-backed AttoXP CTest in inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -N > .attoxp-ctest-inventory.txt
+          cat .attoxp-ctest-inventory.txt
+          for name in \
+            attoxp_counter_guest_42 \
+            attoxp_counter_guest_reset \
+            attoxp_counter_guest_decrement \
+            attoxp_scalar_shared_source_pins \
+            attoxp_scalar_guest_answer42 \
+            attoxp_scalar_guest_decrement41 \
+            attoxp_scalar_guest_reset0 \
+            attoxp_scalar_guest_multiply42 \
+            atto_shared_scalar_guest
+          do
+            grep -Fq ": $name" .attoxp-ctest-inventory.txt
+          done
+      - name: Compile IR, link Clang native executables and run exact .atto guests
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -V --output-on-failure --timeout 180 \
+            -R '^(attoxp_counter_guest_42|attoxp_counter_guest_reset|attoxp_counter_guest_decrement|attoxp_scalar_shared_source_pins|attoxp_scalar_guest_answer42|attoxp_scalar_guest_decrement41|attoxp_scalar_guest_reset0|attoxp_scalar_guest_multiply42|atto_shared_scalar_guest)$' \
+            | tee .attoxp-real-llvm-guest.log
+          grep -E '100% tests passed, 0 tests failed out of 9' .attoxp-real-llvm-guest.log
+      - name: Independently compile one production .atto guest at O0 and O2
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .build/attoxp-proof
+          build/oreslang-llvmc tests/fixtures/attoxp-counter-main.atto \
+            > .build/attoxp-proof/counter.ll 2> .build/attoxp-proof/compiler.stderr
+          test -s .build/attoxp-proof/counter.ll
+          test ! -s .build/attoxp-proof/compiler.stderr
+          sha256sum .build/attoxp-proof/counter.ll
+          for opt in O0 O2; do
+            clang "-$opt" -Werror -Wno-override-module \
+              -x ir .build/attoxp-proof/counter.ll \
+              -o ".build/attoxp-proof/counter-$opt"
+            set +e
+            ".build/attoxp-proof/counter-$opt" \
+              > ".build/attoxp-proof/$opt.stdout" \
+              2> ".build/attoxp-proof/$opt.stderr"
+            code=$?
+            set -e
+            test "$code" -eq 42
+            test ! -s ".build/attoxp-proof/$opt.stdout"
+            test ! -s ".build/attoxp-proof/$opt.stderr"
+            sha256sum ".build/attoxp-proof/counter-$opt"
+            echo "ATTOXP_LLVM_COMPILER_SCALAR_AT_$opt=PASS exit=42"
+          done
+      - name: Recheck clean exact source and classify proof
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          echo "SOURCE_TREE_FINAL=$(git rev-parse HEAD^{tree})"
+          echo 'EVIDENCE_CLASS=COMPILER_GENERATED_LLVM_SCALAR_GUEST'
+          echo 'ATTOXP_NATIVE_UI_ABI_LINK=NOT_EXECUTED'
+          echo 'CROSS_BACKEND_PARITY=NOT_EXECUTED'

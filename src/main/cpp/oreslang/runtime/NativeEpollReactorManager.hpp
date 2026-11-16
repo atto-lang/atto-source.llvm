@@ -12,6 +12,8 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <fcntl.h>
+#include <sys/stat.h>
 
 namespace oreslang::runtime {
 
@@ -100,6 +102,8 @@ public:
             actor.release_resource_loan();
             return std::nullopt;
         }
+        // Dup/inode alias fencing runs inside try_watch_locked, under mu_,
+        // for both host and actor-owned registrations.
         auto watch = try_watch_locked(fd, events, &actor);
         if (!watch) {
             actor.release_resource_loan();
@@ -236,6 +240,12 @@ private:
         Watch watch{};
         std::optional<NativeActorRef> actor;
         bool completion_delivered = false;
+        // Physical transport identity, so dup()/dup2() aliases of a claimed
+        // socket or same-direction pipe end cannot register a second owner.
+        dev_t device = 0;
+        ino_t inode = 0;
+        mode_t mode = 0;
+        int access_mode = 0;
     };
 
     FdClaim* find_claim_locked(Watch watch) noexcept {
@@ -261,10 +271,35 @@ private:
             started_.store(1, std::memory_order_release);
             count = 1;
         }
+        // Distinct dup()/dup2() FD values may refer to the same socket/pipe.
+        // Conservatively fence an equal Linux transport inode identity.
+        // No allocation, guest pointer, or mutable buffer access here.
+        struct stat identity{};
+        if (::fstat(fd, &identity) != 0) return std::nullopt;
+        const bool transport = S_ISSOCK(identity.st_mode) || S_ISFIFO(identity.st_mode);
+        const int flags = ::fcntl(fd, F_GETFL);
+        if (flags < 0) return std::nullopt;
+        const int access_mode = flags & O_ACCMODE;
+        // One FD can only have one outstanding readiness owner in this
+        // process-level manager, even if two different epoll instances could
+        // each register that descriptor independently. Otherwise read/write
+        // consumers might race across reactors and violate socket ownership.
         FdClaim* free_claim = nullptr;
         for (auto& claim : claimed_fds_) {
-            if (claim.occupied && claim.fd == fd) return std::nullopt;
-            if (!claim.occupied && !free_claim) free_claim = &claim;
+            if (!claim.occupied) {
+                if (!free_claim) free_claim = &claim;
+                continue;
+            }
+            if (claim.fd == fd) return std::nullopt;
+            if (transport && claim.device == identity.st_dev
+                && claim.inode == identity.st_ino
+                && (claim.mode & S_IFMT) == (identity.st_mode & S_IFMT)
+                // Pipe read/write endpoints share one inode, but they are
+                // different directional ends. Their same-direction dup
+                // aliases must still be fenced. Sockets need no exception.
+                && (!S_ISFIFO(identity.st_mode)
+                    || claim.access_mode == access_mode))
+                return std::nullopt;
         }
         // Actor terminal records may keep claims occupied after reactor slots
         // are freed. Refuse before epoll registration rather than creating an
@@ -286,6 +321,10 @@ private:
             free_claim->watch = result;
             free_claim->actor.reset();
             free_claim->completion_delivered = false;
+            free_claim->device = identity.st_dev;
+            free_claim->inode = identity.st_ino;
+            free_claim->mode = identity.st_mode;
+            free_claim->access_mode = access_mode;
             if (actor) free_claim->actor = *actor;
             return result;
         }
