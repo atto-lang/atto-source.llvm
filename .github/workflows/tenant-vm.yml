@@ -23,6 +23,24 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify checkout identity and native runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$expected" || { echo "Wrong checkout: expected $expected, got $actual" >&2; exit 1; }
+          printf 'Source commit: %s\nSource tree: %s\n' "$actual" "$(git rev-parse HEAD^{tree})"
+          printf 'Runner architecture: %s\n' "$(uname -m)"
+          uname -a
+          lscpu | head -n 25 || true
+          {
+            echo "### Tenant VM exact-checkout evidence"
+            echo "- Source commit: \`$actual\`"
+            echo "- Git tree: \`$(git rev-parse HEAD^{tree})\`"
+            echo "- Runner: \`${{ runner.os }} / ${{ runner.arch }}\`"
+            echo "- Kernel architecture: \`$(uname -m)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Install toolchain
         shell: bash
         run: |
@@ -42,15 +60,22 @@ jobs:
         run: |
           set -euo pipefail
           cmake -S tests/tenant-vm -B build/tv -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-            -DTENANT_VM_ATTO_COMPILER="$PWD/build/compiler/oreslang-llvmc"
+            -DTENANT_VM_REQUIRE_FULL_COVERAGE=ON -DTENANT_VM_ATTO_COMPILER="$PWD/build/compiler/oreslang-llvmc"
           cmake --build build/tv -j4
+          ctest --test-dir build/tv -N | tee build/tv/test-inventory.txt
+          for suite in tenant_vm_test tenant_vm_lowered_test tenant_vm_source_contract_test tenant_vm_admission_test; do
+            if ! grep -Eq "Test +#[0-9]+: ${suite}$" build/tv/test-inventory.txt; then
+              echo "Missing required tenant VM suite: ${suite}" >&2
+              exit 1
+            fi
+          done
           ctest --test-dir build/tv --output-on-failure
       - name: ASan and UBSan
         shell: bash
         run: |
           set -euo pipefail
           cmake -S tests/tenant-vm -B build/tv-asan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-            -DTENANT_VM_SANITIZE=ON -DTENANT_VM_ATTO_COMPILER="$PWD/build/compiler/oreslang-llvmc"
+            -DTENANT_VM_SANITIZE=ON -DTENANT_VM_REQUIRE_FULL_COVERAGE=ON -DTENANT_VM_ATTO_COMPILER="$PWD/build/compiler/oreslang-llvmc"
           cmake --build build/tv-asan -j4
           TENANT_VM_FUZZ_ROUNDS=400 UBSAN_OPTIONS=halt_on_error=1 ctest --test-dir build/tv-asan --output-on-failure -E admission
       - name: TSan
