@@ -1,0 +1,20 @@
+// AoS scalar control compiled by the ordinary class frontend: two i64
+// fields stored in the same object. This tests scalar-observable 42 parity
+// with inverted SoA; it is NOT full dense-row/erase-swap AoS parity.
+define class Row as
+    let int value = 40;
+    let int token = 70;
+    pub bump(mut self, int amount):void {
+        self.value = self.value + amount;
+        return;
+    }
+    pub read(self):int {
+        return self.value;
+    }
+end
+
+pub fnc main():int {
+    let mut Row row = new Row();
+    row.bump(2);
+    return row.read();
+}
