@@ -152,47 +152,47 @@ CASES = {
     # G0: reserve unsafe without ever emitting source-level native IR.
     "unsafe-callable": (
         "pub unsafe fnc main(): int { return 42; }",
-        "native unsafe boundary unsupported",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
     ),
     "unsafe-block": (
         "pub fnc main(): int { unsafe { return 42; } }",
-        "native unsafe boundary unsupported",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
     ),
     "unsafe-identifier": (
         "pub fnc unsafe(): int { return 42; }",
-        "native unsafe boundary unsupported",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
     ),
     "unsafe-parameter": (
         "pub fnc main(int unsafe): int { return 42; }",
-        "native unsafe boundary unsupported",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
     ),
     "unsafe-template-interpolation": (
         "pub fnc main(): int { return `value ${unsafe}`; }",
-        "native unsafe boundary unsupported",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
     ),
     "unsafe-nested-template-interpolation": (
         "pub fnc main(): int { return `outer ${`inner ${unsafe}`}`; }",
-        "native unsafe boundary unsupported",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
     ),
     "unsafe-after-cr-comment": (
         "pub fnc main(): int { return 42; } // ordinary comment\runsafe",
-        "native unsafe boundary unsupported",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
     ),
     "unsafe-after-crlf-comment": (
         "pub fnc main(): int { return 42; } // ordinary comment\r\nunsafe",
-        "native unsafe boundary unsupported",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
     ),
     "unsafe-in-template-after-cr-comment": (
         "pub fnc main(): int { return `value ${42 // comment\runsafe}`; }",
-        "native unsafe boundary unsupported",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
     ),
     "unsafe-after-valid-function": (
         "pub fnc main(): int { return 42; } unsafe",
-        "native unsafe boundary unsupported",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
     ),
     "unsafe-qualified-member": (
         "pub fnc main(): int { return std.unsafe.memory.read(); }",
-        "native unsafe boundary unsupported",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
     ),
 }
 
@@ -207,11 +207,11 @@ CASES.update({
     "unsafe-after-nested-comment": (
         "pub fnc main(): int { return 42; } " +
         "/*" * 128 + "unsafe" + "*/" * 128 + " unsafe",
-        "native unsafe boundary unsupported",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
     ),
     "unsafe-after-lf-comment": (
         "pub fnc main(): int { return 42; } // comment\nunsafe",
-        "native unsafe boundary unsupported",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
     ),
     "native-template-comment-overdepth": (
         "pub fnc main(): int { return `test ${42 " +

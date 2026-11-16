@@ -230,8 +230,8 @@ public:
             // lexed recursively only for their interpolated expressions.
             if (first == "unsafe") {
                 throw std::runtime_error(
-                    "native unsafe boundary unsupported: checked effects, grants "
-                    "and backend lowering required at byte " +
+                    "unsafe is reserved until checked unsafe effects and backend "
+                    "lowering exist at byte " +
                     std::to_string(unsafe_base_offset_ + start));
             }
             if (first == "nb" && source_.substr(at_, 7) == "-select") {
