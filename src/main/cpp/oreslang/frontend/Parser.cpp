@@ -1364,7 +1364,7 @@ private:
         // deliberately synchronous and immutable. Handler temporaries are
         // allocated in the existing actor heap and dropped before returning;
         // borrow/take/await need separate lifetime-aware lowering.
-        while (token_.text != "return") {
+        while ((token_.text != "return" && token_.text != "^")) {
             if (token_.kind == Kind::End || token_.text == "}") fail("actor handler requires return");
             if (token_.text == "const") {
                 if (!method.actor_field_writes.empty())
@@ -2722,7 +2722,7 @@ private:
         bool return_guards_started = false;
         bool terminal_try_finally = false;
         std::size_t branch_count = 0;
-        while (token_.text != "return") {
+        while ((token_.text != "return" && token_.text != "^")) {
             if (token_.text == "while" && experimental_rt_scalar_loop_) {
                 if (value.scalar_while || value.locals.size() != 1 ||
                         !value.statements.empty() || !value.early_returns.empty() ||
@@ -2760,7 +2760,7 @@ private:
                         loop->upper_bound > 1000000000LL)
                     fail("experimental scalar loop requires bounded nonnegative i64 range");
                 value.scalar_while = std::move(loop);
-                if (token_.text != "return")
+                if ((token_.text != "return" && token_.text != "^"))
                     fail("experimental scalar loop must be followed by a single return");
                 continue;
             }
@@ -2900,7 +2900,7 @@ private:
                 require("}");
                 // Existing return-guard lowering runs one shared defer and
                 // ownership-cleanup exit on both the early and final paths.
-                // The ordinary final 'return' is mandatory after this arm.
+                // A final lexical return marker ('return' or '^') is mandatory after this arm.
                 value.early_returns.push_back(std::move(guard));
                 return_guards_started = true;
                 continue;
