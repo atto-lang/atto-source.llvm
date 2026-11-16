@@ -4214,6 +4214,32 @@ if(BUILD_TESTING)
         COMMAND ${CMAKE_COMMAND} -E env "CXX=${CMAKE_CXX_COMPILER}"
                 bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/dop_inverted_negative_admission.sh")
 
+    # Actor-independent Arc-style immutable buffer reference. This validates
+    # host ownership/pinning only; it does not establish Oreslang guest lowering.
+    add_executable(oreslang-dop-shared-immutable-test tests/dop_shared_immutable_test.cpp)
+    target_include_directories(oreslang-dop-shared-immutable-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-dop-shared-immutable-test PRIVATE cxx_std_20)
+    target_link_libraries(oreslang-dop-shared-immutable-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-dop-shared-immutable-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME dop_shared_immutable_actor_independent
+        COMMAND oreslang-dop-shared-immutable-test)
+    set_tests_properties(dop_shared_immutable_actor_independent PROPERTIES TIMEOUT 20)
+
+    # Actor-independent disjoint partition borrow reference for Task/ECS lowering.
+    # Host-only CPU proof; not source-level Send/Sync, ECS or Task execution.
+    add_executable(oreslang-dop-scoped-partitions-test tests/dop_scoped_partitions_test.cpp)
+    target_include_directories(oreslang-dop-scoped-partitions-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-dop-scoped-partitions-test PRIVATE cxx_std_20)
+    target_link_libraries(oreslang-dop-scoped-partitions-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-dop-scoped-partitions-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME dop_scoped_partitions_actor_independent
+        COMMAND oreslang-dop-scoped-partitions-test)
+    set_tests_properties(dop_scoped_partitions_actor_independent PROPERTIES TIMEOUT 20)
+
     add_executable(oreslang-managed-ref-test tests/managed_ref_test.cpp)
     target_include_directories(oreslang-managed-ref-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
