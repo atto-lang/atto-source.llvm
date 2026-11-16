@@ -24,6 +24,7 @@ bash ci/test_freestanding_cortexm.sh
 - `fail-41.atto`: a distinct valid Atto program returning **41** must produce QEMU status **1**; this is the fail-negative control against a fake/always-success startup.
 - `deny-stdio.atto`: host stdio source must produce an error and **no LLVM IR or ELF**.
 - `deny-unbound.atto`: unresolved identifier must produce an error and **no LLVM IR or ELF**.
+- `deny-alloc.atto`, `deny-process.atto`, `deny-std-import.atto`: reject dynamic allocation, OS process operations, and explicit hosted standard-library imports before emitting IR/ELF.
 - Every final ELF is checked as ARM, with vector/startup symbols, no dynamic loader, and **no named undefined symbols**.
 
 `cortexm_boot.c` and `cortexm_flash.ld` are **test-only platform code**, not `atto.core`, `atto.alloc`, a new language runtime or production startup. The harness communicates the result back to QEMU using ARM semihosting `SYS_EXIT_EXTENDED` and a breakpoint. This instrumented exit path is not a source-level OS or standard-library dependency of the Atto guest. Production firmware must provide its own device startup and termination policy.
