@@ -8,7 +8,7 @@ define class Row as
         self.value = self.value + amount;
         return;
     }
-    pub read(self):int {
+    pub get_value(self):int {
         return self.value;
     }
 end
@@ -16,5 +16,5 @@ end
 pub fnc main():int {
     let mut Row row = new Row();
     row.bump(2);
-    return row.read();
+    return row.get_value();
 }
