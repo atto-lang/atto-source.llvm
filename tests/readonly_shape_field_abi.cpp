@@ -1,4 +1,4 @@
-#include "../../src/main/cpp/oreslang/types/ReadonlyShapeFieldAbi.hpp"
+#include "../src/main/cpp/oreslang/types/ReadonlyShapeFieldAbi.hpp"
 #include <array>
 #include <cassert>
 #include <cstdint>
