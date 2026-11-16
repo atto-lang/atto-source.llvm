@@ -73,7 +73,11 @@ jobs:
           set -euo pipefail
           bash tests/native_inverted_source_guest_hardening.sh /tmp/atto-inverted-full/oreslang-llvmc clang-18 contracts/dop-inverted-v1
           bash tests/native_inverted_source_randomized.sh /tmp/atto-inverted-full/oreslang-llvmc clang-18
-          bash tests/native_inverted_wasm32_source_guest.sh /tmp/atto-inverted-full/oreslang-llvmc clang-18 contracts/dop-inverted-v1
+          binary=/tmp/atto-inverted-full/oreslang-llvmc
+          binary_sha256="$(sha256sum "$binary" | cut -d ' ' -f 1)"
+          [[ "$binary_sha256" =~ ^[a-f0-9]{64}$ ]]
+          echo "REAL_LLVM_COMPILER_SHA256=$binary_sha256"
+          bash tests/native_inverted_wasm32_source_guest.sh "$binary" clang-18 contracts/dop-inverted-v1 "$binary_sha256"
           echo 'REAL_NATIVE_AND_WASM32_SOURCE_GUEST_FULL_TREE_EXECUTED'
 
   full-repository-ctest:
