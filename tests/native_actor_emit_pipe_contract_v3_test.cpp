@@ -85,6 +85,26 @@ int main() {
     reject({stage("a", std::string(1, static_cast<char>(0xc0)), "int", {"int"}),
             stage("b", "Sink", "int")}, "E_ACTOR_PIPE_IDENTITY");
 
+    // Shared Java/.NET v3 identity admission vectors: strict 256 UTF-8 bytes.
+    require(check_actor_emit_pipeline_v3({
+        stage(std::string(256, 'x'), "Parse", "int", {"bool"}),
+        stage("sink", "Sink", "bool")}).size() == 1,
+        "256-byte ASCII actor identity must be admitted");
+    std::string unicode_256;
+    for (int i = 0; i < 64; ++i) unicode_256 += "\xF0\x9F\x8C\x8D";
+    require(check_actor_emit_pipeline_v3({
+        stage(unicode_256, "Parse", "int", {"bool"}),
+        stage("sink", "Sink", "bool")}).size() == 1,
+        "256-byte multibyte actor identity must be admitted");
+    reject({stage(std::string(257, 'x'), "Parse", "int", {"bool"}),
+            stage("sink", "Sink", "bool")}, "E_ACTOR_PIPE_IDENTITY");
+    reject({stage(unicode_256 + "\xF0\x9F\x8C\x8D", "Parse", "int", {"bool"}),
+            stage("sink", "Sink", "bool")}, "E_ACTOR_PIPE_IDENTITY");
+    reject({stage(std::string("abc\\0def", 7), "Parse", "int", {"bool"}),
+            stage("sink", "Sink", "bool")}, "E_ACTOR_PIPE_IDENTITY");
+    reject({stage(std::string(1'000'000, 'x'), "Parse", "int", {"bool"}),
+            stage("sink", "Sink", "bool")}, "E_ACTOR_PIPE_IDENTITY");
+
     for (int n = 2; n <= 16; ++n) {
         std::vector<ActorEmitStageV3> chain;
         for (int i = 0; i < n; ++i) {
