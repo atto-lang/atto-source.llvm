@@ -3356,7 +3356,24 @@ private:
                 }
                 binding.name = identifier();
                 require("=");
-                if (accept("await")) {
+                // Lower a terminal unary `pending |> std.await` through
+                // the *same* checked Future/Task await slot and ownership
+                // obligations as `await pending`. No implicit flattening,
+                // general Future<T> or first-class lambda support is claimed.
+                // Exact four-token lookahead avoids misidentifying ordinary
+                // scalar value pipelines or user member calls as the core
+                // suspension adapter.
+                bool std_await_stage = false;
+                if (token_.kind == Kind::Identifier && peek_next().text == "|>") {
+                    Lexer look = lexer_;
+                    std_await_stage =
+                        look.next().text == "|>" &&
+                        look.next().text == "std" &&
+                        look.next().text == "." &&
+                        look.next().text == "await";
+                }
+                const bool prefix_await = accept("await");
+                if (prefix_await || std_await_stage) {
                     if (mode == "const")
                         fail("E_NON_CONST_INITIALIZER: await is not compile-time constant");
                     if (binding.scalar_type != ScalarType::I64)
@@ -3364,6 +3381,12 @@ private:
                     if (!value.locals.empty())
                         fail("native first async slice requires await to immediately consume its Future/Task");
                     const std::string awaited_name = identifier();
+                    if (std_await_stage) {
+                        require("|>");
+                        require("std");
+                        require(".");
+                        require("await");
+                    }
                     auto task = std::find_if(
                         value.source_tasks.begin(), value.source_tasks.end(),
                         [&](const SourceTaskI64Binding& item) {
