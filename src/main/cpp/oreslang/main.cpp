@@ -3,6 +3,7 @@
 #include "oreslang/backend/ActorRegionV2Guest.hpp"
 #include "oreslang/backend/GpuG1AttoSaxpySource.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/types/InvertedProductionSourceMir.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/ActorSourceSetAdmission.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
@@ -463,6 +464,70 @@ static void require_sealed_scalar_aot_graph(const oreslang::Program& program,
     }
 }
 
+static void require_actor_region_v1_aot_graph(const oreslang::Program& program) {
+    using namespace oreslang;
+    // Reuse the existing fully resolved sealed class-field checker. The new
+    // profile narrows it further: class owners may exist only in main/0 and
+    // may not cross a function boundary.
+    require_sealed_scalar_aot_graph(program, true);
+    const auto main = std::find_if(program.functions.begin(), program.functions.end(),
+        [](const Function& fn) { return fn.name == "main" && fn.parameters.empty(); });
+    if (main == program.functions.end() || main->returns_void ||
+        main->return_type != ScalarType::I64)
+        throw std::runtime_error("actor-region-v1 requires a synchronous int main/0");
+    std::size_t owners = 0;
+    for (const auto& fn : program.functions) {
+        if (!fn.return_class.empty() ||
+            std::any_of(fn.parameters.begin(), fn.parameters.end(),
+                [](const Parameter& parameter) { return !parameter.class_name.empty(); }))
+            throw std::runtime_error(
+                "actor-region-v1 forbids class-valued parameters and returns until owner transfer lowering exists");
+        for (const auto& local : fn.locals) {
+            if (local.class_name.empty()) continue;
+            if (&fn != &*main)
+                throw std::runtime_error(
+                    "actor-region-v1 class owners are restricted to main/0 in v1");
+            if (!local.new_class || local.record_view || local.move_class ||
+                !local.move_source.empty() || local.heap_owned || local.int_array ||
+                !local.constructor_arguments.empty() || local.owner_mutable ||
+                local.field_mutable)
+                throw std::runtime_error(
+                    "actor-region-v1 requires fresh immutable class owners");
+            ++owners;
+        }
+        // Branch-local owners need path-sensitive destruction and are outside
+        // this v1 root-frame profile. Reject them before codegen instead of
+        // allowing a class inside ScopedLocal/ForIndex to bypass slot counting.
+        std::function<void(const Statement&)> reject_scoped_class_owners =
+            [&](const Statement& statement) {
+                if (statement.branch_local &&
+                    !statement.branch_local->class_name.empty())
+                    throw std::runtime_error(
+                        "actor-region-v1 rejects branch-scoped class owners until path-sensitive cleanup is proven");
+                for (const auto& child : statement.then_statements)
+                    reject_scoped_class_owners(child);
+                for (const auto& child : statement.else_statements)
+                    reject_scoped_class_owners(child);
+            };
+        for (const auto& statement : fn.statements)
+            reject_scoped_class_owners(statement);
+    }
+    if (!owners || owners > 4096)
+        throw std::runtime_error(
+            "actor-region-v1 requires between 1 and 4096 lexical class owners");
+    for (const auto& cls : program.classes) {
+        const std::size_t bytes = cls.fields.size() * sizeof(std::int64_t);
+        if (!bytes || bytes > 1024u * 1024u)
+            throw std::runtime_error("actor-region-v1 class layout exceeds region slot bounds");
+        for (const auto& field : cls.fields)
+            if (!field.final_field || field.mutable_referent || field.int_array ||
+                !field.class_name.empty() || !field.sum_type.empty() ||
+                field.scalar_type == ScalarType::String)
+                throw std::runtime_error(
+                    "actor-region-v1 supports only immutable scalar class fields");
+    }
+}
+
 int main(int argc, char** argv) {
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
@@ -493,6 +558,7 @@ int main(int argc, char** argv) {
     bool tree_shake = false;
     bool sealed_scalar_aot = false;
     bool sealed_class_fields_aot = false;
+    bool actor_region_v1_aot = false;
     bool isolate_entry_seen = false;
     std::string isolate_entry;
     std::vector<std::string> tree_shake_roots;
@@ -550,7 +616,7 @@ int main(int argc, char** argv) {
                 return 2;
             }
         } else if (arg.rfind("--aot-profile=", 0) == 0) {
-            if (sealed_scalar_aot || sealed_class_fields_aot) {
+            if (sealed_scalar_aot || sealed_class_fields_aot || actor_region_v1_aot) {
                 std::cerr << "duplicate AOT profile option\n"; return 2;
             }
             const std::string profile = arg.substr(std::string_view("--aot-profile=").size());
@@ -558,8 +624,10 @@ int main(int argc, char** argv) {
                 sealed_scalar_aot = true;
             } else if (profile == "sealed-class-fields-v1") {
                 sealed_class_fields_aot = true;
+            } else if (profile == "actor-region-v1") {
+                actor_region_v1_aot = true;
             } else {
-                std::cerr << "unsupported AOT profile (expected sealed-scalar-v1 or sealed-class-fields-v1)\n";
+                std::cerr << "unsupported AOT profile (expected sealed-scalar-v1, sealed-class-fields-v1 or actor-region-v1)\n";
                 return 2;
             }
         } else if (arg.rfind("--profile=", 0) == 0) {
@@ -747,7 +815,7 @@ int main(int argc, char** argv) {
                 oreslang::frontend::CoreProviderRequirement::Allocator)
             : 0u;
 
-    if ((sealed_scalar_aot || sealed_class_fields_aot) &&
+    if ((sealed_scalar_aot || sealed_class_fields_aot || actor_region_v1_aot) &&
         (wasm32_target || cortex_m_target || experimental_owned_int ||
          experimental_rt_scalar_loop || native_hard_rt_profile || rt_check_only ||
          rt_entry_seen || rt_report_seen || tree_shake ||
@@ -790,7 +858,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--aot-profile=sealed-scalar-v1|sealed-class-fields-v1] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--check|--analyze] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--aot-profile=sealed-scalar-v1|sealed-class-fields-v1|actor-region-v1] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--check|--analyze] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -845,6 +913,27 @@ int main(int argc, char** argv) {
         source_module = ast.module;
         source_namespace = ast.namespace_name;
 
+        if (ast.inverted_main) {
+            // Bounded production two-i64 stack owner only; no escaping
+            // handles, async/actor lifetime, or target/RT guarantees.
+            if (experimental_owned_int || experimental_rt_scalar_loop ||
+                    wasm32_target || cortex_m_target || native_hard_rt_profile ||
+                    rt_check_only || rt_report_seen || rt_entry_seen ||
+                    tree_shake || !tree_shake_roots.empty() ||
+                    constraint_descriptors_only || library_profile_seen ||
+                    allocator_provider_seen)
+                throw std::runtime_error(
+                    "production inverted i64 slice requires plain host compilation without extra owner, RT or target flags");
+            const auto verified = oreslang::dop::mir::verify_production_inverted_i64(ast);
+            const auto llvm_ir = oreslang::dop::mir::emit_native_i64_pair_ir(
+                verified.mir, verified.operands);
+            std::cout << llvm_ir;
+            std::cout.flush();
+            if (coreLog) coreLog->dump(stderr);
+            return 0;
+        }
+
+
         // Checked two-owner native AOT: both branches converge on exactly
         // two compiler-generated drops, with no interpreter or GC fallback.
         if (actor_region_v2_guest) {
@@ -885,6 +974,7 @@ int main(int argc, char** argv) {
         // Program, before any executable LLVM IR or sidecar is emitted.
         if (sealed_scalar_aot) require_sealed_scalar_aot_graph(ast);
         if (sealed_class_fields_aot) require_sealed_scalar_aot_graph(ast, true);
+        if (actor_region_v1_aot) require_actor_region_v1_aot_graph(ast);
 
         if (frontend_check_only) {
             // Source decoding, import admission and supported-subset parsing
@@ -1230,7 +1320,7 @@ int main(int argc, char** argv) {
             // so unsupported target features cannot hide in unreachable code.
             (void)oreslang::emit_verified_llvm_ir(
                 ast, wasm32_target, cortex_m_target,
-                bounded_allocator_provider);
+                bounded_allocator_provider, {}, actor_region_v1_aot);
 
             // The shipped pass is deliberately function-only. Richer Program
             // owners have hidden semantic/ABI roots that are not represented
@@ -1242,7 +1332,7 @@ int main(int argc, char** argv) {
         }
         std::cout << oreslang::emit_verified_llvm_ir(
                 ast, wasm32_target, cortex_m_target,
-                bounded_allocator_provider, isolate_entry);
+                bounded_allocator_provider, isolate_entry, actor_region_v1_aot);
         std::cout.flush();
         if (coreLog) coreLog->dump(stderr);
         return 0;

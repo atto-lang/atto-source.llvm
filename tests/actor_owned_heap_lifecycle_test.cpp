@@ -13,6 +13,7 @@
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "actor heap check failed at %d\n", __LINE__); return 1; } } while (0)
 
+#if !defined(ORES_HEAP_NO_LINK_WRAP)
 /* Linker --wrap intercepts calls from production ActorOwnedI64Heap.c,
  * not its C++ test host's unrelated allocator traffic. Check actual bytes
  * BEFORE real free at O0/O2, never after the allocation lifetime ends.
@@ -49,6 +50,7 @@ extern "C" void __wrap_free(void* p) {
     ++scrubbed_physical_frees;
     __real_free(p);
 }
+#endif /* !ORES_HEAP_NO_LINK_WRAP */
 
 enum Misuse { WRONG_OWNER, WRONG_EPOCH, FORGED_SLOT, DROP_LOANED, WRITE_LOANED, STALE_SLOT_REUSED, FOREIGN_SLOT, DOUBLE_LOAN_RELEASE, REENTER, CALL_AFTER_RETIRE, CROSS_CARRIER_TOKEN, NESTED_DIFFERENT_HEAP };
 static void invalid_call(enum Misuse which) {
@@ -237,8 +239,10 @@ int main(void) {
     CHECK(rejects(CROSS_CARRIER_TOKEN));
     CHECK(rejects(NESTED_DIFFERENT_HEAP));
     CHECK(test_long_lived_source_actor_heap_churn() == 0);
+#if !defined(ORES_HEAP_NO_LINK_WRAP) /* Apple ld has no --wrap: no pre-free scrub evidence there */
     CHECK(tracked_heap_count == 0);
     CHECK(scrubbed_physical_frees == 2);
+#endif
     puts("SOURCE_ACTOR_HEAP_HOST_LIFECYCLE_OK|churn=100000|churn_turns=1000|negative=12|scrubbed_heap_frees=2|atto_guest=NO");
 #endif
     return 0;
