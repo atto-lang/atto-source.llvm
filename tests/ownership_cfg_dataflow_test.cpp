@@ -86,6 +86,62 @@ int main() {
     verify(alias_layout);
 
     // Direct apply() must reject ambiguous storage too, even without verify().
+    // The flat key space MUST NOT treat unproven indexed/deref projections
+    // as independent storage. Otherwise a live loan on p can be bypassed by
+    // a write through p[0] or through an encoded generated expression.
+    for (const char* unproven : {"p[0]", "p[*]", "p->a", "p::a", "p.a[0]",
+                                 "p.0", "p.$a", "p\\x", "p a"}) {
+        Graph indexed_alias;
+        indexed_alias.entry = {{"p", cell(kOwned)}, {unproven, cell(kOwned)}};
+        indexed_alias.blocks = {{{op(Kind::BorrowShared, "p"),
+                                  op(Kind::Move, unproven)}, {}}};
+        assert(rejected([&] { verify(indexed_alias); }));
+    }
+    // Compiler-owned ANF root locals (main's $effectN) are flat places;
+    // a bare or projected '$' is still rejected above / here.
+    Graph generated_local;
+    generated_local.entry = {{"$effect1", cell(kOwned)}};
+    generated_local.blocks = {{{op(Kind::Read, "$effect1")}, {}}};
+    verify(generated_local);
+    for (const char* bad : {"$", "$.a", "$$x", "$1"}) {
+        Graph bad_generated;
+        bad_generated.entry = {{bad, cell(kOwned)}};
+        bad_generated.blocks = {{{op(Kind::Read, bad)}, {}}};
+        assert(rejected([&] { verify(bad_generated); }));
+    }
+    // A fieldless object's compiler-owned identity slot is a flat leaf place
+    // (OwnershipChecker emits "<owner>.$identity"); nothing may project
+    // through it and no other '$' leaf is admitted.
+    Graph identity_slot;
+    identity_slot.entry = {{"self.$identity", cell(kOwned)}};
+    identity_slot.blocks = {{{op(Kind::Read, "self.$identity")}, {}}};
+    verify(identity_slot);
+    for (const char* bad : {"self.$identity.a", "self.$identityx", "self.$ident",
+                            "self.a.$identity.b"}) {
+        Graph bad_identity;
+        bad_identity.entry = {{bad, cell(kOwned)}};
+        bad_identity.blocks = {{{op(Kind::Read, bad)}, {}}};
+        assert(rejected([&] { verify(bad_identity); }));
+    }
+    Graph too_deep_path;
+    std::string deep_key = "p";
+    for (int i = 0; i < 16; ++i) deep_key += ".a";
+    too_deep_path.entry = {{deep_key, cell(kOwned)}};
+    too_deep_path.blocks = {{{op(Kind::Read, deep_key.c_str())}, {}}};
+    assert(rejected([&] { verify(too_deep_path); }));
+    Graph huge_path;
+    const std::string long_key(257, 'a');
+    huge_path.entry = {{long_key, cell(kOwned)}};
+    huge_path.blocks = {{{op(Kind::Read, long_key.c_str())}, {}}};
+    assert(rejected([&] { verify(huge_path); }));
+    // Valid, statically named sibling projections remain disjoint.
+    Graph valid_named_siblings;
+    valid_named_siblings.entry = {{"p.a", cell(kOwned)}, {"p.b", cell(kOwned)}};
+    valid_named_siblings.blocks = {{{op(Kind::BorrowShared, "p.a"),
+                                    op(Kind::Move, "p.b"),
+                                    op(Kind::ReleaseShared, "p.a")}, {}}};
+    verify(valid_named_siblings);
+
     State direct_alias = {{"p", cell(kOwned)}, {"p.a", cell(kOwned)}};
     assert(rejected([&] { apply(op(Kind::Read, "p.a"), direct_alias); }));
     assert(rejected([&] { apply(op(Kind::MoveObject, "p"), direct_alias); }));
@@ -396,6 +452,14 @@ int main() {
     bad_entry.blocks = {{{op(Kind::ReleaseShared, "x"), op(Kind::Read, "x")}, {}}};
     verify(bad_entry);
 
+    // Even a syntactically valid disconnected block must not escape the
+    // ownership proof and become reachable after a compiler rewrite.
+    Graph disconnected_valid;
+    disconnected_valid.entry = {{"x", cell(kOwned)}};
+    disconnected_valid.blocks = {{{op(Kind::Read, "x")}, {}},
+                                 {{op(Kind::Move, "x")}, {}}};
+    assert(rejected([&] { verify(disconnected_valid); }));
+
     // Verify every CFG successor, not only edges reached by the worklist.
     // An invalid edge in a currently unreachable block must not survive
     // into native emission or become reachable after a later transform.
@@ -410,5 +474,148 @@ int main() {
         invalid.blocks = {{{}, {2}}};
         verify(invalid);
     }));
+    // Executable native-C++ ownership CFG checks mapped to the shared
+    // nine-toolchain borrow-mir-v1 logical case IDs. These use the actual
+    // LLVM-side verifier, not the source-free JS oracle or emitted .atto guests.
+    // C02/C04/C07/C08/C10-C14/C16/C20-C21 require typed MIR effects this
+    // LLVM flat-place API cannot faithfully represent: DO NOT synthesize a pass.
+    {
+        Graph contract;
+        contract.entry = {{"x", cell(kOwned)}};
+
+        // C01: a definitely owned place is readable.
+        contract.blocks = {{{op(Kind::Read, "x")}, {}}};
+        verify(contract);
+
+        // C03: use after a move must fail.
+        contract.blocks = {{{op(Kind::Move, "x"), op(Kind::Read, "x")}, {}}};
+        assert(rejected([&] { verify(contract); }));
+
+        // C05: two independently identified shared loans can coexist.
+        contract.blocks = {{{
+            {Kind::BorrowShared, "x", 10},
+            {Kind::BorrowShared, "x", 11},
+            op(Kind::Read, "x"),
+            {Kind::ReleaseShared, "x", 11},
+            {Kind::ReleaseShared, "x", 10}
+        }, {}}};
+        verify(contract);
+
+        // C06: an exclusive loan cannot overlap a live shared loan.
+        contract.blocks = {{{
+            {Kind::BorrowShared, "x", 10},
+            {Kind::BorrowExclusive, "x", 11}
+        }, {}}};
+        assert(rejected([&] { verify(contract); }));
+
+        // C09: a live shared loan fences destruction.
+        contract.blocks = {{{
+            {Kind::BorrowShared, "x", 10},
+            op(Kind::Drop, "x")
+        }, {}}};
+        assert(rejected([&] { verify(contract); }));
+
+        // C15: a nonexistent loan cannot be released.
+        contract.blocks = {{{{Kind::ReleaseShared, "x", 10}}, {}}};
+        assert(rejected([&] { verify(contract); }));
+
+        // C22: a live shared loan cannot escape a terminal block.
+        contract.blocks = {{{{Kind::BorrowShared, "x", 10}}, {}}};
+        assert(rejected([&] { verify(contract); }));
+    }
+    {
+        // C17: loan IDs are globally minted, not per branch.
+        Graph reused_loan;
+        reused_loan.entry = {{"x", cell(kOwned)}};
+        reused_loan.blocks = {
+            {{}, {1, 2}},
+            {{{Kind::BorrowShared, "x", 10},
+              {Kind::ReleaseShared, "x", 10}}, {3}},
+            {{{Kind::BorrowShared, "x", 10},
+              {Kind::ReleaseShared, "x", 10}}, {3}},
+            {{{Kind::Read, "x"}}, {}}
+        };
+        assert(rejected([&] { verify(reused_loan); }));
+    }
+    {
+        // C18: a MAY-moved owner at a CFG join cannot be read.
+        Graph branch_moved;
+        branch_moved.entry = {{"x", cell(kOwned)}};
+        branch_moved.blocks = {
+            {{}, {1, 2}},
+            {{{Kind::Move, "x"}}, {3}},
+            {{}, {3}},
+            {{{Kind::Read, "x"}}, {}}
+        };
+        assert(rejected([&] { verify(branch_moved); }));
+    }
+    {
+        // Backend extension, NOT shared C19 parity: the LLVM fixed-point
+        // engine accepts a proven read-only cycle, while canonical Rust V0
+        // deliberately rejects all cycles. Model this as capability drift
+        // until a typed cyclic Rust contract is independently validated.
+        Graph proven_read_loop;
+        proven_read_loop.entry = {{"x", cell(kOwned)}};
+        proven_read_loop.blocks = {
+            {{}, {1}},
+            {{{Kind::Read, "x"}}, {1, 2}},
+            {{}, {}}
+        };
+        verify(proven_read_loop);
+    }
+
+    // Fail closed BEFORE fixed-point analysis or large allocations.
+    // This guards the verifier itself against an adversarial typed-CFG
+    // producer and does not claim that the source compiler is complete.
+    Graph oversized_cfg;
+    oversized_cfg.entry = {{"x", cell(kOwned)}};
+    oversized_cfg.blocks.resize(kMaxCfgBlocks + 1);
+    assert(rejected([&] { verify(oversized_cfg); }));
+
+    // A massive declared state is itself untrusted input. Check place-count
+    // limits before enumerating path aliases or starting fixed-point work.
+    Graph oversized_places;
+    oversized_places.blocks = {{{}, {}}};
+    for (std::size_t i = 0; i <= kMaxCfgEntryPlaces; ++i)
+        oversized_places.entry.emplace("place" + std::to_string(i), cell(kOwned));
+    assert(rejected([&] { verify(oversized_places); }));
+
+    Graph oversized_operations;
+    oversized_operations.entry = oversized_cfg.entry;
+    oversized_operations.blocks = {{{}, {}}};
+    oversized_operations.blocks[0].operations.assign(
+        kMaxCfgOperationsPerBlock + 1, op(Kind::Read, "x"));
+    assert(rejected([&] { verify(oversized_operations); }));
+
+    // The aggregate operation budget is independent of the per-block cap.
+    // This graph stays under the 4096-block and 1024-op/block ceilings.
+    Graph oversized_total_operations;
+    oversized_total_operations.entry = oversized_cfg.entry;
+    oversized_total_operations.blocks.resize(
+        kMaxCfgOperations / kMaxCfgOperationsPerBlock + 1);
+    for (auto& block : oversized_total_operations.blocks)
+        block.operations.assign(kMaxCfgOperationsPerBlock, op(Kind::Read, "x"));
+    assert(rejected([&] { verify(oversized_total_operations); }));
+
+    Graph oversized_edges;
+    oversized_edges.entry = oversized_cfg.entry;
+    oversized_edges.blocks.resize(2);
+    oversized_edges.blocks[0].successors.assign(kMaxCfgEdges + 1, 1);
+    assert(rejected([&] { verify(oversized_edges); }));
+
+    // Default-constructed operations have a deterministic, harmless enum
+    // value, but their missing place still rejects, even under -DNDEBUG.
+    Graph incomplete_operation;
+    incomplete_operation.entry = {{"x", cell(kOwned)}};
+    incomplete_operation.blocks = {{{Operation{}}, {}}};
+    assert(rejected([&] { verify(incomplete_operation); }));
+
+    // At the input limits, budgeted verification still accepts a safe
+    // terminal graph. The limit is inclusive, not an off-by-one rejection.
+    Graph bounded_graph;
+    bounded_graph.entry = {{"x", cell(kOwned)}};
+    bounded_graph.blocks = {{{op(Kind::Read, "x")}, {}}};
+    verify(bounded_graph);
+
     return 0;
 }

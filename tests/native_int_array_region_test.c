@@ -27,6 +27,17 @@ static void positives(void) {
     oreslang_int_array_set(r,a,4095,INT64_MAX);
     require(oreslang_int_array_get(r,a,0) == INT64_MIN);
     require(oreslang_int_array_get(r,a,4095) == INT64_MAX);
+    int64_t copy = 424242;
+    require(oreslang_int_array_try_get_copy(r,a,-1,&copy) == 0);
+    require(copy == 424242);
+    require(oreslang_int_array_try_get_copy(r,a,4096,&copy) == 0);
+    require(copy == 424242);
+    require(oreslang_int_array_try_get_copy(r,a,INT64_MAX,&copy) == 0);
+    require(copy == 424242);
+    require(oreslang_int_array_try_get_copy(r,a,0,&copy) == 1);
+    require(copy == INT64_MIN);
+    require(oreslang_int_array_try_get_copy(r,a,4095,&copy) == 1);
+    require(copy == INT64_MAX);
     oreslang_int_array_add(r,b,99);
     require(oreslang_int_array_get(r,b,0) == 99);
     oreslang_int_array_drop(r,a);
@@ -47,6 +58,32 @@ static void positives(void) {
     require(oreslang_int_array_get(maximum,largest,65535) == 65535);
     oreslang_int_array_drop(maximum,largest);
     oreslang_int_array_region_close(maximum);
+}
+
+/* Host ABI only: signed 64-bit boundaries and owned-copy independence. */
+static void checked_copy_boundaries(void) {
+    OresNativeIntArrayRegion* region = oreslang_int_array_region_open();
+    OresNativeIntArrayHandle values = oreslang_int_array_new(region);
+    int64_t copied = 123456789;
+    require(oreslang_int_array_try_get_copy(region, values, 0, &copied) == 0);
+    require(copied == 123456789);
+    oreslang_int_array_add(region, values, INT64_MIN);
+    oreslang_int_array_add(region, values, INT64_MAX);
+    const int64_t misses[] = {
+        INT64_MIN, -1, 2, INT32_MAX, (int64_t)UINT32_MAX, INT64_MAX
+    };
+    for (size_t i = 0; i < sizeof(misses) / sizeof(misses[0]); ++i) {
+        require(oreslang_int_array_try_get_copy(region, values, misses[i], &copied) == 0);
+        require(copied == 123456789);
+    }
+    require(oreslang_int_array_try_get_copy(region, values, 0, &copied) == 1);
+    require(copied == INT64_MIN);
+    require(oreslang_int_array_try_get_copy(region, values, 1, &copied) == 1);
+    require(copied == INT64_MAX);
+    oreslang_int_array_drop(region, values);
+    /* A Copy<int> belongs to the caller, not the retired native array. */
+    require(copied == INT64_MAX);
+    oreslang_int_array_region_close(region);
 }
 
 #if defined(__unix__) || defined(__APPLE__)
@@ -100,6 +137,31 @@ static void must_abort(int type) {
             (void)oreslang_int_array_new(r);
         }
 #endif
+        else if (type == 16) {
+            int64_t out = 0;
+            (void)oreslang_int_array_try_get_copy(other,a,-1,&out);
+        } else if (type == 17) {
+            (void)oreslang_int_array_try_get_copy(r,a,-1,NULL);
+        } else if (type == 18) {
+            int64_t out = 0;
+            oreslang_int_array_drop(r,a);
+            (void)oreslang_int_array_try_get_copy(r,a,-1,&out);
+        } else if (type == 19) {
+            int64_t out = 0;
+            (void)oreslang_int_array_try_get_copy(r,0,INT64_MIN,&out);
+        } else if (type == 20) {
+            int64_t out = 0;
+            (void)oreslang_int_array_try_get_copy(r,UINT64_MAX,INT64_MAX,&out);
+        } else if (type == 21) {
+            int64_t out = 0;
+            oreslang_int_array_drop(r,a);
+            OresNativeIntArrayHandle fresh = oreslang_int_array_new(r);
+            oreslang_int_array_add(r,fresh,7);
+            (void)oreslang_int_array_try_get_copy(r,a,-1,&out);
+        } else if (type == 22) {
+            int64_t out = 0;
+            (void)oreslang_int_array_try_get_copy(NULL,a,-1,&out);
+        }
         else abort();
         _exit(0);
     }
@@ -111,8 +173,10 @@ static void must_abort(int type) {
 
 int main(void) {
     positives();
+    checked_copy_boundaries();
 #if defined(__unix__) || defined(__APPLE__)
     for (int i = 0; i <= 14; ++i) must_abort(i);
+    for (int i = 16; i <= 22; ++i) must_abort(i);
 #ifdef ORESLANG_NATIVE_TEST_TOKEN_EXHAUSTION
     must_abort(15);
 #endif
