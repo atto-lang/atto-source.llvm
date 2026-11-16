@@ -1826,6 +1826,11 @@ private:
         } else {
             value.exported = owner.empty() ? accept("pub") : visible;
         const bool source_async = owner.empty() && accept("async");
+        // A foreign declaration has no Atto body. Never treat its source
+        // spelling as a freely chosen native linker symbol.
+        value.foreign_import = owner.empty() && accept("extern");
+        if (value.foreign_import && value.exported)
+            fail("foreign FFI declaration must remain private");
         value.async_source_i64 = source_async;
         if (token_.text == "pure") {
             fail("native pure modifier awaits transitive observable-effect verification");
@@ -2029,6 +2034,29 @@ private:
         }
         if (!owner.empty() && value.has_declared_effects)
             fail("native method using effects require receiver effect summaries");
+        if (value.foreign_import) {
+            // Production AST shape, but the M1 symbol/target/capability scope
+            // is deliberately fixed while actor runtime admission is pending.
+            const bool params_ok = value.parameters.size() == 2 &&
+                std::all_of(value.parameters.begin(), value.parameters.end(),
+                    [](const Parameter& param) {
+                        return param.scalar_type == ScalarType::I64 &&
+                            param.mode == Parameter::Mode::Value &&
+                            param.class_name.empty() && param.generic_type.empty() &&
+                            param.pending_type_alias.empty() && param.sum_type.empty();
+                    });
+            if (value.name != "atto_add_i64" || !params_ok ||
+                    value.returns_void || value.return_type != ScalarType::I64 ||
+                    !value.pending_return_type_alias.empty() ||
+                    !value.return_class.empty() || !value.return_sum.empty() ||
+                    !value.generic_parameters.empty() ||
+                    !value.has_declared_effects ||
+                    value.declared_effects.bits !=
+                        static_cast<std::uint32_t>(FunctionEffect::Ffi))
+                fail("ffi declaration requires exact approved i64(i64,i64) and using ffi");
+            require(";");
+            return value;
+        }
         if (accept("requires")) {
             // Never accept an uncertified realtime property as a mere annotation.
             fail("native requires clause awaits verified WCET/allocation/blocking analysis");
@@ -4516,7 +4544,7 @@ private:
     }
 
     static void validate_declared_effects(const Function& fn, const Program& program) {
-        if (!fn.has_declared_effects) return;
+        if (!fn.has_declared_effects || fn.foreign_import) return;
         if (!fn.actor_spawns.empty() || !fn.ready_await_actor.empty()
                 || !fn.done_await_actor.empty()
                 || !fn.actor_sends.empty() || !fn.actor_stops.empty()
@@ -4573,8 +4601,27 @@ private:
                 contains_callable_invocation(guard.rhs.get()) ||
                 contains_callable_invocation(guard.result.get()))
                 throw std::runtime_error("using effects require transitive call summaries");
-        if (contains_callable_invocation(fn.result.get()))
-            throw std::runtime_error("using effects require transitive call summaries");
+        if (contains_callable_invocation(fn.result.get())) {
+            // M1-only direct foreign call; source cannot launder a foreign
+            // effect through a pure helper, nested call or arbitrary symbol.
+            const auto* call = fn.result.get();
+            const bool approved = program.foreign_i64_granted &&
+                fn.name == "main" && fn.parameters.empty() &&
+                fn.declared_effects.bits ==
+                    static_cast<std::uint32_t>(FunctionEffect::Ffi) &&
+                fn.locals.empty() && fn.statements.empty() &&
+                fn.early_returns.empty() &&
+                call && call->kind == Expression::Kind::Call &&
+                call->name == "atto_add_i64" && call->arguments.size() == 2 &&
+                std::all_of(call->arguments.begin(), call->arguments.end(),
+                    [](const std::unique_ptr<Expression>& arg) {
+                        return arg && (arg->kind == Expression::Kind::Integer ||
+                            (arg->kind == Expression::Kind::Negate && arg->left &&
+                             arg->left->kind == Expression::Kind::Integer));
+                    });
+            if (!approved)
+                throw std::runtime_error("using ffi requires one directly admitted static foreign i64 call");
+        }
     }
 
     static void validate(const Program& program) {
@@ -4589,6 +4636,24 @@ private:
         }
         NativeSignatures functions;
         for (const auto& fn : program.functions) {
+            if (fn.foreign_import) {
+                if (!program.foreign_i64_granted || !program.module.empty() ||
+                        !program.imports.empty() || !program.actors.empty() ||
+                        !program.classes.empty() || fn.name != "atto_add_i64" ||
+                        fn.exported || fn.native_internal ||
+                        fn.parameters.size() != 2 || fn.returns_void ||
+                        fn.return_type != ScalarType::I64 ||
+                        fn.declared_effects.bits !=
+                            static_cast<std::uint32_t>(FunctionEffect::Ffi))
+                    throw std::runtime_error("ffi native import denied: trusted host grant and exact static i64 contract required");
+                for (const auto& p : fn.parameters)
+                    if (p.mode != Parameter::Mode::Value ||
+                            p.scalar_type != ScalarType::I64 ||
+                            !p.class_name.empty() || !p.sum_type.empty())
+                        throw std::runtime_error("ffi native import parameter type must be value int");
+            } else if (fn.name == "atto_add_i64") {
+                throw std::runtime_error("reserved ffi native linker symbol cannot have a source body");
+            }
             // Reject hand-constructed or incorrectly deserialized programs:
             // parser-only pending aliases never enter ownership or LLVM ABI.
             if (!fn.pending_return_type_alias.empty())
