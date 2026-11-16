@@ -2163,6 +2163,12 @@ private:
             fail("callable signatures cannot be declared as nominal class types");
         if (entry_builtin_name(result.name))
             fail("builtin Entry is compiler-owned and cannot be declared as a nominal class type");
+        // A class header may look like Java/Rust inheritance syntax, but native
+        // flat-class codegen has no parent layout, dynamic method table, or
+        // checked superclass/interface witness. Reject explicitly, before
+        // producing any LLVM IR, instead of mis-parsing or silently flattening.
+        if (token_.text == "extends" || token_.text == "implements" || token_.text == "impl")
+            fail("NATIVE_CLASS_INHERITANCE_UNSUPPORTED: native class extends/implements needs verified parent layout and virtual/trait method dispatch; no LLVM IR may be emitted");
         require("as");
         std::unordered_set<std::string> seen;
         while (token_.text != "end") {

@@ -147,6 +147,20 @@ def main():
           pub read(Box other):int{return 1;}end pub fnc main():int{return 0;}''',{},'by-value class parameter'),
         ('static-not-reinterpreted', '''define class Box as let int value=42;
           pub static fnc read():int{return 1;}end pub fnc main():int{return 0;}''',{},'expected'),
+        # Source-only ancestry is NOT native class lowering: these must reject
+        # before producing LLVM IR, regardless of whether main uses the class.
+        ('class-inheritance-vtable-unimplemented', '''define class Base as
+          pub value():int{return 1;}end
+          define class Child extends Base as
+          pub value():int{return 2;}end
+          pub fnc main():int{return 0;}''',{},'NATIVE_CLASS_INHERITANCE_UNSUPPORTED'),
+        ('class-interface-witness-unimplemented', '''define class Child implements Named as
+          pub name():int{return 42;}end
+          pub fnc main():int{return 0;}''',{},'NATIVE_CLASS_INHERITANCE_UNSUPPORTED'),
+        ('class-multiple-inheritance-unimplemented', '''define class Left as end
+          define class Right as end
+          define class Diamond extends Left, Right as end
+          pub fnc main():int{return 0;}''',{},'NATIVE_CLASS_INHERITANCE_UNSUPPORTED'),
         ('escaped-bound-method', COUNTER+'pub fnc main():int{let Counter c=new Counter();return c.read;}',{},'unknown class field'),
     ]
     passed=compared=0
