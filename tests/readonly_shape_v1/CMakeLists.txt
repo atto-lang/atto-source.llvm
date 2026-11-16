@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.20)
+project(atto_readonly_shape_witness_v1 LANGUAGES CXX)
+enable_testing()
+add_executable(readonly-shape-witness-v1 ../native_readonly_shape_projection_v1_test.cpp)
+target_compile_features(readonly-shape-witness-v1 PRIVATE cxx_std_17)
+target_compile_options(readonly-shape-witness-v1 PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME readonly-shape-witness-v1 COMMAND readonly-shape-witness-v1)
