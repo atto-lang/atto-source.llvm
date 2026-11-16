@@ -405,8 +405,11 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             if (!expr.left)
                 reject(expr, "native Array<int> operation requires a named owner");
             array_owner(*expr.left, locals, false);
-            if (expr.name != "get" || expr.arguments.size() != 1)
-                reject(expr, "native Array<int> expression supports only get(index)");
+            if ((expr.name != "get" && expr.name != "get_copy") ||
+                    expr.arguments.size() != 1)
+                reject(expr, "native Array<int> expression supports only get(index) or checked get_copy(index)");
+            if (expr.name == "get_copy" && expr.sum_type != "Option<int>")
+                reject(expr, "Array.get_copy requires proven Option<int> sum authority");
             check_value(*expr.arguments[0], locals, functions);
             return;
         }

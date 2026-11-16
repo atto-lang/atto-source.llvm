@@ -380,6 +380,33 @@ llvm::Value* lower(const Expression& expr,
             if (expr.name == "get" && args.size() == 1)
                 return builder.CreateCall(moves->array_get,
                     {selected_region, handle, args[0]}, "array.get");
+            if (expr.name == "get_copy" && args.size() == 1) {
+                // Native scalar copy is checked before pointer arithmetic.
+                // The C ABI validates region/handle authority even on None,
+                // and writes the payload only for a present element.
+                if (!moves || !moves->sum_program ||
+                        expr.sum_type != "Option<int>" ||
+                        native_sum(*moves->sum_program, expr.sum_type).value_type != ScalarType::I64)
+                    throw std::runtime_error("unproven native Array.get_copy Option<int>");
+                auto* payload_slot = entry_alloca(builder, i64,
+                    llvm::ConstantInt::get(i64, 1), "array.copy.payload");
+                builder.CreateStore(llvm::ConstantInt::get(i64, 0), payload_slot);
+                auto* module = builder.GetInsertBlock()->getModule();
+                auto checked_get = module->getOrInsertFunction(
+                    "oreslang_int_array_try_get_copy",
+                    llvm::FunctionType::get(builder.getInt32Ty(),
+                        {selected_region->getType(), i64, i64, payload_slot->getType()}, false));
+                llvm::Value* present = builder.CreateCall(checked_get,
+                    {selected_region, handle, args[0], payload_slot}, "array.copy.present");
+                auto* fields = entry_alloca(builder, i64,
+                    llvm::ConstantInt::get(i64, 2), "array.copy.option.fields");
+                builder.CreateStore(builder.CreateZExt(present, i64), fields);
+                builder.CreateStore(builder.CreateLoad(i64, payload_slot),
+                    builder.CreateGEP(i64, fields, llvm::ConstantInt::get(i64, 1)));
+                return builder.CreateCall(moves->record_new,
+                    {llvm::ConstantInt::get(i64, moves->record_schemas->at(expr.sum_type)),
+                     llvm::ConstantInt::get(i64, 2), fields}, "array.get_copy.option");
+            }
             if (expr.name == "add" && args.size() == 1) {
                 llvm::Value* status = builder.CreateCall(moves->array_add,
                     {selected_region, handle, args[0]}, "array.add.status");
@@ -3028,6 +3055,23 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             b.SetInsertPoint(null_invalid);
             return_i32(b, -1);
             b.SetInsertPoint(nonnull);
+            // The next() ABI writes a value through 'out' and advances the
+            // two-word frame. Disallow output aliasing either frame slot:
+            // otherwise out=frame could forge state and out=frame+1 could
+            // overwrite the just-updated index (violating single delivery).
+            auto* frame_index_addr = b.CreateInBoundsGEP(
+                i64, frame, llvm::ConstantInt::get(i64, 1));
+            auto* output_disjoint = b.CreateAnd(
+                b.CreateICmpNE(out, frame),
+                b.CreateICmpNE(out, frame_index_addr));
+            auto* alias_invalid = llvm::BasicBlock::Create(
+                context, "frame.output.alias", next);
+            auto* alias_valid = llvm::BasicBlock::Create(
+                context, "frame.output.disjoint", next);
+            b.CreateCondBr(output_disjoint, alias_valid, alias_invalid);
+            b.SetInsertPoint(alias_invalid);
+            return_i32(b, -1);
+            b.SetInsertPoint(alias_valid);
             auto* state = b.CreateLoad(i64, frame, "state");
             auto* active = llvm::BasicBlock::Create(context, "active", next);
             auto* done = llvm::BasicBlock::Create(context, "done", next);
