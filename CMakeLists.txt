@@ -4001,7 +4001,7 @@ if(BUILD_TESTING)
     add_test(NAME native_source_cleanup_continuation_binding
         COMMAND oreslang-native-source-cleanup-binding-test)
     set_tests_properties(native_source_cleanup_continuation_binding PROPERTIES TIMEOUT 30)
-    oreslang_contract_test(reject_gpu_kernel unsupported-gpu-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
+    oreslang_contract_test(reject_gpu_kernel unsupported-gpu-kernel.ores --diagnostic "GPU-LAUNCH-001: GPU kernel must return void")
     oreslang_contract_test(reject_quantum_kernel unsupported-quantum-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_gpu_expression unsupported-gpu-expression.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_cpu_expression unsupported-cpu-expression.ores --diagnostic "native cpu execution block boundary unsupported")
