@@ -3997,6 +3997,8 @@ private:
                     if (!value.return_class.empty()) fail("structured class return requires ownership-aware exit lowering");
                     statement.kind = Statement::Kind::Return;
                     if (!value.returns_void) statement.expression = expression();
+                    else if (token_.text != ";" && !arm_ended())
+                        fail("RETURN_VOID_VALUE: void function cannot return a value");
                     if (!accept(";") && !arm_ended())
                         fail("native return requires ';' or a closing block delimiter");
                     actions.push_back(std::move(statement));
