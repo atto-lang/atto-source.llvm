@@ -128,6 +128,8 @@ class NormalCompilerStaticI64(unittest.TestCase):
                 "define untrusted ffi actor NativeMath as end\n"),True,"host"),
             ("wasm",source(),True,"wasm32"),
             ("overflow_literal",source("9223372036854775808","0"),True,"host"),
+            ("foreign_signed_overflow",source("9223372036854775807","1"),True,"host"),
+            ("foreign_signed_underflow",source("-9223372036854775807","-2"),True,"host"),
             ("unknown_effect",source(effects="using foo"),True,"host")
         ]
         for label,txt,grant,target in negatives:
