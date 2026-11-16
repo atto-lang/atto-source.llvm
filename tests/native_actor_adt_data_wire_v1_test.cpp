@@ -28,7 +28,7 @@ static void rejects(const Bytes& bytes) {
 }
 static void exact(const Wire::Value& value, const char* wire) {
     const auto encoded = Wire::encode(value);
-    if (encoded != hex(wire) || Wire::decode(encoded) != value)
+    if (encoded != hex(wire) || !(Wire::decode(encoded) == value))
         throw std::logic_error("native ADT wire vector mismatch");
 }
 int main() {
