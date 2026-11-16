@@ -123,7 +123,8 @@ private:
 #if defined(_WIN32)
         const auto fn = GetProcAddress(library_, name);
 #elif defined(__APPLE__)
-        const void* fn = nullptr;
+        (void)name;
+        void* fn = nullptr;
 #else
         void* fn = dlsym(library_, name);
 #endif
