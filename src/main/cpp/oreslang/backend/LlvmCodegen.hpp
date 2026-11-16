@@ -10,6 +10,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target = fa
                                   bool cortex_m_target = false,
                                   bool bounded_allocator_provider = false,
                                   const std::string& isolate_entry = {},
+                                  bool actor_region_v1 = false,
                                   bool wasm_core_f64_entry = false);
 
 // Opt-in scalar-only continuation IR; external host owns and pins frame storage.

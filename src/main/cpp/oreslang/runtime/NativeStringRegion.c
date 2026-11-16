@@ -309,6 +309,27 @@ static void publish_output(Region *r) {
     atomic_fetch_add_explicit(&r->head, 1, memory_order_release);
     wake_writer(r);
 }
+/* Immutable length-delimited substring predicate, including embedded NUL.
+ * No malloc, pointer escape, mutation or implicit zero-terminator semantics.
+ * Empty needle matches, mirroring ordinary String contains semantics.
+ */
+int64_t ores_string_contains_literal(int64_t haystack, int64_t needle) {
+    String text = lookup(haystack), pattern = lookup(needle);
+    if (atomic_load(&region.failed)) return 0;
+    if (pattern.size == 0) return 1;
+    if (pattern.size > text.size) return 0;
+    size_t start = 0;
+    const size_t last = text.size - pattern.size;
+    while (start <= last) {
+        const char *at = memchr(text.data + start,
+            (unsigned char)pattern.data[0], last - start + 1);
+        if (!at) return 0;
+        const size_t found = (size_t)(at - text.data);
+        if (memcmp(at, pattern.data, pattern.size) == 0) return 1;
+        start = found + 1;
+    }
+    return 0;
+}
 int64_t ores_string_print(int64_t handle, int64_t newline) {
     Region *r = &region;
     String value = lookup(handle);

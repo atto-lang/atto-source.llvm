@@ -39,7 +39,11 @@ int main() {
 
     // Even a maximally permissive nominal proof callback must not override
     // unimplemented synchronizing handles and guest-fabricated capability names.
-    for (const char* name : {"Arc", "Weak", "Shared", "Mutex",
+    for (const char* name : {"Atomic", "AtomicRef", "AtomicBool",
+                                    "AtomicInt", "AtomicLong", "AtomicI8",
+                                    "AtomicI16", "AtomicI32", "AtomicI64",
+                                    "AtomicU8", "AtomicU16", "AtomicU32",
+                                    "AtomicU64", "Box", "Arc", "Weak", "Shared", "Mutex",
                                     "RwLock", "Channel", "Task", "ActorRef",
                                     "NativeHandle", "FfiHandle", "UnsafeCell"}) {
         const WorkerType handle{Shape::Named, name, {number}};

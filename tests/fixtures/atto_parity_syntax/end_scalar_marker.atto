@@ -1,0 +1,7 @@
+// expect-exit: 42
+// Explicit :: is mandatory if the header/body newline is removed.
+fnc add_one(int x) -> int :: return x + 1; end
+
+pub fnc main(): int {
+  return add_one(41);
+}
