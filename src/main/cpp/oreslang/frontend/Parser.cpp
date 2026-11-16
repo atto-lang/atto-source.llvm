@@ -9,6 +9,7 @@
 #include "oreslang/frontend/GpuKernelBodyHir.hpp"
 #include "oreslang/frontend/MethodResolver.hpp"
 #include "oreslang/types/NativeScalarTypes.hpp"
+#include "oreslang/types/InvertedProductionSourceMir.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
 
 #include <algorithm>
@@ -106,7 +107,7 @@ std::size_t template_interpolation_close(std::string_view source, std::size_t fr
             at = template_close(source, at + 1, nesting + 1, origin) + 1;
         } else if (source.substr(at, 2) == "//") {
             at += 2;
-            while (at < source.size() && source[at] != '\n') ++at;
+            while (at < source.size() && source[at] != '\n' && source[at] != '\r') ++at;
         } else if (source.substr(at, 2) == "/*") {
             at = skip_template_block_comment(source, at + 2, origin);
         } else if (ch == '{') {
@@ -147,30 +148,35 @@ std::size_t template_close(std::string_view source, std::size_t from,
 
 bool reserved(std::string_view name) {
     // Keep these reserved even while their grammar is unsupported.
+    // Contextual words (borrow, critical, enum, gen, pure, requires, serial,
+    // structural, suspend, using) are ordinary identifiers, as in the Java
+    // lexer (KeywordTaxonomyLexerExecutionTest) and the spec ch.23 taxonomy;
+    // the parser recognizes them only at their declaration/modifier sites.
     static constexpr std::string_view words[] = {
-        "define", "class", "enum", "pattern", "module", "contract", "conforms", "namespace",
+        "define", "class", "pattern", "module", "contract", "conforms", "namespace",
         "import", "from", "as", "extends", "implements", "try", "catch",
-        "throw", "raise", "panic", "recover",
+        "throw", "raise", "panic", "recover", "unsafe",
         "finally", "end", "fi", "if", "guard", "do", "else", "then", "new",
-        "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "gen", "generator",
+        "spawn", "stop", "done", "await", "rt", "async", "suspends", "generator",
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
-        "default", "eq", "neq", "and", "or", "xor", "Xor", "nb", "select", "readch", "writech",
+        "default", "eq", "neq", "Xor", "nb", "select", "readch", "writech",
         "cb", "shared", "untrusted", "type", "types", "typeof",
         "interface", "trait", "struct", "impl", "abstract", "void", "Iterator", "AsyncIterator",
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
-        "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "gpu", "cpu", "quantum", "over", "structural", "int", "bool", "pure",
-        "Some", "None", "Ok", "Err", "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
+        "let", "mut", "self", "true", "false", "null", "obj", "arr",
+        "gpu", "cpu", "quantum", "over", "int", "bool",
+        "Some", "None", "Ok", "Err", "critical-read", "critical-write", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
 
 class Lexer {
 public:
-    explicit Lexer(std::string_view source) : source_(source) {}
+    explicit Lexer(std::string_view source, std::size_t unsafe_base_offset = 0)
+        : source_(source), unsafe_base_offset_(unsafe_base_offset) {}
 
     Token next() {
         for (;;) {
@@ -178,7 +184,9 @@ public:
             const unsigned char ch = static_cast<unsigned char>(source_[at_]);
             if (std::isspace(ch)) { ++at_; continue; }
             if (source_.substr(at_, 2) == "//") {
-                const auto end = source_.find('\n', at_ + 2);
+                // A CR-only source file must not hide the next line's
+                // reserved unsafe token inside a line comment.
+                const auto end = source_.find_first_of("\r\n", at_ + 2);
                 at_ = end == std::string_view::npos ? source_.size() : end;
                 continue;
             }
@@ -217,6 +225,15 @@ public:
             // Existing nb-select recognition is intentionally unchanged
             // until native select lowering supports that grammar.
             const auto first = source_.substr(start, at_ - start);
+            // G0: do not parse an unsupported unsafe operation as a normal
+            // identifier, callable or arithmetic expression. Templates are
+            // lexed recursively only for their interpolated expressions.
+            if (first == "unsafe") {
+                throw std::runtime_error(
+                    "unsafe is reserved until checked unsafe effects and backend "
+                    "lowering exist at byte " +
+                    std::to_string(unsafe_base_offset_ + start));
+            }
             if (first == "nb" && source_.substr(at_, 7) == "-select") {
                 const auto end = at_ + 7;
                 if (end == source_.size() ||
@@ -366,7 +383,10 @@ public:
         // Admit '@' as a TOKEN only so existing parameter-local @Default guards
         // can issue their specific fail-closed diagnostic instead of a generic
         // unsupported-token error. No annotation execution is enabled.
-        if (std::string_view("(){},:;+-*/%=.<>@?!").find(ch) != std::string_view::npos) {
+        // '[' / ']' are plain tokens: only the GPU launch geometry and the
+        // GPU kernel body envelope consume them; anywhere else the parser
+        // rejects them before IR exactly like any other unexpected symbol.
+        if (std::string_view("(){}[],:;+-*/%=.<>@?!").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -379,6 +399,9 @@ public:
 
 private:
     std::string_view source_;
+    // Only unsafe G0 lexical diagnostics need the absolute interpolation offset.
+    // All normal token/AST offsets remain relative to the parsed source slice.
+    std::size_t unsafe_base_offset_ = 0;
     std::size_t at_ = 0;
 };
 
@@ -814,12 +837,47 @@ bool namespace_literal_i64_arithmetic(const Expression& expr, std::size_t depth 
     }
 }
 
+/* First real native namespace execution slice: exactly one standalone, pure,
+ * zero-arg scalar main returning checked literal arithmetic. Shared by the
+ * default frontend gate and resolve_and_validate_program so the generic
+ * validator admits exactly the same slice and nothing broader. */
+bool namespace_checked_scalar_main(const Program& program) {
+    return program.imports.empty()
+        && program.functions.size() == 1
+        && program.classes.empty() && program.actors.empty()
+        && program.contracts.empty() && program.conforms.empty()
+        && program.cooperative_loops.empty() && program.generators.empty()
+        && program.type_only_declarations.empty()
+        && program.functions.front().name == "main"
+        && program.functions.front().parameters.empty()
+        && program.functions.front().generic_parameters.empty()
+        && !program.functions.front().returns_void
+        && program.functions.front().return_type == ScalarType::I64
+        && !program.functions.front().async_source_i64
+        && !program.functions.front().has_declared_effects
+        && program.functions.front().result
+        && namespace_literal_i64_arithmetic(*program.functions.front().result)
+        && program.functions.front().result->arguments.empty()
+        && program.functions.front().locals.empty()
+        && program.functions.front().statements.empty()
+        && program.functions.front().early_returns.empty()
+        && program.functions.front().actor_spawns.empty()
+        && program.functions.front().actor_sends.empty()
+        && program.functions.front().actor_stops.empty()
+        && program.functions.front().source_tasks.empty()
+        && program.functions.front().future_pipelines.empty()
+        && program.functions.front().actor_field_writes.empty()
+        && !program.functions.front().caught_throw_value;
+}
+
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
                     bool experimental_rt_scalar_loop,
-                    bool verified_namespace_metadata_only = false)
-        : source_(source), lexer_(source), token_(lexer_.next()),
+                    bool verified_namespace_metadata_only = false,
+                    std::size_t unsafe_base_offset = 0)
+        : source_(source), lexer_(source, unsafe_base_offset), token_(lexer_.next()),
+          unsafe_base_offset_(unsafe_base_offset),
           experimental_owned_int_(experimental_owned_int),
           experimental_rt_scalar_loop_(experimental_rt_scalar_loop),
           verified_namespace_metadata_only_(verified_namespace_metadata_only) {
@@ -828,8 +886,6 @@ public:
 
     Program parse() {
         Program program;
-        if (token_.text == "use" && peek_next().text == "namespace")
-            fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native actor namespace header needs typed module/linker identity");
         while (token_.text == "import") {
             advance();
             // Outside the host-only verified-metadata mode, namespace imports stay
@@ -953,10 +1009,15 @@ public:
                  "actor entrypoint needs manifest-verified receiver, state "
                  "loan and mailbox MIR");
         while (token_.text == "define" || token_.text == "declare" ||
+               at_bare_type_alias() ||
                 (token_.text == "pub" &&
                  (peek_next().text == "define" || peek_next().text == "declare"))) {
             if (at_type_only_introducer()) {
                 type_only_declaration(program);
+                continue;
+            }
+            if (at_bare_type_alias()) {
+                bare_type_alias(program);
                 continue;
             }
             // Unlike complete defined actors, declaration-only actors require
@@ -973,6 +1034,15 @@ public:
             if (accept("pub")) {
                 if (exported) fail("duplicate pub modifier");
                 exported = true;
+            }
+            if (accept("inverted")) {
+                if (accept("struct")) {
+                    program.inverted_structs.push_back(inverted_struct_declaration(exported));
+                    continue;
+                }
+                if (accept("class"))
+                    fail("DOP_INVERTED_CLASS_UNSUPPORTED: generation-checked row identities and method lowering required");
+                fail("DOP_INVERTED_DECLARATION_UNSUPPORTED: expected struct or class");
             }
             if (token_.text == "macro") {
                 if (exported) fail("NATIVE_MACRO_EXPANDER_REQUIRED: public macro export needs checked module visibility before LLVM IR; runtime fallback is forbidden");
@@ -1048,8 +1118,22 @@ public:
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
+            if (program.inverted_main)
+                fail("production inverted main must be the only source callable");
+            if (!program.inverted_structs.empty() && looks_like_inverted_main()) {
+                if (program.inverted_structs.size() != 1 || wrapped_module ||
+                        !program.functions.empty() || !program.classes.empty() ||
+                        !program.actors.empty() || !program.generators.empty())
+                    fail("production inverted i64 requires one standalone schema and main");
+                program.inverted_main = inverted_source_main(program.inverted_structs.front());
+                continue;
+            }
             if (token_.text == "import")
                 fail("native contract imports require a validated cross-unit linker");
+            if (at_bare_type_alias()) {
+                bare_type_alias(program);
+                continue;
+            }
             if (at_type_only_introducer()) {
                 type_only_declaration(program);
                 continue;
@@ -1140,6 +1224,15 @@ public:
                     if (public_class) fail("duplicate pub modifier");
                     public_class = true;
                 }
+                if (accept("inverted")) {
+                    if (accept("struct")) {
+                        program.inverted_structs.push_back(inverted_struct_declaration(public_class));
+                        continue;
+                    }
+                    if (accept("class"))
+                        fail("DOP_INVERTED_CLASS_UNSUPPORTED: generation-checked row identities and method lowering required");
+                    fail("DOP_INVERTED_DECLARATION_UNSUPPORTED: expected struct or class");
+                }
                 if (token_.text == "macro") {
                     fail("NATIVE_MACRO_EXPANDER_REQUIRED: define macro is compile-time-only; "
                          "native expansion must complete before LLVM IR and runtime fallback is forbidden");
@@ -1203,6 +1296,7 @@ public:
         if (wrapped_module) require("end");
         validate_actor_forwards(program);
         if (token_.kind != Kind::End) fail("unexpected trailing source");
+        resolve_scalar_generator_delegation(program);
         // The package-local host graph is not connected to an authenticated
         // v2 manifest/source loader and native codegen yet. Namespace AST
         // imports must not silently enter the existing relative module linker.
@@ -1211,38 +1305,13 @@ public:
         validate_type_only_declarations(program);
         if (!verified_namespace_metadata_only_ && !program.namespace_name.empty() &&
                 (!program.functions.empty() || !program.classes.empty() ||
-                 !program.actors.empty() || !program.contracts.empty() ||
+                 !program.actors.empty() || !program.inverted_structs.empty() || !program.contracts.empty() ||
                  !program.cooperative_loops.empty() || !program.generators.empty())) {
             // First real native namespace execution slice: exactly one
             // standalone, pure, zero-arg scalar main returning checked literal arithmetic.
             // No imports, namespace cross-file linking, actors, closures or
             // source FFI can acquire identity/dispatch authority here.
-            const bool checked_scalar_main = program.imports.empty()
-                    && program.functions.size() == 1
-                    && program.classes.empty() && program.actors.empty()
-                    && program.contracts.empty() && program.conforms.empty()
-                    && program.cooperative_loops.empty() && program.generators.empty()
-                    && program.type_only_declarations.empty()
-                    && program.functions.front().name == "main"
-                    && program.functions.front().parameters.empty()
-                    && program.functions.front().generic_parameters.empty()
-                    && !program.functions.front().returns_void
-                    && program.functions.front().return_type == ScalarType::I64
-                    && !program.functions.front().async_source_i64
-                    && !program.functions.front().has_declared_effects
-                    && program.functions.front().result
-                    && namespace_literal_i64_arithmetic(*program.functions.front().result)
-                    && program.functions.front().result->arguments.empty()
-                    && program.functions.front().locals.empty()
-                    && program.functions.front().statements.empty()
-                    && program.functions.front().early_returns.empty()
-                    && program.functions.front().actor_spawns.empty()
-                    && program.functions.front().actor_sends.empty()
-                    && program.functions.front().actor_stops.empty()
-                    && program.functions.front().source_tasks.empty()
-                    && program.functions.front().future_pipelines.empty()
-                    && program.functions.front().actor_field_writes.empty()
-                    && !program.functions.front().caught_throw_value;
+            const bool checked_scalar_main = namespace_checked_scalar_main(program);
             if (!checked_scalar_main)
                 fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: only standalone checked literal-arithmetic i64 main is native-lowered; multi-file actor namespaces remain gated");
         }
@@ -1258,8 +1327,8 @@ public:
                 "completion fences are not executable; no implicit CPU fallback");
         if (program.functions.empty() && program.actors.empty() && program.classes.empty() &&
                 program.cooperative_loops.empty() && program.generators.empty() &&
-                program.type_only_declarations.empty())
-            fail("expected at least one function, generator, actor or type-only declaration");
+                program.type_only_declarations.empty() && program.inverted_structs.empty())
+            fail("expected at least one function, generator, actor, type-only or inverted struct declaration");
         // P0 C host exposure is deliberately *version-only*. Without this
         // whole-source check a second unannotated guest function would retain
         // external LLVM linkage and become a callable ELF export, bypassing
@@ -1287,6 +1356,128 @@ public:
     static void validate_complete(const Program& program) { validate(program); }
 
 private:
+    std::unordered_set<std::string> inverted_struct_names_;
+
+    // Structural lexer lookahead is only a dispatch hint, never authorization:
+    // the full source is still consumed and checked below. Other functions
+    // following an inverted declaration retain the legacy fail-closed path.
+    bool looks_like_inverted_main() const {
+        if (token_.text != "fnc") return false;
+        Lexer probe = lexer_;
+        for (std::size_t i = 0; i < 32; ++i) {
+            const auto next = probe.next();
+            if (next.kind == Kind::End || next.text == "}") return false;
+            if (next.text == "InvertedArray") return true;
+        }
+        return false;
+    }
+
+    std::size_t inverted_source_index() {
+        const auto n = signed_integer_literal();
+        if (n < 0 || static_cast<std::uint64_t>(n) >
+                         static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
+            fail("production inverted row index must fit nonnegative size_t");
+        return static_cast<std::size_t>(n);
+    }
+
+    InvertedSourceMain inverted_source_main(const InvertedStructDecl& decl) {
+        if (decl.fields.size() != 2 ||
+                decl.fields[0].type != InvertedScalarKind::I64 ||
+                decl.fields[1].type != InvertedScalarKind::I64)
+            fail("production inverted main requires precisely two i64 fields");
+        InvertedSourceMain result;
+        result.schema_name = decl.name;
+        require("fnc"); require("main"); require("("); require(")");
+        require(":"); require("int"); require("{");
+        require("let");
+        result.owner_name = identifier();
+        require("=");
+        require("InvertedArray"); require("<");
+        if (identifier() != decl.name)
+            fail("production inverted collection nominal schema mismatch");
+        require(">"); require("."); require("with_capacity"); require("(");
+        result.capacity = inverted_source_index();
+        if (result.capacity == 0 || result.capacity > 256)
+            fail("production inverted capacity must be 1..256");
+        require(")"); require(";");
+        while (true) {
+            if (token_.kind == Kind::End || result.operations.size() == 1024)
+                fail("production inverted main missing return or operation budget exceeded");
+            InvertedSourceOperation op;
+            if (accept("return")) {
+                if (identifier() != result.owner_name)
+                    fail("production inverted return must read the local owner");
+                require("."); require("get"); require("(");
+                op.kind = InvertedSourceOperation::Kind::ReturnRead;
+                op.index = inverted_source_index();
+                require(",");
+                op.field = identifier();
+                require(")"); require(";");
+                result.operations.push_back(std::move(op));
+                require("}");
+                return result;
+            }
+            if (identifier() != result.owner_name)
+                fail("production inverted operation must target the local owner");
+            require(".");
+            if (accept("push")) {
+                op.kind = InvertedSourceOperation::Kind::Push;
+                require("(");
+                op.values[0] = signed_integer_literal();
+                require(",");
+                op.values[1] = signed_integer_literal();
+                require(")");
+            } else if (accept("set")) {
+                op.kind = InvertedSourceOperation::Kind::WriteField;
+                require("("); op.index = inverted_source_index();
+                require(","); op.field = identifier(); require(",");
+                op.value = signed_integer_literal(); require(")");
+            } else if (accept("erase_swap")) {
+                op.kind = InvertedSourceOperation::Kind::EraseSwap;
+                require("("); op.index = inverted_source_index(); require(")");
+            } else {
+                fail("production inverted supports only push, set, erase_swap and terminal get");
+            }
+            require(";");
+            result.operations.push_back(std::move(op));
+        }
+    }
+
+    InvertedStructDecl inverted_struct_declaration(bool exported) {
+        InvertedStructDecl decl;
+        decl.exported = exported;
+        decl.offset = token_.offset;
+        decl.name = identifier();
+        if (!inverted_struct_names_.insert(decl.name).second)
+            fail("duplicate inverted struct declaration");
+        require("as");
+        std::unordered_set<std::string> members;
+        while (token_.text != "end") {
+            if (token_.kind == Kind::End)
+                fail("unterminated inverted struct declaration");
+            if (decl.fields.size() == 64)
+                fail("inverted struct field limit exceeded (64)");
+            InvertedStructField field;
+            field.offset = token_.offset;
+            field.mutable_field = accept("let");
+            field.name = identifier();
+            if (!members.insert(field.name).second)
+                fail("duplicate inverted struct field");
+            require(":");
+            if (accept("int") || accept("i64"))
+                field.type = InvertedScalarKind::I64;
+            else if (accept("bool"))
+                field.type = InvertedScalarKind::Bool;
+            else if (accept("f64"))
+                field.type = InvertedScalarKind::F64;
+            else fail("inverted struct member requires fixed scalar int/i64, bool or f64; nested inverted, pointers and resources require checked layout lowering");
+            require(";");
+            decl.fields.push_back(std::move(field));
+        }
+        if (decl.fields.empty()) fail("empty inverted struct is not admitted");
+        require("end");
+        return decl;
+    }
     std::vector<gpu::source_link::Signature> gpu_kernel_source_signatures_;
     std::vector<std::pair<std::string, gpu::body_hir::CheckedBody>> gpu_kernel_typed_body_hirs_;
     std::vector<NativeSumType> sum_types_;
@@ -1298,6 +1489,19 @@ private:
     bool at_type_only_introducer() const {
         return token_.text == "declare" ||
                (token_.text == "pub" && peek_next().text == "declare");
+    }
+
+    // Java's legacy `type Name = Target;` (and `pub type ...`) is the same
+    // transparent alias as `define type Name = Target;`.
+    bool at_bare_type_alias() const {
+        return (token_.text == "type" && peek_next().kind == Kind::Identifier) ||
+               (token_.text == "pub" && peek_next().text == "type");
+    }
+
+    void bare_type_alias(Program& program) {
+        const bool exported = accept("pub");
+        if (token_.text != "type") fail("expected 'type'");
+        type_only_declaration(program, true, exported);
     }
 
     // Aliases are compile-time spellings for the existing scalar ABI, never
@@ -1485,11 +1689,22 @@ private:
         // Exported forward signatures cannot be enforced by this native actor
         // ABI, which has no actor visibility field, so reject them for now.
         if (!already_defined && accept("actor")) {
+            // Under a namespace header an exported declaration is a
+            // manifest-level (cross-file) declared actor, owned by the
+            // declared-actor codegen gate rather than the same-source forward.
+            if (exported && !program.namespace_name.empty())
+                fail("DECLARED_ACTOR_CODEGEN_UNSUPPORTED: native actor receiver, "
+                     "sealed state and mailbox lowering require a verified "
+                     "same-manifest namespace source set");
             if (exported)
                 fail("NATIVE_ACTOR_FORWARD_PUBLIC_UNSUPPORTED: native actor forward visibility needs an actor export ABI");
             const std::string name = nominal_declaration_name();
             if (token_.text == "<")
                 fail("NATIVE_ACTOR_FORWARD_GENERIC_UNSUPPORTED: native actor generics require typed specialization");
+            // As on Java, a forward declaration never carries a body; the
+            // actor's state and handlers belong to its 'define actor'.
+            if (token_.text == "as")
+                fail("NATIVE_ACTOR_FORWARD_BODY: actor forward declaration cannot supply a body");
             require(";");
             if (!actor_forwards_.emplace(name, program.module).second)
                 fail("NATIVE_ACTOR_FORWARD_DUPLICATE: duplicate actor forward '" + name + "'");
@@ -1501,7 +1716,18 @@ private:
         TypeOnlyDecl decl;
         decl.module_name = program.module;
         decl.exported = exported;
-        if (accept("type")) decl.kind = TypeOnlyDecl::Kind::Alias;
+        // Java TransparentTypeAliasTest: `define type alias Name as Target;` is
+        // the canonical spelling; `type Name = Target;` and `define type Name =
+        // Target;` are the same transparent alias. `declare` keeps only `=`.
+        bool alias_as_spelling = false;
+        if (accept("type")) {
+            decl.kind = TypeOnlyDecl::Kind::Alias;
+            if (already_defined && token_.text == "alias" &&
+                    peek_next().kind == Kind::Identifier) {
+                advance();
+                alias_as_spelling = true;
+            }
+        }
         else if (accept("trait")) decl.kind = TypeOnlyDecl::Kind::Trait;
         else if (accept("interface")) decl.kind = TypeOnlyDecl::Kind::Interface;
         else fail("TYPE_ONLY_INVALID_KIND: declare admits type, trait or interface; "
@@ -1516,10 +1742,16 @@ private:
                 fail("TYPE_ONLY_GENERIC_UNSUPPORTED: native aliases are non-generic in descriptor v1");
             // 'declare type' and 'define type' share this exact grammar.
             // Incomplete 'declare type Code;' never creates an alias.
-            if (token_.text != "=")
-                fail("TYPE_ONLY_INCOMPLETE_DEFINITION: declare type and define type"
-                     " both require '= <type>'");
-            require("=");
+            if (alias_as_spelling) {
+                if (token_.text != "as")
+                    fail("TYPE_ONLY_INCOMPLETE_DEFINITION: define type alias requires 'as <type>'");
+                advance();
+            } else {
+                if (token_.text != "=")
+                    fail("TYPE_ONLY_INCOMPLETE_DEFINITION: declare type and define type"
+                         " both require '= <type>'");
+                require("=");
+            }
             decl.alias_target = type_alias_target();
             type_alias_constraints(decl);
             require(";");
@@ -1590,6 +1822,15 @@ private:
         if (program.type_only_declarations.size() >= 1024)
             fail("TYPE_ONLY_DECL_BUDGET: maximum 1024 type-only declarations");
         program.type_only_declarations.push_back(std::move(decl));
+    }
+
+    // After a comma-body separator: a second ',' is an empty item, while
+    // 'end' means the trailing separator has no following item.
+    void reject_missing_comma_item() const {
+        if (token_.text == ",")
+            fail("native comma expression body contains an empty item");
+        if (token_.text == "end")
+            fail("native comma expression body requires item after ','");
     }
 
     void validate_actor_forwards(const Program& program) const {
@@ -2129,6 +2370,12 @@ private:
             fail("callable signatures cannot be declared as nominal class types");
         if (entry_builtin_name(result.name))
             fail("builtin Entry is compiler-owned and cannot be declared as a nominal class type");
+        // A class header may look like Java/Rust inheritance syntax, but native
+        // flat-class codegen has no parent layout, dynamic method table, or
+        // checked superclass/interface witness. Reject explicitly, before
+        // producing any LLVM IR, instead of mis-parsing or silently flattening.
+        if (token_.text == "extends" || token_.text == "implements" || token_.text == "impl")
+            fail("NATIVE_CLASS_INHERITANCE_UNSUPPORTED: native class extends/implements needs verified parent layout and virtual/trait method dispatch; no LLVM IR may be emitted");
         require("as");
         std::unordered_set<std::string> seen;
         while (token_.text != "end") {
@@ -2151,7 +2398,9 @@ private:
                 signature.mutable_receiver = method.parameters.front().mode == Parameter::Mode::BorrowMut;
                 for (const auto& prior : result.methods)
                     if (prior.name == signature.name && prior.arity == signature.arity)
-                        fail("duplicate native method name/arity");
+                        fail("duplicate native method name/arity '" + signature.name +
+                             "/" + std::to_string(signature.arity) +
+                             "' (self receiver does not count toward arity)");
                 result.methods.push_back(std::move(signature));
                 methods_.push_back(std::move(method));
                 continue;
@@ -2402,10 +2651,20 @@ private:
             if (token_.kind == Kind::End)
                 fail("unterminated native generator body");
             if (accept("yield")) {
-                if (accept("*"))
-                    fail("native generator yield* requires delegated iterator ownership and close lowering");
-                generator.yields.push_back(signed_integer_literal());
-                if (generator.yields.size() > 4096)
+                ScalarGeneratorStep step;
+                if (accept("*")) {
+                    // The only safe native v1 delegate is a named generator
+                    // defined in this same source file. No expressions,
+                    // parameters, actor owners or foreign iterator handles.
+                    step.delegate = true;
+                    step.target = identifier();
+                    require("(");
+                    require(")");
+                } else {
+                    step.value = signed_integer_literal();
+                }
+                generator.steps.push_back(std::move(step));
+                if (generator.steps.size() > 4096)
                     fail("native generator v1 exceeds 4096 yielded elements");
                 require(";");
                 continue;
@@ -2420,6 +2679,47 @@ private:
             fail("native sync generator v1 admits only integer yield statements and bare return");
         }
         return generator;
+    }
+
+    // Resolve pure literal yield* delegation once, at compiler admission.
+    // Since neither producer has captures, callbacks, awaits nor cleanup,
+    // static inlining is observationally equivalent to pulling each child in
+    // order. All other forms continue to fail closed in scalar_generator().
+    static void resolve_scalar_generator_delegation(Program& program) {
+        const std::size_t count = program.generators.size();
+        std::unordered_map<std::string, std::size_t> names;
+        for (std::size_t i = 0; i < count; ++i)
+            names.emplace(program.generators[i].name, i);
+        std::vector<unsigned char> state(count, 0);
+        std::function<void(std::size_t)> resolve = [&](std::size_t index) {
+            if (state[index] == 2) return;
+            if (state[index] == 1)
+                throw std::runtime_error("native generator yield* cycle at '" +
+                    program.generators[index].name + "'");
+            state[index] = 1;
+            auto& generator = program.generators[index];
+            std::vector<std::int64_t> result;
+            for (const auto& step : generator.steps) {
+                if (!step.delegate) {
+                    if (result.size() >= 4096)
+                        throw std::runtime_error("native generator v1 exceeds 4096 yielded elements");
+                    result.push_back(step.value);
+                    continue;
+                }
+                const auto target = names.find(step.target);
+                if (target == names.end())
+                    throw std::runtime_error("native generator yield* target is not a same-file literal generator: '" +
+                        step.target + "'");
+                resolve(target->second);
+                const auto& child = program.generators[target->second].yields;
+                if (child.size() > 4096 - result.size())
+                    throw std::runtime_error("native generator v1 exceeds 4096 yielded elements after yield*");
+                result.insert(result.end(), child.begin(), child.end());
+            }
+            generator.yields = std::move(result);
+            state[index] = 2;
+        };
+        for (std::size_t i = 0; i < count; ++i) resolve(i);
     }
 
     CooperativeScalarLoop cooperative_scalar_loop() {
@@ -2495,15 +2795,17 @@ private:
         auto found = std::find_if(program.classes.begin(), program.classes.end(),
             [&](const ClassDecl& cls) { return cls.name == owner; });
         if (found == program.classes.end()) {
+            // An already defined actor's state is sealed, even when the same
+            // source also forward-declares it: check that first.
+            const bool actor_target = std::any_of(program.actors.begin(), program.actors.end(),
+                [&](const ActorDecl& actor) { return actor.name == owner; });
+            if (actor_target)
+                fail("NATIVE_MTD_ACTOR_STATE_SEALED: external receiver methods cannot extend an already defined actor's sealed state");
             // A declaration-only actor with type-first methods is valid
             // AttoLang, but cannot yet be represented by native on_message
             // class slots. Reject for missing backend lowering, not grammar.
             if (actor_forwards_.count(owner))
                 fail("NATIVE_ACTOR_MTD_BACKEND_UNSUPPORTED: declaration-only actor receiver needs typed mailbox method lowering");
-            const bool actor_target = std::any_of(program.actors.begin(), program.actors.end(),
-                [&](const ActorDecl& actor) { return actor.name == owner; });
-            if (actor_target)
-                fail("NATIVE_MTD_ACTOR_STATE_SEALED: external receiver methods cannot extend an already defined actor's sealed state");
             fail("NATIVE_MTD_LOCAL_CLASS_REQUIRED: typed receiver must name an already declared ordinary local class");
         }
         const bool prior_active = external_class_receiver_active_;
@@ -2614,7 +2916,7 @@ private:
         }
         // Compatibility spellings remain fail-closed in this first native
         // slice. Canonical bare sync gen* is handled by scalar_generator().
-        if (token_.text == "gen" || token_.text == "generator") {
+        if ((token_.text == "gen" && peek_next().text != "(" && peek_next().text != "<") || token_.text == "generator") {
             fail("native generator v1 requires iterator-frame, ownership and LLVM continuation lowering");
         }
         if (at_unsupported_critical_mode()) {
@@ -2852,14 +3154,12 @@ private:
                         value.locals.push_back(std::move(binding));
                         if (!accept(","))
                             fail("native comma body local must be followed by ',' and an expression");
-                        if (token_.text == "," || token_.text == "end")
-                            fail("native comma expression body requires item after ','");
+                        reject_missing_comma_item();
                         continue;
                     }
                     auto evaluated = expression();
                     if (accept(",")) {
-                        if (token_.text == "," || token_.text == "end")
-                            fail("native comma expression body requires item after ','");
+                        reject_missing_comma_item();
                         LocalBinding discarded;
                         discarded.name = "$effect" + std::to_string(value.locals.size());
                         discarded.initializer = std::move(evaluated);
@@ -3031,14 +3331,29 @@ private:
                 fail("E_CONST_MUT_UNSUPPORTED: scoped owned mutable value lowering is not yet implemented");
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
-            if (type_first_const ||
+            // Java: `val Count c = 42;` with `type Count = int;` is the same
+            // scalar local as `val c: Count = 42;`. Only a declared scalar alias
+            // followed by a binding name takes this path; class names do not.
+            const bool alias_prefixed =
+                    (token_.text == "val" || token_.text == "const" || token_.text == "let") &&
+                    sum_first.kind == Kind::Identifier &&
+                    scalar_alias_targets_.count(std::string(sum_first.text)) &&
+                    sum_look.next().kind == Kind::Identifier;
+            if (alias_prefixed ||
+                    type_first_const ||
                     ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
                     (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string"))) {
                 const std::string mode = type_first_const ? "const" : std::string(token_.text);
                 if (!type_first_const) { advance(); if (mode == "let") accept("mut"); }
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
-                binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
-                if (binding.scalar_type == ScalarType::I64) require("int");
+                if (alias_prefixed) {
+                    binding.pending_type_alias = std::string(token_.text);
+                    advance();
+                    binding.scalar_type = resolve_scalar_alias(binding.pending_type_alias);
+                } else {
+                    binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
+                    if (binding.scalar_type == ScalarType::I64) require("int");
+                }
                 binding.name = identifier();
                 require("=");
                 if (accept("await")) {
@@ -3449,7 +3764,7 @@ private:
             while (token_.text != "}" && (!then_scope || (token_.text != "fi" && token_.text != "else" && token_.text != "elif"))) {
                 if (token_.kind == Kind::End || actions.size() == 16)
                     fail("native conditional arm limit exceeded (16)");
-                if (token_.text == "using" && !finally_scope) {
+                if (token_.text == "using" && peek_next().kind == Kind::Identifier && !finally_scope) {
                     actions.push_back(using_telemetry_span()); continue;
                 }
                 if (token_.text == "for" && !finally_scope) {
@@ -3954,11 +4269,17 @@ private:
                     fail("native protected try guard requires a pure nonthrowing bool expression");
                 const bool then_form = accept_keyword_if_header();
                 if (!then_form) require("{");
+                // In a void function `if c then return; fi` is an ordinary conditional
+                // whose arm returns (as in Java); the generic branch below parses
+                // `return;` like any other arm statement. Only value-returning
+                // functions use the scalar guarded-return lowering.
+                if (value.returns_void && token_.text == "return" && peek_next().text != ";")
+                    fail("RETURN_VOID_VALUE: void function cannot return a value");
                 // Preserve the owning-return guard ABI for a single return,
                 // but route a scalar return with alternatives through the
                 // structured CFG so later conditions are evaluated lazily.
                 bool return_has_alternative = false;
-                if (then_form && token_.text == "return") {
+                if (then_form && !value.returns_void && token_.text == "return") {
                     Lexer look = lexer_;
                     std::size_t depth = 0;
                     for (std::size_t scanned = 0; scanned < 4096; ++scanned) {
@@ -3977,9 +4298,7 @@ private:
                         }
                     }
                 }
-                if (!return_has_alternative && accept("return")) {
-                    if (value.returns_void)
-                        fail("guarded early return requires a scalar result");
+                if (!value.returns_void && !return_has_alternative && accept("return")) {
                     if (value.early_returns.size() == 8)
                         fail("native guarded return limit exceeded (8)");
                     GuardedReturn guard;
@@ -4039,7 +4358,7 @@ private:
             }
             if (return_guards_started)
                 fail("native statements cannot follow guarded returns");
-            if (token_.text == "using") {
+            if (token_.text == "using" && peek_next().kind == Kind::Identifier) {
                 if (terminal_try_finally)
                     fail("native telemetry scope inside protected try requires unified unwind proof");
                 value.statements.push_back(using_telemetry_span());
@@ -4341,8 +4660,16 @@ private:
 
     std::unique_ptr<Expression> logical_xor() {
         auto left = logical_and();
-        if (token_.text == "^^")
-            fail("'^^' is reserved and is not AttoLang source syntax; use Xor(a, b)");
+        // The lexer emits adjacent ^^ as one token; single ^ remains invalid.
+        // LLVM's existing LogicalXor lowering is eager and bool-only.
+        while (token_.text == "^^") {
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::LogicalXor, offset);
+            expr->left = std::move(left);
+            expr->right = logical_and();
+            left = std::move(expr);
+        }
         return left;
     }
 
@@ -5658,7 +5985,8 @@ private:
 
     std::unique_ptr<Expression> template_expression(std::string_view source,
                                                     std::size_t base_offset) {
-        Parser nested(source, experimental_owned_int_, experimental_rt_scalar_loop_);
+        Parser nested(source, experimental_owned_int_, experimental_rt_scalar_loop_,
+                      false, unsafe_base_offset_ + base_offset);
         auto expr = nested.expression();
         if (nested.token_.kind != Kind::End)
             nested.fail("expected end of template interpolation expression");
@@ -5975,11 +6303,31 @@ private:
                         throw std::runtime_error(
                             "named native array/member arguments require checked lowering at byte " +
                             std::to_string(expr.offset));
+                // String.contains_literal(String) is a scalar, pure,
+                // length-delimited native operation, never an array handle.
+                if (expr.name == "contains_literal") {
+                    if (!expr.left || expr.arguments.size() != 1)
+                        throw std::runtime_error(
+                            "String.contains_literal requires exactly one String argument at byte " +
+                            std::to_string(expr.offset));
+                    if (validate_scalar_expression(*expr.left, variables, functions, depth + 1)
+                            != ScalarType::String)
+                        throw std::runtime_error(
+                            "String.contains_literal requires a String receiver at byte " +
+                            std::to_string(expr.offset));
+                    if (validate_scalar_expression(*expr.arguments.front(), variables, functions, depth + 1)
+                            != ScalarType::String)
+                        throw std::runtime_error(
+                            "String.contains_literal requires a String needle at byte " +
+                            std::to_string(expr.offset));
+                    return expr.resolved_type = ScalarType::Bool;
+                }
                 std::string receiver;
                 if (expr.left) receiver = native_place_key(*expr.left);
                 const auto element_slot = variables.find(receiver + ".$element");
                 const ScalarType element = element_slot == variables.end() ? ScalarType::I64 : element_slot->second;
-                const std::size_t expected = expr.name == "get" || expr.name == "add"
+                const std::size_t expected = expr.name == "get" ||
+                    expr.name == "get_copy" || expr.name == "add"
                     ? 1 : expr.name == "set" ? 2 : 0;
                 if (expected == 0 || expr.arguments.size() != expected)
                     throw std::runtime_error("native Array<int> effect supports only add(value) or set(index,value); scalar expression supports only get(index) at byte " +
@@ -5988,7 +6336,8 @@ private:
                     const auto& argument = expr.arguments[i];
                     const ScalarType actual = validate_scalar_expression(
                         *argument, variables, functions, depth + 1);
-                    const bool index = (expr.name == "get" || expr.name == "set") && i == 0;
+                    const bool index = (expr.name == "get" ||
+                        expr.name == "get_copy" || expr.name == "set") && i == 0;
                     if (actual != (index ? ScalarType::I64 : element))
                         throw std::runtime_error(std::string(element == ScalarType::I64
                             ? "native Array<int> arguments require int, got "
@@ -5996,6 +6345,13 @@ private:
                             std::string(scalar_type_name(actual)) + " at byte " +
                             std::to_string(argument->offset));
                 }
+                // A checked Copy read is an opaque tagged Option<int> sum
+                // with i64 ABI handle. The sum resolver proves the element
+                // kind; it must never become an untagged raw int alias.
+                if (expr.name == "get_copy" &&
+                    (element != ScalarType::I64 || expr.sum_type != "Option<int>"))
+                    throw std::runtime_error(
+                        "native Array.get_copy requires proven Copy<int> and Option<int> sum lowering");
                 return expr.resolved_type = expr.name == "get" ? element : ScalarType::I64;
             }
             case Expression::Kind::RecordConstruct:
@@ -7416,6 +7772,7 @@ private:
     std::string_view source_;
     Lexer lexer_;
     Token token_;
+    std::size_t unsafe_base_offset_ = 0;
     std::size_t last_token_end_ = 0;
     std::unordered_set<std::string> module_names_;
     std::unordered_map<std::string, MacroKind> macros_;
@@ -7615,14 +7972,26 @@ Program parse_unresolved_program(std::string_view source, bool experimental_owne
 }
 
 void resolve_and_validate_program(Program& program) {
+    // Narrow standalone two-i64 inverted source only. The independent
+    // verified-MIR pass rejects all other source metadata and effects before
+    // any lowering. The normal function pipeline remains unchanged.
+    if (!program.inverted_structs.empty() || program.inverted_main) {
+        if (program.inverted_structs.size() != 1 || !program.inverted_main)
+            throw std::runtime_error("DOP_INVERTED_BACKEND_UNSUPPORTED: no admitted bounded local main");
+        (void)dop::mir::verify_production_inverted_i64(program);
+        return;
+    }
     // A host-only, parsed namespace AST is not a codegen authorization.
     // Prevent callers of the general validator from taking a parsed v2
     // namespace source around the default frontend's executable gate.
+    // The single admitted exception is the namespace checked-scalar main
+    // slice, re-proved here from the AST rather than trusted from a flag.
     if (!program.namespace_imports.empty() ||
             (!program.namespace_name.empty() &&
                 (!program.functions.empty() || !program.classes.empty() ||
                  !program.actors.empty() || !program.contracts.empty() ||
-                 !program.cooperative_loops.empty() || !program.generators.empty())))
+                 !program.cooperative_loops.empty() || !program.generators.empty()) &&
+                !namespace_checked_scalar_main(program)))
         throw std::runtime_error(
             "NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: verified namespace AST requires typed cross-unit lowering");
     if (!program.imports.empty())
