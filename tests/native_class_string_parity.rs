@@ -235,6 +235,23 @@ fn main() {
     let exact = include_str!("fixtures/native-class-string/main.ores");
     let foo = include_str!("fixtures/native-class-string/main-1.ores");
     let positives = [
+        ("atto-nats-split-literal-empty-tokens",
+         r#"pub fnc main():int{
+            val String subject="orders..created.";
+            val parts=subject.split_literal(".");
+            val String empty="";
+            val empties=empty.split_literal(".");
+            val String nul="a\u0000b";
+            val binary=nul.split_literal("\u0000");
+            val String longsep="a::b::::";
+            val multi=longsep.split_literal("::");
+            return parts.size==4&&parts.get(0)=="orders"&&
+                parts.get(1)==""&&parts.get(2)=="created"&&
+                parts.get(3)==""&&empties.size==1&&empties.get(0)==""&&
+                binary.size==2&&binary.get(0)=="a"&&binary.get(1)=="b"&&
+                multi.size==4&&multi.get(0)=="a"&&multi.get(1)=="b"&&
+                multi.get(2)==""&&multi.get(3)==""?0:1;
+         }"#, ""),
         ("ordered-array-moves-through-owning-return", "define class Box as pub val Array<int> values;end fnc touch():void{return;}fnc build():Box{touch();val Array<int> values=new Array<int>();values.add(42);return new Box(values);}pub fnc main():int{val Box box=build();return box.values.get(0)==42?0:1;}", ""),
         ("ordered-array-sibling-scopes", "fnc touch():void{return;}pub fnc main():int{touch();if true;then val Array<int> values=new Array<int>();values.add(1);fi if true;then val Array<String> values=new Array<String>();values.add(\"ok\");if values.get(0)!=\"ok\";then return 1;fi fi return 0;}", ""),
         ("ordered-record-array-loop", "define class EntryValue as pub val int value;end fnc touch():void{return;}pub fnc main():int{touch();let int total=0;for(let int i=0;i<100;i=i+1){val Array<EntryValue> values=new Array<EntryValue>();values.add(new EntryValue(i));val EntryValue entry=values.get(0);total=total+entry.value;}return total==4950?0:1;}", ""),
@@ -723,6 +740,7 @@ fn main() {
             .arg(PathBuf::from(&runtime).parent().unwrap().parent().unwrap().parent().unwrap())
             .arg(&runtime)
             .arg(PathBuf::from(&runtime).parent().unwrap().join("NativeIntArrayRegion.c"))
+            .arg(PathBuf::from(&runtime).parent().unwrap().join("NativeStringSplit.c"))
             .arg(PathBuf::from(&runtime).parent().unwrap().join("NativeRecordRegion.c"))
             .arg("-pthread")
             .arg("-o")
@@ -994,6 +1012,13 @@ fn main() {
         ("string-record-private-field", "define class Segment as val String value; end pub fnc main():int{val Segment s=new Segment(\"secret\");return s.value==\"secret\"?0:1;}".to_owned(), foo.to_owned()),
         ("string-record-final-field-write", "define class Segment as pub val String value; end pub fnc main():int{let mut Segment s=new Segment(\"first\");s.value=\"other\";return 0;}".to_owned(), foo.to_owned()),
         ("string-record-untyped-handle-return", "define class Segment as pub val String value; end pub fnc main():int{val Segment s=new Segment(\"first\");return s.value;}".to_owned(), foo.to_owned()),
+        ("atto-nats-split-int-receiver", "pub fnc main():int{val int subject=42;val parts=subject.split_literal(\".\");return 0;}".to_owned(), foo.to_owned()),
+        ("atto-nats-split-int-delimiter", "pub fnc main():int{val String subject=\"a.b\";val parts=subject.split_literal(42);return 0;}".to_owned(), foo.to_owned()),
+        ("atto-nats-split-wrong-arity", "pub fnc main():int{val String subject=\"a.b\";val parts=subject.split_literal(\".\",\"-\");return 0;}".to_owned(), foo.to_owned()),
+        ("atto-nats-split-named-delimiter", "pub fnc main():int{val String subject=\"a.b\";val parts=subject.split_literal(delimiter:\".\");return 0;}".to_owned(), foo.to_owned()),
+        ("atto-nats-split-owner-as-int", "pub fnc main():int{val String subject=\"a.b\";val parts=subject.split_literal(\".\");val int token=parts;return token;}".to_owned(), foo.to_owned()),
+        ("nats-native-string-abi-spoof", "pub fnc ores_string_split_literal():int{return 42;}pub fnc main():int{return ores_string_split_literal();}".to_owned(), foo.to_owned()),
+        ("nats-native-string-containment-abi-spoof", "pub fnc ores_string_contains_literal():int{return 42;}pub fnc main():int{return ores_string_contains_literal();}".to_owned(), foo.to_owned()),
         ("nats-string-contains-int-receiver", "pub routine main():int{val n: int = 42;return n.contains_literal(\"4\")?0:1;}".to_owned(), foo.to_owned()),
         ("nats-string-contains-int-needle", "pub routine main():int{val String s=\"abc\";return s.contains_literal(42)?0:1;}".to_owned(), foo.to_owned()),
         ("nats-string-contains-wrong-arity", "pub routine main():int{val String s=\"abc\";return s.contains_literal(\"a\",\"b\")?0:1;}".to_owned(), foo.to_owned()),

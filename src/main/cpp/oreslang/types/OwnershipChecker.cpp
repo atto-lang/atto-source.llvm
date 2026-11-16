@@ -728,8 +728,22 @@ void validate_i64_ownership(Program& program) {
             entry.assignable = binding.assignable;
             entry.class_name = binding.class_name;
             if (binding.int_array) {
-                if (!binding.owner_mutable || binding.heap_owned || binding.initializer)
+                if (!binding.owner_mutable || binding.heap_owned)
                     throw std::runtime_error("invalid native Array<int> owner");
+                if (binding.initializer) {
+                    const Expression& split = *binding.initializer;
+                    if (binding.array_element_type != ScalarType::String ||
+                            split.kind != Expression::Kind::ArrayCall ||
+                            split.name != "split_literal" ||
+                            !split.left || split.arguments.size() != 1)
+                        throw std::runtime_error(
+                            "ownership violation: only String.split_literal may initialize a native owned array");
+                    // Verify borrowed inputs before creating a new unique
+                    // array owner. The receiver and delimiter stay in the
+                    // same invocation String region until the split finishes.
+                    check_value(*split.left, locals, functions);
+                    check_value(*split.arguments.front(), locals, functions);
+                }
             } else if (binding.name.rfind("$effect", 0) == 0 && binding.initializer &&
                     binding.initializer->kind == Expression::Kind::ArrayCall) {
                 const auto& call = *binding.initializer;
@@ -1020,7 +1034,20 @@ void validate_i64_ownership(Program& program) {
                 if (state.count(local.name))
                     throw std::runtime_error("ownership violation: branch local shadows live owner at byte " +
                         std::to_string(local.offset));
-                if (local.initializer) check_value(*local.initializer, state, functions);
+                if (local.int_array && local.initializer) {
+                    const Expression& split = *local.initializer;
+                    if (local.array_element_type != ScalarType::String ||
+                            split.kind != Expression::Kind::ArrayCall ||
+                            split.name != "split_literal" ||
+                            !split.left || split.arguments.size() != 1 ||
+                            !local.owner_mutable)
+                        throw std::runtime_error(
+                            "ownership violation: scoped array initializer must be checked String.split_literal");
+                    check_value(*split.left, state, functions);
+                    check_value(*split.arguments.front(), state, functions);
+                } else if (local.initializer) {
+                    check_value(*local.initializer, state, functions);
+                }
                 state.emplace(local.name, scoped_entry(local));
                 return;
             }
