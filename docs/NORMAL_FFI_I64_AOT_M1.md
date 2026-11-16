@@ -41,3 +41,26 @@ The binder is a fixed, reviewed external C symbol atto_add_i64(int64_t,int64_t):
 4. Extend the scalar ABI to canonical bool and f64 then value/copy-only buffers. Re-run exact-source sanitizer suites, explicit native 32-bit when available, and cross-backend conformance.
 
 Previous M0: static ffi-i64 C adapter proof in PR #22. M1 source branch/CI receipts live in the draft PR description and are not a substitute for a signed production authority.
+
+## Security hardening audit, November 16
+
+The normal FFI admission now refuses an asynchronous extern (it has no
+scheduler-owned foreign continuation and must not become an internal-only LLVM
+declaration), and refuses to combine the FFI grant with the experimental
+Pointer<int> AOT fast path. That fast path previously returned before the
+normal FFI grant validation. The grant can no longer act as unused ambient
+authority: it requires exactly one authorized extern declaration and one
+effect-qualified main that immediately consumes the approved call. Extra
+helpers, unused declarations, duplicate declarations and other profiles are
+denied before any IR escapes to stdout.
+
+The checked int64 addition preflight uses portable signed-i64 comparisons
+rather than compiler-specific __int128 arithmetic, so the admission logic
+does not itself require a 128-bit C++ integer type. **No actual 32-bit native
+compiler/guest has been executed yet.** Negative tests include an otherwise
+valid Pointer<int> source compiled with the forbidden FFI grant, asynchronous
+foreign declarations, unused/colliding grants and malformed call graphs.
+
+The linker authority remains a test-only compile-time grant. Without a signed
+artifact hash/production flag parser or supervisor actor admission the build
+must not be represented as authenticated foreign code execution.
