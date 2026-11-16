@@ -264,7 +264,7 @@ def main():
          "TYPE_ALIAS_UNKNOWN_TARGET"),
         ("bool alias cannot bypass borrow rule",
          "declare type Flag = bool;\n"
-         "fnc unsafe(borrow Flag value): int { return value; }\n" + main_fn,
+         "fnc unchecked_flag(borrow Flag value): int { return value; }\n" + main_fn,
          "native bool borrow ABI"),
     ])
     with tempfile.TemporaryDirectory(prefix="ores-native-typeonly-") as root:
