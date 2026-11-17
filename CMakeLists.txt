@@ -2490,6 +2490,27 @@ if(BUILD_TESTING)
         set_tests_properties(native_verified_namespace_real_parser_v2_host_only
             PROPERTIES TIMEOUT 30)
 
+        # Compiles the actual native Parser.cpp and applies the existing
+        # ownership validator; the source spelling fixture is not AOT proof.
+        add_executable(oreslang-native-ownership-bang-aliases-test
+            tests/native_ownership_bang_aliases_test.cpp
+            src/main/cpp/oreslang/frontend/Parser.cpp
+            src/main/cpp/oreslang/frontend/MethodResolver.cpp
+            src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+            src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+        target_include_directories(oreslang-native-ownership-bang-aliases-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+            "${LLVM_INCLUDE_DIRS}")
+        target_link_libraries(oreslang-native-ownership-bang-aliases-test PRIVATE
+            OpenSSL::Crypto ${ORE_LLVM_LIBS})
+        target_compile_options(oreslang-native-ownership-bang-aliases-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+        add_test(NAME native_ownership_bang_aliases_parser_and_checker
+            COMMAND oreslang-native-ownership-bang-aliases-test
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/ownership-bang-v1")
+        set_tests_properties(native_ownership_bang_aliases_parser_and_checker
+            PROPERTIES TIMEOUT 30)
+
         add_executable(oreslang-messagepack-wire-v2-test
             tests/messagepack_wire_v2_test.cpp)
         target_include_directories(oreslang-messagepack-wire-v2-test PRIVATE
@@ -5142,6 +5163,103 @@ if(BUILD_TESTING)
 
     # Native i64 is a Copy value: rt copy/rt share are scalar value copies,
     # while rt take invalidates named scalar binding until function exit.
+    # Actual source-compiled, Clang-linked native .atto guest executions.
+    # These are executable gates (not parser-only smoke tests) and reuse the
+    # existing compiler-owned contract harness / exact-tree CI configuration.
+    oreslang_contract_test(native_ownership_bang_copy_compact_guest
+        ownership-bang-v1/copy-compact-native.atto
+        --run 42 --clang "${ORE_CLANG}")
+    oreslang_contract_test(native_ownership_bang_copy_spaced_guest
+        ownership-bang-v1/copy-spaced-native.atto
+        --run 42 --clang "${ORE_CLANG}")
+    oreslang_contract_test(native_ownership_bang_take_guest
+        ownership-bang-v1/take-native.atto
+        --run 42 --clang "${ORE_CLANG}")
+    oreslang_contract_test(native_ownership_bang_share_guest
+        ownership-bang-v1/share-native.atto
+        --run 42 --clang "${ORE_CLANG}")
+    oreslang_contract_test(native_ownership_bang_borrow_call_guest
+        ownership-bang-v1/borrow-call-accept.atto
+        --run 42 --clang "${ORE_CLANG}")
+
+    # Optimization is an ABI/ownership-sensitive boundary: require both
+    # unoptimized and optimized real native runs (not just IR shape tests).
+    foreach(mode IN ITEMS 0 2)
+        oreslang_contract_test(native_ownership_bang_copy_compact_O${mode}
+            ownership-bang-v1/copy-compact-native.atto
+            --run 42 --clang "${ORE_CLANG}" --opt-level "${mode}")
+        oreslang_contract_test(native_ownership_bang_copy_spaced_O${mode}
+            ownership-bang-v1/copy-spaced-native.atto
+            --run 42 --clang "${ORE_CLANG}" --opt-level "${mode}")
+        oreslang_contract_test(native_ownership_bang_take_O${mode}
+            ownership-bang-v1/take-native.atto
+            --run 42 --clang "${ORE_CLANG}" --opt-level "${mode}")
+        oreslang_contract_test(native_ownership_bang_share_O${mode}
+            ownership-bang-v1/share-native.atto
+            --run 42 --clang "${ORE_CLANG}" --opt-level "${mode}")
+        oreslang_contract_test(native_ownership_bang_borrow_call_O${mode}
+            ownership-bang-v1/borrow-call-accept.atto
+            --run 42 --clang "${ORE_CLANG}" --opt-level "${mode}")
+    endforeach()
+
+    # This checks that Clang can execute and link its sanitizer runtimes
+    # with LLVM IR. It does NOT prove ASan/UBSan actually instruments
+    # pre-generated Oreslang IR; that requires separate audited IR passes.
+    oreslang_contract_test(native_ownership_bang_take_sanitizer_runtime_smoke
+        ownership-bang-v1/take-native.atto --run 42
+        --clang "${ORE_CLANG}" --opt-level 1 --sanitizer-runtime-smoke)
+    oreslang_contract_test(native_ownership_bang_borrow_sanitizer_runtime_smoke
+        ownership-bang-v1/borrow-call-accept.atto --run 42
+        --clang "${ORE_CLANG}" --opt-level 1 --sanitizer-runtime-smoke)
+    # Unsafe ownership sources must fail with compiler diagnostics and no IR.
+    oreslang_contract_test(native_ownership_bang_use_after_move_reject
+        ownership-bang-v1/take-after-use-reject.atto
+        --diagnostic "use of explicitly moved int")
+    oreslang_contract_test(native_ownership_bang_escaping_borrow_reject
+        ownership-bang-v1/borrow-escape-reject.atto
+        --diagnostic "borrowed reference may only be passed")
+    oreslang_contract_test(native_ownership_bang_share_class_reject
+        ownership-bang-v1/share-class-reject.atto
+        --diagnostic "class is non-Copy")
+
+    # A selected -R bang guest must not skip its reviewed .atto Git blob
+    # verifier. CTest fixtures automatically pull the setup test into the
+    # selection and order it before compiler execution, including -j runs.
+    # The parser checker needs the Linux OpenSSL host block; where it is
+    # unavailable the guests are registered DISABLED (reported "Not Run
+    # (Disabled)"), never silently run against unpinned source fixtures.
+    if(TEST native_ownership_bang_aliases_parser_and_checker)
+        set_tests_properties(native_ownership_bang_aliases_parser_and_checker
+            PROPERTIES FIXTURES_SETUP native_ownership_bang_git_pins)
+        set(_ownership_bang_pins_available ON)
+    else()
+        set(_ownership_bang_pins_available OFF)
+    endif()
+    set(_ownership_bang_contracts
+        native_ownership_bang_copy_compact_guest
+        native_ownership_bang_copy_spaced_guest
+        native_ownership_bang_take_guest
+        native_ownership_bang_share_guest
+        native_ownership_bang_borrow_call_guest
+        native_ownership_bang_take_sanitizer_runtime_smoke
+        native_ownership_bang_borrow_sanitizer_runtime_smoke
+        native_ownership_bang_use_after_move_reject
+        native_ownership_bang_escaping_borrow_reject
+        native_ownership_bang_share_class_reject)
+    foreach(mode IN ITEMS 0 2)
+        list(APPEND _ownership_bang_contracts
+            native_ownership_bang_copy_compact_O${mode}
+            native_ownership_bang_copy_spaced_O${mode}
+            native_ownership_bang_take_O${mode}
+            native_ownership_bang_share_O${mode}
+            native_ownership_bang_borrow_call_O${mode})
+    endforeach()
+    set_tests_properties(${_ownership_bang_contracts}
+        PROPERTIES FIXTURES_REQUIRED native_ownership_bang_git_pins)
+    if(NOT _ownership_bang_pins_available)
+        set_tests_properties(${_ownership_bang_contracts} PROPERTIES DISABLED TRUE)
+    endif()
+
     oreslang_contract_test(native_rt_copy_scalar native-rt-copy-scalar.ores --ir "llvm.sadd.with.overflow.i64" --run 42 --clang "${ORE_CLANG}")
     oreslang_contract_test(native_rt_take_scalar native-rt-take-scalar.ores --ir "llvm.sadd.with.overflow.i64" --run 42 --clang "${ORE_CLANG}")
     oreslang_contract_test(native_rt_share_scalar native-rt-share-scalar.ores --ir "llvm.sadd.with.overflow.i64" --run 42 --clang "${ORE_CLANG}")

@@ -3394,8 +3394,21 @@ private:
             require("=");
 
             bool parenthesized_take = false;
+            bool consume_pipeline_root = false;
             if (accept("rt")) {
                 require("take");
+                consume_pipeline_root = true;
+            } else if (token_.text == "take") {
+                Lexer probe = lexer_;
+                const Token bang = probe.next();
+                if (bang.text == "!" &&
+                        bang.offset == token_.offset + token_.text.size()) {
+                    advance(); // take
+                    require("!");
+                    consume_pipeline_root = true;
+                }
+            }
+            if (consume_pipeline_root) {
                 pipeline.root_consumed = true;
                 parenthesized_take = accept("(");
             }
@@ -3672,8 +3685,19 @@ private:
                     }
                     binding.new_class = true;
                 } else {
-                    require("rt");
-                    require("take");
+                    if (accept("rt")) {
+                        require("take");
+                    } else {
+                        if (token_.text != "take")
+                            fail("native class move requires explicit take! or rt take");
+                        Lexer probe = lexer_;
+                        const Token bang = probe.next();
+                        if (bang.text != "!" ||
+                                bang.offset != token_.offset + token_.text.size())
+                            fail("native class move requires explicit take! or rt take");
+                        advance();
+                        require("!");
+                    }
                     const bool parenthesized = accept("(");
                     binding.move_source = identifier();
                     if (parenthesized) require(")");
@@ -5151,6 +5175,55 @@ private:
             result->trap_origin = true;
             result->arguments.push_back(std::move(payload));
             return result;
+        }
+        // Preferred contextual ownership prefixes lower into the existing
+        // Copy/Take/Borrow/BorrowMut/Share expression kinds and checker.
+        // Only the verb must touch '!'; the operand may be separated by trivia.
+        {
+            bool mutable_borrow = token_.text == "mut";
+            const auto start = token_.offset;
+            std::string operation(token_.text);
+            Lexer probe = lexer_;
+            if (mutable_borrow) {
+                const Token verb = probe.next();
+                operation = std::string(verb.text);
+                if (operation == "borrow") {
+                    const Token marker = probe.next();
+                    if (marker.text == "!" &&
+                            marker.offset == verb.offset + verb.text.size()) {
+                        advance(); // mut
+                        advance(); // borrow
+                        require("!");
+                        if (token_.text == "mut")
+                            fail("duplicate mutable borrow qualifier");
+                        auto result = make_expression(Expression::Kind::BorrowMut, start);
+                        result->left = unary();
+                        return result;
+                    }
+                }
+            } else if (operation == "copy" || operation == "take" ||
+                       operation == "borrow" || operation == "share") {
+                const Token marker = probe.next();
+                if (marker.text == "!" &&
+                        marker.offset == token_.offset + token_.text.size()) {
+                    advance();
+                    require("!");
+                    // Canonical mutable borrowing puts the qualifier after
+                    // the attached bang: borrow! mut value.
+                    const bool canonical_mutable_borrow =
+                            operation == "borrow" && accept("mut");
+                    if (canonical_mutable_borrow && token_.text == "mut")
+                        fail("duplicate mutable borrow qualifier");
+                    auto result = make_expression(
+                        operation == "copy" ? Expression::Kind::Copy :
+                        operation == "take" ? Expression::Kind::Take :
+                        operation == "share" ? Expression::Kind::Share :
+                        canonical_mutable_borrow ? Expression::Kind::BorrowMut :
+                        Expression::Kind::Borrow, start);
+                    result->left = unary();
+                    return result;
+                }
+            }
         }
         if (token_.text == "rt") {
             const auto offset = token_.offset;

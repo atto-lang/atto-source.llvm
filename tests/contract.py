@@ -122,6 +122,13 @@ def main():
     parser.add_argument("--parser-diagnostic", action="store_true")
     parser.add_argument("--run", type=int)
     parser.add_argument("--clang")
+    # Native optimizer and sanitizer matrices require actual Clang execution.
+    # Without --run they must fail, not yield a false-green compile-only gate.
+    parser.add_argument("--opt-level", choices=("0", "1", "2", "3"))
+    # Clang's -fsanitize at a pre-generated IR boundary can link sanitizer
+    # runtimes without adding memory-access instrumentation. This is only an
+    # executable toolchain/link smoke, never ASan/UBSan coverage evidence.
+    parser.add_argument("--sanitizer-runtime-smoke", action="store_true")
     parser.add_argument("--target")
     parser.add_argument("--native-runtime")
     parser.add_argument("--experimental-owned-int", action="store_true")
@@ -145,6 +152,10 @@ def main():
                 "--run requires an OS exit code in [0, 255]")
     require(not (args.no_main_link and args.run is not None),
             "--no-main-link cannot request successful execution")
+    require(args.opt_level is None or (args.run is not None and bool(args.clang)),
+            "--opt-level requires an executable --run and --clang")
+    require(not args.sanitizer_runtime_smoke or (args.run is not None and bool(args.clang)),
+            "--sanitizer-runtime-smoke requires an executable --run and --clang")
     require(args.native_runtime is None or args.run is not None,
             "--native-runtime requires --run")
     require(not args.verify_object or bool(args.clang),
@@ -310,7 +321,13 @@ def main():
             "native executable lacks an i32 main entrypoint wrapper")
     with tempfile.TemporaryDirectory(prefix="oreslang-llvm-test-") as directory:
         executable = str(pathlib.Path(directory) / "guest")
-        clang_cmd = [args.clang, "-x", "ir", "-"]
+        clang_cmd = [args.clang]
+        if args.opt_level is not None:
+            clang_cmd.append("-O" + args.opt_level)
+        if args.sanitizer_runtime_smoke:
+            clang_cmd.extend(["-fsanitize=address,undefined",
+                              "-fno-omit-frame-pointer"])
+        clang_cmd.extend(["-x", "ir", "-"])
         if args.native_runtime:
             native_source = pathlib.Path(args.native_runtime)
             clang_cmd.extend(["-x", "c", str(native_source), "-std=c11",
