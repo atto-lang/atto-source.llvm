@@ -367,6 +367,10 @@ struct Function {
     // First executable source Task slice: one capture-free Task<int> in trusted
     // zero-argument main, submitted before ordinary locals and awaited once.
     std::vector<SourceTaskI64Binding> source_tasks;
+    // Compiler-staged actor-only suspension edge. This is not a runtime
+    // capability or a codegen-ready continuation: LLVM emission MUST deny
+    // any actor carrying this marker until actor-owned frame lowering exists.
+    std::string actor_task_await_name;
     // First executable Future-aware value-pipeline slice. Async producers are
     // compiled as scheduler work; sync unary stages execute on that carrier.
     std::vector<SourceFuturePipelineI64Binding> future_pipelines;

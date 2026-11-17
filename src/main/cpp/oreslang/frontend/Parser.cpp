@@ -2381,9 +2381,11 @@ private:
         // Match the Java frontend's declaration spelling contract. The native
         // actor subset still lowers only on_message(int) and cannot admit
         // arbitrary methods, static fnc members or suspension frames.
-        if (token_.text == "suspend" || token_.text == "suspends") {
+        // Only the plural 'suspends' keyword marks an effectful actor method.
+        // The singular legacy 'suspend' spelling remains deliberately denied.
+        if (token_.text == "suspend")
             fail("native suspends actor method requires continuation lowering");
-        }
+        const bool suspends_actor = accept("suspends");
         // Actor method modifiers have their own admission boundary. Do not
         // allow the fixed-int actor subset to parse these as method names or
         // quietly route a read declaration through the legacy write lane.
@@ -2394,7 +2396,12 @@ private:
             if (accept("method")) fail("static method is invalid; use static fnc");
             fail("native actor static fnc requires separate member lowering");
         }
-        if (!accept("fnc")) accept("method"); // optional method marker
+        if (suspends_actor) {
+            if (!accept("fnc") && !accept("mtd"))
+                fail("ATTO_TASK_E_SUSPENDS_DECL: use 'suspends fnc' or 'suspends mtd'");
+        } else if (!accept("fnc")) {
+            accept("method"); // legacy synchronous actor method marker
+        }
         if (at_unsupported_critical_mode()) {
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
@@ -2412,12 +2419,63 @@ private:
         require("{");
         actor_handler_active_ = true;
         struct HandlerScope { bool& flag; ~HandlerScope() { flag = false; } } handler_scope{actor_handler_active_};
+        if (suspends_actor) {
+            // Staged grammar for ONE capture-free child and an explicit await.
+            // No actor 'self'/field, mutable borrow, method argument or guest
+            // closure can escape into the suspended frame. LLVM emission is
+            // still fail-closed until the native TASK/WAKE continuation is
+            // compiler-wired; this AST must never be interpreted synchronously.
+            SourceTaskI64Binding task;
+            task.offset = token_.offset;
+            if (token_.text != "let" || peek_next().text != "Task")
+                fail("ATTO_TASK_E_ACTOR_TASK_SHAPE: suspends actor requires one Task<int> binding");
+            require("let");
+            require("Task");
+            require("<");
+            require("int");
+            require(">");
+            task.name = identifier();
+            if (task.name == method.parameters.front().name ||
+                    names.count(task.name))
+                fail("ATTO_TASK_E_ACTOR_CAPTURE: Task binding shadows actor state or parameter");
+            require("=");
+            require("task");
+            require("{");
+            require("return");
+            task.result = expression();
+            require(";");
+            require("}");
+            require(";");
+            if (!native_capture_free_task_tree(*task.result))
+                fail("ATTO_TASK_E_ACTOR_CAPTURE: actor Task<int> must be capture-free and scalar");
+            require("return");
+            require("await");
+            const std::string awaited = identifier();
+            if (awaited != task.name)
+                fail("ATTO_TASK_E_ACTOR_TASK_AWAIT: await must consume the exact owned Task<int>");
+            require(";");
+            require("}");
+            task.awaited = true;
+            method.actor_task_await_name = task.name;
+            method.source_tasks.push_back(std::move(task));
+            // A non-null placeholder keeps existing source AST visitors safe.
+            // LLVM's explicit ACTOR_LOWERING_PENDING gate runs BEFORE IR
+            // emission and may not consume this placeholder as a result.
+            method.result = make_expression(Expression::Kind::Integer, method.offset);
+            actor.on_message = std::move(method);
+            if (braced) require("}");
+            else require("end");
+            return actor;
+        }
         // The first compiler-lowered per-message owned value slice is
         // deliberately synchronous and immutable. Handler temporaries are
         // allocated in the existing actor heap and dropped before returning;
         // borrow/take/await need separate lifetime-aware lowering.
         while (token_.text != "return") {
             if (token_.kind == Kind::End || token_.text == "}") fail("actor handler requires return");
+            if (token_.text == "await" ||
+                (token_.text == "let" && peek_next().text == "Task"))
+                fail("ATTO_TASK_E_SUSPENDS_REQUIRED: actor task/await requires suspends fnc or suspends mtd");
             // The legacy capture-free Task<int> bridge uses a synthetic
             // scheduler. It cannot preserve this actor's pool, incarnation,
             // sealed state or physical STOP barrier. Reject at source
@@ -2462,6 +2520,8 @@ private:
             method.actor_field_writes.push_back(std::move(write));
         }
         require("return");
+        if (token_.text == "await")
+            fail("ATTO_TASK_E_SUSPENDS_REQUIRED: await requires suspends fnc or suspends mtd");
         method.result = expression();
         if (!method.locals.empty()) {
             // This slice has one drop epilogue. No taken/moved or borrowed
@@ -7268,6 +7328,26 @@ private:
                 if (!mutables.count(write.field))
                     throw std::runtime_error("cannot assign immutable or unknown actor field '" + write.field + "'");
                 validate_expression(*write.expression, fields, functions);
+            }
+            // Staging the syntax is NOT sufficient to admit a producer.
+            // Re-check its typed, capture-free ownership at the semantic
+            // boundary, independently of the parser's lexical shape guard.
+            if (!method.actor_task_await_name.empty()) {
+                if (method.source_tasks.size() != 1 ||
+                        !method.source_tasks.front().awaited ||
+                        !method.source_tasks.front().result ||
+                        method.source_tasks.front().name !=
+                            method.actor_task_await_name ||
+                        !native_capture_free_task_tree(
+                            *method.source_tasks.front().result))
+                    throw std::runtime_error(
+                        "ATTO_TASK_E_ACTOR_CAPTURE: invalid actor task provenance or capture");
+                const std::unordered_map<std::string, ScalarType> no_captures;
+                if (validate_scalar_expression(
+                        *method.source_tasks.front().result,
+                        no_captures, functions) != ScalarType::I64)
+                    throw std::runtime_error(
+                        "ATTO_TASK_E_ACTOR_TASK_TYPE: Task<int> producer must return int");
             }
             validate_expression(*method.result, fields, functions);
             if (functions.count("oreslang_actor_" + actor.name + "_init") ||
