@@ -64,6 +64,15 @@ POSITIVE = [
                                   "pub fnc main(): int { return choose(false); }\n", 7),
 ]
 NEGATIVE = [
+    # Full explicit suspending-lambda + typed terminal capture is tracked in
+    # LLVM issue #25. The current bounded backend must reject these programs
+    # before IR rather than silently emit a guest with incomplete semantics.
+    ("unlowered_explicit_suspend_lambda_pipeline",
+     "pub suspends fnc main(): int { let Task<int> pending = task { ^ 41; }; "
+     "^ pending |> susp |f| -> await f >> val answer: int; }", None),
+    ("unlowered_guard_caret_suspend_capture",
+     "pub suspends fnc main(): int { let Task<int> pending = task { ^ 41; }; "
+     "guard false { ^ pending |> susp |f| -> await f >> val answer: int; } ^ 0; }", None),
     ("task_future_await_twice",
      "pub suspends fnc main(): int { let Task<int> pending = task { ^ 41; }; "
      "val first: int = await pending; val second: int = await pending; ^ second; }", None),
