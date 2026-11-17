@@ -6503,6 +6503,21 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_actor_carrier_locality_control_priority
         COMMAND oreslang-native-actor-carrier-locality-test)
+    # Carrier affinity window: a carrier prefers the actor it ran last within a
+    # bounded window; exactly-once, per-actor FIFO and exclusivity in every mode.
+    add_executable(oreslang-native-actor-carrier-affinity-test
+        tests/native_actor_carrier_affinity_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-carrier-affinity-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-carrier-affinity-test PRIVATE Threads::Threads)
+    target_compile_definitions(oreslang-native-actor-carrier-affinity-test PRIVATE
+        ORESLANG_NATIVE_SCHED_VALIDATE=1)
+    target_compile_options(oreslang-native-actor-carrier-affinity-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_carrier_affinity
+        COMMAND oreslang-native-actor-carrier-affinity-test)
+    set_tests_properties(native_actor_carrier_affinity PROPERTIES TIMEOUT 60)
     set_tests_properties(native_actor_carrier_locality_control_priority
         PROPERTIES TIMEOUT 30)
 
