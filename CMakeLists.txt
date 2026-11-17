@@ -3234,8 +3234,15 @@ if(BUILD_TESTING)
         scalar-pipeline-type-reject.ores --diagnostic "requires int, got bool")
     oreslang_contract_test(native_scalar_value_pipeline_noncallable
         scalar-pipeline-noncallable-reject.ores --diagnostic "native scalar pipeline stage must be a named function")
+    # Java ValuePipeOperatorTest parity: 128 stages run, 129 fail with java's
+    # diagnostic. Pipeline edges have their own budget (source nesting stays 64).
     oreslang_contract_test(native_scalar_value_pipeline_budget
-        scalar-pipeline-budget-reject.ores --diagnostic "native scalar pipeline exceeds 64 stages")
+        scalar-pipeline-budget-reject.ores --diagnostic "pipeline exceeds 128 stages")
+    oreslang_contract_test(native_scalar_value_pipeline_128_stages_ir
+        scalar-pipeline-128-stages-run.ores --ir "call")
+    oreslang_contract_test(native_scalar_value_pipeline_nested_path_budget
+        scalar-pipeline-nested-path-budget-reject.ores
+        --diagnostic "nested pipelines exceed 128 stages along one native expression path")
     oreslang_contract_test(native_actor_pipe_rejects_untyped_edges
         actor-pipe-untyped-reject.ores --diagnostic "actor pipe expressions require typed roles")
     if(ORE_CLANG)
@@ -3243,6 +3250,8 @@ if(BUILD_TESTING)
             scalar-pipeline-run.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_scalar_value_pipeline_named_runtime
             scalar-pipeline-named-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_scalar_value_pipeline_128_stages_runtime
+            scalar-pipeline-128-stages-run.ores --run 42 --clang "${ORE_CLANG}")
     endif()
     oreslang_contract_test(native_value_match_arm_result
         dispatch-value-match-run.ores --ir "ternary.merge")

@@ -74,6 +74,9 @@ struct Expression {
     // Records a compiler-produced caller-side trap; never collapse this to
     // an ordinary Some constructor without independently proving its operand.
     bool trap_origin = false;
+    // A Call produced by an eager `|>` stage (java CallOrigin.VALUE_PIPE_ARGUMENT):
+    // arguments[0] is the piped value. Pipeline edges have their own depth budget.
+    bool pipeline_stage = false;
 };
 
 // Phase-one native trap supports only total integer-expression structure.
