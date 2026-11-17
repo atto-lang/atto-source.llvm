@@ -31,12 +31,6 @@ def program(guard, value=42):
     return "pub fnc main(): int {\n" + guard + "\n return " + str(value) + ";\n}\n"
 
 POSITIVE = [
-    ("caret_task_await_guard_fallthrough",
-     "pub suspends fnc main(): int { let Task<int> pending = task { ^ 41; }; "
-     "val answer: int = await pending; guard answer > 0 { ^ -1; } ^ answer + 1; }", 42),
-    ("caret_task_await_guard_failure_returns",
-     "pub suspends fnc main(): int { let Task<int> pending = task { ^ 41; }; "
-     "val answer: int = await pending; guard answer < 0 { ^ -1; } ^ answer; }", -1),
     ("caret_return_statement", "pub fnc main(): int { ^ 42; }", 42),
     ("caret_guard_false_exits", program("guard false { ^ 7; }"), 7),
     ("caret_guard_true_falls_through", "pub fnc main(): int { guard true { ^ 7; } ^ 42; }", 42),
@@ -64,18 +58,29 @@ POSITIVE = [
                                   "pub fnc main(): int { return choose(false); }\n", 7),
 ]
 NEGATIVE = [
+    # Native suspended main/task lowering is not yet implemented. These
+    # formerly positive fixtures must reject with the precise gate diagnostic,
+    # rather than masquerade as compiled Task/await parity.
+    ("caret_task_await_guard_fallthrough_not_yet_admitted",
+     "pub suspends fnc main(): int { let Task<int> pending = task { ^ 41; }; "
+     "val answer: int = await pending; guard answer > 0 { ^ -1; } ^ answer + 1; }",
+     "suspension-aware borrow checking"),
+    ("caret_task_await_guard_failure_not_yet_admitted",
+     "pub suspends fnc main(): int { let Task<int> pending = task { ^ 41; }; "
+     "val answer: int = await pending; guard answer < 0 { ^ -1; } ^ answer; }",
+     "suspension-aware borrow checking"),
     # Full explicit suspending-lambda + typed terminal capture is tracked in
     # LLVM issue #25. The current bounded backend must reject these programs
     # before IR rather than silently emit a guest with incomplete semantics.
     ("unlowered_explicit_suspend_lambda_pipeline",
      "pub suspends fnc main(): int { let Task<int> pending = task { ^ 41; }; "
-     "^ pending |> susp |f| -> await f >> val answer: int; }", None),
+     "^ pending |> susp |f| -> await f >> val answer: int; }", "suspension-aware borrow checking"),
     ("unlowered_guard_caret_suspend_capture",
      "pub suspends fnc main(): int { let Task<int> pending = task { ^ 41; }; "
-     "guard false { ^ pending |> susp |f| -> await f >> val answer: int; } ^ 0; }", None),
-    ("task_future_await_twice",
+     "guard false { ^ pending |> susp |f| -> await f >> val answer: int; } ^ 0; }", "suspension-aware borrow checking"),
+    ("task_future_await_twice_not_yet_admitted",
      "pub suspends fnc main(): int { let Task<int> pending = task { ^ 41; }; "
-     "val first: int = await pending; val second: int = await pending; ^ second; }", None),
+     "val first: int = await pending; val second: int = await pending; ^ second; }", "suspension-aware borrow checking"),
     ("caret_infix_cannot_xor", "pub fnc main(): int { ^ 41 ^ 1; }", None),
     ("caret_cannot_be_expression", "pub fnc main(): int { return ^ 42; }", None),
     ("double_caret_cannot_return", "pub fnc main(): int { ^^ 42; }", None),
