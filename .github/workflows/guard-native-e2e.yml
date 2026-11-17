@@ -19,6 +19,8 @@ jobs:
       ATTO_GUARD_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       LLVM_DIR: /usr/lib/llvm-18/lib/cmake/llvm
     steps:
+      - name: Prove negative-compiler artifact gate fails closed (host-only)
+        run: python3 tests/test_guard_artifact_evidence.py -v
       - name: Checkout exact review HEAD with original ancestor; no credentials
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
