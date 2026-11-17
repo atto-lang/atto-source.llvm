@@ -29,6 +29,12 @@ def program(guard, value=42):
     return "pub fnc main(): int {\n" + guard + "\n return " + str(value) + ";\n}\n"
 
 POSITIVE = [
+    ("caret_task_await_guard_fallthrough",
+     "pub suspends fnc main(): int { let Task<int> pending = task { ^ 41; }; "
+     "val answer: int = await pending; guard answer > 0 { ^ -1; } ^ answer + 1; }", 42),
+    ("caret_task_await_guard_failure_returns",
+     "pub suspends fnc main(): int { let Task<int> pending = task { ^ 41; }; "
+     "val answer: int = await pending; guard answer < 0 { ^ -1; } ^ answer; }", -1),
     ("caret_return_statement", "pub fnc main(): int { ^ 42; }", 42),
     ("caret_guard_false_exits", program("guard false { ^ 7; }"), 7),
     ("caret_guard_true_falls_through", "pub fnc main(): int { guard true { ^ 7; } ^ 42; }", 42),
@@ -56,6 +62,9 @@ POSITIVE = [
                                   "pub fnc main(): int { return choose(false); }\n", 7),
 ]
 NEGATIVE = [
+    ("task_future_await_twice",
+     "pub suspends fnc main(): int { let Task<int> pending = task { ^ 41; }; "
+     "val first: int = await pending; val second: int = await pending; ^ second; }", None),
     ("caret_infix_cannot_xor", "pub fnc main(): int { ^ 41 ^ 1; }", None),
     ("caret_cannot_be_expression", "pub fnc main(): int { return ^ 42; }", None),
     ("double_caret_cannot_return", "pub fnc main(): int { ^^ 42; }", None),
