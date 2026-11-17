@@ -1,0 +1,39 @@
+name: Atto self-hosted bootstrap seed (host model only)
+
+on:
+  pull_request:
+    paths:
+      - "bootstrap/atto-self-hosted/**"
+      - ".github/workflows/atto-self-hosted-seed.yml"
+  push:
+    paths:
+      - "bootstrap/atto-self-hosted/**"
+      - ".github/workflows/atto-self-hosted-seed.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  host-model:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out exact submitted tree
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Print source identity and compiler version
+        run: |
+          git rev-parse HEAD
+          git rev-parse HEAD^{tree}
+          rustc --version
+      - name: Execute Rust-only reference vectors
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --edition 2021 --test \
+            bootstrap/atto-self-hosted/tests/scalar_seed_model.rs \
+            -o "$RUNNER_TEMP/atto-seed-model"
+          "$RUNNER_TEMP/atto-seed-model"
+
+# Deliberately DOES NOT certify Atto guest execution or self-hosting.
+# Native .atto source admission and Stage 1/2/3 must be verified separately.
