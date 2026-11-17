@@ -430,13 +430,62 @@ std::unique_ptr<Expression> make_expression(Expression::Kind kind,
     return result;
 }
 
+// Source nesting (parser recursion and non-pipeline AST edges) stays at 64.
+// Java-compatible value pipelines add one AST level per stage without any
+// parser recursion; java main admits 128 stages ("pipeline exceeds 128
+// stages"). Pipeline edges therefore have their own budget, and recursive
+// semantic/codegen walks are bounded by the sum of both budgets.
 inline constexpr std::size_t kMaxNativeExpressionDepth = 64;
+inline constexpr std::size_t kMaxNativePipelineStages = 128;
+inline constexpr std::size_t kMaxNativeExpressionTreeDepth =
+        kMaxNativeExpressionDepth + kMaxNativePipelineStages;
 
-inline void require_expression_depth(std::size_t depth, std::size_t offset) {
-    if (depth > kMaxNativeExpressionDepth) {
+// Two-counter budget: `nesting` counts nodes reached through ordinary edges
+// (the root counts as 1), `piped` counts edges from a |> stage call to its
+// piped first argument along the current path. Recursion is bounded by
+// nesting + piped <= kMaxNativeExpressionTreeDepth.
+inline void require_expression_budget(const Expression& expr,
+                                      std::size_t nesting,
+                                      std::size_t piped) {
+    if (nesting > kMaxNativeExpressionDepth) {
         throw std::runtime_error(
             "native expression nesting limit exceeded (64) at byte " +
-            std::to_string(offset));
+            std::to_string(expr.offset));
+    }
+    if (piped > kMaxNativePipelineStages) {
+        throw std::runtime_error(
+            "nested pipelines exceed 128 stages along one native expression "
+            "path at byte " + std::to_string(expr.offset));
+    }
+    auto ordinary = [&](const std::unique_ptr<Expression>& child) {
+        if (child) require_expression_budget(*child, nesting + 1, piped);
+    };
+    ordinary(expr.left);
+    ordinary(expr.right);
+    ordinary(expr.condition);
+    ordinary(expr.condition_lhs);
+    ordinary(expr.condition_rhs);
+    ordinary(expr.when_true);
+    ordinary(expr.when_false);
+    for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
+        if (!expr.arguments[i]) continue;
+        if (i == 0 && expr.pipeline_stage)
+            require_expression_budget(*expr.arguments[i], nesting, piped + 1);
+        else
+            require_expression_budget(*expr.arguments[i], nesting + 1, piped);
+    }
+}
+
+// Every recursive walk calls this at each node. Entering a walk (depth 1)
+// checks the precise nesting/pipeline budget of the whole subtree once;
+// deeper nodes only re-check the combined stack ceiling.
+inline void require_expression_depth(std::size_t depth, const Expression& expr) {
+    if (depth == 1) require_expression_budget(expr, 1, 0);
+    if (depth > kMaxNativeExpressionTreeDepth) {
+        throw std::runtime_error(
+            "native expression tree depth limit exceeded (" +
+            std::to_string(kMaxNativeExpressionTreeDepth) + ") at byte " +
+            std::to_string(expr.offset));
     }
 }
 
@@ -454,7 +503,7 @@ bool nonthrowing_protected_read(const Expression& expr) {
 // Arithmetic over checked scalar reads is nonthrowing. Never admit
 // general calls, array mutations, ownership transfers, or suspension.
 bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
-    require_expression_depth(depth, expr.offset);
+    require_expression_depth(depth, expr);
     if (nonthrowing_protected_read(expr)) return true;
     if (expr.kind == Expression::Kind::Negate ||
             expr.kind == Expression::Kind::LogicalNot)
@@ -538,7 +587,7 @@ bool native_scalar_loop_body(const std::vector<Statement>& body,
 std::optional<std::int64_t> native_const_integer_value(
         const Expression& expr, const std::vector<LocalBinding>& known,
         std::size_t depth = 1) {
-    require_expression_depth(depth, expr.offset);
+    require_expression_depth(depth, expr);
     using K = Expression::Kind;
     if (expr.kind == K::Integer) return expr.integer;
     if (expr.kind == K::Variable) {
@@ -579,7 +628,7 @@ std::optional<std::int64_t> native_const_integer_value(
 bool native_const_scalar_tree(
         const Expression& expr, const std::vector<LocalBinding>& known,
         std::size_t depth = 1) {
-    require_expression_depth(depth, expr.offset);
+    require_expression_depth(depth, expr);
     using K = Expression::Kind;
     if (expr.kind == K::Integer || expr.kind == K::Boolean ||
             expr.kind == K::String) return true;
@@ -613,7 +662,7 @@ bool native_const_scalar_tree(
 
 bool native_capture_free_task_tree(
         const Expression& expr, std::size_t depth = 1) {
-    require_expression_depth(depth, expr.offset);
+    require_expression_depth(depth, expr);
     using K = Expression::Kind;
     if (expr.kind == K::Integer || expr.kind == K::Boolean) return true;
     if ((expr.kind == K::Negate || expr.kind == K::LogicalNot) && expr.left)
@@ -646,7 +695,7 @@ bool native_async_i64_tree(
         const Expression& expr,
         const std::string* allowed_parameter,
         std::size_t depth = 1) {
-    require_expression_depth(depth, expr.offset);
+    require_expression_depth(depth, expr);
     using K = Expression::Kind;
     if (expr.kind == K::Integer || expr.kind == K::Boolean) return true;
     if (expr.kind == K::Variable)
@@ -704,7 +753,7 @@ using NativeSignatures = std::unordered_map<
 // explicitly typed scalar parameters, never arbitrary fields or operations.
 bool native_constructor_scalar_tree(const Expression& expr,
                                     std::size_t depth = 1) {
-    require_expression_depth(depth, expr.offset);
+    require_expression_depth(depth, expr);
     using Kind = Expression::Kind;
     if (expr.kind == Kind::Integer || expr.kind == Kind::Boolean || expr.kind == Kind::String ||
             expr.kind == Kind::Variable) return true;
@@ -751,6 +800,7 @@ std::unique_ptr<Expression> clone_native_expression(const Expression& source) {
     result->type_arguments = source.type_arguments;
     result->type_arguments_present = source.type_arguments_present;
     result->sum_type = source.sum_type;
+    result->pipeline_stage = source.pipeline_stage;
     auto clone = [](const std::unique_ptr<Expression>& value) {
         return value ? clone_native_expression(*value) : nullptr;
     };
@@ -4855,8 +4905,8 @@ private:
         auto value = conditional();
         std::size_t stages = 0;
         while (accept("|>")) {
-            if (++stages > kMaxNativeExpressionDepth)
-                fail("native scalar pipeline exceeds 64 stages");
+            if (++stages > kMaxNativePipelineStages)
+                fail("pipeline exceeds 128 stages");
             auto stage = primary();
             if (stage->kind != Expression::Kind::Variable &&
                     stage->kind != Expression::Kind::Call)
@@ -4864,6 +4914,7 @@ private:
             // Existing function validation checks arity, names, types,
             // generics and effects. Evaluate the incoming value once.
             stage->kind = Expression::Kind::Call;
+            stage->pipeline_stage = true;
             stage->arguments.insert(stage->arguments.begin(), std::move(value));
             stage->argument_names.insert(stage->argument_names.begin(), "");
             value = std::move(stage);
@@ -6430,7 +6481,7 @@ private:
                                     const std::unordered_set<std::string>& parameters,
                                     const NativeSignatures& functions,
                                     std::size_t depth = 1) {
-        require_expression_depth(depth, expr.offset);
+        require_expression_depth(depth, expr);
         switch (expr.kind) {
             case Expression::Kind::Integer:
             case Expression::Kind::Boolean:
@@ -6621,7 +6672,7 @@ private:
             const std::unordered_map<std::string, ScalarType>& variables,
             const NativeSignatures& functions,
             std::size_t depth = 1) {
-        require_expression_depth(depth, expr.offset);
+        require_expression_depth(depth, expr);
         auto require_type = [&](ScalarType actual, ScalarType expected, std::string_view where) {
             if (actual != expected)
                 throw std::runtime_error(std::string(where) + " requires " +
@@ -6897,7 +6948,7 @@ private:
     static bool contains_callable_invocation(
             const Expression* expr, std::size_t depth = 1) {
         if (!expr) return false;
-        require_expression_depth(depth, expr->offset);
+        require_expression_depth(depth, *expr);
         if (expr->kind == Expression::Kind::SumConstruct || expr->kind == Expression::Kind::SumAccess || expr->kind == Expression::Kind::RecordConstruct || expr->kind == Expression::Kind::Call ||
             expr->kind == Expression::Kind::ArrayCall) return true;
         if (contains_callable_invocation(expr->left.get(), depth + 1) ||
