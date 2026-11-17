@@ -427,6 +427,14 @@ if(ORESLANG_PROXY_SLAB_HOST_ONLY)
         tests/native_actor_proxy_request_slab_owner_test.cpp
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c
         src/main/cpp/oreslang/runtime/ActorArena.c)
+    # Runnable native TASK bridge gate without LLVM development libraries.
+    # This is real host scheduling and STOP cleanup, NOT .atto guest parity.
+    oreslang_proxy_host_ctest(oreslang-native-vm-actor-task-bridge-test
+        native_vm_actor_task_bridge_host_only 40
+        tests/native_vm_actor_task_bridge_test.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
     oreslang_proxy_host_ctest(oreslang-native-proxy-transport-gate-test
         native_proxy_transport_callback_gate_races 20
         tests/native_proxy_transport_gate_test.cpp)
@@ -5091,6 +5099,24 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-task-pool-affinity-test)
     set_tests_properties(native_actor_task_pool_affinity_host_only
         PROPERTIES TIMEOUT 40)
+
+    # VM-to-scheduler integration for actor-owned TASK turns. This executes
+    # real C callbacks on native carriers; compiler-generated .atto continuations
+    # require a separate executable guest acceptance gate.
+    add_executable(oreslang-native-vm-actor-task-bridge-test
+        tests/native_vm_actor_task_bridge_test.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-vm-actor-task-bridge-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-vm-actor-task-bridge-test PRIVATE c_std_11)
+    target_compile_options(oreslang-native-vm-actor-task-bridge-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-vm-actor-task-bridge-test PRIVATE Threads::Threads)
+    add_test(NAME native_vm_actor_task_bridge_host_only
+        COMMAND oreslang-native-vm-actor-task-bridge-test)
+    set_tests_properties(native_vm_actor_task_bridge_host_only PROPERTIES TIMEOUT 40)
 
     set(ORE_SOURCE_TASK_E2E
         "${CMAKE_CURRENT_BINARY_DIR}/oreslang-source-task-i64-e2e")

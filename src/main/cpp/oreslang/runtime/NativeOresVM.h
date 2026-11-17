@@ -46,12 +46,29 @@ typedef struct {
     OresNativeActorWakeFn domains[ORES_NATIVE_VM_DOMAIN_COUNT];
 } OresNativeVMWakeConfig;
 
+/* ABI-separate actor TASK callback configuration. This does not extend the
+ * legacy per-domain config struct or create a foreign physical task pool.
+ * Both callbacks are mandatory for a domain; canceled queued handles must
+ * receive cleanup on its actor's carrier, never guest TASK execution. */
+typedef struct {
+    OresNativeActorTaskFn on_task[ORES_NATIVE_VM_DOMAIN_COUNT];
+    OresNativeActorTaskFn on_task_cancel[ORES_NATIVE_VM_DOMAIN_COUNT];
+} OresNativeVMTaskConfig;
+
 typedef struct OresNativeVM OresNativeVM;
 OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config);
 /* Opt-in wake-capable VM construction for continuation/NIO runtimes. Existing
  * ores_native_vm_open() remains wake-free and ABI-compatible. */
 OresNativeVM* ores_native_vm_open_with_wakes(
     const OresNativeVMConfig* config, const OresNativeVMWakeConfig* wakes);
+/* Opt-in, compiler/runtime-internal TASK lane. No source guest is admitted by
+ * these constructors alone. Callbacks run inside the existing actor domain,
+ * with the exact single-writer physical turn and incarnation identity. */
+OresNativeVM* ores_native_vm_open_with_tasks(
+    const OresNativeVMConfig* config, const OresNativeVMTaskConfig* tasks);
+OresNativeVM* ores_native_vm_open_with_wakes_and_tasks(
+    const OresNativeVMConfig* config, const OresNativeVMWakeConfig* wakes,
+    const OresNativeVMTaskConfig* tasks);
 /* RT bootstrap: prestart every configured carrier in all four domains before
  * exposing the VM to guest work. No carrier will be created on its DATA or
  * CONTROL hot path thereafter. Unlike normal open(), this starts pthreads.
@@ -124,6 +141,13 @@ int ores_native_vm_publish_supervised_failure(
 OresNativeSendStatus ores_native_vm_try_send(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorRef actor, uint64_t payload);
+/* Trusted physical actor-turn admission only, never external Future producer,
+ * CONTROL, root caller or another actor/domain. The opaque nonzero handle must
+ * already be owned by the calling actor and remains runtime-managed until its
+ * task or cancellation callback completes. Never expose as a guest syscall. */
+OresNativeTaskAdmissionStatus ores_native_vm_try_schedule_task(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef actor, uint64_t task_handle);
 /* Reject supervisor stop until all its registered direct children have
  * drained AND their terminal notices have been admitted to priority CONTROL.
  * VM-wide retirement still drains previously accepted actor work, but it
