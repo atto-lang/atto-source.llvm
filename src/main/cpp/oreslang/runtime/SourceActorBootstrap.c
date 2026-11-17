@@ -93,6 +93,12 @@ static SourceActorGroup group = {
 static uint64_t next_actor_id = UINT64_C(4100);
 static _Thread_local OresNativeExecutionHandle current_source_execution;
 
+/* Defined below; the test hooks in the next block call them first. C99 and
+ * later reject implicit declarations (an error in clang 16+). */
+static void ensure(int condition);
+static void group_lock(void);
+static void group_unlock(void);
+
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
 static atomic_int test_hold_initialization;
 static atomic_int test_initialization_entered;
