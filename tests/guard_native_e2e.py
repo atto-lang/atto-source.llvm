@@ -100,10 +100,17 @@ class ActualNativeGuard(unittest.TestCase):
         cls.workspace.cleanup()
     def compile(self, case, source):
         self.assertLess(len(source.encode()),4096)
-        path=self.work/(case+".atto")
+        # Isolate every compiler invocation. Negative cases must prove the
+        # compiler did not write IR, object files, or an executable *anywhere*
+        # in its case workspace; checking a never-created .native path alone
+        # gives false confidence.
+        case_dir = self.work/case
+        case_dir.mkdir()
+        path=case_dir/"input.atto"
         path.write_text(source,encoding="utf-8",newline="\n")
         before=hashlib.sha256(path.read_bytes()).hexdigest()
-        result=run([str(COMPILER),"--target=host",str(path)])
+        result=run([str(COMPILER),"--target=host",str(path)],
+                   cwd=case_dir, stdin=subprocess.DEVNULL)
         self.assertEqual(before,hashlib.sha256(path.read_bytes()).hexdigest(),"compiler modified source")
         return result, path
     def test_compiler_native_positive(self):
@@ -138,7 +145,14 @@ class ActualNativeGuard(unittest.TestCase):
                 if diagnostic:
                     self.assertIn(diagnostic.lower(),result.stderr.decode(errors="replace").lower(),
                                   "unexpected compiler diagnostic for "+name)
-                self.assertFalse((self.work/("reject_"+name+".native")).exists())
+                self.assertFalse(result.stdout.strip(),
+                    "rejected source emitted stdout (possible partial IR): "+name)
+                generated = {
+                    str(item.relative_to(path.parent))
+                    for item in path.parent.rglob("*")
+                }
+                self.assertEqual(generated, {"input.atto"},
+                    "rejected source created artifacts in its isolated workspace: "+name)
                 print("ATTO_NATIVE_GUARD_REJECTED="+name+" source="+
                        hashlib.sha256(path.read_bytes()).hexdigest(),flush=True)
 
