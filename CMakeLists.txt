@@ -575,6 +575,16 @@ if(BUILD_TESTING AND UNIX)
     set_tests_properties(native_frontend_check_effects_boundary PROPERTIES TIMEOUT 30)
 endif()
 if(BUILD_TESTING)
+    # Real compiler / Clang native guest lane for file-level exports.
+    find_program(ORESLANG_EXPORT_CLANG NAMES clang)
+    if(ORESLANG_EXPORT_CLANG)
+        add_test(NAME oreslang-declarative-exports-native
+            COMMAND bash
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/declarative_exports_native.sh"
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORESLANG_EXPORT_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/declarative-exports")
+    endif()
 
     # The same production C11 preallocated logical-frame ABI is tested in the
     # full LLVM build, but this is host-runtime proof, not guest compiler output.

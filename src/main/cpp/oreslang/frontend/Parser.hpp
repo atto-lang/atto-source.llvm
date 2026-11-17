@@ -516,6 +516,15 @@ struct TypeConstraintDescriptor {
     bool validation_required = true;
 };
 
+struct FileExport {
+    enum class Visibility { Public, Package };
+    enum class Kind { Inferred, Class, Fnc };
+    std::string name;
+    Visibility visibility = Visibility::Public;
+    Kind kind = Kind::Inferred;
+    std::size_t offset = 0;
+};
+
 // Distinct nominal *value-schema* declaration, never an inverted class
 // alias. This parser milestone records type/field/mutability intent only;
 // source lowering remains denied until the production parser and ownership verifier admit it.
@@ -552,6 +561,7 @@ struct InvertedSourceMain {
 };
 
 struct Program {
+    std::vector<FileExport> exports;
     std::vector<ModuleImport> imports;
     std::vector<NamespaceImportSyntax> namespace_imports;
     std::vector<CooperativeScalarLoop> cooperative_loops;

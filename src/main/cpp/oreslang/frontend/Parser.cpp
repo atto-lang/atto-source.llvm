@@ -155,7 +155,7 @@ bool reserved(std::string_view name) {
     // the parser recognizes them only at their declaration/modifier sites.
     static constexpr std::string_view words[] = {
         "define", "class", "pattern", "module", "contract", "conforms", "namespace",
-        "import", "from", "as", "extends", "implements", "try", "catch",
+        "import", "export", "from", "as", "extends", "implements", "try", "catch",
         "throw", "raise", "panic", "recover", "unsafe",
         "finally", "end", "fi", "if", "ifnot", "unless", "guard", "do", "else", "then", "new",
         "spawn", "stop", "done", "await", "rt", "async", "suspends", "generator",
@@ -942,7 +942,8 @@ public:
 
     Program parse() {
         Program program;
-        while (token_.text == "import") {
+        while (token_.text == "import" || token_.text == "export") {
+            if (token_.text == "export") { export_declaration(program); continue; }
             advance();
             // Outside the host-only verified-metadata mode, namespace imports stay
             // fail-closed here; in that mode they are parsed into metadata and
@@ -1064,10 +1065,14 @@ public:
             fail("DECLARED_ACTOR_CODEGEN_UNSUPPORTED: external runtime-only "
                  "actor entrypoint needs manifest-verified receiver, state "
                  "loan and mailbox MIR");
-        while (token_.text == "define" || token_.text == "declare" ||
+        while (token_.text == "export" || token_.text == "define" || token_.text == "declare" ||
                at_bare_type_alias() ||
                 (token_.text == "pub" &&
                  (peek_next().text == "define" || peek_next().text == "declare"))) {
+            if (token_.text == "export") {
+                export_declaration(program);
+                continue;
+            }
             if (at_type_only_introducer()) {
                 type_only_declaration(program);
                 continue;
@@ -1174,6 +1179,13 @@ public:
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
+            if (token_.text == "export") {
+                // File-level export metadata must not be minted inside a
+                // module wrapper and treated as a root symbol capability.
+                if (wrapped_module) fail("EXPORT_SCOPE: file-level export inside module");
+                export_declaration(program);
+                continue;
+            }
             if (program.inverted_main)
                 fail("production inverted main must be the only source callable");
             if (!program.inverted_structs.empty() && looks_like_inverted_main()) {
@@ -6141,6 +6153,25 @@ private:
         return lookahead.next().text == ":";
     }
 
+    void export_declaration(Program& program) {
+        const auto at = token_.offset;
+        require("export");
+        require("pub");
+        FileExport entry;
+        entry.offset = at;
+        if (accept("[")) {
+            require("pkg");
+            require("]");
+            entry.visibility = FileExport::Visibility::Package;
+        }
+        if (accept("class")) entry.kind = FileExport::Kind::Class;
+        else if (accept("fnc")) entry.kind = FileExport::Kind::Fnc;
+        entry.name = identifier();
+        require(";");
+        if (program.exports.size() >= 1024) fail("EXPORT_SOURCE_LIMIT: too many file exports");
+        program.exports.push_back(std::move(entry));
+    }
+
     bool accept(std::string_view text) {
         if (token_.text != text) return false;
         advance();
@@ -8364,6 +8395,38 @@ Program parse_unresolved_program(std::string_view source, bool experimental_owne
 }
 
 void resolve_and_validate_program(Program& program) {
+    // Export directives bind after full-file parsing; package-scoped names
+    // remain non-public until the package-aware native linker enforces them.
+    std::unordered_set<std::string> export_names;
+    for (const auto& entry : program.exports) {
+        if (!export_names.insert(entry.name).second)
+            throw std::runtime_error("EXPORT_DUPLICATE: " + entry.name);
+        bool class_target = false, function_target = false;
+        for (const auto& cls : program.classes)
+            if (cls.name == entry.name) class_target = true;
+        for (const auto& fn : program.functions)
+            if (fn.name == entry.name && fn.method_owner.empty()) function_target = true;
+        if (!class_target && !function_target)
+            throw std::runtime_error("EXPORT_UNBOUND: " + entry.name);
+        if (class_target && function_target)
+            throw std::runtime_error("EXPORT_AMBIGUOUS: " + entry.name);
+        if ((entry.kind == FileExport::Kind::Class && !class_target) ||
+            (entry.kind == FileExport::Kind::Fnc && !function_target))
+            throw std::runtime_error("EXPORT_KIND_MISMATCH: " + entry.name);
+        if (class_target) {
+            for (auto& cls : program.classes) if (cls.name == entry.name) {
+                if (entry.visibility == FileExport::Visibility::Package && cls.exported)
+                    throw std::runtime_error("EXPORT_VISIBILITY_CONFLICT: " + entry.name);
+                if (entry.visibility == FileExport::Visibility::Public) cls.exported = true;
+            }
+        } else {
+            for (auto& fn : program.functions) if (fn.name == entry.name && fn.method_owner.empty()) {
+                if (entry.visibility == FileExport::Visibility::Package && fn.exported)
+                    throw std::runtime_error("EXPORT_VISIBILITY_CONFLICT: " + entry.name);
+                if (entry.visibility == FileExport::Visibility::Public) fn.exported = true;
+            }
+        }
+    }
     // Narrow standalone two-i64 inverted source only. The independent
     // verified-MIR pass rejects all other source metadata and effects before
     // any lowering. The normal function pipeline remains unchanged.
