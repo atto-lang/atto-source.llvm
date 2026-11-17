@@ -13,6 +13,8 @@ import subprocess
 import tempfile
 import unittest
 
+from guard_artifact_evidence import require_no_rejected_artifacts
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--compiler", required=True)
 parser.add_argument("--clang", required=True)
@@ -145,14 +147,7 @@ class ActualNativeGuard(unittest.TestCase):
                 if diagnostic:
                     self.assertIn(diagnostic.lower(),result.stderr.decode(errors="replace").lower(),
                                   "unexpected compiler diagnostic for "+name)
-                self.assertFalse(result.stdout.strip(),
-                    "rejected source emitted stdout (possible partial IR): "+name)
-                generated = {
-                    str(item.relative_to(path.parent))
-                    for item in path.parent.rglob("*")
-                }
-                self.assertEqual(generated, {"input.atto"},
-                    "rejected source created artifacts in its isolated workspace: "+name)
+                require_no_rejected_artifacts(path.parent, path, result.stdout)
                 print("ATTO_NATIVE_GUARD_REJECTED="+name+" source="+
                        hashlib.sha256(path.read_bytes()).hexdigest(),flush=True)
 
