@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -40,8 +41,11 @@ extern "C" int fake_store(void*, std::uint32_t, std::int64_t) {
 
 template<typename Fn>
 bool denies(Fn&& operation) {
+    // Only authenticated host admission/lifetime failures count as denial.
+    // std::bad_alloc, arithmetic failures, and unrelated exceptions must
+    // never turn a negative isolation test into a false positive.
     try { operation(); }
-    catch (const std::exception&) { return true; }
+    catch (const std::logic_error&) { return true; }
     return false;
 }
 
@@ -59,6 +63,21 @@ int main() {
     malformed.abi_version = ORES_ISOLATE_ABI_VERSION;
     malformed.slot_count = 0;
     CHECK(ores_guest_entry(&malformed, 1, &fake_out) == ORES_GUEST_BAD_CONTEXT);
+    CHECK(fake_callback_calls.load() == 0 && fake_out == 777);
+    // Missing callback pointers or an output buffer must be rejected
+    // before the compiler-generated native guest can call either host hook.
+    malformed.slot_count = ORES_ISOLATE_I64_SLOTS;
+    malformed.load_i64 = nullptr;
+    CHECK(ores_guest_entry(&malformed, 1, &fake_out) == ORES_GUEST_BAD_CONTEXT);
+    malformed.load_i64 = &fake_load;
+    malformed.store_i64 = nullptr;
+    CHECK(ores_guest_entry(&malformed, 1, &fake_out) == ORES_GUEST_BAD_CONTEXT);
+    malformed.store_i64 = &fake_store;
+    malformed.call_data = nullptr;
+    CHECK(ores_guest_entry(&malformed, 1, &fake_out) == ORES_GUEST_BAD_CONTEXT);
+    malformed.call_data = &fake_data;
+    CHECK(ores_guest_entry(nullptr, 1, &fake_out) == ORES_GUEST_BAD_CONTEXT);
+    CHECK(ores_guest_entry(&malformed, 1, nullptr) == ORES_GUEST_BAD_CONTEXT);
     CHECK(fake_callback_calls.load() == 0 && fake_out == 777);
 
     // Distinct tenant heaps and source-private module state, one immutable
