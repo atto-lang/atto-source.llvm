@@ -118,7 +118,10 @@ def checked_test_defines(defines):
         elif name in TEST_INTEGER_DEFINES:
             # Limit the expanded C constant to a representable signed i32;
             # never permit an expression, token paste, suffix or compiler flag.
-            if int(value) > (1 << 31) - 1:
+            if len(value) > 10 or int(value) > (1 << 31) - 1:
+                # Reject before int() on huge decimal strings: newer Python
+                # versions cap digit conversions and would otherwise report
+                # an internal ValueError instead of our typed refusal.
                 raise Refused("test fault value outside allowed range")
         else:
             raise Refused("unrecognized test-only preprocessor definition")
