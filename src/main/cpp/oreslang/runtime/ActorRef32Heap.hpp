@@ -21,11 +21,22 @@ struct ActorHeapOwner {
 // In a compiled guest only the 4-byte token is stored. The typed compiler and
 // trusted host must preserve origin separately; a token by itself is NOT a
 // cross-actor capability and equal numeric tokens may exist in sibling heaps.
-struct TrustedActorRef32 {
-    std::uint32_t token;
-    ActorHeapOwner origin;
+// A TRUSTED HOST witness (not the four-byte guest representation).
+// Only the owning arena may mint one. Untrusted guest code cannot fabricate
+// an origin by passing {token, owner} to public read/write APIs.
+class TrustedActorRef32 final {
+public:
+    TrustedActorRef32() noexcept = default; // invalid/null reference
+    std::uint32_t guest_token() const noexcept { return token_; }
+    ActorHeapOwner origin() const noexcept { return origin_; }
+private:
+    friend class ActorRef32Heap;
+    TrustedActorRef32(std::uint32_t token, ActorHeapOwner origin) noexcept
+        : token_(token), origin_(origin) {}
+    std::uint32_t token_ = 0;
+    ActorHeapOwner origin_{0, 0, 0};
 };
-static_assert(sizeof(decltype(TrustedActorRef32::token)) == 4,
+static_assert(sizeof(std::uint32_t) == 4,
               "portable guest reference token is exactly 4 bytes");
 
 class ActorRef32Heap final {
@@ -56,8 +67,8 @@ public:
             slot.alignment = alignment;
             slot.type_id = type_id;
             slot.live = true;
-            return { (std::uint32_t(slot.generation) << kSlotBits) |
-                         std::uint32_t(i + 1), owner_ };
+            return TrustedActorRef32{ (std::uint32_t(slot.generation) << kSlotBits) |
+                                         std::uint32_t(i + 1), owner_ };
         }
         return {};
     }
@@ -136,10 +147,10 @@ private:
     }
     const Slot* checked_slot(TrustedActorRef32 ref, ActorHeapOwner caller,
                              std::uint32_t type_id) const noexcept {
-        if (!authorized(caller) || !(ref.origin == owner_) || !ref.token || !type_id)
+        if (!authorized(caller) || !(ref.origin() == owner_) || !ref.guest_token() || !type_id)
             return nullptr;
-        const std::uint32_t i = (ref.token & kSlotMask);
-        const std::uint32_t generation = ref.token >> kSlotBits;
+        const std::uint32_t i = (ref.guest_token() & kSlotMask);
+        const std::uint32_t generation = ref.guest_token() >> kSlotBits;
         if (!i || i > slots_.size() || !generation) return nullptr;
         const Slot& slot = slots_[i - 1];
         if (!slot.live || slot.retired || slot.generation != generation ||
