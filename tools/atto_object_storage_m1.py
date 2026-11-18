@@ -312,7 +312,12 @@ def main():
             raise Reject("source SHA-256 mismatch")
         plan = Parser(tokenize(raw.decode("utf-8", errors="strict"))).parse()
         result = render_java(plan) if args.backend == "java" else render_llvm(plan)
-        # Atomic O_EXCL creation prevents replacing a destination planted after\n        # the initial exists check. No output file is created on parse rejection.\n        with output.open("x", encoding="utf-8", newline="\n") as stream:\n            stream.write(result)
+        # Exclusive O_EXCL file creation: do not overwrite an output planted
+        # between admission and emission, including a symlink.
+        with output.open("x", encoding="utf-8", newline="\n") as stream:
+            written = stream.write(result)
+        if written != len(result) or not output.is_file() or output.stat().st_size == 0:
+            raise Reject("generated backend artifact missing or incomplete")
         print("ATTO_OBJECT_M1_COMPILE_PASS backend=" + args.backend +
               " source_sha256=" + sha + " expected_exit=" + str(plan["result"]))
     except (Reject, UnicodeError, OSError, ValueError) as exc:
