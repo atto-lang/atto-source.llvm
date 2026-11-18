@@ -44,6 +44,7 @@ public:
 struct State {
     OresNativeActorScheduler* scheduler = nullptr;
     OresNativeActorRef actor{};
+    OresNativeActorRef sibling{}; // same generation, different slot
     Bridge* bridge = nullptr;
     OresNativeWakeTicket ticket{};
     std::atomic<int> wake_count{0};
@@ -51,14 +52,38 @@ struct State {
     std::atomic<int> delivered{0};
     std::thread::id host_thread;
     std::atomic<int> invalid_mail_denied{0};
+    std::atomic<int> cross_actor_denied{0};
 };
 
 static void on_data(void* opaque, size_t actor, std::uint64_t payload) {
     try {
     auto& s = *static_cast<State*>(opaque);
-    check(actor == 0 && payload == 1, "unexpected actor message");
     check(ores_native_actor_scheduler_in_any_actor_turn() != 0,
           "native GPU admission must be on an actor carrier");
+    if (actor == 1) {
+        // A foreign actor may have the exact same generation number as
+        // the GPU actor. Reject its authentic DATA-mail WAKE regardless.
+        check(payload == 2, "unexpected sibling message");
+        std::uint64_t sibling_mail = 0;
+        check(ores_native_actor_scheduler_current_data_mail_sequence(
+            s.scheduler, s.sibling, &sibling_mail), "sibling mail not authenticated");
+        OresNativeWakeTicket foreign{};
+        check(ores_native_actor_scheduler_reserve_wake(
+            s.scheduler, s.sibling, s.sibling, 11, 12, 13, 14, &foreign),
+              "sibling wake reservation failed");
+        try {
+            (void)s.bridge->submit_with_native_wake(
+                3, s.scheduler, foreign, sibling_mail);
+        } catch (const std::logic_error& error) {
+            if (std::string(error.what()) == "GPU_PROVIDER_FOREIGN_WAKE_AUTHORITY")
+                s.cross_actor_denied.store(1, std::memory_order_release);
+            else throw;
+        }
+        check(ores_native_actor_scheduler_cancel_wake(s.scheduler, foreign),
+              "sibling denied wake remained reserved");
+        return;
+    }
+    check(actor == 0 && payload == 1, "unexpected actor message");
     std::uint64_t mail = 0;
     check(ores_native_actor_scheduler_current_data_mail_sequence(
         s.scheduler, s.actor, &mail), "missing authenticated DATA mail");
@@ -107,10 +132,14 @@ static void run_case(Port::Observation result, bool cancel, bool unknown,
     State state;
     state.host_thread = std::this_thread::get_id();
     state.scheduler = ores_native_actor_scheduler_open_with_wakes(
-        1, 4, 2, on_data, on_control, nullptr, on_wake, &state);
+        2, 4, 2, on_data, on_control, nullptr, on_wake, &state);
     check(state.scheduler != nullptr, "native scheduler failed to open");
     state.actor = ores_native_actor_scheduler_spawn(state.scheduler, 0);
     check(state.actor.generation != 0, "native actor failed to spawn");
+    state.sibling = ores_native_actor_scheduler_spawn(state.scheduler, 1);
+    check(state.sibling.generation == state.actor.generation
+        && state.sibling.actor_slot != state.actor.actor_slot,
+          "expected two separate actors with same generation");
 
     auto registry = std::make_shared<Registry>(4);
     auto provider = std::make_shared<MockProvider>(state.actor.generation);
@@ -119,6 +148,21 @@ static void run_case(Port::Observation result, bool cancel, bool unknown,
     Bridge bridge(registry, provider, control,
                   {"gpu-actor", state.actor.generation}, "root", 256);
     state.bridge = &bridge;
+    bridge.bind_native_actor(state.scheduler, state.actor);
+    try {
+        bridge.bind_native_actor(state.scheduler, state.sibling);
+        check(false, "native binding incorrectly allowed retarget");
+    } catch (const std::logic_error& error) {
+        check(std::string(error.what()) == "GPU_PROVIDER_NATIVE_BINDING_DENIED",
+              "native binding rejected with incorrect reason");
+    }
+    check(ores_native_actor_scheduler_try_send(
+        state.scheduler, state.sibling, 2) == ORES_NATIVE_SEND_ACCEPTED,
+          "sibling actor DATA send rejected");
+    check(ores_native_actor_scheduler_drain(state.scheduler),
+          "sibling DATA did not finish");
+    check(state.cross_actor_denied.load(std::memory_order_acquire) == 1,
+          "same-generation foreign actor wake crossed binding");
     check(ores_native_actor_scheduler_try_send(
         state.scheduler, state.actor, 1) == ORES_NATIVE_SEND_ACCEPTED,
           "actor DATA send rejected");
