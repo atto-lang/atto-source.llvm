@@ -1,0 +1,68 @@
+# CPU/GPU continuation wake locality — native host integration (2026-11-18)
+
+**Status: draft native host-only, fake GPU event in tests. Not an executable
+source `gpu` keyword, physical GPU, or compiler-backed AttoLang test.**
+
+## Scheduling contract
+
+`gpu { ... }` and `gpu task { ... }` are the canonical source constructs in
+`contracts/v2/CPU_GPU_TASK_V2.md`. A compiler may eventually lower them into
+device command submission with a GPU event and an actor-owned suspension.
+That compiler/backend path is **not** completed by this patch.
+
+- Root/CONTROL coordinator never executes device kernels, polls a driver, or
+  runs the actor guest continuation. PRIVATE/SHARED/UNTRUSTED actor pools stay
+  separate; GPU work stays on a provider-authenticated device queue.
+- During the *current authenticated DATA mail*, native code reserves the
+  generation-checked scheduler WAKE ticket. New optional
+  `GpuActorProviderBridgeV1::submit_with_native_wake` validates the exact
+  original DATA-mail issuance and requires its producer/target to be the
+  same actor incarnation. It transfers native WAKE escrow **before enqueue**
+  and preserves it through unknown/ambiguous submission.
+- The existing supervisor-rooted `GpuActorQuarantineRegistryV1` holds the
+  wake while device work may be active. Merely detaching the actor-facing
+  bridge does not release GPU memory or the wake ticket.
+- Only the **trusted provider's exact terminal event** lets the registry
+  publish READY/FAILED/CANCELLED onto the original native actor scheduler.
+  Pending, Unknown, or device loss NEVER publishes READY. A definitely
+  not-submitted operation publishes FAILED; only a pre-enqueue failure can
+  abort a transferred wake without a device event.
+- `NativeActorScheduler` takes the WAKE under the existing actor physical
+  lease, **not on the GPU driver/polling thread**. Its WAKE-vs-DATA-vs-CONTROL
+  priorities and last-carrier soft affinity apply automatically. GPU queue
+  locality (VRAM reuse, device/queue affinity) is independent of CPU L1/L2.
+- STOP racing a terminal GPU event invokes the scheduler's terminal wake
+  accounting. The scheduler may consume it as PRODUCER_RETIRED; it must never
+  reopen a stopped actor or simulate device quiescence. A failed or cancelled
+  result cannot assert a READY source continuation.
+
+## Verification
+
+`tests/gpu_actor_scheduler_wake_host_test.cpp` links the REAL
+`NativeActorScheduler.c` with the existing host registry/provider bridge.
+It checks DATA-mail provenance, actor carrier ownership, one WAKE after
+provider terminal completion, failure/cancel denial, unknown-enqueue
+reconciliation, and repeated-poll idempotence.
+
+Run:
+```sh
+cmake -S . -B build-gpu-wake -DORESLANG_GPU_ACTOR_HOST_ONLY=ON -DBUILD_TESTING=ON
+cmake --build build-gpu-wake -j2
+ctest --test-dir build-gpu-wake --output-on-failure -R 'native_gpu_actor_scheduler_wake_host|native_gpu_actor_v1_quarantine'
+```
+Then run ASan/UBSan and process-fault tests; do not label the mock as device
+evidence. Hardware GPU tests require authenticated device identity, driver,
+source/build/blob IDs and kernel event proof. Java source `gpu` lowering is
+still fail-closed on main, so Java/LLVM GPU guest parity is NOT proven.
+
+### Remaining blockers
+
+Compiler generated `gpu task` HIR/MIR must mint and bind source continuation
+and actor incarnation, with resource loans, explicit upload/download, device
+quota and on-stop isolation. GPU queue placement should reuse device buffers
+within authenticated tenant/device/queue boundaries (no implicit migration).
+Measure kernel queue waits, PCIe/UMA transfers, VRAM misses/reuse and CPU
+L1/L2 misses around host resumption separately.
+
+**Execution:** commit/test source staged. Exact-head CMake/CTest, sanitizers,
+real GPU and compiler-backed `.atto` execution are NOT EXECUTED here.

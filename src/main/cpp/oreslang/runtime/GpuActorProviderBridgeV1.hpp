@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/runtime/GpuActorHostTurnBridgeV0.hpp"
+#include "oreslang/runtime/NativeActorScheduler.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -136,6 +137,17 @@ public:
     using Port = ProviderPortV1;
     using EventHandle = Port::EventHandle;
 
+    /* Trusted host bridge for a compiler-owned GPU continuation. Its exact
+     * native WAKE ticket is issued during the original DATA mail turn.
+     * Provider progress (never the GPU callback directly) publishes it only
+     * after a provider-confirmed terminal device event or definite no-enqueue.
+     * This metadata is NOT GPU-device authority or a guest ABI. */
+    struct SchedulerWake {
+        OresNativeActorScheduler* scheduler;
+        OresNativeWakeTicket ticket;
+        std::uint64_t original_data_mail;
+    };
+
 private:
     enum class Phase { Ready, Retiring, EnqueueInProgress, UnknownEnqueue, Reconciling, Submitted, Terminal, Releasing, Released };
 
@@ -149,10 +161,24 @@ private:
         std::unique_ptr<HostTurnBridgeV0> host;
         std::optional<Turn> turn;
         EventHandle event;
+        std::optional<SchedulerWake> scheduler_wake;
         Phase phase = Phase::Ready;
         bool stopping = false;
         bool detached = false;
         bool device_lost = false;
+
+        void publish_verified_wake_locked(OresNativeWakeOutcome outcome) {
+            if (!scheduler_wake) return; // legacy host-only bridge unchanged
+            const auto receipt = *scheduler_wake;
+            const auto published = ores_native_actor_scheduler_publish_wake(
+                receipt.scheduler, receipt.ticket, outcome);
+            /* RETIRED consumes the actor's escrow without entering guest code.
+             * INVALID is a broken host authority/lifetime contract: keep the
+             * binding quarantined instead of pretending success. */
+            if (published == ORES_NATIVE_WAKE_INVALID)
+                throw std::logic_error("GPU_PROVIDER_NATIVE_WAKE_INVALID");
+            scheduler_wake.reset();
+        }
 
         void stop_locked(bool device_loss) {
             if (phase == Phase::Released) return;
@@ -187,18 +213,50 @@ private:
                 event.reset();
                 turn.reset();
                 phase = Phase::Terminal;
+                publish_verified_wake_locked(ORES_NATIVE_WAKE_FAILED);
             } else {
                 if (result.event) throw std::logic_error("GPU_PROVIDER_UNKNOWN_HAS_EVENT");
                 phase = Phase::UnknownEnqueue;
             }
         }
 
-        Turn submit(std::int64_t delta) {
+        Turn submit(std::int64_t delta,
+                    std::optional<SchedulerWake> incoming = std::nullopt) {
             std::unique_lock<std::mutex> guard(mu);
             if (phase != Phase::Ready || stopping || detached)
                 throw std::logic_error("GPU_PROVIDER_ACTOR_NOT_READY");
-            const Turn next = host->prepare(delta);
-            host->begin_enqueue(next);
+            if (incoming) {
+                const auto& w = *incoming;
+                const auto& a = w.ticket.producer;
+                const auto& b = w.ticket.target;
+                // For this v1 contract only the same actor may resume. An
+                // authenticated DATA mail, not an untrusted GPU event, must
+                // have minted the exact native wake escrow.
+                if (!w.scheduler || !w.original_data_mail
+                        || a.scheduler_domain != b.scheduler_domain
+                        || a.actor_slot != b.actor_slot
+                        || a.generation != b.generation
+                        || a.generation != port->binding().actor_generation
+                        || !ores_native_actor_scheduler_current_data_issued_wake(
+                            w.scheduler, w.ticket, w.original_data_mail))
+                    throw std::logic_error("GPU_PROVIDER_FOREIGN_WAKE_AUTHORITY");
+                if (!ores_native_actor_scheduler_transfer_wake(w.scheduler, w.ticket))
+                    throw std::logic_error("GPU_PROVIDER_NATIVE_WAKE_TRANSFER_DENIED");
+            }
+            Turn next;
+            try {
+                next = host->prepare(delta);
+                host->begin_enqueue(next);
+            } catch (...) {
+                // No provider enqueue was attempted yet. This is the only
+                // safe place to release a transferred wake without a device
+                // quiescence witness; the caller must discard the host turn.
+                if (incoming && !ores_native_actor_scheduler_abort_transferred_wake(
+                        incoming->scheduler, incoming->ticket))
+                    std::terminate();
+                throw;
+            }
+            scheduler_wake = incoming;
             turn = next;
             phase = Phase::EnqueueInProgress;
             guard.unlock();
@@ -279,9 +337,12 @@ private:
                         observed == Port::Observation::Unknown) return;
                 if (stopping) {
                     host->acknowledge_cancelled_provider_event(current, true);
+                    publish_verified_wake_locked(ORES_NATIVE_WAKE_CANCELLED);
                 } else {
                     host->finish_after_provider_event(
                         current, observed == Port::Observation::CompleteOk, true);
+                    publish_verified_wake_locked(observed == Port::Observation::CompleteOk
+                        ? ORES_NATIVE_WAKE_READY : ORES_NATIVE_WAKE_FAILED);
                 }
                 turn.reset();
                 event.reset();
@@ -402,6 +463,12 @@ public:
     }
 
     Turn submit(std::uint64_t id, std::int64_t delta) { return require(id)->submit(delta); }
+    Turn submit_with_native_wake(std::uint64_t id, std::int64_t delta,
+            OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket,
+            std::uint64_t original_data_mail) {
+        return require(id)->submit(delta,
+            SchedulerWake{scheduler, ticket, original_data_mail});
+    }
     void request_close(std::uint64_t id) {
         auto e = require(id);
         std::lock_guard<std::mutex> guard(e->mu);
@@ -572,6 +639,15 @@ public:
     ~GpuActorProviderBridgeV1() { if (registry_) registry_->detach(id_); }
 
     HostTurnBridgeV0::Turn submit(std::int64_t delta) { return registry_->submit(id_,delta); }
+    /* GPU task host entry; never publish directly from a driver callback.
+     * The actor's compiler-owned continuation resumes on its existing native
+     * scheduler and inherits the scheduler's soft CPU-carrier locality. */
+    HostTurnBridgeV0::Turn submit_with_native_wake(std::int64_t delta,
+            OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket,
+            std::uint64_t original_data_mail) {
+        return registry_->submit_with_native_wake(
+            id_, delta, scheduler, ticket, original_data_mail);
+    }
     void request_close() { registry_->request_close(id_); }
     void retire_gracefully() { registry_->retire_gracefully(id_); }
     std::int64_t committed_state() const { return registry_->committed_state(id_); }

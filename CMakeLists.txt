@@ -224,6 +224,15 @@ if(ORESLANG_GPU_ACTOR_HOST_ONLY)
     oreslang_gpu_actor_host_test(oreslang-gpu-host-v1-quarantine
         native_gpu_actor_v1_quarantine
         tests/gpu_actor_provider_bridge_v1_test.cpp)
+    # Actual native actor scheduler WAKE delivery on an actor carrier.
+    # The provider is mocked: this test does NOT certify GPU hardware.
+    oreslang_gpu_actor_host_test(oreslang-gpu-actor-scheduler-wake-host
+        native_gpu_actor_scheduler_wake_host
+        tests/gpu_actor_scheduler_wake_host_test.cpp)
+    target_sources(oreslang-gpu-actor-scheduler-wake-host PRIVATE
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_compile_options(oreslang-gpu-actor-scheduler-wake-host PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     oreslang_gpu_actor_host_test(oreslang-gpu-host-v2-opencl
         native_gpu_actor_v2_opencl_mock
         tests/gpu_actor_opencl_provider_v2_test.cpp)
