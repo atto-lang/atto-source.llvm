@@ -40,6 +40,11 @@ extern "C" std::int32_t guest_replay(OresIsolateContext* ctx, std::int64_t delta
         return ORES_GUEST_FAILED;
     return guest_sum(ctx, delta, out);
 }
+extern "C" std::int32_t guest_capture_error(OresIsolateContext* ctx, std::int64_t, std::int64_t*) {
+    if (!ctx) return ORES_GUEST_BAD_CONTEXT;
+    saved_cookie.store(ctx->call_data, std::memory_order_release);
+    return ORES_GUEST_LOAD_DENIED;
+}
 static std::atomic<bool> entered{false}, allow_exit{false};
 extern "C" std::int32_t guest_wait(OresIsolateContext* ctx, std::int64_t delta, std::int64_t* out) {
     waiting_context.store(ctx, std::memory_order_release);
@@ -81,6 +86,12 @@ int main() {
         return ORES_GUEST_LOAD_DENIED;
     }, 0);
     assert(bad.status == ORES_GUEST_LOAD_DENIED && bad.value == 0);
+    const auto failed = vm.invoke_guest_result(a, guest_capture_error, 0);
+    assert(failed.status == ORES_GUEST_LOAD_DENIED && failed.value == 0);
+    std::int64_t after_error = -13;
+    assert(saved_load.load(std::memory_order_acquire)(
+        saved_cookie.load(std::memory_order_acquire), 0, &after_error) == 0);
+    assert(after_error == -13);
     assert(vm.snapshot(a).active_guest_calls == 0);
     // Counter previously allowed lost updates: load/store are two callbacks.
     // Synchronous calls must be serialized per tenant but not across tenants.
