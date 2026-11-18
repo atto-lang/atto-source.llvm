@@ -1117,14 +1117,22 @@ struct TenantVmHost::Core {
         return result;
     }
 
-    int send_impl(const std::shared_ptr<Vm>& shared, std::uint64_t target, std::uint32_t offset, std::uint32_t length) {
+    int send_impl(const std::shared_ptr<Vm>& shared, const Actor& sender, std::uint64_t target,
+                  std::uint32_t offset, std::uint32_t length) {
         Vm& vm = *shared;
         if (length > vm.spec.limits.max_payload_bytes) return 0;
         std::lock_guard<std::mutex> lock(vm.mutex);
         if (vm.current_phase() != Phase::Running) return 0;
-        // The host is about to read these bytes with faults fatal, so the range must be mapped:
-        // above the unmapped first page, and within what is committed, which never shrinks here.
-        if (length != 0 && (offset < page_size() || std::uint64_t{offset} + length > vm.committed)) return 0;
+        // Host copies run outside guest mode: an invalid read here is a host-wide fault,
+        // and a mapped offset in the same VM may belong to a DIFFERENT actor. A caller
+        // must never turn the host into a read oracle for a sibling's private region.
+        // Widen BEFORE addition so UINT32_MAX + length cannot wrap.
+        const std::uint64_t begin = offset;
+        const std::uint64_t end = begin + length;
+        const std::uint64_t sender_end = std::uint64_t{sender.region} + sender.region_bytes;
+        if (begin < sender.region || begin >= sender_end || end > sender_end ||
+            begin < page_size() || end > vm.committed)
+            return 0;
         Actor* actor = resolve_actor_locked(vm, target);
         if (!actor || actor->stopping || actor->mailbox.size() >= vm.spec.limits.mailbox_capacity ||
             vm.inflight >= vm.spec.limits.max_inflight ||
@@ -1143,7 +1151,7 @@ struct TenantVmHost::Core {
         Carrier* c = host_enter();
         int result = 0;
         try {
-            result = static_cast<Core*>(c->core)->send_impl(*c->vm, target, offset, length);
+            result = static_cast<Core*>(c->core)->send_impl(*c->vm, *c->actor, target, offset, length);
         } catch (...) { // out of memory is this guest's refusal, not the process's end
         }
         host_leave(c);
