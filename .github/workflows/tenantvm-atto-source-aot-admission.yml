@@ -10,6 +10,9 @@ on:
       - 'src/main/cpp/oreslang/runtime/OresVM.hpp'
       - 'tests/fixtures/tenantvm-trusted-scalar.atto'
       - 'tests/native_tenantvm_atto_guest_test.cpp'
+      - 'tests/native_tenantvm_actor_turn_object_test.cpp'
+      - 'tests/native_tenantvm_integrated_actor_source_test.cpp'
+      - 'tests/tenantvm_actor_turn_exact_checkout.sh'
       - 'tests/tenantvm_atto_source_aot_gate.sh'
       - '.github/workflows/tenantvm-atto-source-aot-admission.yml'
   workflow_dispatch:
