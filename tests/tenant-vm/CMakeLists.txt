@@ -81,7 +81,7 @@ if(WAT2WASM AND WASM2C AND WASM_RT_INCLUDE AND LOWER_CLANG AND Python3_FOUND)
     endfunction()
     set(HOSTILE "${CMAKE_CURRENT_LIST_DIR}/lowered/hostile.wat")
     lower_guest(hostile_bounds "${HOSTILE}" --mode bounds)
-    lower_guest(hostile_guard "${HOSTILE}" --mode guard)
+    lower_guest(hostile_guard "${HOSTILE}" --mode guard --test-only)
 
     set(ATTO_DEFINITION "")
     if(TENANT_VM_WASM_LD AND (TENANT_VM_ATTO_COMPILER OR TENANT_VM_ATTO_IR_DIR))
@@ -101,15 +101,15 @@ if(WAT2WASM AND WASM2C AND WASM_RT_INCLUDE AND LOWER_CLANG AND Python3_FOUND)
             if(fixture STREQUAL "atomic")
                 lower_guest(atto_atomic_eager "${input}" ${compiler_args}
                     --wasm-clang "${TENANT_VM_WASM_CLANG}" --wasm-ld "${TENANT_VM_WASM_LD}"
-                    --test-define ORES_VM_TEST_EAGER_SEND=1)
+                    --test-only --test-define ORES_VM_TEST_EAGER_SEND=1)
             endif()
             if(fixture STREQUAL "pair")
                 lower_guest(atto_pair_fault "${input}" ${compiler_args}
                     --wasm-clang "${TENANT_VM_WASM_CLANG}" --wasm-ld "${TENANT_VM_WASM_LD}"
-                    --test-define ORES_VM_TEST_COMMIT_FAULT_ON=77)
+                    --test-only --test-define ORES_VM_TEST_COMMIT_FAULT_ON=77)
                 lower_guest(atto_pair_unsafe "${input}" ${compiler_args}
                     --wasm-clang "${TENANT_VM_WASM_CLANG}" --wasm-ld "${TENANT_VM_WASM_LD}"
-                    --test-define ORES_VM_TEST_COMMIT_FAULT_ON=77 --test-define ORES_VM_TEST_UNSAFE_COMMIT=1)
+                    --test-only --test-define ORES_VM_TEST_COMMIT_FAULT_ON=77 --test-define ORES_VM_TEST_UNSAFE_COMMIT=1)
             endif()
         endforeach()
     endif()
