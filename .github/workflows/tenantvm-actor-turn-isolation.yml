@@ -1,0 +1,54 @@
+name: TenantVM physical actor turn object authority (HOST ONLY)
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/OresVM.hpp'
+      - 'src/main/cpp/oreslang/runtime/OresIsolateVM.hpp'
+      - 'tests/native_tenantvm_actor_turn_object_test.cpp'
+      - '.github/workflows/tenantvm-actor-turn-isolation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  actor-turn-provenance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+        mode: [optimized-ndebug, address-undefined-sanitizers]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          submodules: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact native source head
+        shell: bash
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+      - name: Compile and execute C++ actor turn ownership regression
+        shell: bash
+        env:
+          CXX: ${{ matrix.compiler }}
+          MODE: ${{ matrix.mode }}
+        run: |
+          set -euo pipefail
+          args=(-std=c++17 -Wall -Wextra -Wpedantic -Werror -pthread -DNDEBUG -Isrc/main/cpp)
+          if [[ "$MODE" == address-undefined-sanitizers ]]; then
+            args+=(-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer)
+          else
+            args+=(-O2)
+          fi
+          "$CXX" "${args[@]}" tests/native_tenantvm_actor_turn_object_test.cpp \
+            -o "$RUNNER_TEMP/tenantvm-actor-turn-objects"
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            "$RUNNER_TEMP/tenantvm-actor-turn-objects"
+          echo "HOST_ONLY_ACTOR_TURN_EXECUTED sha=$GITHUB_SHA compiler=$CXX mode=$MODE"
