@@ -354,6 +354,15 @@ private:
             return *next;
         }
 
+        // Only submitted commands with an authenticated provider event may
+        // receive periodic nonblocking poll passes. Ambiguous enqueue,
+        // device loss and provider release errors require a separate trusted
+        // recovery signal rather than an optimistic busy-loop.
+        bool needs_event_poll() {
+            std::lock_guard<std::mutex> guard(mu);
+            return phase == Phase::Submitted && !device_lost;
+        }
+
         void progress() {
             std::unique_lock<std::mutex> guard(mu);
             if (phase == Phase::EnqueueInProgress
@@ -583,12 +592,18 @@ public:
         auto entry = require(id);
         return entry->port->binding(); // immutable provider binding, copied
     }
-    void progress_one(std::uint64_t id) {
+    // true means a still-submitted event can be checked again by a bounded
+    // host completion worker. It is NOT a device-completion certificate.
+    // Unknown enqueue or device loss intentionally suspends auto-polling
+    // until the privileged recovery path explicitly requests another pass.
+    bool progress_one(std::uint64_t id) {
         if (ores_native_actor_scheduler_in_any_actor_turn())
             throw std::logic_error("GPU_PROVIDER_PROGRESS_ON_ACTOR_CARRIER");
         auto entry = require(id);
         entry->progress();
+        const bool pending = entry->needs_event_poll();
         prune(id, entry);
+        return pending;
     }
 
     void progress_all() {
