@@ -17,7 +17,7 @@ extern "C" std::int32_t ores_guest_entry(
 
 #define CHECK(condition) do { \
     if (!(condition)) { \
-        std::fprintf(stderr, "integrated .atto TenantVM/actor gate FAIL %s:%d: %s\\n", \
+        std::fprintf(stderr, "integrated .atto TenantVM/actor gate FAIL %s:%d: %s\n", \
                      __FILE__, __LINE__, #condition); \
         return EXIT_FAILURE; \
     } \
