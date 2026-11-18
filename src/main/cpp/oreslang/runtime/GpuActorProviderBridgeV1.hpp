@@ -2,6 +2,7 @@
 
 #include "oreslang/runtime/GpuActorHostTurnBridgeV0.hpp"
 #include "oreslang/runtime/NativeActorScheduler.h"
+#include <exception>
 
 #include <cstddef>
 #include <cstdint>
