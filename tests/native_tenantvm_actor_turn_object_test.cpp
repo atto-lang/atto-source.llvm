@@ -27,6 +27,14 @@ bool denies(Fn&& action) {
     return false;
 }
 
+extern "C" std::int32_t trusted_guest_probe(
+    OresIsolateContext* ctx, std::int64_t input, std::int64_t* out) {
+    if (!ctx || !out || ctx->abi_version != ORES_ISOLATE_ABI_VERSION)
+        return ORES_GUEST_BAD_CONTEXT;
+    *out = input;
+    return ORES_GUEST_OK;
+}
+
 int main() {
     OresVM vm;
     auto a = vm.create_isolate({"actor_a", 256, 8});
@@ -47,6 +55,11 @@ int main() {
     const auto first_turn = vm.enter_actor_turn(a, a1);
     CHECK(denies([&] { (void)vm.enter_actor_turn(b, b1); }));
     CHECK(denies([&] { (void)other_root.enter_actor_turn(other, other_actor); }));
+    // Plain tenant guests have no actor-turn provenance, so they must not
+    // re-enter while this physical carrier owns a live actor turn.
+    CHECK(denies([&] { (void)vm.invoke_guest(a, trusted_guest_probe, 1); }));
+    CHECK(denies([&] { (void)vm.invoke_guest(b, trusted_guest_probe, 2); }));
+    CHECK(denies([&] { (void)other_root.invoke_guest(other, trusted_guest_probe, 3); }));
     CHECK(denies([&] { (void)vm.enter_actor_turn(a, a1); }));
     CHECK(denies([&] { (void)vm.enter_actor_turn(a, a2); }));
     const auto obj = vm.allocate_actor_object(a, a1, first_turn, 8);
@@ -79,6 +92,9 @@ int main() {
     const auto other_turn = other_root.enter_actor_turn(other, other_actor);
     CHECK(denies([&] { (void)vm.enter_actor_turn(b, b1); }));
     other_root.leave_actor_turn(other, other_actor, other_turn);
+    // After releasing all actor-owned capabilities, legacy trusted scalar
+    // guests can run on this carrier (not an untrusted actor sandbox).
+    CHECK(vm.invoke_guest(b, trusted_guest_probe, 17) == 17);
     other_root.retire_actor(other, other_actor);
     other_root.begin_shutdown(other);
     other_root.complete_shutdown(other);
