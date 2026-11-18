@@ -102,7 +102,8 @@ static void on_wake(void* opaque, size_t actor, OresNativeWakeTicket ticket,
     } catch (...) { std::abort(); } // No exception may cross the native C ABI.
 }
 
-static void run_case(Port::Observation result, bool cancel, bool unknown) {
+static void run_case(Port::Observation result, bool cancel, bool unknown,
+                     bool stop_native = false) {
     State state;
     state.host_thread = std::this_thread::get_id();
     state.scheduler = ores_native_actor_scheduler_open_with_wakes(
@@ -128,11 +129,28 @@ static void run_case(Port::Observation result, bool cancel, bool unknown) {
     // Unknown enqueue never publishes an optimistic wake. Reconcile first.
     registry->progress_all();
     check(state.wake_count.load() == 0, "device Pending/Unknown caused a wake");
-    if (cancel) bridge.request_close();
+    if (stop_native) {
+        // Physical STOP cannot interpret an in-flight GPU cancellation as
+        // permission to reclaim the device loan or resume guest code.
+        check(ores_native_actor_scheduler_stop_sealed(state.scheduler, state.actor),
+              "actor native STOP refused");
+        bridge.request_close();
+    } else if (cancel) bridge.request_close();
     provider->observation = result;
     registry->progress_all();
     check(ores_native_actor_scheduler_drain(state.scheduler),
           "resumed native actor did not quiesce");
+    if (stop_native) {
+        // The scheduler consumes a transferred wake when its producer STOPs;
+        // the provider still had to establish physical event quiescence.
+        check(state.wake_count.load() == 0,
+              "retired actor must never execute a GPU completion");
+        check(ores_native_actor_scheduler_outstanding_wake_loans(
+            state.scheduler, state.actor) == 0,
+              "native STOP left GPU wake escrow stranded");
+        check(ores_native_actor_scheduler_wait_done(state.scheduler, state.actor),
+              "native STOP did not reach physical DONE after device event");
+    } else {
     check(state.wake_count.load() == 1, "terminal event must publish one wake");
     const auto expected = cancel ? ORES_NATIVE_WAKE_CANCELLED
         : (result == Port::Observation::CompleteOk
@@ -146,14 +164,15 @@ static void run_case(Port::Observation result, bool cancel, bool unknown) {
     registry->progress_all(); // no duplicate WAKE on repeated polls
     check(ores_native_actor_scheduler_drain(state.scheduler), "duplicate wake drain");
     check(state.wake_count.load() == 1, "duplicate GPU event resumed twice");
-    if (!cancel && result == Port::Observation::CompleteOk)
+    }
+    if (!stop_native && !cancel && result == Port::Observation::CompleteOk)
         bridge.retire_gracefully();
     else registry->progress_all();
     ores_native_actor_scheduler_retire(state.scheduler);
     check(ores_native_actor_scheduler_try_destroy(state.scheduler),
           "native scheduler was not physically quiescent");
-    std::printf("GPU_ACTOR_NATIVE_WAKE_PASS cancel=%d unknown=%d outcome=%d\n",
-                cancel, unknown, static_cast<int>(expected));
+    std::printf("GPU_ACTOR_NATIVE_WAKE_PASS cancel=%d unknown=%d stopped=%d\n",
+                cancel, unknown, stop_native);
 }
 
 int main() {
@@ -161,5 +180,6 @@ int main() {
     run_case(Port::Observation::CompleteFailed, false, false);
     run_case(Port::Observation::CompleteOk, true, false);
     run_case(Port::Observation::CompleteOk, false, true);
+    run_case(Port::Observation::CompleteOk, true, false, true);
     return 0;
 }
