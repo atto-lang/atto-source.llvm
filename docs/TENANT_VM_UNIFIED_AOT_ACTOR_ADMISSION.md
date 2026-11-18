@@ -20,7 +20,10 @@ No Git objects were mirrored to a different organization. The integration
 test deliberately modifies only the integration PR's own source fixture and
 workflow, leaving the underlying feature PRs independently reviewable.
 The source identity test locks the exact compiler and runtime blob IDs until
-a new explicitly reviewed head replaces them.
+a new explicitly reviewed head replaces them. In the integration branch,
+`OresVM.hpp` has its own later reviewed blob identity
+`805d6951ee678cdab028f9685d4430fae3dfc8fb` to enforce the tenant-wide
+cross-carrier exclusion beyond the original actor-turn PR.
 
 ## What this combined host+guest test proves when executed
 
@@ -36,9 +39,14 @@ physical-turn/object boundary and **real** `ores_guest_entry` in one
 executable: a carrier with an active actor turn must not use the generic
 unscoped native guest entry, including into another tenant. A released
 turn permits ordinary trusted scalar entry again without changing any
-unsuccessful nested call's state. A callback inside the generic guest entry
-cannot acquire an actor turn. Neither test grants guest code an actor ticket
-or raw object address.
+unsuccessful nested call's state. The integrated branch adds a stronger
+**tenant-wide cross-pthread exclusion**: if any carrier holds an actor turn,
+an unscoped scalar guest cannot enter that tenant from a different native
+thread; if a scalar guest is active (including queued guest calls), no
+carrier may acquire an actor turn in that tenant. An unrelated tenant's
+trusted scalar guest may proceed on a separate carrier. A callback inside
+the generic guest entry cannot acquire an actor turn. Neither test grants
+guest code an actor ticket or raw object address.
 
 The companion `tests/tenantvm_actor_turn_exact_checkout.sh` builds
 actual OresVM host tests under GCC and Clang, optimized/NDEBUG and
