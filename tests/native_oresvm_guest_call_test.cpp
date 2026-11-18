@@ -21,10 +21,13 @@ extern "C" std::int32_t guest_sum(OresIsolateContext* ctx, std::int64_t delta, s
 }
 // A callback's call_data is a single-use ticket, not a native address or a
 // long-lived capability. Save one to attempt replay from a different turn.
+using GuestLoadCallback = int (*)(void*, std::uint32_t, std::int64_t*);
 static std::atomic<void*> saved_cookie{nullptr};
+static std::atomic<GuestLoadCallback> saved_load{nullptr};
 static std::atomic<OresIsolateContext*> waiting_context{nullptr};
 extern "C" std::int32_t guest_capture(OresIsolateContext* ctx, std::int64_t delta, std::int64_t* out) {
     if (!ctx) return ORES_GUEST_BAD_CONTEXT;
+    saved_load.store(ctx->load_i64, std::memory_order_release);
     saved_cookie.store(ctx->call_data, std::memory_order_release);
     return guest_sum(ctx, delta, out);
 }
@@ -44,7 +47,8 @@ extern "C" std::int32_t guest_wait(OresIsolateContext* ctx, std::int64_t delta, 
     while(!allow_exit.load(std::memory_order_acquire)) std::this_thread::yield();
     return guest_sum(ctx, delta, out);
 }
-extern "C" std::int32_t guest_throw(OresIsolateContext*, std::int64_t, std::int64_t*) {
+extern "C" std::int32_t guest_throw(OresIsolateContext* ctx, std::int64_t, std::int64_t*) {
+    saved_cookie.store(ctx->call_data, std::memory_order_release);
     throw std::runtime_error("host-only test exception");
 }
 int main() {
@@ -62,6 +66,10 @@ int main() {
     // Previously a saved call_data pointer could alias the next turn's
     // stack GuestCall, silently reading or changing another tenant's state.
     assert(vm.invoke_guest(a, guest_capture, 0) == 11);
+    std::int64_t outside_value = -11;
+    assert(saved_load.load(std::memory_order_acquire)(
+        saved_cookie.load(std::memory_order_acquire), 0, &outside_value) == 0);
+    assert(outside_value == -11);
     assert(vm.invoke_guest(b, guest_replay, 0) == 19);
     assert(vm.invoke_guest(a, guest_replay, 0) == 11);
     assert(vm.invoke_guest(a, guest_sum, 0) == 11);
@@ -90,6 +98,10 @@ int main() {
     vm.start(fault);
     assert(vm.invoke_guest(fault, guest_sum, 9) == 9);
     assert(rejects([&]{ vm.invoke_guest(fault, guest_throw, 0); }));
+    std::int64_t after_throw = -12;
+    assert(saved_load.load(std::memory_order_acquire)(
+        saved_cookie.load(std::memory_order_acquire), 0, &after_throw) == 0);
+    assert(after_throw == -12);
     assert(vm.snapshot(fault).active_guest_calls == 0);
     assert(vm.snapshot(fault).phase == IsolatePhase::Quiescing);
     assert(rejects([&]{ vm.invoke_guest(fault, guest_sum, 1); }));
