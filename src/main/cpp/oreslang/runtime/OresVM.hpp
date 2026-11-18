@@ -727,6 +727,13 @@ private:
         const std::shared_ptr<IsolateVM>& state, const ActorTicket& actor,
         bool cleanup_only) {
         require_live_actor(state, actor);
+        // Symmetric fence: the generic scalar guest ABI cannot acquire an
+        // actor turn from its callback either. Its runtime entry carries no
+        // actor authority, and checking only the other direction would
+        // permit nested guest -> actor -> guest capability confusion.
+        if (active_guest_call_ != nullptr)
+            throw std::logic_error(
+                "unscoped tenant guest cannot enter actor physical turn");
         if (active_carrier_tenant_ != nullptr || active_carrier_turn_serial_ != 0)
             throw std::logic_error("carrier already owns an actor turn");
         if (state->actor_turns.count(actor.id_))
