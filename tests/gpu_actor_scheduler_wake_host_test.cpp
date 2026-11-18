@@ -1,10 +1,13 @@
-#include "oreslang/runtime/GpuActorProviderBridgeV1.hpp"
+#include "oreslang/runtime/GpuActorCompletionExecutorV1.hpp"
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
 #include <cstdio>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -21,8 +24,15 @@ static void check(bool ok, const char* why) {
 
 class MockProvider final : public Port {
 public:
-    explicit MockProvider(std::uint64_t generation)
-        : Port({"gpu-actor", generation, "tenantA", "gpu0", "queueA", 2, 3, 5}) {}
+    explicit MockProvider(std::uint64_t generation,
+                          std::string actor_id = "gpu-actor",
+                          std::string tenant = "tenantA")
+        : Port({std::move(actor_id), generation, std::move(tenant),
+                "gpu0", "queueA", 2, 3, 5}),
+          host_thread(std::this_thread::get_id()) {}
+    const std::thread::id host_thread;
+    std::atomic<int> foreign_host_polls{0};
+    std::atomic<int> observed_events{0};
     Observation observation = Observation::Pending;
     EventHandle event;
     bool unknown = false;
@@ -36,6 +46,9 @@ public:
         return {EnqueueState::Submitted, event};
     }
     Observation observe(const EventHandle& candidate) override {
+        if (std::this_thread::get_id() == host_thread)
+            ++foreign_host_polls;
+        ++observed_events;
         check(candidate == event, "GPU poll observed foreign event");
         return observation;
     }
@@ -222,12 +235,22 @@ static void run_case(Port::Observation result, bool cancel, bool unknown,
     check(state.wake_count.load() == 0, "GPU submission ran completion inline");
     check(ores_native_actor_scheduler_outstanding_wake_loans(
         state.scheduler, state.actor) == 1, "GPU continuation wake loan not retained");
+    // GPU completion is deliberately processed by a bounded native host
+    // service, never the root CONTROL or an actor-carrier thread.
+    GpuActorCompletionExecutorV1 executor(provider->binding(), 4);
+    const auto progress = [&] {
+        check(executor.request(registry, bridge.completion_lease_id()),
+              "deduplicated GPU completion request was not admitted");
+        executor.await_idle();
+        check(executor.stats().failed == 0,
+              "GPU completion executor caught a host exception");
+    };
     // Unknown enqueue never publishes an optimistic wake. Reconcile first.
-    registry->progress_all();
+    progress();
     check(state.wake_count.load() == 0, "device Pending/Unknown caused a wake");
     if (device_loss_first) {
         provider->observation = Port::Observation::DeviceLost;
-        registry->progress_all();
+        progress();
         check(state.wake_count.load() == 0,
               "device loss fabricated a completion wake");
         check(ores_native_actor_scheduler_outstanding_wake_loans(
@@ -245,7 +268,9 @@ static void run_case(Port::Observation result, bool cancel, bool unknown,
         bridge.request_close();
     } else if (cancel) bridge.request_close();
     provider->observation = result;
-    registry->progress_all();
+    progress();
+    check(provider->foreign_host_polls.load() == 0,
+          "GPU event was observed on the root/control test thread");
     check(ores_native_actor_scheduler_drain(state.scheduler),
           "resumed native actor did not quiesce");
     const bool terminal_gpu_actor = stop_native || cancel || device_loss_first
@@ -277,7 +302,7 @@ static void run_case(Port::Observation result, bool cancel, bool unknown,
         check(ores_native_actor_scheduler_outstanding_wake_loans(
             state.scheduler, state.actor) == 0,
               "successful GPU event left a native wake loan");
-        registry->progress_all();
+        progress(); // no duplicate WAKE after a repeated terminal poll
         check(ores_native_actor_scheduler_drain(state.scheduler),
               "duplicate GPU wake drain");
         check(state.wake_count.load() == 1,
@@ -285,7 +310,9 @@ static void run_case(Port::Observation result, bool cancel, bool unknown,
     }
     if (!terminal_gpu_actor)
         bridge.retire_gracefully();
-    else registry->progress_all();
+    else progress();
+    check(executor.stats().processed >= (device_loss_first ? 3u : 2u),
+          "bounded completion worker failed to process provider events");
     ores_native_actor_scheduler_retire(state.scheduler);
     check(ores_native_actor_scheduler_try_destroy(state.scheduler),
           "native scheduler was not physically quiescent");
