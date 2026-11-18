@@ -8176,6 +8176,9 @@ if(BUILD_TESTING)
     oreslang_add_checked_source_actor_id_case(
         await tests/source_actor_checked_identity_await_v1.c)
 
+    oreslang_add_checked_source_actor_id_case(
+        stop_send_race tests/source_actor_checked_identity_stop_send_race.c)
+
     # A fail-stop regression must terminate AND emit the specific compiler-
     # owned denial. Ordinary CTest WILL_FAIL could mask an unrelated crash.
     foreach(mode IN ITEMS
