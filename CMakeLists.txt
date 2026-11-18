@@ -3561,6 +3561,27 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_using_typed_effects using-pure-constant.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_unknown_effect using-unknown-effect.ores --diagnostic "unknown function effect")
     oreslang_contract_test(native_using_duplicate_effect using-duplicate-effect.ores --diagnostic "duplicate function effect")
+    # #355 recovery: the host-only closed Result<void,ArrayError> contract
+    # is NOT a source-level generic Result/Ok/Err implementation. Fail
+    # before any IR. Existing Result<int,Error> and pure-trap gates remain.
+    foreach(kind IN ITEMS param return local)
+        oreslang_contract_test("native_result_void_arrayerror_${kind}_reject"
+            "native-result-void-arrayerror-${kind}-reject.ores"
+            --diagnostic "native Result<void,E> requires tagged zero-payload and nominal error lowering"
+            --parser-diagnostic)
+    endforeach()
+    oreslang_contract_test(native_result_nominal_error_payload_reject
+        native-result-arrayerror-payload-reject.ores
+        --diagnostic "native sum class/compound payload requires ownership and lifetime lowering"
+        --parser-diagnostic)
+    oreslang_contract_test(native_result_class_nominal_spoof_reject
+        native-result-spoof-class-reject.ores
+        --diagnostic "native sum type names are compiler-owned"
+        --parser-diagnostic)
+    oreslang_contract_test(native_option_class_nominal_spoof_reject
+        native-option-spoof-class-reject.ores
+        --diagnostic "native sum type names are compiler-owned"
+        --parser-diagnostic)
     oreslang_contract_test(native_critical_actor_state_not_lowered critical-handle-state-using.ores --diagnostic "native actor state { ... } requires sealed handle_state lowering")
     oreslang_contract_test(native_requires_rejects_unverified_wcet requires-unverified.ores --diagnostic "native requires clause awaits verified")
     oreslang_contract_test(native_actor_state_sealed_until_lowering state-sealed-unsupported.ores --diagnostic "native actor state")
