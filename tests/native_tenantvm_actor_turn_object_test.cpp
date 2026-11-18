@@ -35,6 +35,32 @@ extern "C" std::int32_t trusted_guest_probe(
     return ORES_GUEST_OK;
 }
 
+struct GuestToActorProbe {
+    OresVM* vm;
+    OresVM::IsolateHandle handle;
+    OresVM::ActorTicket actor;
+    int refused = 0;
+};
+static GuestToActorProbe* current_probe = nullptr;
+
+extern "C" std::int32_t guest_attempt_actor_reentry(
+    OresIsolateContext* ctx, std::int64_t input, std::int64_t* out) {
+    if (!ctx || !out || !current_probe ||
+        ctx->abi_version != ORES_ISOLATE_ABI_VERSION)
+        return ORES_GUEST_BAD_CONTEXT;
+    // The source guest ABI never received actor authority: holding its
+    // opaque callback cookie must not bootstrap a new actor physical turn.
+    if (!denies([&] {
+            const auto turn = current_probe->vm->enter_actor_turn(
+                current_probe->handle, current_probe->actor);
+            current_probe->vm->leave_actor_turn(
+                current_probe->handle, current_probe->actor, turn);
+        })) return ORES_GUEST_FAILED;
+    ++current_probe->refused;
+    *out = input;
+    return ORES_GUEST_OK;
+}
+
 int main() {
     OresVM vm;
     auto a = vm.create_isolate({"actor_a", 256, 8});
@@ -95,6 +121,14 @@ int main() {
     // After releasing all actor-owned capabilities, legacy trusted scalar
     // guests can run on this carrier (not an untrusted actor sandbox).
     CHECK(vm.invoke_guest(b, trusted_guest_probe, 17) == 17);
+    // Reverse-direction nested entry: an existing unscoped trusted guest
+    // cannot acquire an actor turn, even for a DIFFERENT root OresVM.
+    GuestToActorProbe probe{&vm, a, a2, 0};
+    current_probe = &probe;
+    CHECK(vm.invoke_guest(a, guest_attempt_actor_reentry, 21) == 21);
+    CHECK(other_root.invoke_guest(other, guest_attempt_actor_reentry, 22) == 22);
+    CHECK(probe.refused == 2);
+    current_probe = nullptr;
     other_root.retire_actor(other, other_actor);
     other_root.begin_shutdown(other);
     other_root.complete_shutdown(other);
