@@ -47,6 +47,7 @@ struct State {
     OresNativeActorRef actor{};
     OresNativeActorRef sibling{}; // same generation, different slot
     Bridge* bridge = nullptr;
+    Registry* registry = nullptr;
     OresNativeWakeTicket ticket{};
     std::atomic<int> wake_count{0};
     std::atomic<int> ready_auth{0};
@@ -56,6 +57,7 @@ struct State {
     std::atomic<int> cross_actor_denied{0};
     bool overflow_test = false;
     std::atomic<int> overflow_denied{0};
+    std::atomic<int> carrier_poll_denied{0};
 };
 
 static void on_data(void* opaque, size_t actor, std::uint64_t payload) {
@@ -87,6 +89,17 @@ static void on_data(void* opaque, size_t actor, std::uint64_t payload) {
         return;
     }
     check(actor == 0 && payload == 1, "unexpected actor message");
+    // GPU provider progress is host/poller work, not an actor turn. Reject
+    // even when the registry is otherwise idle.
+    try {
+        s.registry->progress_all();
+    } catch (const std::logic_error& e) {
+        if (std::string(e.what()) == "GPU_PROVIDER_PROGRESS_ON_ACTOR_CARRIER")
+            s.carrier_poll_denied.store(1, std::memory_order_release);
+        else throw;
+    }
+    check(s.carrier_poll_denied.load(std::memory_order_acquire) == 1,
+          "GPU provider polling escaped onto actor carrier");
     std::uint64_t mail = 0;
     check(ores_native_actor_scheduler_current_data_mail_sequence(
         s.scheduler, s.actor, &mail), "missing authenticated DATA mail");
@@ -177,6 +190,7 @@ static void run_case(Port::Observation result, bool cancel, bool unknown,
                   {"gpu-actor", state.actor.generation}, "root", 256,
                   overflow_test ? 1 : 0);
     state.bridge = &bridge;
+    state.registry = registry.get();
     bridge.bind_native_actor(state.scheduler, state.actor);
     // Bound native GPU actors must never enter the host-only submission
     // path: a WAKE-free submit could strand logical Future/STOP ownership.
