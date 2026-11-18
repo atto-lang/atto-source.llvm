@@ -94,6 +94,22 @@ int main() {
     CHECK(denies([&] { (void)vm.invoke_guest(a, trusted_guest_probe, 1); }));
     CHECK(denies([&] { (void)vm.invoke_guest(b, trusted_guest_probe, 2); }));
     CHECK(denies([&] { (void)other_root.invoke_guest(other, trusted_guest_probe, 3); }));
+    // The same TENANT is excluded on a different physical pthread as well.
+    // This is stronger than the host TLS guard alone; a completely separate
+    // tenant on that other pthread must still be able to make progress.
+    std::atomic<bool> cross_carrier_guest_denied{false};
+    std::atomic<bool> foreign_tenant_guest_allowed{false};
+    std::thread other_guest_carrier([&] {
+        cross_carrier_guest_denied.store(
+            denies([&] { (void)vm.invoke_guest(a, trusted_guest_probe, 13); }));
+        try {
+            foreign_tenant_guest_allowed.store(
+                vm.invoke_guest(b, trusted_guest_probe, 13) == 13);
+        } catch (...) { foreign_tenant_guest_allowed.store(false); }
+    });
+    other_guest_carrier.join();
+    CHECK(cross_carrier_guest_denied.load());
+    CHECK(foreign_tenant_guest_allowed.load());
     CHECK(denies([&] { (void)vm.enter_actor_turn(a, a1); }));
     CHECK(denies([&] { (void)vm.enter_actor_turn(a, a2); }));
     const auto obj = vm.allocate_actor_object(a, a1, first_turn, 8);
