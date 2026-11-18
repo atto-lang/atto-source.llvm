@@ -87,20 +87,26 @@ jobs:
           # -V preserves the per-executable case totals, including the real
           # compiler-generated guest cases. Missing cases are a failed gate.
           ctest --test-dir build/tv --verbose --output-on-failure | tee build/tv/test-execution.log
-          grep -Fq '44 cases, 0 failed' build/tv/test-execution.log || { echo "Native host case total or result mismatch" >&2; exit 1; }
+          grep -Fq '45 cases, 0 failed' build/tv/test-execution.log || { echo "Native host case total or result mismatch" >&2; exit 1; }
           grep -Fq '[ RUN  ] host_send_rejects_sibling_regions_and_boundary_spans' build/tv/test-execution.log || {
             echo "Sender-bounds regression did not execute" >&2; exit 1;
           }
-          grep -Fq '22 cases, 0 failed' build/tv/test-execution.log || { echo "Lowered guest case total or result mismatch" >&2; exit 1; }
+          grep -Fq '[ RUN  ] host_api_table_is_shared_across_root_lifetimes' build/tv/test-execution.log || {
+            echo "Root callback table lifetime regression did not execute" >&2; exit 1;
+          }
+          grep -Fq '23 cases, 0 failed' build/tv/test-execution.log || { echo "Lowered guest case total or result mismatch" >&2; exit 1; }
           grep -Fq '[ RUN  ] atto_carrier_handoff_and_tenant_reincarnation' build/tv/test-execution.log || {
             echo "Real compiler guest carrier-handoff regression did not execute" >&2; exit 1;
+          }
+          grep -Fq '[ RUN  ] atto_shared_module_across_independent_roots' build/tv/test-execution.log || {
+            echo "Compiled guest multi-root callback lifetime regression did not execute" >&2; exit 1;
           }
           grep -Fq 'SOURCE_CONTRACT_PASS' build/tv/test-execution.log || { echo "Missing source contract execution proof" >&2; exit 1; }
           grep -Fq 'ADMISSION_PASS' build/tv/test-execution.log || { echo "Missing admission execution proof" >&2; exit 1; }
           {
             echo "### Required executable gate totals"
-            echo "- Native host: 44/44 cases passed (including sender-region isolation)"
-            echo "- Lowered guests: 22/22 cases passed (including real .atto carrier handoff)"
+            echo "- Native host: 45/45 cases passed (including sender-region and root API lifetime)"
+            echo "- Lowered guests: 23/23 cases passed (including real .atto carrier handoff and cross-root host APIs)"
             echo "- Source-contract and admission: pass markers present"
             echo "- Plain suite: all four registered CTest tests ran"
           } >> "$GITHUB_STEP_SUMMARY"
