@@ -942,6 +942,95 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             digest, hashlib.sha256(v3.canonical_bytes(rows)).hexdigest()
         )
 
+    def test_exact_tree_current_tenantvm_snapshot_fits_and_cap_refuses_before_blob_read(self):
+        # A real source PR head had 1,845 blobs and 95 directories on
+        # 2026-11-18. A 1,024-file v3 cap would refuse that COMPLETE source
+        # tree even after every independent governance gate was approved.
+        # These fixtures are synthetic and SOURCE-FREE: no source export.
+        self.assertGreaterEqual(v3.MAX_FILES, 1845)
+        self.assertLess(v3.MAX_FILES, v3.MAX_TREE_ENTRIES)
+        self.assertEqual(v3.MAX_FILES, 2048)
+        self.assertEqual(v3.MAX_TOTAL, 40 * 1024 * 1024)
+        self.assertEqual(v3.MAX_FILE, 10 * 1024 * 1024)
+        fetched_blobs = []
+        size = 1845
+
+        def api(route, method="GET", payload=None):
+            if route == f"repos/{v3.SOURCE_REPO}/git/commits/" + "9" * 40:
+                return {"sha": "9" * 40, "tree": {"sha": SOURCE_TREE}}
+            if route == f"repos/{v3.SOURCE_REPO}/git/trees/{SOURCE_TREE}?recursive=1":
+                return {
+                    "sha": SOURCE_TREE, "truncated": False,
+                    "tree": [
+                        {"path": f"src/tenantvm-{i:04}.c", "type": "blob",
+                         "mode": "100644", "sha": BLOB, "size": len(DATA)}
+                        for i in range(size)
+                    ],
+                }
+            if route == f"repos/{v3.SOURCE_REPO}/git/blobs/{BLOB}":
+                fetched_blobs.append(route)
+                return {"sha": BLOB, "encoding": "base64",
+                        "content": base64.b64encode(DATA).decode()}
+            raise AssertionError(route)
+
+        with (
+            patch.object(v3, "verify_source_pr"),
+            patch.object(v3, "gh_api", side_effect=api),
+        ):
+            for size in (1845, v3.MAX_FILES):
+                fetched_blobs.clear()
+                root, files, rows, manifest = v3.exact_source_tree(669, "9" * 40)
+                self.assertEqual(root, SOURCE_TREE)
+                self.assertEqual(len(files), size)
+                self.assertEqual(len(fetched_blobs), size)
+                self.assertEqual(len(rows), size)
+                self.assertEqual(len({path for path, _mode, _sha, _data in files}), size)
+                self.assertEqual(manifest, hashlib.sha256(v3.canonical_bytes(rows)).hexdigest())
+            # Too many files must be denied BEFORE any source blob is fetched.
+            size = v3.MAX_FILES + 1
+            fetched_blobs.clear()
+            with self.assertRaisesRegex(v3.Denied, "exceeds bounded capacity"):
+                v3.exact_source_tree(669, "9" * 40)
+            self.assertEqual(fetched_blobs, [])
+
+    def test_exact_tree_enforces_independent_byte_and_entry_budgets(self):
+        # Increasing MAX_FILES cannot increase MAX_TOTAL or permit a
+        # truncated/tree-bomb response. All cases fail before blob reads.
+        blobs = []
+        count, size, truncated = 5, v3.MAX_FILE, False
+
+        def api(route, method="GET", payload=None):
+            if "/git/commits/" in route:
+                return {"sha": "9" * 40, "tree": {"sha": SOURCE_TREE}}
+            if "/git/trees/" in route:
+                return {
+                    "sha": SOURCE_TREE, "truncated": truncated,
+                    "tree": [
+                        {"path": f"src/large-{i:05}.dat", "type": "blob",
+                         "mode": "100644", "sha": BLOB, "size": size}
+                        for i in range(count)
+                    ],
+                }
+            if "/git/blobs/" in route:
+                blobs.append(route)
+            raise AssertionError(route)
+
+        with (
+            patch.object(v3, "verify_source_pr"),
+            patch.object(v3, "gh_api", side_effect=api),
+        ):
+            with self.assertRaisesRegex(v3.Denied, "bounded capacity"):
+                v3.exact_source_tree(669, "9" * 40)
+            self.assertEqual(blobs, [])
+            count, size = v3.MAX_TREE_ENTRIES + 1, 1
+            with self.assertRaisesRegex(v3.Denied, "incomplete or exceeds safety"):
+                v3.exact_source_tree(669, "9" * 40)
+            self.assertEqual(blobs, [])
+            count, size, truncated = 1, 1, True
+            with self.assertRaisesRegex(v3.Denied, "incomplete or exceeds safety"):
+                v3.exact_source_tree(669, "9" * 40)
+            self.assertEqual(blobs, [])
+
     def test_source_tree_rejects_oversized_declared_blob_before_blob_read(self):
         seen = []
         def api(route, method="GET", payload=None):
