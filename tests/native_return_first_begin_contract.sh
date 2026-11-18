@@ -32,4 +32,25 @@ for case in 1 2 3 4 5; do
     exit 1
   fi
 done
-printf 'RETURN_FIRST_LLVM_PARSER_ACCEPTED=12 REJECTED=5 WASM_GUEST_NOT_EXECUTED\n'
+# The class-method grammar is distinct from root functions. Frontend-only
+# admission confirms all four spellings bind the receiver-bearing method path
+# without claiming Wasm class object ABI or guest execution.
+for marker in '' 'mtd ' 'fnc '; do
+  for separator in '<-' '•'; do
+    { printf 'define class Box as\n  %sint %s value()\n  begin\n    return 42;\n  end.\nend\n' "$marker" "$separator"
+      printf 'fnc main(): int { return 42; }\n'
+    } > "$work/method.atto"
+    "$compiler" --check "$work/method.atto" > "$work/method.out" 2>"$work/method.err" || {
+      printf 'class method rejected marker=%s separator=%s\n' "$marker" "$separator" >&2
+      cat "$work/method.err" >&2
+      exit 1
+    }
+    test ! -s "$work/method.out"
+  done
+done
+# Contextual <- must never consume an ordinary less-than followed by
+# unary minus in an expression, even without whitespace.
+printf 'fnc main(): bool { return 1<-2; }\n' > "$work/expression.atto"
+"$compiler" --check "$work/expression.atto" > "$work/expr.out" 2>"$work/expr.err"
+test ! -s "$work/expr.out"
+printf 'RETURN_FIRST_LLVM_PARSER_ACCEPTED=12 CLASS_METHODS=6 REJECTED=5 WASM_GUEST_NOT_EXECUTED\n'
