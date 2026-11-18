@@ -177,6 +177,15 @@ static void run_case(Port::Observation result, bool cancel, bool unknown,
                   overflow_test ? 1 : 0);
     state.bridge = &bridge;
     bridge.bind_native_actor(state.scheduler, state.actor);
+    // Bound native GPU actors must never enter the host-only submission
+    // path: a WAKE-free submit could strand logical Future/STOP ownership.
+    try {
+        (void)bridge.submit(3);
+        check(false, "native GPU bridge allowed wake-free submission");
+    } catch (const std::logic_error& error) {
+        check(std::string(error.what()) == "GPU_PROVIDER_NATIVE_WAKE_REQUIRED",
+              "native GPU wake-free denial returned wrong error");
+    }
     try {
         bridge.bind_native_actor(state.scheduler, state.sibling);
         check(false, "native binding incorrectly allowed retarget");
