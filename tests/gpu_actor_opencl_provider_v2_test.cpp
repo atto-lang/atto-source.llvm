@@ -1,4 +1,5 @@
 #include "oreslang/runtime/GpuActorOpenClRecoveryWorkerV1.hpp"
+#include "oreslang/runtime/GpuActorCompletionExecutorV1.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -233,6 +234,46 @@ void actual_provider_api_pipeline_mocked() {
     check(p->observe(result.event)==Port::Observation::Unknown,"retired provider cannot replay completion");
 }
 
+// OpenCL Api has polling only. A bounded host GPU completion worker must
+// advance upload -> kernel -> download without waking a GPU/CPU actor carrier
+// for each intermediate event. The physical API here is deliberately FAKE.
+void timed_completion_executor_advances_multistage_opencl_mock() {
+    Inputs in;
+    auto api=std::make_shared<FakeOpenCl>();
+    auto port=make_port(api,in);
+    auto registry=std::make_shared<Registry>(2);
+    auto lane=std::make_shared<Lane>(2);
+    auto actor=std::make_unique<GpuActorProviderBridgeV1>(
+        registry,port,lane,Lane::ActorKey{"actor",3},"root",
+        in.plan.byte_length(),5);
+    auto turn=actor->submit(12);
+    check(turn.sequence==1, "timed OpenCL multi-stage initial actor turn");
+    {
+        oreslang::gpu_actor::GpuActorCompletionExecutorV1 executor(
+            port->binding(), 1, std::chrono::milliseconds{2});
+        check(executor.request(registry,actor->completion_lease_id()),
+              "timed OpenCL stage work admitted");
+        executor.await_idle();
+        const auto result=executor.stats();
+        check(result.processed>=3 && result.timed_repolls>=2
+              && result.failed==0 && result.retained==0,
+              "timed completion host progressed 3 physical OpenCL stage receipts");
+    }
+    check(actor->committed_state()==17,
+          "GPU actor host state commits only after download completion");
+    check(api->uploads==1 && api->kernels==1 && api->downloads==1,
+          "upload, kernel and download all ran via OpenCL API seam");
+    numerical_oracle(in,port->verified_output());
+    check(api->buffer_releases==2 && api->event_releases==3,
+          "OpenCL buffer/event ownership retired after verified stage events");
+    actor->retire_gracefully();
+    check(api->program_releases==1,
+          "OpenCL compiled program retired exactly once after host completion");
+    actor.reset();
+    check(registry->retained_count()==0,
+          "timed GPU completion left no orphaned registry entry");
+}
+
 void actor_bridge_commits_only_after_kernel_download() {
     Inputs in;
     auto api=std::make_shared<FakeOpenCl>();
@@ -461,6 +502,7 @@ void ambiguous_kernel_or_download_never_releases_before_proof(bool download,
 
 int main() {
     actual_provider_api_pipeline_mocked();
+    timed_completion_executor_advances_multistage_opencl_mock();
     event_info_query_failure_never_forges_terminal_completion();
     actor_bridge_commits_only_after_kernel_download();
     gpu_loss_requires_native_quiescence_before_cancel_retirement();
