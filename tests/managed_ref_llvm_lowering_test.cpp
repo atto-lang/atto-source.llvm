@@ -193,7 +193,7 @@ int main(int argc, char** argv) {
             for (std::size_t at = printed.find(source_conv);
                  at != std::string::npos;
                  at = printed.find(source_conv, at + 1)) {
-                const auto eol = printed.find('\\n', at);
+                const auto eol = printed.find('\n', at);
                 const auto line = printed.substr(at, eol - at);
                 require(line.size() >= want_width.size() &&
                         line.compare(line.size() - want_width.size(),
