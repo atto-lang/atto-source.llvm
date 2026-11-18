@@ -367,6 +367,68 @@ void atto_actor_state_is_private_and_durable() {
     std::printf("  1000 durable turns; state private per actor, tenant and program\n");
 }
 
+// One pthread is deliberately shared between two concurrently admitted TenantVMs.
+// The real .atto compiler must have produced these actors; the host must neither keep
+// the previous tenant's execution context on the carrier nor let a failed tenant's
+// old actor handle regain access when its tenant name is reused.
+void atto_carrier_handoff_and_tenant_reincarnation() {
+    const LoadedGuest counter = load("atto_counter");
+    const LoadedGuest fault_guest = load("hostile_guard");
+    if (!counter.module || !fault_guest.module) return;
+    HostLimits limits;
+    limits.carriers = 1;  // Every cross-tenant turn must use the SAME pthread.
+    TenantVmHost host(limits);
+
+    auto first = host.open(spec("handoff-a", counter));
+    auto second = host.open(spec("handoff-b", counter));
+    auto doomed = host.open(spec("handoff-failed", fault_guest));
+    REQUIRE_OK(first);
+    REQUIRE_OK(second);
+    REQUIRE_OK(doomed);
+    std::vector<VmActor> actors_a, actors_b;
+    for (int j = 0; j < 3; ++j) {
+        auto a = host.spawn_actor(first.handle, 0);
+        auto b = host.spawn_actor(second.handle, 0);
+        REQUIRE_OK(a);
+        REQUIRE_OK(b);
+        actors_a.push_back(a.actor);
+        actors_b.push_back(b.actor);
+    }
+    auto failing_actor = host.spawn_actor(doomed.handle, 0);
+    REQUIRE_OK(failing_actor);
+
+    // All six compiled .atto actor instances maintain independent state even
+    // though there is exactly one carrier and every turn changes its tenant.
+    for (int round = 1; round <= 48; ++round) {
+        for (int j = 0; j < 3; ++j) {
+            const auto a = host.call(actors_a[j], one(j + 1)).get();
+            const auto b = host.call(actors_b[j], one(j + 4)).get();
+            CHECK_STATUS(a.status, Status::Ok);
+            CHECK_STATUS(b.status, Status::Ok);
+            CHECK(word(a.payload) == round * (j + 1));
+            CHECK(word(b.payload) == round * (j + 4));
+        }
+        if (round == 24) {
+            // A fault through a validated, test-only Wasm guest retires its VM.
+            // The same pthread must subsequently execute healthy .atto tenants.
+            CHECK_STATUS(host.call(failing_actor.actor, msg(OP_TRAP)).get().status, Status::TenantFailed);
+            CHECK(host.wait_closed(doomed.handle).phase == Phase::Failed);
+            // Reusing the tenant name must create fresh memory and authority.
+            auto fresh = host.open(spec("handoff-failed", counter));
+            REQUIRE_OK(fresh);
+            auto newborn = host.spawn_actor(fresh.handle, 0);
+            REQUIRE_OK(newborn);
+            CHECK_STATUS(host.call(failing_actor.actor, msg(OP_ADD, 1)).get().status, Status::StaleHandle);
+            CHECK(word(host.call(newborn.actor, one(0)).get().payload) == 0);
+            CHECK(word(host.call(newborn.actor, one(17)).get().payload) == 17);
+            CHECK_STATUS(host.begin_shutdown(fresh.handle), Status::Ok);
+            CHECK(host.wait_closed(fresh.handle).phase == Phase::Stopped);
+        }
+    }
+    CHECK(host.stats().wild_accesses == 0);
+    CHECK(host.stats().live_vms == 2);
+}
+
 // A trap in source restarts that actor from its last finished turn. Everything else carries on.
 void atto_failed_actor_restarts_from_stored_state() {
     const LoadedGuest counter = load("atto_counter");
@@ -855,6 +917,7 @@ const Case cases[] = {
     {"loader_admits_only_exact_bytes", loader_admits_only_exact_bytes},
 #if defined(TENANT_VM_HAVE_ATTO)
     {"atto_actor_state_is_private_and_durable", atto_actor_state_is_private_and_durable},
+    {"atto_carrier_handoff_and_tenant_reincarnation", atto_carrier_handoff_and_tenant_reincarnation},
     {"atto_failed_actor_restarts_from_stored_state", atto_failed_actor_restarts_from_stored_state},
     {"atto_without_bounds_checks_no_restart", atto_without_bounds_checks_no_restart},
     {"atto_runaway_source_ends_only_its_turn", atto_runaway_source_ends_only_its_turn},
