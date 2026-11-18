@@ -72,11 +72,13 @@ for level in O0 O2; do
   # security substrate, and source-generated ABI in ONE native executable.
   # This does NOT grant actor-scoped entry to generic source guests.
   integrated="$root/tests/native_tenantvm_integrated_actor_source_test.cpp"
-  if [[ -f "$integrated" ]]; then
-    "$cxx" -std=c++17 -"$level" -DNDEBUG -Wall -Wextra -Wpedantic -Werror \
-      -pthread -I"$root/src/main/cpp" "$integrated" "$tmp/tenantvm-$level.o" \
-      -o "$tmp/tenantvm-integrated-$level"
-    "$tmp/tenantvm-integrated-$level"
+  if [[ ! -f "$integrated" || -L "$integrated" ]]; then
+    echo "MISSING_ACTOR_GUEST_INTEGRATION_FIXTURE" >&2
+    exit 1
   fi
+  "$cxx" -std=c++17 -"$level" -DNDEBUG -Wall -Wextra -Wpedantic -Werror \
+    -pthread -I"$root/src/main/cpp" "$integrated" "$tmp/tenantvm-$level.o" \
+    -o "$tmp/tenantvm-integrated-$level"
+  "$tmp/tenantvm-integrated-$level"
 done
 echo 'REAL_ATTO_LLVM_TENANTVM_AOT_EXECUTED: O0/O2, trusted only'
