@@ -68,6 +68,9 @@ struct IsolateActorTurnRecord {
     std::uint64_t incarnation = 0;
     std::uint64_t serial = 0;
     std::thread::id carrier{};
+    // Thread IDs may be recycled after a pthread exits. Never authorize a
+    // turn on numeric thread identity alone; require a unique TLS lifetime.
+    std::uint64_t carrier_incarnation = 0;
 };
 
 struct IsolateSnapshot {
