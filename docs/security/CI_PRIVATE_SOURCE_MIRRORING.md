@@ -83,6 +83,23 @@ this exact-head evidence.
 
 ## V3 exact source-API publisher
 
+### Full-tree size is an authorization-independent gate
+
+As of the November 18, 2026 TenantVM [#1898](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1898)
+head, the exact private LLVM Git tree has **1,845 blobs and 95 directories**.
+The original v3 publisher limit of 1,024 files would have rejected even a
+fully approved exact-tree transfer. The proposed bounded limit is **2,048
+blobs**, while preserving **4,096 total recursive tree entries, 40 MiB total
+declared source bytes and 10 MiB per blob**. Source-free tests exercise
+1,845 and 2,048 accepted blobs and refuse 2,049 blobs, budget overruns,
+tree truncation and unsupported symlink modes **before source blob reads**.
+
+This limit change is **not permission to export**. Source protected-main,
+independent reviewer and incident closure, carrier contract, workflow and
+test-plan identity must still pass unchanged. As soon as the current tree
+exceeds a limit, fail closed and request a separately reviewed bounded
+policy change; never silently skip files to fit.
+
 The source-side v3 publisher is `scripts/publish-private-ci-source-v3.py`,
 invoked only through `scripts/run-in-private-ci-destination.sh`. It does not
 trust a caller-provided working-tree snapshot. Instead, it requires the exact
