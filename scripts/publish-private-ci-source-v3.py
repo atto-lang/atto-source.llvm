@@ -62,7 +62,12 @@ MAX_MAVEN_PREFETCH_ARTIFACTS = 16
 CARRIER_REVIEW_LOGIN = INCIDENT_REVIEW_LOGIN
 CARRIER_REVIEW_USER_ID = INCIDENT_REVIEW_USER_ID
 MAX_GOVERNANCE_FILE = 1024 * 1024
-MAX_FILES = 1024
+# The 2026-11-18 LLVM TenantVM head has 1,845 regular/executable Git blobs.
+# The former 1,024 cap silently made an exact full-tree test impossible even
+# after policy authorization. 2,048 is deliberately bounded; the independent
+# 4,096 total entries / 40 MiB source / 10 MiB per-file limits still apply.
+# This change does NOT authorize any private-source export.
+MAX_FILES = 2048
 MAX_TREE_ENTRIES = 4096
 MAX_TOTAL = 40 * 1024 * 1024
 MAX_FILE = 10 * 1024 * 1024
