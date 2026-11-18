@@ -12,6 +12,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -70,6 +71,24 @@ public:
               slot_(slot), object_generation_(generation) {}
     public:
         ObjectHandle() = default;
+    };
+
+    class ActorTurnTicket final {
+        friend class OresVM;
+        std::weak_ptr<IsolateVM> state_;
+        std::uint64_t tenant_generation_ = 0;
+        std::uint64_t actor_id_ = 0;
+        std::uint64_t actor_generation_ = 0;
+        std::uint64_t turn_serial_ = 0;
+        std::thread::id carrier_{};
+        ActorTurnTicket(const std::shared_ptr<IsolateVM>& state,
+                        std::uint64_t actor_id, std::uint64_t actor_generation,
+                        std::uint64_t serial, std::thread::id carrier)
+            : state_(state), tenant_generation_(state->generation),
+              actor_id_(actor_id), actor_generation_(actor_generation),
+              turn_serial_(serial), carrier_(carrier) {}
+    public:
+        ActorTurnTicket() = default;
     };
 
     class ActorTicket final {
@@ -298,6 +317,108 @@ public:
         if (slot.generation != std::numeric_limits<std::uint64_t>::max())
             ++slot.generation;
         // A UINT64_MAX slot remains retired forever; never wrap to 1.
+    }
+
+    // These are authenticated trusted-host *turn* tickets, not native
+    // machine-code sandbox or user-creatable ActorRef values. A ticket is
+    // admitted on one carrier pthread and cannot be used from another.
+    ActorTurnTicket enter_actor_turn(const IsolateHandle& handle,
+                                     const ActorTicket& actor) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running)
+            throw std::logic_error("actor physical turn admission closed");
+        require_live_actor(state, actor);
+        if (state->actor_turns.count(actor.id_))
+            throw std::logic_error("actor already owns a physical turn");
+        const auto carrier = std::this_thread::get_id();
+        for (const auto& active : state->actor_turns)
+            if (active.second.carrier == carrier)
+                throw std::logic_error("reentrant actor carrier turn denied");
+        if (state->next_actor_turn_serial ==
+            std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("actor turn serial exhausted");
+        const auto serial = state->next_actor_turn_serial++;
+        state->actor_turns.emplace(actor.id_, IsolateActorTurnRecord{
+            actor.actor_generation_, serial, carrier});
+        return ActorTurnTicket(state, actor.id_, actor.actor_generation_,
+                               serial, carrier);
+    }
+
+    void leave_actor_turn(const IsolateHandle& handle, const ActorTicket& actor,
+                          const ActorTurnTicket& turn) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto state = checked(handle);
+        require_live_turn(state, actor, turn);
+        state->actor_turns.erase(actor.id_);
+    }
+
+    // All actor-owned object operations use the exact live actor and current
+    // physical turn. Host-only legacy object APIs deliberately cannot read
+    // or retire actor-owned objects. No guest gets a native heap address.
+    ObjectHandle allocate_actor_object(const IsolateHandle& handle,
+                                      const ActorTicket& actor,
+                                      const ActorTurnTicket& turn,
+                                      std::uint32_t bytes,
+                                      std::uint32_t alignment = 8) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running)
+            throw std::logic_error("actor object allocation admission closed");
+        require_live_turn(state, actor, turn);
+        return allocate_object_locked(state, bytes, alignment,
+                                      actor.id_, actor.actor_generation_);
+    }
+
+    std::uint8_t read_actor_object_byte(const IsolateHandle& handle,
+                                       const ActorTicket& actor,
+                                       const ActorTurnTicket& turn,
+                                       const ObjectHandle& object,
+                                       std::uint32_t index) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running &&
+            state->phase != IsolatePhase::Quiescing)
+            throw std::logic_error("actor object access closed");
+        require_live_turn(state, actor, turn);
+        const auto& slot = checked_object(
+            state, object, actor.id_, actor.actor_generation_);
+        if (index >= slot.size)
+            throw std::out_of_range("actor object read out of bounds");
+        return state->heap[static_cast<std::size_t>(slot.offset) + index];
+    }
+
+    void write_actor_object_byte(const IsolateHandle& handle,
+                                 const ActorTicket& actor,
+                                 const ActorTurnTicket& turn,
+                                 const ObjectHandle& object,
+                                 std::uint32_t index, std::uint8_t value) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running &&
+            state->phase != IsolatePhase::Quiescing)
+            throw std::logic_error("actor object access closed");
+        require_live_turn(state, actor, turn);
+        const auto& slot = checked_object(
+            state, object, actor.id_, actor.actor_generation_);
+        if (index >= slot.size)
+            throw std::out_of_range("actor object write out of bounds");
+        state->heap[static_cast<std::size_t>(slot.offset) + index] = value;
+    }
+
+    void retire_actor_object(const IsolateHandle& handle,
+                             const ActorTicket& actor,
+                             const ActorTurnTicket& turn,
+                             const ObjectHandle& object) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running &&
+            state->phase != IsolatePhase::Quiescing)
+            throw std::logic_error("actor object retirement closed");
+        require_live_turn(state, actor, turn);
+        auto& slot = checked_object(
+            state, object, actor.id_, actor.actor_generation_);
+        scrub_object(state, slot);
     }
 
     ActorTicket register_actor(const IsolateHandle& handle, std::uint64_t actor_id) {
