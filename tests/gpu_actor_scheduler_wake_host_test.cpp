@@ -234,33 +234,42 @@ static void run_case(Port::Observation result, bool cancel, bool unknown,
     registry->progress_all();
     check(ores_native_actor_scheduler_drain(state.scheduler),
           "resumed native actor did not quiesce");
-    if (stop_native) {
-        // The scheduler consumes a transferred wake when its producer STOPs;
-        // the provider still had to establish physical event quiescence.
+    const bool terminal_gpu_actor = stop_native || cancel || device_loss_first
+        || result == Port::Observation::CompleteFailed;
+    if (terminal_gpu_actor) {
+        // A closed GPU-ACTOR incarnation must never execute guest code on
+        // a native WAKE, including a previously enqueued completion.
         check(state.wake_count.load() == 0,
-              "retired actor must never execute a GPU completion");
+              "terminal GPU actor executed a continuation");
         check(ores_native_actor_scheduler_outstanding_wake_loans(
             state.scheduler, state.actor) == 0,
-              "native STOP left GPU wake escrow stranded");
+              "terminal GPU actor left WAKE escrow live");
         check(ores_native_actor_scheduler_wait_done(state.scheduler, state.actor),
-              "native STOP did not reach physical DONE after device event");
+              "terminal GPU actor failed to reach native DONE");
+        const auto notice = control->poll();
+        check(notice.has_value(), "terminal GPU actor emitted no supervisor CONTROL");
+        check(notice->kind == (device_loss_first
+                || result == Port::Observation::CompleteFailed
+                ? Lane::Kind::HostFailure : Lane::Kind::Cancel),
+              "terminal GPU actor produced incorrect CONTROL kind");
+        control->ack(notice->actor);
     } else {
-    check(state.wake_count.load() == 1, "terminal event must publish one wake");
-    const auto expected = (cancel || device_loss_first) ? ORES_NATIVE_WAKE_CANCELLED
-        : (result == Port::Observation::CompleteOk
-            ? ORES_NATIVE_WAKE_READY : ORES_NATIVE_WAKE_FAILED);
-    check(state.delivered.load() == static_cast<int>(expected),
-          "GPU completion had wrong outcome");
-    check(state.ready_auth.load() == (expected == ORES_NATIVE_WAKE_READY),
-          "GPU cancellation or failure leaked READY continuation authority");
-    check(ores_native_actor_scheduler_outstanding_wake_loans(
-        state.scheduler, state.actor) == 0, "GPU wake loan not retired");
-    registry->progress_all(); // no duplicate WAKE on repeated polls
-    check(ores_native_actor_scheduler_drain(state.scheduler), "duplicate wake drain");
-    check(state.wake_count.load() == 1, "duplicate GPU event resumed twice");
+        check(state.wake_count.load() == 1,
+              "successful GPU event must publish one actor WAKE");
+        check(state.delivered.load() == ORES_NATIVE_WAKE_READY,
+              "successful GPU event yielded a non-READY wake");
+        check(state.ready_auth.load() == 1,
+              "READY wake did not have native actor execution authority");
+        check(ores_native_actor_scheduler_outstanding_wake_loans(
+            state.scheduler, state.actor) == 0,
+              "successful GPU event left a native wake loan");
+        registry->progress_all();
+        check(ores_native_actor_scheduler_drain(state.scheduler),
+              "duplicate GPU wake drain");
+        check(state.wake_count.load() == 1,
+              "duplicate GPU event resumed twice");
     }
-    if (!stop_native && !cancel && !device_loss_first
-        && result == Port::Observation::CompleteOk)
+    if (!terminal_gpu_actor)
         bridge.retire_gracefully();
     else registry->progress_all();
     ores_native_actor_scheduler_retire(state.scheduler);
