@@ -81,12 +81,15 @@ public:
         std::uint64_t actor_generation_ = 0;
         std::uint64_t turn_serial_ = 0;
         std::thread::id carrier_{};
+        bool cleanup_only_ = false;
         ActorTurnTicket(const std::shared_ptr<IsolateVM>& state,
                         std::uint64_t actor_id, std::uint64_t actor_generation,
-                        std::uint64_t serial, std::thread::id carrier)
+                        std::uint64_t serial, std::thread::id carrier,
+                        bool cleanup_only)
             : state_(state), tenant_generation_(state->generation),
               actor_id_(actor_id), actor_generation_(actor_generation),
-              turn_serial_(serial), carrier_(carrier) {}
+              turn_serial_(serial), carrier_(carrier),
+              cleanup_only_(cleanup_only) {}
     public:
         ActorTurnTicket() = default;
     };
@@ -288,7 +291,7 @@ public:
         const auto state = checked(handle);
         if (state->phase != IsolatePhase::Running)
             throw std::logic_error("actor physical turn admission closed");
-        return admit_actor_turn_locked(state, actor);
+        return admit_actor_turn_locked(state, actor, false);
     }
 
     // Quiescing seals new work but the supervisor must still be able to
@@ -300,7 +303,7 @@ public:
         const auto state = checked(handle);
         if (state->phase != IsolatePhase::Quiescing)
             throw std::logic_error("cleanup-only turn requires quiescing");
-        return admit_actor_turn_locked(state, actor);
+        return admit_actor_turn_locked(state, actor, true);
     }
 
     void leave_actor_turn(const IsolateHandle& handle, const ActorTicket& actor,
@@ -339,6 +342,8 @@ public:
             state->phase != IsolatePhase::Quiescing)
             throw std::logic_error("actor object access closed");
         require_live_turn(state, actor, turn);
+        if (turn.cleanup_only_)
+            throw std::logic_error("cleanup-only turn cannot read actor objects");
         const auto& slot = checked_object(
             state, object, actor.id_, actor.actor_generation_);
         if (index >= slot.size)
@@ -357,6 +362,8 @@ public:
             state->phase != IsolatePhase::Quiescing)
             throw std::logic_error("actor object access closed");
         require_live_turn(state, actor, turn);
+        if (turn.cleanup_only_)
+            throw std::logic_error("cleanup-only turn cannot write actor objects");
         const auto& slot = checked_object(
             state, object, actor.id_, actor.actor_generation_);
         if (index >= slot.size)
@@ -674,7 +681,8 @@ private:
 
     // All helper functions require mutex_ to be held by their caller.
     static ActorTurnTicket admit_actor_turn_locked(
-        const std::shared_ptr<IsolateVM>& state, const ActorTicket& actor) {
+        const std::shared_ptr<IsolateVM>& state, const ActorTicket& actor,
+        bool cleanup_only) {
         require_live_actor(state, actor);
         if (state->actor_turns.count(actor.id_))
             throw std::logic_error("actor already owns a physical turn");
@@ -689,7 +697,7 @@ private:
         state->actor_turns.emplace(actor.id_, IsolateActorTurnRecord{
             actor.actor_generation_, serial, carrier});
         return ActorTurnTicket(state, actor.id_, actor.actor_generation_,
-                               serial, carrier);
+                               serial, carrier, cleanup_only);
     }
 
     // No actor ID/name is accepted as authority without a host-issued
