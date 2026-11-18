@@ -19,7 +19,7 @@ jobs:
       - name: GCC C++17 optimized host adapter test
         run: |
           set -euo pipefail
-          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Isrc/main/cpp tests/actor_ref32_heap_test.cpp -o /tmp/ref32-host-gcc
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -pthread -Isrc/main/cpp tests/actor_ref32_heap_test.cpp -o /tmp/ref32-host-gcc
           /tmp/ref32-host-gcc | tee /tmp/ref32-gcc.log
           grep -q '^ATTO_REF32_HOST_PASS checks=' /tmp/ref32-gcc.log
       - name: Clang ASan UBSan host adapter test
