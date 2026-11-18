@@ -14,6 +14,7 @@ on:
       - 'tests/native_tenantvm_integrated_actor_source_test.cpp'
       - 'tests/tenantvm_actor_turn_exact_checkout.sh'
       - 'tests/tenantvm_atto_source_aot_gate.sh'
+      - 'tests/tenantvm_unified_source_identity.sh'
       - '.github/workflows/tenantvm-atto-source-aot-admission.yml'
   workflow_dispatch:
 
@@ -37,6 +38,13 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED"
+      - name: Verify original compiler and actor runtime Git object identities
+        shell: bash
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          bash tests/tenantvm_unified_source_identity.sh "$EXPECTED"
       - name: Install compiler toolchain
         run: |
           sudo apt-get update
