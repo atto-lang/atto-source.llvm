@@ -692,6 +692,57 @@ void must_not_kill_the_process(const char* what, Body body) {
     }
 }
 
+// The guest passes only an offset, so the host must not accept any committed
+// offset as readable: another actor's region in the SAME VM is often mapped.
+// A stale or wrongly compiled caller must not make the privileged host copy
+// a sibling's state into a mailbox, even when no memory fault would occur.
+void host_send_rejects_sibling_regions_and_boundary_spans() {
+    TenantVmHost host;
+    auto tenant = host.open(spec("sender-bounds"));
+    auto neighbor = host.open(spec("neighbor"));
+    REQUIRE_OK(tenant); REQUIRE_OK(neighbor);
+    auto victim = host.spawn_actor(tenant.handle, KIND_MEMORY);
+    auto attacker = host.spawn_actor(tenant.handle, KIND_HOSTILE);
+    auto next = host.spawn_actor(tenant.handle, KIND_MEMORY);
+    auto recipient = host.spawn_actor(tenant.handle, KIND_COUNTER);
+    auto unaffected = host.spawn_actor(neighbor.handle, KIND_COUNTER);
+    REQUIRE_OK(victim); REQUIRE_OK(attacker); REQUIRE_OK(next);
+    REQUIRE_OK(recipient); REQUIRE_OK(unaffected);
+
+    constexpr std::int64_t secret = 0x46524f4d41435452LL;
+    const auto victim_offset = word(host.call(victim.actor, words({MEM_STATE_OFFSET, 0, 0})).get().payload);
+    const auto next_offset = word(host.call(next.actor, words({MEM_STATE_OFFSET, 0, 0})).get().payload);
+    CHECK_STATUS(host.call(victim.actor, words({MEM_WRITE_STATE, secret, 0})).get().status, Status::Ok);
+    CHECK_STATUS(host.call(next.actor, words({MEM_WRITE_STATE, secret, 0})).get().status, Status::Ok);
+
+    const auto send_from = [&](std::int64_t source, std::int64_t length) {
+        return host.call(attacker.actor, words({HOSTILE_SEND, static_cast<std::int64_t>(recipient.actor.ref()),
+                                                 source, length})).get();
+    };
+    // Without sender-region checks each of these copies mapped sibling memory.
+    for (const auto [source, length] : std::initializer_list<std::pair<std::int64_t, std::int64_t>>{
+             {victim_offset, 8}, {next_offset, 8}, {next_offset - 4, 8}}) {
+        const auto attempt = send_from(source, length);
+        CHECK_STATUS(attempt.status, Status::Ok);
+        CHECK_EQ(word(attempt.payload), 0);
+    }
+    // Valid source data from the sender's own heap still follows the normal mailbox path.
+    const auto own = host.call(attacker.actor, words({HOSTILE_ALLOC, 8, 8, 0})).get();
+    CHECK_STATUS(own.status, Status::Ok);
+    const auto own_offset = word(own.payload);
+    CHECK(own_offset != 0);
+    const auto allowed = send_from(own_offset, 8);
+    CHECK_STATUS(allowed.status, Status::Ok);
+    CHECK_EQ(word(allowed.payload), 1);
+
+    // All four actor regions remain intact; neither a sibling nor the neighboring VM
+    // has had its state exposed or modified by the rejected host copies.
+    CHECK_EQ(word(host.call(recipient.actor, words({1})).get().payload), 1);
+    CHECK_EQ(word(host.call(victim.actor, words({MEM_READ_STATE, 0, 0})).get().payload), secret);
+    CHECK_EQ(word(host.call(next.actor, words({MEM_READ_STATE, 0, 0})).get().payload), secret);
+    CHECK_EQ(word(host.call(unaffected.actor, words({1})).get().payload), 1);
+}
+
 // A send from the unmapped first page, or past what is committed, made the host fault while
 // copying, and a fault in host code is fatal to everyone.
 void guest_send_cannot_fault_the_host() {
@@ -1566,6 +1617,7 @@ const Case cases[] = {
     {"concurrent_open_call_fault_kill_stress", concurrent_open_call_fault_kill_stress},
     {"destructor_retires_everything", destructor_retires_everything},
     {"a_host_fault_stays_fatal", a_host_fault_stays_fatal},
+    {"host_send_rejects_sibling_regions_and_boundary_spans", host_send_rejects_sibling_regions_and_boundary_spans},
     {"guest_send_cannot_fault_the_host", guest_send_cannot_fault_the_host},
     {"guest_reply_cannot_fault_the_host", guest_reply_cannot_fault_the_host},
     {"queued_mail_is_bounded_per_vm_and_per_host", queued_mail_is_bounded_per_vm_and_per_host},
