@@ -611,6 +611,9 @@ class ActorHeapRegionPool final {
     std::size_t slot_bytes_ = 0;
     std::uint32_t slots_ = 0;
     std::unique_ptr<std::uint32_t[]> free_;
+    // One byte per slot, allocated during construction. A duplicate STOP/
+    // release must never publish the same slot twice for concurrent actors.
+    std::unique_ptr<std::uint8_t[]> acquired_;
     std::uint32_t free_count_ = 0;
 
 public:
@@ -636,7 +639,13 @@ public:
         ::madvise(mapping, slot_bytes_ * slots, MADV_NOHUGEPAGE);
 #endif
         free_.reset(new (std::nothrow) std::uint32_t[slots]);
-        if (!free_) { ::munmap(mapping, slot_bytes_ * slots); return; }
+        acquired_.reset(new (std::nothrow) std::uint8_t[slots]());
+        if (!free_ || !acquired_) {
+            free_.reset();
+            acquired_.reset();
+            ::munmap(mapping, slot_bytes_ * slots);
+            return;
+        }
         base_ = static_cast<std::byte*>(mapping);
         slots_ = slots;
         for (std::uint32_t i = 0; i < slots; ++i) free_[i] = slots - 1 - i;
@@ -656,20 +665,33 @@ public:
     std::uint32_t available() const noexcept { return free_count_; }
 
     void* acquire() noexcept {
-        if (free_count_ == 0) return nullptr;
-        return base_ + std::size_t{free_[--free_count_]} * slot_bytes_;
+        if (!base_ || free_count_ == 0) return nullptr;
+        const std::uint32_t index = free_[free_count_ - 1];
+        // Fail closed if free-list metadata becomes corrupt; never hand a
+        // live actor's memory to another actor.
+        if (index >= slots_ || acquired_[index] != 0) return nullptr;
+        --free_count_;
+        acquired_[index] = 1;
+        return base_ + std::size_t{index} * slot_bytes_;
     }
 
     // Call after the slot's heap retired (which scrubbed its carved pages).
     bool release(void* slot) noexcept {
-        const auto at = static_cast<std::byte*>(slot);
-        if (!base_ || at < base_ || free_count_ == slots_) return false;
-        const auto delta = static_cast<std::size_t>(at - base_);
-        if (delta % slot_bytes_ != 0 || delta / slot_bytes_ >= slots_) return false;
+        if (!base_ || !slot || free_count_ == slots_) return false;
+        // Integer-range validation avoids relational/subtraction operations
+        // on an unrelated (possibly forged) pointer.
+        const auto address = reinterpret_cast<std::uintptr_t>(slot);
+        const auto base_address = reinterpret_cast<std::uintptr_t>(base_);
+        if (address < base_address) return false;
+        const std::size_t delta = static_cast<std::size_t>(address - base_address);
+        if (delta >= slot_bytes_ * slots_ || delta % slot_bytes_ != 0) return false;
+        const auto index = static_cast<std::uint32_t>(delta / slot_bytes_);
+        if (acquired_[index] == 0) return false; // duplicate or never acquired
+        acquired_[index] = 0;
 #if ORES_SLAB_HEAP_HAS_MMAP && defined(MADV_DONTNEED)
-        ::madvise(at, slot_bytes_, MADV_DONTNEED); // give the RSS back
+        ::madvise(slot, slot_bytes_, MADV_DONTNEED); // give the RSS back
 #endif
-        free_[free_count_++] = static_cast<std::uint32_t>(delta / slot_bytes_);
+        free_[free_count_++] = index;
         return true;
     }
 };
