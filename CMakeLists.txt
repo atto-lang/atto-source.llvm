@@ -8176,6 +8176,31 @@ if(BUILD_TESTING)
     oreslang_add_checked_source_actor_id_case(
         await tests/source_actor_checked_identity_await_v1.c)
 
+    # A fail-stop regression must terminate AND emit the specific compiler-
+    # owned denial. Ordinary CTest WILL_FAIL could mask an unrelated crash.
+    foreach(mode IN ITEMS
+            stale-send stale-stop stale-join stale-await-ready
+            stale-await-done exhaust legacy-send legacy-stop legacy-join)
+        set(expected_denial "SOURCE_ACTOR_CHECKED_ID_REJECTED")
+        if(mode STREQUAL "exhaust")
+            set(expected_denial "SOURCE_ACTOR_CHECKED_ID_EXHAUSTED")
+        elseif(mode MATCHES "^legacy-")
+            set(expected_denial "SOURCE_ACTOR_LEGACY_STALE_POINTER_DENIED")
+        endif()
+        add_test(NAME source_actor_checked_id_deny_${mode}
+            COMMAND "${CMAKE_COMMAND}"
+                "-DEXECUTABLE=$<TARGET_FILE:oreslang-checked-actor-id-aba-normal>"
+                "-DMODE=${mode}"
+                "-DEXPECTED_DIAGNOSTIC=${expected_denial}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/checked_actor_id_denial.cmake")
+        set_tests_properties(source_actor_checked_id_deny_${mode}
+            PROPERTIES TIMEOUT 40)
+    endforeach()
+    add_test(NAME source_actor_checked_id_legacy_stale_status
+        COMMAND oreslang-checked-actor-id-aba-normal legacy-status)
+    set_tests_properties(source_actor_checked_id_legacy_stale_status
+        PROPERTIES TIMEOUT 40)
+
     add_executable(oreslang-source-actor-stop-before-ready-test
         tests/source_actor_stop_before_ready_test.c
         src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
