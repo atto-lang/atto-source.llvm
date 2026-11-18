@@ -43,6 +43,13 @@ find_program(WASM2C wasm2c)
 find_path(WASM_RT_INCLUDE wasm-rt.h)
 find_program(LOWER_CLANG NAMES clang clang-18 clang-19 clang-20)
 find_package(Python3 COMPONENTS Interpreter)
+# Independent fail-closed admission policy tests need only Python, not WABT.
+# They must run even on developer machines without a wasm2c toolchain.
+if(Python3_FOUND)
+    add_test(NAME tenant_vm_lowering_policy_test COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_LIST_DIR}/lowered/lowering_policy_test.py")
+    set_tests_properties(tenant_vm_lowering_policy_test PROPERTIES TIMEOUT 30)
+endif()
 # Optional, for .atto. The compiler may come from a different build.
 set(TENANT_VM_ATTO_COMPILER "" CACHE FILEPATH "oreslang-llvmc, to lower real .atto source")
 set(TENANT_VM_ATTO_IR_DIR "" CACHE PATH "IR already emitted by oreslang-llvmc --target=wasm32, one NAME.ll per fixture")
