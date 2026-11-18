@@ -116,6 +116,26 @@ int main() {
         }, "retired target failed to trap before dereference");
         proof.live = true;
 
+        // A proof for the TARGET does not validate the SOURCE ref32 field.
+        // The old lowering loaded source->ref before checking source bounds,
+        // potentially reading another tenant's bytes. Guard both operations.
+        Node foreign_source{11, 3, 0};
+        must_trap([&] {
+            (void)oreslang_test_read_compact(
+                &foreign_source, arena.data(), arena.size(), &proof);
+        }, "foreign source ref32 field was read outside actor arena");
+        must_trap([&] {
+            oreslang_test_write_compact(
+                &foreign_source, arena.data(), arena.size(), &proof, 444);
+        }, "foreign source ref32 field bypassed store-path validation");
+
+        // A field address inside the arena is still invalid if it cannot
+        // meet i32 alignment, even though its target encoding might match.
+        must_trap([&] {
+            (void)oreslang_test_read_compact(
+                arena.data() + 1, arena.data(), arena.size(), &proof);
+        }, "misaligned source field was admitted");
+
         must_trap([&] {
             (void)oreslang_test_read_compact(first, arena.data() + 8, 56, &proof);
         }, "foreign arena base failed to trap");
@@ -164,7 +184,7 @@ int main() {
                 "valid reference no longer resolves after the rejected accesses");
 #endif
         std::cout << "PASS LLVM compact i32 physical load/store, stale/null/foreign/"
-                     "out-of-bounds fail-closed access\n";
+                     "out-of-bounds and source-field fail-closed access\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "FAIL ref32 runtime e2e: " << e.what() << "\n";
