@@ -59,6 +59,59 @@ That compiler/backend path is **not** completed by this patch.
   issued wakes; tasks launched from a TASK/WAKE turn need further compiler
   and capability-gated admission. It is not full source `gpu` lowering.
 
+## Bounded completion executor — host milestone
+
+\`GpuActorCompletionExecutorV1.hpp\` now implements a dedicated native
+**GPU event completion** worker, confined to one immutable provider
+tenant/device/queue/generation cohort. It does not itself allocate GPU
+buffers, launch kernels, validate OpenCL hardware, or enable .atto source
+lowering. Its trusted host \`request(registry, lease_id)\` validates the
+registered provider's cohort **before** taking a bounded slot, and the worker
+calls \`GpuActorQuarantineRegistryV1::progress_one(lease_id)\` rather than
+\`progress_all()\` across the entire registry. Thus a single GPU completion
+need not touch unrelated actor entries or their host cache lines.
+
+The queue includes active work in its capacity limit; duplicate notifications
+for queued work collapse, and a notification racing with an active poll grants
+**one** additional pass after the current poll returns. No busy loop is
+started when a device event is Pending or Unknown. Completion scheduling
+uses an explicit event notification from the host integration point, not
+one background poll per task. The worker remains independent of OresVM's
+CONTROL and CPU actor carrier pools. GPU device/queue affinity is a
+separate decision from CPU L1/L2 actor-carrier affinity.
+
+The new host-only test runs actual \`NativeActorScheduler.c\` WAKE delivery
+while **the executor's host worker** advances the mock GPU provider. It also
+deliberately blocks one event poll and proves duplicate coalescing, active
+capacity accounting, queue-overload refusal, wrong-tenant refusal, and
+capacity reuse after provider progress. It does **not** measure hardware cache
+misses, and the injected provider does **not** prove physical GPU execution.
+
+A bounded worker does not make arbitrary native GPU drivers safe: a driver
+that blocks forever may hang shutdown of the in-process worker. Privileged
+ambiguous-enqueue recovery remains assigned to the separate
+\`OpenClActorRecoveryWorkerV1\` (or ultimately a supervised helper process).
+The embedding VM must own completion worker lifetime, subscribe to actual
+device events, enforce driver queue identity and provision core placement;
+the current patch exposes the reusable building block but does not wire it
+into every VM startup/shutdown path.
+
+The \`gpu task\` Future contract is distinct: failure of one task must not
+stop its containing CPU actor. The current bridge intentionally models a
+**terminal GPU actor** and still admits only DATA-mail-originated WAKEs.
+The source compiler must introduce a separate nonterminal Future completion
+authority and a general TASK/WAKE-origin suspension path before enabling
+\`gpu task\` or synchronous \`gpu { ... }\` source execution.
+
+### Exact-head native CI gate (not yet executed)
+
+\`.github/workflows/gpu-actor-completion-host.yml\` now requests source-SHA
+verified host-only GCC/Clang CMake/CTest and Clang ASan/UBSan. Evidence may
+be promoted only when the checked-out exact HEAD runs **real steps** and
+CTest reports executed test processes. \`steps=[]\` is a runner admission
+failure, never a code pass. Real GPU device event evidence and compiler-backed
+\`.atto\` guest runs remain separate gates.
+
 ## Verification
 
 `tests/gpu_actor_scheduler_wake_host_test.cpp` links the REAL
@@ -82,11 +135,13 @@ still fail-closed on main, so Java/LLVM GPU guest parity is NOT proven.
 
 ### Remaining blockers
 
-The completion executor should be one bounded, supervised GPU host service
-per device/queue cohort with short nonblocking poll passes; it must not create
-one thread per task, and expensive unknown-enqueue/device-loss recovery must
-stay on the existing separate privileged recovery path. Neither the native
-actor scheduler nor main CONTROL thread should spin on a device event.
+The new completion executor supplies one bounded worker per configured
+device/queue cohort, but the embedding VM still needs to instantiate and
+supervise it, register real provider event notifications and verify core
+placement. It must never create one thread per task. Expensive
+unknown-enqueue/device-loss recovery stays on the separate privileged
+recovery path; neither the native actor scheduler nor main CONTROL thread
+should spin on a device event.
 Choose queue locality from authenticated device/tenant/generation identity,
 not untrusted guest-provided queue IDs.
 
