@@ -154,7 +154,10 @@ public:
     };
 
 private:
-    enum class Phase { Ready, Retiring, EnqueueInProgress, UnknownEnqueue, Reconciling, Submitted, Terminal, Releasing, Released };
+    enum class Phase {
+        Ready, Retiring, EnqueueInProgress, UnknownEnqueue, Reconciling,
+        Submitted, WakeQuarantined, Terminal, Releasing, Released
+    };
 
     struct Entry final {
         explicit Entry(std::shared_ptr<Port> p,
@@ -198,8 +201,16 @@ private:
             /* RETIRED consumes the actor's escrow without entering guest code.
              * INVALID is a broken host authority/lifetime contract: keep the
              * binding quarantined instead of pretending success. */
-            if (published == ORES_NATIVE_WAKE_INVALID)
+            if (published == ORES_NATIVE_WAKE_INVALID) {
+                // The provider event is terminal, and the host ledger may
+                // already have committed/closed the turn. Retrying host
+                // completion would double-commit that same GPU event. Keep
+                // provider resources rooted and demand supervisor repair.
+                // Never misrepresent this as a successful wake or quiescent
+                // completion of the logical actor.
+                phase = Phase::WakeQuarantined;
                 throw std::logic_error("GPU_PROVIDER_NATIVE_WAKE_INVALID");
+            }
             scheduler_wake.reset();
         }
 
@@ -332,7 +343,9 @@ private:
 
         void progress() {
             std::unique_lock<std::mutex> guard(mu);
-            if (phase == Phase::EnqueueInProgress || phase == Phase::Released
+            if (phase == Phase::EnqueueInProgress
+                    || phase == Phase::WakeQuarantined
+                    || phase == Phase::Released
                     || phase == Phase::Ready) return;
             if (phase == Phase::UnknownEnqueue) {
                 const Turn current = *turn;
@@ -578,7 +591,8 @@ public:
         std::size_t n = 0;
         for (const auto& e : snapshot()) {
             std::lock_guard<std::mutex> guard(e->mu);
-            if (e->detached && e->phase != Phase::Released) ++n;
+            if ((e->detached && e->phase != Phase::Released)
+                    || e->phase == Phase::WakeQuarantined) ++n;
         }
         return n;
     }
