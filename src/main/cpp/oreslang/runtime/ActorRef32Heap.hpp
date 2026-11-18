@@ -160,5 +160,6 @@ private:
     std::uint8_t* cage_;
     ActorSlabHeap32 slab_;
     std::vector<Slot> slots_;
+    bool closed_ = false;
 };
 } // namespace oreslang::runtime::vm
