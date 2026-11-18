@@ -486,6 +486,15 @@ public:
     GuestOutcome invoke_guest_result(const IsolateHandle& handle, OresGuestEntry guest,
                                     std::int64_t input) {
         if (!guest) throw std::invalid_argument("guest entry is null");
+        // A plain tenant-scoped guest ABI is NOT an actor-turn-bound ABI.
+        // Until the compiler passes a verified actor and turn credential to
+        // the native guest entry, prevent nested guest calls on a carrier
+        // that still owns any actor's live capabilities (even in another VM).
+        // A cross-tenant re-entry would otherwise bypass our physical-turn
+        // admission check by entering the generic guest path directly.
+        if (active_carrier_tenant_ != nullptr)
+            throw std::logic_error(
+                "actor carrier cannot enter unscoped tenant guest ABI");
         std::shared_ptr<IsolateVM> state;
         {
             std::lock_guard<std::mutex> lock(mutex_);
