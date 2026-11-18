@@ -720,9 +720,9 @@ void host_send_rejects_sibling_regions_and_boundary_spans() {
                                                  source, length})).get();
     };
     // Without sender-region checks each of these copies mapped sibling memory.
-    for (const auto [source, length] : std::initializer_list<std::pair<std::int64_t, std::int64_t>>{
-             {victim_offset, 8}, {next_offset, 8}, {next_offset - 4, 8}}) {
-        const auto attempt = send_from(source, length);
+    const std::int64_t denied[][2] = {{victim_offset, 8}, {next_offset, 8}, {next_offset - 4, 8}};
+    for (const auto& range : denied) {
+        const auto attempt = send_from(range[0], range[1]);
         CHECK_STATUS(attempt.status, Status::Ok);
         CHECK_EQ(word(attempt.payload), 0);
     }
