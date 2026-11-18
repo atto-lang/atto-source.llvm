@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -57,6 +58,16 @@ struct IsolateObjectSlot {
     std::uint32_t size = 0;
     std::uint64_t generation = 1;
     bool live = false;
+    // Actor-owned objects are inaccessible through the host-only unscoped
+    // object API. The actor id and incarnation are checked on every access.
+    std::uint64_t owner_actor_id = 0;
+    std::uint64_t owner_actor_generation = 0;
+};
+
+struct IsolateActorTurnRecord {
+    std::uint64_t incarnation = 0;
+    std::uint64_t serial = 0;
+    std::thread::id carrier{};
 };
 
 struct IsolateSnapshot {
@@ -89,6 +100,9 @@ class IsolateVM final {
     std::vector<IsolateObjectSlot> object_slots; // checked reusable host objects
     std::unordered_map<std::uint64_t, std::uint64_t> actors;
     std::uint64_t next_actor_generation = 1;
+    std::uint64_t next_actor_turn_serial = 1;
+    // Keyed by actor ID; one physical writer turn per live actor.
+    std::unordered_map<std::uint64_t, IsolateActorTurnRecord> actor_turns;
     std::uint64_t next_resource_id = 1;
     std::unordered_map<std::uint64_t, IsolateResourceRecord> resource_pins;
     std::size_t active_guest_calls = 0;
