@@ -740,6 +740,10 @@ int main(int argc, char** argv) {
     bool actor_region_v1_aot = false;
     bool isolate_entry_seen = false;
     std::string isolate_entry;
+    // The scheduler's UNTRUSTED label is NOT a native memory boundary.
+    // A requested hostile-tenant profile must never become trusted AOT.
+    bool tenant_execution_seen = false;
+    bool untrusted_tenant_execution = false;
     std::vector<std::string> tree_shake_roots;
     const char* path = nullptr;
     // Host-only severity policy: last CLI flag overrides the environment.
@@ -885,6 +889,21 @@ int main(int argc, char** argv) {
                 std::cerr << "source-log-ids path cannot be empty\n";
                 return 2;
             }
+        } else if (arg.rfind("--tenant-execution=", 0) == 0) {
+            if (tenant_execution_seen) {
+                std::cerr << "duplicate tenant execution policy\n";
+                return 2;
+            }
+            tenant_execution_seen = true;
+            const auto policy = arg.substr(std::string("--tenant-execution=").size());
+            if (policy == "trusted") {
+                untrusted_tenant_execution = false;
+            } else if (policy == "untrusted") {
+                untrusted_tenant_execution = true;
+            } else {
+                std::cerr << "invalid tenant execution policy (expected trusted|untrusted)\n";
+                return 2;
+            }
         } else if (arg.rfind("--isolate-entry=", 0) == 0) {
             if (isolate_entry_seen) { std::cerr << "duplicate isolate entry\n"; return 2; }
             isolate_entry_seen = true;
@@ -922,6 +941,20 @@ int main(int argc, char** argv) {
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
     }
+    // Fail before source loading, parsing or IR output: in-process LLVM AOT
+    // has no native memory sandbox. The wasm32 source target also lacks a
+    // certified Wasmtime/process worker broker in this compiler path.
+    // Never silently downgrade an explicitly untrusted tenant to trusted.
+    if (tenant_execution_seen && !isolate_entry_seen) {
+        std::cerr << "tenant execution policy requires --isolate-entry\n";
+        return 2;
+    }
+    if (untrusted_tenant_execution) {
+        std::cerr << "TENANTVM_UNTRUSTED_SANDBOX_UNAVAILABLE: "
+                     "no certified process/verified-memory sandbox for native "
+                     "or wasm32 source tenant guests; no IR emitted\n";
+        return 2;
+    }
     // Do not promote frontend admission into typed effect certification.  A
     // formatter using --analyze must never observe a false successful check.
     if (analyze_requested) {
@@ -934,7 +967,7 @@ int main(int argc, char** argv) {
             (rt_check_only || rt_report_seen || rt_entry_seen || native_hard_rt_profile ||
              tree_shake || !tree_shake_roots.empty() || constraint_descriptors_only ||
              experimental_owned_int || experimental_rt_scalar_loop ||
-             target_seen || allocator_provider_seen)) {
+             target_seen || allocator_provider_seen || tenant_execution_seen)) {
         std::cerr << "--check is frontend-only and cannot be combined with codegen, "
                      "real-time reports, target, or experimental options\n";
         return 2;
@@ -947,7 +980,8 @@ int main(int argc, char** argv) {
             path == nullptr || target_seen || profile_seen || library_profile_seen ||
             allocator_provider_seen || rt_check_only || rt_entry_seen || rt_report_seen ||
             constraint_descriptors_only || tree_shake || !tree_shake_roots.empty() ||
-            isolate_entry_seen || experimental_owned_int || experimental_rt_scalar_loop) {
+            isolate_entry_seen || tenant_execution_seen ||
+            experimental_owned_int || experimental_rt_scalar_loop) {
             std::cerr << "actor source-set verification requires only trusted SHA, manifest path and verification-only mode\n";
             return 2;
         }
@@ -1019,7 +1053,7 @@ int main(int argc, char** argv) {
             (tree_shake || !tree_shake_roots.empty() || native_hard_rt_profile ||
              rt_check_only || rt_entry_seen || rt_report_seen ||
              experimental_owned_int || experimental_rt_scalar_loop ||
-             target_seen || allocator_provider_seen)) {
+             target_seen || allocator_provider_seen || tenant_execution_seen)) {
         std::cerr << "constraint-descriptors is a metadata-only mode and cannot be combined with execution/codegen options\n";
         return 2;
     }
@@ -1057,7 +1091,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--aot-profile=sealed-scalar-v1|sealed-class-fields-v1|actor-region-v1] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--check|--analyze] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--aot-profile=sealed-scalar-v1|sealed-class-fields-v1|actor-region-v1] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--check|--analyze] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--isolate-entry=name --tenant-execution=trusted|untrusted] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
