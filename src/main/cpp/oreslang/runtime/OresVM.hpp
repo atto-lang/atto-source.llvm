@@ -314,6 +314,11 @@ public:
         const auto state = checked(handle);
         require_live_turn(state, actor, turn);
         state->actor_turns.erase(actor.id_);
+        // Release physical-carrier admission only after the registered turn
+        // has been revoked. All other tenant/root-VM turns on this pthread
+        // remain denied until that happens.
+        active_carrier_tenant_ = nullptr;
+        active_carrier_turn_serial_ = 0;
     }
 
     // All actor-owned object operations use the exact live actor and current
@@ -685,6 +690,13 @@ private:
     // Unlike std::thread::id or pthread_t, this lifetime value never
     // repeats when the OS recycles a carrier-thread identity.
     inline static std::atomic<std::uint64_t> next_carrier_incarnation_{1};
+    // Process-wide (across all OresVM objects) thread-local physical turn
+    // admission, not per-TenantVM bookkeeping alone. Without this fence a
+    // callback on one pthread could enter a second tenant while retaining
+    // its first actor's active capabilities. The pool label is not an
+    // isolation boundary; fail closed on nested cross-tenant turns.
+    inline static thread_local const IsolateVM* active_carrier_tenant_ = nullptr;
+    inline static thread_local std::uint64_t active_carrier_turn_serial_ = 0;
     static std::uint64_t issue_carrier_incarnation() {
         auto next = next_carrier_incarnation_.load(std::memory_order_relaxed);
         for (;;) {
@@ -706,6 +718,8 @@ private:
         const std::shared_ptr<IsolateVM>& state, const ActorTicket& actor,
         bool cleanup_only) {
         require_live_actor(state, actor);
+        if (active_carrier_tenant_ != nullptr || active_carrier_turn_serial_ != 0)
+            throw std::logic_error("carrier already owns an actor turn");
         if (state->actor_turns.count(actor.id_))
             throw std::logic_error("actor already owns a physical turn");
         const auto carrier = std::this_thread::get_id();
@@ -717,10 +731,16 @@ private:
             std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("actor turn serial exhausted");
         const auto serial = state->next_actor_turn_serial++;
+        // Construct the ticket first; then publish it into the tenant's
+        // turn ledger. The host mutex protects every ledger mutation, while
+        // this thread-local fence disallows entering any other tenant turn.
+        ActorTurnTicket ticket(state, actor.id_, actor.actor_generation_,
+                               serial, carrier, carrier_incarnation, cleanup_only);
         state->actor_turns.emplace(actor.id_, IsolateActorTurnRecord{
             actor.actor_generation_, serial, carrier, carrier_incarnation});
-        return ActorTurnTicket(state, actor.id_, actor.actor_generation_,
-                               serial, carrier, carrier_incarnation, cleanup_only);
+        active_carrier_tenant_ = state.get();
+        active_carrier_turn_serial_ = serial;
+        return ticket;
     }
 
     // No actor ID/name is accepted as authority without a host-issued
@@ -745,7 +765,9 @@ private:
             turn.actor_generation_ != actor.actor_generation_ ||
             turn.turn_serial_ == 0 ||
             turn.carrier_ != std::this_thread::get_id() ||
-            turn.carrier_incarnation_ != current_carrier_incarnation())
+            turn.carrier_incarnation_ != current_carrier_incarnation() ||
+            active_carrier_tenant_ != state.get() ||
+            active_carrier_turn_serial_ != turn.turn_serial_)
             throw std::logic_error("foreign, stale or migrated actor turn");
         const auto it = state->actor_turns.find(actor.id_);
         if (it == state->actor_turns.end() ||
