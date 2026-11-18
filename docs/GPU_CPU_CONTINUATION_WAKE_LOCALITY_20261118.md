@@ -61,14 +61,14 @@ That compiler/backend path is **not** completed by this patch.
 
 ## Bounded completion executor — host milestone
 
-\`GpuActorCompletionExecutorV1.hpp\` now implements a dedicated native
+`GpuActorCompletionExecutorV1.hpp` now implements a dedicated native
 **GPU event completion** worker, confined to one immutable provider
 tenant/device/queue/generation cohort. It does not itself allocate GPU
 buffers, launch kernels, validate OpenCL hardware, or enable .atto source
-lowering. Its trusted host \`request(registry, lease_id)\` validates the
+lowering. Its trusted host `request(registry, lease_id)` validates the
 registered provider's cohort **before** taking a bounded slot, and the worker
-calls \`GpuActorQuarantineRegistryV1::progress_one(lease_id)\` rather than
-\`progress_all()\` across the entire registry. Thus a single GPU completion
+calls `GpuActorQuarantineRegistryV1::progress_one(lease_id)` rather than
+`progress_all()` across the entire registry. Thus a single GPU completion
 need not touch unrelated actor entries or their host cache lines.
 
 The queue includes active work in its capacity limit; duplicate notifications
@@ -80,7 +80,7 @@ one background poll per task. The worker remains independent of OresVM's
 CONTROL and CPU actor carrier pools. GPU device/queue affinity is a
 separate decision from CPU L1/L2 actor-carrier affinity.
 
-The new host-only test runs actual \`NativeActorScheduler.c\` WAKE delivery
+The new host-only test runs actual `NativeActorScheduler.c` WAKE delivery
 while **the executor's host worker** advances the mock GPU provider. It also
 deliberately blocks one event poll and proves duplicate coalescing, active
 capacity accounting, queue-overload refusal, wrong-tenant refusal, and
@@ -90,27 +90,50 @@ misses, and the injected provider does **not** prove physical GPU execution.
 A bounded worker does not make arbitrary native GPU drivers safe: a driver
 that blocks forever may hang shutdown of the in-process worker. Privileged
 ambiguous-enqueue recovery remains assigned to the separate
-\`OpenClActorRecoveryWorkerV1\` (or ultimately a supervised helper process).
+`OpenClActorRecoveryWorkerV1` (or ultimately a supervised helper process).
 The embedding VM must own completion worker lifetime, subscribe to actual
 device events, enforce driver queue identity and provision core placement;
 the current patch exposes the reusable building block but does not wire it
 into every VM startup/shutdown path.
 
-The \`gpu task\` Future contract is distinct: failure of one task must not
+The `gpu task` Future contract is distinct: failure of one task must not
 stop its containing CPU actor. The current bridge intentionally models a
 **terminal GPU actor** and still admits only DATA-mail-originated WAKEs.
 The source compiler must introduce a separate nonterminal Future completion
 authority and a general TASK/WAKE-origin suspension path before enabling
-\`gpu task\` or synchronous \`gpu { ... }\` source execution.
+`gpu task` or synchronous `gpu { ... }` source execution.
 
 ### Exact-head native CI gate (not yet executed)
 
-\`.github/workflows/gpu-actor-completion-host.yml\` now requests source-SHA
+`.github/workflows/gpu-actor-completion-host.yml` now requests source-SHA
 verified host-only GCC/Clang CMake/CTest and Clang ASan/UBSan. Evidence may
 be promoted only when the checked-out exact HEAD runs **real steps** and
-CTest reports executed test processes. \`steps=[]\` is a runner admission
+CTest reports executed test processes. `steps=[]` is a runner admission
 failure, never a code pass. Real GPU device event evidence and compiler-backed
-\`.atto\` guest runs remain separate gates.
+`.atto` guest runs remain separate gates.
+
+## OpenCL provider timed-event integration — host-only milestone
+
+The existing OpenCL `Api` exposes `poll_event()` rather than a guaranteed
+device completion callback. The completion executor therefore now supports an
+**optional 1–30,000 ms bounded timed-poll interval** (`0` preserves the
+request-only behavior). A submitted, still-active provider event is rearmed
+with that delay on the dedicated completion worker; a new trusted host
+notification can expedite a scheduled poll without a second retained job.
+Pending observations cannot commit host state or publish a READY actor wake.
+
+The registry returns a **repoll hint**, not event authority: only an active
+Submitted event that has not been marked device-lost can auto-rearm. Unknown
+enqueue, device loss, release failures and native actor STOP remain in their
+supervisor/recovery path, requiring an explicit recovery notification rather
+than a potentially unsafe background retry. Executor teardown cancels only
+poll subscriptions. GPU physical command loans remain rooted in the registry,
+never released on timeout, cancellation request or worker shutdown.
+
+The V2 fake-OpenCL API test exercises the real provider state machine from
+upload to kernel to download, including provider-owned buffers/events and
+verified output, but **uses a fake OpenCL device**. No source `.atto` guest,
+real GPU kernel, device callback or physical L1/L2 perf result was executed.
 
 ## Verification
 
