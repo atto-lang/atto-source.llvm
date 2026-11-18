@@ -1,7 +1,9 @@
 // Tests the experimental HOST-side Ref32 adapter against the real M2b slab.
 // Not a compiled .atto guest, guest ABI v5 or a native sandbox proof.
 #include "oreslang/runtime/ActorRef32Heap.hpp"
+#include <atomic>
 #include <cstdint>
+#include <thread>
 #include <iostream>
 #include <stdexcept>
 #include <type_traits>
@@ -55,6 +57,51 @@ int main() {
     check(!a.read_i64(z, owner, 101, 0, v), "post-STOP read");
     check(a.allocate(owner, 24, 8, 101).guest_token() == 0, "post-STOP alloc");
     check(b.read_i64(y, other, 101, 0, v) && v == 0, "sibling survived STOP");
+
+    // Default actors may have concurrent carrier turns. Host access to the
+    // sidecar and slab must not race across read/write/alloc/free operations.
+    constexpr std::int64_t kLeft = 0x1122334455667788LL;
+    constexpr std::int64_t kRight = 0x0102030405060708LL;
+    check(b.write_i64(y, other, 101, 0, kLeft), "init concurrent field");
+    std::atomic<bool> linear{true};
+    std::vector<std::thread> workers;
+    for (int worker = 0; worker < 6; ++worker) {
+        workers.emplace_back([&, worker] {
+            for (int j = 0; j < 500; ++j) {
+                if (worker < 3) {
+                    if (!b.write_i64(y, other, 101, 0,
+                                     (j & 1) ? kLeft : kRight))
+                        linear.store(false);
+                } else {
+                    std::int64_t observed = 0;
+                    if (!b.read_i64(y, other, 101, 0, observed) ||
+                        (observed != kLeft && observed != kRight))
+                        linear.store(false);
+                }
+            }
+        });
+    }
+    for (auto& worker : workers) worker.join();
+    check(linear.load(), "torn or racy concurrent field access");
+    workers.clear();
+    std::atomic<int> allocations{0};
+    for (int worker = 0; worker < 4; ++worker) {
+        workers.emplace_back([&] {
+            for (int j = 0; j < 300; ++j) {
+                const auto local = b.allocate(other, 8, 8, 102);
+                if (!local.guest_token()) continue; // expected bounded slot backpressure
+                ++allocations;
+                if (!b.write_i64(local, other, 102, 0, 42) ||
+                    !b.release(local, other, 102))
+                    linear.store(false);
+            }
+        });
+    }
+    for (auto& worker : workers) worker.join();
+    check(linear.load() && allocations.load() > 0,
+          "concurrent actor slot allocate/free integrity");
+    check(b.read_i64(y, other, 101, 0, v) &&
+          (v == kLeft || v == kRight), "concurrent sibling state preserved");
     check(b.close_after_quiescence(), "sibling close");
     // Exhaust the finite generation bits: never wrap into an old token.
     std::vector<std::uint8_t> little(8192, 0);
