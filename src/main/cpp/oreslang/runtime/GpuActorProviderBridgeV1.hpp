@@ -214,6 +214,17 @@ private:
             scheduler_wake.reset();
         }
 
+        void seal_native_actor_locked() {
+            // A GPU-ACTOR host close is an incarnation-wide STOP. A device
+            // failure or actor teardown cannot leave an already-published
+            // READY WAKE authorized to run guest code after the host closed.
+            // The native scheduler retains outstanding WAKE credit until the
+            // provider event proves quiescence; STOP is NOT buffer release.
+            if (native_actor)
+                (void)ores_native_actor_scheduler_stop_sealed(
+                    native_actor->scheduler, native_actor->actor);
+        }
+
         void stop_locked(bool device_loss) {
             if (phase == Phase::Released) return;
             if (device_loss) device_lost = true;
@@ -222,6 +233,7 @@ private:
                 if (device_loss) (void)host->report_device_loss();
                 else (void)host->request_close();
             }
+            seal_native_actor_locked();
             if (host->closed() && !turn && phase != Phase::Retiring
                     && phase != Phase::Releasing) phase = Phase::Terminal;
         }
@@ -244,6 +256,7 @@ private:
             } else if (result.state == Port::EnqueueState::DefinitelyNotSubmitted) {
                 if (result.event) throw std::logic_error("GPU_PROVIDER_SPURIOUS_EVENT");
                 host->abort_enqueue(*turn);
+                seal_native_actor_locked();
                 event.reset();
                 turn.reset();
                 phase = Phase::Terminal;
@@ -396,6 +409,7 @@ private:
                 } else {
                     host->finish_after_provider_event(
                         current, observed == Port::Observation::CompleteOk, true);
+                    if (host->closed()) seal_native_actor_locked();
                     publish_verified_wake_locked(observed == Port::Observation::CompleteOk
                         ? ORES_NATIVE_WAKE_READY : ORES_NATIVE_WAKE_FAILED);
                 }
@@ -465,6 +479,7 @@ private:
                 throw std::logic_error("GPU_PROVIDER_RELEASE_NOT_PROVEN");
             }
             host->retire_gracefully_after_backend_release(true);
+            seal_native_actor_locked();
             phase = Phase::Released;
         }
     };
