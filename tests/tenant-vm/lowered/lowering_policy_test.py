@@ -44,6 +44,7 @@ class LoweringPolicyTests(unittest.TestCase):
             "ORES_VM_TEST_EAGER_SEND=0",
             "ORES_VM_TEST_EAGER_SEND=2",
             "ORES_VM_TEST_COMMIT_FAULT_ON=2147483648",
+            "ORES_VM_TEST_COMMIT_FAULT_ON=" + "9" * 5000,
             "ORES_VM_TEST_COMMIT_FAULT_ON=1+1",
             "ORES_VM_TEST_EAGER_SEND=1 -DWASM_RT_MEMCHECK_BOUNDS_CHECK=0",
             "-DWASM_RT_MEMCHECK_BOUNDS_CHECK=0",
