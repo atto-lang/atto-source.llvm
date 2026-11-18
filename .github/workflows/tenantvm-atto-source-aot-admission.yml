@@ -5,6 +5,9 @@ on:
     paths:
       - 'src/main/cpp/oreslang/main.cpp'
       - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'src/main/cpp/oreslang/runtime/OresIsolateAbi.h'
+      - 'src/main/cpp/oreslang/runtime/OresIsolateVM.hpp'
+      - 'src/main/cpp/oreslang/runtime/OresVM.hpp'
       - 'tests/fixtures/tenantvm-trusted-scalar.atto'
       - 'tests/native_tenantvm_atto_guest_test.cpp'
       - 'tests/tenantvm_atto_source_aot_gate.sh'
