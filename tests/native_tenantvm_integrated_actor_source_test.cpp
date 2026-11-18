@@ -60,6 +60,20 @@ extern "C" std::int32_t attempt_actor_from_scalar_guest(
     return ORES_GUEST_OK;
 }
 
+// A held unscoped scalar guest rejects foreign-carrier actor admission.
+static std::atomic<bool> scalar_guest_entered{false};
+static std::atomic<bool> finish_scalar_guest{false};
+extern "C" std::int32_t hold_scalar_guest(
+    OresIsolateContext* ctx, std::int64_t value, std::int64_t* out) {
+    if (!ctx || !out || ctx->abi_version != ORES_ISOLATE_ABI_VERSION)
+        return ORES_GUEST_BAD_CONTEXT;
+    scalar_guest_entered.store(true, std::memory_order_release);
+    while (!finish_scalar_guest.load(std::memory_order_acquire))
+        std::this_thread::yield();
+    *out = value;
+    return ORES_GUEST_OK;
+}
+
 int main() {
     OresVM vm;
     const auto a = vm.create_isolate({"integrated_a", 256, 3});
@@ -95,14 +109,29 @@ int main() {
         (void)vm.read_actor_object_byte(b, b1, turn, owned, 0);
     }));
     CHECK(vm.read_actor_object_byte(a, a1, turn, owned, 0) == 0xA5);
+    // Other pthreads are also denied generic guest admission to the
+    // actor's own tenant, while separate tenants retain independent
+    // scheduling and storage, even on that other carrier thread.
+    std::atomic<bool> cross_carrier_denied{false};
+    std::atomic<bool> separate_tenant_ok{false};
+    std::thread other_carrier([&] {
+        cross_carrier_denied.store(denies_authority([&] {
+            (void)vm.invoke_guest(a, ores_guest_entry, 100);
+        }));
+        try {
+            separate_tenant_ok.store(vm.invoke_guest(b, ores_guest_entry, 2) == 39);
+        } catch (...) { separate_tenant_ok.store(false); }
+    });
+    other_carrier.join();
+    CHECK(cross_carrier_denied.load() && separate_tenant_ok.load());
     vm.retire_actor_object(a, a1, turn, owned);
     vm.leave_actor_turn(a, a1, turn);
 
     // Failed nested source guests must never publish half-written state.
     CHECK(vm.invoke_guest(a, ores_guest_entry, 0) == 11);
-    CHECK(vm.invoke_guest(b, ores_guest_entry, 0) == 37);
+    CHECK(vm.invoke_guest(b, ores_guest_entry, 0) == 39);
     CHECK(vm.invoke_guest(a, ores_guest_entry, 4) == 15);
-    CHECK(vm.invoke_guest(b, ores_guest_entry, -7) == 30);
+    CHECK(vm.invoke_guest(b, ores_guest_entry, -7) == 32);
 
     // Reverse direction: an unscoped tenant-global guest callback may not
     // acquire actor-turn authority, even for an otherwise live actor.
@@ -111,6 +140,34 @@ int main() {
     CHECK(vm.invoke_guest(a, attempt_actor_from_scalar_guest, 5) == 5);
     CHECK(probe.denied == 1);
     current_probe = nullptr;
+
+    // Cross-carrier reverse direction: a scalar guest already executing in
+    // tenant A also prevents actor admission from a distinct pthread.
+    // Both the observation and release are bounded to avoid a stuck worker
+    // and to keep a failure from aborting with a joinable std::thread.
+    scalar_guest_entered.store(false);
+    finish_scalar_guest.store(false);
+    std::atomic<bool> scalar_completed{false};
+    std::thread scalar_carrier([&] {
+        try {
+            scalar_completed.store(vm.invoke_guest(a, hold_scalar_guest, 7) == 7);
+        } catch (...) { scalar_completed.store(false); }
+    });
+    for (int spin = 0; spin < 1000000 &&
+            !scalar_guest_entered.load(std::memory_order_acquire); ++spin)
+        std::this_thread::yield();
+    const bool active_guest_observed =
+        scalar_guest_entered.load(std::memory_order_acquire);
+    const bool actor_admission_denied = active_guest_observed &&
+        denies_authority([&] {
+            const auto forbidden = vm.enter_actor_turn(a, a2);
+            vm.leave_actor_turn(a, a2, forbidden);
+        });
+    finish_scalar_guest.store(true, std::memory_order_release);
+    scalar_carrier.join();
+    CHECK(active_guest_observed && actor_admission_denied &&
+          scalar_completed.load());
+
     const auto new_turn = vm.enter_actor_turn(a, a2);
     const auto new_obj = vm.allocate_actor_object(a, a2, new_turn, 8);
     CHECK(vm.read_actor_object_byte(a, a2, new_turn, new_obj, 0) == 0);
@@ -126,7 +183,7 @@ int main() {
     vm.retire_actor(a, a2);
     vm.complete_shutdown(a);
     vm.destroy(a);
-    CHECK(vm.invoke_guest(b, ores_guest_entry, 0) == 30);
+    CHECK(vm.invoke_guest(b, ores_guest_entry, 0) == 32);
     vm.retire_actor(b, b1);
     vm.begin_shutdown(b);
     vm.complete_shutdown(b);
