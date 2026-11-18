@@ -248,6 +248,12 @@ private:
             std::unique_lock<std::mutex> guard(mu);
             if (phase != Phase::Ready || stopping || detached)
                 throw std::logic_error("GPU_PROVIDER_ACTOR_NOT_READY");
+            // Once a GPU provider is bound to a physical native actor,
+            // legacy host-only submit() MUST NOT bypass its authenticated
+            // continuation escrow. The old API remains available only for
+            // standalone mock-provider host tests.
+            if (native_actor && !incoming)
+                throw std::logic_error("GPU_PROVIDER_NATIVE_WAKE_REQUIRED");
             if (incoming) {
                 const auto& w = *incoming;
                 const auto& a = w.ticket.producer;
