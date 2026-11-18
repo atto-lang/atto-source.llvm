@@ -501,6 +501,14 @@ public:
             state = checked(handle);
             if (state->phase != IsolatePhase::Running)
                 throw std::logic_error("guest admission is closed");
+            // A generic native scalar guest carries TENANT authority only,
+            // never actor-turn authority. In addition to the per-carrier TLS
+            // fence, reject if *any* carrier holds an actor turn in the same
+            // tenant, so a second pthread cannot bypass state exclusivity.
+            // This guard is under the same mutex as actor-turn admission.
+            if (!state->actor_turns.empty())
+                throw std::logic_error(
+                    "unscoped guest cannot overlap tenant actor turns");
             // Includes invocations waiting on guest_turn_mutex. Bound both
             // per-tenant queues and the aggregate VM workload before pinning.
             if (state->active_guest_calls >= state->config.max_inflight_guest_calls ||
@@ -727,6 +735,12 @@ private:
         const std::shared_ptr<IsolateVM>& state, const ActorTicket& actor,
         bool cleanup_only) {
         require_live_actor(state, actor);
+        // active_guest_calls includes guests queued on the guest-turn mutex.
+        // A different pthread must not enter an actor turn while any guest
+        // holds even tenant-global scalar authority for this tenant.
+        if (state->active_guest_calls != 0)
+            throw std::logic_error(
+                "actor turn cannot overlap tenant-global guest invocation");
         // Symmetric fence: the generic scalar guest ABI cannot acquire an
         // actor turn from its callback either. Its runtime entry carries no
         // actor authority, and checking only the other direction would
