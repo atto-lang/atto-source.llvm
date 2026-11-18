@@ -2583,11 +2583,38 @@ private:
             if (!publicly_visible) accept("private");
             // Formatter may insert 'mtd', but method identity and receiver
             // erasure must remain unchanged. Never consume it as a class field.
-            const bool method_marker = accept("mtd");
-            const bool method_ahead = token_.kind == Kind::Identifier && token_.text != "constructor" && (!reserved(token_.text) || token_.text == "pattern")
-                && [&] { Lexer look = lexer_; const auto next = look.next().text; return next == "(" || next == "<"; }();
+            // The formatter canonicalizes a legacy instance 'fnc' marker
+            // to 'mtd'; both are accepted, but neither creates a static
+            // function or escapes the class's checked receiver ABI.
+            const bool method_marker = accept("mtd") || accept("fnc");
+            const bool ordinary_method = token_.kind == Kind::Identifier &&
+                token_.text != "constructor" &&
+                (!reserved(token_.text) || token_.text == "pattern") &&
+                [&] { Lexer look = lexer_; const auto next = look.next().text;
+                    return next == "(" || next == "<"; }();
+            const bool return_first_method = [&] {
+                if (token_.text != "int" && token_.text != "bool" &&
+                        token_.text != "void" && token_.text != "string" &&
+                        token_.text != "String") return false;
+                Lexer look = lexer_;
+                const Token marker = look.next();
+                if (marker.text == "<") {
+                    const Token minus = look.next();
+                    if (minus.text != "-" ||
+                            minus.offset != marker.offset + marker.text.size())
+                        return false;
+                } else if (marker.text != "•") {
+                    return false;
+                }
+                const Token name = look.next();
+                const Token opening = look.next();
+                return name.kind == Kind::Identifier &&
+                    (!reserved(name.text) || name.text == "pattern") &&
+                    opening.text == "(";
+            }();
+            const bool method_ahead = ordinary_method || return_first_method;
             if (method_marker && !method_ahead)
-                fail("native mtd marker must precede a method signature");
+                fail("native mtd/fnc marker must precede a method signature");
             if (method_ahead) {
                 auto method = function(result.name, publicly_visible);
                 ClassMethod signature;
