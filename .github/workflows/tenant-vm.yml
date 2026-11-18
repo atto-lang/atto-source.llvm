@@ -78,7 +78,7 @@ jobs:
             -DTENANT_VM_REQUIRE_FULL_COVERAGE=ON -DTENANT_VM_ATTO_COMPILER="$PWD/build/compiler/oreslang-llvmc"
           cmake --build build/tv -j4
           ctest --test-dir build/tv -N | tee build/tv/test-inventory.txt
-          for suite in tenant_vm_test tenant_vm_lowered_test tenant_vm_source_contract_test tenant_vm_admission_test; do
+          for suite in tenant_vm_test tenant_vm_lowered_test tenant_vm_source_contract_test tenant_vm_admission_test tenant_vm_lowering_policy_test; do
             if ! grep -Eq "Test +#[0-9]+: ${suite}$" build/tv/test-inventory.txt; then
               echo "Missing required tenant VM suite: ${suite}" >&2
               exit 1
@@ -103,12 +103,16 @@ jobs:
           }
           grep -Fq 'SOURCE_CONTRACT_PASS' build/tv/test-execution.log || { echo "Missing source contract execution proof" >&2; exit 1; }
           grep -Fq 'ADMISSION_PASS' build/tv/test-execution.log || { echo "Missing admission execution proof" >&2; exit 1; }
+          grep -Fq 'LOWERING_POLICY_PASS' build/tv/test-execution.log || { echo "Missing bounds-check policy unit-test proof" >&2; exit 1; }
+          grep -Fq '12 unsafe lowering flag combinations refused' build/tv/test-execution.log || { echo "Missing unsafe macro override refusals" >&2; exit 1; }
           {
             echo "### Required executable gate totals"
             echo "- Native host: 45/45 cases passed (including sender-region and root API lifetime)"
             echo "- Lowered guests: 23/23 cases passed (including real .atto carrier handoff and cross-root host APIs)"
-            echo "- Source-contract and admission: pass markers present"
-            echo "- Plain suite: all four registered CTest tests ran"
+            echo "- Source-contract, admission, and lowering-policy: pass markers present"
+            echo "- Unsafe lowering flag cases: 12/12 refused"
+            echo "- Plain suite: all five registered CTest tests ran"
+
           } >> "$GITHUB_STEP_SUMMARY"
       - name: ASan and UBSan
         shell: bash
