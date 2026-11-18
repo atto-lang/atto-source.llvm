@@ -36,6 +36,9 @@ struct IsolateConfig {
     std::size_t max_inflight_guest_calls = 64;
     // Append after existing fields to preserve positional IsolateConfig callers.
     std::uint32_t max_resource_pins = 1024;
+    // Bound the host-owned object descriptor table independently of the
+    // logical heap size. Host-only until compiler/guest ABI integration.
+    std::uint32_t max_object_slots = 1024;
 };
 
 // OresVM host-level reservation and queue budgets. The heap budget charges
@@ -46,6 +49,16 @@ struct OresVmLimits {
     std::size_t max_inflight_guest_calls = 4096;
 };
 
+// Object addresses are offsets; never an exported native pointer. Reuse is
+// permitted only after retirement, memory clearing, and generation advance.
+struct IsolateObjectSlot {
+    std::uint32_t offset = 0;
+    std::uint32_t capacity = 0;
+    std::uint32_t size = 0;
+    std::uint64_t generation = 1;
+    bool live = false;
+};
+
 struct IsolateSnapshot {
     std::string tenant_id;
     std::uint64_t generation = 0;
@@ -54,6 +67,7 @@ struct IsolateSnapshot {
     std::size_t active_actors = 0;
     std::size_t active_guest_calls = 0;
     std::size_t active_resource_pins = 0;
+    std::size_t active_objects = 0;
 };
 
 // One concrete tenant-owned execution domain. OresVM is the sole constructor,
@@ -72,6 +86,7 @@ class IsolateVM final {
     const std::uint64_t generation;
     IsolatePhase phase = IsolatePhase::Created;
     std::vector<std::uint8_t> heap; // logical bounded tenant region
+    std::vector<IsolateObjectSlot> object_slots; // checked reusable host objects
     std::unordered_map<std::uint64_t, std::uint64_t> actors;
     std::uint64_t next_actor_generation = 1;
     std::uint64_t next_resource_id = 1;
