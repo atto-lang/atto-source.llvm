@@ -270,27 +270,36 @@ private:
                 if (!ores_native_actor_scheduler_transfer_wake(w.scheduler, w.ticket))
                     throw std::logic_error("GPU_PROVIDER_NATIVE_WAKE_TRANSFER_DENIED");
             }
-            Turn next;
+            std::optional<Turn> next;
             try {
                 next = host->prepare(delta);
-                host->begin_enqueue(next);
+                host->begin_enqueue(*next);
             } catch (...) {
-                // No provider enqueue was attempted yet. This is the only
-                // safe place to release a transferred wake without a device
-                // quiescence witness; the caller must discard the host turn.
+                // No provider enqueue occurred, but prepare() MAY have
+                // claimed the host fence before begin_enqueue() throws.
+                // Close such a prepared turn so that the host coordinator
+                // cannot retain an unsubmitted GPU ticket indefinitely.
+                // A simple stage overflow throws before making a host turn,
+                // so that case remains retryable.
+                if (next) {
+                    try { (void)host->request_close(); }
+                    catch (...) { std::terminate(); } // broken host ledger
+                    phase = Phase::Terminal;
+                    stopping = true;
+                }
                 if (incoming && !ores_native_actor_scheduler_abort_transferred_wake(
                         incoming->scheduler, incoming->ticket))
                     std::terminate();
                 throw;
             }
             scheduler_wake = incoming;
-            turn = next;
+            turn = *next;
             phase = Phase::EnqueueInProgress;
             guard.unlock();
 
             Port::EnqueueResult result{Port::EnqueueState::Unknown, nullptr};
             try {
-                result = port->enqueue(next);
+                result = port->enqueue(*next);
             } catch (...) {
                 // An exception may have occurred after the physical enqueue.
                 guard.lock();
@@ -312,7 +321,7 @@ private:
                 }
                 throw;
             }
-            return next;
+            return *next;
         }
 
         void progress() {
