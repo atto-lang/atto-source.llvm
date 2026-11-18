@@ -240,6 +240,17 @@ static int64_t chain(const OresVmHostApi* h, void* inst, uint8_t* cage, uint64_t
     return h->send(next, in, 8) ? 0 : -7;
 }
 
+/* Trusted test fixture only: report the (not guest-visible in production) host
+ * callback-table address. Two independently owned roots must supply the SAME
+ * immutable process-lifetime table; otherwise the lowered adapter's module
+ * global can retain a dangling pointer after one root shuts down. */
+static int64_t host_api_table_id(const OresVmHostApi* h, void* inst, uint8_t* cage, uint64_t self,
+                                 uint32_t state, uint32_t in, uint32_t in_len, uint32_t out, uint32_t cap) {
+    (void)inst; (void)self; (void)state; (void)in; (void)in_len; (void)cap;
+    WRITE_I64(cage, out, (int64_t)(uintptr_t)h);
+    return 8;
+}
+
 static const OresVmGuestKind kinds[] = {
     [KIND_COUNTER] = {counter, 16, 0, 64, 0, 0, 0},
     [KIND_MEMORY] = {memory, 64, 4096, 256, 0, 0, 0},
@@ -256,5 +267,6 @@ static const OresVmGuestKind kinds[] = {
     [KIND_RESTARTABLE] = {restartable, 16, 8192, 64, 16, 16, ORES_VM_KIND_RESTARTABLE},
     [KIND_RESTART_UNFLAGGED] = {restartable, 16, 8192, 64, 16, 16, 0},
     [KIND_CHAIN] = {chain, 16, 0, 64, 0, 0, 0},
+    [KIND_HOST_API_TABLE_ID] = {host_api_table_id, 16, 0, 64, 0, 0, 0},
 };
 const OresVmGuestModule ores_vm_test_module = {ORES_VM_GUEST_ABI_VERSION, sizeof kinds / sizeof kinds[0], kinds};
