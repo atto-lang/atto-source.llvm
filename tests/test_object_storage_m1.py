@@ -129,6 +129,17 @@ class ObjectM1CompilerGuests(unittest.TestCase):
                 self.assertFalse(out.exists(), "rejected guest emitted artifact: " + name)
                 self.assertIn(b"ATTO_OBJECT_M1_REJECT", result.stderr)
 
+    def test_existing_output_is_never_replaced(self):
+        path = self.root / "existing.atto"
+        path.write_text(BASE, encoding="utf-8")
+        sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        dest = self.root / ("occupied.java" if args.backend == "java" else "occupied.ll")
+        dest.write_text("DO_NOT_REPLACE", encoding="utf-8")
+        result = run(["python3", GENERATOR, path, "--source-sha256", sha,
+                      "--backend", args.backend, "--out", dest])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(dest.read_text(encoding="utf-8"), "DO_NOT_REPLACE")
+
     def test_source_sha_rejection(self):
         path = self.root / "sha.atto"
         path.write_text(BASE, encoding="utf-8")
