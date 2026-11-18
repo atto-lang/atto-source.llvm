@@ -37,7 +37,16 @@ int main() {
     const auto a2 = vm.register_actor(a, 2);
     const auto b1 = vm.register_actor(b, 1);
 
+    // Same native carrier cannot hold two active tenant-domain turns.
+    // Actor ID equality is NOT what protects this boundary: different
+    // tenant roots, actor IDs and OresVM hosts must all be denied.
+    OresVM other_root;
+    const auto other = other_root.create_isolate({"independent_root", 128, 2});
+    other_root.start(other);
+    const auto other_actor = other_root.register_actor(other, 7);
     const auto first_turn = vm.enter_actor_turn(a, a1);
+    CHECK(denies([&] { (void)vm.enter_actor_turn(b, b1); }));
+    CHECK(denies([&] { (void)other_root.enter_actor_turn(other, other_actor); }));
     CHECK(denies([&] { (void)vm.enter_actor_turn(a, a1); }));
     CHECK(denies([&] { (void)vm.enter_actor_turn(a, a2); }));
     const auto obj = vm.allocate_actor_object(a, a1, first_turn, 8);
@@ -64,6 +73,16 @@ int main() {
     CHECK(cross_thread_denied.load());
     CHECK(vm.read_actor_object_byte(a, a1, first_turn, obj, 0) == 71);
     vm.leave_actor_turn(a, a1, first_turn);
+    // Leaving the owning turn clears global carrier admission. A different
+    // root may then run on this same pthread, but not concurrently with
+    // any other tenant turn in the first root.
+    const auto other_turn = other_root.enter_actor_turn(other, other_actor);
+    CHECK(denies([&] { (void)vm.enter_actor_turn(b, b1); }));
+    other_root.leave_actor_turn(other, other_actor, other_turn);
+    other_root.retire_actor(other, other_actor);
+    other_root.begin_shutdown(other);
+    other_root.complete_shutdown(other);
+    other_root.destroy(other);
     CHECK(denies([&] { vm.leave_actor_turn(a, a1, first_turn); }));
     CHECK(denies([&] { (void)vm.read_actor_object_byte(a, a1, first_turn, obj, 0); }));
     CHECK(denies([&] { vm.retire_actor(a, a1); })); // live owned object
