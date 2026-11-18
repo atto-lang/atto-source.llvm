@@ -341,6 +341,12 @@ public:
             at_ += 3;
             return {Kind::Symbol, source_.substr(start, 3), start};
         }
+        // Return-first bullet is an indivisible UTF-8 source declaration
+        // marker. Ordinary '<' and '-' stay separate for expressions.
+        if (source_.substr(at_, 3) == "\xE2\x80\xA2") {
+            at_ += 3;
+            return {Kind::Symbol, source_.substr(start, 3), start};
+        }
         // Contiguous comparison/logical operators are single tokens, matching
         // the Java/Graal precedence grammar.
         for (std::string_view op : {"->", "::", "|>", "==", "!=", "<=", ">=", "&&", "||", "^^"}) {
@@ -3110,8 +3116,43 @@ private:
                 fail("native async gen* requires scheduler-owned async iterator continuation lowering");
             if (!accept("fnc"))
                 fail("native first async Future<int> producer requires async fnc");
-        } else if (owner.empty() && !accept("fnc") && !accept("routine")) {
-            fail("expected fnc or routine");
+        } else if (owner.empty()) {
+            // Both explicit fnc and unmarked return-first file/module
+            // declarations lower to the same native Function AST.
+            if (!accept("fnc") && !accept("routine") &&
+                    token_.text != "int" && token_.text != "bool" &&
+                    token_.text != "void" && token_.text != "string" &&
+                    token_.text != "String")
+                fail("expected fnc, routine or return-first callable");
+        }
+        // Only a complete type immediately followed by <- or • opens
+        // this declaration. The split < and - remain ordinary expression
+        // operators elsewhere in the language.
+        ScalarType prefix_return_type = ScalarType::I64;
+        bool prefix_returns_void = false;
+        bool return_first = false;
+        if (token_.text == "int" || token_.text == "bool" ||
+                token_.text == "void" || token_.text == "string" ||
+                token_.text == "String") {
+            const Token mark = peek_next();
+            bool bullet = mark.text == "•";
+            bool arrow = false;
+            if (mark.text == "<") {
+                Lexer look = lexer_;
+                const Token minus = look.next();
+                arrow = minus.text == "-" &&
+                    minus.offset == mark.offset + mark.text.size();
+            }
+            if (bullet || arrow) {
+                prefix_returns_void = token_.text == "void";
+                if (token_.text == "bool") prefix_return_type = ScalarType::Bool;
+                else if (token_.text == "string" || token_.text == "String")
+                    prefix_return_type = ScalarType::String;
+                advance();
+                if (bullet) require("•");
+                else { require("<"); require("-"); }
+                return_first = true;
+            }
         }
         // Compatibility spellings remain fail-closed in this first native
         // slice. Canonical bare sync gen* is handled by scalar_generator().
@@ -3246,10 +3287,11 @@ private:
         }
         for (const auto& parameter : value.parameters)
             if (!parameter.class_name.empty()) class_receivers_.insert(parameter.name);
-        const bool arrow_return_type = !accept(":");
-        if (arrow_return_type) require("->");
-        value.returns_void = accept("void");
-        if (!value.returns_void) {
+        const bool arrow_return_type = !return_first && !accept(":");
+        if (!return_first && arrow_return_type) require("->");
+        value.returns_void = return_first ? prefix_returns_void : accept("void");
+        if (return_first) value.return_type = prefix_return_type;
+        if (!value.returns_void && !return_first) {
             if (accept("int")) {
                 value.return_type = ScalarType::I64;
             } else if (accept("bool")) {
@@ -3305,15 +3347,28 @@ private:
         // Java parity: a free/module callable may omit '::' only if the first
         // body token begins on a later physical source line than its complete
         // return type; the body is then the same expression sequence.
-        const bool explicit_end_body = token_.text == "::";
-        const bool newline_end_body = owner.empty() && arrow_return_type &&
+        const bool explicit_end_body = token_.text == "::" || return_first;
+        const bool newline_end_body = !return_first && owner.empty() && arrow_return_type &&
             token_.text != "{" && last_token_end_ <= token_.offset &&
             source_.substr(last_token_end_, token_.offset - last_token_end_)
                 .find_first_of("\r\n") != std::string_view::npos;
         if (explicit_end_body || newline_end_body) {
-            if (!arrow_return_type)
+            if (!arrow_return_type && !return_first)
                 fail("native '::' body requires '->' return syntax");
-            if (explicit_end_body) require("::");
+            if (return_first) {
+                if (token_.text != "begin")
+                    fail("return-first callable requires standalone begin");
+                const auto begin_start = token_.offset;
+                if (last_token_end_ > begin_start ||
+                        source_.substr(last_token_end_, begin_start - last_token_end_)
+                            .find_first_of("\r\n") == std::string_view::npos)
+                    fail("return-first begin must start on line after signature");
+                require("begin");
+                if (last_token_end_ > token_.offset ||
+                        source_.substr(last_token_end_, token_.offset - last_token_end_)
+                            .find_first_of("\r\n") == std::string_view::npos)
+                    fail("return-first begin must be alone on its line");
+            } else if (explicit_end_body) require("::");
             bool terminal = false;
             while (token_.text != "end") {
                 if (token_.kind == Kind::End)
@@ -3381,6 +3436,7 @@ private:
             if (!value.returns_void && !terminal)
                 fail("native non-void comma expression body requires a result");
             require("end");
+            if (return_first && !accept(".")) accept(";");
             return value;
         }
         if (owner.empty() && arrow_return_type && token_.text == "return")
