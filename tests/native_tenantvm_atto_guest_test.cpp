@@ -17,6 +17,19 @@ using oreslang::runtime::OresVM;
 extern "C" std::int32_t ores_guest_entry(
     OresIsolateContext*, std::int64_t, std::int64_t*);
 
+// Deliberately permissive fake callbacks: the generated guest must refuse
+// malformed context metadata BEFORE invoking any callback at all.
+static std::atomic<int> fake_callback_calls{0};
+extern "C" int fake_load(void*, std::uint32_t, std::int64_t* out) {
+    ++fake_callback_calls;
+    if (out) *out = 123;
+    return 1;
+}
+extern "C" int fake_store(void*, std::uint32_t, std::int64_t) {
+    ++fake_callback_calls;
+    return 1;
+}
+
 #define CHECK(condition) do { \
     if (!(condition)) { \
         std::fprintf(stderr, "TenantVM .atto guest FAIL: %s line %d\\n", \
@@ -33,6 +46,21 @@ bool denies(Fn&& operation) {
 }
 
 int main() {
+    std::int64_t fake_data = 88;
+    std::int64_t fake_out = 777;
+    OresIsolateContext malformed{
+        ORES_ISOLATE_ABI_VERSION, ORES_ISOLATE_I64_SLOTS, 0,
+        &fake_data, &fake_load, &fake_store};
+    CHECK(ores_guest_entry(&malformed, 1, &fake_out) == ORES_GUEST_BAD_CONTEXT);
+    CHECK(fake_callback_calls.load() == 0 && fake_out == 777);
+    malformed.generation = 1;
+    malformed.abi_version = 0;
+    CHECK(ores_guest_entry(&malformed, 1, &fake_out) == ORES_GUEST_BAD_CONTEXT);
+    malformed.abi_version = ORES_ISOLATE_ABI_VERSION;
+    malformed.slot_count = 0;
+    CHECK(ores_guest_entry(&malformed, 1, &fake_out) == ORES_GUEST_BAD_CONTEXT);
+    CHECK(fake_callback_calls.load() == 0 && fake_out == 777);
+
     // Distinct tenant heaps and source-private module state, one immutable
     // compiler-emitted function pointer shared by two tenants.
     OresVM vm;
