@@ -42,6 +42,16 @@ int main() {
     CHECK(other_continuation.last_scope_result() == ORES_ACTOR_STATE_BUSY_LOAN);
     CHECK(!other_continuation.active());
     CHECK(outer.check() == ORES_ACTOR_STATE_OK);
+    auto read_inside_write = callback;
+    read_inside_write.inferred = {static_cast<std::uint32_t>(
+        FunctionEffect::StateRead)};
+    read_inside_write.callback_critical = false;
+    CriticalStateLoan nested_write_to_read;
+    CHECK(nested_write_to_read.begin(state, 123, 900,
+                                   read_inside_write, declared)
+            == CriticalStateAdmission::NestedStateLoan);
+    CHECK(!nested_write_to_read.active() && nested_write_to_read.token() == 0);
+    CHECK(outer.check() == ORES_ACTOR_STATE_OK);
     CHECK(outer.end() == ORES_ACTOR_STATE_OK);
     CHECK(outer.check() == ORES_ACTOR_STATE_STALE);
     CHECK(ores_actor_state_ready_to_suspend(&state, 123)
@@ -56,6 +66,13 @@ int main() {
     CHECK(outer_read.begin(state, 123, 900, read_only, declared)
             == CriticalStateAdmission::Accept);
     const auto read_generation = state.generation;
+    // READ -> READ must also be denied: even immutable nested callbacks
+    // may not escape the same lexical state-scoped transaction.
+    CriticalStateLoan nested_read;
+    CHECK(nested_read.begin(state, 123, 900, read_only, declared)
+            == CriticalStateAdmission::NestedStateLoan);
+    CHECK(nested_read.last_scope_result() == ORES_ACTOR_STATE_BUSY_LOAN);
+    CHECK(!nested_read.active() && nested_read.token() == 0);
     CriticalStateLoan upgraded;
     CHECK(upgraded.begin(state, 123, 900, callback, declared)
             == CriticalStateAdmission::NestedStateLoan);
