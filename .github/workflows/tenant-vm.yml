@@ -91,13 +91,16 @@ jobs:
           grep -Fq '[ RUN  ] host_send_rejects_sibling_regions_and_boundary_spans' build/tv/test-execution.log || {
             echo "Sender-bounds regression did not execute" >&2; exit 1;
           }
-          grep -Fq '21 cases, 0 failed' build/tv/test-execution.log || { echo "Lowered guest case total or result mismatch" >&2; exit 1; }
+          grep -Fq '22 cases, 0 failed' build/tv/test-execution.log || { echo "Lowered guest case total or result mismatch" >&2; exit 1; }
+          grep -Fq '[ RUN  ] atto_carrier_handoff_and_tenant_reincarnation' build/tv/test-execution.log || {
+            echo "Real compiler guest carrier-handoff regression did not execute" >&2; exit 1;
+          }
           grep -Fq 'SOURCE_CONTRACT_PASS' build/tv/test-execution.log || { echo "Missing source contract execution proof" >&2; exit 1; }
           grep -Fq 'ADMISSION_PASS' build/tv/test-execution.log || { echo "Missing admission execution proof" >&2; exit 1; }
           {
             echo "### Required executable gate totals"
             echo "- Native host: 44/44 cases passed (including sender-region isolation)"
-            echo "- Lowered guests: 21/21 cases passed"
+            echo "- Lowered guests: 22/22 cases passed (including real .atto carrier handoff)"
             echo "- Source-contract and admission: pass markers present"
             echo "- Plain suite: all four registered CTest tests ran"
           } >> "$GITHUB_STEP_SUMMARY"
