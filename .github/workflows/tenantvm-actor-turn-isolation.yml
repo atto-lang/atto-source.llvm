@@ -13,6 +13,7 @@ on:
       - 'tests/native_tenantvm_actor_turn_object_test.cpp'
       - 'tests/tenantvm_actor_turn_exact_checkout.sh'
       - 'tests/tenantvm_actor_turn_gate_selftest.sh'
+      - 'tests/tenantvm_unified_source_identity.sh'
       - '.github/workflows/tenantvm-actor-turn-isolation.yml'
   workflow_dispatch:
 
@@ -47,6 +48,13 @@ jobs:
         run: |
           set -euo pipefail
           bash tests/tenantvm_actor_turn_gate_selftest.sh
+      - name: Verify original compiler and actor runtime Git object identities
+        shell: bash
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          bash tests/tenantvm_unified_source_identity.sh "$EXPECTED"
       - name: Compile and execute reviewed exact-head C++ actor turn regression
         shell: bash
         env:
