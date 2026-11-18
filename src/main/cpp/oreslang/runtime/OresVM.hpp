@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -311,11 +312,22 @@ public:
         guest_active = true;
         struct GuestThreadGuard {
             bool& active;
-            ~GuestThreadGuard() noexcept { active = false; }
+            ~GuestThreadGuard() noexcept {
+                // Revoke on every exit, including exceptions and error returns.
+                OresVM::active_guest_call_ = nullptr;
+                OresVM::active_guest_cookie_ = 0;
+                active = false;
+            }
         } thread_guard{guest_active};
         GuestCall call{this, state, state->generation};
+        // The guest receives a single-use opaque cookie, not a stack address.
+        // Only callbacks on this thread with this ticket may resolve the call.
+        const auto cookie = issue_guest_cookie();
+        active_guest_call_ = &call;
+        active_guest_cookie_ = cookie;
         OresIsolateContext ctx{ORES_ISOLATE_ABI_VERSION, ORES_ISOLATE_I64_SLOTS,
-                              state->generation, &call, &guest_load_i64, &guest_store_i64};
+                              state->generation, reinterpret_cast<void*>(cookie),
+                              &guest_load_i64, &guest_store_i64};
         std::int64_t value = 0;
         std::int32_t status = ORES_GUEST_FAILED;
         try {
@@ -394,9 +406,33 @@ private:
         std::uint64_t generation;
     };
 
+    // Host-only callback fencing, not a sandbox for arbitrary native code.
+    // The integer/void* cookie representation is native-host-specific and
+    // must NEVER be dereferenced, treated as an address, or serialized.
+    // Exhaustion fails closed rather than allowing any cookie to be reused.
+    inline static std::atomic<std::uintptr_t> next_guest_cookie_{1};
+    inline static thread_local GuestCall* active_guest_call_ = nullptr;
+    inline static thread_local std::uintptr_t active_guest_cookie_ = 0;
+
+    static std::uintptr_t issue_guest_cookie() {
+        auto next = next_guest_cookie_.load(std::memory_order_relaxed);
+        for (;;) {
+            if (next == std::numeric_limits<std::uintptr_t>::max())
+                throw std::overflow_error("guest invocation cookies exhausted");
+            if (next_guest_cookie_.compare_exchange_weak(
+                    next, next + 1, std::memory_order_relaxed,
+                    std::memory_order_relaxed))
+                return next;
+        }
+    }
+
     static int guest_load_i64(void* raw, std::uint32_t slot, std::int64_t* out) noexcept {
         if (!raw || !out || slot >= ORES_ISOLATE_I64_SLOTS) return 0;
-        auto* call = static_cast<GuestCall*>(raw);
+        // Check before any dereference: a stale token cannot alias a new
+        // invocation that happens to reuse the former stack address.
+        if (!active_guest_call_ ||
+            raw != reinterpret_cast<void*>(active_guest_cookie_)) return 0;
+        auto* call = active_guest_call_;
         std::lock_guard<std::mutex> lock(call->vm->mutex_);
         const auto& state = call->state;
         if (call->generation != state->generation ||
@@ -409,7 +445,11 @@ private:
 
     static int guest_store_i64(void* raw, std::uint32_t slot, std::int64_t value) noexcept {
         if (!raw || slot >= ORES_ISOLATE_I64_SLOTS) return 0;
-        auto* call = static_cast<GuestCall*>(raw);
+        // Check before any dereference: a stale token cannot alias a new
+        // invocation that happens to reuse the former stack address.
+        if (!active_guest_call_ ||
+            raw != reinterpret_cast<void*>(active_guest_cookie_)) return 0;
+        auto* call = active_guest_call_;
         std::lock_guard<std::mutex> lock(call->vm->mutex_);
         const auto& state = call->state;
         if (call->generation != state->generation ||
