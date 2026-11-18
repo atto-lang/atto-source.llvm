@@ -275,14 +275,8 @@ public:
             state->phase != IsolatePhase::Quiescing)
             throw std::logic_error("tenant object retirement closed");
         auto& slot = checked_object(state, object);
-        std::fill(state->heap.begin() + slot.offset,
-                  state->heap.begin() + static_cast<std::size_t>(slot.offset) +
-                      slot.capacity, std::uint8_t{0});
-        slot.live = false;
-        slot.size = 0;
-        if (slot.generation != std::numeric_limits<std::uint64_t>::max())
-            ++slot.generation;
-        // A UINT64_MAX slot remains retired forever; never wrap to 1.
+        scrub_object(state, slot);
+        // A UINT64_MAX descriptor remains retired forever; no ABA wrap.
     }
 
     // These are authenticated trusted-host *turn* tickets, not native
@@ -418,6 +412,12 @@ public:
             if (pin.second.actor_id == actor.id_ &&
                 pin.second.actor_generation == actor.actor_generation_)
                 throw std::logic_error("actor has outstanding native resource pins");
+        if (state->actor_turns.count(actor.id_))
+            throw std::logic_error("actor has an outstanding physical turn");
+        for (const auto& object : state->object_slots)
+            if (object.live && object.owner_actor_id == actor.id_ &&
+                object.owner_actor_generation == actor.actor_generation_)
+                throw std::logic_error("actor has live owned object allocations");
         state->actors.erase(it);
     }
 
@@ -572,6 +572,7 @@ public:
         auto state = checked(handle);
         if (state->phase != IsolatePhase::Quiescing || !state->actors.empty() ||
             state->active_guest_calls != 0 || !state->resource_pins.empty() ||
+            !state->actor_turns.empty() ||
             std::any_of(state->object_slots.begin(), state->object_slots.end(),
                         [](const IsolateObjectSlot& slot) { return slot.live; }))
             throw std::logic_error("actor or guest invocation still active");
