@@ -3564,6 +3564,21 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_critical_actor_state_not_lowered critical-handle-state-using.ores --diagnostic "native actor state { ... } requires sealed handle_state lowering")
     oreslang_contract_test(native_requires_rejects_unverified_wcet requires-unverified.ores --diagnostic "native requires clause awaits verified")
     oreslang_contract_test(native_actor_state_sealed_until_lowering state-sealed-unsupported.ores --diagnostic "native actor state")
+    # #309: a reference-backed List[int] actor map must never bypass the
+    # current fail-closed sealed-state frontend. The old #309 diagnostic
+    # expected fixed-int parser admission which main no longer implements.
+    oreslang_contract_test(native_actor_list_snapshot_still_unlowered
+        actor-state-list-int-current-main-reject.ores
+        --diagnostic "native actor state { ... } requires sealed handle_state lowering"
+        --parser-diagnostic)
+    # #297/#333: provisional raw i64 try_add status is NOT a public typed
+    # Result<void,ArrayError>. Both consumed and discarded forms fail closed.
+    oreslang_contract_test(native_array_try_add_scalar_status_unavailable
+        unsafe-native-array-try-add-result-reject.ores
+        --diagnostic "native Array<int> expression supports only get(index) or checked get_copy(index)")
+    oreslang_contract_test(native_array_try_add_discard_unavailable
+        unsafe-native-array-try-add-discard-reject.ores
+        --diagnostic "native Array<int> effect supports only add(value) or set(index,value)")
 
     # Native OS ABI is i32 even though Oreslang int is represented as i64.
     oreslang_contract_test(native_exit_reject_main_arguments exit-invalid-main-args.ores
