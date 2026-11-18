@@ -12,18 +12,24 @@ execute_process(
     OUTPUT_VARIABLE captured_stdout
     ERROR_VARIABLE captured_stderr
     TIMEOUT 25)
-if("${exit_status}" STREQUAL "0" OR
-        "${exit_status}" MATCHES "[Tt]imeout|[Nn]o such file|[Nn]ot found")
+# Production fail-stop paths use abort(): accepting any nonzero result lets
+# an unrelated process exit, segfault, tool failure or timeout masquerade as
+# an intentional checked-ID rejection. CMake reports SIGABRT this way on
+# Unix (verified on Linux CMake 3.25); review if a host uses another spelling.
+if(NOT "${exit_status}" STREQUAL "Subprocess aborted")
     message(FATAL_ERROR
-        "checked actor-ID mode ${MODE} unexpectedly succeeded or did not execute: ${exit_status}")
+        "checked actor-ID mode ${MODE} did not fail-stop with SIGABRT: ${exit_status}\\n${captured_stderr}")
 endif()
 string(FIND "${captured_stderr}" "${EXPECTED_DIAGNOSTIC}" expected_offset)
 if(expected_offset EQUAL -1)
     message(FATAL_ERROR
         "checked actor-ID mode ${MODE} failed without its exact denial: ${exit_status}\n${captured_stderr}")
 endif()
-if(captured_stdout MATCHES "SOURCE_ACTOR_CHECKED_ID_STALE_ACCEPTED|SOURCE_ACTOR_CHECKED_ID_WRAP_ACCEPTED|SOURCE_ACTOR_LEGACY_STALE_DEREF_ACCEPTED")
+# Forbidden acceptance markers must be absent from BOTH output streams.
+# Regressions often print the marker to stderr immediately before aborting.
+set(all_output "${captured_stdout}\\n${captured_stderr}")
+if(all_output MATCHES "SOURCE_ACTOR_CHECKED_ID_STALE_ACCEPTED|SOURCE_ACTOR_CHECKED_ID_WRAP_ACCEPTED|SOURCE_ACTOR_LEGACY_STALE_DEREF_ACCEPTED|SOURCE_ACTOR_STALE_AWAIT_CONTINUATION_EXECUTED")
     message(FATAL_ERROR
-        "checked actor-ID mode ${MODE} printed a forbidden accepted marker")
+        "checked actor-ID mode ${MODE} emitted a forbidden acceptance/continuation marker")
 endif()
 message(STATUS "checked actor-ID denial verified for ${MODE}: ${EXPECTED_DIAGNOSTIC}")
