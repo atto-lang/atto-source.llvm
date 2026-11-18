@@ -5254,7 +5254,7 @@ private:
             if (!native_trap_pure_integer(*payload))
                 fail("native trap operand unsupported: only pure integer literals and checked arithmetic are lowered");
             auto result = make_expression(Expression::Kind::SumConstruct, offset);
-            result->name = "Some";
+            result->name = "Ok"; // trap yields Result<int, Error> (spec ch. 7)
             result->trap_origin = true;
             result->arguments.push_back(std::move(payload));
             return result;
@@ -6452,7 +6452,15 @@ private:
             };
             auto scalar_name = [](ScalarType t) { return t == ScalarType::String ? "String" : t == ScalarType::Bool ? "bool" : "int"; };
             type.value_type = payload(); name += "<" + std::string(scalar_name(type.value_type));
-            if (type.kind == NativeSumType::Kind::Result) { require(","); type.error_type = payload(); name += "," + std::string(scalar_name(type.error_type)); }
+            if (type.kind == NativeSumType::Kind::Result) {
+                require(",");
+                if (accept("Error")) {
+                    // The trap error type (spec ch. 7): a sanitized message slot.
+                    type.error_type = ScalarType::String; type.trap_error = true; name += ",Error";
+                } else {
+                    type.error_type = payload(); name += "," + std::string(scalar_name(type.error_type));
+                }
+            }
             require(">"); type.name = name + ">";
             if (std::none_of(sum_types_.begin(), sum_types_.end(), [&](const NativeSumType& t) { return t.name == type.name; })) sum_types_.push_back(type);
             return type.name;

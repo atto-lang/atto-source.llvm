@@ -25,6 +25,9 @@ struct NativeSumType {
     std::string name;
     ScalarType value_type = ScalarType::I64;
     ScalarType error_type = ScalarType::I64;
+    // Result<_, Error>: the error slot holds a sanitized trap message and is
+    // minted only by `trap` (spec ch. 7); source cannot construct or read it.
+    bool trap_error = false;
 };
 
 struct GenericTypeArgument {

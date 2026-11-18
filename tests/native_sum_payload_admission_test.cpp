@@ -34,6 +34,8 @@ Program initial(const std::string& sum, const std::string& name,
     program.sum_types.push_back({NativeSumType::Kind::Option,
         "Option<String>", ScalarType::String, ScalarType::I64});
     program.sum_types.push_back({NativeSumType::Kind::Result,
+        "Result<int,Error>", ScalarType::I64, ScalarType::String, true});
+    program.sum_types.push_back({NativeSumType::Kind::Result,
         "Result<int,String>", ScalarType::I64, ScalarType::String});
     Function function;
     function.name = "test";
@@ -167,6 +169,12 @@ int main() {
             p.sum_types.back().error_type = ScalarType::I64;
         }, "type-shape mismatch", "Result error payload doesn't match name");
         require_invalid_registry([](Program& p) {
+            p.sum_types.front().trap_error = true;
+        }, "cannot carry a trap Error slot", "Option has no trap Error slot");
+        require_invalid_registry([](Program& p) {
+            p.sum_types[p.sum_types.size() - 2].error_type = ScalarType::I64;
+        }, "noncanonical error slot", "Result<_, Error> slot must be the sanitized message");
+        require_invalid_registry([](Program& p) {
             p.sum_types.back().error_type = static_cast<ScalarType>(255);
         }, "invalid native sum scalar ABI descriptor", "invalid Result error payload byte");
 
@@ -298,46 +306,63 @@ int main() {
         }
 
         std::cout << "native sum typed payload admission: PASS 52 assertions (host-only)\n";
-        // Real native typed sum resolver: caller-side trap is only a
-        // compiler-proved Some(int), never implicit Result/Option coercion.
+        // Real native typed sum resolver: caller-side trap is a compiler-proved
+        // Ok(int) of Result<int, Error> (spec ch. 7), never an Option and never
+        // an implicit Result/Option coercion.
         {
-            auto p = initial("Option<int>", "Some", scalar(Kind::Integer));
+            auto p = initial("Result<int,Error>", "Ok", scalar(Kind::Integer));
             p.functions.front().locals.front().initializer->trap_origin = true;
-            require_success(std::move(p), "pure int trap admitted into Option<int>");
+            require_success(std::move(p), "pure int trap admitted into Result<int, Error>");
         }
         {
-            auto p = initial("Option<int>", "Some", scalar(Kind::Boolean));
+            auto p = initial("Result<int,Error>", "Ok", scalar(Kind::Boolean));
             p.functions.front().locals.front().initializer->trap_origin = true;
             require_rejection(std::move(p), "pure i64 expression",
                 "bool is not a proven native trap int payload");
         }
         {
-            auto p = initial("Option<String>", "Some", scalar(Kind::String));
+            auto p = initial("Result<int,Error>", "Ok", scalar(Kind::String));
             p.functions.front().locals.front().initializer->trap_origin = true;
             require_rejection(std::move(p), "pure i64 expression",
-                "string cannot be silently trapped into Option<String>");
+                "string cannot be silently trapped");
         }
         {
-            auto p = initial("Result<int,String>", "Some", scalar(Kind::Integer));
+            auto p = initial("Option<int>", "Ok", scalar(Kind::Integer));
             p.functions.front().locals.front().initializer->trap_origin = true;
-            require_rejection(std::move(p), "exactly Option<int>",
-                "trap never flattens to bare Result");
+            require_rejection(std::move(p), "exactly Result<int, Error>",
+                "trap no longer yields Option<int>");
         }
         {
-            auto p = initial("", "Some", scalar(Kind::Integer));
+            auto p = initial("Result<int,String>", "Ok", scalar(Kind::Integer));
+            p.functions.front().locals.front().initializer->trap_origin = true;
+            require_rejection(std::move(p), "exactly Result<int, Error>",
+                "trap never inhabits a Result with a foreign error type");
+        }
+        {
+            auto p = initial("Result<int,Error>", "Ok", scalar(Kind::Integer));
+            require_rejection(std::move(p), "minted only by trap",
+                "source Ok cannot forge a trap Result");
+        }
+        {
+            auto p = initial("Result<int,Error>", "Err", scalar(Kind::String));
+            require_rejection(std::move(p), "minted only by trap",
+                "source Err cannot forge a trap Error");
+        }
+        {
+            auto p = initial("", "Ok", scalar(Kind::Integer));
             p.functions.front().locals.front().initializer->trap_origin = true;
             require_rejection(std::move(p), "cannot implicitly wrap or erase",
                 "trap cannot inhabit a scalar local");
         }
         {
-            auto p = initial("Option<int>", "Some", scalar(Kind::Integer));
+            auto p = initial("Result<int,Error>", "Ok", scalar(Kind::Integer));
             p.functions.front().locals.front().initializer->trap_origin = true;
             auto arithmetic = scalar(Kind::Add);
             arithmetic->left = std::move(p.functions.front().locals.front().initializer);
             arithmetic->right = scalar(Kind::Integer);
             p.functions.front().locals.front().initializer = std::move(arithmetic);
             require_rejection(std::move(p), "not an integer arithmetic operand",
-                "tagged Option cannot silently become i64");
+                "tagged Result cannot silently become i64");
         }
         return 0;
     } catch (const std::exception& e) {

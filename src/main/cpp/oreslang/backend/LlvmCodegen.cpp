@@ -168,13 +168,13 @@ llvm::Value* lower(const Expression& expr,
                    const RegionMoveLowering* moves = nullptr) {
     switch (expr.kind) {
         case Expression::Kind::SumConstruct: {
-            // Independent backend gate: a trap-origin Some may only wrap the
+            // Independent backend gate: a trap-origin Ok may only wrap the
             // statically total integer subset. Never accidentally catch host,
             // ordinary guest, panic or cancellation errors by fabricating Some.
-            if (expr.trap_origin && (expr.name != "Some" ||
+            if (expr.trap_origin && (expr.name != "Ok" ||
                     expr.arguments.size() != 1 ||
                     !native_trap_pure_integer(*expr.arguments.front()) ||
-                    expr.sum_type != "Option<int>"))
+                    expr.sum_type != "Result<int,Error>"))
                 throw std::runtime_error("unproved native trap AST reached LLVM codegen");
             const auto& type = native_sum(*moves->sum_program, expr.sum_type);
             const bool option = type.kind == NativeSumType::Kind::Option;
