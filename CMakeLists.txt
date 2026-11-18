@@ -8125,6 +8125,57 @@ if(BUILD_TESTING)
     set_tests_properties(source_actor_await_done_trace_runtime PROPERTIES TIMEOUT 30)
 
 
+    # Regression files already in-tree but previously missing from CTest.
+    # Exercise the real SourceActorBootstrap checked-ID API through repeated
+    # physical address reuse and compiler-style READY/DONE continuations.
+    # A draft until the exact current branch tree executes on a real runner.
+    function(oreslang_add_checked_source_actor_id_case case_name source_file)
+        set(native_source_actor_id_runtime
+            src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+            src/main/cpp/oreslang/runtime/NativeOresVM.c
+            src/main/cpp/oreslang/runtime/NativeActorFuture.c
+            src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+            src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+            src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+            src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+            src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+        foreach(variant IN ITEMS normal asan_ubsan)
+            if(variant STREQUAL "asan_ubsan" AND
+                    NOT CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+                continue()
+            endif()
+            set(target "oreslang-checked-actor-id-${case_name}-${variant}")
+            add_executable(${target} ${source_file} ${native_source_actor_id_runtime})
+            target_include_directories(${target} PRIVATE
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+            target_link_libraries(${target} PRIVATE Threads::Threads)
+            target_compile_features(${target} PRIVATE c_std_11)
+            target_compile_definitions(${target} PRIVATE
+                ORESLANG_SOURCE_ACTOR_TESTING=1)
+            target_compile_options(${target} PRIVATE
+                -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+            if(variant STREQUAL "asan_ubsan")
+                target_compile_options(${target} PRIVATE
+                    -fsanitize=address,undefined -fno-omit-frame-pointer)
+                target_link_options(${target} PRIVATE
+                    -fsanitize=address,undefined -fno-omit-frame-pointer)
+            endif()
+            set(test_name "source_actor_checked_id_${case_name}_${variant}")
+            if(case_name STREQUAL "aba")
+                add_test(NAME ${test_name} COMMAND ${target} positive)
+            else()
+                add_test(NAME ${test_name} COMMAND ${target})
+            endif()
+            set_tests_properties(${test_name} PROPERTIES TIMEOUT 90)
+        endforeach()
+    endfunction()
+
+    oreslang_add_checked_source_actor_id_case(
+        aba tests/source_actor_checked_identity_aba_v1.c)
+    oreslang_add_checked_source_actor_id_case(
+        await tests/source_actor_checked_identity_await_v1.c)
+
     add_executable(oreslang-source-actor-stop-before-ready-test
         tests/source_actor_stop_before_ready_test.c
         src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
