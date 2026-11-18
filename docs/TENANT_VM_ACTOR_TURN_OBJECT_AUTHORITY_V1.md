@@ -72,7 +72,27 @@ for CXX in g++ clang++; do
 done
 ```
 
-A dedicated Actions matrix also proposes Clang/GCC ASan+UBSan. The
+A reviewer with an **authorized local clone** can exercise the exact
+same security gate without a hosted GitHub Actions runner or any private
+source export into another organization:
+
+```bash
+head="$(git rev-parse HEAD)"
+bash tests/tenantvm_actor_turn_exact_checkout.sh "$head" g++ optimized
+bash tests/tenantvm_actor_turn_exact_checkout.sh "$head" clang++ optimized
+bash tests/tenantvm_actor_turn_exact_checkout.sh "$head" g++ asan-ubsan
+bash tests/tenantvm_actor_turn_exact_checkout.sh "$head" clang++ asan-ubsan
+```
+
+The script refuses dirty/untracked checkouts, unexpected head SHAs,
+symlinked source headers and mismatched Git blobs. It compiles and
+executes with `-DNDEBUG`, requires full test exit zero, and only then
+prints an exact-head/host-only receipt. **Merely authoring this script,
+or running it against an unrelated synthetic source, is not proof of
+executed compiler/native tests.**
+
+A dedicated Actions matrix invokes the **same** script for Clang/GCC
+O2-NDEBUG and ASan+UBSan. The
 regression denies unscoped host access, foreign tenant/actor access,
 wrong-thread use of a live turn, nested/replayed turns, bounds failures,
 double retirement and stale descriptor reuse. It tests actor retirement,
@@ -80,7 +100,10 @@ shutdown cleanup-only authority, cross-tenant and cross-root carrier nesting
 denial, tenant recreation and four concurrent actors on four carrier pthreads.
 
 **Evidence status is NOT_EXECUTED until the exact PR head has real
-nonempty job steps and native program output.** A zero-step workflow
+native program output and independently checkable receipts.** The
+source organization's current Actions jobs still have zero steps;
+a local gate is an acceptable host-only execution receipt only when
+its actual compiler/test output and exact head/blob inventory are captured. A zero-step workflow
 failure indicates runner admission trouble, not either a successful or
 failing native C++ test.
 
