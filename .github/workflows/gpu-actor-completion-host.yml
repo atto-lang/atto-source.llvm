@@ -7,6 +7,8 @@ on:
       - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.c'
       - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.h'
       - 'tests/gpu_actor_scheduler_wake_host_test.cpp'
+      - 'tests/gpu_actor_opencl_provider_v2_test.cpp'
+      - 'src/main/cpp/oreslang/runtime/GpuActorOpenClProviderV2.hpp'
       - 'CMakeLists.txt'
       - '.github/workflows/gpu-actor-completion-host.yml'
   workflow_dispatch:
