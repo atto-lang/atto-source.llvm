@@ -288,21 +288,19 @@ public:
         const auto state = checked(handle);
         if (state->phase != IsolatePhase::Running)
             throw std::logic_error("actor physical turn admission closed");
-        require_live_actor(state, actor);
-        if (state->actor_turns.count(actor.id_))
-            throw std::logic_error("actor already owns a physical turn");
-        const auto carrier = std::this_thread::get_id();
-        for (const auto& active : state->actor_turns)
-            if (active.second.carrier == carrier)
-                throw std::logic_error("reentrant actor carrier turn denied");
-        if (state->next_actor_turn_serial ==
-            std::numeric_limits<std::uint64_t>::max())
-            throw std::overflow_error("actor turn serial exhausted");
-        const auto serial = state->next_actor_turn_serial++;
-        state->actor_turns.emplace(actor.id_, IsolateActorTurnRecord{
-            actor.actor_generation_, serial, carrier});
-        return ActorTurnTicket(state, actor.id_, actor.actor_generation_,
-                               serial, carrier);
+        return admit_actor_turn_locked(state, actor);
+    }
+
+    // Quiescing seals new work but the supervisor must still be able to
+    // reclaim actor-owned bytes. This dedicated host-only path admits ONLY
+    // retirement/cleanup, not allocations or newly scheduled guest work.
+    ActorTurnTicket enter_actor_cleanup_turn(const IsolateHandle& handle,
+                                             const ActorTicket& actor) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto state = checked(handle);
+        if (state->phase != IsolatePhase::Quiescing)
+            throw std::logic_error("cleanup-only turn requires quiescing");
+        return admit_actor_turn_locked(state, actor);
     }
 
     void leave_actor_turn(const IsolateHandle& handle, const ActorTicket& actor,
@@ -675,6 +673,25 @@ private:
     }
 
     // All helper functions require mutex_ to be held by their caller.
+    static ActorTurnTicket admit_actor_turn_locked(
+        const std::shared_ptr<IsolateVM>& state, const ActorTicket& actor) {
+        require_live_actor(state, actor);
+        if (state->actor_turns.count(actor.id_))
+            throw std::logic_error("actor already owns a physical turn");
+        const auto carrier = std::this_thread::get_id();
+        for (const auto& active : state->actor_turns)
+            if (active.second.carrier == carrier)
+                throw std::logic_error("reentrant actor carrier turn denied");
+        if (state->next_actor_turn_serial ==
+            std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("actor turn serial exhausted");
+        const auto serial = state->next_actor_turn_serial++;
+        state->actor_turns.emplace(actor.id_, IsolateActorTurnRecord{
+            actor.actor_generation_, serial, carrier});
+        return ActorTurnTicket(state, actor.id_, actor.actor_generation_,
+                               serial, carrier);
+    }
+
     // No actor ID/name is accepted as authority without a host-issued
     // incarnation ticket AND a physical carrier-bound turn ticket.
     static void require_live_actor(const std::shared_ptr<IsolateVM>& state,
