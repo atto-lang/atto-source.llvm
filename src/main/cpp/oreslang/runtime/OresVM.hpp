@@ -81,14 +81,16 @@ public:
         std::uint64_t actor_generation_ = 0;
         std::uint64_t turn_serial_ = 0;
         std::thread::id carrier_{};
+        std::uint64_t carrier_incarnation_ = 0;
         bool cleanup_only_ = false;
         ActorTurnTicket(const std::shared_ptr<IsolateVM>& state,
                         std::uint64_t actor_id, std::uint64_t actor_generation,
                         std::uint64_t serial, std::thread::id carrier,
-                        bool cleanup_only)
+                        std::uint64_t carrier_incarnation, bool cleanup_only)
             : state_(state), tenant_generation_(state->generation),
               actor_id_(actor_id), actor_generation_(actor_generation),
               turn_serial_(serial), carrier_(carrier),
+              carrier_incarnation_(carrier_incarnation),
               cleanup_only_(cleanup_only) {}
     public:
         ActorTurnTicket() = default;
@@ -680,6 +682,26 @@ private:
     }
 
     // All helper functions require mutex_ to be held by their caller.
+    // Unlike std::thread::id or pthread_t, this lifetime value never
+    // repeats when the OS recycles a carrier-thread identity.
+    inline static std::atomic<std::uint64_t> next_carrier_incarnation_{1};
+    static std::uint64_t issue_carrier_incarnation() {
+        auto next = next_carrier_incarnation_.load(std::memory_order_relaxed);
+        for (;;) {
+            if (next == std::numeric_limits<std::uint64_t>::max())
+                throw std::overflow_error("carrier lifetime serial exhausted");
+            if (next_carrier_incarnation_.compare_exchange_weak(
+                    next, next + 1, std::memory_order_relaxed,
+                    std::memory_order_relaxed))
+                return next;
+        }
+    }
+    static std::uint64_t current_carrier_incarnation() {
+        static thread_local const std::uint64_t incarnation =
+            issue_carrier_incarnation();
+        return incarnation;
+    }
+
     static ActorTurnTicket admit_actor_turn_locked(
         const std::shared_ptr<IsolateVM>& state, const ActorTicket& actor,
         bool cleanup_only) {
@@ -687,6 +709,7 @@ private:
         if (state->actor_turns.count(actor.id_))
             throw std::logic_error("actor already owns a physical turn");
         const auto carrier = std::this_thread::get_id();
+        const auto carrier_incarnation = current_carrier_incarnation();
         for (const auto& active : state->actor_turns)
             if (active.second.carrier == carrier)
                 throw std::logic_error("reentrant actor carrier turn denied");
@@ -695,9 +718,9 @@ private:
             throw std::overflow_error("actor turn serial exhausted");
         const auto serial = state->next_actor_turn_serial++;
         state->actor_turns.emplace(actor.id_, IsolateActorTurnRecord{
-            actor.actor_generation_, serial, carrier});
+            actor.actor_generation_, serial, carrier, carrier_incarnation});
         return ActorTurnTicket(state, actor.id_, actor.actor_generation_,
-                               serial, carrier, cleanup_only);
+                               serial, carrier, carrier_incarnation, cleanup_only);
     }
 
     // No actor ID/name is accepted as authority without a host-issued
@@ -721,13 +744,15 @@ private:
             turn.actor_id_ != actor.id_ ||
             turn.actor_generation_ != actor.actor_generation_ ||
             turn.turn_serial_ == 0 ||
-            turn.carrier_ != std::this_thread::get_id())
+            turn.carrier_ != std::this_thread::get_id() ||
+            turn.carrier_incarnation_ != current_carrier_incarnation())
             throw std::logic_error("foreign, stale or migrated actor turn");
         const auto it = state->actor_turns.find(actor.id_);
         if (it == state->actor_turns.end() ||
             it->second.incarnation != actor.actor_generation_ ||
             it->second.serial != turn.turn_serial_ ||
-            it->second.carrier != turn.carrier_)
+            it->second.carrier != turn.carrier_ ||
+            it->second.carrier_incarnation != turn.carrier_incarnation_)
             throw std::logic_error("actor physical turn no longer active");
     }
 
