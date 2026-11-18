@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'src/main/cpp/oreslang/main.cpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
       - 'tests/fixtures/tenantvm-trusted-scalar.atto'
       - 'tests/native_tenantvm_atto_guest_test.cpp'
       - 'tests/tenantvm_atto_source_aot_gate.sh'
