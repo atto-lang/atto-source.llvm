@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -23,7 +24,14 @@ using oreslang::runtime::OresVM;
 
 template<typename Fn>
 bool denies(Fn&& action) {
-    try { action(); } catch (const std::exception&) { return true; }
+    // Only the runtime's explicitly programmed admission, lifetime and
+    // bounds denials count. std::bad_alloc, sanitizer failures and unrelated
+    // runtime errors must not turn a negative security test green.
+    try {
+        action();
+    } catch (const std::logic_error&) {
+        return true;
+    }
     return false;
 }
 
