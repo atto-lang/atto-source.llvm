@@ -6,6 +6,7 @@ on:
       - 'src/main/cpp/oreslang/runtime/OresVM.hpp'
       - 'src/main/cpp/oreslang/runtime/OresIsolateVM.hpp'
       - 'tests/native_tenantvm_actor_turn_object_test.cpp'
+      - 'tests/tenantvm_actor_turn_exact_checkout.sh'
       - '.github/workflows/tenantvm-actor-turn-isolation.yml'
   workflow_dispatch:
 
@@ -34,21 +35,17 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED"
-      - name: Compile and execute C++ actor turn ownership regression
+      - name: Compile and execute reviewed exact-head C++ actor turn regression
         shell: bash
         env:
           CXX: ${{ matrix.compiler }}
           MODE: ${{ matrix.mode }}
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          args=(-std=c++17 -Wall -Wextra -Wpedantic -Werror -pthread -DNDEBUG -Isrc/main/cpp)
-          if [[ "$MODE" == address-undefined-sanitizers ]]; then
-            args+=(-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer)
-          else
-            args+=(-O2)
-          fi
-          "$CXX" "${args[@]}" tests/native_tenantvm_actor_turn_object_test.cpp \
-            -o "$RUNNER_TEMP/tenantvm-actor-turn-objects"
-          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
-            "$RUNNER_TEMP/tenantvm-actor-turn-objects"
-          echo "HOST_ONLY_ACTOR_TURN_EXECUTED sha=$GITHUB_SHA compiler=$CXX mode=$MODE"
+          case "$MODE" in
+            optimized-ndebug) mode=optimized ;;
+            address-undefined-sanitizers) mode=asan-ubsan ;;
+            *) exit 2 ;;
+          esac
+          bash tests/tenantvm_actor_turn_exact_checkout.sh "$EXPECTED" "$CXX" "$mode"
