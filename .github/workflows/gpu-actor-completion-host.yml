@@ -1,0 +1,88 @@
+name: GPU actor completion executor native host (not guest)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/GpuActorCompletionExecutorV1.hpp'
+      - 'src/main/cpp/oreslang/runtime/GpuActorProviderBridgeV1.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.c'
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.h'
+      - 'tests/gpu_actor_scheduler_wake_host_test.cpp'
+      - 'CMakeLists.txt'
+      - '.github/workflows/gpu-actor-completion-host.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-host:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cc: gcc
+            cxx: g++
+          - cc: clang
+            cxx: clang++
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Exact PR SHA checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: GCC or Clang host-only CTest
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          echo "source_sha=$EXPECTED_HEAD"
+          git rev-parse 'HEAD^{tree}'
+          git hash-object src/main/cpp/oreslang/runtime/GpuActorCompletionExecutorV1.hpp
+          git hash-object src/main/cpp/oreslang/runtime/GpuActorProviderBridgeV1.hpp
+          git hash-object tests/gpu_actor_scheduler_wake_host_test.cpp
+          cmake -S . -B "$RUNNER_TEMP/gpu-host" \
+            -DORESLANG_GPU_ACTOR_HOST_ONLY=ON -DBUILD_TESTING=ON \
+            -DCMAKE_BUILD_TYPE=Debug
+          cmake --build "$RUNNER_TEMP/gpu-host" --parallel 2
+          ctest --test-dir "$RUNNER_TEMP/gpu-host" --output-on-failure \
+            -R '^native_gpu_actor_(scheduler_wake_host|v0_registry_migration|v1_quarantine|v2_opencl_mock|recovery_worker_authority_private|v0_completion_authority_private)$'
+          echo "EVIDENCE=NATIVE_HOST_ONLY_EXECUTED"
+          echo "ATTO_GPU_GUEST_EXECUTED=false"
+          echo "PHYSICAL_GPU_EVENT_VERIFIED=false"
+  clang-host-asan-ubsan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Exact PR SHA checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Build and test native host with ASan/UBSan
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          CC: clang
+          CXX: clang++
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          cmake -S . -B "$RUNNER_TEMP/gpu-sanitized" \
+            -DORESLANG_GPU_ACTOR_HOST_ONLY=ON -DBUILD_TESTING=ON \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_FLAGS="-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined" \
+            -DCMAKE_CXX_FLAGS="-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          cmake --build "$RUNNER_TEMP/gpu-sanitized" --parallel 2
+          ctest --test-dir "$RUNNER_TEMP/gpu-sanitized" --output-on-failure \
+            -R '^native_gpu_actor_(scheduler_wake_host|v1_quarantine|v2_opencl_mock)$'
+          echo "EVIDENCE=NATIVE_HOST_SANITIZERS_EXECUTED"
+          echo "ATTO_GPU_GUEST_EXECUTED=false"
+          echo "PHYSICAL_GPU_EVENT_VERIFIED=false"
