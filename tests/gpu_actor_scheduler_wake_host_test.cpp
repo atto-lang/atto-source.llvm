@@ -33,7 +33,7 @@ public:
     const std::thread::id host_thread;
     std::atomic<int> foreign_host_polls{0};
     std::atomic<int> observed_events{0};
-    Observation observation = Observation::Pending;
+    std::atomic<Observation> observation{Observation::Pending};
     EventHandle event;
     bool unknown = false;
     EnqueueResult enqueue(Turn turn) override {
@@ -50,7 +50,7 @@ public:
             ++foreign_host_polls;
         ++observed_events;
         check(candidate == event, "GPU poll observed foreign event");
-        return observation;
+        return observation.load(std::memory_order_acquire);
     }
     bool try_release_buffer() override { return true; }
 };
@@ -427,7 +427,124 @@ static void test_completion_capacity_and_cohort() {
     std::puts("GPU_COMPLETION_BOUNDED_COHORT_PASS");
 }
 
+// OpenCL's native Api exposes poll_event(), not a guaranteed callback.
+// A bounded worker must keep checking a submitted event without spinning a
+// VM actor carrier and without automatically trying unknown-enqueue recovery.
+class RecoverableUnknownProvider final : public MockProvider {
+public:
+    using MockProvider::MockProvider;
+    std::atomic<int> reconcilations{0};
+    std::atomic<bool> recovered{false};
+    EnqueueResult reconcile_unknown(Turn turn) override {
+        ++reconcilations;
+        if (!recovered.load(std::memory_order_acquire))
+            return {EnqueueState::Unknown, nullptr};
+        return MockProvider::reconcile_unknown(turn);
+    }
+};
+
+static void test_timed_opencl_repoll() {
+    auto reg = std::make_shared<Registry>(3);
+    auto lane = std::make_shared<Lane>(3);
+    auto port = std::make_shared<MockProvider>(1, "actor-timed");
+    Bridge bridge(reg, port, lane, {"actor-timed",1}, "root", 128);
+    (void)bridge.submit(7);
+    {
+        GpuActorCompletionExecutorV1 executor(
+            port->binding(), 2, std::chrono::milliseconds{5});
+        check(executor.request(reg, bridge.completion_lease_id()),
+              "timed OpenCL poll was rejected");
+        const auto deadline = std::chrono::steady_clock::now()
+            + std::chrono::seconds{3};
+        while (port->observed_events.load(std::memory_order_acquire) < 3
+                && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds{2});
+        check(port->observed_events.load() >= 3,
+              "submitted OpenCL operation never repolled on GPU host worker");
+        check(bridge.committed_state() == 0,
+              "repeated pending GPU polls committed actor state");
+        port->observation.store(Port::Observation::CompleteOk,
+                                std::memory_order_release);
+        executor.await_idle();
+        check(bridge.committed_state() == 7,
+              "timed completion did not commit authenticated event");
+        check(port->foreign_host_polls.load() == 0,
+              "timed OpenCL polling occurred on root/CONTROL host thread");
+        const auto st = executor.stats();
+        check(st.timed_repolls >= 2 && st.retained == 0
+            && st.failed == 0 && st.processed >= 3,
+              "timed GPU completion polling did not settle bounded lease");
+    }
+    bridge.retire_gracefully();
+
+    auto unknown = std::make_shared<RecoverableUnknownProvider>(1, "actor-unknown");
+    unknown->unknown = true;
+    Bridge pending(reg, unknown, lane, {"actor-unknown",1}, "root", 128);
+    (void)pending.submit(9);
+    GpuActorCompletionExecutorV1 executor(
+        unknown->binding(), 1, std::chrono::milliseconds{3});
+    check(executor.request(reg, pending.completion_lease_id()),
+          "unknown-enqueue host poll not accepted");
+    executor.await_idle();
+    check(unknown->reconcilations.load() == 1,
+          "unknown enqueue did not enter supervisor-owned reconciliation");
+    std::this_thread::sleep_for(std::chrono::milliseconds{25});
+    check(unknown->reconcilations.load() == 1
+          && unknown->observed_events.load() == 0,
+          "unknown enqueue was automatically retried without recovery proof");
+    check(pending.committed_state() == 0,
+          "unknown enqueue falsely committed GPU actor state");
+    unknown->recovered.store(true, std::memory_order_release);
+    unknown->observation.store(Port::Observation::CompleteOk,
+                               std::memory_order_release);
+    check(executor.request(reg, pending.completion_lease_id()),
+          "recovery worker could not signal GPU completion executor");
+    executor.await_idle();
+    check(pending.committed_state() == 9
+          && unknown->observed_events.load() == 1,
+          "explicit recovery did not resume authenticated event completion");
+    pending.retire_gracefully();
+    std::puts("GPU_COMPLETION_TIMED_POLL_PASS");
+}
+
+static void test_pending_worker_shutdown_preserves_gpu_loan() {
+    auto reg = std::make_shared<Registry>(2);
+    auto lane = std::make_shared<Lane>(2);
+    auto port = std::make_shared<MockProvider>(1, "actor-stop-poller");
+    Bridge bridge(reg, port, lane, {"actor-stop-poller",1}, "root", 128);
+    (void)bridge.submit(1);
+    {
+        GpuActorCompletionExecutorV1 polling(
+            port->binding(), 1, std::chrono::milliseconds{4});
+        check(polling.request(reg, bridge.completion_lease_id()),
+              "initial pending poll failed");
+        const auto deadline = std::chrono::steady_clock::now()
+            + std::chrono::seconds{3};
+        while (port->observed_events.load() < 2
+                && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds{2});
+        check(port->observed_events.load() >= 2,
+              "polling worker did not establish a pending subscription");
+    } // stop polling only, NEVER release the physical GPU device loan
+    check(bridge.committed_state() == 0,
+          "shutdown of GPU completion worker forged physical completion");
+    port->observation.store(Port::Observation::CompleteOk,
+                            std::memory_order_release);
+    {
+        GpuActorCompletionExecutorV1 recovery(port->binding(), 1);
+        check(recovery.request(reg, bridge.completion_lease_id()),
+              "replacement completion worker could not adopt host lease");
+        recovery.await_idle();
+        check(recovery.stats().failed == 0 && bridge.committed_state() == 1,
+              "replacement GPU completion worker lost the native provider event");
+    }
+    bridge.retire_gracefully();
+    std::puts("GPU_COMPLETION_SHUTDOWN_PRESERVES_LOAN_PASS");
+}
+
 int main() {
+    test_timed_opencl_repoll();
+    test_pending_worker_shutdown_preserves_gpu_loan();
     test_completion_capacity_and_cohort();
     run_case(Port::Observation::CompleteOk, false, false);
     run_case(Port::Observation::CompleteFailed, false, false);
