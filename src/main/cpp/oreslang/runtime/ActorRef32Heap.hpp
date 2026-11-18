@@ -3,9 +3,12 @@
 // Stacked on M2b ActorSlabHeap32. Not installed into guest ABI v4 or emitted
 // from general .atto compiler code; raw Offset32 remains ABI v4. No host sandbox.
 // C++17, bounded preallocated sidecars; NEVER transport bare guest tokens across actors.
+// A host mutex serializes access vs concurrent scheduler carriers; this is NOT
+// a substitute for compiled critical-read/write and suspension loan checking.
 #include "ActorSlabHeap32.hpp"
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <stdexcept>
 #include <vector>
 
@@ -55,7 +58,8 @@ public:
     ActorRef32Heap& operator=(const ActorRef32Heap&) = delete;
 
     TrustedActorRef32 allocate(ActorHeapOwner caller, Offset32 size,
-                                Offset32 alignment, std::uint32_t type_id) noexcept {
+                                Offset32 alignment, std::uint32_t type_id) {
+        const std::lock_guard<std::mutex> guard(mutex_);
         if (!authorized(caller) || type_id == 0 || size == 0) return {};
         for (std::size_t i = 0; i < slots_.size(); ++i) {
             Slot& slot = slots_[i];
@@ -75,7 +79,8 @@ public:
 
     bool write_i64(TrustedActorRef32 ref, ActorHeapOwner caller,
                    std::uint32_t type_id, Offset32 displacement,
-                   std::int64_t value) noexcept {
+                   std::int64_t value) {
+        const std::lock_guard<std::mutex> guard(mutex_);
         const Slot* slot = checked(ref, caller, type_id, displacement, 8);
         if (!slot) return false;
         std::memcpy(cage_ + slot->offset + displacement, &value, sizeof(value));
@@ -84,7 +89,8 @@ public:
 
     bool read_i64(TrustedActorRef32 ref, ActorHeapOwner caller,
                   std::uint32_t type_id, Offset32 displacement,
-                  std::int64_t& out) const noexcept {
+                  std::int64_t& out) const {
+        const std::lock_guard<std::mutex> guard(mutex_);
         const Slot* slot = checked(ref, caller, type_id, displacement, 8);
         if (!slot) return false;
         std::memcpy(&out, cage_ + slot->offset + displacement, sizeof(out));
@@ -92,7 +98,8 @@ public:
     }
 
     bool release(TrustedActorRef32 ref, ActorHeapOwner caller,
-                 std::uint32_t type_id) noexcept {
+                 std::uint32_t type_id) {
+        const std::lock_guard<std::mutex> guard(mutex_);
         Slot* slot = checked_slot(ref, caller, type_id);
         if (!slot || !slab_.release(slot->offset, slot->size, slot->alignment))
             return false;
@@ -105,7 +112,8 @@ public:
 
     // Only after the owner actor's loans, callbacks and frames are quiescent.
     // The underlying slab release scrubs each live allocation before reset.
-    bool close_after_quiescence() noexcept {
+    bool close_after_quiescence() {
+        const std::lock_guard<std::mutex> guard(mutex_);
         if (closed_) return true;
         for (Slot& slot : slots_) {
             if (slot.live) {
@@ -120,8 +128,12 @@ public:
         return true;
     }
 
-    bool closed() const noexcept { return closed_; }
-    std::size_t sidecar_bytes() const noexcept {
+    bool closed() const {
+        const std::lock_guard<std::mutex> guard(mutex_);
+        return closed_;
+    }
+    std::size_t sidecar_bytes() const {
+        const std::lock_guard<std::mutex> guard(mutex_);
         return slots_.capacity() * sizeof(Slot) + slab_.metadata_bytes();
     }
 
@@ -172,5 +184,6 @@ private:
     ActorSlabHeap32 slab_;
     std::vector<Slot> slots_;
     bool closed_ = false;
+    mutable std::mutex mutex_; // protects sidecars, slab and retirement vs carrier threads
 };
 } // namespace oreslang::runtime::vm
