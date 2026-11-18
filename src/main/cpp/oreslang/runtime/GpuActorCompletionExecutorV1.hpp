@@ -128,8 +128,7 @@ public:
         if (found != by_key_.end()) {
             // Already executing: one additional pass handles a notification
             // that races with provider.observe() returning Pending.
-            if (!active_.empty() && found->second == active_.begin()
-                    && !found->second->rerun) {
+            if (found->second->running && !found->second->rerun) {
                 found->second->rerun = true;
                 bump(rearmed_);
                 return true;
@@ -142,7 +141,7 @@ public:
             bump(rejected_);
             throw std::logic_error("GPU_COMPLETION_QUEUE_CAPACITY_EXHAUSTED");
         }
-        queued_.push_back(Job{registry, lease_id, key, false});
+        queued_.push_back(Job{registry, lease_id, key, false, false});
         auto it = std::prev(queued_.end());
         try {
             by_key_.emplace(key, it);
@@ -187,6 +186,7 @@ private:
         std::uint64_t lease_id;
         Key key;
         bool rerun;
+        bool running; // avoids comparing iterators from distinct lists
     };
 
     static void bump(std::uint64_t& value) noexcept {
@@ -209,6 +209,7 @@ private:
                 // No allocations, no duplicate key, and no holding our
                 // queue lock across provider.observe()/registry progress.
                 active_.splice(active_.end(), queued_, queued_.begin());
+                active_.front().running = true;
                 registry = active_.front().registry;
                 lease = active_.front().lease_id;
             }
@@ -226,6 +227,7 @@ private:
                 else bump(failed_);
                 if (active_.front().rerun && !stopping_) {
                     active_.front().rerun = false;
+                    active_.front().running = false;
                     queued_.splice(queued_.end(), active_, active_.begin());
                     cv_.notify_one();
                 } else {
