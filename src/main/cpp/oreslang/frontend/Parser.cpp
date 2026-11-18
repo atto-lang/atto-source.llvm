@@ -3139,6 +3139,7 @@ private:
             bool arrow = false;
             if (mark.text == "<") {
                 Lexer look = lexer_;
+                look.next(); // <
                 const Token minus = look.next();
                 arrow = minus.text == "-" &&
                     minus.offset == mark.offset + mark.text.size();
