@@ -1,6 +1,7 @@
 #include "oreslang/runtime/GpuActorProviderBridgeV1.hpp"
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <memory>
 #include <stdexcept>
@@ -53,6 +54,7 @@ struct State {
 };
 
 static void on_data(void* opaque, size_t actor, std::uint64_t payload) {
+    try {
     auto& s = *static_cast<State*>(opaque);
     check(actor == 0 && payload == 1, "unexpected actor message");
     check(ores_native_actor_scheduler_in_any_actor_turn() != 0,
@@ -76,13 +78,15 @@ static void on_data(void* opaque, size_t actor, std::uint64_t payload) {
     check(s.invalid_mail_denied.load(std::memory_order_acquire) == 1,
           "forged DATA-mail provenance accepted");
     (void)s.bridge->submit_with_native_wake(3, s.scheduler, s.ticket, mail);
+    } catch (...) { std::abort(); } // Never unwind C++ exceptions through C scheduler frames.
 }
 
 static void on_control(void*, size_t, std::uint64_t) {
-    throw std::runtime_error("unexpected native CONTROL");
+    std::abort(); // Unexpected native CONTROL in this test.
 }
 static void on_wake(void* opaque, size_t actor, OresNativeWakeTicket ticket,
                     OresNativeWakeOutcome outcome) {
+    try {
     auto& s = *static_cast<State*>(opaque);
     check(actor == 0, "foreign actor resumed");
     check(std::this_thread::get_id() != s.host_thread,
@@ -95,6 +99,7 @@ static void on_wake(void* opaque, size_t actor, OresNativeWakeTicket ticket,
         s.scheduler, ticket), std::memory_order_release);
     s.delivered.store(static_cast<int>(outcome), std::memory_order_release);
     ++s.wake_count;
+    } catch (...) { std::abort(); } // No exception may cross the native C ABI.
 }
 
 static void run_case(Port::Observation result, bool cancel, bool unknown) {
@@ -147,7 +152,7 @@ static void run_case(Port::Observation result, bool cancel, bool unknown) {
     ores_native_actor_scheduler_retire(state.scheduler);
     check(ores_native_actor_scheduler_try_destroy(state.scheduler),
           "native scheduler was not physically quiescent");
-    std::printf("GPU_ACTOR_NATIVE_WAKE_PASS cancel=%d unknown=%d outcome=%d\\n",
+    std::printf("GPU_ACTOR_NATIVE_WAKE_PASS cancel=%d unknown=%d outcome=%d\n",
                 cancel, unknown, static_cast<int>(expected));
 }
 
