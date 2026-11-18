@@ -232,44 +232,10 @@ public:
     ObjectHandle allocate_object(const IsolateHandle& handle,
                                  std::uint32_t bytes, std::uint32_t alignment = 8) {
         std::lock_guard<std::mutex> lock(mutex_);
-        auto state = checked(handle);
+        const auto state = checked(handle);
         if (state->phase != IsolatePhase::Running)
             throw std::logic_error("tenant object admission closed");
-        if (bytes == 0 || alignment == 0 || (alignment & (alignment - 1)) != 0 ||
-            alignment > state->config.heap_limit_bytes)
-            throw std::invalid_argument("object bytes and alignment invalid");
-        // Reuse only an already scrubbed descriptor from this exact tenant.
-        // Never revive the same object generation, even after counter overflow.
-        for (std::size_t i = 0; i < state->object_slots.size(); ++i) {
-            auto& slot = state->object_slots[i];
-            if (slot.live ||
-                slot.generation == std::numeric_limits<std::uint64_t>::max() ||
-                slot.capacity < bytes || slot.offset % alignment != 0)
-                continue;
-            slot.size = bytes;
-            slot.live = true;
-            return ObjectHandle(state, i, slot.generation);
-        }
-        if (state->object_slots.size() >= state->config.max_object_slots)
-            throw std::bad_alloc();
-        const auto limit = static_cast<std::size_t>(state->config.heap_limit_bytes);
-        const auto used = state->heap.size();
-        const auto padding = (alignment - (used % alignment)) % alignment;
-        if (used > limit || padding > limit - used ||
-            bytes > limit - used - padding)
-            throw std::bad_alloc();
-        const auto start = used + padding;
-        // Descriptor insertion first; failed backing-heap growth must roll
-        // the descriptor back and leave the heap unchanged.
-        state->object_slots.push_back(IsolateObjectSlot{
-            static_cast<std::uint32_t>(start), bytes, bytes, 1, true});
-        try {
-            state->heap.resize(start + bytes, 0);
-        } catch (...) {
-            state->object_slots.pop_back();
-            throw;
-        }
-        return ObjectHandle(state, state->object_slots.size() - 1, 1);
+        return allocate_object_locked(state, bytes, alignment, 0, 0);
     }
 
     std::uint8_t read_object_byte(const IsolateHandle& handle,
@@ -707,14 +673,108 @@ private:
         return state;
     }
 
+    // All helper functions require mutex_ to be held by their caller.
+    // No actor ID/name is accepted as authority without a host-issued
+    // incarnation ticket AND a physical carrier-bound turn ticket.
+    static void require_live_actor(const std::shared_ptr<IsolateVM>& state,
+                                   const ActorTicket& actor) {
+        const auto it = state->actors.find(actor.id_);
+        if (actor.id_ == 0 || actor.state_.lock() != state ||
+            actor.generation_ != state->generation ||
+            it == state->actors.end() ||
+            it->second != actor.actor_generation_)
+            throw std::logic_error("foreign or retired actor incarnation");
+    }
+
+    static void require_live_turn(const std::shared_ptr<IsolateVM>& state,
+                                  const ActorTicket& actor,
+                                  const ActorTurnTicket& turn) {
+        require_live_actor(state, actor);
+        if (turn.state_.lock() != state ||
+            turn.tenant_generation_ != state->generation ||
+            turn.actor_id_ != actor.id_ ||
+            turn.actor_generation_ != actor.actor_generation_ ||
+            turn.turn_serial_ == 0 ||
+            turn.carrier_ != std::this_thread::get_id())
+            throw std::logic_error("foreign, stale or migrated actor turn");
+        const auto it = state->actor_turns.find(actor.id_);
+        if (it == state->actor_turns.end() ||
+            it->second.incarnation != actor.actor_generation_ ||
+            it->second.serial != turn.turn_serial_ ||
+            it->second.carrier != turn.carrier_)
+            throw std::logic_error("actor physical turn no longer active");
+    }
+
+    static ObjectHandle allocate_object_locked(
+        const std::shared_ptr<IsolateVM>& state,
+        std::uint32_t bytes, std::uint32_t alignment,
+        std::uint64_t owner_id, std::uint64_t owner_generation) {
+        if (bytes == 0 || alignment == 0 ||
+            (alignment & (alignment - 1)) != 0 ||
+            alignment > state->config.heap_limit_bytes)
+            throw std::invalid_argument("object bytes and alignment invalid");
+        // A retired descriptor is scrubbed before its generation is ever
+        // incremented. Reuse is checked for size/alignment compatibility.
+        for (std::size_t i = 0; i < state->object_slots.size(); ++i) {
+            auto& slot = state->object_slots[i];
+            if (slot.live ||
+                slot.generation == std::numeric_limits<std::uint64_t>::max() ||
+                slot.capacity < bytes || slot.offset % alignment != 0)
+                continue;
+            slot.size = bytes;
+            slot.owner_actor_id = owner_id;
+            slot.owner_actor_generation = owner_generation;
+            slot.live = true;
+            return ObjectHandle(state, i, slot.generation);
+        }
+        if (state->object_slots.size() >= state->config.max_object_slots)
+            throw std::bad_alloc();
+        const auto limit = static_cast<std::size_t>(state->config.heap_limit_bytes);
+        const auto used = state->heap.size();
+        const auto padding = (alignment - (used % alignment)) % alignment;
+        if (used > limit || padding > limit - used ||
+            bytes > limit - used - padding)
+            throw std::bad_alloc();
+        const auto offset = used + padding;
+        state->object_slots.push_back(IsolateObjectSlot{
+            static_cast<std::uint32_t>(offset), bytes, bytes, 1, true,
+            owner_id, owner_generation});
+        try {
+            state->heap.resize(offset + bytes, 0);
+        } catch (...) {
+            state->object_slots.pop_back();
+            throw;
+        }
+        return ObjectHandle(state, state->object_slots.size() - 1, 1);
+    }
+
+    static void scrub_object(const std::shared_ptr<IsolateVM>& state,
+                             IsolateObjectSlot& slot) {
+        // The host lock serializes every read/write/retire/reuse. The pointer
+        // is never exposed; stale handles cannot alias a new object.
+        std::fill(state->heap.begin() + slot.offset,
+                  state->heap.begin() + static_cast<std::size_t>(slot.offset) +
+                      slot.capacity, std::uint8_t{0});
+        slot.live = false;
+        slot.size = 0;
+        slot.owner_actor_id = 0;
+        slot.owner_actor_generation = 0;
+        if (slot.generation != std::numeric_limits<std::uint64_t>::max())
+            ++slot.generation;
+    }
+
     static IsolateObjectSlot& checked_object(
-        const std::shared_ptr<IsolateVM>& state, const ObjectHandle& object) {
+        const std::shared_ptr<IsolateVM>& state, const ObjectHandle& object,
+        std::uint64_t owner_id = 0,
+        std::uint64_t owner_generation = 0) {
         if (object.state_.lock() != state ||
             object.tenant_generation_ != state->generation ||
             object.slot_ >= state->object_slots.size())
             throw std::logic_error("foreign or stale tenant object ticket");
         auto& slot = state->object_slots[object.slot_];
         if (!slot.live || slot.generation != object.object_generation_ ||
+            slot.owner_actor_id != owner_id ||
+            slot.owner_actor_generation != owner_generation ||
             slot.size == 0 || slot.size > slot.capacity ||
             static_cast<std::uint64_t>(slot.offset) + slot.capacity >
                 state->heap.size())
