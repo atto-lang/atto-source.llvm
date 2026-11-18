@@ -10,9 +10,13 @@ source `gpu` keyword, physical GPU, or compiler-backed AttoLang test.**
 device command submission with a GPU event and an actor-owned suspension.
 That compiler/backend path is **not** completed by this patch.
 
-- Root/CONTROL coordinator never executes device kernels, polls a driver, or
-  runs the actor guest continuation. PRIVATE/SHARED/UNTRUSTED actor pools stay
-  separate; GPU work stays on a provider-authenticated device queue.
+- Root/CONTROL coordinator must only signal a dedicated supervisor-owned
+  GPU completion executor, not run device driver polling or guest callbacks.
+  PRIVATE/SHARED/UNTRUSTED actor pools stay separate; GPU work stays on a
+  provider-authenticated device queue. This patch rejects `progress_all()`
+  from **any native actor carrier**, including actor CONTROL turns. It does
+  **not yet enforce** that an external host thread is an authorized GPU
+  completion-pool worker; the embedding VM must provide that boundary.
 - The trusted host first calls `bind_native_actor(scheduler, actor_ref)`
   exactly once. Actor generation numbers are **scheduler-local**: the GPU
   bridge rejects tickets from a different actor slot or scheduler even when
@@ -77,6 +81,14 @@ source/build/blob IDs and kernel event proof. Java source `gpu` lowering is
 still fail-closed on main, so Java/LLVM GPU guest parity is NOT proven.
 
 ### Remaining blockers
+
+The completion executor should be one bounded, supervised GPU host service
+per device/queue cohort with short nonblocking poll passes; it must not create
+one thread per task, and expensive unknown-enqueue/device-loss recovery must
+stay on the existing separate privileged recovery path. Neither the native
+actor scheduler nor main CONTROL thread should spin on a device event.
+Choose queue locality from authenticated device/tenant/generation identity,
+not untrusted guest-provided queue IDs.
 
 Compiler generated `gpu task` HIR/MIR must mint and bind source continuation
 and actor incarnation, with resource loans, explicit upload/download, device
