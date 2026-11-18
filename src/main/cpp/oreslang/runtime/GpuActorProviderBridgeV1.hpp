@@ -577,6 +577,13 @@ public:
     }
 
     void progress_all() {
+        // Driver poll / unknown-enqueue recovery must never execute on an
+        // OresVM actor carrier (DATA/TASK/WAKE/CONTROL). Such calls can enter
+        // a native provider and contaminate CPU L1/L2 locality or stall an
+        // actor's physical lease. A dedicated host GPU-completion executor
+        // must invoke progress from outside *all* actor pools.
+        if (ores_native_actor_scheduler_in_any_actor_turn())
+            throw std::logic_error("GPU_PROVIDER_PROGRESS_ON_ACTOR_CARRIER");
         for (auto& [id, e] : snapshot_with_ids()) {
             e->progress();
             prune(id, e);
