@@ -148,6 +148,10 @@ public:
         OresNativeWakeTicket ticket;
         std::uint64_t original_data_mail;
     };
+    struct NativeActorBinding {
+        OresNativeActorScheduler* scheduler;
+        OresNativeActorRef actor;
+    };
 
 private:
     enum class Phase { Ready, Retiring, EnqueueInProgress, UnknownEnqueue, Reconciling, Submitted, Terminal, Releasing, Released };
@@ -163,10 +167,28 @@ private:
         std::optional<Turn> turn;
         EventHandle event;
         std::optional<SchedulerWake> scheduler_wake;
+        // Immutable trusted-host association. Actor generations are LOCAL to
+        // a scheduler; two unrelated actors can both be generation 1.
+        // A GPU bridge must not accept a WAKE from an arbitrary such actor.
+        std::optional<NativeActorBinding> native_actor;
         Phase phase = Phase::Ready;
         bool stopping = false;
         bool detached = false;
         bool device_lost = false;
+
+        void bind_native_actor(OresNativeActorScheduler* scheduler,
+                               OresNativeActorRef actor) {
+            std::lock_guard<std::mutex> guard(mu);
+            if (!scheduler || !actor.scheduler_domain || !actor.generation
+                    || !ores_native_actor_scheduler_poll_ready(scheduler, actor)
+                    || actor.generation != port->binding().actor_generation
+                    || native_actor || phase != Phase::Ready || stopping || detached)
+                throw std::logic_error("GPU_PROVIDER_NATIVE_BINDING_DENIED");
+            // The owning trusted VM MUST keep the scheduler alive until
+            // all outstanding GPU WAKE escrow is settled. A raw scheduler
+            // pointer is never a source-level guest capability.
+            native_actor = NativeActorBinding{scheduler, actor};
+        }
 
         void publish_verified_wake_locked(OresNativeWakeOutcome outcome) {
             if (!scheduler_wake) return; // legacy host-only bridge unchanged
@@ -233,10 +255,14 @@ private:
                 // For this v1 contract only the same actor may resume. An
                 // authenticated DATA mail, not an untrusted GPU event, must
                 // have minted the exact native wake escrow.
-                if (!w.scheduler || !w.original_data_mail
-                        || a.scheduler_domain != b.scheduler_domain
-                        || a.actor_slot != b.actor_slot
-                        || a.generation != b.generation
+                if (!w.scheduler || !w.original_data_mail || !native_actor
+                        || w.scheduler != native_actor->scheduler
+                        || a.scheduler_domain != native_actor->actor.scheduler_domain
+                        || a.actor_slot != native_actor->actor.actor_slot
+                        || a.generation != native_actor->actor.generation
+                        || b.scheduler_domain != a.scheduler_domain
+                        || b.actor_slot != a.actor_slot
+                        || b.generation != a.generation
                         || a.generation != port->binding().actor_generation
                         || !ores_native_actor_scheduler_current_data_issued_wake(
                             w.scheduler, w.ticket, w.original_data_mail))
@@ -463,6 +489,10 @@ public:
         return id;
     }
 
+    void bind_native_actor(std::uint64_t id, OresNativeActorScheduler* scheduler,
+                           OresNativeActorRef actor) {
+        require(id)->bind_native_actor(scheduler, actor);
+    }
     Turn submit(std::uint64_t id, std::int64_t delta) { return require(id)->submit(delta); }
     Turn submit_with_native_wake(std::uint64_t id, std::int64_t delta,
             OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket,
@@ -639,6 +669,13 @@ public:
     GpuActorProviderBridgeV1& operator=(const GpuActorProviderBridgeV1&) = delete;
     ~GpuActorProviderBridgeV1() { if (registry_) registry_->detach(id_); }
 
+    /* Called exactly once by the trusted VM when associating the provider
+     * with the actor's native scheduler. An actor-generation integer alone
+     * does not prove scheduler/slot identity. */
+    void bind_native_actor(OresNativeActorScheduler* scheduler,
+                           OresNativeActorRef actor) {
+        registry_->bind_native_actor(id_, scheduler, actor);
+    }
     HostTurnBridgeV0::Turn submit(std::int64_t delta) { return registry_->submit(id_,delta); }
     /* GPU task host entry; never publish directly from a driver callback.
      * The actor's compiler-owned continuation resumes on its existing native
