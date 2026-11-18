@@ -216,7 +216,8 @@ public:
         auto state = checked(handle);
         if (state->phase != IsolatePhase::Running)
             throw std::logic_error("tenant object admission closed");
-        if (bytes == 0 || alignment == 0 || (alignment & (alignment - 1)) != 0)
+        if (bytes == 0 || alignment == 0 || (alignment & (alignment - 1)) != 0 ||
+            alignment > state->config.heap_limit_bytes)
             throw std::invalid_argument("object bytes and alignment invalid");
         // Reuse only an already scrubbed descriptor from this exact tenant.
         // Never revive the same object generation, even after counter overflow.
