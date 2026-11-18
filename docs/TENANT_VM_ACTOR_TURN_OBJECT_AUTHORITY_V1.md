@@ -35,6 +35,12 @@ which in turn depends on [#1890](https://github.com/ores-truffle-oreslang/oresla
 - `leave_actor_turn` ends the admission and revokes all copies of that
   turn token. Migrating the token to another pthread, replaying it after
   leaving, or using it during a later turn fails closed.
+- The legacy trusted scalar guest ABI and physical actor turn ABI are
+  intentionally **mutually non-reentrant** on a carrier: an active actor
+  turn cannot invoke an unscoped guest, and an active unscoped guest
+  cannot acquire an actor turn, even in another root OresVM. A future
+  compiler-generated actor guest ABI must explicitly carry verified
+  actor and turn credentials instead of exploiting this legacy path.
 - Actor retirement refuses live turns, live actor-owned objects, and
   outstanding resource pins. Tenant shutdown still requires all actors,
   objects, native resources and guest invocation pins to drain.
