@@ -13,12 +13,19 @@ That compiler/backend path is **not** completed by this patch.
 - Root/CONTROL coordinator never executes device kernels, polls a driver, or
   runs the actor guest continuation. PRIVATE/SHARED/UNTRUSTED actor pools stay
   separate; GPU work stays on a provider-authenticated device queue.
+- The trusted host first calls `bind_native_actor(scheduler, actor_ref)`
+  exactly once. Actor generation numbers are **scheduler-local**: the GPU
+  bridge rejects tickets from a different actor slot or scheduler even when
+  the generation matches. Once bound, the legacy wake-free `submit()` is
+  denied; only the authenticated wake path can admit new GPU actor work.
 - During the *current authenticated DATA mail*, native code reserves the
-  generation-checked scheduler WAKE ticket. New optional
+  generation-checked scheduler WAKE ticket. The optional
   `GpuActorProviderBridgeV1::submit_with_native_wake` validates the exact
-  original DATA-mail issuance and requires its producer/target to be the
-  same actor incarnation. It transfers native WAKE escrow **before enqueue**
-  and preserves it through unknown/ambiguous submission.
+  original DATA-mail issuance and its bound producer/target incarnation.
+  It transfers native WAKE escrow **before enqueue** and preserves it
+  through unknown/ambiguous submission. A staging failure before provider
+  enqueue aborts the transferred WAKE, and a partially prepared but
+  unsubmitted host turn is closed rather than stranded.
 - The existing supervisor-rooted `GpuActorQuarantineRegistryV1` holds the
   wake while device work may be active. Merely detaching the actor-facing
   bridge does not release GPU memory or the wake ticket.
@@ -31,18 +38,32 @@ That compiler/backend path is **not** completed by this patch.
   lease, **not on the GPU driver/polling thread**. Its WAKE-vs-DATA-vs-CONTROL
   priorities and last-carrier soft affinity apply automatically. GPU queue
   locality (VRAM reuse, device/queue affinity) is independent of CPU L1/L2.
-- STOP racing a terminal GPU event invokes the scheduler's terminal wake
-  accounting. The scheduler may consume it as PRODUCER_RETIRED; it must never
-  reopen a stopped actor or simulate device quiescence. A failed or cancelled
-  result cannot assert a READY source continuation.
+- GPU **actor** cancellation, hardware loss, failed kernel, and graceful
+  GPU-actor retirement seal the matching native actor incarnation. In-flight
+  GPU event authority remains quarantined until real device quiescence; a
+  terminal event then consumes the transferred WAKE without calling guest
+  code on a stopped actor. The host supervisor receives the typed CONTROL
+  notice independent of the actor's DATA/WAKE pool.
+- An INVALID native wake after a verified terminal GPU event puts the
+  host-provider binding into `WakeQuarantined`, forbidding duplicate host
+  event commit and speculative buffer release. This path requires explicit
+  supervisor repair; blindly retrying provider completion is unsafe.
+- **Important distinction:** `GpuActorProviderBridgeV1::request_close()`
+  closes an entire GPU **actor incarnation**, not one `gpu task` Future.
+  Non-terminal `gpu task` cancellation/failure must use a separate
+  actor-live Future completion path. This host bridge only accepts DATA-mail
+  issued wakes; tasks launched from a TASK/WAKE turn need further compiler
+  and capability-gated admission. It is not full source `gpu` lowering.
 
 ## Verification
 
 `tests/gpu_actor_scheduler_wake_host_test.cpp` links the REAL
 `NativeActorScheduler.c` with the existing host registry/provider bridge.
-It checks DATA-mail provenance, actor carrier ownership, one WAKE after
-provider terminal completion, failure/cancel denial, unknown-enqueue
-reconciliation, and repeated-poll idempotence.
+It checks DATA-mail provenance, exact native actor/scheduler binding,
+same-generation sibling denial, wake-free bypass denial, actor carrier
+ownership, one successful READY WAKE after provider completion, native STOP
+on cancellation/failure/device loss, supervisor CONTROL, staging-overflow
+rollback, unknown-enqueue reconciliation and repeated-poll idempotence.
 
 Run:
 ```sh
