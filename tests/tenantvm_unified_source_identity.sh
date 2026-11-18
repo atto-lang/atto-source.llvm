@@ -42,7 +42,7 @@ done <<'PINNED_GIT_BLOBS'
 e2e35dc461bdc5ae4f9bc5742181cdbccffcfc1a src/main/cpp/oreslang/main.cpp
 ac05a911c1fcbe55a770171950931776b63a814f tests/fixtures/tenantvm-trusted-scalar.atto
 e3bdfa9c901210692451220606184b0541c25310 tests/native_tenantvm_atto_guest_test.cpp
-2e1d22a00045dc191f15a9ef5a657f559d477ce8 src/main/cpp/oreslang/runtime/OresVM.hpp
+805d6951ee678cdab028f9685d4430fae3dfc8fb src/main/cpp/oreslang/runtime/OresVM.hpp
 4cf332d75b3351b9cd4a03e9bb4922251e986542 src/main/cpp/oreslang/runtime/OresIsolateVM.hpp
 0ab3d69d2be78d1b156e294b49ed22192c4de713 src/main/cpp/oreslang/runtime/OresIsolateAbi.h
 01907996041ec4cd16a76f4ef7ca9be2a1065dfa tests/native_tenantvm_actor_turn_object_test.cpp
