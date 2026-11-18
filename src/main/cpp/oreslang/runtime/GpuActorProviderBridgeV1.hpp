@@ -576,6 +576,21 @@ public:
         }
     }
 
+    // A GPU event completion always identifies ONE exact host-owned lease.
+    // Unlike progress_all(), this does not walk every actor in a registry,
+    // avoiding unnecessary cache-line touches for unrelated tenants/actors.
+    Port::Binding completion_binding(std::uint64_t id) const {
+        auto entry = require(id);
+        return entry->port->binding(); // immutable provider binding, copied
+    }
+    void progress_one(std::uint64_t id) {
+        if (ores_native_actor_scheduler_in_any_actor_turn())
+            throw std::logic_error("GPU_PROVIDER_PROGRESS_ON_ACTOR_CARRIER");
+        auto entry = require(id);
+        entry->progress();
+        prune(id, entry);
+    }
+
     void progress_all() {
         // Driver poll / unknown-enqueue recovery must never execute on an
         // OresVM actor carrier (DATA/TASK/WAKE/CONTROL). Such calls can enter
@@ -727,6 +742,9 @@ public:
                            OresNativeActorRef actor) {
         registry_->bind_native_actor(id_, scheduler, actor);
     }
+    // Trusted host-only lease key for targeted completion scheduling. This is
+    // not a guest capability and does not authenticate a physical GPU event.
+    std::uint64_t completion_lease_id() const noexcept { return id_; }
     HostTurnBridgeV0::Turn submit(std::int64_t delta) { return registry_->submit(id_,delta); }
     /* GPU task host entry; never publish directly from a driver callback.
      * The actor's compiler-owned continuation resumes on its existing native
