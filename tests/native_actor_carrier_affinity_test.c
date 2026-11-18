@@ -65,12 +65,13 @@ static void on_control(void* ctx, size_t actor, uint64_t payload) {
     (void)ctx; (void)actor; (void)payload;
 }
 
-static double run(uint32_t window, uint64_t* affine_picks) {
+static double run(uint32_t window, size_t workers, uint64_t* affine_picks,
+        uint64_t* migrations) {
     State state;
     memset(&state, 0, sizeof state);
     assert(pthread_mutex_init(&state.mutex, NULL) == 0);
     OresNativeActorScheduler* scheduler = ores_native_actor_scheduler_open_control(
-            ACTORS, PER_ROUND, WORKERS, on_message, on_control, &state);
+            ACTORS, PER_ROUND, workers, on_message, on_control, &state);
     assert(scheduler != NULL);
     assert(ores_native_actor_scheduler_set_affinity_window(scheduler, window));
     assert(!ores_native_actor_scheduler_set_affinity_window(scheduler, 65));
@@ -86,6 +87,11 @@ static double run(uint32_t window, uint64_t* affine_picks) {
         assert(ores_native_actor_scheduler_drain(scheduler));
     }
     *affine_picks = ores_native_actor_scheduler_affine_picks(scheduler);
+    *migrations = ores_native_actor_scheduler_carrier_migrations(scheduler);
+    /* DATA-only workload: continuation metric must not count DATA moves.
+     * The callback observes physical pthread equality independently. */
+    assert(ores_native_actor_scheduler_continuation_migrations(scheduler) == 0);
+    assert(*migrations == (uint64_t)(state.turns - ACTORS - state.same_carrier));
     ores_native_actor_scheduler_retire(scheduler);
     assert(ores_native_actor_scheduler_try_destroy(scheduler));
 
@@ -97,13 +103,19 @@ static double run(uint32_t window, uint64_t* affine_picks) {
 }
 
 int main(void) {
-    uint64_t picks_on = 0, picks_off = 0;
-    const double on = run(8, &picks_on);
-    const double off = run(0, &picks_off);
+    uint64_t picks_on = 0, picks_off = 0, picks_one = 0;
+    uint64_t migrations_on = 0, migrations_off = 0, migrations_one = 0;
+    const double on = run(8, WORKERS, &picks_on, &migrations_on);
+    const double off = run(0, WORKERS, &picks_off, &migrations_off);
+    const double one = run(8, 1, &picks_one, &migrations_one);
     printf("same-carrier ratio: window 8 = %.2f (affine picks %llu), window 0 = %.2f\n",
             on, (unsigned long long)picks_on, off);
     assert(picks_off == 0); /* window 0 is plain FIFO */
     assert(picks_on > 0);           /* the window is actually used */
+    assert(picks_one == 0);         /* single-carrier scan has no cache benefit */
+    assert(one == 1.0 && migrations_one == 0);
+    assert(ores_native_actor_scheduler_carrier_migrations(NULL) == 0);
+    assert(ores_native_actor_scheduler_continuation_migrations(NULL) == 0);
     assert(on + 0.02 >= off);       /* and never makes locality worse than FIFO */
     puts("native carrier affinity: exactly-once FIFO exclusive turns, locality: OK");
     return 0;
