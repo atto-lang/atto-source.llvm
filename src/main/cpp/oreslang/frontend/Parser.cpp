@@ -6451,6 +6451,13 @@ private:
                 fail("native sum class/compound payload requires ownership and lifetime lowering");
             };
             auto scalar_name = [](ScalarType t) { return t == ScalarType::String ? "String" : t == ScalarType::Bool ? "bool" : "int"; };
+            // The host-only ArrayResult contract has a zero-payload Ok,
+            // but native source tagged-Result lowering has no void payload
+            // or nominal-error destructor/layout contract yet. Reject at
+            // the wrapper boundary, not via a generic unexpected keyword.
+            if (type.kind == NativeSumType::Kind::Result &&
+                    token_.text == "void")
+                fail("native Result<void,E> requires tagged zero-payload and nominal error lowering");
             type.value_type = payload(); name += "<" + std::string(scalar_name(type.value_type));
             if (type.kind == NativeSumType::Kind::Result) {
                 require(",");
