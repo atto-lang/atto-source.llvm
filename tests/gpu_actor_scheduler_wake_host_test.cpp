@@ -22,7 +22,7 @@ static void check(bool ok, const char* why) {
     if (!ok) throw std::runtime_error(why);
 }
 
-class MockProvider final : public Port {
+class MockProvider : public Port {
 public:
     explicit MockProvider(std::uint64_t generation,
                           std::string actor_id = "gpu-actor",
@@ -320,7 +320,115 @@ static void run_case(Port::Observation result, bool cancel, bool unknown,
                 cancel, unknown, stop_native, device_loss_first);
 }
 
+// Completion scheduling must be per exact device queue/lease; the executor
+// coalesces event notifications and bounds retained GPU host authority even
+// when a native driver/poller blocks. It is NOT GPU device evidence.
+class BlockedPollProvider final : public MockProvider {
+public:
+    using MockProvider::MockProvider;
+    std::mutex mu;
+    std::condition_variable cv;
+    bool entered = false;
+    bool proceed = false;
+
+    Observation observe(const EventHandle& event) override {
+        {
+            std::unique_lock<std::mutex> guard(mu);
+            entered = true;
+            cv.notify_all();
+            cv.wait(guard, [this] { return proceed; });
+        }
+        return MockProvider::observe(event);
+    }
+    void wait_for_enter() {
+        std::unique_lock<std::mutex> guard(mu);
+        check(cv.wait_for(guard, std::chrono::seconds(5),
+                          [this] { return entered; }),
+              "bounded GPU completion worker never began poll");
+    }
+    void unblock() {
+        {
+            std::lock_guard<std::mutex> guard(mu);
+            proceed = true;
+        }
+        cv.notify_all();
+    }
+};
+
+static void test_completion_capacity_and_cohort() {
+    auto registry = std::make_shared<Registry>(4);
+    auto control = std::make_shared<Lane>(4);
+    auto a = std::make_shared<BlockedPollProvider>(1, "actor-a");
+    auto b = std::make_shared<MockProvider>(1, "actor-b");
+    auto foreign = std::make_shared<MockProvider>(1, "actor-c", "other-tenant");
+    Bridge first(registry, a, control, {"actor-a", 1}, "root", 256);
+    Bridge second(registry, b, control, {"actor-b", 1}, "root", 256);
+    Bridge third(registry, foreign, control, {"actor-c", 1}, "root", 256);
+    (void)first.submit(1);
+    (void)second.submit(1);
+
+    // Capacity=1 counts the currently active device poll as retained.
+    GpuActorCompletionExecutorV1 executor(a->binding(), 1);
+    a->observation = Port::Observation::CompleteOk;
+    check(executor.request(registry, first.completion_lease_id()),
+          "first GPU event notification rejected");
+    a->wait_for_enter();
+
+    // No duplicate queued job: one active event plus exactly one rearm.
+    check(executor.request(registry, first.completion_lease_id()),
+          "active event notification was lost");
+    check(!executor.request(registry, first.completion_lease_id()),
+          "duplicate GPU completion rearm was not coalesced");
+    const auto during = executor.stats();
+    check(during.retained == 1 && during.active
+          && during.queued == 0 && during.rearmed == 1,
+          "GPU completion admission failed to bound active demand");
+
+    try {
+        (void)executor.request(registry, second.completion_lease_id());
+        check(false, "GPU completion capacity exceeded");
+    } catch (const std::logic_error& error) {
+        check(std::string(error.what()) == "GPU_COMPLETION_QUEUE_CAPACITY_EXHAUSTED",
+              "GPU completion capacity rejected with incorrect reason");
+    }
+    try {
+        (void)executor.request(registry, third.completion_lease_id());
+        check(false, "foreign tenant entered GPU completion queue");
+    } catch (const std::logic_error& error) {
+        check(std::string(error.what()) == "GPU_COMPLETION_FOREIGN_QUEUE_COHORT",
+              "GPU completion accepted foreign device/tenant/queue binding");
+    }
+
+    a->unblock(); // a real device event would make the provider poll terminal
+    executor.await_idle();
+    const auto after = executor.stats();
+    check(after.processed == 2 && after.failed == 0
+          && after.retained == 0 && !after.active,
+          "GPU completion rerun did not release its retained slot");
+    check(a->observed_events.load() == 1
+          && a->foreign_host_polls.load() == 0,
+          "GPU completion poll ran twice or on a root thread");
+    first.retire_gracefully();
+
+    b->observation = Port::Observation::CompleteOk;
+    check(executor.request(registry, second.completion_lease_id()),
+          "GPU completion failed to reuse freed executor capacity");
+    executor.await_idle();
+    check(b->observed_events.load() == 1
+          && b->foreign_host_polls.load() == 0,
+          "independent actor completion did not run on host GPU executor");
+    second.retire_gracefully();
+    third.retire_gracefully();
+    const auto final_stats = executor.stats();
+    check(final_stats.accepted == 2 && final_stats.rearmed == 1
+          && final_stats.processed == 3 && final_stats.rejected == 1
+          && final_stats.retained == 0,
+          "GPU completion executor accounting incorrect");
+    std::puts("GPU_COMPLETION_BOUNDED_COHORT_PASS");
+}
+
 int main() {
+    test_completion_capacity_and_cohort();
     run_case(Port::Observation::CompleteOk, false, false);
     run_case(Port::Observation::CompleteFailed, false, false);
     run_case(Port::Observation::CompleteOk, true, false);
