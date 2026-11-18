@@ -3575,7 +3575,7 @@ if(BUILD_TESTING)
     # Result<void,ArrayError>. Both consumed and discarded forms fail closed.
     oreslang_contract_test(native_array_try_add_scalar_status_unavailable
         unsafe-native-array-try-add-result-reject.ores
-        --diagnostic "native Array<int> expression supports only get(index) or checked get_copy(index)")
+        --diagnostic "native Array<int> effect supports only add(value) or set(index,value); scalar expression supports only get(index)")
     oreslang_contract_test(native_array_try_add_discard_unavailable
         unsafe-native-array-try-add-discard-reject.ores
         --diagnostic "native Array<int> effect supports only add(value) or set(index,value)")
