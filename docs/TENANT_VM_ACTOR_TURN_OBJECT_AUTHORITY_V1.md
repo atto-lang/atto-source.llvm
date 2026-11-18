@@ -13,7 +13,11 @@ which in turn depends on [#1890](https://github.com/ores-truffle-oreslang/oresla
   No actor ID string, numeric slot, guest pointer or reconstructed ActorRef
   is sufficient by itself.
 - `enter_actor_turn(handle, actor)` admits exactly one physical active
-  turn for an actor, on the entering carrier pthread. Its opaque
+  turn for an actor, on the entering carrier pthread. A process-wide
+  thread-local admission fence additionally forbids **nested turns on the
+  same pthread across different TenantVMs and different root OresVMs**.
+  Different carriers can still execute separate tenants in parallel.
+  Its opaque
   `ActorTurnTicket` records tenant generation, actor incarnation,
   monotonically increasing turn serial, thread identity and a separate
   **monotonic per-thread lifetime cookie**. This guards against OS reuse of
@@ -66,8 +70,8 @@ A dedicated Actions matrix also proposes Clang/GCC ASan+UBSan. The
 regression denies unscoped host access, foreign tenant/actor access,
 wrong-thread use of a live turn, nested/replayed turns, bounds failures,
 double retirement and stale descriptor reuse. It tests actor retirement,
-shutdown cleanup-only authority, tenant recreation and four concurrent
-actors on four carrier pthreads.
+shutdown cleanup-only authority, cross-tenant and cross-root carrier nesting
+denial, tenant recreation and four concurrent actors on four carrier pthreads.
 
 **Evidence status is NOT_EXECUTED until the exact PR head has real
 nonempty job steps and native program output.** A zero-step workflow
