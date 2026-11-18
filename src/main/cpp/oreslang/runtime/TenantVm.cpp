@@ -543,6 +543,21 @@ struct TenantVmHost::Core {
                 reason = FailReason::TurnDeadline;
             if (reason != FailReason::HostKill) traps_contained.fetch_add(1, std::memory_order_relaxed);
         }
+        // The turn sequence became even in execute(), before clearing its Vm/Actor
+        // pointers. The fault and deadline classification above is the LAST consumer
+        // of these carrier-local values. Do not leave a retired tenant's generation,
+        // timeout, fault address, or restartability available when this pthread next
+        // runs an unrelated tenant. The watchdog's watched_seq is owned by the
+        // watchdog and is intentionally NOT mutated here. The abort sequence is
+        // likewise preserved to fence a signal sent for the previous turn.
+        c->vm_generation.store(0, std::memory_order_seq_cst);
+        c->started_ns.store(0, std::memory_order_relaxed);
+        c->deadline_ms.store(0, std::memory_order_relaxed);
+        c->restartable_turn.store(false, std::memory_order_relaxed);
+        c->deadline_abort_seq.store(0, std::memory_order_seq_cst);
+        c->fault_address = 0;
+        c->trap_was_checked = false;
+        c->current_seq = 0;
 
         bool restarted = false;
         bool terminated = false;
