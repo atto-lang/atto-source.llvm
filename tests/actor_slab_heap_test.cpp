@@ -217,6 +217,44 @@ static void caller_buffer_and_retire() {
     REQUIRE(mapped.free(forge(1)) == SlabStatus::Retired);
 }
 
+
+#if defined(ORES_SLAB_HEAP_HAS_MMAP)
+// Region-pool slots are per-actor exclusive. A second STOP/release must not
+// enqueue a still-live actor's region for another actor to acquire.
+static void pool_rejects_double_release_and_forgery() {
+    oreslang::runtime::ActorHeapRegionPool pool(3, 64 * 1024);
+    REQUIRE(pool.ok());
+    REQUIRE(pool.available() == 3);
+    void* a = pool.acquire();
+    void* b = pool.acquire();
+    void* c = pool.acquire();
+    REQUIRE(a && b && c && a != b && b != c && a != c);
+    REQUIRE(pool.available() == 0);
+    REQUIRE(pool.acquire() == nullptr);
+    REQUIRE(pool.release(a));
+    REQUIRE(pool.available() == 1);
+    REQUIRE(!pool.release(a)); // duplicate while b/c still live
+    REQUIRE(pool.available() == 1);
+    REQUIRE(!pool.release(static_cast<std::byte*>(a) + 8)); // interior
+    REQUIRE(!pool.release(nullptr));
+    REQUIRE(!pool.release(reinterpret_cast<void*>(std::uintptr_t{1})));
+    REQUIRE(pool.acquire() == a);
+    REQUIRE(pool.acquire() == nullptr); // duplicate could have aliased a!
+    REQUIRE(pool.release(b));
+    REQUIRE(pool.release(c));
+    REQUIRE(pool.release(a));
+    REQUIRE(pool.available() == 3);
+    void* d = pool.acquire();
+    void* e = pool.acquire();
+    void* f = pool.acquire();
+    REQUIRE(d && e && f && d != e && e != f && d != f);
+    REQUIRE(pool.release(d));
+    REQUIRE(pool.release(e));
+    REQUIRE(pool.release(f));
+    REQUIRE(pool.available() == 3);
+}
+#endif
+
 static void rejects_bad_config() {
     REQUIRE(!ActorSlabHeap(config(0, 0)).ok());
     REQUIRE(!ActorSlabHeap(config(1 << 20, 2 << 20)).ok()); // budget > reserve
@@ -230,6 +268,9 @@ int main() {
     handles_fifo_stale_and_quarantine();
     stress_fragmentation();
     caller_buffer_and_retire();
+#if defined(ORES_SLAB_HEAP_HAS_MMAP)
+    pool_rejects_double_release_and_forgery();
+#endif
     rejects_bad_config();
     std::printf("PASS actor slab heap: %d checks, %zu-bit host, 4-byte Offset32/Handle32\n",
                 checks, sizeof(void*) * 8);
