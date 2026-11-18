@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstdio>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -53,6 +54,8 @@ struct State {
     std::thread::id host_thread;
     std::atomic<int> invalid_mail_denied{0};
     std::atomic<int> cross_actor_denied{0};
+    bool overflow_test = false;
+    std::atomic<int> overflow_denied{0};
 };
 
 static void on_data(void* opaque, size_t actor, std::uint64_t payload) {
@@ -102,6 +105,29 @@ static void on_data(void* opaque, size_t actor, std::uint64_t payload) {
     }
     check(s.invalid_mail_denied.load(std::memory_order_acquire) == 1,
           "forged DATA-mail provenance accepted");
+    if (s.overflow_test) {
+        // Overflow fails before host fence publication, and MUST release the
+        // transferred wake escrow so a retry can reserve a fresh ticket.
+        try {
+            (void)s.bridge->submit_with_native_wake(
+                std::numeric_limits<std::int64_t>::max(),
+                s.scheduler, s.ticket, mail);
+        } catch (const std::overflow_error& e) {
+            if (std::string(e.what()) == "GPU_ACTOR_STAGE_OVERFLOW")
+                s.overflow_denied.store(1, std::memory_order_release);
+            else throw;
+        }
+        check(s.overflow_denied.load(std::memory_order_acquire) == 1,
+              "GPU staging overflow was not denied");
+        check(ores_native_actor_scheduler_outstanding_wake_loans(
+            s.scheduler, s.actor) == 0,
+              "pre-enqueue failure stranded a native wake");
+        check(s.bridge->committed_state() == 1,
+              "pre-enqueue failure incorrectly committed host state");
+        check(ores_native_actor_scheduler_reserve_wake(
+            s.scheduler, s.actor, s.actor, 15, 16, 17, 18, &s.ticket),
+              "native WAKE cannot be re-reserved after overflow");
+    }
     (void)s.bridge->submit_with_native_wake(3, s.scheduler, s.ticket, mail);
     } catch (...) { std::abort(); } // Never unwind C++ exceptions through C scheduler frames.
 }
@@ -128,8 +154,9 @@ static void on_wake(void* opaque, size_t actor, OresNativeWakeTicket ticket,
 }
 
 static void run_case(Port::Observation result, bool cancel, bool unknown,
-                     bool stop_native = false) {
+                     bool stop_native = false, bool overflow_test = false) {
     State state;
+    state.overflow_test = overflow_test;
     state.host_thread = std::this_thread::get_id();
     state.scheduler = ores_native_actor_scheduler_open_with_wakes(
         2, 4, 2, on_data, on_control, nullptr, on_wake, &state);
@@ -146,7 +173,8 @@ static void run_case(Port::Observation result, bool cancel, bool unknown,
     provider->unknown = unknown;
     auto control = std::make_shared<Lane>(4);
     Bridge bridge(registry, provider, control,
-                  {"gpu-actor", state.actor.generation}, "root", 256);
+                  {"gpu-actor", state.actor.generation}, "root", 256,
+                  overflow_test ? 1 : 0);
     state.bridge = &bridge;
     bridge.bind_native_actor(state.scheduler, state.actor);
     try {
@@ -225,5 +253,6 @@ int main() {
     run_case(Port::Observation::CompleteOk, true, false);
     run_case(Port::Observation::CompleteOk, false, true);
     run_case(Port::Observation::CompleteOk, true, false, true);
+    run_case(Port::Observation::CompleteOk, false, false, false, true);
     return 0;
 }
