@@ -24,24 +24,46 @@ int main() {
     CHECK(ores_actor_state_ready_to_suspend(&state, 123)
             == ORES_ACTOR_STATE_BUSY_LOAN);
 
+    // A sealed state callback may not nest within the same actor turn.
+    // Reject BEFORE entering the low-level token stack: generation and outer
+    // read/write authority must remain unmodified, even for read/read.
     CriticalStateLoan nested;
     CHECK(nested.begin(state, 123, 900, callback, declared)
-            == CriticalStateAdmission::Accept);
-    CHECK(nested.token() != outer_token);
-    CHECK(outer.check() == ORES_ACTOR_STATE_OUT_OF_ORDER);
-    CHECK(nested.check() == ORES_ACTOR_STATE_OK);
-    CHECK(outer.end() == ORES_ACTOR_STATE_OUT_OF_ORDER);
-    CHECK(nested.end() == ORES_ACTOR_STATE_OK);
+            == CriticalStateAdmission::NestedStateLoan);
+    CHECK(nested.last_scope_result() == ORES_ACTOR_STATE_BUSY_LOAN);
+    CHECK(!nested.active() && nested.token() == 0);
+    CHECK(state.generation == outer_token && state.depth == 1);
     CHECK(outer.check() == ORES_ACTOR_STATE_OK);
 
+    // A foreign continuation cannot hijack the existing state loan either.
     CriticalStateLoan other_continuation;
     CHECK(other_continuation.begin(state, 123, 901, callback, declared)
-            == CriticalStateAdmission::ScopeDenied);
-    CHECK(other_continuation.last_scope_result() == ORES_ACTOR_STATE_REENTRANT);
+            == CriticalStateAdmission::NestedStateLoan);
+    CHECK(other_continuation.last_scope_result() == ORES_ACTOR_STATE_BUSY_LOAN);
     CHECK(!other_continuation.active());
-
+    CHECK(outer.check() == ORES_ACTOR_STATE_OK);
     CHECK(outer.end() == ORES_ACTOR_STATE_OK);
     CHECK(outer.check() == ORES_ACTOR_STATE_STALE);
+    CHECK(ores_actor_state_ready_to_suspend(&state, 123)
+            == ORES_ACTOR_STATE_OK);
+
+    // A READ-only outer loan cannot be upgraded to WRITE by nesting.
+    auto read_only = callback;
+    read_only.callback_critical = false;
+    read_only.inferred = {static_cast<std::uint32_t>(
+        FunctionEffect::StateRead)};
+    CriticalStateLoan outer_read;
+    CHECK(outer_read.begin(state, 123, 900, read_only, declared)
+            == CriticalStateAdmission::Accept);
+    const auto read_generation = state.generation;
+    CriticalStateLoan upgraded;
+    CHECK(upgraded.begin(state, 123, 900, callback, declared)
+            == CriticalStateAdmission::NestedStateLoan);
+    CHECK(upgraded.last_scope_result() == ORES_ACTOR_STATE_BUSY_LOAN);
+    CHECK(!upgraded.active());
+    CHECK(state.generation == read_generation && state.depth == 1);
+    CHECK(outer_read.check() == ORES_ACTOR_STATE_OK);
+    CHECK(outer_read.end() == ORES_ACTOR_STATE_OK);
     CHECK(ores_actor_state_ready_to_suspend(&state, 123)
             == ORES_ACTOR_STATE_OK);
 
