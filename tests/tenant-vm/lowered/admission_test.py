@@ -2,6 +2,7 @@
 """Modules the lowering pipeline must refuse, and mutations of one it accepts. Nothing here may
 crash the tool, and everything refused must leave no library behind."""
 import argparse
+import json
 import random
 import subprocess
 import sys
@@ -70,10 +71,10 @@ def lower(path, out, *extra):
 failures = 0
 with tempfile.TemporaryDirectory(prefix="tenant-vm-admission-") as temporary:
     tmp = Path(temporary)
-    def refused(name, path):
+    def refused(name, path, *extra):
         global failures
         out = tmp / "out"
-        result = lower(path, out)
+        result = lower(path, out, *extra)
         library_left = any(out.glob("guest.*")) if out.exists() else False
         if result.returncode == 0 or library_left:
             print(f"  FAIL accepted: {name}: {result.stdout}{result.stderr}")
@@ -103,6 +104,49 @@ with tempfile.TemporaryDirectory(prefix="tenant-vm-admission-") as temporary:
     if baseline.returncode != 0:
         print(f"  FAIL a valid module was refused: {baseline.stderr}")
         failures += 1
+    else:
+        manifest = json.loads((tmp / "good" / "manifest.json").read_text())
+        if manifest.get("mode") != "bounds" or manifest.get("test_only") is not False or \
+           manifest.get("memory_confinement") != "BOUNDS_CHECKED":
+            print("  FAIL safe guest is not labeled as bounds-checked non-test output")
+            failures += 1
+
+    # Check a VALID Wasm binary and intentionally hostile lowering flags. The
+    # old --test-define accepted arbitrary -D replacements AFTER the enforced
+    # bounds-check macro, silently defeating actor isolation while retaining a
+    # mode=bounds manifest. This is a security regression, not parser fuzz.
+    attack_flags = [
+        ("guard without test consent", ("--mode", "guard")),
+        ("test define without consent", ("--test-define", "ORES_VM_TEST_EAGER_SEND=1")),
+        ("bounds bypass", ("--test-only", "--test-define", "WASM_RT_MEMCHECK_BOUNDS_CHECK=0")),
+        ("guard switch bypass", ("--test-only", "--test-define", "WASM_RT_MEMCHECK_GUARD_PAGES=1")),
+        ("actor adapter bypass", ("--test-only", "--test-define", "ORES_VM_SOURCE_ACTOR=0")),
+        ("memory size bypass", ("--test-only", "--test-define", "ORES_VM_MEMORY_BYTES=1")),
+        ("forged test macro", ("--test-only", "--test-define", "ORES_VM_TEST_NOT_ALLOWLISTED=1")),
+        ("invalid boolean switch", ("--test-only", "--test-define", "ORES_VM_TEST_EAGER_SEND=2")),
+        ("duplicate test macro", ("--test-only", "--test-define", "ORES_VM_TEST_EAGER_SEND=1",
+                                  "--test-define", "ORES_VM_TEST_EAGER_SEND=1")),
+        ("compiler argument in test macro", ("--test-only", "--test-define",
+                                             "ORES_VM_TEST_EAGER_SEND=1 -DWASM_RT_MEMCHECK_BOUNDS_CHECK=0")),
+        ("expression in test macro", ("--test-only", "--test-define", "ORES_VM_TEST_COMMIT_FAULT_ON=1+2")),
+        ("test integer overflow", ("--test-only", "--test-define", "ORES_VM_TEST_COMMIT_FAULT_ON=4294967296")),
+    ]
+    for name, flags in attack_flags:
+        refused(name, wasm, *flags)
+    print(f"  {len(attack_flags)} unsafe lowering flag combinations refused")
+
+    # A guard build is needed for deliberate cage-only attack tests. Explicit
+    # consent is mandatory, and the output must NOT look production-confined.
+    guard = lower(wasm, tmp / "test-guard", "--mode", "guard", "--test-only")
+    if guard.returncode != 0:
+        print(f"  FAIL explicit test-only guard was refused: {guard.stderr[-400:]}")
+        failures += 1
+    else:
+        manifest = json.loads((tmp / "test-guard" / "manifest.json").read_text())
+        if manifest.get("mode") != "guard" or manifest.get("test_only") is not True or \
+           manifest.get("memory_confinement") != "UNSAFE_GUARD_TEST_ONLY":
+            print("  FAIL unsafe guard guest lacks mandatory test-only warning")
+            failures += 1
 
     # Mutations of a valid module: the tool may accept or refuse, but never crash or hang.
     rng = random.Random(0xA110)
@@ -173,7 +217,7 @@ with tempfile.TemporaryDirectory(prefix="tenant-vm-admission-") as temporary:
             path = tmp / "survivor.wasm"
             path.write_bytes(bytes(mutated))
             mode = "guard" if survivors % 2 else "bounds"
-            result = lower(path, stem, "--mode", mode)
+            result = lower(path, stem, "--mode", mode, *(["--test-only"] if mode == "guard" else []))
             if result.returncode != 0:
                 if "REFUSED" not in result.stderr:
                     print(f"  FAIL a mutant crashed the tool: {result.stderr[-400:]}")
