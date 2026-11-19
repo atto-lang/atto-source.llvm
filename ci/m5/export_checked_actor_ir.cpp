@@ -10,6 +10,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <sstream>
 #include <string_view>
 #include <vector>
 
@@ -71,10 +72,22 @@ static void checked_actor(const ActorDecl& actor) {
     variable(write.expression->left.get(), field.name);
     variable(write.expression->right.get(), parameter.name);
     variable(actor.on_message.result.get(), field.name);
-    require(actor.on_message.actor_sends.empty() && actor.on_message.actor_spawns.empty() &&
-                actor.on_message.actor_stops.empty() && actor.on_message.locals.empty() &&
-                actor.on_message.statements.empty() && actor.on_message.early_returns.empty(),
-            "M5_MIR_UNSUPPORTED: actor handler side effects outside checked expression");
+    // Fail closed on *all* known source-level effects, not merely on writes
+    // and synchronous sends. Dropping a suspension/throw/effect from the
+    // projection would give GraalVM different behavior from checked LLVM.
+    const auto& handler = actor.on_message;
+    require(handler.actor_sends.empty() && handler.actor_spawns.empty() &&
+                handler.actor_stops.empty() && handler.actor_actions.empty() &&
+                handler.locals.empty() && handler.statements.empty() &&
+                handler.early_returns.empty() && handler.source_tasks.empty() &&
+                handler.future_pipelines.empty() && handler.caught_throw_defers.empty() &&
+                !handler.caught_throw_value && !handler.scalar_while &&
+                handler.ready_await_actor.empty() && handler.done_await_actor.empty() &&
+                handler.ready_future_name.empty() && handler.ready_future_actor.empty() &&
+                !handler.async_source_i64 && handler.return_class.empty() &&
+                handler.return_sum.empty() && !handler.returns_void &&
+                handler.return_type == oreslang::ScalarType::I64,
+            "M5_MIR_UNSUPPORTED: actor handler has unprojected effects or ownership");
 }
 static void project(const Program& p) {
     require(p.imports.empty() && p.classes.empty() && p.actors.size() == 1 &&
@@ -89,11 +102,20 @@ static void project(const Program& p) {
                 fn.result && fn.result->kind == Expression::Kind::Integer &&
                 fn.locals.empty() && fn.statements.empty() && fn.early_returns.empty() &&
                 fn.source_tasks.empty() && fn.future_pipelines.empty() &&
-                fn.actor_field_writes.empty() && !fn.scalar_while,
+                fn.actor_field_writes.empty() && !fn.scalar_while &&
+                !fn.caught_throw_value && fn.caught_throw_defers.empty() &&
+                fn.ready_await_actor.empty() && fn.done_await_actor.empty() &&
+                fn.ready_future_actor.empty() && fn.ready_future_name.empty() &&
+                !fn.async_source_i64 && fn.return_class.empty() &&
+                fn.return_sum.empty() && !fn.returns_void &&
+                fn.return_type == oreslang::ScalarType::I64,
             "M5_MIR_UNSUPPORTED: unsupported main effects/types");
     const auto& fld = actor.fields.front();
     const auto& param = actor.on_message.parameters.front();
-    std::cout << "{\"schema\":\"atto.canonical-checked-actor-ir.v0\","
+    // Build an atomic checked-IR response: no bytes are published until
+    // *all* graph/action/identity validations have completed.
+    std::ostringstream buffer;
+    buffer << "{\"schema\":\"atto.canonical-checked-actor-ir.v0\","
               << "\"checker\":\"LLVM_PARSE_PROGRAM_OWNERSHIP_SCALAR_TYPES\","
               << "\"status\":\"CHECKED_RESTRICTED_ACTOR_SLICE\","
               << "\"actor\":{\"name\":" << escaped(actor.name)
@@ -106,33 +128,39 @@ static void project(const Program& p) {
         const auto& spawn = fn.actor_spawns[i];
         identifier(spawn.name); identifier(spawn.actor_type);
         require(spawn.actor_type == actor.name, "M5_MIR_UNSUPPORTED: unknown actor kind");
-        if (i) std::cout << ',';
-        std::cout << "{\"ref\":" << escaped(spawn.name) << ",\"kind\":"
+        if (i) buffer << ',';
+        buffer << "{\"ref\":" << escaped(spawn.name) << ",\"kind\":"
                   << escaped(spawn.actor_type) << "}";
     }
-    std::cout << "],\"actions\":[";
+    buffer << "],\"actions\":[";
     for (std::size_t i = 0; i < fn.actor_actions.size(); ++i) {
         const auto& action = fn.actor_actions[i];
-        if (i) std::cout << ',';
+        if (i) buffer << ',';
         if (action.kind == ActorAction::Kind::Send) {
             require(action.index < fn.actor_sends.size(),
                     "M5_MIR_UNSUPPORTED: checked actor send index invalid");
             const auto& send = fn.actor_sends[action.index];
             identifier(send.reference);
-            std::cout << "{\"op\":\"send\",\"ref\":" << escaped(send.reference)
+            buffer << "{\"op\":\"send\",\"ref\":" << escaped(send.reference)
                       << ",\"value\":" << integer(send.payload.get()) << '}';
         } else {
             require(action.index < fn.actor_stops.size(),
                     "M5_MIR_UNSUPPORTED: checked actor stop index invalid");
             const auto& name = fn.actor_stops[action.index];
             identifier(name);
-            std::cout << "{\"op\":\"stop\",\"ref\":" << escaped(name) << '}';
+            buffer << "{\"op\":\"stop\",\"ref\":" << escaped(name) << '}';
         }
     }
-    std::cout << "],\"return_i64\":" << fn.result->integer
+    buffer << "],\"return_i64\":" << fn.result->integer
               << ",\"limits\":{\"max_actor_instances\":64,\"max_source_sends\":1024},"
               << "\"unsupported\":[\"await\",\"critical-read\",\"critical-write\","
               << "\"rt_take\",\"rt_share\",\"dynamic_guest_code\",\"tenant_sandbox\"]}\n";
+    const auto checked_json = buffer.str();
+    require(checked_json.size() <= 131072u,
+            "M5_MIR_UNSUPPORTED: serialized IR exceeds bounded size");
+    // Only this final statement publishes machine-readable IR. All earlier
+    // fail-closed errors leave stdout empty for downstream GraalVM codegen.
+    std::cout << checked_json;
 }
 
 int main(int argc, char** argv) {

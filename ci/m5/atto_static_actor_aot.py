@@ -314,11 +314,19 @@ def compile_with_checked_exporter(source_bytes, exporter, claimed_sha256):
             hashlib.sha256(raw_executable).hexdigest() != claimed_sha256):
         raise CompileError("canonical exporter executable digest mismatch")
     with tempfile.TemporaryDirectory(prefix="atto-m5-canonical-") as temp:
+        # Execute the *exact bytes just hashed*, not the original mutable
+        # path that a competing writer could swap between check and exec.
+        checked = Path(temp) / "checked-exporter"
+        with checked.open("xb") as stream:
+            stream.write(raw_executable)
+        checked.chmod(0o500)
+        if hashlib.sha256(checked.read_bytes()).hexdigest() != claimed_sha256:
+            raise CompileError("canonical exporter private copy digest mismatch")
         pinned = Path(temp) / "input.atto"
         pinned.write_bytes(source_bytes)
         try:
             result = subprocess.run(
-                [str(executable.resolve()), str(pinned)],
+                [str(checked), str(pinned)],
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 check=False, timeout=30)
         except (OSError, subprocess.TimeoutExpired) as err:
@@ -326,10 +334,31 @@ def compile_with_checked_exporter(source_bytes, exporter, claimed_sha256):
         if result.returncode != 0 or len(result.stdout) > 131072 or len(result.stderr) > 8192:
             raise CompileError("canonical checked frontend rejected source or exceeded its output budget")
         try:
-            ir = json.loads(result.stdout.decode("utf-8", "strict"))
+            ir = decode_checked_ir(result.stdout)
         except (UnicodeError, ValueError) as err:
             raise CompileError("canonical checked frontend emitted invalid JSON") from err
     return validate_checked_actor_ir(ir)
+
+
+def decode_checked_ir(data):
+    """Strict canonical JSON: reject duplicates, NaN, Infinity, and bad UTF-8."""
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise CompileError("canonical checked IR has duplicate JSON key")
+            result[key] = value
+        return result
+
+    def no_special_number(value):
+        raise CompileError("canonical checked IR has non-finite JSON number")
+
+    try:
+        return json.loads(data.decode("utf-8", "strict"),
+                          object_pairs_hook=unique_object,
+                          parse_constant=no_special_number)
+    except (UnicodeError, ValueError, TypeError) as err:
+        raise CompileError("canonical checked IR rejected malformed JSON") from err
 
 
 def validate_checked_actor_ir(ir):
@@ -370,7 +399,9 @@ def validate_checked_actor_ir(ir):
         raise CompileError("canonical actor action budget invalid")
     sends = 0
     for op in ops:
-        if not isinstance(op, dict) or op.get("ref") not in seen:
+        if (not isinstance(op, dict) or
+                not isinstance(op.get("ref"), str) or
+                not NAME.fullmatch(op["ref"]) or op["ref"] not in seen):
             raise CompileError("canonical actor handle missing")
         ref = op["ref"]
         if op.get("op") == "send" and set(op) == {"op", "ref", "value"}:
@@ -392,7 +423,13 @@ def validate_checked_actor_ir(ir):
     result = ir["return_i64"]
     if type(result) is not int or not -(1 << 63) <= result < (1 << 63):
         raise CompileError("canonical main return must be i64")
-    if not isinstance(ir["unsupported"], list) or not {"rt_take", "rt_share", "tenant_sandbox"}.issubset(set(ir["unsupported"])):
+    if ir["unsupported"] != [
+            "await", "critical-read", "critical-write", "rt_take",
+            "rt_share", "dynamic_guest_code", "tenant_sandbox"]:
+        # A missing unsupported effect must not be silently treated as
+        # checked, and unfamiliar fields require a new reviewed schema.
+        # In particular, no deep graph immutability/ownership capability
+        # is projected by this narrow static actor slice.
         raise CompileError("canonical unsupported ownership or tenant operations silently omitted")
     return {name: (name, field, parameter, a["initial"])}, actions, result, sends
 
