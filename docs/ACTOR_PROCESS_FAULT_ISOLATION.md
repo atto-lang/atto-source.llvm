@@ -38,7 +38,9 @@ parent-ignored SIGPIPE, in addition to the original crash/sibling cases.
 `runtime/actor_runtime.c` currently invokes generated actor code from
 `pthread` workers inside a shared process. Native SIGSEGV there is
 process-fatal and cannot be made safe by `sigaction`, `recover`, or catching
-`SIGSEGV`. Do not mark actual Atto guest crash containment as passed until
+`SIGSEGV`. Defining `ATTO_REQUIRE_PROCESS_ISOLATED_ACTORS` fails compilation
+of that in-process runtime instead of silently weakening the guarantee.
+Do not mark actual Atto guest crash containment as passed until
 compiled actor bodies execute behind the process/tenant boundary, their
 mailboxes and generation-fenced CONTROL notices are wired to the supervisor,
 and exact-head guest fault-injection passes.
@@ -47,11 +49,15 @@ and exact-head guest fault-injection passes.
 
 This is **not** a security sandbox or a complete actor implementation. It does
 not integrate Atto source actors, mailboxes, ownership/borrow checking,
-restarts, exception hooks, actor heaps, arena quiescence, or AOT lowering. Workers can still use their inherited OS identity/privileges and signal
+restarts, exception hooks, actor heaps, arena quiescence, or AOT lowering.
+
+Workers can still use their inherited OS identity/privileges and signal
 same-UID processes. A production untrusted-worker policy requires independently
 enforced sandbox confinement, authenticated IPC, per-worker CPU/memory
 quotas (cgroups/job objects), no privilege to signal the supervisor, and
-supervisor-controlled resource retirement. It cannot recover from SIGKILL of the supervisor process,
+supervisor-controlled resource retirement.
+
+It cannot recover from SIGKILL of the supervisor process,
 whole-machine OOM, or compromised trusted host code. There is no recovery by
 continuing execution in a SIGSEGV signal handler.
 
@@ -67,7 +73,8 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
-The test spawns an external executable and checks isolated SIGSEGV, SIGBUS,
+The test spawns an external executable and checks an actual PROT_NONE page
+access causing SIGSEGV (not just `raise(SIGSEGV)`), injected signals SIGBUS,
 SIGILL, SIGFPE, SIGKILL, SIGABRT,
 nonzero and clean exits, a hung worker killed at a bounded deadline, inherited
 environment sanitization, descriptor/stdio closure, inherited signal-state
