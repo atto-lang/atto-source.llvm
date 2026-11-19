@@ -1,0 +1,13 @@
+// Two negated imperative aliases and a value-producing negated if.
+pub fnc main(): int {
+  do ifnot true then
+    return 41;
+  fi
+  do unless true then
+    return 42;
+  fi
+  do ifnot false then
+    return unless true then 9 else 7 fi;
+  fi
+  return 8;
+}

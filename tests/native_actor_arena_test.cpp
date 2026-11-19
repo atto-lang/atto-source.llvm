@@ -11,7 +11,7 @@
 #include <unistd.h>
 #endif
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "native actor arena failed:%d\n", __LINE__); return 1; } } while (0)
-enum Misuse { STALE_TURN, FOREIGN_OWNER, OVERLAP, SCRATCH_AFTER_LEAVE, WRITE_LOANED, DROP_LOANED, DOUBLE_RELEASE, OUT_OF_BOUNDS, SCRATCH_OVERFLOW, BAD_ALIGNMENT, OVERSIZED_ACTOR_BUDGET, FOREIGN_CARRIER_TURN, NESTED_ACTOR_TURN };
+enum Misuse { STALE_TURN, FOREIGN_OWNER, OVERLAP, SCRATCH_AFTER_LEAVE, WRITE_LOANED, DROP_LOANED, DOUBLE_RELEASE, OUT_OF_BOUNDS, SCRATCH_OVERFLOW, BAD_ALIGNMENT, OVERSIZED_ACTOR_BUDGET, FOREIGN_CARRIER_TURN, NESTED_ACTOR_TURN, FOREIGN_ARENA_READ, FOREIGN_ARENA_WRITE };
 typedef struct { OresActorArena* arena; OresArenaTurn turn; OresArenaHandle handle; } WrongCarrier;
 static int different_carrier_with_stolen_turn(void* opaque) {
     WrongCarrier* x = (WrongCarrier*) opaque;
@@ -62,6 +62,20 @@ static void invalid(enum Misuse m) {
     } else if (m == NESTED_ACTOR_TURN) {
         OresActorArena* other = ores_actor_arena_open(33, 2, 1, 16, 16);
         (void) ores_actor_arena_enter(other, 33, 2);
+    } else if (m == FOREIGN_ARENA_READ || m == FOREIGN_ARENA_WRITE) {
+        // A foreign actor's first slot has index zero too: its domain must
+        // be checked even when slot index and generation happen to match.
+        ores_actor_arena_leave(a, t);
+        OresActorArena* other = ores_actor_arena_open(33, 2, 1, 16, 16);
+        OresArenaTurn other_turn = ores_actor_arena_enter(other, 33, 2);
+        OresArenaHandle foreign = ores_actor_arena_alloc(other, other_turn, 8);
+        ores_actor_arena_leave(other, other_turn);
+        OresArenaTurn resumed = ores_actor_arena_enter(a, 23, 2);
+        int value = 7;
+        if (m == FOREIGN_ARENA_READ)
+            ores_actor_arena_read(a, resumed, foreign, 0, &value, sizeof(value));
+        else
+            ores_actor_arena_write(a, resumed, foreign, 0, &value, sizeof(value));
     }
 }
 #if defined(__unix__) || defined(__APPLE__)
@@ -125,6 +139,56 @@ int main(void) {
     CHECK(ores_actor_arena_try_destroy(a) == 0);
     ores_actor_arena_release(a, hold);
     CHECK(ores_actor_arena_try_destroy(a) == 1);
+    /* Two same-kind actors own distinct heaps even when both allocate slot
+     * index zero and share a scheduler carrier between mailbox turns. */
+    OresActorArena* left = ores_actor_arena_open(40, 1, 1, 32, 64);
+    OresActorArena* right = ores_actor_arena_open(41, 1, 1, 32, 64);
+    OresArenaTurn left_turn = ores_actor_arena_enter(left, 40, 1);
+    OresArenaHandle left_handle = ores_actor_arena_alloc(left, left_turn, sizeof(int));
+    int left_value = 111;
+    ores_actor_arena_write(left, left_turn, left_handle, 0, &left_value, sizeof(left_value));
+    OresArenaLoan left_hold = ores_actor_arena_borrow(left, left_turn, left_handle);
+    ores_actor_arena_leave(left, left_turn);
+
+    OresArenaTurn right_turn = ores_actor_arena_enter(right, 41, 1);
+    OresArenaHandle right_handle = ores_actor_arena_alloc(right, right_turn, sizeof(int));
+    CHECK(left_handle.index == 0 && right_handle.index == 0);
+    CHECK(left_handle.domain != right_handle.domain);
+    int right_value = 222;
+    ores_actor_arena_write(right, right_turn, right_handle, 0, &right_value, sizeof(right_value));
+    ores_actor_arena_leave(right, right_turn);
+
+    left_turn = ores_actor_arena_enter(left, 40, 1);
+    left_value = 0;
+    ores_actor_arena_read(left, left_turn, left_handle, 0, &left_value, sizeof(left_value));
+    CHECK(left_value == 111);
+    ores_actor_arena_leave(left, left_turn);
+    /* A's outstanding loan must not freeze B, including while A retires. */
+    ores_actor_arena_retire(left);
+    CHECK(ores_actor_arena_try_destroy(left) == 0);
+    right_turn = ores_actor_arena_enter(right, 41, 1);
+    right_value = 223;
+    ores_actor_arena_write(right, right_turn, right_handle, 0, &right_value, sizeof(right_value));
+    right_value = 0;
+    ores_actor_arena_read(right, right_turn, right_handle, 0, &right_value, sizeof(right_value));
+    CHECK(right_value == 223);
+    ores_actor_arena_leave(right, right_turn);
+    ores_actor_arena_release(left, left_hold);
+    CHECK(ores_actor_arena_try_destroy(left) == 1);
+
+    right_turn = ores_actor_arena_enter(right, 41, 1);
+    right_value = 0;
+    ores_actor_arena_read(right, right_turn, right_handle, 0, &right_value, sizeof(right_value));
+    CHECK(right_value == 223);
+    right_value = 224;
+    ores_actor_arena_write(right, right_turn, right_handle, 0, &right_value, sizeof(right_value));
+    right_value = 0;
+    ores_actor_arena_read(right, right_turn, right_handle, 0, &right_value, sizeof(right_value));
+    CHECK(right_value == 224);
+    ores_actor_arena_leave(right, right_turn);
+    ores_actor_arena_retire(right);
+    CHECK(ores_actor_arena_try_destroy(right) == 1);
+
     /* Supervisor cancellation may retire a heap during an active turn. */
     a = ores_actor_arena_open(23, 3, 1, 32, 64);
     OresArenaTurn unwinding = ores_actor_arena_enter(a, 23, 3);
@@ -133,7 +197,7 @@ int main(void) {
     ores_actor_arena_leave(a, unwinding);
     CHECK(ores_actor_arena_try_destroy(a) == 1);
 #if defined(__unix__) || defined(__APPLE__)
-    for (int n = STALE_TURN; n <= NESTED_ACTOR_TURN; ++n) CHECK(rejects((enum Misuse) n));
+    for (int n = STALE_TURN; n <= FOREIGN_ARENA_WRITE; ++n) CHECK(rejects((enum Misuse) n));
 #endif
     return 0;
 }
