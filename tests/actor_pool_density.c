@@ -30,6 +30,7 @@ typedef struct {
     uint32_t head, len, generation;
     unsigned queued : 1;         // protected by pool mutex
     unsigned running : 1;        // protected by pool mutex
+    unsigned live : 1;           // generation-fenced lifecycle
     atomic_uint turn_lease;       // assertion of non-reentrant execution
 } actor_t;
 
@@ -39,6 +40,7 @@ typedef struct {
     actor_t *actors;
     uint32_t *ready;
     uint32_t cap, size, head, len, active;
+    uint32_t free_head;          // retired-slot 1-based list; no extra array
     unsigned closing;
     pthread_t carriers[CARRIERS];
     // Host-test controls, not a public runtime contract.
@@ -68,10 +70,10 @@ static void *carrier(void *context) {
             return NULL;
         }
         uint32_t slot = p->ready[p->head];
-        p->head = (p->head + 1) % p->cap;
+        p->head = (uint32_t)(((uint64_t)p->head + 1u) % p->cap);
         --p->len;
         actor_t *a = &p->actors[slot];
-        FAIL_IF_FALSE(a->queued && !a->running && a->len && a->mail);
+        FAIL_IF_FALSE(a->live && a->queued && !a->running && a->len && a->mail);
         a->queued = 0;
         a->running = 1;
         ++p->active;
@@ -101,7 +103,7 @@ static void *carrier(void *context) {
     }
 }
 
-static int pool_open(pool_t *p, uint32_t capacity) {
+static int pool_open_impl(pool_t *p, uint32_t capacity, int fail_create_at) {
     if (!capacity) return -1;
     memset(p, 0, sizeof(*p));
     p->actors = calloc(capacity, sizeof(*p->actors));
@@ -116,7 +118,10 @@ static int pool_open(pool_t *p, uint32_t capacity) {
     if (pthread_mutex_init(&p->mu, NULL) != 0) goto fail_memory;
     if (pthread_cond_init(&p->wake, NULL) != 0) goto fail_mutex;
     for (unsigned i = 0; i < CARRIERS; ++i) {
-        if (pthread_create(&p->carriers[i], NULL, carrier, p) != 0) {
+        // Deliberate host-test injection, including failure after one thread.
+        // No guest callback or queued task is admitted during pool_open_impl.
+        if ((int)i == fail_create_at ||
+            pthread_create(&p->carriers[i], NULL, carrier, p) != 0) {
             pthread_ok(pthread_mutex_lock(&p->mu));
             p->closing = 1;
             pthread_ok(pthread_cond_broadcast(&p->wake));
@@ -136,18 +141,73 @@ fail_memory:
     return -1;
 }
 
-// One-shot capacity: no slot reuse/restart and no generation wrap in prototype.
+static int pool_open(pool_t *p, uint32_t capacity) {
+    return pool_open_impl(p, capacity, -1);
+}
+
+// No new control block is allocated for a recycled, quiescent actor slot.
+// Each retired incarnation has a fresh generation; exhausted slots never wrap.
 static uint64_t pool_spawn(pool_t *p) {
     pthread_ok(pthread_mutex_lock(&p->mu));
     uint64_t ref = 0;
-    if (!p->closing && p->size < p->cap) {
-        uint32_t slot = p->size++;
-        p->actors[slot].generation = 1;
-        atomic_init(&p->actors[slot].turn_lease, 0);
-        ref = (UINT64_C(1) << 32) | (uint64_t)(slot + 1);
+    if (!p->closing && (p->free_head || p->size < p->cap)) {
+        uint32_t slot;
+        if (p->free_head) {
+            slot = p->free_head - 1u;
+            FAIL_IF_FALSE(slot < p->size);
+            p->free_head = p->actors[slot].head; // linked free-list
+        } else {
+            slot = p->size++;
+            p->actors[slot].generation = 1;
+        }
+        actor_t *a = &p->actors[slot];
+        FAIL_IF_FALSE(a->generation != 0 && !a->live && !a->running &&
+                      !a->queued && !a->len && !a->mail);
+        a->head = 0;
+        a->sum = 0;
+        a->live = 1;
+        atomic_init(&a->turn_lease, 0);
+        ref = ((uint64_t)a->generation << 32) | (uint64_t)(slot + 1);
     }
     pthread_ok(pthread_mutex_unlock(&p->mu));
     return ref;
+}
+
+// Retirement is a fail-closed, non-blocking quiescence test under the same
+// mutex used for mailbox admission and carrier dispatch. A caller must retry
+// after accepted turns complete. This does not cancel accepted work.
+// 0 retired; -1 invalid/stale/closed; -2 active or pending messages.
+static int pool_retire(pool_t *p, uint64_t ref) {
+    uint32_t index = (uint32_t)ref;
+    uint32_t generation = (uint32_t)(ref >> 32);
+    if (!index) return -1;
+    pthread_ok(pthread_mutex_lock(&p->mu));
+    int status = -1;
+    if (!p->closing && index <= p->size) {
+        actor_t *a = &p->actors[index - 1u];
+        if (a->live && a->generation == generation) {
+            if (a->running || a->queued || a->len) status = -2;
+            else {
+                FAIL_IF_FALSE(atomic_load(&a->turn_lease) == 0);
+                free(a->mail);
+                a->mail = NULL;
+                a->sum = 0;
+                a->live = 0;
+                a->head = 0;
+                if (a->generation == UINT32_MAX) {
+                    // Generation exhausted: permanently quarantine this slot.
+                    a->generation = 0;
+                } else {
+                    ++a->generation;
+                    a->head = p->free_head;
+                    p->free_head = index;
+                }
+                status = 0;
+            }
+        }
+    }
+    pthread_ok(pthread_mutex_unlock(&p->mu));
+    return status;
 }
 
 // Linearization: enqueue under mutex. 0 success, -1 invalid/closed,
@@ -160,7 +220,7 @@ static int pool_send(pool_t *p, uint64_t ref, int64_t value) {
     int status = -1;
     if (!p->closing && index <= p->size) {
         actor_t *a = &p->actors[index - 1];
-        if (generation == a->generation) {
+        if (a->live && generation == a->generation) {
             if (a->len == MAIL_CAP) status = -2;
             else {
                 if (!a->mail) {
@@ -243,6 +303,70 @@ static void await_pause(pool_t *p) {
         sched_yield();
     }
     FAIL_IF_FALSE(!"carrier did not enter the deliberately paused turn");
+}
+
+static void await_quiescent(pool_t *p, uint64_t ref) {
+    const uint32_t slot = (uint32_t)ref - 1u;
+    for (unsigned attempt = 0; attempt < 10000000u; ++attempt) {
+        pthread_ok(pthread_mutex_lock(&p->mu));
+        actor_t *a = &p->actors[slot];
+        int idle = !a->running && !a->queued && !a->len;
+        pthread_ok(pthread_mutex_unlock(&p->mu));
+        if (idle) return;
+        sched_yield();
+    }
+    FAIL_IF_FALSE(!"quiescence deadline exceeded");
+}
+
+// A true old ActorRef must fail after retirement/reuse, unlike a synthetic
+// flipped generation bit. No retired slot may be dispatched or freed mid-turn.
+static void test_lifecycle(void) {
+    pool_t p;
+    FAIL_IF_FALSE(pool_open(&p, 1) == 0);
+    uint64_t old = pool_spawn(&p);
+    FAIL_IF_FALSE(old && pool_spawn(&p) == 0);
+    atomic_store(&p.pause_slot, 0);
+    atomic_store(&p.pause_enabled, 1);
+    FAIL_IF_FALSE(pool_send(&p, old, 7) == 0);
+    await_pause(&p);
+    FAIL_IF_FALSE(pool_retire(&p, old) == -2); // active turn
+    FAIL_IF_FALSE(pool_send(&p, old, 8) == 0);
+    FAIL_IF_FALSE(pool_retire(&p, old) == -2); // accepted pending message
+    atomic_store(&p.pause_enabled, 0);
+    await_quiescent(&p, old);
+    FAIL_IF_FALSE(pool_retire(&p, old) == 0);
+    FAIL_IF_FALSE(pool_retire(&p, old) == -1);
+    FAIL_IF_FALSE(pool_send(&p, old, 1) == -1);
+    uint64_t revived = pool_spawn(&p);
+    FAIL_IF_FALSE(revived && revived != old);
+    FAIL_IF_FALSE((uint32_t)revived == (uint32_t)old);
+    FAIL_IF_FALSE((uint32_t)(revived >> 32) == (uint32_t)(old >> 32) + 1u);
+    FAIL_IF_FALSE(pool_send(&p, old, 99) == -1);
+    FAIL_IF_FALSE(pool_send(&p, revived, 11) == 0);
+    await_quiescent(&p, revived);
+    pthread_ok(pthread_mutex_lock(&p.mu));
+    FAIL_IF_FALSE(p.actors[0].sum == 11);
+    // Force the final generation in this test-only setup, then prove that
+    // retirement quarantines it instead of overflowing/reusing its identity.
+    p.actors[0].generation = UINT32_MAX;
+    pthread_ok(pthread_mutex_unlock(&p.mu));
+    uint64_t exhausted = (UINT64_C(0xffffffff) << 32) | 1u;
+    FAIL_IF_FALSE(pool_retire(&p, exhausted) == 0);
+    FAIL_IF_FALSE(pool_spawn(&p) == 0);
+    FAIL_IF_FALSE(pool_send(&p, exhausted, 5) == -1);
+    pool_close(&p);
+    pool_free(&p);
+    puts("PASS lifecycle: busy retirement, stale ref after reuse, generation exhaustion quarantine");
+}
+
+// Early second-carrier creation fails without a live orphaned worker.
+static void test_worker_failure(void) {
+    for (int fail_at = 0; fail_at < (int)CARRIERS; ++fail_at) {
+        pool_t p;
+        FAIL_IF_FALSE(pool_open_impl(&p, 4, fail_at) == -1);
+        FAIL_IF_FALSE(p.actors == NULL && p.ready == NULL);
+    }
+    puts("PASS worker-failure: failure-atomic carrier pool startup");
 }
 
 static void test_density(void) {
@@ -338,6 +462,8 @@ static void test_close_race(void) {
 
 int main(void) {
     FAIL_IF_FALSE(pool_open(&(pool_t){0}, 0) == -1);
+    test_worker_failure();
+    test_lifecycle();
     test_density();
     test_close_race();
     puts("PASS experimental actor scheduler host-only safety checks");
