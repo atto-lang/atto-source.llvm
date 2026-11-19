@@ -2948,6 +2948,25 @@ if(BUILD_TESTING)
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto-first-parity")
         set_tests_properties(native_atto_first_aot_gate_fault_injection
             PROPERTIES TIMEOUT 60)
+        # Canonical portable bounds .atto native guest O0/O2 gate.
+        # Rust-only validation; this is not a whole-backend parity claim.
+        if(ORE_BORROW_RUSTC AND ORE_RT_AOT_CLANG)
+            set(ORE_BOUNDS_NATIVE_GATE "${CMAKE_CURRENT_BINARY_DIR}/atto-portable-bounds-native${CMAKE_EXECUTABLE_SUFFIX}")
+            add_custom_command(OUTPUT "${ORE_BOUNDS_NATIVE_GATE}"
+                COMMAND "${ORE_BORROW_RUSTC}" --edition=2021 -D warnings
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/portable_bounds_native.rs"
+                    -o "${ORE_BOUNDS_NATIVE_GATE}"
+                DEPENDS tests/portable_bounds_native.rs VERBATIM)
+            add_custom_target(atto-portable-bounds-native-build ALL
+                DEPENDS "${ORE_BOUNDS_NATIVE_GATE}")
+            add_test(NAME native_atto_portable_bounds_i64_guest
+                COMMAND "${ORE_BOUNDS_NATIVE_GATE}"
+                    "$<TARGET_FILE:oreslang-llvmc>"
+                    "${ORE_RT_AOT_CLANG}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/portable-bounds-v1")
+            set_tests_properties(native_atto_portable_bounds_i64_guest
+                PROPERTIES TIMEOUT 120 LABELS "native-guest;atto-bounds;unverified")
+        endif()
     endif()
 
     # Pure host resolver security test for canonical +/ project-root imports.
