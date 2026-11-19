@@ -20,7 +20,10 @@ enum class CriticalStateAdmission : std::uint8_t {
     EffectExceedsWith,
     LoanAcrossSuspension,
     MissingContinuationFence,
-    ScopeDenied
+    ScopeDenied,
+    // Appended to keep the previously published native enum ordinals stable.
+    // Sealed actor callback loans must not nest, even on the same turn.
+    NestedStateLoan
 };
 
 struct CriticalStateCallback {
@@ -60,15 +63,13 @@ inline CriticalStateAdmission admit_critical_handle_state(
     if (!with_effects.permits(callback.inferred)) {
         return CriticalStateAdmission::EffectExceedsWith;
     }
-    if (callback.inferred.has(FunctionEffect::Suspend)) {
-        // A state-backed loan may not cross a yielding reduction boundary.
-        // The callback resumes only on a generation-fenced re-admitted turn.
-        if (callback.state_loan_live_across_suspend) {
-            return CriticalStateAdmission::LoanAcrossSuspension;
-        }
-        if (!callback.continuation_generation_fenced) {
-            return CriticalStateAdmission::MissingContinuationFence;
-        }
+    // A generation-fenced continuation permits resumption only AFTER a
+    // lexical state loan ends. An effect row advertising suspend still
+    // cannot run while this sealed callback holds its state capability.
+    // Never trust the caller's "live across suspend" flag to waive this.
+    if (callback.inferred.has(FunctionEffect::Suspend) ||
+            callback.state_loan_live_across_suspend) {
+        return CriticalStateAdmission::LoanAcrossSuspension;
     }
     return CriticalStateAdmission::Accept;
 }

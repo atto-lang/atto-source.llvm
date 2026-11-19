@@ -12,6 +12,7 @@
 #include "oreslang/frontend/LibraryProfile.hpp"
 #include "oreslang/frontend/CoreLibrarySources.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
+#include "oreslang/runtime/DeploymentProfile.hpp"
 #include "oreslang/runtime/CoreLog.hpp"
 #include "oreslang/types/RealtimeAnalysis.hpp"
 
@@ -713,6 +714,10 @@ int main(int argc, char** argv) {
     bool wasm32_target = false;
     bool cortex_m_target = false;
     bool target_seen = false;
+    enum class BuildProfile { Dev, Release, StrictAot, HardRt };
+    BuildProfile build_profile = BuildProfile::Dev;
+    bool build_profile_seen = false;
+    bool freestanding = false;
     bool native_hard_rt_profile = false;
     bool profile_seen = false;
     std::optional<oreslang::frontend::LibraryProfile> library_profile;
@@ -861,6 +866,31 @@ int main(int argc, char** argv) {
             expected_source_set_seen = true;
             expected_source_set_sha =
                 arg.substr(std::string("--expected-source-set-git-sha=").size());
+        } else if (arg == "--release" || arg == "--strict-aot" || arg == "--hard-rt") {
+            if (build_profile_seen) {
+                std::cerr << "--release, --strict-aot and --hard-rt are mutually exclusive\n";
+                return 2;
+            }
+            build_profile_seen = true;
+            if (arg == "--release") build_profile = BuildProfile::Release;
+            else if (arg == "--strict-aot") build_profile = BuildProfile::StrictAot;
+            else build_profile = BuildProfile::HardRt;
+        } else if (arg == "--freestanding") {
+            if (freestanding) { std::cerr << "duplicate --freestanding\n"; return 2; }
+            freestanding = true;
+        } else if (arg.rfind("--deployment-profile=", 0) == 0) {
+            // Deployment profiles are stronger than architecture triples:
+            // generic host IR is never evidence of a qualified XDP, Linux
+            // carrier, FPGA or ASIC artifact. Until a certified emitter and
+            // its independent validators exist, refuse before source I/O.
+            try {
+                const auto profile = oreslang::DeploymentProfile::parse(
+                    arg.substr(std::string_view("--deployment-profile=").size()));
+                profile.require_certified_emitter();
+            } catch (const std::exception& error) {
+                std::cerr << error.what() << '\n';
+                return 2;
+            }
         } else if (arg.rfind("--core-log-level=", 0) == 0) {
             coreLogLevel = arg.substr(std::string_view("--core-log-level=").size());
         } else if (arg == "--no-core-log") {
@@ -921,6 +951,19 @@ int main(int argc, char** argv) {
             return 2;
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
+    }
+    if (build_profile != BuildProfile::Dev) {
+        const char* requested =
+            build_profile == BuildProfile::Release ? "release" :
+            build_profile == BuildProfile::StrictAot ? "strict-aot" : "hard-rt";
+        std::cerr << requested
+                  << " profile requires semantic reachability/tree shaking and final-artifact evidence; "
+                  << "oreslang-llvmc currently emits IR only, so the profile is rejected rather than weakened\n";
+        return 2;
+    }
+    if (freestanding && !cortex_m_target) {
+        std::cerr << "--freestanding is currently admitted only with --target=thumbv7m-none-eabi\n";
+        return 2;
     }
     // Do not promote frontend admission into typed effect certification.  A
     // formatter using --analyze must never observe a false successful check.
@@ -1057,7 +1100,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--aot-profile=sealed-scalar-v1|sealed-class-fields-v1|actor-region-v1] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--check|--analyze] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--release|--strict-aot|--hard-rt] [--freestanding] [--deployment-profile=ebpf-xdp|ebpf-tc|carrier-linux|fpga-hls|asic-rtl (not yet certified)] [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--aot-profile=sealed-scalar-v1|sealed-class-fields-v1|actor-region-v1] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--check|--analyze] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }

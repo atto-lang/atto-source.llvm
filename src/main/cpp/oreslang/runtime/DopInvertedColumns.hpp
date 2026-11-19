@@ -154,6 +154,22 @@ class InvertedColumns {
     static void reserve_columns(State& s, std::size_t n, std::index_sequence<I...>) {
         (std::get<I>(s.columns).reserve(n), ...);
     }
+    // push() must pre-allocate so the append below cannot throw, but
+    // vector::reserve(n) allocates exactly n. Reserving row + 1 on every push
+    // therefore reallocated and copied every column on every insert (O(n^2)
+    // build). Grow geometrically instead; capacity only ever increases.
+    template<class Vector>
+    static void ensure_capacity(Vector& v, std::size_t needed) {
+        if (v.capacity() >= needed) return;
+        const std::size_t limit = v.max_size();
+        if (needed > limit) throw std::length_error("inverted column capacity exhausted");
+        const std::size_t doubled = v.capacity() > limit / 2 ? limit : v.capacity() * 2;
+        v.reserve(doubled > needed ? doubled : needed);
+    }
+    template<std::size_t... I>
+    static void grow_columns(State& s, std::size_t n, std::index_sequence<I...>) {
+        (ensure_capacity(std::get<I>(s.columns), n), ...);
+    }
     template<std::size_t... I>
     static bool columns_have_capacity(const State& s, std::size_t n,
                                       std::index_sequence<I...>) {
@@ -451,9 +467,9 @@ public:
         invalidate_layout(s);
         // Allocate everything before changing logical size. If allocation
         // throws, no row/slot/column sizes change.
-        s.row_slots.reserve(row + 1);
-        if (s.free_slots.empty()) s.slots.reserve(s.slots.size() + 1);
-        reserve_columns(s, row + 1, std::index_sequence_for<Fields...>{});
+        ensure_capacity(s.row_slots, row + 1);
+        if (s.free_slots.empty()) ensure_capacity(s.slots, s.slots.size() + 1);
+        grow_columns(s, row + 1, std::index_sequence_for<Fields...>{});
         const bool reuse = !s.free_slots.empty();
         const auto slot = reuse ? s.free_slots.back() : s.slots.size();
         append_columns(s, std::tuple<Fields...>(fields...), std::index_sequence_for<Fields...>{});
@@ -475,7 +491,7 @@ public:
         invalidate_layout(s);
         const auto last = s.row_slots.size() - 1;
         const bool recycle = s.slots[h.slot_].generation != std::numeric_limits<std::uint64_t>::max();
-        if (recycle) s.free_slots.reserve(s.free_slots.size() + 1);
+        if (recycle) ensure_capacity(s.free_slots, s.free_slots.size() + 1);
         erase_columns(s, row, last, std::index_sequence_for<Fields...>{});
         if (row != last) {
             const auto displaced = s.row_slots[last];
