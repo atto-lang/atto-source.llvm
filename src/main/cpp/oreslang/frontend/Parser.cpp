@@ -1142,6 +1142,8 @@ public:
             }
             bool exported = accept("pub");
             require("define");
+            if (token_.text == "abstract")
+                fail("native private abstract method slots unsupported: general class inheritance, originating-declaration virtual dispatch and trusted actor-hook lowering required; no IR may be emitted");
             if (accept("pub")) {
                 if (exported) fail("duplicate pub modifier");
                 exported = true;
@@ -1338,6 +1340,8 @@ public:
                 actor.max_actor_threads = cap;
                 program.actors.push_back(std::move(actor));
             } else if (accept("define")) {
+                if (token_.text == "abstract")
+                    fail("native private abstract method slots unsupported: general class inheritance, originating-declaration virtual dispatch and trusted actor-hook lowering required; no IR may be emitted");
                 if (accept("pub")) {
                     if (public_class) fail("duplicate pub modifier");
                     public_class = true;
@@ -2342,7 +2346,7 @@ private:
         require("as");
         const bool braced = accept("{");
         if (token_.text == "receive") {
-            fail("native ActorMail<T> receive and actor outputs require typed message and mailbox lowering; unsupported");
+            fail("native actor receive/private abstract slots unsupported: ActorMail<T>, explicit/implicit Self receiver, originating-slot authority and trusted mailbox virtual dispatch lowering required; no IR may be emitted; native ActorMail<T> receive and actor outputs require typed message and mailbox lowering; unsupported");
         }
         if (token_.text == "state") {
             fail("native actor state { ... } requires sealed handle_state lowering; legacy scalar actor fields are not this contract");
@@ -2370,12 +2374,14 @@ private:
         if (token_.text == "final") {
             fail("native final actor fields require typed field initialization and ownership lowering");
         }
+        if (token_.text == "receive" || at_private_abstract_member())
+            fail("native actor receive/private abstract slots unsupported: ActorMail<T>, explicit/implicit Self receiver, originating-slot authority and trusted mailbox virtual dispatch lowering required; no IR may be emitted");
         if (actor.fields.empty()) fail("actor requires at least one scalar field");
         Function method;
         method.offset = token_.offset;
         method.exported = accept("pub");
         if (token_.text == "receive") {
-            fail("native ActorMail<T> receive and actor outputs require typed message and mailbox lowering; unsupported");
+            fail("native actor receive/private abstract slots unsupported: ActorMail<T>, explicit/implicit Self receiver, originating-slot authority and trusted mailbox virtual dispatch lowering required; no IR may be emitted; native ActorMail<T> receive and actor outputs require typed message and mailbox lowering; unsupported");
         }
         if (!method.exported) fail("native actor requires pub on_message(int)");
         // Match the Java frontend's declaration spelling contract. The native
@@ -2568,11 +2574,15 @@ private:
         // checked superclass/interface witness. Reject explicitly, before
         // producing any LLVM IR, instead of mis-parsing or silently flattening.
         if (token_.text == "extends" || token_.text == "implements" || token_.text == "impl")
-            fail("NATIVE_CLASS_INHERITANCE_UNSUPPORTED: native class extends/implements needs verified parent layout and virtual/trait method dispatch; no LLVM IR may be emitted");
+            fail("NATIVE_CLASS_INHERITANCE_UNSUPPORTED: native class inheritance/virtual slots unsupported: native class extends/implements needs verified parent layout and virtual/trait method dispatch; no LLVM IR may be emitted");
         require("as");
         std::unordered_set<std::string> seen;
         while (token_.text != "end") {
             if (token_.kind == Kind::End) fail("expected 'end'");
+            if (at_private_abstract_member())
+                fail("native private abstract method slots unsupported: general class inheritance, originating-declaration virtual dispatch and trusted actor-hook lowering required; no IR may be emitted");
+            if (token_.text == "abstract")
+                fail("native abstract class methods unsupported: virtual slot layout and override dispatch lowering required; no IR may be emitted");
             const bool publicly_visible = accept("pub");
             if (!publicly_visible) accept("private");
             // Formatter may insert 'mtd', but method identity and receiver
@@ -6402,6 +6412,12 @@ private:
         require(";");
         if (program.exports.size() >= 1024) fail("EXPORT_SOURCE_LIMIT: too many file exports");
         program.exports.push_back(std::move(entry));
+    }
+
+    bool at_private_abstract_member() const {
+        if (token_.text != "private") return false;
+        Lexer lookahead = lexer_;
+        return lookahead.next().text == "abstract";
     }
 
     bool accept(std::string_view text) {
