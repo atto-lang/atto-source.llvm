@@ -6,7 +6,9 @@
 // A host mutex serializes access vs concurrent scheduler carriers; this is NOT
 // a substitute for compiled critical-read/write and suspension loan checking.
 #include "ActorSlabHeap32.hpp"
+#include <atomic>
 #include <cstdint>
+#include <limits>
 #include <cstring>
 #include <mutex>
 #include <stdexcept>
@@ -34,10 +36,14 @@ public:
     ActorHeapOwner origin() const noexcept { return origin_; }
 private:
     friend class ActorRef32Heap;
-    TrustedActorRef32(std::uint32_t token, ActorHeapOwner origin) noexcept
-        : token_(token), origin_(origin) {}
+    TrustedActorRef32(std::uint32_t token, ActorHeapOwner origin,
+                      std::uint64_t heap_identity) noexcept
+        : token_(token), origin_(origin), heap_identity_(heap_identity) {}
     std::uint32_t token_ = 0;
     ActorHeapOwner origin_{0, 0, 0};
+    // Trusted sidecar, never part of the four-byte guest token. Separates
+    // multiple heaps of the *same* logical actor owner.
+    std::uint64_t heap_identity_ = 0;
 };
 static_assert(sizeof(std::uint32_t) == 4,
               "portable guest reference token is exactly 4 bytes");
@@ -51,7 +57,8 @@ public:
 
     ActorRef32Heap(ActorHeapOwner owner, std::uint8_t* cage, Offset32 base,
                    Offset32 capacity, std::uint32_t slot_limit)
-        : owner_(owner), cage_(cage), slab_(capacity), slots_(checked_slots(slot_limit)) {
+        : owner_(owner), heap_identity_(next_heap_identity()), cage_(cage),
+          slab_(capacity), slots_(checked_slots(slot_limit)) {
         slab_.bind(cage, base);
     }
     ActorRef32Heap(const ActorRef32Heap&) = delete;
@@ -72,7 +79,7 @@ public:
             slot.type_id = type_id;
             slot.live = true;
             return TrustedActorRef32{ (std::uint32_t(slot.generation) << kSlotBits) |
-                                         std::uint32_t(i + 1), owner_ };
+                                         std::uint32_t(i + 1), owner_, heap_identity_ };
         }
         return {};
     }
@@ -138,6 +145,19 @@ public:
     }
 
 private:
+    // Never reuse a trusted heap identity, even if the C++ object address
+    // is recycled. Saturate and fail closed instead of wrapping.
+    static std::uint64_t next_heap_identity() {
+        auto value = next_heap_identity_.load(std::memory_order_relaxed);
+        for (;;) {
+            if (value == std::numeric_limits<std::uint64_t>::max())
+                throw std::overflow_error("actor heap witness identities exhausted");
+            if (next_heap_identity_.compare_exchange_weak(
+                    value, value + 1, std::memory_order_relaxed))
+                return value;
+        }
+    }
+    inline static std::atomic<std::uint64_t> next_heap_identity_{1};
     struct Slot {
         Offset32 offset = 0, size = 0, alignment = 0;
         std::uint32_t type_id = 0;
@@ -159,7 +179,8 @@ private:
     }
     const Slot* checked_slot(TrustedActorRef32 ref, ActorHeapOwner caller,
                              std::uint32_t type_id) const noexcept {
-        if (!authorized(caller) || !(ref.origin() == owner_) || !ref.guest_token() || !type_id)
+        if (!authorized(caller) || !(ref.origin() == owner_) ||
+            ref.heap_identity_ != heap_identity_ || !ref.guest_token() || !type_id)
             return nullptr;
         const std::uint32_t i = (ref.guest_token() & kSlotMask);
         const std::uint32_t generation = ref.guest_token() >> kSlotBits;
@@ -180,6 +201,7 @@ private:
     }
 
     ActorHeapOwner owner_;
+    const std::uint64_t heap_identity_;
     std::uint8_t* cage_;
     ActorSlabHeap32 slab_;
     std::vector<Slot> slots_;

@@ -27,6 +27,15 @@ int main() {
     auto x = a.allocate(owner, 24, 8, 101);  // Point {i64 x,y} + velocity i64
     auto y = b.allocate(other, 24, 8, 101);
     check(x.guest_token() != 0 && x.guest_token() == y.guest_token(), "sibling numeric collision test");
+    // A logical actor may accidentally admit a second heap with identical
+    // tenant/actor/incarnation. Numeric token plus matching owner is NOT enough.
+    ActorRef32Heap same_owner(owner, cage.data(), 12288, 2048, 2);
+    const auto collision = same_owner.allocate(owner, 24, 8, 101);
+    check(collision.guest_token() == x.guest_token(), "same-owner numeric collision");
+    std::int64_t stolen = 5;
+    check(!a.read_i64(collision, owner, 101, 0, stolen), "same-owner foreign witness read");
+    check(!same_owner.read_i64(x, owner, 101, 0, stolen), "same-owner reverse witness read");
+    check(!a.release(collision, owner, 101), "same-owner foreign witness release");
     check(a.write_i64(x, owner, 101, 0, 10), "write point x");
     check(a.write_i64(x, owner, 101, 8, 20), "write point y");
     check(a.write_i64(x, owner, 101, 16, 3), "write velocity");
