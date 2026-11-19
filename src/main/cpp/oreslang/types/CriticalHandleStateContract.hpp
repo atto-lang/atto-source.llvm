@@ -17,15 +17,22 @@ enum class CriticalStateAdmission : std::uint8_t {
     MissingCallbackCritical,
     InvalidStateCallback,
     CallbackEscape,
-    EffectExceedsUsing,
+    EffectExceedsWith,
     LoanAcrossSuspension,
     MissingContinuationFence,
-    ScopeDenied
+    ScopeDenied,
+    // Appended to keep the previously published native enum ordinals stable.
+    // Sealed actor callback loans must not nest, even on the same turn.
+    NestedStateLoan
 };
 
 struct CriticalStateCallback {
     bool intrinsic_critical = true;  // sealed runtime intrinsic
     bool callback_critical = false;
+    // Compiler-proven builtin serial actor superclass, not guest-provided flags.
+    bool actor_is_serial = false;
+    // Trusted scheduler must hold the actor-wide request/message lifetime lease.
+    bool serial_lifetime_admission_proven = false;
     bool lexical = true;
     bool one_state_parameter = false;
     bool escapes = false;
@@ -36,29 +43,33 @@ struct CriticalStateCallback {
 
 inline CriticalStateAdmission admit_critical_handle_state(
         const CriticalStateCallback& callback,
-        FunctionEffects using_effects,
+        FunctionEffects with_effects,
         bool verified_serial_actor = false) noexcept {
     if (!callback.intrinsic_critical) return CriticalStateAdmission::MissingIntrinsicCritical;
-    // The serial privilege comes from a trusted actor declaration + scheduler,
-    // never from callback metadata supplied by guest code.
-    if (!callback.callback_critical && !verified_serial_actor)
+    // Spec ch.05/ch.22: serial actors keep the same sealed-state and loan
+    // rules, and unguarded state mutation fails before emission. An unmarked
+    // callback is READ-only on every actor; any state write needs explicit
+    // critical marking. A verified serial actor (trusted declaration +
+    // scheduler, never guest metadata) cannot mint implicit WRITE authority.
+    (void) verified_serial_actor;
+    if (!callback.callback_critical
+            && callback.inferred.has(FunctionEffect::StateWrite)) {
         return CriticalStateAdmission::MissingCallbackCritical;
+    }
     if (!callback.lexical || !callback.one_state_parameter) {
         return CriticalStateAdmission::InvalidStateCallback;
     }
     if (callback.escapes) return CriticalStateAdmission::CallbackEscape;
-    if (!using_effects.permits(callback.inferred)) {
-        return CriticalStateAdmission::EffectExceedsUsing;
+    if (!with_effects.permits(callback.inferred)) {
+        return CriticalStateAdmission::EffectExceedsWith;
     }
-    if (callback.inferred.has(FunctionEffect::Suspend)) {
-        // A state-backed loan may not cross a yielding reduction boundary.
-        // The callback resumes only on a generation-fenced re-admitted turn.
-        if (callback.state_loan_live_across_suspend) {
-            return CriticalStateAdmission::LoanAcrossSuspension;
-        }
-        if (!callback.continuation_generation_fenced) {
-            return CriticalStateAdmission::MissingContinuationFence;
-        }
+    // A generation-fenced continuation permits resumption only AFTER a
+    // lexical state loan ends. An effect row advertising suspend still
+    // cannot run while this sealed callback holds its state capability.
+    // Never trust the caller's "live across suspend" flag to waive this.
+    if (callback.inferred.has(FunctionEffect::Suspend) ||
+            callback.state_loan_live_across_suspend) {
+        return CriticalStateAdmission::LoanAcrossSuspension;
     }
     return CriticalStateAdmission::Accept;
 }

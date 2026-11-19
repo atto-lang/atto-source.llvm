@@ -1,0 +1,11 @@
+fnc choose(): int {
+    return 2;
+}
+
+pub fnc main(): int {
+    return switch choose()
+        case 1 -> { 11; }
+        case 2 -> { 42; }
+        default -> { 99; }
+    end;
+}

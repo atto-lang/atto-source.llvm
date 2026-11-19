@@ -1,0 +1,9 @@
+// Each pipeline has <= 128 stages, but the parenthesized head pipeline
+// is piped again: 129 pipeline edges on one AST path exceed the native
+// recursion budget and fail closed.
+fnc increment(int value): int {
+    return value + 1;
+}
+pub fnc main(): int {
+    return (0 |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment) |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment |> increment;
+}

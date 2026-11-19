@@ -1,0 +1,5 @@
+pub fnc main():int {
+    val Option<int> selected = true ? Some(42) : None;
+    val Option<int> absent = false ? Some(0) : None;
+    return selected.is_some() && selected.unwrap_or(0) == 42 && absent.is_none() ? 0 : 1;
+}
