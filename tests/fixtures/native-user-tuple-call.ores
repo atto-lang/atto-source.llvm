@@ -1,0 +1,7 @@
+fnc tuple(int left, int right): int {
+  return left + right;
+}
+
+pub fnc main(): int {
+  return tuple(20, 22);
+}

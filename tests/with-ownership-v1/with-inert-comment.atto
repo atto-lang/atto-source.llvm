@@ -1,0 +1,5 @@
+// with {x => 9} must be inert
+pub fnc main(): int {
+    /* with {x => 3} */
+    return 42;
+}

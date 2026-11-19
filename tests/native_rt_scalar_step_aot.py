@@ -41,16 +41,26 @@ def main():
         assert "define void @oreslang_rt_scalar_frame_cancel" in accepted.stdout
         assert "define void @oreslang_rt_scalar_frame_init" in accepted.stdout
         assert "define i64 @oreslang_rt_scalar_frame_result" in accepted.stdout
+        # Generated IR contract: the source loop has a single source-bound
+        # branch and a precomputed dispatch endpoint, NOT a fuel predicate
+        # executed on every committed backedge.
+        assert "dispatch.batch.stop" in accepted.stdout, "missing batched endpoint"
+        assert "loop.batch.exit" in accepted.stdout, "missing batch exit"
+        assert "loop.fuel" not in accepted.stdout, "per-backedge fuel test regressed"
+        assert "fuel.remaining" not in accepted.stdout, "per-iteration fuel decrement regressed"
+        assert "counter.valid" in accepted.stdout, "corrupted frame counter guard missing"
         llvm_ir = out / "guest.ll"
         llvm_ir.write_text(accepted.stdout)
         exe = out / "run-guest"
-        build = run([args.clang, "-std=c11", "-O2", "-Wall", "-Wextra",
+        build = run([args.clang, "-std=c11", "-O2", "-DNDEBUG", "-Wall", "-Wextra",
                      "-Werror", "-Wno-error=override-module", "-pedantic", str(args.harness),
                      "-x", "ir", str(llvm_ir), "-o", str(exe)])
         assert build.returncode == 0, build.stderr
         execution = run([str(exe)])
         assert execution.returncode == 0, execution.stderr
         assert "SCALAR_FRAME_AOT_TWO_TASKS_PASS" in execution.stdout
+        assert "SCALAR_FRAME_AOT_THREE_PEERS_BOUNDED_PROGRESS_PASS" in execution.stdout
+        assert "SCALAR_FRAME_AOT_CANCELLED_PEER_ISOLATION_PASS" in execution.stdout
         for i, (original, replacement) in enumerate(cases):
             assert original in source
             file = out / f"invalid-{i}.ores"
@@ -59,7 +69,7 @@ def main():
             assert wrong.returncode != 0 and not wrong.stdout.strip(), (i, wrong.stdout)
         missing = run([compiler, "--experimental-rt-scalar-loop", "--target=wasm32", str(fixture)])
         assert missing.returncode != 0 and not missing.stdout.strip()
-        print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: 2 heap frames, resume, fuel, cancel, negatives")
+        print("NATIVE_OPT_IN_SCALAR_FRAME_PASS: 3 peer frames, cancellation isolation, bounded progress, negatives")
 
 if __name__ == "__main__":
     main()

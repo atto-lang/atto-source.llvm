@@ -1,0 +1,204 @@
+name: Native proxy slab exact-head C++20
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/ProxyRequestSlab.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorOwnedProxyRequestSlab.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeTransportCallbackGate.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeActorNioCallbacks.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeOresVMActorNio.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeOresVMNio.cpp'
+      - 'src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp'
+      - 'src/main/cpp/oreslang/runtime/NativeEpollTransportBridge.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeEpollReactor.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorArena.h'
+      - 'src/main/cpp/oreslang/runtime/ActorArena.c'
+      - 'tests/native_proxy_request_slab_test.cpp'
+      - 'tests/native_proxy_request_slab_arena_pages_test.cpp'
+      - 'tests/native_actor_proxy_request_slab_owner_test.cpp'
+      - 'tests/native_proxy_transport_gate_test.cpp'
+      - 'tests/native_epoll_transport_bridge_test.cpp'
+      - 'tests/native_epoll_transport_capacity_stress_test.cpp'
+      - 'tests/native_epoll_bridge_lifetime_test.cpp'
+      - 'tests/native_vm_actor_nio_owned_test.cpp'
+      - 'tests/native_actor_nio_fd_lease_test.cpp'
+      - 'CMakeLists.txt'
+      - '.github/workflows/native-proxy-slab-exact-head.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  standalone-host-sanitizers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cc: gcc
+            cxx: g++
+          - cc: clang
+            cxx: clang++
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Assert exact Git source head and tree
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git rev-parse 'HEAD^{tree}'
+      - name: Compile strict C++20 host slab
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CC" -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror \
+            -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/ActorArena.c \
+            -o /tmp/proxy-actor-arena.o
+          "$CXX" -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror \
+            -Isrc/main/cpp tests/native_proxy_request_slab_test.cpp \
+            /tmp/proxy-actor-arena.o -o /tmp/proxy-slab-host
+          test "$(/tmp/proxy-slab-host)" = "NATIVE_PROXY_REQUEST_SLAB_OK"
+          "$CXX" -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Isrc/main/cpp tests/native_proxy_request_slab_arena_pages_test.cpp \
+            /tmp/proxy-actor-arena.o -o /tmp/proxy-arena-pages
+          test "$(/tmp/proxy-arena-pages)" = "NATIVE_PROXY_ARENA_PAGES_OK"
+      - name: Exercise ASan and UBSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CC" -std=c11 -g -O1 -fno-omit-frame-pointer \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror \
+            -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/ActorArena.c \
+            -o /tmp/proxy-actor-arena-sanitized.o
+          "$CXX" -std=c++20 -g -O1 -fno-omit-frame-pointer \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror \
+            -Isrc/main/cpp tests/native_proxy_request_slab_test.cpp \
+            /tmp/proxy-actor-arena-sanitized.o -o /tmp/proxy-slab-sanitized
+          ASAN_OPTIONS=detect_leaks=1 /tmp/proxy-slab-sanitized
+          "$CXX" -std=c++20 -g -O1 -fno-omit-frame-pointer \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Isrc/main/cpp tests/native_proxy_request_slab_arena_pages_test.cpp \
+            /tmp/proxy-actor-arena-sanitized.o -o /tmp/proxy-arena-pages-sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 /tmp/proxy-arena-pages-sanitized
+      - name: Compile and execute exact-generation real native actor test
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CC" -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            -o /tmp/proxy-native-actor-scheduler.o
+          "$CXX" -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
+            -Isrc/main/cpp tests/native_actor_proxy_request_slab_owner_test.cpp \
+            /tmp/proxy-native-actor-scheduler.o /tmp/proxy-actor-arena.o \
+            -o /tmp/proxy-native-owner-test
+          test "$(/tmp/proxy-native-owner-test)" = "NATIVE_ACTOR_PROXY_REQUEST_SLAB_OWNER_OK"
+      - name: Verify registered C11/C++20 native CTests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B /tmp/ores-proxy-ctest \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
+            -DBUILD_TESTING=ON \
+            -DORESLANG_PROXY_SLAB_HOST_ONLY=ON
+          cmake --build /tmp/ores-proxy-ctest --parallel 2 \
+            --target oreslang-native-proxy-request-slab-test \
+                     oreslang-native-proxy-arena-pages-test \
+                     oreslang-native-actor-proxy-slab-owner-test \
+                     oreslang-native-proxy-transport-gate-test \
+                     oreslang-native-epoll-transport-bridge-test \
+                     oreslang-native-epoll-transport-stress-test \
+                     oreslang-native-epoll-bridge-lifetime-test \
+                     oreslang-native-actor-nio-fd-lease-test \
+                     oreslang-native-vm-actor-nio-owned-test
+          ctest --test-dir /tmp/ores-proxy-ctest --output-on-failure \
+            -R '^(native_proxy_request_slab_host_only|native_proxy_slab_arena_pages_and_zeroization|native_actor_proxy_slab_generation_and_quota|native_proxy_transport_callback_gate_races|native_epoll_transport_callback_retirement|native_epoll_transport_capacity_stale_shutdown_stress|native_epoll_bridge_external_handoff_failstop|native_actor_nio_fd_lease_exclusive_rearm|native_vm_actor_nio_owned_callbacks)$'
+      - name: Verify actor-owned FD is exclusive until exact terminal acknowledgment under ASan/UBSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CXX" -std=c++20 -g -O1 -fno-omit-frame-pointer -pthread \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Isrc/main/cpp tests/native_actor_nio_fd_lease_test.cpp \
+            -o /tmp/actor-nio-fd-lease-sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/actor-nio-fd-lease-sanitized
+      - name: Exercise VM actor-owned NIO backend under ASan/UBSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B /tmp/ores-proxy-asan-vm \
+            -DORESLANG_PROXY_SLAB_HOST_ONLY=ON -DBUILD_TESTING=ON \
+            -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER="$CC" \
+            -DCMAKE_CXX_COMPILER="$CXX" \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          cmake --build /tmp/ores-proxy-asan-vm --parallel 2 \
+            --target oreslang-native-vm-actor-nio-owned-test
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            ctest --test-dir /tmp/ores-proxy-asan-vm --output-on-failure \
+              -R '^native_vm_actor_nio_owned_callbacks$'
+      - name: Exercise counted transport callback gate under ASan/UBSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CXX" -std=c++20 -g -O1 -fno-omit-frame-pointer -pthread \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Isrc/main/cpp tests/native_proxy_transport_gate_test.cpp \
+            -o /tmp/proxy-transport-gate-sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/proxy-transport-gate-sanitized
+      - name: Exercise real epoll transport bridge under ASan/UBSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CXX" -std=c++20 -g -O1 -fno-omit-frame-pointer -pthread \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Isrc/main/cpp tests/native_epoll_transport_bridge_test.cpp \
+            -o /tmp/proxy-epoll-transport-sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/proxy-epoll-transport-sanitized
+      - name: Enforce external completion lifetime before epoll bridge destruction
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CXX" -std=c++20 -g -O1 -fno-omit-frame-pointer -pthread \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Isrc/main/cpp tests/native_epoll_bridge_lifetime_test.cpp \
+            -o /tmp/proxy-epoll-lifetime-sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/proxy-epoll-lifetime-sanitized
+      - name: Stress real epoll capacity, stale tickets and shutdown under ASan/UBSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CXX" -std=c++20 -g -O1 -fno-omit-frame-pointer -pthread \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Isrc/main/cpp tests/native_epoll_transport_capacity_stress_test.cpp \
+            -o /tmp/proxy-epoll-stress-sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/proxy-epoll-stress-sanitized
+      - name: Exercise exact native actor and arena under ASan/UBSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CC" -std=c11 -g -O1 -fno-omit-frame-pointer -pthread \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror \
+            -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            -o /tmp/proxy-scheduler-sanitized.o
+          "$CXX" -std=c++20 -g -O1 -fno-omit-frame-pointer -pthread \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Isrc/main/cpp tests/native_actor_proxy_request_slab_owner_test.cpp \
+            /tmp/proxy-scheduler-sanitized.o /tmp/proxy-actor-arena-sanitized.o \
+            -o /tmp/proxy-native-owner-sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/proxy-native-owner-sanitized
