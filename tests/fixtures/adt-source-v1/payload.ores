@@ -1,0 +1,15 @@
+define enum Message as
+    First: string = 1
+    Second: string = 2
+end
+fnc f(Message x): int {
+    match x over
+        on Message.First(s) -> { return 11; }
+        on Message.Second(s) -> { return 17; }
+    end
+}
+pub fnc main(): void {
+    stdio.println(f(Message.First("same")));
+    stdio.println(f(Message.Second("same")));
+    return;
+}

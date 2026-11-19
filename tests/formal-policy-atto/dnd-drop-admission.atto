@@ -1,0 +1,107 @@
+// Native AttoLang scalar projection for ORES DnD provider/drop admission.
+// Independently enumerates all 64 states of six booleans, requiring exactly
+// two admitted cases (one provider, parsed, drag+drop checks, not a native file).
+// Does NOT assert real OS drag events, bytes-on-wire validation, or actor effects.
+fnc dnd_one_backend(bool egui, bool makepad): bool {
+  return egui != makepad;
+}
+
+fnc dnd_may_commit(
+  bool egui, bool makepad,
+  bool parsed, bool drag_admitted,
+  bool drop_admitted, bool native_file
+): bool {
+  return dnd_one_backend(egui, makepad) &&
+    parsed && drag_admitted && drop_admitted && !native_file;
+}
+
+fnc check_states_0_15(): bool {
+  // Inputs 0..15; the independent oracle accepts exactly masks 29 and 30.
+  return
+    !dnd_may_commit(false, false, false, false, false, false) &&
+    !dnd_may_commit(true, false, false, false, false, false) &&
+    !dnd_may_commit(false, true, false, false, false, false) &&
+    !dnd_may_commit(true, true, false, false, false, false) &&
+    !dnd_may_commit(false, false, true, false, false, false) &&
+    !dnd_may_commit(true, false, true, false, false, false) &&
+    !dnd_may_commit(false, true, true, false, false, false) &&
+    !dnd_may_commit(true, true, true, false, false, false) &&
+    !dnd_may_commit(false, false, false, true, false, false) &&
+    !dnd_may_commit(true, false, false, true, false, false) &&
+    !dnd_may_commit(false, true, false, true, false, false) &&
+    !dnd_may_commit(true, true, false, true, false, false) &&
+    !dnd_may_commit(false, false, true, true, false, false) &&
+    !dnd_may_commit(true, false, true, true, false, false) &&
+    !dnd_may_commit(false, true, true, true, false, false) &&
+    !dnd_may_commit(true, true, true, true, false, false);
+}
+
+fnc check_states_16_31(): bool {
+  // Inputs 16..31; the independent oracle accepts exactly masks 29 and 30.
+  return
+    !dnd_may_commit(false, false, false, false, true, false) &&
+    !dnd_may_commit(true, false, false, false, true, false) &&
+    !dnd_may_commit(false, true, false, false, true, false) &&
+    !dnd_may_commit(true, true, false, false, true, false) &&
+    !dnd_may_commit(false, false, true, false, true, false) &&
+    !dnd_may_commit(true, false, true, false, true, false) &&
+    !dnd_may_commit(false, true, true, false, true, false) &&
+    !dnd_may_commit(true, true, true, false, true, false) &&
+    !dnd_may_commit(false, false, false, true, true, false) &&
+    !dnd_may_commit(true, false, false, true, true, false) &&
+    !dnd_may_commit(false, true, false, true, true, false) &&
+    !dnd_may_commit(true, true, false, true, true, false) &&
+    !dnd_may_commit(false, false, true, true, true, false) &&
+    dnd_may_commit(true, false, true, true, true, false) &&
+    dnd_may_commit(false, true, true, true, true, false) &&
+    !dnd_may_commit(true, true, true, true, true, false);
+}
+
+fnc check_states_32_47(): bool {
+  // Inputs 32..47; the independent oracle accepts exactly masks 29 and 30.
+  return
+    !dnd_may_commit(false, false, false, false, false, true) &&
+    !dnd_may_commit(true, false, false, false, false, true) &&
+    !dnd_may_commit(false, true, false, false, false, true) &&
+    !dnd_may_commit(true, true, false, false, false, true) &&
+    !dnd_may_commit(false, false, true, false, false, true) &&
+    !dnd_may_commit(true, false, true, false, false, true) &&
+    !dnd_may_commit(false, true, true, false, false, true) &&
+    !dnd_may_commit(true, true, true, false, false, true) &&
+    !dnd_may_commit(false, false, false, true, false, true) &&
+    !dnd_may_commit(true, false, false, true, false, true) &&
+    !dnd_may_commit(false, true, false, true, false, true) &&
+    !dnd_may_commit(true, true, false, true, false, true) &&
+    !dnd_may_commit(false, false, true, true, false, true) &&
+    !dnd_may_commit(true, false, true, true, false, true) &&
+    !dnd_may_commit(false, true, true, true, false, true) &&
+    !dnd_may_commit(true, true, true, true, false, true);
+}
+
+fnc check_states_48_63(): bool {
+  // Inputs 48..63; the independent oracle accepts exactly masks 29 and 30.
+  return
+    !dnd_may_commit(false, false, false, false, true, true) &&
+    !dnd_may_commit(true, false, false, false, true, true) &&
+    !dnd_may_commit(false, true, false, false, true, true) &&
+    !dnd_may_commit(true, true, false, false, true, true) &&
+    !dnd_may_commit(false, false, true, false, true, true) &&
+    !dnd_may_commit(true, false, true, false, true, true) &&
+    !dnd_may_commit(false, true, true, false, true, true) &&
+    !dnd_may_commit(true, true, true, false, true, true) &&
+    !dnd_may_commit(false, false, false, true, true, true) &&
+    !dnd_may_commit(true, false, false, true, true, true) &&
+    !dnd_may_commit(false, true, false, true, true, true) &&
+    !dnd_may_commit(true, true, false, true, true, true) &&
+    !dnd_may_commit(false, false, true, true, true, true) &&
+    !dnd_may_commit(true, false, true, true, true, true) &&
+    !dnd_may_commit(false, true, true, true, true, true) &&
+    !dnd_may_commit(true, true, true, true, true, true);
+}
+
+pub fnc main(): int {
+  return check_states_0_15() &&
+    check_states_16_31() &&
+    check_states_32_47() &&
+    check_states_48_63() ? 0 : 1;
+}

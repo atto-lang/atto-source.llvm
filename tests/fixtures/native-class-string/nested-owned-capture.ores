@@ -1,0 +1,23 @@
+define class RequestPath as
+  val Array<String> segments;
+  pub size():int{return self.segments.size;}
+  pub at(int index):String{return self.segments.get(index);}
+end
+define class PathCapture as
+  val RequestPath path;
+  val int start;
+  pub size():int{return self.path.size();}
+  pub at(int index):String{return self.path.at(self.start+index);}
+end
+fnc make_capture():PathCapture{
+  val Array<String> segments=new Array<String>();segments.add("foo");segments.add("id");
+  val RequestPath path=new RequestPath(segments);
+  val PathCapture capture=new PathCapture(path,1);
+  return capture;
+}
+pub routine main():int{
+  val PathCapture capture=make_capture();
+  let mut PathCapture moved=rt take capture;
+  stdio.println(moved.at(0));
+  return moved.size()==2&&moved.at(0)=="id"?0:1;
+}

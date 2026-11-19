@@ -1,0 +1,3 @@
+// 41: min-i64-successor
+// Candidate scalar exactness fixture; no compiler-backed execution claimed.
+pub fnc main(): int { return (-9223372036854775807 - 1) + 9223372036854775807 + 43; }

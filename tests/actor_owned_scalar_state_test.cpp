@@ -33,13 +33,26 @@ int main() {
 
     check(state.ready_to_suspend(actor));
     // The serial guarantee is stored on the actor's runtime instance, not
-    // supplied by a guest callback. It admits the optional critical marker.
+    // supplied by a guest callback. Per spec ch.05/ch.22 it does not waive
+    // explicit critical marking for state writes: an unmarked callback is
+    // READ-only on serial and ordinary actors alike.
     State serial_actor(actor + 1, {
         {"count", {State::Type::Int, std::int64_t{0}}}
     }, true);
     auto plain = checked;
     plain.callback_critical = false;
-    auto incremented = serial_actor.critical(actor + 1, 300, plain, allowed,
+    rejects([&] {
+        (void) serial_actor.critical(actor + 1, 299, plain, allowed,
+                [](State::Access&) -> State::Value { return std::int64_t{0}; });
+    });
+    auto plain_read = plain;
+    plain_read.inferred = readonly;
+    check(std::get<std::int64_t>(serial_actor.critical(
+            actor + 1, 300, plain_read, readonly,
+            [](State::Access& access) -> State::Value {
+        return access.read("count");
+    })) == 0);
+    auto incremented = serial_actor.critical(actor + 1, 301, checked, allowed,
             [&](State::Access& access) -> State::Value {
         const auto count = std::get<std::int64_t>(access.read("count"));
         access.write("count", count + 1);
@@ -48,7 +61,7 @@ int main() {
     check(std::get<std::int64_t>(incremented) == 1);
     // Explicit critical continues to be legal on serial actors.
     check(std::get<std::int64_t>(serial_actor.critical(
-            actor + 1, 301, checked, allowed,
+            actor + 1, 302, checked, allowed,
             [](State::Access& access) -> State::Value {
         return access.read("count");
     })) == 1);

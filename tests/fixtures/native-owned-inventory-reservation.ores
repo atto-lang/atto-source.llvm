@@ -1,0 +1,26 @@
+// Real LLVM native class/borrow smoke: one owned mutable two-field invariant.
+// Public scalar fields reflect the current native frontend subset; full
+// Java-equivalent private state-container methods remain a separate gate.
+define class Inventory as
+  pub let int available = 10;
+  pub let int reserved = 0;
+end
+
+fnc reserve(borrow mut Inventory state, int amount): int {
+  if amount <= 0; then return 0; fi
+  if amount > state.available; then return 0; fi
+  state.available = state.available - amount;
+  state.reserved = state.reserved + amount;
+  return 1;
+}
+
+pub fnc main(): int {
+  let mut Inventory state = new Inventory();
+  let int accepted = reserve(rt mut borrow state, 3);
+  let int refused = reserve(rt mut borrow state, 20);
+  let int zero = reserve(rt mut borrow state, 0);
+  let int negative = reserve(rt mut borrow state, -1);
+  // 7 available, 3 reserved, 1 success, 0 overdraw acceptance.
+  // Distinct terms also fail if zero/negative cases are admitted.
+  return state.available * 10 + state.reserved + accepted + refused + zero * 100 + negative * 1000;
+}

@@ -1,0 +1,9 @@
+// #309: Java's detached List[int] state snapshot is not LLVM permission.
+// Until native sealed handle_state reference/ownership lowering exists,
+// native actor state maps MUST fail before LLVM IR emission.
+define actor Snapshot as
+    state { items: List[int] = [1, 2]; }
+    current(): int with state.read {
+        return self.handle_state(|s| -> s.items[0]);
+    }
+end

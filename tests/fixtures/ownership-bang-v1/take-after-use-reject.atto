@@ -1,0 +1,1 @@
+pub fnc main(int value): int { return take!value + value; }
