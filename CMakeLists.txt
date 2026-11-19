@@ -4736,6 +4736,20 @@ if(BUILD_TESTING)
     set_tests_properties(dop_heterogeneous_four_layout_checked_geometry
         PROPERTIES TIMEOUT 20)
 
+    # Byte-for-byte Java/native parity for the same four layouts; the golden file
+    # is shared with oreslang-source.java HeterogeneousDataLayoutTest.
+    add_executable(oreslang-dop-heterogeneous-layout-golden-test
+        tests/dop_heterogeneous_layout_golden_test.cpp)
+    target_include_directories(oreslang-dop-heterogeneous-layout-golden-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-dop-heterogeneous-layout-golden-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-dop-heterogeneous-layout-golden-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME dop_heterogeneous_four_layout_java_golden_parity
+        COMMAND oreslang-dop-heterogeneous-layout-golden-test
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/dop/heterogeneous-layout-golden-v1.txt")
+    set_tests_properties(dop_heterogeneous_four_layout_java_golden_parity PROPERTIES TIMEOUT 20)
+
     # Precompiled AoS/SoA/AoSoA function table and owner+epoch guard.
     # Native host component only; not JIT or .atto guest lowering.
     add_executable(oreslang-dop-precompiled-kernel-region-test
