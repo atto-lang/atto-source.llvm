@@ -3,7 +3,7 @@ on:
   push:
     branches: [main, feat/native-atto-http3-policy-20261114]
   pull_request:
-    paths: ['Cargo.toml', 'src/**', 'frontend/**', 'tests/fixtures/**', 'tests/actors/**', 'tests/native_actor_mailbox_stress.c', 'runtime/**', 'contracts/native-llvm-actor-aot-v1.json', 'contracts/parity/**', 'tests/portable-scalar-v3-native.test.mjs', 'ci/**', '.github/workflows/native-aot.yml']
+    paths: ['Cargo.toml', 'src/**', 'frontend/**', 'tests/fixtures/**', 'tests/actors/**', 'tests/native_actor_mailbox_stress.c', 'runtime/**', 'contracts/native-llvm-actor-aot-v1.json', 'contracts/parity/**', 'tests/portable-scalar-v4-native.test.mjs', 'ci/**', '.github/workflows/native-aot.yml']
 permissions:
   contents: read
 jobs:
@@ -30,6 +30,6 @@ jobs:
       - name: Execute canonical four-backend scalar v3 corpus in native LLVM ELF guests
         env:
           ATTO_LLVM: target/release/atto-llvm
-        run: node --test tests/portable-scalar-v3-native.test.mjs
+        run: node --test tests/portable-scalar-v4-native.test.mjs
       - name: Verify scalar and native actor AOT exact source receipts
         run: python3 -m unittest discover -s tests -p 'test_llvm_*receipt.py' -v
