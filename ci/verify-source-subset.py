@@ -31,7 +31,7 @@ def check():
     overlay = json.loads((ROOT / "ci/accepted-llvm-source-overlays.json").read_text())
     require(overlay.get("schema") == "atto.llvm.reviewed-compiler-overlays.v1", "invalid review overlay schema")
     overrides = overlay.get("files")
-    require(isinstance(overrides, dict) and set(overrides) == set(["src/main/cpp/oreslang/backend/LlvmCodegen.cpp","src/main/cpp/oreslang/frontend/Parser.cpp","src/main/cpp/oreslang/frontend/Parser.hpp","src/main/cpp/oreslang/main.cpp","src/main/cpp/oreslang/runtime/TenantVm.cpp","src/main/cpp/oreslang/runtime/TenantVmGuestAbi.h","src/main/cpp/oreslang/types/OwnershipChecker.cpp"])
+    require(isinstance(overrides, dict) and set(overrides) == set(["src/main/cpp/oreslang/frontend/ModuleLoader.cpp","src/main/cpp/oreslang/frontend/ModuleLoader.hpp","src/main/cpp/oreslang/backend/LlvmCodegen.cpp","src/main/cpp/oreslang/frontend/Parser.cpp","src/main/cpp/oreslang/frontend/Parser.hpp","src/main/cpp/oreslang/main.cpp","src/main/cpp/oreslang/runtime/TenantVm.cpp","src/main/cpp/oreslang/runtime/TenantVmGuestAbi.h","src/main/cpp/oreslang/types/OwnershipChecker.cpp"])
     , "unreviewed overlay paths")
     require(all(bool(re.fullmatch(r"[0-9a-f]{40}", v)) for v in overrides.values()), "malformed override Git SHA")
     require(set(overrides).issubset(m["files"]), "overlay path outside original provenance")
