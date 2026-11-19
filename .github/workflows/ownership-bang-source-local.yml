@@ -89,9 +89,9 @@ jobs:
           # Fail closed if any negative/guest/optimization case disappears.
           # Compare parsed CTest names exactly, not substring grep hits.
           # No missing, extra, or duplicated case may satisfy admission.
-          sed -nE 's/^[[:space:]]*Test[[:space:]]+#[[:space:]]*[0-9]+:[[:space:]]+(native_ownership_bang_[A-Za-z0-9_]+)[[:space:]]*$/\\1/p' ci-evidence/ctest-inventory.txt > ci-evidence/selected-tests.txt
+          sed -nE 's/^[[:space:]]*Test[[:space:]]+#[[:space:]]*[0-9]+:[[:space:]]+(native_ownership_bang_[A-Za-z0-9_]+)[[:space:]]*$/\1/p' ci-evidence/ctest-inventory.txt > ci-evidence/selected-tests.txt
           while IFS= read -r test_name; do
-            printf '%s\\n' "$test_name"
+            printf '%s\n' "$test_name"
           done <<'EXPECTED_CTESTS' > ci-evidence/expected-tests.txt
           native_ownership_bang_aliases_parser_and_checker
           native_ownership_bang_copy_compact_guest
