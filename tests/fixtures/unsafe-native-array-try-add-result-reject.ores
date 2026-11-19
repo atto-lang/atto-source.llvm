@@ -1,0 +1,7 @@
+// #297/#333: native i64 status is NOT a public typed Result.
+// Do not silently admit recoverable append as source expression until
+// Result<void, ArrayError> ownership and effect lowering is verified.
+pub fnc main(): int {
+  let mut Array<int> a = new Array<int>();
+  return a.try_add(7);
+}

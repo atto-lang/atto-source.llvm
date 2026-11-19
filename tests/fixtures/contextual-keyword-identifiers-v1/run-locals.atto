@@ -1,0 +1,23 @@
+pub fnc main(): int {
+  let mut int borrow = 4;
+  let mut int critical = 4;
+  let mut int enum = 4;
+  let mut int gen = 4;
+  let mut int pure = 4;
+  let mut int requires = 4;
+  let mut int serial = 4;
+  let mut int structural = 4;
+  let mut int suspend = 4;
+  let mut int using = 4;
+  borrow = borrow + 0;
+  critical = critical + 0;
+  enum = enum + 0;
+  gen = gen + 0;
+  pure = pure + 0;
+  requires = requires + 0;
+  serial = serial + 0;
+  structural = structural + 0;
+  suspend = suspend + 0;
+  using = using + 0;
+  return borrow + critical + enum + gen + pure + requires + serial + structural + suspend + using + 2;
+}

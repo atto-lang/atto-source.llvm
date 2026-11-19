@@ -69,6 +69,13 @@ int oreslang_source_task_start_i64_checked(
         OresSourceTaskI64Producer producer, void** out_task) {
     if (!producer || !out_task) return ORES_SOURCE_TASK_INVALID;
     *out_task = NULL;
+    /* This legacy capture-free Task<int> ABI owns a separate one-actor
+     * scheduler. An actor's task must instead use its owning actor pool,
+     * which native compiler lowering has not implemented yet. Reject before
+     * allocation, admitting a task, or creating a worker; never silently
+     * move guest code to a foreign scheduler/supervisor domain. */
+    if (ores_native_actor_scheduler_in_any_actor_turn())
+        return ORES_SOURCE_TASK_ACTOR_POOL_UNSUPPORTED;
 
     SourceTaskI64* task = (SourceTaskI64*)calloc(1, sizeof(*task));
     if (!task) return ORES_SOURCE_TASK_RESOURCE_EXHAUSTED;

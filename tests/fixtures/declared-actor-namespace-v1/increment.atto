@@ -1,0 +1,7 @@
+namespace foo;
+pub mtd (Counter c) increment(): void {
+    c.handle_state(critical-write |s| -> {
+        s.count = s.count + 1;
+    });
+    return;
+}

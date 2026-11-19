@@ -1,0 +1,70 @@
+name: LLVM shared-region incarnation host-runtime proof (not guest)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/SharedDomainArena.hpp'
+      - 'tests/native_shared_domain_arena_test.cpp'
+      - 'docs/SHARED_ACTOR_ARENAS_V1.md'
+      - '.github/workflows/shared-domain-incarnation-native-host.yml'
+  push:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/SharedDomainArena.hpp'
+      - 'tests/native_shared_domain_arena_test.cpp'
+      - 'docs/SHARED_ACTOR_ARENAS_V1.md'
+      - '.github/workflows/shared-domain-incarnation-native-host.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  shared-region-incarnation-native-host-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Assert checkout and source identity
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          git rev-parse 'HEAD^{tree}'
+          git hash-object src/main/cpp/oreslang/runtime/SharedDomainArena.hpp
+          git hash-object tests/native_shared_domain_arena_test.cpp
+          echo "ATTO_GUEST_NATIVE_COMPILER=NOT_EXECUTED"
+      - name: Compile and execute native trusted-host tests using Clang and GCC
+        shell: bash
+        run: |
+          set -euo pipefail
+          for cc in clang++ g++; do
+            command -v "$cc"
+            binary="$RUNNER_TEMP/shared-domain-incarnation-${cc//+/p}"
+            "$cc" -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
+              -Isrc/main/cpp tests/native_shared_domain_arena_test.cpp -o "$binary"
+            for iteration in 1 2 3; do
+              timeout 90 "$binary"
+              echo "SHARED_DOMAIN_INCARNATION_${cc}_ROUND_${iteration}=EXECUTED_HOST_PASS"
+            done
+          done
+      - name: Clang AddressSanitizer and UndefinedBehaviorSanitizer
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="$RUNNER_TEMP/shared-domain-incarnation-asan-ubsan"
+          clang++ -std=c++20 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined \
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread -Isrc/main/cpp \
+            tests/native_shared_domain_arena_test.cpp -o "$binary"
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 timeout 90 "$binary"
+          echo "SHARED_DOMAIN_INCARNATION_ASAN_UBSAN=EXECUTED_HOST_PASS"
+          echo "ATTO_GUEST_NATIVE_COMPILER=NOT_EXECUTED"
+      - name: Assert source tree remains unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code HEAD --
+          test -z "$(git ls-files --others --exclude-standard)"

@@ -1,0 +1,8 @@
+// A suspending actor handler still needs a typed, owned task binding.
+define actor Worker as {
+  let total: int = 0;
+  pub suspends fnc on_message(int n): int {
+    return await n;
+  }
+}
+pub fnc main(): int { return 0; }

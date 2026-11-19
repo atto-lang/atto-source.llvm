@@ -1,0 +1,104 @@
+name: Inverted class handle reference contract
+on:
+  pull_request:
+    paths:
+      - 'tests/support/InvertedClassHandleContract.hpp'
+      - 'tests/inverted_class_handle_contract_test.cpp'
+      - 'tests/inverted_class_handle_fuzz_test.cpp'
+      - 'tests/inverted_class_handle_adversarial_test.cpp'
+      - 'CMakeLists.txt'
+      - '.github/workflows/inverted-class-handle-reference.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cxx17-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+        optimization: ['-O0', '-O2']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Verify checkout identity
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          echo "TREE_SHA=$(git rev-parse 'HEAD^{tree}')"
+      - name: Compile and run the actual bounded host reference
+        env:
+          CXX: ${{ matrix.compiler }}
+          OPT: ${{ matrix.optimization }}
+        run: |
+          set -euo pipefail
+          "$CXX" -std=c++17 "$OPT" -Wall -Wextra -Wpedantic -Werror \
+            -pthread -Itests/support \
+            tests/inverted_class_handle_contract_test.cpp \
+            -o /tmp/inverted-class-handle-reference
+          /tmp/inverted-class-handle-reference
+          "$CXX" -std=c++17 "$OPT" -Wall -Wextra -Wpedantic -Werror \
+            -pthread -Itests/support \
+            tests/inverted_class_handle_fuzz_test.cpp \
+            -o /tmp/inverted-class-handle-fuzz
+          /tmp/inverted-class-handle-fuzz
+          "$CXX" -std=c++17 "$OPT" -Wall -Wextra -Wpedantic -Werror \
+            -pthread -Itests/support \
+            tests/inverted_class_handle_adversarial_test.cpp \
+            -o /tmp/inverted-class-handle-adversarial
+          /tmp/inverted-class-handle-adversarial
+          echo CLASS_HANDLE_HOST_ALL_3_TARGETS=EXECUTED
+
+  sanitizer-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address, undefined, thread]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Verify checkout identity
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          echo "TREE_SHA=$(git rev-parse 'HEAD^{tree}')"
+      - name: Compile and execute host reference under sanitizer
+        env:
+          SANITIZER: ${{ matrix.sanitizer }}
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O1 -Wall -Wextra -Wpedantic -Werror \
+            -fno-omit-frame-pointer "-fsanitize=$SANITIZER" \
+            -pthread -Itests/support \
+            tests/inverted_class_handle_contract_test.cpp \
+            -o /tmp/inverted-class-handle-sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 TSAN_OPTIONS=halt_on_error=1 /tmp/inverted-class-handle-sanitized
+          g++ -std=c++17 -O1 -Wall -Wextra -Wpedantic -Werror \
+            -fno-omit-frame-pointer "-fsanitize=$SANITIZER" \
+            -pthread -Itests/support \
+            tests/inverted_class_handle_fuzz_test.cpp \
+            -o /tmp/inverted-class-handle-fuzz-sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 TSAN_OPTIONS=halt_on_error=1 /tmp/inverted-class-handle-fuzz-sanitized
+          g++ -std=c++17 -O1 -Wall -Wextra -Wpedantic -Werror \
+            -fno-omit-frame-pointer "-fsanitize=$SANITIZER" \
+            -pthread -Itests/support \
+            tests/inverted_class_handle_adversarial_test.cpp \
+            -o /tmp/inverted-class-handle-adversarial-sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 TSAN_OPTIONS=halt_on_error=1 /tmp/inverted-class-handle-adversarial-sanitized
+          echo CLASS_HANDLE_HOST_ALL_3_SANITIZER_TARGETS=EXECUTED

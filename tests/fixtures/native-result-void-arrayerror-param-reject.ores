@@ -1,0 +1,3 @@
+// Closed host Result<void,ArrayError> is not a supported source Result payload.
+fnc consume(Result<void, ArrayError> value): int { return 0; }
+pub fnc main(): int { return 42; }
