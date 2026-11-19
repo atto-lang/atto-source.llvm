@@ -17,6 +17,14 @@ int main() {
     {
         std::vector<std::uint8_t> memory(100000, 0);
         ActorSlabHeap32 a(9000); a.bind(memory.data(), 4011);
+        a.bind(memory.data(), 4011); // exact repeat is safe and idempotent
+        bool wrong_base_rejected = false, foreign_cage_rejected = false;
+        try { a.bind(memory.data(), 8192); }
+        catch (const std::invalid_argument&) { wrong_base_rejected = true; }
+        try { a.bind(memory.data() + 1, 4011); }
+        catch (const std::invalid_argument&) { foreign_cage_rejected = true; }
+        yes(wrong_base_rejected);
+        yes(foreign_cage_rejected);
         yes(sizeof(ActorSlabHeap32::Offset32) == 4);
         yes(a.metadata_bytes() <= 64 * a.page_count());
         auto x = a.allocate(8, 8), y = a.allocate(16, 16);

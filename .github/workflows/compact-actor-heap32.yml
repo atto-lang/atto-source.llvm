@@ -32,7 +32,7 @@ jobs:
           set -euo pipefail
           g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -I src/main/cpp tests/compact_actor_heap32_test.cpp -o /tmp/compact-heap64
           /tmp/compact-heap64 | tee /tmp/heap64.log
-          grep -q 'COMPACT_ACTOR_SLAB_TEST_PASS checks=1288' /tmp/heap64.log
+          grep -q 'COMPACT_ACTOR_SLAB_TEST_PASS checks=1290' /tmp/heap64.log
       - name: Execute AddressSanitizer and UndefinedBehaviorSanitizer
         run: |
           set -euo pipefail
@@ -40,7 +40,7 @@ jobs:
             -fsanitize=address,undefined -fno-omit-frame-pointer -I src/main/cpp \
             tests/compact_actor_heap32_test.cpp -o /tmp/compact-heap64-san
           ASAN_OPTIONS=detect_leaks=1 /tmp/compact-heap64-san | tee /tmp/heap64-san.log
-          grep -q 'COMPACT_ACTOR_SLAB_TEST_PASS checks=1288' /tmp/heap64-san.log
+          grep -q 'COMPACT_ACTOR_SLAB_TEST_PASS checks=1290' /tmp/heap64-san.log
       - name: Compile and execute real i386 ELF32, not simulated 32-bit offsets
         run: |
           set -euo pipefail
@@ -50,7 +50,7 @@ jobs:
             tests/compact_actor_heap32_test.cpp -o /tmp/compact-heap32
           file /tmp/compact-heap32 | grep -q 'ELF 32-bit'
           /tmp/compact-heap32 | tee /tmp/heap32.log
-          grep -q 'COMPACT_ACTOR_SLAB_TEST_PASS checks=1288' /tmp/heap32.log
+          grep -q 'COMPACT_ACTOR_SLAB_TEST_PASS checks=1290' /tmp/heap32.log
       - name: Build and execute native tenant VM host integration regressions
         run: |
           set -euo pipefail
