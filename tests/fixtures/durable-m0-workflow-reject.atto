@@ -1,0 +1,3 @@
+define workflow Checkout as
+    run(int order_id) -> int { return order_id; }
+end

@@ -12,6 +12,7 @@ struct OresNativeActorMailbox {
     uint64_t next_ticket, served;
     uint64_t rejected;
     int active;
+    int draining;
     int retired;
 };
 static _Thread_local OresNativeActorMailbox* current_lane;
@@ -32,7 +33,7 @@ int ores_native_actor_mailbox_try_enter(OresNativeActorMailbox* m) {
     if (pthread_mutex_lock(&m->lock) != 0) abort();
     /* Zero waiting turns: capacity one already means one active plus no FIFO
      * backlog. For capacity > 1 this path must never overtake queued tickets. */
-    if (m->retired || m->active || m->pending != 0 ||
+    if (m->retired || m->draining || m->active || m->pending != 0 ||
         m->next_ticket != m->served || m->next_ticket == UINT64_MAX) {
         m->rejected++;
         pthread_mutex_unlock(&m->lock);
@@ -49,7 +50,7 @@ int ores_native_actor_mailbox_try_enter(OresNativeActorMailbox* m) {
 int ores_native_actor_mailbox_enter(OresNativeActorMailbox* m) {
     if (!m || current_lane != NULL) return 0;
     if (pthread_mutex_lock(&m->lock) != 0) abort();
-    if (m->retired || m->pending >= m->capacity || m->next_ticket == UINT64_MAX) {
+    if (m->retired || m->draining || m->pending >= m->capacity || m->next_ticket == UINT64_MAX) {
         m->rejected++;
         pthread_mutex_unlock(&m->lock);
         return 0;
@@ -77,9 +78,25 @@ void ores_native_actor_mailbox_leave(OresNativeActorMailbox* m) {
     m->active = 0;
     m->pending--;
     m->served++;
+    /* Once every pre-drain ticket has completed, become destroyable.
+     * Hard retire still has precedence and wakes pending waiters to abort. */
+    if (m->draining && m->pending == 0) m->retired = 1;
     current_lane = NULL;
     pthread_cond_broadcast(&m->changed);
     pthread_mutex_unlock(&m->lock);
+}
+int ores_native_actor_mailbox_begin_drain(OresNativeActorMailbox* m) {
+    if (!m) return 0;
+    if (pthread_mutex_lock(&m->lock) != 0) abort();
+    if (m->retired || m->draining) {
+        pthread_mutex_unlock(&m->lock);
+        return 0;
+    }
+    m->draining = 1;
+    if (m->pending == 0) m->retired = 1;
+    pthread_cond_broadcast(&m->changed);
+    pthread_mutex_unlock(&m->lock);
+    return 1;
 }
 void ores_native_actor_mailbox_retire(OresNativeActorMailbox* m) {
     if (!m) abort();

@@ -1,0 +1,27 @@
+# ores.type-declarations.conformance.v1 — identical UTF-8 bytes in Java, LLVM and formatter branches
+# TAB: id | outcome(+/-) | equivalence-group(- if none) | native diagnostic(- if unstable) | source with escaped LF
+# Decode literal \n to LF; each case is standalone. Positive pairs must have equivalent declarations and LLVM IR.
+# Formatter is not a parser: assert format idempotence, not syntactic acceptance. Java diagnostics need not use LLVM codes.
+# Clang-executable cases return 7. Generic aliases, cross-unit imports and constrained runtime values are excluded.
+basic-declare	+	basic	-	declare type Code = int;\nfnc identity(Code value): Code { return value; }\npub fnc main(): int { return identity(7); }\n
+basic-define	+	basic	-	define type Code = int;\nfnc identity(Code value): Code { return value; }\npub fnc main(): int { return identity(7); }\n
+public-declare	+	public	-	declare pub type Code = int;\nfnc identity(Code value): Code { return value; }\npub fnc main(): int { return identity(7); }\n
+public-define	+	public	-	define pub type Code = int;\nfnc identity(Code value): Code { return value; }\npub fnc main(): int { return identity(7); }\n
+module-declare	+	module	-	define module api as\n  declare pub type Code = int;\n  fnc identity(Code value): Code { return value; }\n  pub fnc main(): int { return identity(7); }\nend\n
+module-define	+	module	-	define module api as\n  define pub type Code = int;\n  fnc identity(Code value): Code { return value; }\n  pub fnc main(): int { return identity(7); }\nend\n
+kinds-declare	+	kinds	-	declare trait Tagged as end\ndeclare interface Endpoint as end\npub fnc main(): int { return 7; }\n
+kinds-define	+	kinds	-	define trait Tagged as end\ndefine interface Endpoint as end\npub fnc main(): int { return 7; }\n
+forward-declare	+	forward	-	declare type Code = Number;\ndefine type Number = int;\nfnc identity(Code value): Code { return value; }\npub fnc main(): int { return identity(7); }\n
+forward-define	+	forward	-	define type Code = Number;\ndefine type Number = int;\nfnc identity(Code value): Code { return value; }\npub fnc main(): int { return identity(7); }\n
+incomplete-declare	-	-	TYPE_ONLY_INCOMPLETE_DEFINITION	declare type Code;\npub fnc main(): int { return 7; }\n
+incomplete-define	-	-	TYPE_ONLY_INCOMPLETE_DEFINITION	define type Code;\npub fnc main(): int { return 7; }\n
+incomplete-public-declare	-	-	TYPE_ONLY_INCOMPLETE_DEFINITION	declare pub type Code;\npub fnc main(): int { return 7; }\n
+incomplete-public-define	-	-	TYPE_ONLY_INCOMPLETE_DEFINITION	define pub type Code;\npub fnc main(): int { return 7; }\n
+duplicate-declare-define	-	-	TYPE_DECL_NAME_COLLISION	declare type Code = int;\ndefine type Code = bool;\npub fnc main(): int { return 7; }\n
+duplicate-define-declare	-	-	TYPE_DECL_NAME_COLLISION	define type Code = int;\ndeclare type Code = bool;\npub fnc main(): int { return 7; }\n
+alias-cycle	-	-	TYPE_ALIAS_CYCLE	declare type A = B;\ndefine type B = A;\npub fnc main(): int { return 7; }\n
+alias-unknown	-	-	TYPE_ALIAS_UNKNOWN_TARGET	declare type Code = Missing;\npub fnc main(): int { return 7; }\n
+alias-kind-mismatch	-	-	TYPE_ALIAS_KIND_MISMATCH	declare trait Tagged as end\ndeclare type Code = Tagged;\npub fnc main(): int { return 7; }\n
+parent-kind-mismatch	-	-	TYPE_PARENT_KIND_MISMATCH	declare interface Parent as end\ndeclare trait Child extends Parent as end\npub fnc main(): int { return 7; }\n
+type-not-runtime-value	-	-	-	declare type Code = int;\npub fnc main(): int { return Code; }
+declare-class-invalid	-	-	TYPE_ONLY_INVALID_KIND	declare class Thing as end\npub fnc main(): int { return 7; }\n

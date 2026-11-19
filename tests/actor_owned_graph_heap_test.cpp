@@ -5,6 +5,13 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
+#include <exception>
+#if defined(__unix__) || defined(__APPLE__)
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 #include <limits>
 #include <thread>
 #include <initializer_list>
@@ -43,6 +50,8 @@ static HungryCarrier::Options bound_options(ActorHeapIdentity owner) {
 
 static void cycles_reclaim_without_gc() {
     using Heap = ActorOwnedGraphHeap<16, 32, 4>;
+    static_assert(Heap::local_link_storage_bytes() == 4,
+                  "actor-local graph edges must use compact 32-bit storage");
     ActorHeapIdentity owner{9, 7, 1};
     Heap graph(owner);
     HungryCarrier carrier(nullptr, done_handler, nullptr, io_noop, bound_options(owner));
@@ -386,7 +395,44 @@ static void test_cross_template_graph_heap_domain_isolation() {
     }, "cross-template foreign graph handle was accepted");
 }
 
+// Prevent an actor lease from retaining a dangling pointer to the heap's
+// borrow gate. A destructor cannot defer deletion of stack storage, so
+// destroying a borrowed heap is a fatal supervisor contract violation.
+static void test_destructor_refuses_outstanding_borrows() {
+#if defined(__unix__) || defined(__APPLE__)
+    pid_t child = fork();
+    check(child >= 0, "unable to fork borrowed heap destruction test");
+    if (child == 0) {
+        std::set_terminate([]() noexcept { std::_Exit(73); });
+        const ActorHeapIdentity actor{4001, 3, 9};
+        using Heap = ActorOwnedGraphHeap<2, 16, 1>;
+        Heap* heap = new Heap(actor);
+        auto borrowed = heap->borrow(actor);
+        if (!borrowed.has_value()) std::_Exit(74);
+        delete heap; // must terminate BEFORE destroying the borrow gate.
+        std::_Exit(75);
+    }
+    int status = 0;
+    check(waitpid(child, &status, 0) == child, "borrowed heap waitpid failed");
+    check(WIFEXITED(status) && WEXITSTATUS(status) == 73,
+          "destructor silently freed actor heap under a live lease");
+#else
+    // Non-POSIX targets exercise successful no-borrow destruction below.
+#endif
+
+    const ActorHeapIdentity actor{4002, 3, 9};
+    using Heap = ActorOwnedGraphHeap<2, 16, 1>;
+    {
+        Heap heap(actor);
+        auto borrowed = heap.borrow(actor);
+        check(borrowed.has_value(), "ordinary heap borrow admission");
+        borrowed->reset();
+    }
+    std::cout << "PASS graph actor heap destructor quiescence enforcement\\n";
+}
+
 int main() {
+    test_destructor_refuses_outstanding_borrows();
     test_cross_template_graph_heap_domain_isolation();
     test_heap_domains_never_wrap_or_repeat();
     for (std::uint32_t seed : {0x51ABCAFEu, 0xA19C7813u,
