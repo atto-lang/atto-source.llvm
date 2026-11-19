@@ -1886,6 +1886,15 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-alloc-json-test)
     set_tests_properties(native_alloc_json_strict_text_tree_substrate
         PROPERTIES TIMEOUT 20)
+    # Source-domain gate: rejection with no partial IR, plus a real positive
+    # native compiler control. This does NOT enable CPU/GPU graph execution.
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME native_cpu_gpu_nb_domain_fail_closed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/cpu_gpu_nb_fail_closed.py"
+            "$<TARGET_FILE:oreslang-llvmc>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/cpu-gpu-nb-unsupported-v1.json")
+    set_tests_properties(native_cpu_gpu_nb_domain_fail_closed PROPERTIES TIMEOUT 90)
     # HOST-ONLY closed Result<void,ArrayError> nominal/tag and exhaustive
     # pattern proof. This is not guest source Result/match lowering.
     add_executable(oreslang-native-array-result-contract-test
