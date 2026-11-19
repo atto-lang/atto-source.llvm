@@ -16,20 +16,49 @@ permissions:
 jobs:
   host-density:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        build_flags: ["-O2", "-O2 -DNDEBUG"]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Compile and execute real host scheduling tests
+        run: |
+          set -euo pipefail
+          ${{ matrix.compiler }} -std=c11 ${{ matrix.build_flags }} -Wall -Wextra -Werror -pthread \
+            tests/actor_pool_density.c -o /tmp/actor_pool_density
+          /tmp/actor_pool_density
+  host-sanitizers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
         compiler: [gcc, clang]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - name: Build and run the two-carrier / 100k-actor host test
-        run: |
-          ${{ matrix.compiler }} -std=c11 -O2 -Wall -Wextra -Werror -pthread tests/actor_pool_density.c -o /tmp/actor_pool_density
-          /tmp/actor_pool_density
-      - name: ASan and UBSan (host only, NOT guest isolation proof)
+      - name: ASan and UBSan, host only
         env:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
           UBSAN_OPTIONS: halt_on_error=1
         run: |
-          ${{ matrix.compiler }} -std=c11 -O1 -g -Wall -Wextra -Werror -pthread -fsanitize=address,undefined -fno-omit-frame-pointer tests/actor_pool_density.c -o /tmp/actor_pool_density_san
+          set -euo pipefail
+          ${{ matrix.compiler }} -std=c11 -O1 -g -Wall -Wextra -Werror -pthread \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/actor_pool_density.c -o /tmp/actor_pool_density_san
           /tmp/actor_pool_density_san
+  host-tsan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: ThreadSanitizer host concurrency gate
+        env:
+          TSAN_OPTIONS: halt_on_error=1
+        run: |
+          set -euo pipefail
+          gcc -std=c11 -O1 -g -Wall -Wextra -Werror -pthread -fsanitize=thread \
+            tests/actor_pool_density.c -o /tmp/actor_pool_density_tsan
+          /tmp/actor_pool_density_tsan
