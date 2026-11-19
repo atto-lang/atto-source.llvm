@@ -8197,6 +8197,85 @@ if(BUILD_TESTING)
     set_tests_properties(source_actor_await_done_trace_runtime PROPERTIES TIMEOUT 30)
 
 
+    # Regression files already in-tree but previously missing from CTest.
+    # Exercise the real SourceActorBootstrap checked-ID API through repeated
+    # physical address reuse and compiler-style READY/DONE continuations.
+    # A draft until the exact current branch tree executes on a real runner.
+    function(oreslang_add_checked_source_actor_id_case case_name source_file)
+        set(native_source_actor_id_runtime
+            src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+            src/main/cpp/oreslang/runtime/NativeOresVM.c
+            src/main/cpp/oreslang/runtime/NativeActorFuture.c
+            src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+            src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+            src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+            src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+            src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+        foreach(variant IN ITEMS normal asan_ubsan)
+            if(variant STREQUAL "asan_ubsan" AND
+                    NOT CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+                continue()
+            endif()
+            set(target "oreslang-checked-actor-id-${case_name}-${variant}")
+            add_executable(${target} ${source_file} ${native_source_actor_id_runtime})
+            target_include_directories(${target} PRIVATE
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+            target_link_libraries(${target} PRIVATE Threads::Threads)
+            target_compile_features(${target} PRIVATE c_std_11)
+            target_compile_definitions(${target} PRIVATE
+                ORESLANG_SOURCE_ACTOR_TESTING=1)
+            target_compile_options(${target} PRIVATE
+                -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+            if(variant STREQUAL "asan_ubsan")
+                target_compile_options(${target} PRIVATE
+                    -fsanitize=address,undefined -fno-omit-frame-pointer)
+                target_link_options(${target} PRIVATE
+                    -fsanitize=address,undefined -fno-omit-frame-pointer)
+            endif()
+            set(test_name "source_actor_checked_id_${case_name}_${variant}")
+            if(case_name STREQUAL "aba")
+                add_test(NAME ${test_name} COMMAND ${target} positive)
+            else()
+                add_test(NAME ${test_name} COMMAND ${target})
+            endif()
+            set_tests_properties(${test_name} PROPERTIES TIMEOUT 90)
+        endforeach()
+    endfunction()
+
+    oreslang_add_checked_source_actor_id_case(
+        aba tests/source_actor_checked_identity_aba_v1.c)
+    oreslang_add_checked_source_actor_id_case(
+        await tests/source_actor_checked_identity_await_v1.c)
+
+    oreslang_add_checked_source_actor_id_case(
+        stop_send_race tests/source_actor_checked_identity_stop_send_race.c)
+
+    # A fail-stop regression must terminate AND emit the specific compiler-
+    # owned denial. Ordinary CTest WILL_FAIL could mask an unrelated crash.
+    foreach(mode IN ITEMS
+            stale-send stale-stop stale-join stale-await-ready
+            stale-await-done exhaust legacy-send legacy-stop legacy-join)
+        set(expected_denial "SOURCE_ACTOR_CHECKED_ID_REJECTED")
+        if(mode STREQUAL "exhaust")
+            set(expected_denial "SOURCE_ACTOR_CHECKED_ID_EXHAUSTED")
+        elseif(mode MATCHES "^legacy-")
+            set(expected_denial "SOURCE_ACTOR_LEGACY_STALE_POINTER_DENIED")
+        endif()
+        add_test(NAME source_actor_checked_id_deny_${mode}
+            COMMAND "${CMAKE_COMMAND}"
+                "-DEXECUTABLE=$<TARGET_FILE:oreslang-checked-actor-id-aba-normal>"
+                "-DMODE=${mode}"
+                "-DEXPECTED_DIAGNOSTIC=${expected_denial}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/checked_actor_id_denial.cmake")
+        set_tests_properties(source_actor_checked_id_deny_${mode}
+            PROPERTIES TIMEOUT 40)
+    endforeach()
+    add_test(NAME source_actor_checked_id_legacy_stale_status
+        COMMAND oreslang-checked-actor-id-aba-normal legacy-status)
+    set_tests_properties(source_actor_checked_id_legacy_stale_status
+        PROPERTIES TIMEOUT 40)
+
     add_executable(oreslang-source-actor-stop-before-ready-test
         tests/source_actor_stop_before_ready_test.c
         src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
