@@ -5,6 +5,7 @@ mod guard_positive;
 mod guard_negative;
 mod pointer_positive;
 mod pointer_negative;
+mod static_ffi;
 
 pub struct Harness {
     compiler: PathBuf,
@@ -138,5 +139,6 @@ fn main() {
     guard_negative::run(&mut h);
     pointer_positive::run(&mut h);
     pointer_negative::run(&mut h);
+    static_ffi::run(&mut h);
     h.finish();
 }
