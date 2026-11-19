@@ -15,6 +15,14 @@
 #include <time.h>
 #include <unistd.h>
 
+#if defined(__APPLE__)
+#define ATTO_SPAWN_DEFAULT_CLOSE_SUPPORTED 1
+#elif defined(__GLIBC__)
+#if __GLIBC_PREREQ(2, 34)
+#define ATTO_SPAWN_DEFAULT_CLOSE_SUPPORTED 1
+#endif
+#endif
+
 /* This interface intentionally accepts only absolute trusted executable
  * paths. Unlike fork()+guest-code in a multithreaded runtime, posix_spawn()
  * executes another program; the parent never executes guest code. */
@@ -76,7 +84,7 @@ static int spawn_worker(pid_t *pid, const atto_actor_worker_spec *spec) {
     goto cleanup;
 #endif
 
-#if defined(__APPLE__) || (defined(__GLIBC__) && __GLIBC_PREREQ(2, 34))
+#if defined(ATTO_SPAWN_DEFAULT_CLOSE_SUPPORTED)
     /* Workers may not inherit the supervisor's stdin/out/err. Real IPC must
      * be an explicit, authenticated allowlisted endpoint in a later API. */
     rc = posix_spawn_file_actions_addopen(&actions, STDIN_FILENO,
