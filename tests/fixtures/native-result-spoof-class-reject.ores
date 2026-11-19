@@ -1,0 +1,5 @@
+// Result constructors/tags are compiler-managed, not user-defined classes.
+define class Result as
+  pub int code: 1;
+end
+pub fnc main(): int { return 42; }

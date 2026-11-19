@@ -1,0 +1,50 @@
+name: Atto ADT guard canonical native compiler admission
+on:
+  pull_request:
+    paths:
+      - 'tests/fixtures/adt-guard-v1/**'
+      - 'tests/adt_guard_v1_native_admission.mjs'
+      - '.github/workflows/adt-guard-parity-admission.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate-immutable-source:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Verify all 24 Git blob SHA1 digests
+        run: node tests/adt_guard_v1_native_admission.mjs --integrity-only
+  real-native-compiler-admission:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Install Clang, LLVM, Ninja and CMake
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang llvm-dev cmake ninja-build nodejs
+      - name: Build real LLVM source compiler
+        run: |
+          cmake -G Ninja -S . -B "$RUNNER_TEMP/adt-guard-llvm-build" \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+            -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build "$RUNNER_TEMP/adt-guard-llvm-build" --target oreslang-llvmc --parallel 2
+      - name: Compile canonical guarded ADTs, execute any accepted positives O0/O2
+        env:
+          ORESLANG_LLVMC: ${{ runner.temp }}/adt-guard-llvm-build/oreslang-llvmc
+          LLVM_ADT_GUARD_RECEIPT_PATH: ${{ runner.temp }}/adt-guard-admission.json
+        run: |
+          node tests/adt_guard_v1_native_admission.mjs
+          node -e "const f=require('fs');const r=JSON.parse(f.readFileSync(process.env.LLVM_ADT_GUARD_RECEIPT_PATH));if(r.cases.length!==24||r.backendParityCertified!==false)process.exit(1)"
+      - name: Admission is not parity without semantic and guest evidence
+        run: echo 'LLVM_ADT_GUARD_PARITY=NOT_CERTIFIED'
