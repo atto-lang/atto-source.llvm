@@ -4945,6 +4945,15 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_assert_scalar_abi_contract
         COMMAND oreslang-native-assert-scalar-abi-test)
+    # #284 recovery: compare Clang's C++ bool return ABI across four
+    # target triples; source-free reference only, NOT imported Assert guest IR.
+    if(ORE_CLANG)
+        add_test(NAME native_assert_bool_target_c_abi_oracle
+            COMMAND "${CMAKE_COMMAND}" "-DCLANG_CXX=${ORE_CLANG}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_assert_bool_c_abi_target_oracle.cmake")
+        set_tests_properties(native_assert_bool_target_c_abi_oracle
+            PROPERTIES TIMEOUT 120)
+    endif()
     # Actor-local uncaught routing never admits PANIC into guest callbacks.
     add_executable(oreslang-actor-local-failure-test tests/actor_local_failure_policy_test.cpp)
     target_include_directories(oreslang-actor-local-failure-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
