@@ -8,6 +8,7 @@
 typedef struct {
     uint32_t protocol_major;
     uint64_t tenant, caller_incarnation, target_actor, target_incarnation;
+    uint64_t association_generation;
     uint64_t placement_epoch, message_id, attempt;
 } atto_receipt_identity_v1;
 typedef enum {
