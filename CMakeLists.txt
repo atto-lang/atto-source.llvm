@@ -1986,6 +1986,14 @@ if(BUILD_TESTING)
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/formal_ownership_loan_model.py")
     set_tests_properties(formal_native_ownership_loan_safety PROPERTIES TIMEOUT 20)
+    # Compiler-backed rejection-only tuple value-pipe source conformance.
+    # A passing rejection gate does not enable tuple ABI or guest execution.
+    add_test(NAME native_value_pipe_tuple_v1_unsupported_admission
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_value_pipe_tuple_v1_admission.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_value_pipe_tuple_v1_unsupported_admission
+        PROPERTIES TIMEOUT 180 LABELS "compiler;tuple;unsupported")
     add_test(NAME native_realtime_profile_cli
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
             realtime-profile "$<TARGET_FILE:oreslang-llvmc>")
