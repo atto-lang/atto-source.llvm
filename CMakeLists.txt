@@ -3589,6 +3589,15 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_using_typed_effects using-pure-constant.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_unknown_effect using-unknown-effect.ores --diagnostic "unknown function effect")
     oreslang_contract_test(native_using_duplicate_effect using-duplicate-effect.ores --diagnostic "duplicate function effect")
+    # #354 recovery: the staged stdlib/assert.ores bytes are inert until
+    # source-owned module resolver and typed Assert/Any/trap ABI exist.
+    oreslang_contract_test(native_assert_source_unlinked_fails_closed
+        native-assert-unlinked-import-reject.ores
+        --diagnostic "native imports require filesystem module resolution")
+    oreslang_contract_test(native_assert_nested_import_fails_closed
+        native-assert-unlinked-nested-import-reject.ores
+        --diagnostic "native contract imports require a validated cross-unit linker"
+        --parser-diagnostic)
     # #355 recovery: the host-only closed Result<void,ArrayError> contract
     # is NOT a source-level generic Result/Ok/Err implementation. Fail
     # before any IR. Existing Result<int,Error> and pure-trap gates remain.
