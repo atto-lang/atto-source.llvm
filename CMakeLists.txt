@@ -6154,6 +6154,18 @@ if(BUILD_TESTING)
         oreslang_contract_test(attoxp_counter_guest_reset attoxp-counter-reset.atto --run 0 --clang "${ORE_CLANG}")
         oreslang_contract_test(attoxp_counter_guest_decrement attoxp-counter-decrement.atto --run 41 --clang "${ORE_CLANG}")
         oreslang_contract_test(atto_shared_scalar_guest ../../contracts/atto-parity-v1/add.atto --run 42 --clang "${ORE_CLANG}")
+        # AttoXP scalar call controls: real LLVM guest at exit 42 and
+        # compiler-negative admission against the actual native executable.
+        oreslang_contract_test(attoxp_counter_two_args_guest
+            ../../contracts/attoxp-counter-v1/two-args.atto --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(attoxp_counter_nested_calls_guest
+            ../../contracts/attoxp-counter-v1/nested-call.atto --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(attoxp_counter_reset_guest
+            ../../contracts/attoxp-counter-v1/reset-add.atto --run 42 --clang "${ORE_CLANG}")
+        add_test(NAME attoxp_counter_llvm_negative
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/attoxp_counter_llvm_negative.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>")
+        set_tests_properties(attoxp_counter_llvm_negative PROPERTIES TIMEOUT 30)
         # Same byte-exact scalar corpus in LLVM, .NET and Wasm. These are
         # genuine LLVM compiler/Clang/OS guest tests, not UI/FFI parity.
         # Host integrity only; compile/link/run evidence comes from guest CTests below.
