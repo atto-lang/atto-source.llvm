@@ -5,6 +5,7 @@ on:
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
       - 'src/main/cpp/oreslang/frontend/Parser.hpp'
       - 'src/main/cpp/oreslang/frontend/PointerIntSyntax.hpp'
+      - 'src/main/cpp/oreslang/frontend/StaticFfiI64Aot.hpp'
       - 'src/main/cpp/oreslang/types/PointerIntHIR.hpp'
       - 'src/main/cpp/oreslang/types/PointerIntOwnership.hpp'
       - 'src/main/cpp/oreslang/types/OwnershipChecker.cpp'
@@ -13,6 +14,8 @@ on:
       - 'tests/pointer_int_hir_admission.cpp'
       - 'src/main/cpp/oreslang/main.cpp'
       - 'tests/pointer_int_native_e2e.py'
+      - 'tests/static_ffi_i64_native_e2e.py'
+      - 'docs/STATIC_FFI_I64_NATIVE_AOT_M0.md'
       - 'tests/guard_native_e2e.py'
       - 'docs/POINTER_INT_AOT_M1.md'
       - '.github/workflows/pointer-int-native-aot.yml'
@@ -45,7 +48,7 @@ jobs:
           test "$(git hash-object tests/pointer_int_hir_admission.cpp)" = 4170a8ba49e1199dfca1bfaf6e701aae2637286b
           test ! -e src/main/cpp/oreslang/frontend/PointerIntAot.hpp
           test "$(git hash-object tests/pointer_int_native_e2e.py)" = e9f104ba81e6bcc4e4e88f088cebd24e1ebba0a7
-          test "$(git hash-object src/main/cpp/oreslang/main.cpp)" = 12951e0c289458d135381089247916a83559240f
+          test "$(git hash-object src/main/cpp/oreslang/main.cpp)" = 52f59f4db55bab8b06c47448ec807a29ad1ebab1
           git rev-parse HEAD HEAD^{tree}
           git status --porcelain
       - name: Install LLVM18 and Clang18 real native toolchain
@@ -74,9 +77,14 @@ jobs:
         run: |
           set -euo pipefail
           python3 tests/guard_native_e2e.py --compiler build/pointer-m1/oreslang-llvmc --clang /usr/bin/clang-18
+      - name: Execute source-compiled static i64 C downcalls and no-IR rejects
+        run: |
+          set -euo pipefail
+          python3 tests/static_ffi_i64_native_e2e.py --compiler build/pointer-m1/oreslang-llvmc --clang /usr/bin/clang-18
       - name: Accurate evidence limits
         run: |
           echo 'POINTER_INT_CANONICAL_FRONTEND_HIR=RESTRICTED_OPT_IN_ONLY'
           echo 'GENERAL_POINTER_T_HEAP_AOT=UNSUPPORTED'
           echo 'POINTER_BORROW_SHARE_ACTOR_TRANSFER=NOT_EXECUTED'
           echo 'OTHER_BACKEND_PARITY=NOT_EXECUTED'
+          echo 'STATIC_FFI_I64=OPT_IN_PROOF_ONLY_NOT_SIGNED_OR_SUPERVISED'
