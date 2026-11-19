@@ -49,13 +49,18 @@ struct Value {
         const OwnerLease& owner) noexcept {
     if (owner.moved) return {Error::Moved, 0};
     if (layout.sealed_actor_state) return {Error::StateBorrow, 0};
-    if (layout.fields.size() > 32) return {Error::InvalidLayout, 0};
+    if (layout.nominal_name.empty() || required_name.empty() ||
+        layout.fields.size() > 32) return {Error::InvalidLayout, 0};
     const Field* match = nullptr;
     for (std::size_t i = 0; i < layout.fields.size(); ++i) {
         const auto& f = layout.fields[i];
         if (f.name.empty() || (f.offset % 8) != 0) return {Error::InvalidLayout, 0};
         for (std::size_t j = i + 1; j < layout.fields.size(); ++j) {
             if (layout.fields[j].name == f.name) return {Error::DuplicateField, 0};
+            // All supported slots in this bounded witness are aligned to 8.
+            // Differently named fields must not claim the same physical slot.
+            if (layout.fields[j].offset == f.offset)
+                return {Error::InvalidLayout, 0};
         }
         if (f.name == required_name) match = &f;
     }

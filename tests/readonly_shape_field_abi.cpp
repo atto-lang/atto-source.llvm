@@ -52,7 +52,14 @@ int main() {
         {"foo", Scalar::Int, 8, true, false, true}
     };
     assert(read_int(Layout{"Duplicate",repeated,false},"foo",dog,dog_owner).error == Error::DuplicateField);
+    constexpr Field alias[] = {
+        {"age", Scalar::Int, 0, true, false, true},
+        {"foo", Scalar::Int, 0, true, false, true}
+    };
+    assert(read_int(Layout{"Aliased",alias,false},"foo",dog,dog_owner).error == Error::InvalidLayout);
+    assert(read_int(Layout{"",dog_fields,false},"foo",dog,dog_owner).error == Error::InvalidLayout);
+    assert(read_int(dog_layout,"",dog,dog_owner).error == Error::InvalidLayout);
     dog_owner.moved = true;
     assert(read_int(dog_layout,"foo",dog,dog_owner).error == Error::Moved);
-    std::cout << "LLVM_SHAPE_FIELD_WITNESS_PASS native=83 negatives=9\n";
+    std::cout << "LLVM_SHAPE_FIELD_WITNESS_PASS native=83 negatives=12\n";
 }
