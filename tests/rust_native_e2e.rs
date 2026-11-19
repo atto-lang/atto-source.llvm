@@ -3,6 +3,7 @@ use std::{env, fs, path::{Path, PathBuf}, process::{Command, Output, Stdio}, tim
 
 mod guard_positive;
 mod guard_negative;
+mod pointer_positive;
 
 pub struct Harness {
     compiler: PathBuf,
@@ -134,5 +135,6 @@ fn main() {
     let mut h = Harness::new(PathBuf::from(&args[1]), PathBuf::from(&args[2]));
     guard_positive::run(&mut h);
     guard_negative::run(&mut h);
+    pointer_positive::run(&mut h);
     h.finish();
 }
