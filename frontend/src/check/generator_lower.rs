@@ -93,7 +93,7 @@ fn value(expr: &Expr, bindings: &BTreeMap<String, Binding>) -> R<TE> {
             let left = value(a, bindings)?;
             let right = value(b, bindings)?;
             let (operand, result) = match op {
-                BinOp::Add | BinOp::Sub | BinOp::Mul =>
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::BitXor =>
                     (Type::Int, Type::Int),
                 BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le |
                 BinOp::Gt | BinOp::Ge => (Type::Int, Type::Bool),
