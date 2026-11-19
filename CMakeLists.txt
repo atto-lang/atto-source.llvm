@@ -5065,6 +5065,33 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-critical-state-loan-bridge-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-critical-state-loan-bridge-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_critical_state_loan_runtime_bridge COMMAND oreslang-critical-state-loan-bridge-test)
+    # #255 recovery: standalone host-side FIFO RW ticket admission only.
+    # This does NOT enable parallel guest actor execution or sealed-state
+    # read/write callback lowering. Guest source remains fail-closed.
+    foreach(variant IN ITEMS normal asan_ubsan)
+        if(variant STREQUAL "asan_ubsan" AND
+                NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+            continue()
+        endif()
+        set(target "oreslang-actor-state-fifo-rw-gate-${variant}")
+        add_executable(${target} tests/actor_state_read_write_gate_test.cpp)
+        target_include_directories(${target} PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(${target} PRIVATE Threads::Threads)
+        target_compile_features(${target} PRIVATE cxx_std_17)
+        target_compile_options(${target} PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        if(variant STREQUAL "asan_ubsan")
+            target_compile_options(${target} PRIVATE
+                -fsanitize=address,undefined -fno-omit-frame-pointer)
+            target_link_options(${target} PRIVATE
+                -fsanitize=address,undefined -fno-omit-frame-pointer)
+        endif()
+        add_test(NAME "native_actor_state_fifo_rw_gate_${variant}"
+            COMMAND ${target})
+        set_tests_properties("native_actor_state_fifo_rw_gate_${variant}"
+            PROPERTIES TIMEOUT 90)
+    endforeach()
     add_executable(oreslang-owned-scalar-state-test tests/actor_owned_scalar_state_test.cpp)
     target_include_directories(oreslang-owned-scalar-state-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-owned-scalar-state-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
