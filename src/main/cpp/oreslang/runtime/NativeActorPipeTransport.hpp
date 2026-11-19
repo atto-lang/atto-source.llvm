@@ -163,6 +163,57 @@ public:
         return future;
     }
 
+    /**
+     * Host-only, all-or-nothing emission from ONE receive turn to ONE
+     * bounded downstream edge. This is not cross-edge forward_all: the DAG
+     * fan-out contract reports per-edge partial admission independently.
+     *
+     * This strict nonblocking path refuses a reader-waiter or pending writer
+     * rather than bypassing FIFO or settling a Future before publication.
+     * The caller may suspend/retry on a later authorized scheduler turn.
+     */
+    bool try_write_turn_atomic(
+            std::size_t edge, const std::vector<std::string>& payloads) {
+        std::shared_lock<std::shared_mutex> publication(publication_mutex_);
+        auto& link = at(edge);
+        std::lock_guard<std::mutex> lock(link.mutex);
+        if (closed_.load(std::memory_order_acquire) || link.closed)
+            throw std::logic_error("native actor pipe is closed");
+        if (payloads.empty()) return true;
+        if (!link.writers.empty() || !link.readers.empty())
+            return false; // no admission may pass earlier waiting work
+        if (payloads.size() > link.capacity - link.messages.size())
+            return false;
+        std::size_t bytes = 0;
+        for (const auto& payload : payloads) {
+            if (payload.size() > max_payload_bytes)
+                throw std::invalid_argument("native actor pipe payload exceeds byte budget");
+            if (payload.size() >
+                    max_edge_buffered_bytes - link.buffered_bytes - bytes)
+                return false;
+            bytes += payload.size();
+        }
+
+        // All potentially throwing copies/allocations finish before any
+        // mailbox DATA or message/byte credit becomes publicly visible.
+        std::deque<std::string> prepared(link.messages);
+        for (const auto& payload : payloads) prepared.push_back(payload);
+        if (!reserve_graph_buffered_messages(payloads.size()))
+            return false;
+        if (!reserve_graph_buffered_bytes(bytes)) {
+            buffered_message_count_.fetch_sub(
+                payloads.size(), std::memory_order_acq_rel);
+            return false;
+        }
+
+        // std::deque::swap with equal std::allocator is noexcept. Under
+        // the edge lock + close publication barrier this is one commit:
+        // no reader observes a prefix and no STOP interleaves with it.
+        link.messages.swap(prepared);
+        link.buffered_bytes += bytes;
+        return true;
+    }
+
     std::shared_future<std::string> read_async(std::size_t edge) {
         // Admission, promise settlement and the close publication share
         // one barrier. A write cannot acknowledge DATA after terminal close
@@ -414,6 +465,18 @@ private:
                     bytes > max_buffered_bytes_ - current) return false;
         } while (!graph_buffered_bytes_.compare_exchange_weak(
             current, current + bytes, std::memory_order_acq_rel,
+            std::memory_order_relaxed));
+        return true;
+    }
+
+    bool reserve_graph_buffered_messages(std::size_t count) noexcept {
+        auto current = buffered_message_count_.load(std::memory_order_relaxed);
+        do {
+            if (current > max_buffered_messages_ ||
+                    count > max_buffered_messages_ - current)
+                return false;
+        } while (!buffered_message_count_.compare_exchange_weak(
+            current, current + count, std::memory_order_acq_rel,
             std::memory_order_relaxed));
         return true;
     }

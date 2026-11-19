@@ -1,0 +1,105 @@
+{
+  "schema": "attolang.gpu-actor-provider-audit/1",
+  "auditedOn": "2026-11-10",
+  "repo": "ores-truffle-oreslang/oreslang-source.llvm",
+  "prNumber": 1652,
+  "scope": "native host-side device-provider port, supervisor quarantine registry, per-actor turn/fence integration",
+  "findings": [
+    {
+      "id": "AUD-01",
+      "severity": "high",
+      "status": "fixed-host",
+      "issue": "two progress workers could invoke physical provider release concurrently",
+      "fix": "exclusive Releasing phase before mutex unlock",
+      "test": "terminal_release_serializes_concurrent_progress_workers"
+    },
+    {
+      "id": "AUD-02",
+      "severity": "high",
+      "status": "fixed-host",
+      "issue": "cancellation during graceful provider release could cause a second release attempt",
+      "fix": "keep Retiring ownership until outcome; reuse release receipt on cancellation",
+      "test": "retirement_release_window_denies_concurrent_actor_turn"
+    },
+    {
+      "id": "AUD-03",
+      "severity": "medium",
+      "status": "fixed-host",
+      "issue": "two progress workers could concurrently reconcile same unknown enqueue",
+      "fix": "exclusive Reconciling phase and fail-closed restore on exception",
+      "test": "unknown_enqueue_reconciliation_serializes_concurrent_pollers"
+    },
+    {
+      "id": "AUD-04",
+      "severity": "high",
+      "status": "fixed-host",
+      "issue": "malformed native provider reconciliation could leave device loan quarantined without escalating failure",
+      "fix": "escalate malformed receipt via device-loss HostFailure CONTROL and retain loan",
+      "test": "malformed_reconciliation_sends_host_failure_control"
+    },
+    {
+      "id": "AUD-05",
+      "severity": "medium",
+      "status": "fixed-host",
+      "issue": "process root pin preceded map entry reservation and could leak empty registry on allocation failure",
+      "fix": "reserve map slot first, then root pin inside rollback-protected construction",
+      "test": "failed_actor_admission_unpins_empty_process_root"
+    }
+  ],
+  "executedProof": {
+    "runId": 42925139986,
+    "url": "https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42925139986",
+    "jobId": 130209609920,
+    "carrierHead": "bf5b415e84239d176bbd98fc3bb08cc65cd85caa",
+    "blobs": {
+      "src/main/cpp/oreslang/runtime/GpuActorProviderBridgeV1.hpp": "67ba38101d602e63ea8c126bc023f51d146daaa4",
+      "tests/gpu_actor_provider_bridge_v1_test.cpp": "ab847cd09d64b714ada72a15409eeda7b64c8566"
+    },
+    "gccAsanUbsan": "pass",
+    "clangWerror": "pass",
+    "assertionsPerCompiler": 6329,
+    "logicalActors": 1024,
+    "mockProviderTurns": 4096
+  },
+  "remainingBlockers": [
+    {
+      "id": "OPEN-01",
+      "severity": "critical",
+      "description": "Local native event handles do not prove actual hardware event quiescence; provider can assert false completion"
+    },
+    {
+      "id": "OPEN-02",
+      "severity": "high",
+      "description": "Legacy V0 trusted native Boolean completion paths remain reachable"
+    },
+    {
+      "id": "OPEN-03",
+      "severity": "high",
+      "description": "Process-root registry retention is not process-crash durable or driver-reset proof"
+    },
+    {
+      "id": "OPEN-04",
+      "severity": "high",
+      "description": "Device-loss/cancel escalation and CONTROL semantics require full supervisor tree integration and formal verification"
+    },
+    {
+      "id": "OPEN-05",
+      "severity": "high",
+      "description": "No compiled AttoLang GPU actor HIR/MIR ownership/effects or guest-kernel execution"
+    },
+    {
+      "id": "OPEN-06",
+      "severity": "high",
+      "description": "Full repository CTest and physical GPU hardware runs not executed; five-backend parity unattested"
+    }
+  ],
+  "nonClaims": {
+    "actualGpu": false,
+    "physicalDriverEvent": false,
+    "compiledGpuGuest": false,
+    "fullCompilerOrCTest": false,
+    "fiveBackendParity": false
+  },
+  "mergeRecommended": false,
+  "draftOnly": true
+}

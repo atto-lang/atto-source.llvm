@@ -116,6 +116,17 @@ def main():
         require(alias.returncode == 0, alias.stderr)
         require("__ores_module_2." not in alias.stdout, "core alias duplicated module")
 
+        atto_source = root / "canonical.atto"
+        atto_source.write_text(
+            'import module numeric from "atto.core/numeric.atto"; '
+            "pub fnc main():int{return numeric.clamp_int(50,0,42);}\n",
+            encoding="utf-8",
+        )
+        canonical = run([args.compiler, str(atto_source)])
+        require(canonical.returncode == 0, canonical.stderr)
+        require("@__ores_module_1.clamp_int" in canonical.stdout,
+                "canonical atto.core module missing from emitted IR")
+
         unknown_source = root / "unknown.ores"
         unknown_source.write_text(
             'import module missing from "ores.core/missing"; '

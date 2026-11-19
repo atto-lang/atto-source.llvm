@@ -1,7 +1,7 @@
 {
   "schema": "oreslang.messagepack.collections.v2",
   "format": "MessagePack",
-  "status": "Java standalone codec v2 implemented and exact-source CI pending; native and actor-runtime transport parity pending",
+  "status": "Portable v2 golden-byte reference only; actual backend implementations require executed tests. Unsupported shapes remain fail-closed.",
   "envelope": [
     "wire_format_version_i64_2",
     "schema_id_utf8",
@@ -107,6 +107,50 @@
       "input": "foo",
       "hex": "9402ae64656d6f2e537472696e672e7631c42021c2efdbff08dd4e1320d8abe1ba0cc6aea8e4cf104b984be7b7079968fad3cda3666f6f",
       "shape_descriptor": "S"
+    },
+    {
+      "schema_id": "demo.I64Edges.v1",
+      "kind": "List",
+      "shape": {
+        "element": "int64"
+      },
+      "input": [
+        "-9223372036854775808",
+        "-32769",
+        "-33",
+        "-32",
+        "127",
+        "128",
+        "9223372036854775807"
+      ],
+      "input_encoding": "signed_i64_decimal_strings",
+      "hex": "9402b064656d6f2e49363445646765732e7631c42085b57ebbe14c39027c6ca72efd13dfd06deebf65584284080d1844cde4aa323997d38000000000000000d2ffff7fffd0dfe07fcc80cf7fffffffffffffff",
+      "shape_descriptor": "L[I]"
+    },
+    {
+      "schema_id": "demo.Unicode.v1",
+      "kind": "string",
+      "shape": "string",
+      "input": "Aé👋中",
+      "hex": "9402af64656d6f2e556e69636f64652e7631c42021c2efdbff08dd4e1320d8abe1ba0cc6aea8e4cf104b984be7b7079968fad3cdaa41c3a9f09f918be4b8ad",
+      "shape_descriptor": "S"
+    },
+    {
+      "schema_id": "demo.F64SignedZero.v1",
+      "kind": "float64",
+      "shape": "float64",
+      "input": "-0.0",
+      "input_encoding": "finite_f64_signed_zero_string",
+      "hex": "9402b564656d6f2e4636345369676e65645a65726f2e7631c42085e27ecf506d7dfa7e3db8c1449d9f3cdf7639765689c429f693b6cbf5d68f91cb8000000000000000",
+      "shape_descriptor": "F"
+    },
+    {
+      "schema_id": "demo.EmptyTuple.v1",
+      "kind": "Tuple",
+      "shape": [],
+      "input": [],
+      "hex": "9402b264656d6f2e456d7074795475706c652e7631c4200b02be190a296835b9a2db3112c9509d4b6d305e3c76de6c1f44691181c930c790",
+      "shape_descriptor": "T[]"
     }
   ],
   "notes": [
@@ -114,6 +158,8 @@
     "Text JSON only for authoring test metadata; actual transport bytes are the MessagePack hex vectors.",
     "No class/enum/Option/Result arbitrary codecs or actor serializer integration are claimed.",
     "Golden byte vectors generated independently with Python msgpack packb(use_bin_type=True) + hashlib.sha256 on canonical descriptors; schema-v2 format is intentionally incompatible with v1.",
-    "Decoder rejects noncanonical integer/string/array header encodings and untrusted array length budgets before allocation."
+    "Decoder rejects noncanonical integer/string/array header encodings and untrusted array length budgets before allocation.",
+    "New boundary vectors exercise i64 minimum/maximum, UTF-8 multibyte scalars, negative zero bit preservation, and empty tuple framing.",
+    "Numeric i64 extremes are represented as strings in JSON metadata to preserve 64-bit integer precision; payload is encoded as canonical signed i64 MessagePack."
   ]
 }

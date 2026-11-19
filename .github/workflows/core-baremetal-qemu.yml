@@ -1,4 +1,4 @@
-name: ores.core bare-metal Cortex-M3 (no libc, QEMU)
+name: atto.core bare-metal Cortex-M3 (no libc, QEMU)
 
 on:
   pull_request:
@@ -31,6 +31,8 @@ jobs:
           [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           echo "EXACT_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+          test -s tests/fixtures/core_baremetal/app.atto
+          sha256sum tests/fixtures/core_baremetal/app.atto
       - name: Install LLVM, LLD and QEMU (no ARM libc or compiler-rt)
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang lld llvm llvm-dev qemu-system-arm
       - name: Build oreslang-llvmc
@@ -39,5 +41,5 @@ jobs:
           cmake --build build --target oreslang-llvmc --parallel 2
       - name: Audit-rule unit tests
         run: cargo test --locked --manifest-path tools/core-baremetal-gate/Cargo.toml
-      - name: Compile, link without libc, audit and boot the ores.core image
+      - name: Compile .atto, link without libc, audit and boot the atto.core image
         run: cargo run --locked --release --manifest-path tools/core-baremetal-gate/Cargo.toml -- --compiler build/oreslang-llvmc

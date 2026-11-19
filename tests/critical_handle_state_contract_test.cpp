@@ -14,92 +14,131 @@ int main() {
     CriticalStateCallback c{};
     c.one_state_parameter = true;
     c.inferred = row(READ | WRITE);
-    const auto using_rw = row(READ | WRITE);
-    CHECK(admit_critical_handle_state(c, using_rw)
+    const auto with_rw = row(READ | WRITE);
+    CHECK(admit_critical_handle_state(c, with_rw)
             == CriticalStateAdmission::MissingCallbackCritical);
-    CHECK(admit_critical_handle_state(c, using_rw, true)
+    // The serial actor base is an immutable compiler property, but an
+    // implicit critical callback is safe only with an actual lifetime lease.
+    c.actor_is_serial = true;
+    CHECK(admit_critical_handle_state(c, with_rw)
+            == CriticalStateAdmission::MissingCallbackCritical);
+    c.serial_lifetime_admission_proven = true;
+    // Serial does not grant implicit WRITE; explicit critical is required.
+    CHECK(admit_critical_handle_state(c, with_rw)
+            == CriticalStateAdmission::MissingCallbackCritical);
+    c.actor_is_serial = false;
+    CHECK(admit_critical_handle_state(c, with_rw)
+            == CriticalStateAdmission::MissingCallbackCritical);
+    c.serial_lifetime_admission_proven = false;
+    // Trusted three-argument policy: a verified serial actor (actor
+    // declaration + scheduler, never callback metadata) still cannot admit an
+    // unmarked state write (spec ch.05/ch.22).
+    CHECK(admit_critical_handle_state(c, with_rw, true)
+            == CriticalStateAdmission::MissingCallbackCritical);
+    c.callback_critical = true;
+    CHECK(admit_critical_handle_state(c, with_rw, true)
             == CriticalStateAdmission::Accept);
     c.intrinsic_critical = false;
-    CHECK(admit_critical_handle_state(c, using_rw, true)
+    CHECK(admit_critical_handle_state(c, with_rw, true)
             == CriticalStateAdmission::MissingIntrinsicCritical);
     c.intrinsic_critical = true;
     c.one_state_parameter = false;
-    CHECK(admit_critical_handle_state(c, using_rw, true)
+    CHECK(admit_critical_handle_state(c, with_rw, true)
             == CriticalStateAdmission::InvalidStateCallback);
     c.one_state_parameter = true;
     c.lexical = false;
-    CHECK(admit_critical_handle_state(c, using_rw, true)
+    CHECK(admit_critical_handle_state(c, with_rw, true)
             == CriticalStateAdmission::InvalidStateCallback);
     c.lexical = true;
     c.escapes = true;
-    CHECK(admit_critical_handle_state(c, using_rw, true)
+    CHECK(admit_critical_handle_state(c, with_rw, true)
             == CriticalStateAdmission::CallbackEscape);
     c.escapes = false;
     CHECK(admit_critical_handle_state(c, row(READ), true)
-            == CriticalStateAdmission::EffectExceedsUsing);
-    // Verified serial admission cannot be inferred from the callback itself;
-    // the two-argument untrusted policy still fails closed.
-    CHECK(admit_critical_handle_state(c, using_rw)
+            == CriticalStateAdmission::EffectExceedsWith);
+    // Serial admission cannot be inferred from the callback itself; the
+    // two-argument untrusted policy still fails closed for unmarked writes.
+    c.callback_critical = false;
+    CHECK(admit_critical_handle_state(c, with_rw)
             == CriticalStateAdmission::MissingCallbackCritical);
     c.callback_critical = true;
-    CHECK(admit_critical_handle_state(c, using_rw)
+    CHECK(admit_critical_handle_state(c, with_rw)
             == CriticalStateAdmission::Accept);
 
+    c.actor_is_serial = true;
+    c.serial_lifetime_admission_proven = true;
+    c.callback_critical = false;
     c.intrinsic_critical = false;
-    CHECK(admit_critical_handle_state(c, using_rw)
+    CHECK(admit_critical_handle_state(c, with_rw)
             == CriticalStateAdmission::MissingIntrinsicCritical);
     c.intrinsic_critical = true;
 
+    // Unmarked callbacks are READ-only, for ordinary and serial actors alike.
+    c.inferred = row(READ);
+    CHECK(admit_critical_handle_state(c, row(READ))
+            == CriticalStateAdmission::Accept);
+    c.actor_is_serial = false;
+    c.serial_lifetime_admission_proven = false;
+    CHECK(admit_critical_handle_state(c, row(READ))
+            == CriticalStateAdmission::Accept);
+    c.callback_critical = true;
+    c.inferred = row(READ | WRITE);
+
     c.lexical = false;
-    CHECK(admit_critical_handle_state(c, using_rw)
+    CHECK(admit_critical_handle_state(c, with_rw)
             == CriticalStateAdmission::InvalidStateCallback);
     c.lexical = true;
     c.one_state_parameter = false;
-    CHECK(admit_critical_handle_state(c, using_rw)
+    CHECK(admit_critical_handle_state(c, with_rw)
             == CriticalStateAdmission::InvalidStateCallback);
     c.one_state_parameter = true;
 
     c.escapes = true;
-    CHECK(admit_critical_handle_state(c, using_rw)
+    CHECK(admit_critical_handle_state(c, with_rw)
             == CriticalStateAdmission::CallbackEscape);
     c.escapes = false;
 
     CHECK(admit_critical_handle_state(c, row(READ))
-            == CriticalStateAdmission::EffectExceedsUsing);
+            == CriticalStateAdmission::EffectExceedsWith);
     c.inferred = row(READ);
     CHECK(admit_critical_handle_state(c, row(READ))
             == CriticalStateAdmission::Accept);
 
     c.inferred = row(READ | IO);
     CHECK(admit_critical_handle_state(c, row(READ))
-            == CriticalStateAdmission::EffectExceedsUsing);
+            == CriticalStateAdmission::EffectExceedsWith);
     CHECK(admit_critical_handle_state(c, row(READ | IO))
             == CriticalStateAdmission::Accept);
 
+    // Even a generation-fenced continuation cannot suspend WITH a live
+    // sealed-state callback loan. The loan must retire before handoff.
     c.inferred = row(READ | SUSPEND);
     CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
-            == CriticalStateAdmission::MissingContinuationFence);
+            == CriticalStateAdmission::LoanAcrossSuspension);
     c.continuation_generation_fenced = true;
     CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
-            == CriticalStateAdmission::Accept);
+            == CriticalStateAdmission::LoanAcrossSuspension);
     c.state_loan_live_across_suspend = true;
     CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
             == CriticalStateAdmission::LoanAcrossSuspension);
+    c.inferred = row(READ);
+    CHECK(admit_critical_handle_state(c, row(READ))
+            == CriticalStateAdmission::LoanAcrossSuspension);
     c.state_loan_live_across_suspend = false;
-    CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
+    CHECK(admit_critical_handle_state(c, row(READ))
             == CriticalStateAdmission::Accept);
 
     // Trusted admission must not accept forged/reserved bits in either the
-    // inferred callback row or the caller's upper-bound "using" row.
+    // inferred callback row or the caller's upper-bound "with" row.
     constexpr std::uint32_t UNKNOWN = 1u << 31;
     c.inferred = row(READ);
     CHECK(admit_critical_handle_state(c, row(READ | UNKNOWN))
-            == CriticalStateAdmission::EffectExceedsUsing);
+            == CriticalStateAdmission::EffectExceedsWith);
     c.inferred = row(READ | UNKNOWN);
     CHECK(admit_critical_handle_state(c, row(READ | UNKNOWN))
-            == CriticalStateAdmission::EffectExceedsUsing);
+            == CriticalStateAdmission::EffectExceedsWith);
     CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
-            == CriticalStateAdmission::EffectExceedsUsing);
+            == CriticalStateAdmission::EffectExceedsWith);
     c.inferred = row(READ);
     CHECK(admit_critical_handle_state(c, row(READ))
             == CriticalStateAdmission::Accept);

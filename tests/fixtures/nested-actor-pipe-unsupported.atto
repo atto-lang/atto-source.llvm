@@ -1,0 +1,9 @@
+// Expected source-level rejection. NO graph, actor or partial LLVM IR may be emitted.
+// The grammar must not mistake a nested builder factory for a scalar call.
+pub fnc main(): int {
+  return Actor.pipe(
+    Reader(),
+    Actor.pipe(Transformer1(), Transformer2()),
+    Writer()
+  ).with_capacity(1024).with_supervision(#one_for_all).start();
+}
