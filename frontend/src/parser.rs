@@ -1722,7 +1722,7 @@ impl Parser {
     }
 
     fn parse_ternary(&mut self) -> R<Expr> {
-        let mut c = self.parse_equality()?;
+        let mut c = self.parse_bitxor()?;
         // Functional pipeline: value |> f |> g(extra) lowers to g(f(value), extra).
         // Only ordinary named functions are admitted: no computed callees,
         // receiver calls or actor piping. This preserves argument evaluation
@@ -1770,6 +1770,27 @@ impl Parser {
             _ => {}
         }
         Ok(c)
+    }
+
+    // Bitwise XOR binds less tightly than value equality and arithmetic.
+    // Unlike ^^ (boolean XOR), ^ requires two int operands; the checker
+    // owns that distinction. The front end does not silently coerce bool.
+    fn parse_bitxor(&mut self) -> R<Expr> {
+        let mut links = 0;
+        let mut left = self.parse_equality()?;
+        while *self.peek() == Tok::Caret {
+            let pos = self.pos();
+            self.advance();
+            self.grow(1)?;
+            links += 1;
+            let right = self.parse_equality()?;
+            left = Expr {
+                kind: ExprKind::Binary(BinOp::BitXor, Box::new(left), Box::new(right)),
+                pos,
+            };
+        }
+        self.height -= links;
+        Ok(left)
     }
 
     fn parse_equality(&mut self) -> R<Expr> {
