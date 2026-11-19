@@ -2813,6 +2813,16 @@ if(BUILD_TESTING)
         set_tests_properties(native_source_bool_${mode} PROPERTIES TIMEOUT 120)
     endforeach()
 
+    # Independent T? type-sugar and name? omission admission.
+    # Positive .atto controls must compile/link/execute; unsupported forms
+    # must be rejected by the real native source compiler with no LLVM IR.
+    add_test(NAME native_optional_named_parameter_presence_fail_closed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_optional_named_parameters.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}")
+    set_tests_properties(native_optional_named_parameter_presence_fail_closed
+        PROPERTIES TIMEOUT 120)
+
     # Source-level compiler admission (not a host-only ownership model):
     # rejected sources must fail before emitting LLVM IR, and three accepted
     # controls must produce IR to prevent parser-only false positives.

@@ -3207,6 +3207,25 @@ private:
                 if (token_.text == "@")
                     fail("native @Default parameter annotation requires checked literal, Option and ownership ABI lowering");
                 Parameter parameter;
+                bool name_first = false;
+                if (token_.kind == Kind::Identifier) {
+                    const Token next = peek_next();
+                    // Name-level omission lives BEFORE ':' in the name-first
+                    // spelling. This is not a type-position Option<T> suffix.
+                    if (next.text == "?") {
+                        Lexer lookahead = lexer_;
+                        (void)lookahead.next();
+                        if (lookahead.next().text == ":")
+                            fail("E_OPTIONAL_FORMAL_ABI_UNSUPPORTED: 'name?: T' "
+                                 "is an omittable formal, not Option<T>; checked "
+                                 "default/presence ABI lowering is missing");
+                    }
+                    if (next.text == ":") {
+                        parameter.name = identifier();
+                        require(":");
+                        name_first = true;
+                    }
+                }
                 if (accept("borrow")) {
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
                                                     : Parameter::Mode::Borrow;
@@ -3234,12 +3253,17 @@ private:
                     else parameter.class_name = type;
                 }
                 if (token_.text == "?")
-                    fail("native optional type '?' requires versioned Option/default ABI lowering");
-                if (alias_extension && token_.text == "self")
+                    fail("E_OPTION_TYPE_ABI_UNSUPPORTED: 'T? name' is a required Option<T> "
+                         "slot, not omittable; versioned Option payload ABI is not implemented");
+                if (!name_first) parameter.name = identifier();
+                if (alias_extension && parameter.name == "self")
                     fail("EXTENSION_SELF_SHADOW: explicit extension parameter cannot be named self");
-                parameter.name = identifier();
                 if (token_.text == "?")
-                    fail("native optional parameter presence '?' requires versioned default/presence ABI lowering");
+                    fail("E_OPTIONAL_FORMAL_ABI_UNSUPPORTED: 'T name?' is an omittable "
+                         "slot, not Option<T>; verified defaults and full-arity ABI are missing");
+                if (token_.text == "=")
+                    fail("E_PARAMETER_DEFAULT_REQUIRES_NAME_QUESTION: a parameter default "
+                         "requires an omittable 'name?' declaration and checked lowering");
                 value.parameters.push_back(std::move(parameter));
             } while (accept(","));
             require(")");
@@ -3274,7 +3298,8 @@ private:
             }
         }
         if (token_.text == "?")
-            fail("native optional return type '?' requires versioned Option/default ABI lowering");
+            fail("E_OPTION_RETURN_ABI_UNSUPPORTED: type-level '?' returns Option<T>, "
+                 "not an omitted argument; native tagged return ABI is missing");
         if (accept("using")) {
             value.has_declared_effects = true;
             do {
