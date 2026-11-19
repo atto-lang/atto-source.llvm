@@ -35,7 +35,7 @@ Scope: LLVM compiled native guest execution, ownership checker, native O0/O2 cas
 Required acceptance: source repository identity, reviewed CI workflow PR SHA, independently verified source commit/tree, run ID and attempt, assigned runner identity, nonempty completed test steps, positive JUnit/CTest counts, no skipped/disabled mandatory tests, and independently downloaded artifact ZIP SHA-256 and report hashes.
 
 Java XML suites must contain >0 tests with zero failures, errors and skips; the Java guest suite validates six SHA-pinned Atto guest fixtures and exact stdout `42`. This is NOT Native Image AOT.
-LLVM must build actual compiler/checker targets and run at least 20 ownership-bang CTests, including the required default, O0 and O2 guest variants and expected negative diagnostic cases. Host-only/sanitizer-runtime tests are not automatically IR instrumentation proof.
+LLVM must build actual compiler/checker targets and run **exactly 24** reviewed ownership-bang CTests, including the required default, O0 and O2 guest variants and expected negative diagnostic cases. Host-only/sanitizer-runtime tests are not automatically IR instrumentation proof.
 
 Source fix [LLVM #1903](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1903) was source-locally rebased onto newer main, invalidating old-head run results; independently re-approve both the new source tree and current workflow PR commit.
 
@@ -50,3 +50,7 @@ Reference: [GitHub self-hosted runner security guidance](https://docs.github.com
 ## Reconciled source-head update (2026-11-19 UTC)
 
 The earlier source head `84c1bddf1807888c5f5904e18d14c71cb6b01d26` is NOT a valid current target (historical attempts and approvals must be re-reviewed). The current LLVM #1903 source commit is `5eba17e441faacc85d446c2f6b12c1537709c48c` with root tree `74aed6c4fa17b372b181886147b4594325458ed4`, directly read from the source Git commit-object API. All 24 CMake-native ownership-bang test registrations and the pinned rt-borrow-mut-native fixture were independently inspected at the new source revision. Neither source-local nor alternate runner has yet compiled/ran these private LLVM tests. The approval variable MUST equal the new SOURCE commit, and the CI workflow-head variable MUST equal this CI PR's latest reviewed commit after this documentation change. Remain off by default.
+
+## Exact inventory audit refinement (2026-11-19 UTC)
+
+The separate, disabled [LLVM CI #1904](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1904) workflow now parses CTest's numbered `Test #N: name` listing into `selected-tests.txt`, compares its complete 24-name multiset against `expected-tests.txt` after sorting, and requires `Total Tests: 24`. Previously, substring matching and a minimum count could theoretically admit an unreviewed replacement or extra test. Both lists are included in the success-only evidence SHA256 manifest. The exact-name parser was exercised locally against a synthetic CMake/CTest project: correct 24-name inventory accepted; one substituted name and an inconsistent total each rejected. **This validates only the metadata parser, not the Oreslang compiler, its native guests, runner admission, or independent approval.** Any workflow change invalidates the previous approved workflow SHA; request fresh review of the current CI PR head.
