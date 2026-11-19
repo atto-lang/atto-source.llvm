@@ -2948,6 +2948,25 @@ if(BUILD_TESTING)
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto-first-parity")
         set_tests_properties(native_atto_first_aot_gate_fault_injection
             PROPERTIES TIMEOUT 60)
+        # Canonical portable bounds .atto native guest O0/O2 gate.
+        # Rust-only validation; this is not a whole-backend parity claim.
+        if(ORE_BORROW_RUSTC AND ORE_RT_AOT_CLANG)
+            set(ORE_BOUNDS_NATIVE_GATE "${CMAKE_CURRENT_BINARY_DIR}/atto-portable-bounds-native${CMAKE_EXECUTABLE_SUFFIX}")
+            add_custom_command(OUTPUT "${ORE_BOUNDS_NATIVE_GATE}"
+                COMMAND "${ORE_BORROW_RUSTC}" --edition=2021 -D warnings
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/portable_bounds_native.rs"
+                    -o "${ORE_BOUNDS_NATIVE_GATE}"
+                DEPENDS tests/portable_bounds_native.rs VERBATIM)
+            add_custom_target(atto-portable-bounds-native-build ALL
+                DEPENDS "${ORE_BOUNDS_NATIVE_GATE}")
+            add_test(NAME native_atto_portable_bounds_i64_guest
+                COMMAND "${ORE_BOUNDS_NATIVE_GATE}"
+                    "$<TARGET_FILE:oreslang-llvmc>"
+                    "${ORE_RT_AOT_CLANG}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/portable-bounds-v1")
+            set_tests_properties(native_atto_portable_bounds_i64_guest
+                PROPERTIES TIMEOUT 120 LABELS "native-guest;atto-bounds;unverified")
+        endif()
     endif()
 
     # Pure host resolver security test for canonical +/ project-root imports.
@@ -4817,6 +4836,45 @@ if(BUILD_TESTING)
         COMMAND oreslang-dop-checked-region-test)
     set_tests_properties(native_dop_checked_region_addressing PROPERTIES TIMEOUT 20)
 
+    # Host-only bounded class handle reference oracle: no compiled guest class.
+    add_executable(oreslang-inverted-class-handle-reference-test
+        tests/inverted_class_handle_contract_test.cpp)
+    target_include_directories(oreslang-inverted-class-handle-reference-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/support")
+    target_compile_features(oreslang-inverted-class-handle-reference-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-inverted-class-handle-reference-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-inverted-class-handle-reference-test PRIVATE Threads::Threads)
+    add_test(NAME native_inverted_class_handle_reference_contract
+        COMMAND oreslang-inverted-class-handle-reference-test)
+    set_tests_properties(native_inverted_class_handle_reference_contract PROPERTIES TIMEOUT 40)
+
+    # Independent 50,000-operation bounded insert/update/swap-erase model.
+    add_executable(oreslang-inverted-class-handle-fuzz-test
+        tests/inverted_class_handle_fuzz_test.cpp)
+    target_include_directories(oreslang-inverted-class-handle-fuzz-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/support")
+    target_compile_features(oreslang-inverted-class-handle-fuzz-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-inverted-class-handle-fuzz-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-inverted-class-handle-fuzz-test PRIVATE Threads::Threads)
+    add_test(NAME native_inverted_class_handle_differential_50k
+        COMMAND oreslang-inverted-class-handle-fuzz-test)
+    set_tests_properties(native_inverted_class_handle_differential_50k PROPERTIES TIMEOUT 60)
+
+    # Second-field rollback and stale-handle vs reused-slot race.
+    add_executable(oreslang-inverted-class-handle-adversarial-test
+        tests/inverted_class_handle_adversarial_test.cpp)
+    target_include_directories(oreslang-inverted-class-handle-adversarial-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/support")
+    target_compile_features(oreslang-inverted-class-handle-adversarial-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-inverted-class-handle-adversarial-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-inverted-class-handle-adversarial-test PRIVATE Threads::Threads)
+    add_test(NAME native_inverted_class_handle_adversarial_recycle
+        COMMAND oreslang-inverted-class-handle-adversarial-test)
+    set_tests_properties(native_inverted_class_handle_adversarial_recycle PROPERTIES TIMEOUT 60)
+
     add_executable(oreslang-dop-inverted-columns-test tests/dop_inverted_columns_test.cpp)
     target_include_directories(oreslang-dop-inverted-columns-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-dop-inverted-columns-test PRIVATE cxx_std_20)
@@ -6104,6 +6162,18 @@ if(BUILD_TESTING)
         oreslang_contract_test(attoxp_counter_guest_reset attoxp-counter-reset.atto --run 0 --clang "${ORE_CLANG}")
         oreslang_contract_test(attoxp_counter_guest_decrement attoxp-counter-decrement.atto --run 41 --clang "${ORE_CLANG}")
         oreslang_contract_test(atto_shared_scalar_guest ../../contracts/atto-parity-v1/add.atto --run 42 --clang "${ORE_CLANG}")
+        # AttoXP scalar call controls: real LLVM guest at exit 42 and
+        # compiler-negative admission against the actual native executable.
+        oreslang_contract_test(attoxp_counter_two_args_guest
+            ../../contracts/attoxp-counter-v1/two-args.atto --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(attoxp_counter_nested_calls_guest
+            ../../contracts/attoxp-counter-v1/nested-call.atto --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(attoxp_counter_reset_guest
+            ../../contracts/attoxp-counter-v1/reset-add.atto --run 42 --clang "${ORE_CLANG}")
+        add_test(NAME attoxp_counter_llvm_negative
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/attoxp_counter_llvm_negative.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>")
+        set_tests_properties(attoxp_counter_llvm_negative PROPERTIES TIMEOUT 30)
         # Same byte-exact scalar corpus in LLVM, .NET and Wasm. These are
         # genuine LLVM compiler/Clang/OS guest tests, not UI/FFI parity.
         # Host integrity only; compile/link/run evidence comes from guest CTests below.

@@ -1,0 +1,62 @@
+{
+  "schema": "opto-sync.atto.scalar-native.v1",
+  "language": "AttoLang",
+  "backend": "llvm",
+  "release_claim": "not-an-opto-sync-sdk",
+  "required_optimizations": [
+    "O0",
+    "O2"
+  ],
+  "guest_exit": 42,
+  "cases": [
+    {
+      "id": "checkpoint",
+      "path": "tests/fixtures/opto-sync-atto-v1/checkpoint.atto",
+      "git_blob_sha1": "947283939c1ea7e506c950b7d15dda8d4b5a5265",
+      "kind": "positive",
+      "expected_exit": 42
+    },
+    {
+      "id": "generation",
+      "path": "tests/fixtures/opto-sync-atto-v1/generation.atto",
+      "git_blob_sha1": "5573c958d3a9b4a04ad449c033dc2d06f409492b",
+      "kind": "positive",
+      "expected_exit": 42
+    },
+    {
+      "id": "retry-budget",
+      "path": "tests/fixtures/opto-sync-atto-v1/retry-budget.atto",
+      "git_blob_sha1": "cbf9e8dc515994f0e32d9a0cf6b5530bca1008d0",
+      "kind": "positive",
+      "expected_exit": 42
+    },
+    {
+      "id": "ack-correlation",
+      "path": "tests/fixtures/opto-sync-atto-v1/ack-correlation.atto",
+      "git_blob_sha1": "f9e85626dda35c72a3217b488900b7aeb9080b7a",
+      "kind": "positive",
+      "expected_exit": 42
+    },
+    {
+      "id": "tenant-cursor",
+      "path": "tests/fixtures/opto-sync-atto-v1/tenant-cursor.atto",
+      "git_blob_sha1": "e45768c62f8a9c72f5980bba9e7527225ba2e836",
+      "kind": "positive",
+      "expected_exit": 42
+    },
+    {
+      "id": "reject-undefined",
+      "path": "tests/fixtures/opto-sync-atto-v1/reject-undefined.atto",
+      "git_blob_sha1": "a020a5a6faa4c79ad0a00d99c45cf9c7a29bc359",
+      "kind": "compile-negative",
+      "expected_exit": null
+    },
+    {
+      "id": "reject-duplicate-main",
+      "path": "tests/fixtures/opto-sync-atto-v1/reject-duplicate-main.atto",
+      "git_blob_sha1": "bf90a16c654c036e0bbf10d654ed7b9d5b0dde40",
+      "kind": "compile-negative",
+      "expected_exit": null
+    }
+  ]
+}
