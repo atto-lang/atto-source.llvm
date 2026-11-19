@@ -2,6 +2,7 @@
 #include "llvm/Support/SHA256.h"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/PointerIntSyntax.hpp"
 #include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/types/OwnershipChecker.hpp"
 #include "oreslang/frontend/MethodResolver.hpp"
@@ -163,7 +164,8 @@ bool reserved(std::string_view name) {
 
 class Lexer {
 public:
-    explicit Lexer(std::string_view source) : source_(source) {}
+    explicit Lexer(std::string_view source, bool allow_pointer_int = false)
+        : source_(source), allow_pointer_int_(allow_pointer_int) {}
 
     Token next() {
         for (;;) {
@@ -209,7 +211,7 @@ public:
             // emit LLVM before region/provenance and drop checks exist.
             // Lexing keeps quoted strings and comments opaque, so this
             // cannot reject a harmless occurrence in documentation or data.
-            if (first == "Pointer") {
+            if (first == "Pointer" && !allow_pointer_int_) {
                 throw std::runtime_error(
                     "native Pointer<T> full-AOT lowering unsupported: requires "
                     "typed region/generation provenance, bounds, ownership and "
@@ -307,7 +309,7 @@ public:
         // Admit '@' as a TOKEN only so existing parameter-local @Default guards
         // can issue their specific fail-closed diagnostic instead of a generic
         // unsupported-token error. No annotation execution is enabled.
-        if (std::string_view("(){},:;+-*/%=.<>@?!&").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*/%=.<>@?!&^").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -318,6 +320,7 @@ public:
 private:
     std::string_view source_;
     std::size_t at_ = 0;
+    bool allow_pointer_int_ = false; // only the exact opt-in closed-world profile
 };
 
 std::unique_ptr<Expression> make_expression(Expression::Kind kind,
@@ -597,13 +600,40 @@ bool entry_builtin_name(std::string_view name) {
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
-                    bool experimental_rt_scalar_loop)
-        : source_(source), lexer_(source), token_(lexer_.next()),
+                    bool experimental_rt_scalar_loop,
+                    bool experimental_pointer_int_aot = false)
+        : source_(source), lexer_(source, experimental_pointer_int_aot),
+          token_(lexer_.next()),
           experimental_owned_int_(experimental_owned_int),
-          experimental_rt_scalar_loop_(experimental_rt_scalar_loop) {}
+          experimental_rt_scalar_loop_(experimental_rt_scalar_loop),
+          experimental_pointer_int_aot_(experimental_pointer_int_aot) {}
 
     Program parse() {
         Program program;
+        if (experimental_pointer_int_aot_) {
+            // One canonical native scanner for both ordinary scalar programs
+            // and nominal Pointer<int>. Never feed bytes through an alternate
+            // source lexer or allow opaque strings to spoof keyword tokens.
+            std::vector<pointer_int_aot::Token> tokens;
+            while (token_.kind != Kind::End) {
+                if (tokens.size() >= 2048)
+                    pointer_int_aot::reject("token budget exceeded", token_.offset);
+                if (token_.kind == Kind::String ||
+                        token_.kind == Kind::Template)
+                    pointer_int_aot::reject("quoted string/template not admitted as a pointer token",
+                                            token_.offset);
+                if (token_.text == "&")
+                    pointer_int_aot::reject("unsupported token (no unary address-of)",
+                                            token_.offset);
+                tokens.push_back({std::string(token_.text), token_.offset,
+                                  token_.kind == Kind::Integer});
+                advance();
+            }
+            tokens.push_back({"<eof>", token_.offset, false});
+            program.pointer_int_plan = std::make_unique<pointer_int_aot::Plan>(
+                pointer_int_aot::Parser(std::move(tokens)).parse());
+            return program;
+        }
         while (token_.text == "import") {
             advance();
             if (token_.text == "contract")
@@ -1376,7 +1406,7 @@ private:
         // deliberately synchronous and immutable. Handler temporaries are
         // allocated in the existing actor heap and dropped before returning;
         // borrow/take/await need separate lifetime-aware lowering.
-        while (token_.text != "return") {
+        while ((token_.text != "return" && token_.text != "^")) {
             if (token_.kind == Kind::End || token_.text == "}") fail("actor handler requires return");
             if (token_.text == "const") {
                 if (!method.actor_field_writes.empty())
@@ -1414,7 +1444,7 @@ private:
             require(";");
             method.actor_field_writes.push_back(std::move(write));
         }
-        require("return");
+        require_return_marker();
         method.result = expression();
         if (!method.locals.empty()) {
             // This slice has one drop epilogue. No taken/moved or borrowed
@@ -1491,7 +1521,7 @@ private:
                     require(")");
                 }
                 require("{");
-                if (accept("return")) require(";");
+                if (accept_return_marker()) require(";");
                 if (token_.text != "}")
                     fail("native scalar constructor body must be empty or contain only 'return;'");
                 require("}");
@@ -1722,7 +1752,7 @@ private:
                 require(";");
                 continue;
             }
-            if (accept("return")) {
+            if (accept_return_marker()) {
                 if (!accept(";"))
                     fail("native generator return cannot carry a value; use yield");
                 if (token_.text != "}")
@@ -2074,12 +2104,12 @@ private:
                 fail("native '::' method requires '->' return syntax");
             require("::");
             if (value.returns_void) {
-                if (accept("return")) {
+                if (accept_return_marker()) {
                     if (!accept(";") && token_.text != "end")
                         fail("native end-delimited void method requires terminal return");
                 }
             } else {
-                require("return");
+                require_return_marker();
                 value.result = expression();
                 if (!accept(";") && token_.text != "end")
                     fail("native end-delimited method requires terminal return");
@@ -2117,7 +2147,7 @@ private:
             require("=");
             require("task");
             require("{");
-            require("return");
+            require_return_marker();
             task.result = expression();
             require(";");
             require("}");
@@ -2607,12 +2637,12 @@ private:
                     }
                     require("fi"); actions.push_back(std::move(statement)); continue;
                 }
-                if (finally_scope && (token_.text == "return" ||
+                if (finally_scope && ((token_.text == "return" || token_.text == "^") ||
                         token_.text == "break" || token_.text == "continue"))
                     fail("return/break/continue cannot escape finally; finally is cleanup-only");
                 if (finally_scope && (token_.text == "defer" || token_.text == "try"))
                     fail("native finally nested defer/try requires scoped cleanup lowering");
-                if (accept("return")) {
+                if (accept_return_marker()) {
                     if (!value.return_class.empty()) fail("structured class return requires ownership-aware exit lowering");
                     statement.kind = Statement::Kind::Return;
                     if (!value.returns_void) statement.expression = expression();
@@ -2764,7 +2794,7 @@ private:
         bool return_guards_started = false;
         bool terminal_try_finally = false;
         std::size_t branch_count = 0;
-        while (token_.text != "return") {
+        while ((token_.text != "return" && token_.text != "^")) {
             if (token_.text == "while" && experimental_rt_scalar_loop_) {
                 if (value.scalar_while || value.locals.size() != 1 ||
                         !value.statements.empty() || !value.early_returns.empty() ||
@@ -2802,7 +2832,7 @@ private:
                         loop->upper_bound > 1000000000LL)
                     fail("experimental scalar loop requires bounded nonnegative i64 range");
                 value.scalar_while = std::move(loop);
-                if (token_.text != "return")
+                if ((token_.text != "return" && token_.text != "^"))
                     fail("experimental scalar loop must be followed by a single return");
                 continue;
             }
@@ -2871,7 +2901,7 @@ private:
                             fail("native caught throw binding shadows local owner");
                     require(")");
                     require("{");
-                    require("return");
+                    require_return_marker();
                     value.result = expression();
                     if (!native_pure_scalar_tree(*value.result))
                         fail("native caught throw catch return requires nonthrowing scalar/field read");
@@ -2936,13 +2966,13 @@ private:
                 require("guard");
                 guard.condition = expression();
                 require("{");
-                require("return");
+                require_return_marker();
                 guard.result = expression();
                 require(";");
                 require("}");
                 // Existing return-guard lowering runs one shared defer and
                 // ownership-cleanup exit on both the early and final paths.
-                // The ordinary final 'return' is mandatory after this arm.
+                // A final lexical return marker ('return' or '^') is mandatory after this arm.
                 value.early_returns.push_back(std::move(guard));
                 return_guards_started = true;
                 continue;
@@ -2959,7 +2989,7 @@ private:
                 } else {
                     require("{");
                 }
-                if (accept("return")) {
+                if (accept_return_marker()) {
                     if (value.returns_void)
                         fail("guarded early return requires a scalar result");
                     if (value.early_returns.size() == 8)
@@ -3167,7 +3197,7 @@ private:
             require(";");
             value.statements.push_back(std::move(statement));
         }
-        require("return");
+        require_return_marker();
         if (!value.returns_void) {
             value.result = expression();
             if (value.scalar_while &&
@@ -3191,7 +3221,7 @@ private:
             // Native try cannot throw: allow the Java-required catch return
             // only as a literal sentinel. It is unreachable by construction,
             // never lowered as a fake catch handler.
-            if (accept("return")) {
+            if (accept_return_marker()) {
                 if (value.returns_void)
                     fail("native nonthrowing catch return requires int result");
                 if (token_.kind != Kind::Integer)
@@ -3500,7 +3530,7 @@ private:
 
     std::unique_ptr<Expression> dispatch_value_arm(std::string_view construct) {
         require("{");
-        const bool compatibility_return = accept("return");
+        const bool compatibility_return = accept_return_marker();
         auto value = expression();
         require(";");
         if (token_.text != "}") {
@@ -3949,6 +3979,16 @@ private:
 
     void require(std::string_view text) {
         if (!accept(text)) fail("expected '" + std::string(text) + "'");
+    }
+
+    // Caret is a lexical return statement, never an expression operator.
+    // Reuse the checked CFG/cleanup lowering of the return keyword.
+    bool accept_return_marker() {
+        return accept("return") || accept("^");
+    }
+
+    void require_return_marker() {
+        if (!accept_return_marker()) fail("expected 'return' or '^'");
     }
 
     void array_element(LocalBinding& binding) {
@@ -5872,6 +5912,7 @@ private:
     std::vector<Function> methods_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
+    bool experimental_pointer_int_aot_;
     // Type-only declarations retain source alias identity until checked
     // catalog validation and extension-call rewriting complete.
     std::unordered_map<std::string, std::string> scalar_alias_targets_;
@@ -6038,9 +6079,9 @@ void resolve_future_pipeline_contracts(Program& program) {
 } // namespace
 
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int,
-                      bool experimental_rt_scalar_loop) {
+                      bool experimental_rt_scalar_loop, bool experimental_pointer_int_aot) {
     Program program = Parser(source, experimental_owned_int,
-                             experimental_rt_scalar_loop).parse();
+                             experimental_rt_scalar_loop, experimental_pointer_int_aot).parse();
     if (experimental_rt_scalar_loop &&
             (program.functions.size() != 1 || !program.functions.front().scalar_while ||
              !program.classes.empty() || !program.actors.empty() ||
@@ -6050,6 +6091,16 @@ Program parse_unresolved_program(std::string_view source, bool experimental_owne
 }
 
 void resolve_and_validate_program(Program& program) {
+    if (program.pointer_int_plan) {
+        if (!program.functions.empty() || !program.actors.empty() ||
+                !program.classes.empty() || !program.imports.empty() ||
+                !program.module.empty() || !program.namespace_name.empty())
+            throw std::runtime_error("Pointer<int> source profile forbids mixed runtime declarations");
+        // Same existing native ownership checker entrypoint, now publishing
+        // an explicit pointer admission bit into the typed HIR.
+        validate_i64_ownership(program);
+        return;
+    }
     if (!program.imports.empty())
         throw std::runtime_error("native imports require filesystem module resolution");
     resolve_native_methods(program);
@@ -6071,8 +6122,9 @@ void resolve_and_validate_program(Program& program) {
 }
 
 Program parse_program(std::string_view source, bool experimental_owned_int,
-                      bool experimental_rt_scalar_loop) {
-    auto program = parse_unresolved_program(source, experimental_owned_int, experimental_rt_scalar_loop);
+                      bool experimental_rt_scalar_loop, bool experimental_pointer_int_aot) {
+    auto program = parse_unresolved_program(source, experimental_owned_int,
+        experimental_rt_scalar_loop, experimental_pointer_int_aot);
     resolve_and_validate_program(program);
     return program;
 }

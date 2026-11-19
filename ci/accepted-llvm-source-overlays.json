@@ -1,0 +1,26 @@
+{
+  "schema": "atto.llvm.reviewed-compiler-overlays.v1",
+  "baseline_main": "4eee1b4180d1f9521faeedba53f1cd63bda6da4c",
+  "merged_prs": [
+    10,
+    13,
+    14,
+    15,
+    18,
+    21,
+    27,
+    19
+  ],
+  "integration_pr": 19,
+  "provenance": "50 exact original Oreslang blobs + 7 reviewed Atto compiler/runtime blobs; original upstream manifest remains immutable",
+  "files": {
+    "src/main/cpp/oreslang/backend/LlvmCodegen.cpp": "a8e82221dae1a542e9c325d2d99f19885c0f5c2d",
+    "src/main/cpp/oreslang/frontend/Parser.cpp": "9dce8828586e761c1221dff97e9eb5a7033bca79",
+    "src/main/cpp/oreslang/frontend/Parser.hpp": "b434ca8e930d8f50119b81134591a412680a0662",
+    "src/main/cpp/oreslang/main.cpp": "12951e0c289458d135381089247916a83559240f",
+    "src/main/cpp/oreslang/types/OwnershipChecker.cpp": "20deb9dbad1a4bbafbf48e6a3cf89b050d3ba3ed",
+    "src/main/cpp/oreslang/runtime/TenantVm.cpp": "bf8ef7b963c19502c97993386ae7e14cfb8b9626",
+    "src/main/cpp/oreslang/runtime/TenantVmGuestAbi.h": "cec4e559b56a94dfdc947f5095a4d2894781c066"
+  },
+  "post_merge_main": "c77fd8579b69862458f8c2a87afe2bcf45884759"
+}

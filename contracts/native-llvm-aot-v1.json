@@ -1,0 +1,96 @@
+{
+  "schema": "atto.llvm.native-aot-scalar.v1",
+  "status": "PASS_X86_64_ELF_SCALAR_GUEST_ONLY",
+  "source_snapshot": {
+    "repo": "atto-lang/atto-source.llvm",
+    "commit": "034c4b00f357c1456ed4d1840437dadfa6924d85",
+    "full_tree": "d02b401e5c7a3a524c4a70db8db8520c6ae408ee",
+    "files": 30,
+    "direct_llvm_codegen_blob": "0b0ff561ada2e2abb722c894eec02633d7ecbf91",
+    "native_test_script_blob": "fdfc0a303403dd82040a5a071ab14b89d565ad74",
+    "frontend_orig_repo": "atto-lang/atto-source.rs",
+    "frontend_orig_commit": "860137bcdc50684ab6cb6aa8f89932506b3beec4",
+    "frontend_parser_blob": "6231be661be9b7bb40bd9ed69d4cd60ccc5b9609",
+    "frontend_check_blob": "18c9b7e3e9696bfdd56fa5130f52a9a71a796c43"
+  },
+  "runner": {
+    "carrier_repo": "athlet-o/athleto-e2e",
+    "snapshot_commit": "694ca1ba3f1f3039e5232d0dcd9eff10cceed71a",
+    "latest_workflow_commit": "3a99bd625938e39098a3bdf7e89f87258197a7c7",
+    "run": "https://github.com/athlet-o/athleto-e2e/actions/runs/43649930185",
+    "toolchain_rust": "1.85.1",
+    "toolchain_clang": "Ubuntu clang 18.1.3",
+    "os": "ubuntu-24.04",
+    "arch": "x86_64",
+    "private_no_cross_org_checkout_token": true,
+    "exact_git_tree_match": true
+  },
+  "execution": {
+    "executable_format": "ELF64",
+    "compiler_pipeline": "native Rust-hosted Atto checked frontend -> direct LLVM IR -> LLVM clang native machine code",
+    "runtime_guest_vm": false,
+    "runtime_wasm_interpreter": false,
+    "runtime_jit": false,
+    "guest_heap": false,
+    "guest_gc": false,
+    "scope": "SCALAR_PURE_FUNCTIONS_ONLY",
+    "direct_cli_native_elf_verified": true,
+    "deterministic_llvm_ir": true,
+    "actual_guest_execute": true,
+    "four_compiler_unit_tests_passed": true,
+    "checked_i64_add_sub_mul_neg_trap_passed": true,
+    "invalid_guest_E_UNBOUND_rejected": true,
+    "unsupported_io_rejected": true,
+    "asan_ubsan_smoke_passed": true,
+    "expected_native_process_exit_status": 42,
+    "total_cases": 1255
+  },
+  "fixtures": [
+    {
+      "source": "tests/fixtures/167-quic-varint-rfc9000.atto",
+      "blob_sha": "cc92894305401e8858561d2cd3d62c6e37b1be63",
+      "cases": 308,
+      "ir_sha256": "4e76d466924142ee22fe8c34269e0990490b5716183f3abe4e870f309ef73a26",
+      "elf_sha256": "af1e4da43b5cad97cdf3222fed7797fc1c75480e9e57b977384b7c48924d645d"
+    },
+    {
+      "source": "tests/fixtures/168-http3-frame-rfc9114.atto",
+      "blob_sha": "70f70bdfa037468e78496dc7637ce9851e1a66aa",
+      "cases": 435,
+      "ir_sha256": "a0c99e390047c626305d33fd0d31d2fabfbdb8d8f7791b5d5ccffc3a5a4b4493",
+      "elf_sha256": "b9986087ff3a3e9ad4e24c1bee071ee2cc9f3eea4b6f454f8d7b580b1eae1b56"
+    },
+    {
+      "source": "tests/fixtures/169-http3-request-state-guards.atto",
+      "blob_sha": "6bdf5f7f9b1c5b8f3fcf6774b5ffcf94508fffc1",
+      "cases": 256,
+      "ir_sha256": "c15f1d6ab5157a456f12bee690d6989eec9d41a54e2c7139c9940eb45e2247a5",
+      "elf_sha256": "a65973558d7905ea3e33c9fea06992f074e1b8d98d2e49d260655243d22391a2"
+    },
+    {
+      "source": "tests/fixtures/170-http3-push-state-guards.atto",
+      "blob_sha": "789ce50b79c4f73b2ba0796d4898aae7bf6418c7",
+      "cases": 256,
+      "ir_sha256": "9433ef1e97859bf63d5764cdbb3ff1d730eb3a95270c269aec1043c8ec3a9399",
+      "elf_sha256": "210ca8d0b1db80e7caed80683f8142430578f8b672358982731ff303d1dd8bee"
+    }
+  ],
+  "unsupported": {
+    "real_quic_udp_tls": false,
+    "http3_client_server_wire": false,
+    "qpack": false,
+    "actor_runtime": false,
+    "actor_heaps_stacks": false,
+    "native_aot_full_language": false,
+    "zero_gc_full_language": false,
+    "other_backend_parity": false,
+    "windows_macos_embedded_aot": false
+  },
+  "next_gates": [
+    "Implement real actor-owned heap/stack and supervisor lifecycle in native LLVM runtime",
+    "Implement typed QUIC/TLS host adapter and real UDP handshake",
+    "Implement HTTP/3 native Atto actor client/server, QPACK and streaming",
+    "Prove independent Java/Graal, .NET and WASM backend compilation and runtime",
+    "Run independent HTTP3 interoperability, malformed traffic, memory, stress and AOT tests"
+  ]
+}

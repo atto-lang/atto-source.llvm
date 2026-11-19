@@ -1,4 +1,5 @@
 #include "oreslang/runtime/TenantVm.hpp"
+#include "oreslang/runtime/ActorSlabHeap32.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -91,8 +92,6 @@ constexpr std::uint32_t kMaxInstanceBytes = std::uint32_t{1} << 20;
 constexpr std::uint32_t kMaxGeneration = (std::uint32_t{1} << 31) - 1; // bit 63 of a ref marks guest refs
 constexpr std::uint64_t kMailOverheadBytes = 256;
 constexpr std::uint64_t kWallBackstopFactor = 16; // a host that is this oversubscribed is not healthy
-constexpr int kHeapClasses = 21;                  // 16 B to 16 MiB; larger blocks live until the actor ends
-constexpr std::uint32_t kMinHeapClassBytes = 16;
 constexpr int kCarrierSpins = 200;
 
 inline void cpu_relax() {
@@ -143,8 +142,8 @@ struct Actor {
     std::uint32_t generation = 0; // bumped at every release, so stale refs never match
     std::uint32_t region = 0;
     std::uint32_t region_bytes = 0;
-    std::uint32_t heap_used = 0;
-    std::unique_ptr<std::uint32_t[]> heap_free; // per size class, allocated on the first free
+    // Trusted bitmap metadata; allocated at actor spawn, never in guest cage.
+    std::unique_ptr<ActorSlabHeap32> heap_allocator;
     std::unique_ptr<std::uint8_t[]> instance;   // outside the cage: instance_bytes, then stored_bytes
     std::deque<std::uint64_t> recent_failures_ns; // within the restart window, so at most budget + 1
     std::uint64_t backoff_until_ns = 0;           // not schedulable until the watchdog clears this
@@ -350,14 +349,6 @@ bool thread_cpu_ns(pthread_t thread, std::uint64_t& out) {
 #endif
 }
 
-// Size class of a heap block, or -1 when it is too large to be recycled.
-int heap_class(std::uint32_t bytes, std::uint32_t alignment) {
-    std::uint64_t size = std::max(std::max(bytes, alignment), kMinHeapClassBytes);
-    int index = 0;
-    for (std::uint64_t c = kMinHeapClassBytes; c < size; c <<= 1) ++index;
-    return index < kHeapClasses ? index : -1;
-}
-std::uint64_t heap_class_bytes(int index) { return std::uint64_t{kMinHeapClassBytes} << index; }
 
 } // namespace
 
@@ -661,8 +652,7 @@ struct TenantVmHost::Core {
     void reset_actor_locked(Vm& vm, Actor& actor) {
         std::memset(vm.cage + actor.region, 0, actor.region_bytes);
         if (actor.kind->instance_bytes) std::memset(actor.instance.get(), 0, actor.kind->instance_bytes);
-        actor.heap_used = 0;
-        actor.heap_free.reset();
+        if (actor.heap_allocator) actor.heap_allocator->reset();
     }
 
     FailReason classify(const Vm& vm, Carrier* c, std::uint64_t& fault_offset) const {
@@ -832,6 +822,11 @@ struct TenantVmHost::Core {
         std::unique_ptr<std::uint8_t[]> instance;
         const std::uint64_t instance_total = std::uint64_t{kind->instance_bytes} + kind->stored_bytes;
         if (instance_total) instance.reset(new std::uint8_t[instance_total]());
+        // Allocate trusted sidecars BEFORE region admission: no host allocation
+        // occurs when this actor calls alloc/free or after a guest restart.
+        std::unique_ptr<ActorSlabHeap32> heap_allocator;
+        if (kind->heap_bytes != 0)
+            heap_allocator = std::make_unique<ActorSlabHeap32>(kind->heap_bytes);
         std::uint32_t region = 0;
         if (!allocate_region_locked(v, bytes, region)) return Status::HeapBudget;
         std::uint32_t slot;
@@ -846,8 +841,9 @@ struct TenantVmHost::Core {
         actor.kind = kind;
         actor.region = region;
         actor.region_bytes = bytes;
-        actor.heap_used = 0;
-        actor.heap_free.reset();
+        if (heap_allocator) heap_allocator->bind(v.cage, static_cast<std::uint32_t>(
+            std::uint64_t{region} + kind->state_bytes));
+        actor.heap_allocator = std::move(heap_allocator);
         actor.instance = std::move(instance);
         v.instance_bytes += std::uint64_t{kind->instance_bytes} + kind->stored_bytes;
         actor.recent_failures_ns.clear();
@@ -866,7 +862,7 @@ struct TenantVmHost::Core {
         vm.used -= actor.region_bytes;
         vm.instance_bytes -= std::uint64_t{actor.kind->instance_bytes} + actor.kind->stored_bytes;
         actor.instance.reset();
-        actor.heap_free.reset();
+        actor.heap_allocator.reset();
         actor.live = false;
         actor.stopping = false;
         ++actor.generation;
@@ -916,46 +912,19 @@ struct TenantVmHost::Core {
         std::atomic_signal_fence(std::memory_order_seq_cst);
     }
 
-    // Only this actor's turn touches its heap, and at most one turn runs per actor. Free lists
-    // are threaded through the blocks themselves, so they cost the host no memory whatever a
-    // guest does. A guest can overwrite those links, so every link is checked when followed:
-    // the worst it can arrange is for its own heap to hand out overlapping blocks of itself.
-    static std::uint32_t alloc_impl(Vm& vm, Actor& actor, std::uint32_t bytes, std::uint32_t alignment) {
-        if (bytes == 0 || alignment == 0 || (alignment & (alignment - 1)) != 0 || alignment > 4096) return 0;
-        const std::uint64_t heap = actor.region + std::uint64_t{actor.kind->state_bytes};
-        const std::uint64_t heap_end = heap + actor.kind->heap_bytes;
-        const int index = heap_class(bytes, alignment);
-        const std::uint64_t size = index >= 0 ? heap_class_bytes(index) : bytes;
-        const std::uint64_t block_alignment = index >= 0 ? std::min<std::uint64_t>(size, 4096) : alignment;
-        if (index >= 0 && actor.heap_free && actor.heap_free[index] != 0) {
-            const std::uint32_t block = actor.heap_free[index];
-            std::uint32_t next = 0;
-            std::memcpy(&next, vm.cage + block, sizeof next); // once: the value may change under us
-            const bool valid = next != 0 && next >= heap && next + size <= heap_end && next % block_alignment == 0;
-            actor.heap_free[index] = valid ? next : 0;
-            std::memset(vm.cage + block, 0, sizeof next);
-            return block;
-        }
-        const std::uint64_t start = align_up(heap + actor.heap_used, block_alignment);
-        const std::uint64_t end = start + size;
-        if (end > heap_end) return 0;
-        actor.heap_used = static_cast<std::uint32_t>(end - heap);
-        return static_cast<std::uint32_t>(start);
+    // The C ABI still returns direct Offset32 values. All allocation state
+    // lives in a preallocated, trusted actor-private bitmap sidecar; guests
+    // cannot poison free-list links, double-free a currently free slab slot,
+    // or force host allocation from the alloc/free hot path. This is NOT a
+    // generational capability ABI: stale offsets after reuse are gated by
+    // compiler ownership/lifetime analysis until a separately versioned ABI.
+    static std::uint32_t alloc_impl(Vm&, Actor& actor, std::uint32_t bytes,
+                                    std::uint32_t alignment) noexcept {
+        return actor.heap_allocator ? actor.heap_allocator->allocate(bytes, alignment) : 0;
     }
-
-    static int free_impl(Vm& vm, Actor& actor, std::uint32_t offset, std::uint32_t bytes, std::uint32_t alignment) {
-        if (bytes == 0 || alignment == 0 || (alignment & (alignment - 1)) != 0 || alignment > 4096) return 0;
-        const int index = heap_class(bytes, alignment);
-        if (index < 0) return 0; // too large to recycle; it lasts until the actor ends
-        const std::uint64_t size = heap_class_bytes(index);
-        const std::uint64_t heap = actor.region + std::uint64_t{actor.kind->state_bytes};
-        if (offset < heap || offset + size > heap + actor.heap_used || offset % std::min<std::uint64_t>(size, 4096) != 0) return 0;
-        if (!actor.heap_free) {
-            actor.heap_free.reset(new std::uint32_t[kHeapClasses]());
-        }
-        std::memcpy(vm.cage + offset, &actor.heap_free[index], sizeof(std::uint32_t));
-        actor.heap_free[index] = offset;
-        return 1;
+    static int free_impl(Vm&, Actor& actor, std::uint32_t offset,
+                         std::uint32_t bytes, std::uint32_t alignment) noexcept {
+        return actor.heap_allocator && actor.heap_allocator->release(offset, bytes, alignment) ? 1 : 0;
     }
 
     // Host calls run on the guest's stack, under a C frame. No exception may cross it.

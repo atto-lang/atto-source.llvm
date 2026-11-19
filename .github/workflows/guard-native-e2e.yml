@@ -7,6 +7,8 @@ on:
       - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
       - 'ci/verify-guard-overlay.py'
       - 'tests/guard_native_e2e.py'
+      - 'tests/guard_artifact_evidence.py'
+      - 'tests/test_guard_artifact_evidence.py'
       - '.github/workflows/guard-native-e2e.yml'
   workflow_dispatch:
 permissions:
@@ -25,7 +27,9 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Verify 54 original Git blobs and three explicit compiler patches
+      - name: Prove negative-compiler artifact gate fails closed (host-only)
+        run: python3 tests/test_guard_artifact_evidence.py -v
+      - name: Verify 50 original Git blobs and seven reviewed compiler/runtime overlays
         run: python3 ci/verify-guard-overlay.py
       - name: Install native LLVM18/Clang18 toolchain
         run: |
@@ -47,7 +51,7 @@ jobs:
           test -x build/guard-native/oreslang-llvmc
           file build/guard-native/oreslang-llvmc
           sha256sum build/guard-native/oreslang-llvmc
-      - name: Execute 25 real source-compiled native guest and negative cases
+      - name: Execute real source-compiled native guest and negative cases
         run: |
           set -euo pipefail
           python3 tests/guard_native_e2e.py --compiler build/guard-native/oreslang-llvmc --clang /usr/bin/clang-18

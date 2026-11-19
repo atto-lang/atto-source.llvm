@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "oreslang/types/PointerIntHIR.hpp"
 #include "oreslang/types/FunctionEffects.hpp"
 #include "oreslang/types/FuturePipelineContract.hpp"
 #include "oreslang/types/NativeHasFutureContract.hpp"
@@ -466,8 +467,12 @@ struct TypeConstraintDescriptor {
 
 struct Program {
     // Host compilation authority, injected by the trusted CLI/loader only.
-    // Source code cannot forge this bit and parsed programs default denied.
+    // Source code cannot forge this bit; parsed programs default denied.
     bool foreign_i64_granted = false;
+    // M2a: same nominal HIR is consumed by canonical parser, existing
+    // ownership checker and LLVM backend. No raw pointer-as-i64 may enter
+    // ordinary source Expression or ScalarType storage.
+    std::unique_ptr<pointer_int_aot::Plan> pointer_int_plan;
     std::vector<ModuleImport> imports;
     std::vector<CooperativeScalarLoop> cooperative_loops;
     std::vector<ScalarGenerator> generators;
@@ -489,12 +494,14 @@ struct Program {
 // is one zero-local actor lifecycle await in trusted zero-argument main:
 // direct/typed get_ready readiness or explicit ActorRef.get_done().
 Program parse_program(std::string_view source, bool experimental_owned_int = false,
-                      bool experimental_rt_scalar_loop = false);
+                      bool experimental_rt_scalar_loop = false,
+                      bool experimental_pointer_int_aot = false);
 
 // Internal module-linking stages: syntax trees are NOT admitted for codegen.
 // resolve_and_validate_program must run after all module names are resolved.
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int = false,
-                                 bool experimental_rt_scalar_loop = false);
+                                 bool experimental_rt_scalar_loop = false,
+                                 bool experimental_pointer_int_aot = false);
 void resolve_and_validate_program(Program& program);
 
 } // namespace oreslang
