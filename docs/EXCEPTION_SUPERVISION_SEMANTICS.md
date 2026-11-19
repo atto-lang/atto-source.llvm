@@ -16,7 +16,8 @@ desired language semantics from features the current compilers actually lower.
 
 * `try/catch/finally` catches only the ordinary `throw` channel. A matching
   typed `recover` boundary, when implemented, may explicitly consume an
-  escalation or panic; ordinary `catch` must never accidentally do so.
+  `raise` (and, if explicitly typed, an ordinary `throw`), but **never panic**;
+  ordinary `catch` must never accidentally consume a raise.
 * `trap fnc f(): T` returns `Option<T>`: normal exit is `Some(result)`,
   unhandled ordinary throw is `None`. `Option<T>` results are not flattened.
   Async trap requires `Future<Option<T>>` with the boundary spanning **every**
@@ -36,8 +37,9 @@ desired language semantics from features the current compilers actually lower.
   fault, out-of-memory condition, or process corruption is survivable.
 * `recover` is **not** a general-purpose replacement for `catch (Throwable)`.
   Proposed admission: only a supervisor/recovery scope with explicit typed
-  capabilities may consume `raise` or `panic`, and it must leave a recorded
-  event. It cannot recover VM corruption or forcibly killed isolates.
+  capabilities may consume `raise` (and potentially an ordinary `throw`) and
+  must leave a recorded event. Neither `recover` nor `catch` may consume `panic`,
+  actor cancellation, VM corruption or forcibly killed isolates.
 
 ## Actor failure / containment
 
@@ -74,7 +76,35 @@ in the data FIFO:
    Scheduler starvation from a non-cooperating busy loop is a separate concern.
 7. A normal stop / structured cancellation is **not** an invented panic.
 
-### Proposed source-level required handlers (not yet implemented)
+### Actor's own failure hooks (design contract, source lowering pending)
+
+After lexical `try/catch`, `defer/finally`, and typed `recover` get
+their opportunity, an actor may define `on_throw`, `on_raise`, or
+`on_panic`:
+
+* `on_throw` receives an **unhandled** ordinary throw and may handle or
+  explicitly escalate it. It is not the same as lexical `catch`.
+* `on_raise` receives a raise **only if no lexical `recover` consumed it**;
+  a compiler-checked handler may resolve or escalate it.
+* `on_panic` is a **best-effort, terminal diagnostic observer only**. It
+  cannot recover, downgrade, retry, defer supervisor notice, return success,
+  or prevent actor retirement. The runtime must emit the immutable parent
+  CONTROL notice independently of whether this callback runs. For machine
+  stack exhaustion or compromised process state, do not execute guest code
+  on the damaged stack: either use a proven safe lane or skip the observer.
+* All three require a checked single registration, correct typed signature,
+  bounded synchronous invocation, no untrusted cross-heap references, and
+  robust cleanup. None may be an ordinary user method silently invoked by
+  convention before compiler lowering exists.
+* Actor-local `on_panic` is distinct from a **parent supervisor's**
+  `on_panic` decision to restart or stop a failed child.
+
+The native `observe_actor_panic_on_safe_lane` helper is an **unwired host
+policy substrate**, not evidence that an AttoLang actor method is parsed,
+lowered, or executed. It accepts a no-return-value observer only after an
+independently verified safe unwind; it always propagates the original PANIC.
+
+### Proposed supervisor handlers (not yet implemented)
 
 For a supervised child spawn or ActorGroup member, the compiler should
 require exhaustive coverage of terminal failure kinds. Recommended canonical
@@ -145,6 +175,14 @@ does not unblock the failed actor, and cannot suppress the audit event.
   fatal isolation and exact same observable traces as Java.
 
 ## Required differential regression matrix
+
+Include deterministic bounded **logical** stack recursion that overflows
+one actor while a sibling in the same carrier domain continues, and verify
+owner-only frame scrubbing, terminal-notice exactly-once identity, and no
+resume after overflow. Test real JVM/CLR/native machine-stack faults only in
+independently terminated child processes: a host fault is not a recoverable
+guest raise, and process survival must not be inferred from a simulated
+`StackOverflowError` or a logical-frame quota failure.
 
 Cover each effect before and after `await`, `select`, `do select`,
 `nb select`, I/O suspension and actor boundaries. Include:

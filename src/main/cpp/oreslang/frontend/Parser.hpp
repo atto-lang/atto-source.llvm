@@ -25,6 +25,9 @@ struct NativeSumType {
     std::string name;
     ScalarType value_type = ScalarType::I64;
     ScalarType error_type = ScalarType::I64;
+    // Result<_, Error>: the error slot holds a sanitized trap message and is
+    // minted only by `trap` (spec ch. 7); source cannot construct or read it.
+    bool trap_error = false;
 };
 
 struct GenericTypeArgument {
@@ -74,6 +77,9 @@ struct Expression {
     // Records a compiler-produced caller-side trap; never collapse this to
     // an ordinary Some constructor without independently proving its operand.
     bool trap_origin = false;
+    // A Call produced by an eager `|>` stage (java CallOrigin.VALUE_PIPE_ARGUMENT):
+    // arguments[0] is the piped value. Pipeline edges have their own depth budget.
+    bool pipeline_stage = false;
 };
 
 // Phase-one native trap supports only total integer-expression structure.
@@ -302,7 +308,7 @@ struct ActorFieldWrite {
 };
 
 struct Statement {
-    enum class Kind { Call, FieldWrite, ScalarWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return, UsingTelemetrySpan };
+    enum class Kind { Call, FieldWrite, ScalarWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Loop, Break, Continue, Return, UsingTelemetrySpan, TelemetryLogInfo };
     Kind kind;
     // Scoped scalar or readonly leaf record. ForEach uses an implicit element
     // binding (no initializer); expression is its named array source and
@@ -311,7 +317,8 @@ struct Statement {
     std::unique_ptr<Expression> expression;
     std::string receiver;
     std::string field;
-    // UsingTelemetrySpan: literal operation name, alias is compile-time-only;
+    // UsingTelemetrySpan or TelemetryLogInfo: literal operation/log message;
+    // alias is compile-time-only;
     // no guest-visible pointer, dynamic handle or actor message transfer.
     std::string telemetry_operation;
     // ForIndex: branch_local initializer, condition and checked next value.
@@ -363,6 +370,10 @@ struct Function {
     // First executable source Task slice: one capture-free Task<int> in trusted
     // zero-argument main, submitted before ordinary locals and awaited once.
     std::vector<SourceTaskI64Binding> source_tasks;
+    // Compiler-staged actor-only suspension edge. This is not a runtime
+    // capability or a codegen-ready continuation: LLVM emission MUST deny
+    // any actor carrying this marker until actor-owned frame lowering exists.
+    std::string actor_task_await_name;
     // First executable Future-aware value-pipeline slice. Async producers are
     // compiled as scheduler work; sync unary stages execute on that carrier.
     std::vector<SourceFuturePipelineI64Binding> future_pipelines;
@@ -515,6 +526,15 @@ struct TypeConstraintDescriptor {
     bool validation_required = true;
 };
 
+struct FileExport {
+    enum class Visibility { Public, Package };
+    enum class Kind { Inferred, Class, Fnc };
+    std::string name;
+    Visibility visibility = Visibility::Public;
+    Kind kind = Kind::Inferred;
+    std::size_t offset = 0;
+};
+
 // Distinct nominal *value-schema* declaration, never an inverted class
 // alias. This parser milestone records type/field/mutability intent only;
 // source lowering remains denied until the production parser and ownership verifier admit it.
@@ -551,6 +571,7 @@ struct InvertedSourceMain {
 };
 
 struct Program {
+    std::vector<FileExport> exports;
     std::vector<ModuleImport> imports;
     std::vector<NamespaceImportSyntax> namespace_imports;
     std::vector<CooperativeScalarLoop> cooperative_loops;

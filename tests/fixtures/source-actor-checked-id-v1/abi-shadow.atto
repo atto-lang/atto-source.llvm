@@ -1,0 +1,11 @@
+// Guest source may not shadow a checked native ActorId runtime symbol.
+define actor Worker as {
+  const base: int = 40;
+  pub fnc on_message(int n): int { return base + n; }
+}
+pub fnc oreslang_source_actor_send_id(): int { return 0; }
+pub fnc main(): int {
+  const worker = spawn Worker();
+  stop worker;
+  return 43;
+}

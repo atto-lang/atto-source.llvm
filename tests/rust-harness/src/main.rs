@@ -1,4 +1,6 @@
 mod checked_i64;
+#[cfg(test)]
+mod actor_io_half_close;
 
 use std::{
     env,

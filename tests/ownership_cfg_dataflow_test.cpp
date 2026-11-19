@@ -617,5 +617,29 @@ int main() {
     bounded_graph.blocks = {{{op(Kind::Read, "x")}, {}}};
     verify(bounded_graph);
 
+
+    // Suspension must reject all live lexical loans, including field loans.
+    Graph suspension_guard;
+    suspension_guard.entry = {{"x", cell(kOwned)}};
+    suspension_guard.blocks = {{{op(Kind::BorrowShared, "x"),
+                                 op(Kind::Suspend, ""),
+                                 op(Kind::ReleaseShared, "x")}, {}}};
+    assert(rejected([&] { verify(suspension_guard); }));
+    suspension_guard.blocks[0].operations = {
+        op(Kind::BorrowShared, "x"),
+        op(Kind::ReleaseShared, "x"),
+        op(Kind::Suspend, "")};
+    verify(suspension_guard);
+    suspension_guard.blocks[0].operations = {
+        op(Kind::BorrowExclusive, "x"), op(Kind::Suspend, "")};
+    assert(rejected([&] { verify(suspension_guard); }));
+    suspension_guard.entry = {{"x.field", cell(kOwned)}, {"x.other", cell(kOwned)}};
+    suspension_guard.blocks[0].operations = {
+        op(Kind::BorrowShared, "x.field"), op(Kind::Suspend, "")};
+    assert(rejected([&] { verify(suspension_guard); }));
+    suspension_guard.blocks[0].operations = {op(Kind::Suspend, ""),
+                                            op(Kind::Read, "x.other")};
+    verify(suspension_guard);
+
     return 0;
 }

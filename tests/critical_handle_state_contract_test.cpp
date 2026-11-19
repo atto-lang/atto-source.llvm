@@ -110,17 +110,22 @@ int main() {
     CHECK(admit_critical_handle_state(c, row(READ | IO))
             == CriticalStateAdmission::Accept);
 
+    // Even a generation-fenced continuation cannot suspend WITH a live
+    // sealed-state callback loan. The loan must retire before handoff.
     c.inferred = row(READ | SUSPEND);
     CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
-            == CriticalStateAdmission::MissingContinuationFence);
+            == CriticalStateAdmission::LoanAcrossSuspension);
     c.continuation_generation_fenced = true;
     CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
-            == CriticalStateAdmission::Accept);
+            == CriticalStateAdmission::LoanAcrossSuspension);
     c.state_loan_live_across_suspend = true;
     CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
             == CriticalStateAdmission::LoanAcrossSuspension);
+    c.inferred = row(READ);
+    CHECK(admit_critical_handle_state(c, row(READ))
+            == CriticalStateAdmission::LoanAcrossSuspension);
     c.state_loan_live_across_suspend = false;
-    CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
+    CHECK(admit_critical_handle_state(c, row(READ))
             == CriticalStateAdmission::Accept);
 
     // Trusted admission must not accept forged/reserved bits in either the
