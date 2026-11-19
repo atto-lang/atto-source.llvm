@@ -4817,6 +4817,45 @@ if(BUILD_TESTING)
         COMMAND oreslang-dop-checked-region-test)
     set_tests_properties(native_dop_checked_region_addressing PROPERTIES TIMEOUT 20)
 
+    # Host-only bounded class handle reference oracle: no compiled guest class.
+    add_executable(oreslang-inverted-class-handle-reference-test
+        tests/inverted_class_handle_contract_test.cpp)
+    target_include_directories(oreslang-inverted-class-handle-reference-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/support")
+    target_compile_features(oreslang-inverted-class-handle-reference-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-inverted-class-handle-reference-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-inverted-class-handle-reference-test PRIVATE Threads::Threads)
+    add_test(NAME native_inverted_class_handle_reference_contract
+        COMMAND oreslang-inverted-class-handle-reference-test)
+    set_tests_properties(native_inverted_class_handle_reference_contract PROPERTIES TIMEOUT 40)
+
+    # Independent 50,000-operation bounded insert/update/swap-erase model.
+    add_executable(oreslang-inverted-class-handle-fuzz-test
+        tests/inverted_class_handle_fuzz_test.cpp)
+    target_include_directories(oreslang-inverted-class-handle-fuzz-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/support")
+    target_compile_features(oreslang-inverted-class-handle-fuzz-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-inverted-class-handle-fuzz-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-inverted-class-handle-fuzz-test PRIVATE Threads::Threads)
+    add_test(NAME native_inverted_class_handle_differential_50k
+        COMMAND oreslang-inverted-class-handle-fuzz-test)
+    set_tests_properties(native_inverted_class_handle_differential_50k PROPERTIES TIMEOUT 60)
+
+    # Second-field rollback and stale-handle vs reused-slot race.
+    add_executable(oreslang-inverted-class-handle-adversarial-test
+        tests/inverted_class_handle_adversarial_test.cpp)
+    target_include_directories(oreslang-inverted-class-handle-adversarial-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/support")
+    target_compile_features(oreslang-inverted-class-handle-adversarial-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-inverted-class-handle-adversarial-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-inverted-class-handle-adversarial-test PRIVATE Threads::Threads)
+    add_test(NAME native_inverted_class_handle_adversarial_recycle
+        COMMAND oreslang-inverted-class-handle-adversarial-test)
+    set_tests_properties(native_inverted_class_handle_adversarial_recycle PROPERTIES TIMEOUT 60)
+
     add_executable(oreslang-dop-inverted-columns-test tests/dop_inverted_columns_test.cpp)
     target_include_directories(oreslang-dop-inverted-columns-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-dop-inverted-columns-test PRIVATE cxx_std_20)
