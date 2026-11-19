@@ -1,0 +1,57 @@
+// EXPERIMENTAL: finite 100-connection async-only RESP2 integration gate.
+// All key/value state is private to this Atto actor's Map<Bytes,Bytes>.
+// NIO2 connection tasks and reply routing are runtime transport, NOT host KV.
+// Per-client in-flight=1; different TCP clients execute independently.
+// Does not claim async WAL, production graceful shutdown or AOT parity.
+define actor TaggedBinaryNioKvActor implements StreamOperator<Tuple[int,int,int,Bytes,Bytes],Tuple[int,int,string,Bytes]> as
+  let Map<Bytes,Bytes> values;
+
+  on_start(): void {
+    self.values = ~map<Bytes,Bytes>();
+    return;
+  }
+
+  receive(ActorMail<Tuple[int,int,int,Bytes,Bytes]> mail): void {
+    const tuple = mail.value;
+    const int client_id = tuple[0];
+    const int request_id = tuple[1];
+    const int kind = tuple[2];
+    const Bytes key = tuple[3];
+    const Bytes value = tuple[4];
+
+    if kind == 3; do
+      self.values.set(key, value);
+      self.send((client_id, request_id, "OK", value));
+      return;
+    fi
+    if kind == 2; do
+      val found = self.values.get_optional(key);
+      if found.is_none(); do
+        self.send((client_id, request_id, "NIL", key));
+      else
+        self.send((client_id, request_id, "VALUE", found.unwrap()));
+      fi
+      return;
+    fi
+    if kind == 4; do
+      if self.values.delete(key); do
+        self.send((client_id, request_id, "ONE", key));
+      else
+        self.send((client_id, request_id, "ZERO", key));
+      fi
+      return;
+    fi
+    self.send((client_id, request_id, "ERR", key));
+    return;
+  }
+end
+
+pub async routine main(): void {
+  val worker = spawn TaggedBinaryNioKvActor();
+  await worker.get_ready();
+  val listener = await network.listen_async("127.0.0.1", 16399);
+  await worker.serve_resp2_async(listener, 100, 100);
+  worker.stop();
+  await worker.get_done();
+  return;
+}

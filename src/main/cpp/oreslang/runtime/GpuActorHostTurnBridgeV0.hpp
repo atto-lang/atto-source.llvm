@@ -15,6 +15,8 @@
 
 namespace oreslang::gpu_actor {
 
+class GpuActorQuarantineRegistryV1;
+
 /**
  * Native host-side GPU actor turn coordinator, v0.
  *
@@ -31,6 +33,11 @@ namespace oreslang::gpu_actor {
  * is quiescent. No implicit CPU fallback.
  */
 class HostTurnBridgeV0 final {
+    // The V1 supervisor registry (including its nested Entry) is the sole
+    // production caller allowed to assert provider-derived lifecycle proof.
+    // No ordinary native consumer can manufacture completion by passing
+    // true/true into the V0 host-only Boolean seam.
+    friend class GpuActorQuarantineRegistryV1;
 public:
     using ActorKey = oreslang::SupervisorFailureLane::ActorKey;
     using FailureKind = oreslang::SupervisorFailureLane::Kind;
@@ -71,6 +78,8 @@ public:
         if (!closed_ || pending_) std::terminate();
     }
 
+    // No test override. Host lifecycle proof is mediated by V1 registry.
+private:
     // Returns a source-only host turn identity, NOT an authenticated GPU event.
     Turn prepare(std::int64_t increment) {
         std::lock_guard<std::mutex> guard(mu_);
@@ -163,6 +172,7 @@ public:
         release_pending();
     }
 
+public:
     // An actor close request never assumes an enqueued GPU kernel is cancelled.
     // An in-progress enqueue must resolve first: no premature buffer reuse.
     bool request_close() { return request_stop(StopCause::Cancel); }
@@ -171,6 +181,9 @@ public:
     // Outstanding allocations remain quarantined pending provider recovery.
     bool report_device_loss() { return request_stop(StopCause::DeviceLoss); }
 
+    // All completion and release acknowledgments originate from the
+    // supervisor-owned registry, never direct tests or actor-facing code.
+private:
     // Called after the *same* provider event completes/quiesces, not merely
     // because cancellation was requested or a timeout occurred.
     void acknowledge_cancelled_provider_event(Turn turn, bool provider_event_quiescent) {
@@ -210,6 +223,7 @@ public:
         closed_ = true;
     }
 
+public:
     std::int64_t committed_state() const {
         std::lock_guard<std::mutex> guard(mu_);
         return state_;

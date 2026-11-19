@@ -1,0 +1,13 @@
+// exit: 42
+// stdout: 1|2
+fnc show(int x): void {
+  if x > 3 then return; fi
+  stdio.println(x);
+  return;
+}
+pub fnc main(): int {
+  show(1);
+  show(5);
+  show(2);
+  return 42;
+}

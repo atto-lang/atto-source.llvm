@@ -1,0 +1,9 @@
+// An actor may not await a different name or synthesize a Task observer.
+define actor Worker as {
+  let total: int = 0;
+  pub suspends fnc on_message(int n): int {
+    let Task<int> child = task { return 41; };
+    return await unknown_task;
+  }
+}
+pub fnc main(): int { return 0; }

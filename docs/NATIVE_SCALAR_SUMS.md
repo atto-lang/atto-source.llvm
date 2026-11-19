@@ -16,7 +16,12 @@ pub routine main(): int {
 }
 ```
 
-Constructors use positional payloads and a declared contextual type. Option
+Constructors use positional payloads and a declared contextual type. For a
+conditional expression whose branches carry an Option or Result, both arms
+must resolve to the same declared sum type; a raw scalar cannot stand in
+for the other arm's checked descriptor. This is enforced in the source sum
+resolver before LLVM IR generation, not left to native runtime tag checks.
+Option
 provides `is_some`, `is_none`, `unwrap`, and `unwrap_or`; Result provides
 `is_ok`, `is_err`, `unwrap`, and `unwrap_or`. Fallback arguments evaluate
 eagerly, matching Java. `Some(0)`, `Some(false)`, `Some("")`, and `Ok(false)`
@@ -79,3 +84,56 @@ lifetime-aware sum ABI. Borrowed subobject results, such as the router's
 owner is not a substitute. The actual Spin server still requires typed HTTP
 mailboxes, await frames, request-scoped storage and the remaining route graph.
 This milestone does not establish server parity or a performance result.
+
+## Conditional-sum source-to-native parity gate
+
+The existing `native_class_string_parity` Rust executable harness includes
+five canonical `.atto` conditional-sum fixtures: two valid Option/Result
+tagged-branch guests executed through `oreslang-llvmc`, Clang/native O1,
+and the harness sanitizer configuration; and three negative mixed scalar/
+tagged conditionals requiring the **exact semantic rejection** and no
+emitted LLVM IR. Legacy fixtures remain `.ores`.
+
+These are test definitions, not executed evidence. The exact-head compiler,
+native guest stdout/exit, and ASan/UBSan receipts remain required.
+
+## Compiler-created descriptor validation
+
+Native C++ compiler ASTs are not automatically trusted. The sum registry
+now rejects duplicated `Option`/`Result` names, a mismatched case kind,
+noncanonical payload names, an invalid `ScalarType` or sum kind, and
+noncanonical hidden `Option` error metadata before the resolver or scalar
+type checker can pass descriptors to LLVM code generation.
+
+The standalone native regression adds eight forged-descriptor mutation
+cases, alongside the existing conditional-arm and payload tests. These
+are compiler-host tests, **not** evidence of source-defined nominal
+`define enum`, recursive ADTs, .atto guest execution, or Native AOT
+parity. Exact-head LLVM CTest execution is required.
+
+## Malformed compiler ASTs
+
+The resolver explicitly rejects null sum-constructor payload pointers,
+conditional expressions with a missing true/false value arm, and scoped
+or iteration statements missing their declaration binding. This prevents
+null-pointer dereferences when an internal compiler stage supplies a
+malformed AST. Six additional host-only negative mutations raise the
+standalone native-sum admission suite to 37 assertion **definitions**.
+Re-execute this changed source at the exact PR head before claiming
+37 passing assertions; previous host-carrier receipts apply only to
+their original byte-identical compiler/test blobs.
+
+## Shared untrusted-AST shape validation
+
+Both `resolve_native_sums` and `validate_native_scalar_types` now invoke the
+same `validate_native_sum_expression_shape` preflight before walking AST
+children. It rejects null tagged constructor/member arguments, missing
+member receivers, incomplete conditional predicates, ambiguous dual
+conditional predicates, and missing conditional result arms. The scalar
+typechecker's loop and scoped-binding dereferences receive the same
+explicit rejection as the sum resolver.
+
+Five additional host mutations expand the regression corpus from 37 to
+42 **defined** assertions. These checks need a fresh exact-source test
+run; previously successful selected-blob carrier runs do not certify
+this new compiler/test source tree or guest `.atto` execution.
