@@ -15,7 +15,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) && defined(POSIX_SPAWN_CLOEXEC_DEFAULT)
 #define ATTO_SPAWN_DEFAULT_CLOSE_SUPPORTED 1
 #elif defined(__GLIBC__)
 #if __GLIBC_PREREQ(2, 34)
