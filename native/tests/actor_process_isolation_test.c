@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <sys/resource.h>
 #include <time.h>
 #include <unistd.h>
@@ -46,6 +47,18 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[1], "clean")) return 0;
         if (!strcmp(argv[1], "code17")) return 17;
         if (!strcmp(argv[1], "segv")) { raise(SIGSEGV); return 90; }
+        if (!strcmp(argv[1], "pagefault")) {
+            /* A real protected-memory access, not merely raise(SIGSEGV).
+             * Works with the POSIX /dev/zero mapping on Linux and macOS. */
+            int zero = open("/dev/zero", O_RDONLY);
+            if (zero < 0) return 92;
+            void *page = mmap(NULL, 4096, PROT_NONE, MAP_PRIVATE, zero, 0);
+            (void)close(zero);
+            if (page == MAP_FAILED) return 93;
+            volatile unsigned char observed = *(volatile unsigned char *)page;
+            (void)observed;
+            return 94;
+        }
         if (!strcmp(argv[1], "abort")) { abort(); return 90; }
         if (!strcmp(argv[1], "bus")) { raise(SIGBUS); return 90; }
         if (!strcmp(argv[1], "illegal")) { raise(SIGILL); return 90; }
@@ -82,7 +95,7 @@ int main(int argc, char **argv) {
     }
     assert(argc >= 1 && argv[0][0] == '/');
     const char *exe = argv[0];
-    atto_actor_exit_notice n = run(exe, "segv", 5000);
+    atto_actor_exit_notice n = run(exe, "pagefault", 5000);
     assert(n.kind == ATTO_ACTOR_EXIT_SIGNAL && n.signal_number == SIGSEGV);
     /* The process supervising this worker is still alive and can launch
      * another actor after a fatal child SIGSEGV. */
@@ -90,10 +103,12 @@ int main(int argc, char **argv) {
     pthread_t sibling_thread;
     assert(pthread_create(&sibling_thread, NULL, run_healthy_sibling, &sibling) == 0);
     /* The healthy sibling remains alive while an independent actor crashes. */
-    n = run(exe, "segv", 5000);
+    n = run(exe, "pagefault", 5000);
     assert(n.kind == ATTO_ACTOR_EXIT_SIGNAL && n.signal_number == SIGSEGV);
     assert(pthread_join(sibling_thread, NULL) == 0);
     assert(sibling.result.kind == ATTO_ACTOR_EXIT_CLEAN);
+    n = run(exe, "segv", 5000);
+    assert(n.kind == ATTO_ACTOR_EXIT_SIGNAL && n.signal_number == SIGSEGV);
     n = run(exe, "clean", 5000);
     assert(n.kind == ATTO_ACTOR_EXIT_CLEAN && n.exit_code == 0);
     n = run(exe, "code17", 5000);
