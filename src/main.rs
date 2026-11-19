@@ -143,6 +143,14 @@ impl<'a> FunctionEmitter<'a> {
                         Ok(self.checked_math(op_name, &a, &b))
                     }
                     BinOp::Div => Err("E_UNSUPPORTED_NATIVE_DIV: integer division is not admitted".into()),
+                    BinOp::BitXor => {
+                        if ty != "i64" {
+                            return Err("E_UNSUPPORTED_NATIVE_XOR: expected int".into());
+                        }
+                        let tmp = self.id("v");
+                        self.instr(format!("%{tmp} = xor i64 {a}, {b}"));
+                        Ok(format!("%{tmp}"))
+                    },
                     BinOp::And | BinOp::Or => {
                         if ty != "i1" {
                             return Err("E_UNSUPPORTED_NATIVE_LOGICAL: expected bool".into());
