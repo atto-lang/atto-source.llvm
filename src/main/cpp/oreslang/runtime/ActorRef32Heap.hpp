@@ -99,7 +99,9 @@ public:
                   std::int64_t& out) const {
         const std::lock_guard<std::mutex> guard(mutex_);
         const Slot* slot = checked(ref, caller, type_id, displacement, 8);
-        if (!slot) return false;
+        // A failed checked read must never expose a previous successful value
+        // through an output parameter that the caller accidentally reuses.
+        if (!slot) { out = 0; return false; }
         std::memcpy(&out, cage_ + slot->offset + displacement, sizeof(out));
         return true;
     }
