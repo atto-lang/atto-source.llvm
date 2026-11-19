@@ -31,6 +31,12 @@ public:
         if (!cage || base == 0 || std::uint64_t{base} + capacity_ >
                 std::numeric_limits<Offset32>::max())
             throw std::invalid_argument("actor heap region exceeds Offset32 range");
+        // An existing allocation's sidecar must never be rebound to a different
+        // guest cage/base; stale offsets could otherwise free or scrub foreign data.
+        if (cage_) {
+            if (cage_ == cage && base_ == base) return; // idempotent binding
+            throw std::invalid_argument("actor slab rebinding forbidden");
+        }
         cage_ = cage;
         base_ = base;
     }
