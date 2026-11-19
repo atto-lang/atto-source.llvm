@@ -127,7 +127,8 @@ jobs:
         run: |
           set -euo pipefail
           ctest --test-dir build --output-on-failure -R '^native_ownership_bang_' | tee ci-evidence/ctest-execution.txt
-          grep -Fq '100% tests passed' ci-evidence/ctest-execution.txt
+          # Exact executed count: registration alone never proves all tests ran.
+          grep -Eq '100% tests passed,[[:space:]]+0 tests failed out of 24([[:space:]]|$)' ci-evidence/ctest-execution.txt
           if grep -Eq 'Not Run|Disabled|Skipped' ci-evidence/ctest-execution.txt; then exit 1; fi
       - name: Bind native result to Git tree and fixture SHA256
         shell: bash
@@ -150,6 +151,8 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: llvm-bang-source-local-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ci-evidence/
+          path: |
+            ci-evidence/
+            build/oreslang-llvmc
           if-no-files-found: error
           retention-days: 3
