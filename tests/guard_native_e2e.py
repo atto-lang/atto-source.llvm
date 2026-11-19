@@ -29,6 +29,11 @@ def program(guard, value=42):
     return "pub fnc main(): int {\n" + guard + "\n return " + str(value) + ";\n}\n"
 
 POSITIVE = [
+    ("multiply_not_dereference", "pub fnc main(): int { return 6 * 7; }\n", 42),
+    ("comment_mention_pointer", "// Pointer<int> is deliberately unsupported in this native profile\npub fnc main(): int { return 42; }\n", 42),
+    ("nested_block_comment_pointer", "/* Pointer<int> /* &fake and *fake */ still a comment */\npub fnc main(): int { return 42; }\n", 42),
+    ("multiplication_in_grouping", "pub fnc main(): int { return 6 * (7); }\n", 42),
+    ("boolean_and_not_address_of", program("guard true && true { return 7; }"), 42),
     ("literal_false_exits", program("guard false { return 7; }"), 7),
     ("literal_true_falls_through", program("guard true { return 7; }"), 42),
     ("positive_numeric_comparison", program("guard 5 > 0 { return 7; }"), 42),
@@ -50,6 +55,16 @@ POSITIVE = [
                                   "pub fnc main(): int { return choose(false); }\n", 7),
 ]
 NEGATIVE = [
+    ("pointer_type_no_codegen", "pub fnc main(): int { val x: Pointer<int> = 0; return 42; }\n", "Pointer<T> full-AOT lowering unsupported"),
+    ("pointer_alloc_no_codegen", "pub fnc main(): int { val p = Pointer.alloc<int>(4); return 42; }\n", "Pointer<T> full-AOT lowering unsupported"),
+    ("pointer_param_no_codegen", "fnc f(Pointer<int> p): int { return 1; }\npub fnc main(): int { return 42; }\n", "Pointer<T> full-AOT lowering unsupported"),
+    ("pointer_shadow_class", "define class Pointer as end\npub fnc main(): int { return 42; }\n", "Pointer<T> full-AOT lowering unsupported"),
+    ("unary_address_of", "pub fnc main(): int { return &1; }\n", "pointer syntax forbids"),
+    ("unary_deref", "pub fnc main(): int { return *1; }\n", "pointer syntax forbids"),
+    ("pointer_nested_in_guard", program("guard true { return Pointer.alloc<int>(4); }"), "Pointer<T> full-AOT lowering unsupported"),
+    ("pointer_new_constructor", program("return new Pointer();"), "Pointer<T> full-AOT lowering unsupported"),
+    ("unary_deref_after_multiply", "pub fnc main(): int { return 6 * *7; }\n", "pointer syntax forbids"),
+    ("address_of_in_additive", "pub fnc main(): int { return 40 + &2; }\n", "pointer syntax forbids"),
     ("int_truthiness", program("guard 1 { return 7; }"), "bool"),
     ("int_param_truthiness", "fnc f(int x): int { guard x { return 7; } return 42; }\n"
                              "pub fnc main(): int { return f(1); }\n", "bool"),

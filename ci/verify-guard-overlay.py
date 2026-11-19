@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Additive, immutable-source verifier for the three reviewed compiler edits.
+"""Additive immutable-source verifier for the reviewed compiler overlay.
+
+The Parser.cpp overlay now additionally reserves unsupported Pointer<T> and
+rejects C-style unary pointer operations; 54 original blobs remain unchanged.
 
 The parent branch pins 57 imported upstream blobs. This child changes exactly
 three named compiler files; the other 54 MUST remain identical to the parent.
@@ -16,7 +19,9 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 OVERLAY = {
     "src/main/cpp/oreslang/frontend/Parser.hpp": "f79e68ef73ecb659d6a0edb31cef3c7a583a9695",
-    "src/main/cpp/oreslang/frontend/Parser.cpp": "46453919f0d535202a1ff66c6a6e099e00421461",
+    # Stacked pointer safety gate: same exact original compiler translation unit,
+    # now with explicit Pointer<T> and unary operator fail-closed admission.
+    "src/main/cpp/oreslang/frontend/Parser.cpp": "45f7c19d894117030d98831d77f2e6e2da2b3bfa",
     "src/main/cpp/oreslang/backend/LlvmCodegen.cpp": "3537fa90fbcb251c1deb47daab78ffaef40d75c0",
 }
 ORIGIN = "b16089183aa1864adaef5bb0a13051d19430db09"
