@@ -523,6 +523,29 @@ impl Parser {
     fn parse_actor(&mut self, defined: bool) -> R<ActorDecl> {
         let (name, pos) = self.ident("an actor name")?;
         self.decl_head("actor")?;
+        // The existing executable ActorMail<T> handler determines the actual
+        // mailbox type. A v1 receives T header may only make that fact
+        // explicit, never widen it or create an unverified second ingress.
+        let declared_receives = if self.eat_word("receives") {
+            if self.is_word("never") {
+                return Err(Diagnostic::new(
+                    self.pos(), "E_UNSUPPORTED",
+                    "receives never requires a separately authenticated CONTROL-only runtime",
+                ));
+            }
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        // Outbound effects are transitive across helpers and callback paths;
+        // this compiler cannot certify them yet. The emits pipeline contract
+        // is distinct and also lacks checked native lowering here.
+        if self.is_word("sends") || self.is_word("emits") {
+            return Err(Diagnostic::new(
+                self.pos(), "E_UNSUPPORTED",
+                "typed actor sends/emits effects require checked transitive lowering",
+            ));
+        }
         let close = if defined {
             self.expect_word("as")?;
             "end"
@@ -532,6 +555,17 @@ impl Parser {
             "end"
         };
         let m = self.parse_members(&name, true, close)?;
+        if let Some(expected) = declared_receives {
+            match &m.receive {
+                Some(handler) if handler.payload == expected => {}
+                Some(_) => return Err(Diagnostic::new(
+                    pos, "E_TYPE", "actor receives header disagrees with concrete ActorMail<T>",
+                )),
+                None => return Err(Diagnostic::new(
+                    pos, "E_TYPE", "typed actor requires a matching receive(ActorMail<T>) handler",
+                )),
+            }
+        }
         Ok(ActorDecl {
             name,
             pos,
