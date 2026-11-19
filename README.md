@@ -48,3 +48,11 @@ This README describes the repository's intended responsibilities. Feature suppor
 AttoLang is the canonical project identity. Use `.atto` source, `atto-*` package and repository names, and the active AttoLang CLI contract for current documentation. Do not duplicate normative semantics from [atto-spec](https://github.com/atto-lang/atto-spec).
 
 **Evidence gate:** record exact compiler/runtime head and tree, target/toolchain, nonzero executed steps, positive and negative guest results, and explicit passed/failed/unsupported/not-executed states. Host-only CI and `steps=[]` do not establish guest support. README scope is not a feature-completeness claim.
+
+## Experimental Rust-hosted native AOT and actor slice
+
+The separate `Cargo.toml`, `frontend/`, `src/main.rs`, `src/target_native.rs`, and `runtime/` path stages an **experimental bounded native compiler and actor runtime** alongside the existing checked C++ LLVM compiler slice. It is not a replacement for the canonical language specification or a claim that both compiler pipelines have identical feature coverage.
+
+For the supported host profile, build the Rust-hosted compiler with `cargo build --offline --release --bin atto-llvm`. The source-owned smoke and actor regression scripts are `ci/test_native_aot.sh` and `ci/test_native_actors.sh`. See [native-AOT limits](docs/native-aot.md), [actor runtime scope](docs/native-actors.md) and [receiver method / sealed-state scope](docs/native-mtd-critical.md).
+
+The independent [exact-head private CI evidence](https://github.com/athlet-o/athleto-e2e/actions/runs/43669427959) covers the original isolated Rust-hosted compiler snapshot: compiled native actor scalar cases, negative compiler admissions, sanitizer checks, and protocol scalar fixtures. **That run does not certify the subsequently combined mainline tree.** In particular this slice does not implement complete actor supervision, full ownership across suspension, general FFI, QUIC/TLS/QPACK networking or five-backend parity. The HTTP/3 ABI contract is a proposed interface, not a working network engine.
