@@ -306,6 +306,10 @@ struct Statement {
 // All locals and ordinary statements precede guards; branch-local objects
 // and suspension remain unsupported until path-sensitive cleanup is proven.
 struct GuardedReturn {
+    // The new else-free 'guard cond { return value; }' is an early exit on
+    // FALSE. Legacy 'if cond { return value; } fi' returns on TRUE.
+    // Keep the polarity explicit: AST paths, typers and cleanup are shared.
+    bool return_on_false = false;
     std::unique_ptr<Expression> condition;
     std::unique_ptr<Expression> lhs; // stacked equality-only compatibility
     std::unique_ptr<Expression> rhs;

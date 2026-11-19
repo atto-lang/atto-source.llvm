@@ -2310,8 +2310,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                             builder.CreateICmpEQ(left, right, "return.guard.eq.i1"),
                             i64, "return.guard.eq");
                     }
-                    llvm::Value* takenCondition = builder.CreateICmpNE(
-                        conditionValue, llvm::ConstantInt::get(i64, 0), "return.guard.cond.i1");
+                    // Native 'guard cond { return ...; }' is a fail arm:
+                    // return if the checked bool condition is false.
+                    // Historical 'if cond { return ...; } fi' remains true-arm.
+                    llvm::Value* takenCondition = guard.return_on_false
+                        ? builder.CreateICmpEQ(
+                            conditionValue, llvm::ConstantInt::get(i64, 0),
+                            "return.guard.fail.i1")
+                        : builder.CreateICmpNE(
+                            conditionValue, llvm::ConstantInt::get(i64, 0),
+                            "return.guard.cond.i1");
                     llvm::BasicBlock* taken = llvm::BasicBlock::Create(context, "guard.return", function);
                     llvm::BasicBlock* next = llvm::BasicBlock::Create(context, "guard.next", function);
                     builder.CreateCondBr(takenCondition, taken, next);
