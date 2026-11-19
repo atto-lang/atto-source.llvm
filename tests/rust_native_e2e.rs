@@ -3,6 +3,8 @@ use std::{env, fs, path::{Path, PathBuf}, process::{Command, Output, Stdio}, tim
 
 #[path = "rust_native_e2e/guard_positive.rs"]
 mod guard_positive;
+#[path = "rust_native_e2e/guard_negative.rs"]
+mod guard_negative;
 
 pub struct Harness {
     compiler: PathBuf,
@@ -133,5 +135,6 @@ fn main() {
     assert_eq!(args.len(), 3, "usage: rust_native_e2e COMPILER CLANG");
     let mut h = Harness::new(PathBuf::from(&args[1]), PathBuf::from(&args[2]));
     guard_positive::run(&mut h);
+    guard_negative::run(&mut h);
     h.finish();
 }
