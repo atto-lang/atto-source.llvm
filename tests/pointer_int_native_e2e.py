@@ -78,6 +78,12 @@ NEGATIVE = [
         "  p.close();", outcome="0").replace("Pointer<int> p", "Pointer<string> p"), "expected 'int'"),
     ("unsupported_ffi", program(
         "  printf(1);\n  p.close();", outcome="0"), "expected 'p'"),
+    ("quoted_pointer_keyword_spoof", program(
+        '  val int first = "return";\n  p.close();',
+        outcome="0"), "quoted string/template"),
+    ("template_pointer_keyword_spoof", program(
+        "  val int first = `return`;\n  p.close();",
+        outcome="0"), "quoted string/template"),
     ("unary_address", program(
         "  p.write_at(0, 1);\n  val int first = &p;\n  p.close();", outcome="first"), "unsupported token"),
     ("pointer_return", program("  p.close();", outcome="p"), "escape"),

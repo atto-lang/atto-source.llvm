@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/PointerIntCodegen.hpp"
 #include "oreslang/backend/NativeFlatClasses.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
@@ -645,6 +646,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool cortex_m_target,
                                   bool bounded_allocator_provider,
                                   bool tenant_vm_guest) {
+    if (source.pointer_int_plan) {
+        if (wasm32_target || cortex_m_target || bounded_allocator_provider ||
+                tenant_vm_guest || !source.functions.empty() ||
+                !source.actors.empty() || !source.classes.empty() ||
+                !source.imports.empty())
+            throw std::runtime_error(
+                "Pointer<int> M2a nominal HIR only admits isolated host AOT");
+        return pointer_int_aot::emit_verified_ir(*source.pointer_int_plan);
+    }
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
