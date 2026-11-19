@@ -1,7 +1,9 @@
 // Dependency-free Rust driver: actual Atto source -> LLVM IR -> Clang -> native binary.
 use std::{env, fs, path::{Path, PathBuf}, process::{Command, Output, Stdio}, time::{SystemTime, UNIX_EPOCH}};
 
+#[path = "rust_native_e2e/guard_positive.rs"]
 mod guard_positive;
+#[path = "rust_native_e2e/guard_negative.rs"]
 mod guard_negative;
 
 pub struct Harness {
