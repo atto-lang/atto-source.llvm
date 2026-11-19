@@ -1,0 +1,12 @@
+export pub Foo;
+export pub[pkg] class Bar;
+export pub fnc calculate;
+
+define class Foo as
+end
+
+define class Bar as
+end
+
+fnc calculate(): int { return 42; }
+fnc main(): int { return calculate(); }

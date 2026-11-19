@@ -1,0 +1,8 @@
+pub fnc main(): int {
+  return (
+    (false && (Integer.rem(1, 0) == 0)) == false &&
+    (true || (Integer.rem(1, 0) == 0)) == true &&
+    (false && (Integer.rem(7, 0) != 0)) == false &&
+    (true || (Integer.rem(7, 0) != 0)) == true
+  ) ? 42 : 7;
+}
