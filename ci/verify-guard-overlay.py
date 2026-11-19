@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify 50 original LLVM source blobs and seven reviewed Atto compiler/runtime overlays.
+"""Verify 48 original LLVM source blobs and nine reviewed Atto compiler/runtime overlays.
 
 The overlay contains immutable Git blob IDs from reviewed compiler merges
 #10, #13, #14 and #15, plus the caret-return semantic merge of #19 and the #21 tenant heap hardening.
@@ -15,7 +15,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 OVERLAY = json.loads((ROOT / "ci/accepted-llvm-source-overlays.json").read_text())["files"]
-EXPECTED_OVERLAY_PATHS = set(["src/main/cpp/oreslang/backend/LlvmCodegen.cpp","src/main/cpp/oreslang/frontend/Parser.cpp","src/main/cpp/oreslang/frontend/Parser.hpp","src/main/cpp/oreslang/main.cpp","src/main/cpp/oreslang/runtime/TenantVm.cpp","src/main/cpp/oreslang/runtime/TenantVmGuestAbi.h","src/main/cpp/oreslang/types/OwnershipChecker.cpp"])
+EXPECTED_OVERLAY_PATHS = set(["src/main/cpp/oreslang/frontend/ModuleLoader.cpp","src/main/cpp/oreslang/frontend/ModuleLoader.hpp","src/main/cpp/oreslang/backend/LlvmCodegen.cpp","src/main/cpp/oreslang/frontend/Parser.cpp","src/main/cpp/oreslang/frontend/Parser.hpp","src/main/cpp/oreslang/main.cpp","src/main/cpp/oreslang/runtime/TenantVm.cpp","src/main/cpp/oreslang/runtime/TenantVmGuestAbi.h","src/main/cpp/oreslang/types/OwnershipChecker.cpp"])
 ORIGIN = "b16089183aa1864adaef5bb0a13051d19430db09"
 
 
@@ -61,8 +61,8 @@ def verify():
             raise ValueError("ATTO_GUARD_NOT_EXECUTED: inaccurate immutable original")
     print("ATTO_GUARD_COMPILER_HEAD=" + expected)
     print("ATTO_GUARD_COMPILER_ROOT_TREE=" + git("rev-parse", "HEAD^{tree}"))
-    print("ORIGINAL_UNCHANGED_GIT_BLOBS=50")
-    print("REVIEWED_ATTO_SOURCE_BLOBS=7")
+    print("ORIGINAL_UNCHANGED_GIT_BLOBS=48")
+    print("REVIEWED_ATTO_SOURCE_BLOBS=9")
     print("SOURCE_COMPLETE_MIGRATION=false")
 
 
