@@ -1,0 +1,72 @@
+name: LLVM functor recursive type-shape preflight (HOST ONLY)
+on:
+  pull_request:
+    paths:
+      - CMakeLists.txt
+      - src/main/cpp/oreslang/frontend/ModuleLoader.cpp
+      - src/main/cpp/oreslang/types/FunctorTypeRules.hpp
+      - src/main/cpp/oreslang/types/NativeSumTypes.hpp
+      - tests/functor_type_rules_test.cpp
+      - .github/workflows/functor-type-shape-host.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  recursive-type-shape-host-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Exact PR-head and tracked-file provenance
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          test -z "$(git ls-files --others --ignored --exclude-standard)"
+          echo "SOURCE_COMMIT=$(git rev-parse HEAD)"
+          echo "SOURCE_TREE=$(git rev-parse HEAD^{tree})"
+          for file in CMakeLists.txt src/main/cpp/oreslang/frontend/ModuleLoader.cpp src/main/cpp/oreslang/types/FunctorTypeRules.hpp src/main/cpp/oreslang/types/NativeSumTypes.hpp tests/functor_type_rules_test.cpp .github/workflows/functor-type-shape-host.yml; do
+            test -f "$file"
+            test ! -L "$file"
+            echo "BLOB $file $(git rev-parse "HEAD:$file")"
+            git cat-file -p "HEAD:$file" | cmp - "$file"
+          done
+      - name: Build and execute C++17 strict host-only shape tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -I src/main/cpp tests/functor_type_rules_test.cpp \
+            -o build/functor-type-shape-host
+          ./build/functor-type-shape-host | tee build/functor-shape-host.log
+          grep -q 'compiler-type-shape host-only checks; LLVM guest/native machine-code verification NOT_EXECUTED' \
+            build/functor-shape-host.log
+      - name: ASan and UBSan C++ type-shape host test (NOT guest ownership)
+        shell: bash
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -fno-omit-frame-pointer -fsanitize=address,undefined \
+            -I src/main/cpp tests/functor_type_rules_test.cpp \
+            -o build/functor-type-shape-host-sanitized
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+          UBSAN_OPTIONS=halt_on_error=1 \
+            ./build/functor-type-shape-host-sanitized
+      - name: Keep backend guest status fail-closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'LLVM native functor guest conformance: NOT_EXECUTED'
+          echo '36 positive assertions / 15 negative .atto fixtures: NOT_EXECUTED'
+          echo 'Nested ownership/destructors and zero-GC: NOT_EXECUTED'

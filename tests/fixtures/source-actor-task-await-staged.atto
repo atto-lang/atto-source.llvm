@@ -1,0 +1,12 @@
+// Typed actor-owned Task await is staged in the AST but must NOT emit IR
+// until the compiler can generate a suspended handler continuation.
+define actor Worker as {
+  let total: int = 0;
+  pub suspends fnc on_message(int n): int {
+    let Task<int> child = task { return 40 + 2; };
+    return await child;
+  }
+}
+pub fnc main(): int {
+  return 0;
+}

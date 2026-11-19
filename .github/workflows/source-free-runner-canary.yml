@@ -1,0 +1,75 @@
+name: Source-free runner admission canary
+
+on:
+  # Manual dispatch is available once this reviewed workflow is on default branch.
+  # No private-source checkout or tokens are used by this canary.
+  workflow_dispatch:
+  # Manual runner admission re-probe; this workflow cannot read or export source.
+  workflow_dispatch: {}
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/source-free-runner-canary.yml
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/source-free-runner-canary.yml
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  admission:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Prove runner admission without repository checkout
+        shell: bash
+        env:
+          EXPECTED_REPOSITORY: ${{ github.repository }}
+          EXPECTED_REPOSITORY_ID: ${{ github.repository_id }}
+          EXPECTED_RUN_ID: ${{ github.run_id }}
+          EXPECTED_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          test -n "${RUNNER_NAME:-}"
+          test -n "${RUNNER_OS:-}"
+          test "$GITHUB_REPOSITORY" = "$EXPECTED_REPOSITORY"
+          [[ "$EXPECTED_REPOSITORY_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$EXPECTED_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$EXPECTED_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          test "$GITHUB_RUN_ID" = "$EXPECTED_RUN_ID"
+          test "$GITHUB_RUN_ATTEMPT" = "$EXPECTED_RUN_ATTEMPT"
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$GITHUB_SHA" = "${{ github.sha }}"
+          printf 'SOURCE_FREE_RUNNER_CANARY=EXECUTED repository=%s repository_id=%s run_id=%s attempt=%s runner_name=%s runner_os=%s\n' \
+            "$EXPECTED_REPOSITORY" "$EXPECTED_REPOSITORY_ID" "$EXPECTED_RUN_ID" \
+            "$EXPECTED_RUN_ATTEMPT" "$RUNNER_NAME" "$RUNNER_OS"
+          printf 'SOURCE_FREE_PROBE_METADATA=OBSERVED event=%s sha=%s ref=%s\n' "$GITHUB_EVENT_NAME" "$GITHUB_SHA" "$GITHUB_REF"
+          echo "This canary proves command execution only; external API evidence must verify runner_id > 0."
+          echo "SOURCE_FREE_RUNNER_CANARY_STEP_A=EXECUTED"
+          echo "It does not certify compiler execution, compiled .ores guest execution, artifacts, or backend parity."
+
+      - name: Prove independent runner execution step
+        shell: bash
+        env:
+          EXPECTED_REPOSITORY: ${{ github.repository }}
+          EXPECTED_RUN_ID: ${{ github.run_id }}
+          EXPECTED_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          test -n "${RUNNER_NAME:-}"
+          test "$GITHUB_REPOSITORY" = "$EXPECTED_REPOSITORY"
+          test "$GITHUB_RUN_ID" = "$EXPECTED_RUN_ID"
+          test "$GITHUB_RUN_ATTEMPT" = "$EXPECTED_RUN_ATTEMPT"
+          echo "SOURCE_FREE_RUNNER_CANARY_STEP_B=EXECUTED"
+          echo "No source checkout, dependencies, credentials, or cross-org source transfer."
+      - name: Compile independent source-free C++17 canary
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' '#include <iostream>' 'int main(){std::cout << "SOURCE_FREE_CPP17_EXECUTED" << std::endl;}' > "$RUNNER_TEMP/sourcefree.cpp"
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror "$RUNNER_TEMP/sourcefree.cpp" -o "$RUNNER_TEMP/sourcefree"
+          "$RUNNER_TEMP/sourcefree" | grep -Fx 'SOURCE_FREE_CPP17_EXECUTED'

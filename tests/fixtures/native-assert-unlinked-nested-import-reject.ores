@@ -1,0 +1,5 @@
+// A nested source import must not bypass the missing cross-unit linker.
+define module Entry as
+    import module Assert from "std/assert";
+    pub fnc main(): int { return 42; }
+end

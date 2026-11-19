@@ -3,6 +3,7 @@
 #include "oreslang/runtime/ActorHeapIdentity.hpp"
 #include <atomic>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -46,6 +47,15 @@ public:
     explicit ActorHeapBorrowGate(ActorHeapIdentity owner) : owner_(owner) {}
     ActorHeapBorrowGate(const ActorHeapBorrowGate&) = delete;
     ActorHeapBorrowGate& operator=(const ActorHeapBorrowGate&) = delete;
+
+    // Leases hold a raw reference to this gate. Destroying its storage while
+    // a worker/continuation owns any lease is a use-after-free even if the
+    // actor was logically stopped. Fail closed rather than permitting a late
+    // Lease::reset() to decrement freed memory. This check allocates nothing.
+    ~ActorHeapBorrowGate() noexcept {
+        if ((state_.load(std::memory_order_acquire) & counter_mask) != 0)
+            std::terminate();
+    }
 
     class Lease final {
         friend class ActorHeapBorrowGate;
