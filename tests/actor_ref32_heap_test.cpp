@@ -43,7 +43,12 @@ int main() {
     check(a.read_i64(x, owner, 101, 0, v) && v == 10, "read x");
     check(a.read_i64(x, owner, 101, 8, v) && v == 20, "read y");
     check(a.read_i64(x, owner, 101, 16, v) && v == 3, "read velocity");
-    check(!a.read_i64(x, owner, 101, 24, v), "OOB read");
+    v = 0x55667788;
+    check(!a.read_i64(x, owner, 101, 24, v) && v == 0,
+          "OOB read must clear stale output");
+    v = 0x11223344;
+    check(!a.read_i64(y, owner, 101, 0, v) && v == 0,
+          "foreign witness must clear output");
     check(!a.write_i64(x, owner, 101, 1, 2), "unaligned field");
     check(!a.write_i64(x, owner, 99, 0, 2), "type forgery");
     check(!a.read_i64(x, other, 101, 0, v), "foreign caller context");
@@ -63,7 +68,9 @@ int main() {
     check(a.allocate(other, 24, 8, 101).guest_token() == 0, "foreign allocation");
     check(a.close_after_quiescence() && a.close_after_quiescence(), "idempotent STOP");
     check(a.closed(), "closed state");
-    check(!a.read_i64(z, owner, 101, 0, v), "post-STOP read");
+    v = 0x12345678;
+    check(!a.read_i64(z, owner, 101, 0, v) && v == 0,
+          "post-STOP read must clear output");
     check(a.allocate(owner, 24, 8, 101).guest_token() == 0, "post-STOP alloc");
     check(b.read_i64(y, other, 101, 0, v) && v == 0, "sibling survived STOP");
 
