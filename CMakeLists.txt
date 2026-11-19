@@ -1981,6 +1981,11 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    # Bounded abstract ownership model, separate from compiler-native proof.
+    add_test(NAME formal_native_ownership_loan_safety
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/formal_ownership_loan_model.py")
+    set_tests_properties(formal_native_ownership_loan_safety PROPERTIES TIMEOUT 20)
     add_test(NAME native_realtime_profile_cli
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
             realtime-profile "$<TARGET_FILE:oreslang-llvmc>")
