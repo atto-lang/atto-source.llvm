@@ -7,6 +7,8 @@ mod guard_positive;
 mod guard_negative;
 #[path = "rust_native_e2e/pointer_positive.rs"]
 mod pointer_positive;
+#[path = "rust_native_e2e/pointer_negative.rs"]
+mod pointer_negative;
 
 pub struct Harness {
     compiler: PathBuf,
@@ -139,5 +141,6 @@ fn main() {
     guard_positive::run(&mut h);
     guard_negative::run(&mut h);
     pointer_positive::run(&mut h);
+    pointer_negative::run(&mut h);
     h.finish();
 }
