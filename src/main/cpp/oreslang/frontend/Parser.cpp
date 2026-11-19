@@ -1856,6 +1856,13 @@ private:
         } else {
             value.exported = owner.empty() ? accept("pub") : visible;
         const bool source_async = owner.empty() && accept("async");
+        // A foreign declaration has no Atto body. Never treat its source
+        // spelling as a freely chosen native linker symbol.
+        value.foreign_import = owner.empty() && accept("extern");
+        if (value.foreign_import && source_async)
+            fail("async extern FFI is unsupported until a real scheduler-owned foreign continuation exists");
+        if (value.foreign_import && value.exported)
+            fail("foreign FFI declaration must remain private");
         value.async_source_i64 = source_async;
         if (token_.text == "pure") {
             fail("native pure modifier awaits transitive observable-effect verification");
@@ -2059,6 +2066,29 @@ private:
         }
         if (!owner.empty() && value.has_declared_effects)
             fail("native method using effects require receiver effect summaries");
+        if (value.foreign_import) {
+            // Production AST shape, but the M1 symbol/target/capability scope
+            // is deliberately fixed while actor runtime admission is pending.
+            const bool params_ok = value.parameters.size() == 2 &&
+                std::all_of(value.parameters.begin(), value.parameters.end(),
+                    [](const Parameter& param) {
+                        return param.scalar_type == ScalarType::I64 &&
+                            param.mode == Parameter::Mode::Value &&
+                            param.class_name.empty() && param.generic_type.empty() &&
+                            param.pending_type_alias.empty() && param.sum_type.empty();
+                    });
+            if (value.name != "atto_add_i64" || !params_ok ||
+                    value.returns_void || value.return_type != ScalarType::I64 ||
+                    !value.pending_return_type_alias.empty() ||
+                    !value.return_class.empty() || !value.return_sum.empty() ||
+                    !value.generic_parameters.empty() ||
+                    !value.has_declared_effects ||
+                    value.declared_effects.bits !=
+                        static_cast<std::uint32_t>(FunctionEffect::Ffi))
+                fail("ffi declaration requires exact approved i64(i64,i64) and using ffi");
+            require(";");
+            return value;
+        }
         if (accept("requires")) {
             // Never accept an uncertified realtime property as a mere annotation.
             fail("native requires clause awaits verified WCET/allocation/blocking analysis");
@@ -4556,7 +4586,7 @@ private:
     }
 
     static void validate_declared_effects(const Function& fn, const Program& program) {
-        if (!fn.has_declared_effects) return;
+        if (!fn.has_declared_effects || fn.foreign_import) return;
         if (!fn.actor_spawns.empty() || !fn.ready_await_actor.empty()
                 || !fn.done_await_actor.empty()
                 || !fn.actor_sends.empty() || !fn.actor_stops.empty()
@@ -4613,8 +4643,42 @@ private:
                 contains_callable_invocation(guard.rhs.get()) ||
                 contains_callable_invocation(guard.result.get()))
                 throw std::runtime_error("using effects require transitive call summaries");
-        if (contains_callable_invocation(fn.result.get()))
-            throw std::runtime_error("using effects require transitive call summaries");
+        if (contains_callable_invocation(fn.result.get())) {
+            // M1-only direct foreign call; source cannot launder a foreign
+            // effect through a pure helper, nested call or arbitrary symbol.
+            const auto* call = fn.result.get();
+            const bool approved = program.foreign_i64_granted &&
+                fn.name == "main" && fn.parameters.empty() &&
+                fn.declared_effects.bits ==
+                    static_cast<std::uint32_t>(FunctionEffect::Ffi) &&
+                fn.locals.empty() && fn.statements.empty() &&
+                fn.early_returns.empty() &&
+                call && call->kind == Expression::Kind::Call &&
+                call->name == "atto_add_i64" && call->arguments.size() == 2 &&
+                std::all_of(call->arguments.begin(), call->arguments.end(),
+                    [](const std::unique_ptr<Expression>& arg) {
+                        return arg && (arg->kind == Expression::Kind::Integer ||
+                            (arg->kind == Expression::Kind::Negate && arg->left &&
+                             arg->left->kind == Expression::Kind::Integer));
+                    });
+            if (!approved)
+                throw std::runtime_error("using ffi requires one directly admitted static foreign i64 call");
+            // This first direct-call M1 profile admits literal arguments only.
+            // Check their mathematical sum before any native C code executes:
+            // neither an untrusted foreign function nor signed C overflow is
+            // an acceptable substitute for the checked Atto int contract.
+            const auto signed_literal = [](const Expression& arg) -> std::int64_t {
+                return arg.kind == Expression::Kind::Integer
+                    ? arg.integer : -arg.left->integer;
+            };
+            const std::int64_t lhs = signed_literal(*call->arguments[0]);
+            const std::int64_t rhs = signed_literal(*call->arguments[1]);
+            // Portable even for 32-bit native C++ hosts: no __int128 or
+            // evaluation of an overflowing signed addition is required.
+            if ((rhs > 0 && lhs > std::numeric_limits<std::int64_t>::max() - rhs) ||
+                    (rhs < 0 && lhs < std::numeric_limits<std::int64_t>::min() - rhs))
+                throw std::runtime_error("foreign i64 checked arithmetic overflow");
+        }
     }
 
     static void validate(const Program& program) {
@@ -4627,8 +4691,58 @@ private:
             if (!classes.insert(cls.name).second)
                 throw std::runtime_error("duplicate class declaration '" + cls.name + "'");
         }
+        // A naked CLI flag must not install ambient FFI authority in an
+        // otherwise ordinary compilation. M1 admits precisely one bound
+        // import and one direct effect-qualified main, no extra call graph.
+        if (program.foreign_i64_granted) {
+            const auto imports = std::count_if(
+                program.functions.begin(), program.functions.end(),
+                [](const Function& f) { return f.foreign_import; });
+            const auto mains = std::count_if(
+                program.functions.begin(), program.functions.end(),
+                [](const Function& f) { return f.name == "main" && !f.foreign_import; });
+            if (imports != 1 || mains != 1 || program.functions.size() != 2 ||
+                    !program.actors.empty() || !program.classes.empty() ||
+                    !program.generators.empty() || !program.cooperative_loops.empty() ||
+                    !program.module.empty() || !program.imports.empty())
+                throw std::runtime_error(
+                    "M1 ffi grant requires exactly one approved extern and one standalone main");
+            const auto it = std::find_if(program.functions.begin(), program.functions.end(),
+                [](const Function& fn) { return fn.name == "main" && !fn.foreign_import; });
+            const Function& entry = *it; // mains==1 above
+            if (!entry.parameters.empty() || !entry.has_declared_effects ||
+                    entry.declared_effects.bits !=
+                        static_cast<std::uint32_t>(FunctionEffect::Ffi) ||
+                    !entry.locals.empty() || !entry.statements.empty() ||
+                    !entry.early_returns.empty() || !entry.actor_spawns.empty() ||
+                    !entry.actor_actions.empty() || entry.caught_throw_value ||
+                    !entry.result || entry.result->kind != Expression::Kind::Call ||
+                    entry.result->name != "atto_add_i64" ||
+                    entry.result->arguments.size() != 2)
+                throw std::runtime_error(
+                    "M1 ffi grant must be consumed by an exact effect-qualified main call");
+        }
         NativeSignatures functions;
         for (const auto& fn : program.functions) {
+            if (fn.foreign_import) {
+                if (!program.foreign_i64_granted || !program.module.empty() ||
+                        !program.imports.empty() || !program.actors.empty() ||
+                        !program.classes.empty() || fn.name != "atto_add_i64" ||
+                        fn.exported || fn.native_internal || fn.async_source_i64 ||
+                        !fn.has_declared_effects ||
+                        fn.parameters.size() != 2 || fn.returns_void ||
+                        fn.return_type != ScalarType::I64 ||
+                        fn.declared_effects.bits !=
+                            static_cast<std::uint32_t>(FunctionEffect::Ffi))
+                    throw std::runtime_error("ffi native import denied: trusted host grant and exact static i64 contract required");
+                for (const auto& p : fn.parameters)
+                    if (p.mode != Parameter::Mode::Value ||
+                            p.scalar_type != ScalarType::I64 ||
+                            !p.class_name.empty() || !p.sum_type.empty())
+                        throw std::runtime_error("ffi native import parameter type must be value int");
+            } else if (fn.name == "atto_add_i64") {
+                throw std::runtime_error("reserved ffi native linker symbol cannot have a source body");
+            }
             // Reject hand-constructed or incorrectly deserialized programs:
             // parser-only pending aliases never enter ownership or LLVM ABI.
             if (!fn.pending_return_type_alias.empty())
@@ -4637,6 +4751,63 @@ private:
                 if (!parameter.pending_type_alias.empty())
                     throw std::runtime_error("unresolved native scalar parameter type before ABI admission");
             validate_declared_effects(fn, program);
+            // A source function without the declared ffi effect must never
+            // reach the foreign linker, even via nested expression trees or
+            // a pure-looking helper. This gate precedes every codegen path.
+            std::function<bool(const Expression*)> foreign_call;
+            foreign_call = [&](const Expression* expr) -> bool {
+                if (!expr) return false;
+                if (expr->kind == Expression::Kind::Call &&
+                        expr->name == "atto_add_i64") return true;
+                if (foreign_call(expr->left.get()) ||
+                        foreign_call(expr->right.get()) ||
+                        foreign_call(expr->condition.get()) ||
+                        foreign_call(expr->condition_lhs.get()) ||
+                        foreign_call(expr->condition_rhs.get()) ||
+                        foreign_call(expr->when_true.get()) ||
+                        foreign_call(expr->when_false.get())) return true;
+                for (const auto& arg : expr->arguments)
+                    if (foreign_call(arg.get())) return true;
+                return false;
+            };
+            std::function<bool(const Statement&)> statement_has_ffi;
+            statement_has_ffi = [&](const Statement& stmt) {
+                if (foreign_call(stmt.expression.get()) ||
+                        foreign_call(stmt.condition.get()) ||
+                        foreign_call(stmt.condition_lhs.get()) ||
+                        foreign_call(stmt.condition_rhs.get()) ||
+                        foreign_call(stmt.array_commit_length.get()) ||
+                        foreign_call(stmt.loop_step.get()) ||
+                        (stmt.branch_local &&
+                         foreign_call(stmt.branch_local->initializer.get())))
+                    return true;
+                for (const auto& arg : stmt.array_commit_values)
+                    if (foreign_call(arg.get())) return true;
+                for (const auto& nested : stmt.then_statements)
+                    if (statement_has_ffi(nested)) return true;
+                for (const auto& nested : stmt.else_statements)
+                    if (statement_has_ffi(nested)) return true;
+                return false;
+            };
+            bool uses_ffi = foreign_call(fn.result.get()) ||
+                foreign_call(fn.caught_throw_value.get());
+            for (const auto& local : fn.locals)
+                uses_ffi = uses_ffi || foreign_call(local.initializer.get());
+            for (const auto& stmt : fn.statements)
+                uses_ffi = uses_ffi || statement_has_ffi(stmt);
+            for (const auto& guard : fn.early_returns)
+                uses_ffi = uses_ffi || foreign_call(guard.condition.get()) ||
+                    foreign_call(guard.result.get());
+            if (uses_ffi && (!fn.has_declared_effects ||
+                    fn.declared_effects.bits !=
+                        static_cast<std::uint32_t>(FunctionEffect::Ffi) ||
+                    !program.foreign_i64_granted || fn.name != "main" ||
+                    fn.parameters.size() != 0 ||
+                    !fn.result || fn.result->kind != Expression::Kind::Call ||
+                    fn.result->name != "atto_add_i64")) {
+                throw std::runtime_error(
+                    "foreign i64 call requires trusted grant, main using ffi and direct effectful return");
+            }
             std::function<bool(const Statement&)> ordered_frame = [&](const Statement& s) {
                 return s.kind == Statement::Kind::ScopedLocal || s.kind == Statement::Kind::ScalarWrite ||
                     std::any_of(s.then_statements.begin(), s.then_statements.end(), ordered_frame) ||

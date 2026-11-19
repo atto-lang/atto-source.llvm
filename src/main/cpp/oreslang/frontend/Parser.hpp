@@ -373,6 +373,7 @@ struct Function {
     bool exported = false;
     std::string method_owner; // compiler-owned class method privilege, never source syntax
     bool native_internal = false; // linker-owned private imported implementation
+    bool foreign_import = false; // exact approved C symbol, declaration-only, never guest-implemented
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
     std::string return_sum;
@@ -465,6 +466,9 @@ struct TypeConstraintDescriptor {
 };
 
 struct Program {
+    // Host compilation authority, injected by the trusted CLI/loader only.
+    // Source code cannot forge this bit; parsed programs default denied.
+    bool foreign_i64_granted = false;
     // M2a: same nominal HIR is consumed by canonical parser, existing
     // ownership checker and LLVM backend. No raw pointer-as-i64 may enter
     // ordinary source Expression or ScalarType storage.

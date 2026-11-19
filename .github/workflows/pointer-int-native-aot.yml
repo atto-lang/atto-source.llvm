@@ -6,6 +6,8 @@ on:
       - 'src/main/cpp/oreslang/frontend/Parser.hpp'
       - 'src/main/cpp/oreslang/frontend/PointerIntSyntax.hpp'
       - 'src/main/cpp/oreslang/frontend/StaticFfiI64Aot.hpp'
+      - 'src/main/cpp/oreslang/frontend/ModuleLoader.cpp'
+      - 'src/main/cpp/oreslang/frontend/ModuleLoader.hpp'
       - 'src/main/cpp/oreslang/types/PointerIntHIR.hpp'
       - 'src/main/cpp/oreslang/types/PointerIntOwnership.hpp'
       - 'src/main/cpp/oreslang/types/OwnershipChecker.cpp'
@@ -15,6 +17,8 @@ on:
       - 'src/main/cpp/oreslang/main.cpp'
       - 'tests/pointer_int_native_e2e.py'
       - 'tests/static_ffi_i64_native_e2e.py'
+      - 'tests/ffi_normal_i64_native_e2e.py'
+      - 'docs/NORMAL_FFI_I64_AOT_M1.md'
       - 'docs/STATIC_FFI_I64_NATIVE_AOT_M0.md'
       - 'tests/guard_native_e2e.py'
       - 'docs/POINTER_INT_AOT_M1.md'
@@ -40,7 +44,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          test "$(git hash-object src/main/cpp/oreslang/frontend/Parser.cpp)" = a671707bda15bc522d8a75f8c22b16f2dff38fb0
+          test "$(git hash-object src/main/cpp/oreslang/frontend/Parser.cpp)" = 511d7ec9c348c78713d5a5008df9aad777a6eaf4
           test "$(git hash-object src/main/cpp/oreslang/frontend/PointerIntSyntax.hpp)" = 356a2bc6f870f3c2cb7b7f848934f708324bb36d
           test "$(git hash-object src/main/cpp/oreslang/types/PointerIntHIR.hpp)" = ea39b2653d6145d20739b53d7cf76a2af8961078
           test "$(git hash-object src/main/cpp/oreslang/types/PointerIntOwnership.hpp)" = 9df530bc13383aca0f6edf352403473f1b551208
@@ -48,7 +52,7 @@ jobs:
           test "$(git hash-object tests/pointer_int_hir_admission.cpp)" = 4170a8ba49e1199dfca1bfaf6e701aae2637286b
           test ! -e src/main/cpp/oreslang/frontend/PointerIntAot.hpp
           test "$(git hash-object tests/pointer_int_native_e2e.py)" = e9f104ba81e6bcc4e4e88f088cebd24e1ebba0a7
-          test "$(git hash-object src/main/cpp/oreslang/main.cpp)" = 52f59f4db55bab8b06c47448ec807a29ad1ebab1
+          test "$(git hash-object src/main/cpp/oreslang/main.cpp)" = 85b3fbb377e77e06e71040edd1b6a5415150a78a
           git rev-parse HEAD HEAD^{tree}
           git status --porcelain
       - name: Install LLVM18 and Clang18 real native toolchain
@@ -81,6 +85,10 @@ jobs:
         run: |
           set -euo pipefail
           python3 tests/static_ffi_i64_native_e2e.py --compiler build/pointer-m1/oreslang-llvmc --clang /usr/bin/clang-18
+      - name: Execute normal compiler C i64 restricted FFI native guests and negatives
+        run: |
+          set -euo pipefail
+          python3 tests/ffi_normal_i64_native_e2e.py --compiler build/pointer-m1/oreslang-llvmc --clang /usr/bin/clang-18
       - name: Accurate evidence limits
         run: |
           echo 'POINTER_INT_CANONICAL_FRONTEND_HIR=RESTRICTED_OPT_IN_ONLY'
@@ -88,3 +96,4 @@ jobs:
           echo 'POINTER_BORROW_SHARE_ACTOR_TRANSFER=NOT_EXECUTED'
           echo 'OTHER_BACKEND_PARITY=NOT_EXECUTED'
           echo 'STATIC_FFI_I64=OPT_IN_PROOF_ONLY_NOT_SIGNED_OR_SUPERVISED'
+          echo 'NORMAL_COMPILER_FFI_I64=CLI_GATED_EXPERIMENT_NOT_SIGNED_PERMISSION'

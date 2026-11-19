@@ -37,12 +37,12 @@ class Loader {
     std::vector<std::unique_ptr<Unit>> units;
     std::size_t bytes = 0, read_bytes = 0, edges = 0;
     std::unordered_map<std::string, std::size_t> paths;
-    bool owned, scalar_loop, host;
+    bool owned, scalar_loop, host, foreign_i64_granted;
     std::uint32_t root_provider_bits = 0;
 public:
     Loader(bool owned, bool scalar_loop, bool host,
-           std::uint32_t admitted_provider_bits)
-        : owned(owned), scalar_loop(scalar_loop), host(host),
+           std::uint32_t admitted_provider_bits, bool foreign_grant)
+        : owned(owned), scalar_loop(scalar_loop), host(host), foreign_i64_granted(foreign_grant),
           root_provider_bits(admitted_provider_bits) {}
     Program run(const std::string& path, std::string text, SourceIdentity identity) {
         read_bytes = text.size();
@@ -50,9 +50,16 @@ public:
               frontend::CompilerLibraryTier::Core, root_provider_bits);
         if (units.front()->program.imports.empty()) {
             auto root = std::move(units.front()->program);
+            root.foreign_i64_granted = foreign_i64_granted;
             resolve_and_validate_program(root);
             return root;
         }
+        // M1 FFI admits no module imports: imported symbol qualification and
+        // trust provenance must be separately proved before any linkage.
+        for (const auto& unit : units)
+            for (const auto& fn : unit->program.functions)
+                if (fn.foreign_import)
+                    throw std::runtime_error("foreign FFI imports require one standalone source unit");
         Program linked;
         linked.module = units.front()->program.module;
         linked.namespace_name = units.front()->program.namespace_name;
@@ -421,8 +428,8 @@ private:
 } // namespace
 Program load_native_program(const std::string& path, std::string source, SourceIdentity identity,
                             bool owned, bool scalar_loop, bool host,
-                            std::uint32_t admitted_provider_bits) {
-    return Loader(owned, scalar_loop, host, admitted_provider_bits)
+                            std::uint32_t admitted_provider_bits, bool foreign_i64_granted) {
+    return Loader(owned, scalar_loop, host, admitted_provider_bits, foreign_i64_granted)
         .run(path, std::move(source), identity);
 }
 } // namespace oreslang

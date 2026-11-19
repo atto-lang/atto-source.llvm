@@ -439,7 +439,7 @@ int main(int argc, char** argv) {
         if (native_hard_rt_profile && experimental_owned_int)
             throw std::runtime_error("native-hard-rt profile rejects experimental owned heap lowering");
 
-        if (experimental_static_ffi_i64 || static_ffi_i64_capability) {
+        if (experimental_static_ffi_i64) {
             // Test-only static native C i64 ABI; never implies actor FFI, imported
             // modules, signed supervisor authorization or production permissions.
             if (!experimental_static_ffi_i64 || !static_ffi_i64_capability ||
@@ -463,7 +463,8 @@ int main(int argc, char** argv) {
             // typed Program HIR, shared ownership checker and LLVM emitter.
             // Its admitted grammar remains a closed-world nonescaping stack
             // specialization until full Pointer<T> lowering is verified.
-            if (wasm32_target || cortex_m_target || tenant_vm_guest ||
+            if (static_ffi_i64_capability ||
+                    wasm32_target || cortex_m_target || tenant_vm_guest ||
                     experimental_owned_int || experimental_rt_scalar_loop ||
                     bounded_allocator_provider || tree_shake ||
                     !tree_shake_roots.empty() || native_hard_rt_profile ||
@@ -471,7 +472,7 @@ int main(int argc, char** argv) {
                     constraint_descriptors_only) {
                 throw std::runtime_error(
                     "Pointer<int> AOT M1 requires isolated --target=host "
-                    "without ownership, scheduler, RT, tree shaking or allocator overrides");
+                    "without ownership, scheduler, RT, FFI grant, tree shaking or allocator overrides");
             }
             // Normal native frontend Program -> ownership checker -> LLVM
             // emission, not the M1 standalone source-to-IR shortcut.
@@ -482,10 +483,21 @@ int main(int argc, char** argv) {
             return 0;
         }
 
+        // A normal source unit may receive exactly one compiler-approved native
+        // C i64 symbol through its semantic FFI gate. This temporary CLI grant
+        // is NOT a signed supervisor capability or a foreign-actor permission.
+        if (static_ffi_i64_capability &&
+                (wasm32_target || cortex_m_target || tenant_vm_guest ||
+                 native_hard_rt_profile || rt_check_only || rt_entry_seen ||
+                 rt_report_seen || tree_shake || !tree_shake_roots.empty() ||
+                 experimental_owned_int || experimental_rt_scalar_loop ||
+                 experimental_pointer_int_aot || bounded_allocator_provider))
+            throw std::runtime_error(
+                "normal static FFI i64 requires host AOT with isolated approved linker grant");
         auto ast = oreslang::load_native_program(
             path, text, source_identity, experimental_owned_int,
             experimental_rt_scalar_loop, !wasm32_target && !cortex_m_target,
-            admitted_provider_bits);
+            admitted_provider_bits, static_ffi_i64_capability);
         source_module = ast.module;
         source_namespace = ast.namespace_name;
 
