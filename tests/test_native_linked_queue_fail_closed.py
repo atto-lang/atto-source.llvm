@@ -9,7 +9,7 @@ from native_linked_queue_fail_closed import git_blob_sha, verify_fixture, verify
 
 
 class NativeLinkedQueueHarnessTest(unittest.TestCase):
-    expected = "oreslang-llvmc: expected fnc or routine at byte 156"
+    expected = "oreslang-llvmc: expected 'module' at byte 163"
 
     def result(self, status=1, out=b"", err=None):
         if err is None:

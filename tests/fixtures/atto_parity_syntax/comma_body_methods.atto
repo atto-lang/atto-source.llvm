@@ -1,0 +1,11 @@
+define class Calculator as
+  pub mtd add(mut self, int n) -> int ::
+    int x = 5,
+    x + n
+  end
+end
+
+fnc main(): int {
+  val Calculator c = new Calculator();
+  return c.add(37);
+}

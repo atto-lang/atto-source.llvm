@@ -1,0 +1,64 @@
+name: LLVM actor-owned binary Map native host proof (not guest)
+on:
+  push:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/NativeActorBytesMap.hpp'
+      - 'tests/native_actor_bytes_map_test.cpp'
+      - 'CMakeLists.txt'
+      - '.github/workflows/native-actor-bytes-map-host.yml'
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/NativeActorBytesMap.hpp'
+      - 'tests/native_actor_bytes_map_test.cpp'
+      - 'CMakeLists.txt'
+      - '.github/workflows/native-actor-bytes-map-host.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-runtime-substrate-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Assert immutable compiler-source tree
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          git rev-parse 'HEAD^{tree}'
+          git hash-object src/main/cpp/oreslang/runtime/NativeActorBytesMap.hpp
+          git hash-object tests/native_actor_bytes_map_test.cpp
+          echo 'ATTO_BYTES_MAP_GUEST_COMPILER=NOT_EXECUTED'
+      - name: GCC and Clang native executable checks (three rounds each)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for cc in g++ clang++; do
+            for opt in O1 O2; do
+              binary="$RUNNER_TEMP/native-bytes-map-${cc//+/p}-$opt"
+              "$cc" -std=c++17 "-$opt" -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+                -Isrc/main/cpp tests/native_actor_bytes_map_test.cpp -o "$binary"
+              for round in 1 2 3; do
+                timeout 90 "$binary"
+                echo "LLVM_ACTOR_BYTES_MAP_${cc}_${opt}_ROUND_${round}=EXECUTED_HOST_PASS"
+              done
+            done
+          done
+      - name: Clang ASan UBSan (native host, no guest)
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="$RUNNER_TEMP/native-actor-bytes-map-asan-ubsan"
+          clang++ -std=c++17 -O1 -g -fno-omit-frame-pointer \
+            -fsanitize=address,undefined -pthread -Wall -Wextra -Wpedantic \
+            -Werror -UNDEBUG -Isrc/main/cpp \
+            tests/native_actor_bytes_map_test.cpp -o "$binary"
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 timeout 90 "$binary"
+          echo 'LLVM_ACTOR_BYTES_MAP_ASAN_UBSAN=EXECUTED_HOST_PASS'
+          echo 'ATTO_BYTES_MAP_GUEST_COMPILER=NOT_EXECUTED'

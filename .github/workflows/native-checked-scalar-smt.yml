@@ -1,0 +1,185 @@
+name: Native checked scalar SMT pilot
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/NativeScalarSmt.hpp'
+      - 'tests/native_checked_scalar_smt_test.cpp'
+      - 'tests/fixtures/formal-core-scalar-checked.ores'
+      - 'tests/fixtures/core-math-i64-v1.json'
+      - 'tests/native_aot_core_math_matrix.py'
+      - 'formal/native-scalar/**'
+      - '.github/workflows/native-checked-scalar-smt.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-scalar-proofs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Require exact source tree and reviewed native fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git hash-object tests/fixtures/formal-core-scalar-checked.ores)" = "f1bf58f3e28c2b5a76553f96e23839a9a520a0a4"
+      - name: Install only the SMT solver
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends z3
+      - name: Build and execute real native Parser.cpp and OwnershipChecker.cpp
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/native-scalar-evidence
+          c++ -std=c++17 -O1 -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp \
+            tests/native_checked_scalar_smt_test.cpp \
+            src/main/cpp/oreslang/frontend/Parser.cpp \
+            src/main/cpp/oreslang/types/OwnershipChecker.cpp \
+            -o build/native-scalar-checked-proof
+          build/native-scalar-checked-proof \
+            tests/fixtures/formal-core-scalar-checked.ores \
+            build/native-scalar-evidence
+      - name: Execute exact native AST SMT proofs and source mutants
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd build/native-scalar-evidence
+          for fn in min_int max_int clamp_int; do
+            timeout 30s z3 -smt2 "${fn}.smt2" > "${fn}.z3.out"
+            test "$(cat "${fn}.z3.out")" = $'unsat\nsat'
+          done
+          for fn in min_int clamp_int; do
+            timeout 30s z3 -smt2 "mutated-${fn}.smt2" > "mutated-${fn}.z3.out"
+            test "$(cat "mutated-${fn}.z3.out")" = $'sat\nsat'
+          done
+      - name: Independently replay every split native AST proof and mutant query
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd build/native-scalar-evidence
+          for fn in min_int max_int clamp_int; do
+            test -s "${fn}-implementation.smt2"
+            test -s "${fn}-negative-control.smt2"
+            timeout 30s z3 -smt2 "${fn}-implementation.smt2" > "${fn}-implementation.z3.out"
+            test "$(cat "${fn}-implementation.z3.out")" = "unsat"
+            timeout 30s z3 -smt2 "${fn}-negative-control.smt2" > "${fn}-negative-control.z3.out"
+            test "$(cat "${fn}-negative-control.z3.out")" = "sat"
+            sha256sum "${fn}-implementation.smt2" "${fn}-negative-control.smt2"
+          done
+          for fn in min_int clamp_int; do
+            test -s "mutated-${fn}-implementation.smt2"
+            timeout 30s z3 -smt2 "mutated-${fn}-implementation.smt2" > "mutated-${fn}-implementation.z3.out"
+            test "$(cat "mutated-${fn}-implementation.z3.out")" = "sat"
+            timeout 30s z3 -smt2 "mutated-${fn}-negative-control.smt2" > "mutated-${fn}-negative-control.z3.out"
+            test "$(cat "mutated-${fn}-negative-control.z3.out")" = "sat"
+            sha256sum "mutated-${fn}-implementation.smt2"
+          done
+      - name: Enforce byte-exact native Z3 proof and mutation transcripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd build/native-scalar-evidence
+          require_digest() {
+            test "$(sha256sum "$1" | cut -d' ' -f1)" = "$2"
+          }
+          # Hashes are for complete newline-terminated Z3 stdout bytes.
+          for fn in min_int max_int clamp_int; do
+            require_digest "${fn}.z3.out" c2af3da181f0cb683d48aba3b47c40b7f3814d13fa817ae57f7f098acb636fca
+            require_digest "${fn}-implementation.z3.out" 5c17dfcc2a8f1f30d9e96df6a9825a5030ade046d560332c19de74d93d591a18
+            require_digest "${fn}-negative-control.z3.out" d9dbf94b05b8314af9ca7f2034e92685c33447917605a7243b1099c693a12e5e
+          done
+          for fn in min_int clamp_int; do
+            require_digest "mutated-${fn}.z3.out" d2f733b85518b2ef01097ad8856647c19731ca558ee45faebb65260de667c989
+            require_digest "mutated-${fn}-implementation.z3.out" d9dbf94b05b8314af9ca7f2034e92685c33447917605a7243b1099c693a12e5e
+            require_digest "mutated-${fn}-negative-control.z3.out" d9dbf94b05b8314af9ca7f2034e92685c33447917605a7243b1099c693a12e5e
+          done
+      - name: Record proof toolchain and source identity
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/native-scalar-evidence
+          git rev-parse HEAD > build/native-scalar-evidence/commit-sha.txt
+          git hash-object tests/fixtures/formal-core-scalar-checked.ores > build/native-scalar-evidence/fixture-git-blob.txt
+          c++ --version > build/native-scalar-evidence/compiler-version.txt
+          z3 -version > build/native-scalar-evidence/z3-version.txt
+          sha256sum "$(command -v z3)" > build/native-scalar-evidence/z3-binary-sha256.txt
+      - name: Archive native source-linked evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-scalar-smt-evidence
+          path: build/native-scalar-evidence/
+          if-no-files-found: warn
+          retention-days: 14
+  native-aot-core-math:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Pin exact AOT fixture, source and shared semantic contract
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git hash-object tests/fixtures/formal-core-scalar-checked.ores)" = "f1bf58f3e28c2b5a76553f96e23839a9a520a0a4"
+          test "$(git hash-object tests/fixtures/core-math-i64-v1.json)" = "58d2b64a137ede4700593f855e1f0504ff744f90"
+      - name: Reject unsafe signed-i64 guest literal spelling before compiler build
+        run: |
+          set -euo pipefail
+          python3 tests/native_aot_core_math_matrix.py --self-test-literals
+      - name: Install pinned-layout native toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build llvm-dev clang
+      - name: Build real Oreslang LLVM compiler
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/native-core-aot -G Ninja \
+            -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build build/native-core-aot --target oreslang-llvmc -j 2
+      - name: Execute all 24 full signed-i64 guest cases and negative control
+        run: |
+          set -euo pipefail
+          mkdir -p build/core-math-execution
+          python3 tests/native_aot_core_math_matrix.py \
+            --compiler build/native-core-aot/oreslang-llvmc \
+            --clang "$(command -v clang)" \
+            --evidence-dir build/core-math-execution \
+            | tee build/core-math-execution/guest.log
+          grep -Fx 'NATIVE-AOT-CORE-MATH-OK 24 cases x 2 optimization levels + 2 negative' \
+            build/core-math-execution/guest.log
+      - name: Record actual execution provenance
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p build/core-math-execution
+          git rev-parse HEAD > build/core-math-execution/head-sha.txt
+          git hash-object tests/fixtures/formal-core-scalar-checked.ores \
+            > build/core-math-execution/fixture-blob.txt
+          llvm-config --version > build/core-math-execution/llvm-version.txt
+          clang --version > build/core-math-execution/clang-version.txt
+          if test -f build/native-core-aot/oreslang-llvmc; then
+            sha256sum build/native-core-aot/oreslang-llvmc \
+              > build/core-math-execution/compiler-sha256.txt
+          fi
+      - name: Archive guest execution, including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-core-math-aot-evidence
+          path: build/core-math-execution/
+          if-no-files-found: warn
+          retention-days: 14

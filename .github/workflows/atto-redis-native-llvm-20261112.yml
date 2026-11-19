@@ -1,0 +1,52 @@
+name: Atto Redis native LLVM compiler actor execution
+on:
+  push:
+    branches: ["perf/atto-redis-native-actor-scalar-20261112"]
+  pull_request:
+    paths:
+      - "tests/atto_redis_native_scalar_guest.rs"
+      - "tests/fixtures/atto-redis-native-*"
+      - "scripts/test-atto-redis-native-llvm.sh"
+      - "CMakeLists.txt"
+permissions:
+  contents: read
+jobs:
+  native-redis-scalar:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Exact source and shared binary guest pins
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          test "$(git hash-object tests/fixtures/atto-redis-native-binary-full-parity.atto)" = ef2e69bd80194291ad30171e6e300ea7e8492e06
+          echo ATTO_REDIS_LLVM_EXACT_GUEST_BLOB=PASS
+      - name: Install LLVM compiler and Rust test requirements
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang llvm-dev cmake build-essential
+          rustc --version
+          clang --version
+          llvm-config --version
+      - name: Build production native source compiler
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --target oreslang-llvmc --parallel 2
+      - name: Run source-to-LLVM-to-native-executable actor and fail-closed network gate
+        run: |
+          set -euo pipefail
+          ctest --test-dir build --output-on-failure -V -R '^atto_redis_llvm_native_actor_guest_scalar$' | tee /tmp/atto-redis-native-llvm.log
+          grep -F 'ATTO_REDIS_LLVM_COMPILER_NATIVE_SCALAR_ACTOR=EXECUTED_PASS' /tmp/atto-redis-native-llvm.log
+          grep -F 'ATTO_REDIS_LLVM_NATIVE_BINARY_TCP=NOT_IMPLEMENTED' /tmp/atto-redis-native-llvm.log
+          echo ATTO_REDIS_LLVM_ACTOR_GUEST_EXECUTION=PASS

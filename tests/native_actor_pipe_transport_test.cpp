@@ -159,6 +159,77 @@ int main() {
         }
     }
 
+    // Atomic receive-turn batch parity: all messages to ONE edge are
+    // admitted together, or no prefix/credit is published. Do not confuse
+    // this with non-transactional multi-edge forward_all.
+    {
+        NativeActorPipeTransport pipe(registry, supervisor, stages(), 3, 3,
+                                      8, 3);
+        check(pipe.try_write_turn_atomic(0, {"a", "bb"}),
+              "valid two-message turn rejected");
+        check(pipe.buffered_message_count() == 2
+                  && pipe.buffered_payload_bytes() == 3,
+              "atomic batch counters not committed");
+        check(!pipe.try_write_turn_atomic(0, {"ccc", "dddd"}),
+              "oversized batch admitted a prefix");
+        check(pipe.buffered_message_count() == 2
+                  && pipe.buffered_payload_bytes() == 3,
+              "rejected batch consumed graph credits");
+        check(pipe.read_async(0).get() == "a", "batch FIFO first missing");
+        check(pipe.read_async(0).get() == "bb", "batch FIFO second missing");
+        check(pipe.buffered_message_count() == 0
+                  && pipe.buffered_payload_bytes() == 0,
+              "batch receiver did not refund graph credits");
+        check(pipe.try_write_turn_atomic(0, {"one", "two", "x"}),
+              "released credits were not reusable for a new actor turn");
+        check(!pipe.try_write_turn_atomic(0, {"z"}),
+              "full batch mailbox accepted a fourth message");
+        pipe.close();
+        check(pipe.read_async(0).get() == "one", "close erased first admitted DATA");
+        check(pipe.read_async(0).get() == "two", "close erased second admitted DATA");
+        check(pipe.read_async(0).get() == "x", "close erased third admitted DATA");
+        bool denied = false;
+        try { (void)pipe.try_write_turn_atomic(0, {"later"}); }
+        catch (const std::logic_error&) { denied = true; }
+        check(denied, "STOP admitted a new actor turn");
+    }
+    {
+        // Existing reader waiter must not be skipped by an atomic batch.
+        NativeActorPipeTransport pipe(registry, supervisor, stages(), 3, 3);
+        auto pending_read = pipe.read_async(0);
+        check(!pipe.try_write_turn_atomic(0, {"bypassed"}),
+              "atomic batch bypassed an earlier pending reader");
+        pipe.write_async(0, "first").get();
+        check(pending_read.get() == "first", "waiting reader missed first DATA");
+        pipe.close();
+    }
+    for (int attempt = 0; attempt < 128; ++attempt) {
+        NativeActorPipeTransport pipe(registry, supervisor, stages(), 3, 3);
+        std::atomic<bool> go{false};
+        std::thread producer([&] {
+            while (!go.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            try { (void)pipe.try_write_turn_atomic(0, {"a", "b"}); }
+            catch (const std::logic_error&) { }
+        });
+        std::thread stopper([&] {
+            while (!go.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            pipe.close();
+        });
+        go.store(true, std::memory_order_release);
+        producer.join();
+        stopper.join();
+        check(pipe.closed(), "concurrent batch/STOP missed terminal seal");
+        check(pipe.buffered_message_count() == 0
+                  || pipe.buffered_message_count() == 2,
+              "concurrent STOP admitted a partial message batch");
+        bool denied = false;
+        try { (void)pipe.try_write_turn_atomic(0, {"after-stop"}); }
+        catch (const std::logic_error&) { denied = true; }
+        check(denied, "STOP admitted new batch");
+    }
+
     bool rejected = false;
     NativeSupervisorRegistry foreign(10, 10, 10);
     try { NativeActorPipeTransport bad(registry, foreign.root(), stages(), 1, 3); }

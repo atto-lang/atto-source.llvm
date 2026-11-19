@@ -1,0 +1,117 @@
+name: Native selective actor mailbox exact-head sanitizers
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/BoundedActorPort.hpp'
+      - 'src/main/cpp/oreslang/runtime/PriorityActorInbox.hpp'
+      - 'src/main/cpp/oreslang/runtime/PreallocatedSelectiveSlots.hpp'
+      - 'tests/native_selective_tagged_port_test.cpp'
+      - 'tests/preallocated_selective_slots_test.cpp'
+      - 'tests/native_bounded_selective_slot_oracle_test.cpp'
+      - 'tests/native_slot_ledger_integration_test.cpp'
+      - 'tests/native_actor_port_allocation_failure_test.cpp'
+      - 'tests/priority_actor_inbox_test.cpp'
+      - 'CMakeLists.txt'
+      - '.github/workflows/native-selective-mailbox-exact-head.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-selective-host-sanitizers:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cc: gcc
+            cxx: g++
+          - cc: clang
+            cxx: clang++
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+    steps:
+      - name: Checkout exact PR head with no persistent token
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify and report exact Git tree
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          printf 'NATIVE_SOURCE_HEAD=%s\nNATIVE_SOURCE_TREE=%s\n' \
+            "$EXPECTED_HEAD" "$(git rev-parse 'HEAD^{tree}')"
+          for path in \
+            src/main/cpp/oreslang/runtime/PreallocatedSelectiveSlots.hpp \
+            src/main/cpp/oreslang/runtime/PriorityActorInbox.hpp \
+            tests/native_selective_tagged_port_test.cpp; do
+            test -s "$path"
+            git hash-object "$path"
+          done
+      - name: Install native build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake ninja-build clang llvm-dev build-essential
+      - name: Configure GCC/Clang CMake sanitizer build
+        shell: bash
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-selective -G Ninja \
+            -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
+            -DCMAKE_C_FLAGS="-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined" \
+            -DCMAKE_CXX_FLAGS="-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+      - name: Compile production mailbox headers and all selective test binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build-selective --parallel 2 --target \
+            oreslang-native-selective-tagged-port-test \
+            oreslang-preallocated-selective-slots-test \
+            oreslang-native-slot-ledger-integration-test \
+            oreslang-native-bounded-selective-slot-oracle-test \
+            oreslang-priority-actor-inbox-test \
+            oreslang-bounded-actor-port-test \
+            oreslang-native-actor-port-alloc-fault-test
+      - name: Execute all eight targeted sanitizer tests; reject zero execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          regex='^native_(actor_(tag_selective_bounded_receive|preallocated_selective_slots|preallocated_slot_ledger_fence|bounded_selective_slot_oracle|preallocated_selective_deleter_rejections|port_bounded_owned_transport|port_ownership_allocator_rollback)|priority_user_inbox_control_isolation)$'
+          ctest --test-dir build-selective -N -R "$regex" | tee /tmp/atto-selective-ctest-list.txt
+          grep -Eq 'Total Tests: 8$' /tmp/atto-selective-ctest-list.txt || {
+            echo 'SELECTIVE_TEST_SET_NOT_EXACTLY_EIGHT' >&2
+            exit 1
+          }
+          timeout --signal=TERM --kill-after=10s 600s \
+            ctest --test-dir build-selective --no-tests=error \
+              --output-on-failure --parallel 1 -R "$regex" \
+            | tee /tmp/atto-selective-ctest-result.txt
+          grep -Eq '100% tests passed, 0 tests failed out of 8' \
+            /tmp/atto-selective-ctest-result.txt || {
+              echo 'SELECTIVE_HOST_TEST_RECEIPT_MISSING' >&2
+              exit 1
+            }
+          echo 'NATIVE_SELECTIVE_HOST_SANITIZERS_PASS'
+      - name: Evidence boundary
+        if: always()
+        shell: bash
+        run: |
+          echo 'NATIVE_HOST_CPP_TESTS_ONLY'
+          echo 'ATTO_COMPILED_GUEST_NOT_EXECUTED'
+          echo 'HARD_REAL_TIME_NOT_CERTIFIED'
+          echo 'FIVE_BACKEND_PARITY_NOT_CERTIFIED'

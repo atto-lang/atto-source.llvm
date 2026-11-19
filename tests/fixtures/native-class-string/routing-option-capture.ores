@@ -1,0 +1,61 @@
+  define class RequestPath as
+    val Array<String> segments_value;
+
+    pub copy() -> RequestPath {
+      val Array<String> copied = new Array<String>();
+      for (const segment of self.segments_value) { copied.add(segment); }
+      return new RequestPath(copied);
+    }
+
+    pub size() -> int {
+      return self.segments_value.size;
+    }
+
+    pub segment_at(int index) -> String {
+      return self.segments_value.get(index);
+    }
+  end
+
+  // A capture is a zero-copy view over the request path.
+  define class PathCapture as
+    val RequestPath path_value;
+    val int start_index;
+    val int count_value;
+
+    pub size() -> int {
+      return self.count_value;
+    }
+
+    pub at(int offset) -> Option<String> {
+      if offset < 0 || offset >= self.count_value; then
+        return None;
+      fi
+      return Some(self.path_value.segment_at(self.start_index + offset));
+    }
+
+    pub one() -> Option<String> {
+      if self.count_value != 1; then
+        return None;
+      fi
+      return Some(self.path_value.segment_at(self.start_index));
+    }
+  end
+
+fnc make_capture(int count):PathCapture {
+  val Array<String> segments=new Array<String>();segments.add("foo");segments.add("id");
+  val RequestPath path=new RequestPath(segments);
+  val PathCapture capture=new PathCapture(path,1,count);
+  return capture;
+}
+fnc across_frame():Option<String>{val PathCapture capture=make_capture(1);return capture.one();}
+fnc checked(bool available):Result<bool,String>{return available?Ok(true):Err("absent");}
+pub routine main():int {
+  val PathCapture capture=make_capture(1);
+  val PathCapture empty=make_capture(0);
+  val Option<String> selected=across_frame();
+  val Result<bool,String> ok=checked(true);
+  val Result<bool,String> err=checked(false);
+  return capture.at(-1).is_none()&&capture.at(1).is_none()&&capture.at(0).unwrap()=="id"&&
+    empty.one().is_none()&&empty.at(0).is_none()&&selected.is_some()&&selected.unwrap()=="id"&&
+    ok.is_ok()&&ok.unwrap()&&err.is_err()&&!err.unwrap_or(false)?0:1;
+}

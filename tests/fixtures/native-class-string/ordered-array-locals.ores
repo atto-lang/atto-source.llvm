@@ -1,0 +1,24 @@
+fnc touch():void{return;}
+fnc evaluate(bool early):int {
+  touch();
+  if early;then return 7;fi
+  val Array<String> names=new Array<String>();
+  names.add("/foo");
+  let int total=0;
+  for(let int index=0;index<2000;index=index+1){
+    val Array<int> values=new Array<int>();
+    values.add(index);
+    total=total+values.get(0);
+    if index==1999;then
+      val Array<String> message=new Array<String>();
+      message.add("done");
+      if message.get(0)=="done";then return total;fi
+    fi
+  }
+  return names.size;
+}
+pub routine main():int {
+  val int skipped=evaluate(true);
+  val int total=evaluate(false);
+  return skipped==7&&total==1999000?0:1;
+}
