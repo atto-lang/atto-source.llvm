@@ -18,6 +18,13 @@ OresNativeActorMailbox* ores_native_actor_mailbox_open(size_t capacity);
 int ores_native_actor_mailbox_try_enter(OresNativeActorMailbox* mailbox);
 int ores_native_actor_mailbox_enter(OresNativeActorMailbox* mailbox);
 void ores_native_actor_mailbox_leave(OresNativeActorMailbox* mailbox);
+/* Graceful admission closure. New tickets are rejected, but already queued
+ * ticket holders run in FIFO order before the mailbox becomes retired.
+ * Returns 1 exactly once on the open generation. Unlike retire(), this does
+ * not abort waiters. This is a HOST turn gate, NOT a guest source mailbox.
+ */
+int ores_native_actor_mailbox_begin_drain(OresNativeActorMailbox* mailbox);
+/* Abort: reject new entrants AND cancel pending ticket holders immediately. */
 void ores_native_actor_mailbox_retire(OresNativeActorMailbox* mailbox);
 /* Scheduler must join/fence every caller before trying physical destroy. */
 int ores_native_actor_mailbox_try_destroy(OresNativeActorMailbox* mailbox);

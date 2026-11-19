@@ -1,0 +1,36 @@
+name: Atto versioned instrumentation dispatch host proof
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/VersionedInstrumentationDispatch.hpp'
+      - 'tests/native_instrumentation_dispatch_test.cpp'
+      - '.github/workflows/atto-instrumentation-dispatch-host.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-host-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Enforce exact checked-out commit
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+      - name: Clang ASan + UBSan host-only dispatch proof
+        run: |
+          clang++ -std=c++17 -O1 -g -pthread -Wall -Wextra -Wpedantic -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp tests/native_instrumentation_dispatch_test.cpp \
+            -o /tmp/atto-instrumentation-dispatch-asan
+          ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 /tmp/atto-instrumentation-dispatch-asan
+      - name: GCC O2 host-only dispatch proof
+        run: |
+          g++ -std=c++17 -O2 -pthread -Wall -Wextra -Wpedantic -Werror \
+            -Isrc/main/cpp tests/native_instrumentation_dispatch_test.cpp \
+            -o /tmp/atto-instrumentation-dispatch-o2
+          /tmp/atto-instrumentation-dispatch-o2
+      - name: Evidence boundary
+        run: echo 'HOST_ONLY. No compiler-backed Atto guest or LLVM ORC JIT execution credit.'

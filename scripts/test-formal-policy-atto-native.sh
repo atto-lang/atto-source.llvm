@@ -28,7 +28,7 @@ work="$(mktemp -d "${TMPDIR:-/tmp}/atto-policy-guest.XXXXXXXX")"
 trap 'rm -rf -- "$work"' EXIT
 case_file="$work/native-results.tsv"
 : > "$case_file"
-cases=(lease-fencing nats-token auth-destination epoch-atomicity)
+cases=(lease-fencing nats-token auth-destination epoch-atomicity dnd-drop-admission)
 for name in "${cases[@]}"; do
   file="tests/formal-policy-atto/$name.atto"
   pinned_blob="$(git -C "$root" rev-parse "HEAD:$file")"
@@ -130,7 +130,7 @@ jq -Rn \
       guestScope: "pure scalar predicates; not actor, network, or persistence parity"
     }' "$case_file" > "$ATTO_POLICY_RECEIPT"
 jq -e '.schema == "atto-native-policy-guest-receipt/v1"
-  and .nativeGuestCount == 8
+  and .nativeGuestCount == 10
   and (.nativeGuestExecutions | all(.guestExitStatus == 0))
   and .rejectedUndeclaredSymbol == true
   and .negativeCount == 6

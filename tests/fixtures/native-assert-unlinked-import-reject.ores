@@ -1,0 +1,4 @@
+// #354 recovery: the source file exists, but a module import cannot acquire
+// native compiler authority until manifest/resolver and guest ABI are proved.
+import module Assert from "std/assert";
+pub fnc main(): int { return 42; }

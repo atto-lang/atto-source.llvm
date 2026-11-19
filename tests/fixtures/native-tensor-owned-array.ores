@@ -1,0 +1,102 @@
+// Actual source -> LLVM/Clang native owned Array<int> storage smoke.
+// Does not assert that class storage is an actor-owned heap or that a
+// metadata span holds any exclusive/async loan.
+define class TensorOwner as
+  pub let mut Array<int> values = new Array<int>();
+end
+
+// Native sources have no int/int '/' (Java's '/' yields float) and no loop
+// lowering, so the stride bound uses exact checked doubling instead:
+// chunk/span grow as (2^k, 2^k * stride) while both still fit.
+fnc chunk_count(int chunk, int span, int count, int room): int {
+  if (chunk > count - chunk) { return chunk; } fi
+  if (span > room - span) { return chunk; } fi
+  return chunk_count(chunk + chunk, span + span, count, room);
+}
+
+fnc chunk_span(int chunk, int span, int count, int room): int {
+  if (chunk > count - chunk) { return span; } fi
+  if (span > room - span) { return span; } fi
+  return chunk_span(chunk + chunk, span + span, count, room);
+}
+
+// Exactly (count * stride > room) for count, room >= 0 and stride >= 1,
+// with no signed-i64 overflow on any path.
+fnc product_exceeds(int count, int stride, int room): int {
+  if (count == 0) { return 0; } fi
+  if (stride > room) { return 1; } fi
+  return product_exceeds(count - chunk_count(1, stride, count, room), stride,
+                         room - chunk_span(1, stride, count, room));
+}
+
+// Signed-i64 metadata bounds, checked before all arithmetic.
+fnc valid_span(int capacity, int start, int count, int stride): int {
+  if (capacity < 0) { return 0; } fi
+  if (start < 0) { return 0; } fi
+  if (count < 0) { return 0; } fi
+  if (stride <= 0) { return 0; } fi
+  if (start > capacity) { return 0; } fi
+  if (count == 0) { return 1; } fi
+  if (start == capacity) { return 0; } fi
+  if (product_exceeds(count - 1, stride, capacity - 1 - start) == 1) { return 0; } fi
+  return 1;
+}
+
+// Native guarded returns cannot precede statements and are limited to
+// eight per function: read every lane into locals first, then check.
+fnc first_owner_failure(int span, int one, int three): int {
+  if (span != 1) { return 1; } fi
+  if (one != 5) { return 2; } fi
+  if (three != 11) { return 3; } fi
+  return 0;
+}
+
+fnc first_moved_failure(int one, int three, int zero, int two, int four): int {
+  if (one != 23) { return 4; } fi
+  if (three != 29) { return 5; } fi
+  if (zero != 3) { return 6; } fi
+  if (two != 7) { return 7; } fi
+  if (four != 13) { return 8; } fi
+  return 0;
+}
+
+fnc first_independent_failure(int size, int zero, int one, int tail_span): int {
+  if (size != 2) { return 9; } fi
+  if (zero != 17) { return 10; } fi
+  if (one != 19) { return 11; } fi
+  if (tail_span != 0) { return 12; } fi
+  return 0;
+}
+
+pub fnc main(): int {
+  // Native class moves are admitted only while binding owners, before the
+  // first statement (no destructor/drop lowering for later ordered owners),
+  // so ownership moves into 'moved' first and the lanes are filled through
+  // the new owner. The use-after-take negative fixture covers 'seed'.
+  let mut TensorOwner seed = new TensorOwner();
+  let mut TensorOwner moved = rt take(seed);
+  let mut TensorOwner independent = new TensorOwner();
+  moved.values.add(3);
+  moved.values.add(5);
+  moved.values.add(7);
+  moved.values.add(11);
+  moved.values.add(13);
+  independent.values.add(17);
+  independent.values.add(19);
+  let int owner = first_owner_failure(valid_span(moved.values.size, 1, 2, 2),
+                                      moved.values.get(1), moved.values.get(3));
+  moved.values.set(1, 23);
+  moved.values.set(3, 29);
+  let int lanes = first_moved_failure(moved.values.get(1), moved.values.get(3),
+                                      moved.values.get(0), moved.values.get(2),
+                                      moved.values.get(4));
+  let int other = first_independent_failure(independent.values.size,
+                                            independent.values.get(0),
+                                            independent.values.get(1),
+                                            valid_span(moved.values.size, 4, 2, 2));
+  if (owner != 0) { return owner; } fi
+  if (lanes != 0) { return lanes; } fi
+  if (other != 0) { return other; } fi
+  return moved.values.get(1) + moved.values.get(3)
+       - independent.values.get(0) - independent.values.get(1) + 26;
+}

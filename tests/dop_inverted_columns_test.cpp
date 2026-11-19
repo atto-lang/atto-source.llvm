@@ -29,6 +29,8 @@ static_assert(!std::is_copy_constructible_v<Store>);
 static_assert(!std::is_aggregate_v<Store::Handle>);
 static_assert(!std::is_default_constructible_v<Store::Handle>);
 static_assert(!std::is_constructible_v<Store::Handle, std::uint64_t, std::size_t, std::uint64_t>);
+static_assert(!std::is_default_constructible_v<Store::LayoutGuard>);
+static_assert(!std::is_aggregate_v<Store::LayoutGuard>);
 static void check(bool ok) { if (!ok) throw std::runtime_error("inverted columns assertion"); }
 template<class E, class F> static void expect(F f) {
     bool caught = false;
@@ -53,6 +55,76 @@ int main() {
     check(saved_middle.slot() == h1.slot() && saved_middle.generation() == h1.generation());
     check(a.read_index<0>(0) == 1.5f);
     check(a.read_index<1>(1) == 200);
+
+    // Structural epoch is a checked, unforgeable guard for compiler/JIT
+    // specializations, not an unchecked physical row pointer. Validation
+    // and the field operation happen under the same storage lock.
+    {
+        Store guarded;
+        auto first = guarded.push(2.5f, 5, true);
+        auto initial = guarded.capture_layout_guard();
+        check(guarded.read_index_guarded<0>(initial, 0) == 2.5f);
+        guarded.write_index_guarded<0>(initial, 0, 7.5f);
+        check(guarded.get<0>(first) == 7.5f);
+        expect<std::logic_error>([&] {
+            (void)a.read_index_guarded<0>(initial, 0);
+        });
+        expect<std::logic_error>([&] {
+            a.write_index_guarded<0>(initial, 0, 99.0f);
+        });
+        {
+            auto borrowed = guarded.borrow_read<0>();
+            check(guarded.read_index_guarded<0>(initial, 0) == 7.5f);
+            expect<std::logic_error>([&] {
+                guarded.write_index_guarded<0>(initial, 0, 99.0f);
+            });
+        }
+        guarded.reserve(32);
+        expect<std::logic_error>([&] {
+            (void)guarded.read_index_guarded<0>(initial, 0);
+        });
+        expect<std::logic_error>([&] {
+            guarded.write_index_guarded<0>(initial, 0, 99.0f);
+        });
+        check(guarded.get<0>(first) == 7.5f); // failure has no side effects
+        auto after_reserve = guarded.capture_layout_guard();
+        check(after_reserve.epoch() > initial.epoch());
+        // A redundant reserve must not invalidate a guard: no pointer,
+        // column, slot, or row metadata is relocated.
+        guarded.reserve(32);
+        check(guarded.capture_layout_guard().epoch() == after_reserve.epoch());
+        check(guarded.read_index_guarded<0>(after_reserve, 0) == 7.5f);
+        guarded.set<0>(first, 8.5f); // value updates do not change layout
+        check(guarded.read_index_guarded<0>(after_reserve, 0) == 8.5f);
+        // Even an allocation failure can partially change vector capacities.
+        // Guards therefore invalidate *before* the first reserve attempt.
+        bool failed_reserve = false;
+        try { guarded.reserve(std::numeric_limits<std::size_t>::max()); }
+        catch (const std::length_error&) { failed_reserve = true; }
+        catch (const std::bad_alloc&) { failed_reserve = true; }
+        check(failed_reserve && guarded.get<0>(first) == 8.5f);
+        expect<std::logic_error>([&] {
+            (void)guarded.read_index_guarded<0>(after_reserve, 0);
+        });
+        auto after_failed_reserve = guarded.capture_layout_guard();
+        check(after_failed_reserve.epoch() > after_reserve.epoch());
+        auto second = guarded.push(3.5f, 8, false);
+        expect<std::logic_error>([&] {
+            (void)guarded.read_index_guarded<0>(after_failed_reserve, 0);
+        });
+        auto after_push = guarded.capture_layout_guard();
+        guarded.erase_swap(first);
+        expect<std::logic_error>([&] {
+            (void)guarded.read_index_guarded<0>(after_push, 0);
+        });
+        auto after_erase = guarded.capture_layout_guard();
+        check(guarded.read_index_guarded<0>(after_erase, 0) == 3.5f);
+        check(guarded.get<0>(second) == 3.5f);
+        expect<std::out_of_range>([&] { (void)guarded.get<0>(first); });
+        expect<std::out_of_range>([&] {
+            (void)guarded.read_index_guarded<0>(after_erase, 1);
+        });
+    }
 
     std::vector<int> lowering_order;
     int receiver_evals = 0, index_evals = 0, value_evals = 0;
@@ -212,15 +284,29 @@ int main() {
     check(!row_bad.load());
     // A moved-out loan retains memory if its owner is destroyed.
     std::optional<Store::Loan<0, false>> carried;
+    std::optional<Store::Loan<0, false>> carried2;
     {
         auto owner = std::make_unique<Store>();
-        owner->push(7.5f, 7, true);
+        auto retired_handle = owner->push(7.5f, 7, true);
         carried.emplace(owner->borrow_read<0>());
+        carried2.emplace(owner->borrow_read<0>());
+        // This raw span is HOST-ONLY and never a legal guest pointer.
+        // Owner teardown revokes all new checked reads immediately, but
+        // cannot scrub an existing host pointer while a loan is still live:
+        // doing so would race an external reader of that span.
+        auto retained = carried->span();
+        check(retained.size() == 1 && retained[0] == 7.5f);
         owner.reset();
+        check(retained[0] == 7.5f);
+        carried2.reset();  // not the final loan; backing remains intact
+        check(retained[0] == 7.5f);
+        expect<std::logic_error>([&] { (void)carried->read_handle(retired_handle); });
         expect<std::logic_error>([&] { (void)carried->span(); });
         expect<std::logic_error>([&] { (void)carried->read_at(0); });
         expect<std::logic_error>([&] { (void)carried->size_checked(); });
     }
+    // Last loan release wipes the retired columns and metadata and frees the
+    // shared state. No host span can be used after its last loan is released.
     carried.reset();
     // Owner IDs are shared across distinct template instantiations.
     oreslang::dop::InvertedColumns<std::int64_t> different_fields;
@@ -263,5 +349,36 @@ int main() {
             check(fuzz.get<2>(expected.handle) == expected.z);
             check(fuzz.get_row(expected.handle) == std::make_tuple(expected.x, expected.y, expected.z));
         }
+    }
+    // push() must grow geometrically. Reserving exactly row + 1 reallocated and
+    // copied every column on every insert, turning a bulk build into O(n^2).
+    // Count distinct backing buffers of one column over a 32k-row build: a
+    // geometric policy needs about log2(n) of them, an exact policy needs n.
+    {
+        oreslang::dop::InvertedColumns<float, std::uint32_t> bulk;
+        constexpr std::size_t rows = std::size_t{1} << 15;
+        const float* last_buffer = nullptr;
+        std::size_t reallocations = 0;
+        std::vector<oreslang::dop::InvertedColumns<float, std::uint32_t>::Handle> handles;
+        handles.reserve(rows);
+        for (std::size_t i = 0; i < rows; ++i) {
+            handles.push_back(bulk.push(static_cast<float>(i), static_cast<std::uint32_t>(i)));
+            auto loan = bulk.borrow_read<0>();
+            const float* buffer = loan.span().data();
+            if (buffer != last_buffer) { ++reallocations; last_buffer = buffer; }
+        }
+        check(bulk.size() == rows);
+        check(reallocations <= 40);
+        // Growth must not disturb logical rows or handles.
+        for (std::size_t i = 0; i < rows; i += 997)
+            check(bulk.get<0>(handles[i]) == static_cast<float>(i) &&
+                  bulk.get<1>(handles[i]) == static_cast<std::uint32_t>(i));
+        // Swap-delete churn reuses slots without growing the slot table.
+        for (std::size_t i = 0; i < 1024; ++i) {
+            bulk.erase_swap(handles[i]);
+            handles[i] = bulk.push(-1.0f, 0);
+        }
+        check(bulk.size() == rows);
+        for (std::size_t i = 0; i < 1024; ++i) check(bulk.get<0>(handles[i]) == -1.0f);
     }
 }

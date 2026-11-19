@@ -1,0 +1,58 @@
+name: Native actor carrier Atto trace v2 (host-runtime only)
+on:
+  pull_request:
+    paths:
+      - 'tests/actor_trace_integration.cpp'
+      - 'tests/check_actor_trace_v2.py'
+      - 'contracts/actor-trace-v2.json'
+      - '.github/workflows/actor-trace-v2-native.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Bind exact source head
+        env:
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          git rev-parse 'HEAD^{tree}'
+      - name: Compile actual native HungryCarrier test and preserve v1 behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          c++ -std=c++20 -O1 -pthread -Wall -Wextra -Wpedantic -Werror \
+            -Isrc/main/cpp \
+            tests/actor_trace_integration.cpp \
+            src/main/cpp/oreslang/runtime/HungryCarrier.cpp \
+            src/main/cpp/oreslang/runtime/ParkingSignal.cpp \
+            -o /tmp/actor-trace-v2-native
+          /tmp/actor-trace-v2-native | grep -Fx 'PASS native actor ingress and delivery of 24 messages'
+      - name: Repeated real native handler and mailbox v2 evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          for iteration in 1 2 3 4; do
+            /tmp/actor-trace-v2-native --trace-v2 > "/tmp/actor-trace-v2-$iteration.json"
+            python3 tests/check_actor_trace_v2.py \
+              --require-backend llvm --require-subject runtime_host \
+              --require-emission reconstructed_after_quiescence \
+              --min-admitted 24 "/tmp/actor-trace-v2-$iteration.json"
+            if python3 tests/check_actor_trace_v2.py \
+              --require-subject compiled_atto_guest "/tmp/actor-trace-v2-$iteration.json"; then
+              echo 'HOST_RECEIPT_WAS_PROMOTED_TO_GUEST_PROOF' >&2
+              exit 1
+            fi
+            python3 -c "import json,sys; t=json.load(open(sys.argv[1])); a=t['events']; assert sum(e['kind']=='send_accept' for e in a)==24; assert sum(e['kind']=='receive_complete' for e in a)==24; assert len(a)==75; assert t['producer']==dict(backend='llvm',subject='runtime_host',emission='reconstructed_after_quiescence')" "/tmp/actor-trace-v2-$iteration.json"
+          done
+          echo 'NATIVE_ACTOR_TRACE_V2_HOST_ONLY=PASS'
+          echo 'COMPILED_ATTO_GUEST=NOT_EXECUTED'

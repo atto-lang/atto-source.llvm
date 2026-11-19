@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -24,6 +25,9 @@ struct NativeSumType {
     std::string name;
     ScalarType value_type = ScalarType::I64;
     ScalarType error_type = ScalarType::I64;
+    // Result<_, Error>: the error slot holds a sanitized trap message and is
+    // minted only by `trap` (spec ch. 7); source cannot construct or read it.
+    bool trap_error = false;
 };
 
 struct GenericTypeArgument {
@@ -40,7 +44,7 @@ struct Expression {
     enum class Kind {
         Integer, Boolean, String, Console, Variable,
         Negate, LogicalNot,
-        Add, Subtract, Multiply, Remainder,
+        Add, Subtract, Multiply, Remainder, Modulo, BitXor,
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
@@ -70,7 +74,34 @@ struct Expression {
     std::vector<GenericTypeArgument> type_arguments;
     bool type_arguments_present = false;
     mutable std::string sum_type;
+    // Records a compiler-produced caller-side trap; never collapse this to
+    // an ordinary Some constructor without independently proving its operand.
+    bool trap_origin = false;
+    // A Call produced by an eager `|>` stage (java CallOrigin.VALUE_PIPE_ARGUMENT):
+    // arguments[0] is the piped value. Pipeline edges have their own depth budget.
+    bool pipeline_stage = false;
 };
+
+// Phase-one native trap supports only total integer-expression structure.
+// Arithmetic overflow remains a terminal panic. This predicate deliberately
+// rejects calls, variables, dereferences, nested sums, host/actor effects,
+// suspension and all non-integer values until effect and cleanup IR is proven.
+inline bool native_trap_pure_integer(const Expression& e, std::size_t depth = 0) {
+    if (depth > 64) return false;
+    switch (e.kind) {
+        case Expression::Kind::Integer: return true;
+        case Expression::Kind::Negate:
+            return e.left && native_trap_pure_integer(*e.left, depth + 1);
+        case Expression::Kind::Add:
+        case Expression::Kind::Subtract:
+        case Expression::Kind::Multiply:
+            return e.left && e.right &&
+                native_trap_pure_integer(*e.left, depth + 1) &&
+                native_trap_pure_integer(*e.right, depth + 1);
+        default: return false;
+    }
+}
+
 
 struct Parameter {
     enum class Mode { Value, Borrow, BorrowMut };
@@ -277,7 +308,7 @@ struct ActorFieldWrite {
 };
 
 struct Statement {
-    enum class Kind { Call, FieldWrite, ScalarWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return };
+    enum class Kind { Call, FieldWrite, ScalarWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Loop, Break, Continue, Return, UsingTelemetrySpan, TelemetryLogInfo };
     Kind kind;
     // Scoped scalar or readonly leaf record. ForEach uses an implicit element
     // binding (no initializer); expression is its named array source and
@@ -286,6 +317,10 @@ struct Statement {
     std::unique_ptr<Expression> expression;
     std::string receiver;
     std::string field;
+    // UsingTelemetrySpan or TelemetryLogInfo: literal operation/log message;
+    // alias is compile-time-only;
+    // no guest-visible pointer, dynamic handle or actor message transfer.
+    std::string telemetry_operation;
     // ForIndex: branch_local initializer, condition and checked next value.
     std::unique_ptr<Expression> loop_step;
     // Dedicated compiler intrinsic, never lowered as a guest-callable
@@ -335,6 +370,10 @@ struct Function {
     // First executable source Task slice: one capture-free Task<int> in trusted
     // zero-argument main, submitted before ordinary locals and awaited once.
     std::vector<SourceTaskI64Binding> source_tasks;
+    // Compiler-staged actor-only suspension edge. This is not a runtime
+    // capability or a codegen-ready continuation: LLVM emission MUST deny
+    // any actor carrying this marker until actor-owned frame lowering exists.
+    std::string actor_task_await_name;
     // First executable Future-aware value-pipeline slice. Async producers are
     // compiled as scheduler work; sync unary stages execute on that carrier.
     std::vector<SourceFuturePipelineI64Binding> future_pipelines;
@@ -436,11 +475,22 @@ struct CooperativeScalarLoop {
     std::size_t offset = 0;
 };
 
+// Generator-v1 delegation is restricted to named, zero-argument, side-effect-
+// free literal generators in the same translation unit. The parser resolves
+// these ordered steps into bounded scalar yields before LLVM emission; general
+// iterator ownership and cleanup have NOT been lowered.
+struct ScalarGeneratorStep {
+    bool delegate = false;
+    std::string target;
+    std::int64_t value = 0;
+};
+
 // Native generator v1 deliberately starts with a value-only, zero-capture
 // Iterator<int> activation. Each activation is represented by a caller-owned,
 // pinned frame in LLVM IR; no native stack or tracing-GC object survives a pull.
 struct ScalarGenerator {
     std::string name;
+    std::vector<ScalarGeneratorStep> steps;
     std::vector<std::int64_t> yields;
     std::size_t offset = 0;
     bool exported = false;
@@ -456,6 +506,17 @@ struct ModuleImport {
     std::size_t offset = 0;
 };
 
+// Syntax-only namespace import. No host, AOT or guest namespace authority is
+// obtained from a parsed source string. The backend must reject this record
+// until a verified v2 package manifest/lockfile graph supplies immutable
+// source ownership, pins and typed physical-provider resolution.
+struct NamespaceImportSyntax {
+    std::string namespace_name;
+    std::string local_name;
+    std::string package_selector;
+    std::size_t offset = 0;
+};
+
 struct TypeConstraintDescriptor {
     std::string schema_id;
     std::string qualified_type_name;
@@ -465,8 +526,54 @@ struct TypeConstraintDescriptor {
     bool validation_required = true;
 };
 
+struct FileExport {
+    enum class Visibility { Public, Package };
+    enum class Kind { Inferred, Class, Fnc };
+    std::string name;
+    Visibility visibility = Visibility::Public;
+    Kind kind = Kind::Inferred;
+    std::size_t offset = 0;
+};
+
+// Distinct nominal *value-schema* declaration, never an inverted class
+// alias. This parser milestone records type/field/mutability intent only;
+// source lowering remains denied until the production parser and ownership verifier admit it.
+enum class InvertedScalarKind { I64, Bool, F64 };
+struct InvertedStructField {
+    std::string name;
+    InvertedScalarKind type = InvertedScalarKind::I64;
+    bool mutable_field = false; // unmarked fields are implicit immutable val
+    std::size_t offset = 0;
+};
+struct InvertedStructDecl {
+    std::string name;
+    std::vector<InvertedStructField> fields;
+    bool exported = false;
+    std::size_t offset = 0;
+};
+
+// One strictly local and bounded source-to-MIR slice. These are parsed
+// production source operations, NOT LLVM IR or a compiler authorization;
+// an independent typed HIR/MIR verifier must admit the complete stream.
+struct InvertedSourceOperation {
+    enum class Kind { Push, WriteField, EraseSwap, ReturnRead };
+    Kind kind = Kind::Push;
+    std::size_t index = 0;
+    std::string field;
+    std::array<std::int64_t, 2> values{};
+    std::int64_t value = 0;
+};
+struct InvertedSourceMain {
+    std::string schema_name;
+    std::string owner_name;
+    std::size_t capacity = 0;
+    std::vector<InvertedSourceOperation> operations;
+};
+
 struct Program {
+    std::vector<FileExport> exports;
     std::vector<ModuleImport> imports;
+    std::vector<NamespaceImportSyntax> namespace_imports;
     std::vector<CooperativeScalarLoop> cooperative_loops;
     std::vector<ScalarGenerator> generators;
     std::string namespace_name;
@@ -479,6 +586,10 @@ struct Program {
     std::vector<TypeConstraintDescriptor> type_constraint_descriptors;
     std::vector<std::string> conforms;
     std::vector<NativeSumType> sum_types;
+    // Compiler-owned staged inverted schema/operation descriptors. Current
+    // production source parser still fails closed; this is not a guest feature.
+    std::vector<InvertedStructDecl> inverted_structs;
+    std::optional<InvertedSourceMain> inverted_main;
 };
 
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
@@ -493,6 +604,10 @@ Program parse_program(std::string_view source, bool experimental_owned_int = fal
 // resolve_and_validate_program must run after all module names are resolved.
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int = false,
                                  bool experimental_rt_scalar_loop = false);
+// HOST-ONLY preparatory AST: caller must supply already authenticated frozen
+// source bytes, and only the verified package graph may consume the result.
+// Unlike parse_program(), this must never authorize IR or guest execution.
+Program parse_verified_namespace_source_unresolved(std::string_view authenticated_source);
 void resolve_and_validate_program(Program& program);
 
 } // namespace oreslang

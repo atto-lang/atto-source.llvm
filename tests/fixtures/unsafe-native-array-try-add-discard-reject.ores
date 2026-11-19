@@ -1,0 +1,7 @@
+// #297/#333: even a uniquely owned array cannot silently discard an
+// unverified recoverable append status in the guest language.
+pub fnc main(): int {
+  let mut Array<int> a = new Array<int>();
+  a.try_add(7);
+  return 42;
+}

@@ -1,0 +1,11 @@
+define class Probe as
+    pub final int status: 42;
+end
+pub fnc main(): int {
+    const Probe owned = new Probe();
+    return match<int> owned over
+        on structural ~(status: 42) -> { 42; }
+        on structural ~(status: 42) -> { 1; }
+        default -> { 0; }
+    end;
+}

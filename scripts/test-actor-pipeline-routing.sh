@@ -15,7 +15,7 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 
 for compiler in g++ clang++; do
   for opt in 0 2; do
-    for test in native_actor_pipe_contract_test native_actor_pipe_graph_contract_test native_actor_pipeline_routing_test; do
+    for test in native_actor_pipe_contract_test native_actor_emit_pipe_contract_v3_test native_actor_pipe_graph_contract_test native_actor_pipeline_routing_test native_actor_pipe_transport_test bounded_actor_port_test native_actor_control_data_lane_test; do
       # The OOM seam exists in native routing TEST binaries only.
       if [ "$test" = native_actor_pipeline_routing_test ]; then
         set -- -DORESLANG_ACTOR_PIPE_FAULT_TESTS=1
@@ -32,7 +32,7 @@ done
 
 if [ "${ORES_ACTOR_PIPELINE_SANITIZE:-1}" = 1 ]; then
   for compiler in g++ clang++; do
-    for test in native_actor_pipe_contract_test native_actor_pipe_graph_contract_test native_actor_pipeline_routing_test; do
+    for test in native_actor_pipe_contract_test native_actor_emit_pipe_contract_v3_test native_actor_pipe_graph_contract_test native_actor_pipeline_routing_test native_actor_pipe_transport_test bounded_actor_port_test native_actor_control_data_lane_test; do
       # The OOM seam exists in native routing TEST binaries only.
       if [ "$test" = native_actor_pipeline_routing_test ]; then
         set -- -DORESLANG_ACTOR_PIPE_FAULT_TESTS=1
@@ -48,4 +48,6 @@ if [ "${ORES_ACTOR_PIPELINE_SANITIZE:-1}" = 1 ]; then
   done
 fi
 
+echo "ORES_ACTOR_PIPELINE_V3_TYPED_EMIT_HOST_ONLY_PASS"
+echo "ORES_ACTOR_IO_CONTROL_HOST_MATRIX_PASS"
 echo "ORES_ACTOR_PIPELINE_HOST_MATRIX_PASS"
