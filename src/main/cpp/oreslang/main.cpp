@@ -1,6 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
-#include "oreslang/frontend/PointerIntAot.hpp"
 #include "oreslang/frontend/StaticFfiI64Aot.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
@@ -406,7 +405,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--guest-abi=tenant-vm] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--experimental-pointer-int-aot] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--guest-abi=tenant-vm] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--experimental-pointer-int-aot] [--experimental-static-ffi-i64-aot] [--ffi-grant=atto.math.i64.v1] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -441,8 +440,8 @@ int main(int argc, char** argv) {
             throw std::runtime_error("native-hard-rt profile rejects experimental owned heap lowering");
 
         if (experimental_static_ffi_i64 || static_ffi_i64_capability) {
-            // Only an isolated host-private static native C link proof.
-            // No actual foreign actor spawn, scheduler or signed artifact.
+            // Test-only static native C i64 ABI; never implies actor FFI, imported
+            // modules, signed supervisor authorization or production permissions.
             if (!experimental_static_ffi_i64 || !static_ffi_i64_capability ||
                     experimental_pointer_int_aot || wasm32_target || cortex_m_target ||
                     tenant_vm_guest || experimental_owned_int ||
@@ -460,11 +459,10 @@ int main(int argc, char** argv) {
         }
 
         if (experimental_pointer_int_aot) {
-            // This source profile is deliberately independent of the main
-            // language parser: a closed-world, typed, nonescaping stack
-            // specialization with no actor/scheduler/import/FFI capability.
-            // Any unrecognized syntax is rejected BEFORE any LLVM text
-            // escapes to stdout. Never silently enable for regular sources.
+            // Pointer M2a now enters the same canonical native lexer,
+            // typed Program HIR, shared ownership checker and LLVM emitter.
+            // Its admitted grammar remains a closed-world nonescaping stack
+            // specialization until full Pointer<T> lowering is verified.
             if (wasm32_target || cortex_m_target || tenant_vm_guest ||
                     experimental_owned_int || experimental_rt_scalar_loop ||
                     bounded_allocator_provider || tree_shake ||
@@ -475,7 +473,10 @@ int main(int argc, char** argv) {
                     "Pointer<int> AOT M1 requires isolated --target=host "
                     "without ownership, scheduler, RT, tree shaking or allocator overrides");
             }
-            const auto ir = oreslang::pointer_int_aot::compile(text);
+            // Normal native frontend Program -> ownership checker -> LLVM
+            // emission, not the M1 standalone source-to-IR shortcut.
+            auto ast = oreslang::parse_program(text, false, false, true);
+            const auto ir = oreslang::emit_verified_llvm_ir(ast);
             std::cout << ir;
             std::cout.flush();
             return 0;

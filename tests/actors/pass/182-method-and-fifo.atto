@@ -1,0 +1,24 @@
+// Actor-only method calls run on the owning actor stack, not on the sender.
+// expect-exit: 0
+// stdout-order: strict
+// expect-stdout: 0
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 3
+define actor Worker as
+    bump(int x): int { return x + 1; }
+    receive(ActorMail<int> mail): void {
+        stdio.println(mail.sequence);
+        val doubled = self.bump(mail.value);
+        return;
+    }
+end
+
+pub fnc main(): int {
+    val worker = spawn Worker();
+    worker.send(1);
+    worker.send(2);
+    worker.send(3);
+    worker.send(4);
+    return 0;
+}

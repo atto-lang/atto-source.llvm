@@ -30,3 +30,19 @@ target_include_directories(oreslang-llvmc PRIVATE
 add_definitions(${LLVM_DEFINITIONS})
 llvm_map_components_to_libnames(ORE_LLVM_LIBS core support)
 target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
+
+# Experimental projection from the SAME canonical parser/type/ownership source.
+# This is not a separately authored language frontend.
+add_executable(atto-checked-actor-ir
+  ci/m5/export_checked_actor_ir.cpp
+  src/main/cpp/oreslang/frontend/Parser.cpp
+  src/main/cpp/oreslang/frontend/MethodResolver.cpp
+  src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+  src/main/cpp/oreslang/types/OwnershipChecker.cpp
+  src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp
+)
+target_include_directories(atto-checked-actor-ir PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+  "${LLVM_INCLUDE_DIRS}"
+)
+target_link_libraries(atto-checked-actor-ir PRIVATE ${ORE_LLVM_LIBS})

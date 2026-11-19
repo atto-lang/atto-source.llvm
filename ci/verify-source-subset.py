@@ -21,7 +21,11 @@ def check():
     assert m["schema"] == "atto.exact-sourced-llvm-tenant-guest-subtree.v1"
     assert m["original"]["repository"] == "ores-truffle-oreslang/oreslang-source.llvm"
     assert re.fullmatch("[0-9a-f]{40}", m["original"]["commit"])
-    assert m["file_count"] == len(m["files"]) >= 50
+    assert m["file_count"] == len(m["files"]) == 57
+    overlay = json.loads((ROOT / "ci/accepted-llvm-source-overlays.json").read_text())
+    assert overlay.get("schema") == "atto.llvm.reviewed-compiler-overlays.v1"
+    overrides = overlay.get("files")
+    assert isinstance(overrides, dict) and set(overrides) == set(["src/main/cpp/oreslang/backend/LlvmCodegen.cpp","src/main/cpp/oreslang/frontend/Parser.cpp","src/main/cpp/oreslang/frontend/Parser.hpp","src/main/cpp/oreslang/main.cpp","src/main/cpp/oreslang/types/OwnershipChecker.cpp"])
     expected = os.environ.get("EXPECTED_CARRIER_HEAD_SHA", "")
     assert re.fullmatch("[0-9a-f]{40}", expected), "carrier checkout SHA must be pinned"
     actual_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
@@ -36,9 +40,10 @@ def check():
         assert re.fullmatch("[0-9a-f]{40}", expected_blob), rel + ": bad SHA"
         assert path.is_file() and not path.is_symlink(), rel + ": missing/symlinked"
         blob = subprocess.check_output(["git", "hash-object", str(path)], text=True).strip()
-        assert blob == expected_blob, rel + ": wrong Git blob"
+        assert blob == overrides.get(rel, expected_blob), rel + ": wrong Git blob or unreviewed overlay"
     print("ORIGINAL_SOURCE_COMMIT="+m["original"]["commit"])
-    print("ORIGINAL_SOURCE_GIT_BLOBS_VERIFIED="+str(len(m["files"])))
+    print("ORIGINAL_SOURCE_GIT_BLOBS_VERIFIED="+str(len(m["files"])-len(overrides)))
+    print("REVIEWED_ATTO_COMPILER_BLOBS_VERIFIED="+str(len(overrides)))
     print("SOURCE_TREE_SCOPE=SELECTED_EXACT_SOURCE_BLOBS_NOT_ORIGINAL_COMPLETE_TREE")
 
 

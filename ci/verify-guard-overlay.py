@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
-"""Additive immutable-source verifier for the reviewed compiler overlay.
+"""Verify exact 52 original LLVM compiler blobs and five approved Atto overlays.
 
-The Parser.cpp overlay now additionally reserves unsupported Pointer<T> and
-rejects C-style unary pointer operations; 54 original blobs remain unchanged.
-
-The parent branch pins 57 imported upstream blobs. This child changes exactly
-three named compiler files; the other 54 MUST remain identical to the parent.
-This does not authorize the original cross-org source transfer or claim that
-the full source repository has been migrated.
+The overlay contains immutable Git blob IDs from reviewed compiler merges
+#10, #13, #14 and #15, plus the caret-return semantic merge of #19.
+The original 57-blob provenance manifest remains unchanged.
+This does not certify full source migration or complete Atto parity.
 """
 import json
 import os
@@ -17,13 +14,8 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-OVERLAY = {
-    "src/main/cpp/oreslang/frontend/Parser.hpp": "f79e68ef73ecb659d6a0edb31cef3c7a583a9695",
-    # Stacked pointer safety gate: same exact original compiler translation unit,
-    # now with explicit Pointer<T> and unary operator fail-closed admission.
-    "src/main/cpp/oreslang/frontend/Parser.cpp": "45f7c19d894117030d98831d77f2e6e2da2b3bfa",
-    "src/main/cpp/oreslang/backend/LlvmCodegen.cpp": "3537fa90fbcb251c1deb47daab78ffaef40d75c0",
-}
+OVERLAY = json.loads((ROOT / "ci/accepted-llvm-source-overlays.json").read_text())["files"]
+EXPECTED_OVERLAY_PATHS = set(["src/main/cpp/oreslang/backend/LlvmCodegen.cpp","src/main/cpp/oreslang/frontend/Parser.cpp","src/main/cpp/oreslang/frontend/Parser.hpp","src/main/cpp/oreslang/main.cpp","src/main/cpp/oreslang/types/OwnershipChecker.cpp"])
 ORIGIN = "b16089183aa1864adaef5bb0a13051d19430db09"
 
 
@@ -32,6 +24,9 @@ def git(*args):
 
 
 def verify():
+    if set(OVERLAY) != EXPECTED_OVERLAY_PATHS or any(
+            not re.fullmatch(r"[0-9a-f]{40}", sha) for sha in OVERLAY.values()):
+        raise ValueError("ATTO_GUARD_NOT_EXECUTED: invalid reviewed overlay manifest")
     expected = os.environ.get("ATTO_GUARD_HEAD_SHA", "")
     if not re.fullmatch(r"[0-9a-f]{40}", expected) or git("rev-parse", "HEAD") != expected:
         raise ValueError("ATTO_GUARD_NOT_EXECUTED: exact Git head mismatch")
@@ -66,8 +61,8 @@ def verify():
             raise ValueError("ATTO_GUARD_NOT_EXECUTED: inaccurate immutable original")
     print("ATTO_GUARD_COMPILER_HEAD=" + expected)
     print("ATTO_GUARD_COMPILER_ROOT_TREE=" + git("rev-parse", "HEAD^{tree}"))
-    print("ORIGINAL_UNCHANGED_GIT_BLOBS=54")
-    print("REVIEWED_CHILD_COMPILER_BLOBS=3")
+    print("ORIGINAL_UNCHANGED_GIT_BLOBS=52")
+    print("REVIEWED_ATTO_COMPILER_BLOBS=5")
     print("SOURCE_COMPLETE_MIGRATION=false")
 
 
