@@ -29,7 +29,7 @@ jobs:
           persist-credentials: false
       - name: Prove negative-compiler artifact gate fails closed (host-only)
         run: python3 tests/test_guard_artifact_evidence.py -v
-      - name: Verify 54 original Git blobs and three explicit compiler patches
+      - name: Verify 52 original Git blobs and five reviewed compiler overlays
         run: python3 ci/verify-guard-overlay.py
       - name: Install native LLVM18/Clang18 toolchain
         run: |
