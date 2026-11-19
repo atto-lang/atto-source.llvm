@@ -2239,6 +2239,34 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actorstream-route-test)
     set_tests_properties(native_actorstream_bounded_route_contract
         PROPERTIES TIMEOUT 30)
+    # #345 recovery: execute CURRENT main's already-merged typed reply
+    # commitment, cancellation and physical DONE race matrix at optimized
+    # and sanitized native host settings. NOT .ores pipe guest execution.
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND
+            CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        foreach(variant IN ITEMS optimized asan_ubsan)
+            set(target "oreslang-native-actorstream-route-${variant}-test")
+            add_executable(${target} tests/native_actorstream_route_test.cpp)
+            target_include_directories(${target} PRIVATE
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+            target_compile_features(${target} PRIVATE cxx_std_17)
+            target_link_libraries(${target} PRIVATE Threads::Threads)
+            target_compile_options(${target} PRIVATE
+                -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+            if(variant STREQUAL "optimized")
+                target_compile_options(${target} PRIVATE -O2 -DNDEBUG)
+            else()
+                target_compile_options(${target} PRIVATE
+                    -O1 -fsanitize=address,undefined -fno-omit-frame-pointer)
+                target_link_options(${target} PRIVATE
+                    -fsanitize=address,undefined -fno-omit-frame-pointer)
+            endif()
+            add_test(NAME "native_actorstream_bounded_route_contract_${variant}"
+                COMMAND ${target})
+            set_tests_properties("native_actorstream_bounded_route_contract_${variant}"
+                PROPERTIES TIMEOUT 180)
+        endforeach()
+    endif()
     add_executable(oreslang-owned-i64-region-security-test
         tests/native_owned_region_security_test.c
         src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c)
