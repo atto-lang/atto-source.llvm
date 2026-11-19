@@ -1,0 +1,82 @@
+name: Canonical typed Pointer<int> LLVM native AOT M2a
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      - 'src/main/cpp/oreslang/frontend/PointerIntSyntax.hpp'
+      - 'src/main/cpp/oreslang/types/PointerIntHIR.hpp'
+      - 'src/main/cpp/oreslang/types/PointerIntOwnership.hpp'
+      - 'src/main/cpp/oreslang/types/OwnershipChecker.cpp'
+      - 'src/main/cpp/oreslang/backend/PointerIntCodegen.hpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'tests/pointer_int_hir_admission.cpp'
+      - 'src/main/cpp/oreslang/main.cpp'
+      - 'tests/pointer_int_native_e2e.py'
+      - 'tests/guard_native_e2e.py'
+      - 'docs/POINTER_INT_AOT_M1.md'
+      - '.github/workflows/pointer-int-native-aot.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  pointer-int-native-aot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      LLVM_DIR: /usr/lib/llvm-18/lib/cmake/llvm
+    steps:
+      - name: Checkout exact reviewed source without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source head, tree and pointer compiler/test Git blobs
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git hash-object src/main/cpp/oreslang/frontend/Parser.cpp)" = a671707bda15bc522d8a75f8c22b16f2dff38fb0
+          test "$(git hash-object src/main/cpp/oreslang/frontend/PointerIntSyntax.hpp)" = 356a2bc6f870f3c2cb7b7f848934f708324bb36d
+          test "$(git hash-object src/main/cpp/oreslang/types/PointerIntHIR.hpp)" = ea39b2653d6145d20739b53d7cf76a2af8961078
+          test "$(git hash-object src/main/cpp/oreslang/types/PointerIntOwnership.hpp)" = 9df530bc13383aca0f6edf352403473f1b551208
+          test "$(git hash-object src/main/cpp/oreslang/backend/PointerIntCodegen.hpp)" = b461987568ae2cf4b51831105c583929b40c3d9c
+          test "$(git hash-object tests/pointer_int_hir_admission.cpp)" = 4170a8ba49e1199dfca1bfaf6e701aae2637286b
+          test ! -e src/main/cpp/oreslang/frontend/PointerIntAot.hpp
+          test "$(git hash-object tests/pointer_int_native_e2e.py)" = e9f104ba81e6bcc4e4e88f088cebd24e1ebba0a7
+          test "$(git hash-object src/main/cpp/oreslang/main.cpp)" = 12951e0c289458d135381089247916a83559240f
+          git rev-parse HEAD HEAD^{tree}
+          git status --porcelain
+      - name: Install LLVM18 and Clang18 real native toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm-18-dev clang-18 lld-18 libzstd-dev cmake file
+          test -d "$LLVM_DIR"
+      - name: Build compiler from reviewed exact source
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/pointer-m1 -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR"
+          cmake --build build/pointer-m1 --target oreslang-llvmc -j2
+          test -x build/pointer-m1/oreslang-llvmc
+          sha256sum build/pointer-m1/oreslang-llvmc
+      - name: Exercise shared nominal pointer HIR ownership against forged ASTs
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -I src/main/cpp tests/pointer_int_hir_admission.cpp -o /tmp/pointer-hir-ownership
+          /tmp/pointer-hir-ownership
+      - name: Execute compiled bounded Pointer<int> native guests and ASan UBSan negatives
+        run: |
+          set -euo pipefail
+          python3 tests/pointer_int_native_e2e.py --compiler build/pointer-m1/oreslang-llvmc --clang /usr/bin/clang-18
+      - name: Regression — execute existing compiled scalar guard guests
+        run: |
+          set -euo pipefail
+          python3 tests/guard_native_e2e.py --compiler build/pointer-m1/oreslang-llvmc --clang /usr/bin/clang-18
+      - name: Accurate evidence limits
+        run: |
+          echo 'POINTER_INT_CANONICAL_FRONTEND_HIR=RESTRICTED_OPT_IN_ONLY'
+          echo 'GENERAL_POINTER_T_HEAP_AOT=UNSUPPORTED'
+          echo 'POINTER_BORROW_SHARE_ACTOR_TRANSFER=NOT_EXECUTED'
+          echo 'OTHER_BACKEND_PARITY=NOT_EXECUTED'

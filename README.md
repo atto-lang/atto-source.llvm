@@ -1,56 +1,58 @@
 # atto-source.llvm
 
-Native LLVM backend for AttoLang. The current draft implements a **real compiled scalar subset**, using the shared checked frontend and direct LLVM IR generation. It does not execute guest code inside a Rust interpreter or WebAssembly engine.
+LLVM-based AttoLang compiler and native runtime for high-performance and real-time systems.
 
-## Quick start
+## Naming and specification migration
 
-Requires Rust 1.85.1 and LLVM/Clang (verified on Clang 18.1.3, Linux x86-64).
+This is the canonical [AttoLang backend repository](https://github.com/atto-lang/atto-source.llvm). Use `.atto` for portable AttoLang source and update local remotes to `https://github.com/atto-lang/atto-source.llvm.git`; do not use historical repository links or naming in new examples.
 
-```sh
-cargo build --offline --release --bin atto-llvm
-target/release/atto-llvm tests/fixtures/167-quic-varint-rfc9000.atto -o /tmp/native-atto
-/tmp/native-atto
-echo $? # 42 means its 308 Atto checks passed
-```
+- **Normative grammar and semantics:** [atto-spec](https://github.com/atto-lang/atto-spec). Check the current versioned contracts for ownership operations (`borrow!`, `take!`, `share!`, `copy!`, `copy!!`), implicit argument borrowing, `lt!` binders, `eq`/`neq` value equality, `susp` effects and file/module `define const`. These are *specification targets*, not claims of executable support in this backend.
+- **Positive and negative guest execution evidence:** [atto-platform-conformance](https://github.com/atto-lang/atto-platform-conformance) and [atto-compilers-parity-testing](https://github.com/atto-lang/atto-compilers-parity-testing). Report `passed`, `failed`, `unsupported` or `not executed`, and pin exact compiler, source tree, target and toolchain.
+- **Portable shared sources and target constraints:** [atto-common-source](https://github.com/atto-lang/atto-common-source) and [atto-target-profiles](https://github.com/atto-lang/atto-target-profiles). Keep backend-specific gaps explicit, and do not infer guest parity from host tests or zero-step CI runs.
 
-Use `--emit-llvm` after `-o output.ll` to inspect the generated LLVM IR. See [Native AOT implementation and limitations](docs/native-aot.md) for admitted types, explicit unsupported diagnostics, toolchain provenance and security scope.
+## Scope
 
-## Verified native execution
+This repository is the AttoLang ecosystem home for:
 
-[Exact-tree private alternate-runner AOT and sanitizer run](https://github.com/athlet-o/athleto-e2e/actions/runs/43649930185) passed 1,255 pure native `.atto` QUIC/HTTP/3 codec checks, four compiler unit tests, checked signed add/sub/mul/neg overflow traps, actual direct `atto-llvm` → ELF output, and ASan/UBSan smoke tests. The source snapshot's exact Git tree is `d02b401e5c7a3a524c4a70db8db8520c6ae408ee`, with a pinned 16-blob frontend copied from `atto-source.rs@860137bcdc50684ab6cb6aa8f89932506b3beec4`.
+- LLVM lowering, ownership-aware runtime semantics, native actor isolation, and target-specific code generation.
+- Compatibility with the [canonical language specification](https://github.com/atto-lang/atto-spec) where applicable.
+- Evidence-based tests, benchmark results, and cross-backend conformance reporting.
 
-Conformance receipt: [`contracts/native-llvm-aot-v1.json`](contracts/native-llvm-aot-v1.json). Tests are real *native machine-code* execution on Linux x86-64. The admitted scalar profile has no guest heap or guest GC.
+## Architecture and compatibility
 
-## Bounded native actor runtime (implemented and tested)
+AttoLang is designed around actors, explicit ownership, and portable concurrency semantics. Backend-specific optimizations must not silently change the shared language contract. Runtime capabilities, target restrictions, and unsupported features should be documented explicitly.
 
-The LLVM backend now compiles a limited legacy `define actor` / `spawn` / `ActorMail<int|bool>` / `send` / receiver-method profile to real native ELF machine code, including per-actor state:
+## Building and testing
 
-```sh
-target/release/atto-llvm tests/actors/pass/180-two-types-state.atto -o /tmp/atto-native-actors
-/tmp/atto-native-actors  # exit 0; per-actor FIFO output: 1,3 and 102,105
-bash ci/test_native_actors.sh
-```
+Consult the checked-in source tree and CI workflows for verified commands and supported targets. Add target-specific build instructions and exact-head execution results as they become available; do not treat a passing host-unit test as proof of guest-language conformance.
 
-[Native actor/arena/mailbox private-runner PASS](https://github.com/athlet-o/athleto-e2e/actions/runs/43657189906): 4 true native `.atto` actor fixtures × 20 runs (80 executable runs), 3 fail-closed compiler fixtures, 5 × 1,600 concurrent C ABI messages (8,000 accepted) through eight actors, and ASan/UBSan; all **1,255 previous scalar protocol tests** also remained green. The exact compiled source tree was `f40cb5044af7ffb55cbd05dd7024cc7963d6042d`.
+## Project status
 
-The bounded runtime uses a 64 KiB zero-initialized actor-owned arena, a dedicated 256 KiB pthread stack, a 128-message bounded FIFO mailbox, 32-bit generation-checked actor handles, and explicit deterministic draining and teardown. It has no guest heap collector. This is one OS thread per actor, **not** the final many-actor cooperative/work-stealing scheduler.
+This README describes the repository's intended responsibilities. Feature support and release readiness must be established from implementation, tests, and CI evidence rather than this description alone.
 
-Full semantics, limitations, executable examples, and the exact Git receipt: [Native actors](docs/native-actors.md) and [`contracts/native-llvm-actor-aot-v1.json`](contracts/native-llvm-actor-aot-v1.json).
+## Related repositories
 
-## Executable `declare actor` / `mtd` and sealed scalar callbacks
+- [AttoLang organization](https://github.com/atto-lang)
+- [Language specification](https://github.com/atto-lang/atto-spec)
+- [Platform conformance](https://github.com/atto-lang/atto-platform-conformance)
+- [Commercial infrastructure](https://github.com/atto-co)
 
-The new target syntax is now **natively executable for a deliberately bounded scalar profile**, not just parse-only. Actors must be both `declare actor` and concretely defined with `define actor ... receive ... end` in the same file. Out-of-line `mtd (Foo self)` methods are type checked and linked nominally, including two different actor types with the same method name.
+## Repository ownership and contribution routing
 
-The guarded actor-state subset admits `critical-read |s| -> s.field` and one pure `critical-write |s| -> { s.field = expression; }` assignment with `mut self`, on the actor's serialized mailbox worker. Direct field access, callback escapes, suspension, invalid mutability and unsupported effects are compile-time errors. This is **not** a general concurrent reader-writer lock, complete lifetime/borrow checker or arbitrary critical callback system.
+**Belongs here:** LLVM frontend/lowering, native code generation, ownership and borrow checks, tenant/actor heap and stack ABI, native toolchains and sanitizer-backed execution.
 
-[Exact-tree native LLVM target-syntax runner](https://github.com/athlet-o/athleto-e2e/actions/runs/43666674489) passed 6 actor guest fixtures ×20 native ELF executions, 15 negative actor compiler fixtures, the existing 8,000-message stress and 1,255 scalar protocol fixtures. See [target syntax and guarded-state scope](docs/native-mtd-critical.md) and the immutable [target-syntax AOT receipt](contracts/native-llvm-target-mtd-v1.json).
+**Belongs elsewhere:** JVM, .NET and Wasm backend-specific lowering belongs in their respective atto-source.* repos; target declarations live in atto-target-profiles.
 
-### Native actor security audit: bounded nominal types and sealed public state
+**Security and portability boundary:** Bound allocations/indices and 32-bit actor heap offsets, fence tenant generations and overflow, contain actor stack traps to the owning actor, and prove real native guest execution.
 
-The [LLVM nominal and sealed-state hardening run](https://github.com/athlet-o/athleto-e2e/actions/runs/43669072054) passed the exact-tree private runner with 120 native actor guest executions, **19** negative actor fixtures, 8,000 concurrent mailbox messages, ASan/UBSan and 1,255 protocol cases. The compiler now rejects out-of-bounds nominal type indices with `E_TYPE_INDEX`, forbids `pub` actor-state fields in the target profile, and revalidates receiver `mtd` signatures after the production reparse. The immutable [audit receipt](contracts/native-llvm-nominal-sealed-hardening-v1.json) pins the executed 69-file source tree and its scope.
+AttoLang is the canonical project identity. Use `.atto` source, `atto-*` package and repository names, and the active AttoLang CLI contract for current documentation. Do not duplicate normative semantics from [atto-spec](https://github.com/atto-lang/atto-spec).
 
-## Not yet implemented
+**Evidence gate:** record exact compiler/runtime head and tree, target/toolchain, nonzero executed steps, positive and negative guest results, and explicit passed/failed/unsupported/not-executed states. Host-only CI and `steps=[]` do not establish guest support. README scope is not a feature-completeness claim.
 
-General-purpose state callback effects and lifetimes, concurrent reader/writer scheduling, borrow checking across suspension, supervisor panic CONTROL, typed `send` Result, per-actor cancellation/close and child spawning, work-stealing scheduler, full language AOT, QUIC/TLS/UDP, QPACK, HTTP/3 client/server loopback, and Windows/macOS/embedded profiles remain unimplemented. Browser/Node standalone WASM, JVM/GraalVM and .NET must each execute their own backend tests; byte-identical source does not establish parity.
+## Experimental Rust-hosted native AOT and actor slice
 
-The proposed 11-operation actor-safe transport boundary in `contracts/http3-host-abi-v1.json` is a **specification**, not a working QUIC engine. Keep this PR in draft until the missing actor semantics and networking integration are verified.
+The separate `Cargo.toml`, `frontend/`, `src/main.rs`, `src/target_native.rs`, and `runtime/` path stages an **experimental bounded native compiler and actor runtime** alongside the existing checked C++ LLVM compiler slice. It is not a replacement for the canonical language specification or a claim that both compiler pipelines have identical feature coverage.
+
+For the supported host profile, build the Rust-hosted compiler with `cargo build --offline --release --bin atto-llvm`. The source-owned smoke and actor regression scripts are `ci/test_native_aot.sh` and `ci/test_native_actors.sh`. See [native-AOT limits](docs/native-aot.md), [actor runtime scope](docs/native-actors.md) and [receiver method / sealed-state scope](docs/native-mtd-critical.md).
+
+The independent [exact-head private CI evidence](https://github.com/athlet-o/athleto-e2e/actions/runs/43669427959) covers the original isolated Rust-hosted compiler snapshot: compiled native actor scalar cases, negative compiler admissions, sanitizer checks, and protocol scalar fixtures. **That run does not certify the subsequently combined mainline tree.** In particular this slice does not implement complete actor supervision, full ownership across suspension, general FFI, QUIC/TLS/QPACK networking or five-backend parity. The HTTP/3 ABI contract is a proposed interface, not a working network engine.
