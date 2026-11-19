@@ -2337,6 +2337,24 @@ private:
             fail("callable signatures cannot be declared as nominal actor types");
         if (entry_builtin_name(actor.name))
             fail("builtin Entry is compiler-owned and cannot be declared as a nominal actor type");
+        // The native stage-0 actor ABI accepts exactly one signed int
+        // application mail type through on_message(int). Preserve this
+        // explicit header bit in the actor AST rather than treating it as
+        // authorization for generic ActorMail<T> or supervisor CONTROL.
+        if (accept("receives")) {
+            if (token_.text != "int")
+                fail("NATIVE_ACTOR_RECEIVES_TYPE_UNSUPPORTED: native actor mailbox is int-only");
+            advance();
+            actor.declared_receives_i64 = true;
+            if (token_.text == "|")
+                fail("NATIVE_ACTOR_RECEIVES_UNION_UNSUPPORTED: native actor lacks sum-message lowering");
+            if (token_.text == "receives")
+                fail("NATIVE_ACTOR_RECEIVES_DUPLICATE: duplicate receives clause");
+        }
+        if (token_.text == "sends")
+            fail("NATIVE_ACTOR_SENDS_EFFECT_UNSUPPORTED: transitive message effect checking is not implemented");
+        if (token_.text == "receives")
+            fail("NATIVE_ACTOR_RECEIVES_DUPLICATE: duplicate receives clause");
         // The native scalar bootstrap has no actor-superclass layout, trait
         // witness table or interface dispatch. A generic 'expected as' error
         // obscures this crucial fail-closed boundary.
