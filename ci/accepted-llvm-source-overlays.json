@@ -1,0 +1,19 @@
+{
+  "schema": "atto.llvm.reviewed-compiler-overlays.v1",
+  "baseline_main": "4eee1b4180d1f9521faeedba53f1cd63bda6da4c",
+  "merged_prs": [
+    10,
+    13,
+    14,
+    15
+  ],
+  "integration_pr": 19,
+  "provenance": "52 exact original Oreslang blobs + 5 reviewed Atto compiler blobs; do not claim 57 original unchanged",
+  "files": {
+    "src/main/cpp/oreslang/backend/LlvmCodegen.cpp": "a8e82221dae1a542e9c325d2d99f19885c0f5c2d",
+    "src/main/cpp/oreslang/frontend/Parser.cpp": "9dce8828586e761c1221dff97e9eb5a7033bca79",
+    "src/main/cpp/oreslang/frontend/Parser.hpp": "b434ca8e930d8f50119b81134591a412680a0662",
+    "src/main/cpp/oreslang/main.cpp": "12951e0c289458d135381089247916a83559240f",
+    "src/main/cpp/oreslang/types/OwnershipChecker.cpp": "20deb9dbad1a4bbafbf48e6a3cf89b050d3ba3ed"
+  }
+}

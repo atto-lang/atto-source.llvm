@@ -309,7 +309,7 @@ public:
         // Admit '@' as a TOKEN only so existing parameter-local @Default guards
         // can issue their specific fail-closed diagnostic instead of a generic
         // unsupported-token error. No annotation execution is enabled.
-        if (std::string_view("(){},:;+-*/%=.<>@?!&").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*/%=.<>@?!&^").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -1406,7 +1406,7 @@ private:
         // deliberately synchronous and immutable. Handler temporaries are
         // allocated in the existing actor heap and dropped before returning;
         // borrow/take/await need separate lifetime-aware lowering.
-        while (token_.text != "return") {
+        while ((token_.text != "return" && token_.text != "^")) {
             if (token_.kind == Kind::End || token_.text == "}") fail("actor handler requires return");
             if (token_.text == "const") {
                 if (!method.actor_field_writes.empty())
@@ -1444,7 +1444,7 @@ private:
             require(";");
             method.actor_field_writes.push_back(std::move(write));
         }
-        require("return");
+        require_return_marker();
         method.result = expression();
         if (!method.locals.empty()) {
             // This slice has one drop epilogue. No taken/moved or borrowed
@@ -1521,7 +1521,7 @@ private:
                     require(")");
                 }
                 require("{");
-                if (accept("return")) require(";");
+                if (accept_return_marker()) require(";");
                 if (token_.text != "}")
                     fail("native scalar constructor body must be empty or contain only 'return;'");
                 require("}");
@@ -1752,7 +1752,7 @@ private:
                 require(";");
                 continue;
             }
-            if (accept("return")) {
+            if (accept_return_marker()) {
                 if (!accept(";"))
                     fail("native generator return cannot carry a value; use yield");
                 if (token_.text != "}")
@@ -2074,12 +2074,12 @@ private:
                 fail("native '::' method requires '->' return syntax");
             require("::");
             if (value.returns_void) {
-                if (accept("return")) {
+                if (accept_return_marker()) {
                     if (!accept(";") && token_.text != "end")
                         fail("native end-delimited void method requires terminal return");
                 }
             } else {
-                require("return");
+                require_return_marker();
                 value.result = expression();
                 if (!accept(";") && token_.text != "end")
                     fail("native end-delimited method requires terminal return");
@@ -2117,7 +2117,7 @@ private:
             require("=");
             require("task");
             require("{");
-            require("return");
+            require_return_marker();
             task.result = expression();
             require(";");
             require("}");
@@ -2607,12 +2607,12 @@ private:
                     }
                     require("fi"); actions.push_back(std::move(statement)); continue;
                 }
-                if (finally_scope && (token_.text == "return" ||
+                if (finally_scope && ((token_.text == "return" || token_.text == "^") ||
                         token_.text == "break" || token_.text == "continue"))
                     fail("return/break/continue cannot escape finally; finally is cleanup-only");
                 if (finally_scope && (token_.text == "defer" || token_.text == "try"))
                     fail("native finally nested defer/try requires scoped cleanup lowering");
-                if (accept("return")) {
+                if (accept_return_marker()) {
                     if (!value.return_class.empty()) fail("structured class return requires ownership-aware exit lowering");
                     statement.kind = Statement::Kind::Return;
                     if (!value.returns_void) statement.expression = expression();
@@ -2764,7 +2764,7 @@ private:
         bool return_guards_started = false;
         bool terminal_try_finally = false;
         std::size_t branch_count = 0;
-        while (token_.text != "return") {
+        while ((token_.text != "return" && token_.text != "^")) {
             if (token_.text == "while" && experimental_rt_scalar_loop_) {
                 if (value.scalar_while || value.locals.size() != 1 ||
                         !value.statements.empty() || !value.early_returns.empty() ||
@@ -2802,7 +2802,7 @@ private:
                         loop->upper_bound > 1000000000LL)
                     fail("experimental scalar loop requires bounded nonnegative i64 range");
                 value.scalar_while = std::move(loop);
-                if (token_.text != "return")
+                if ((token_.text != "return" && token_.text != "^"))
                     fail("experimental scalar loop must be followed by a single return");
                 continue;
             }
@@ -2871,7 +2871,7 @@ private:
                             fail("native caught throw binding shadows local owner");
                     require(")");
                     require("{");
-                    require("return");
+                    require_return_marker();
                     value.result = expression();
                     if (!native_pure_scalar_tree(*value.result))
                         fail("native caught throw catch return requires nonthrowing scalar/field read");
@@ -2936,13 +2936,13 @@ private:
                 require("guard");
                 guard.condition = expression();
                 require("{");
-                require("return");
+                require_return_marker();
                 guard.result = expression();
                 require(";");
                 require("}");
                 // Existing return-guard lowering runs one shared defer and
                 // ownership-cleanup exit on both the early and final paths.
-                // The ordinary final 'return' is mandatory after this arm.
+                // A final lexical return marker ('return' or '^') is mandatory after this arm.
                 value.early_returns.push_back(std::move(guard));
                 return_guards_started = true;
                 continue;
@@ -2959,7 +2959,7 @@ private:
                 } else {
                     require("{");
                 }
-                if (accept("return")) {
+                if (accept_return_marker()) {
                     if (value.returns_void)
                         fail("guarded early return requires a scalar result");
                     if (value.early_returns.size() == 8)
@@ -3167,7 +3167,7 @@ private:
             require(";");
             value.statements.push_back(std::move(statement));
         }
-        require("return");
+        require_return_marker();
         if (!value.returns_void) {
             value.result = expression();
             if (value.scalar_while &&
@@ -3191,7 +3191,7 @@ private:
             // Native try cannot throw: allow the Java-required catch return
             // only as a literal sentinel. It is unreachable by construction,
             // never lowered as a fake catch handler.
-            if (accept("return")) {
+            if (accept_return_marker()) {
                 if (value.returns_void)
                     fail("native nonthrowing catch return requires int result");
                 if (token_.kind != Kind::Integer)
@@ -3500,7 +3500,7 @@ private:
 
     std::unique_ptr<Expression> dispatch_value_arm(std::string_view construct) {
         require("{");
-        const bool compatibility_return = accept("return");
+        const bool compatibility_return = accept_return_marker();
         auto value = expression();
         require(";");
         if (token_.text != "}") {
@@ -3949,6 +3949,16 @@ private:
 
     void require(std::string_view text) {
         if (!accept(text)) fail("expected '" + std::string(text) + "'");
+    }
+
+    // Caret is a lexical return statement, never an expression operator.
+    // Reuse the checked CFG/cleanup lowering of the return keyword.
+    bool accept_return_marker() {
+        return accept("return") || accept("^");
+    }
+
+    void require_return_marker() {
+        if (!accept_return_marker()) fail("expected 'return' or '^'");
     }
 
     void array_element(LocalBinding& binding) {

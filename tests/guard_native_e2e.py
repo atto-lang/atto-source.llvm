@@ -13,6 +13,8 @@ import subprocess
 import tempfile
 import unittest
 
+from guard_artifact_evidence import require_no_rejected_artifacts
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--compiler", required=True)
 parser.add_argument("--clang", required=True)
@@ -34,6 +36,12 @@ POSITIVE = [
     ("nested_block_comment_pointer", "/* Pointer<int> /* &fake and *fake */ still a comment */\npub fnc main(): int { return 42; }\n", 42),
     ("multiplication_in_grouping", "pub fnc main(): int { return 6 * (7); }\n", 42),
     ("boolean_and_not_address_of", program("guard true && true { return 7; }"), 42),
+    ("caret_return_statement", "pub fnc main(): int { ^ 42; }", 42),
+    ("caret_guard_false_exits", program("guard false { ^ 7; }"), 7),
+    ("caret_guard_true_falls_through", "pub fnc main(): int { guard true { ^ 7; } ^ 42; }", 42),
+    ("caret_guard_in_helper", "fnc pick(bool ready): int { guard ready { ^ 7; } ^ 42; } "
+                              "pub fnc main(): int { ^ pick(false); }", 7),
+
     ("literal_false_exits", program("guard false { return 7; }"), 7),
     ("literal_true_falls_through", program("guard true { return 7; }"), 42),
     ("positive_numeric_comparison", program("guard 5 > 0 { return 7; }"), 42),
@@ -65,6 +73,35 @@ NEGATIVE = [
     ("pointer_new_constructor", program("return new Pointer();"), "Pointer<T> full-AOT lowering unsupported"),
     ("unary_deref_after_multiply", "pub fnc main(): int { return 6 * *7; }\n", "pointer syntax forbids"),
     ("address_of_in_additive", "pub fnc main(): int { return 40 + &2; }\n", "pointer syntax forbids"),
+    # Native suspended main/task lowering is not yet implemented. These
+    # formerly positive fixtures must reject with the precise gate diagnostic,
+    # rather than masquerade as compiled Task/await parity.
+    ("caret_task_await_guard_fallthrough_not_yet_admitted",
+     "pub suspends fnc main(): int { let Task<int> pending = task { ^ 41; }; "
+     "val answer: int = await pending; guard answer > 0 { ^ -1; } ^ answer + 1; }",
+     "suspension-aware borrow checking"),
+    ("caret_task_await_guard_failure_not_yet_admitted",
+     "pub suspends fnc main(): int { let Task<int> pending = task { ^ 41; }; "
+     "val answer: int = await pending; guard answer < 0 { ^ -1; } ^ answer; }",
+     "suspension-aware borrow checking"),
+    # Full explicit suspending-lambda + typed terminal capture is tracked in
+    # LLVM issue #25. The current bounded backend must reject these programs
+    # before IR rather than silently emit a guest with incomplete semantics.
+    ("unlowered_explicit_suspend_lambda_pipeline",
+     "pub suspends fnc main(): int { let Task<int> pending = task { ^ 41; }; "
+     "^ pending |> susp |f| -> await f >> val answer: int; }", "suspension-aware borrow checking"),
+    ("unlowered_guard_caret_suspend_capture",
+     "pub suspends fnc main(): int { let Task<int> pending = task { ^ 41; }; "
+     "guard false { ^ pending |> susp |f| -> await f >> val answer: int; } ^ 0; }", "suspension-aware borrow checking"),
+    ("task_future_await_twice_not_yet_admitted",
+     "pub suspends fnc main(): int { let Task<int> pending = task { ^ 41; }; "
+     "val first: int = await pending; val second: int = await pending; ^ second; }", "suspension-aware borrow checking"),
+    ("caret_infix_cannot_xor", "pub fnc main(): int { ^ 41 ^ 1; }", None),
+    ("caret_cannot_be_expression", "pub fnc main(): int { return ^ 42; }", None),
+    ("double_caret_cannot_return", "pub fnc main(): int { ^^ 42; }", None),
+    ("caret_nonvoid_requires_value", "pub fnc main(): int { ^; }", None),
+    ("caret_guard_requires_one_terminal_exit", "pub fnc main(): int { guard false { ^ 7; ^ 8; } ^ 42; }", None),
+
     ("int_truthiness", program("guard 1 { return 7; }"), "bool"),
     ("int_param_truthiness", "fnc f(int x): int { guard x { return 7; } return 42; }\n"
                              "pub fnc main(): int { return f(1); }\n", "bool"),
@@ -94,10 +131,17 @@ class ActualNativeGuard(unittest.TestCase):
         cls.workspace.cleanup()
     def compile(self, case, source):
         self.assertLess(len(source.encode()),4096)
-        path=self.work/(case+".atto")
+        # Isolate every compiler invocation. Negative cases must prove the
+        # compiler did not write IR, object files, or an executable *anywhere*
+        # in its case workspace; checking a never-created .native path alone
+        # gives false confidence.
+        case_dir = self.work/case
+        case_dir.mkdir()
+        path=case_dir/"input.atto"
         path.write_text(source,encoding="utf-8",newline="\n")
         before=hashlib.sha256(path.read_bytes()).hexdigest()
-        result=run([str(COMPILER),"--target=host",str(path)])
+        result=run([str(COMPILER),"--target=host",str(path)],
+                   cwd=case_dir, stdin=subprocess.DEVNULL)
         self.assertEqual(before,hashlib.sha256(path.read_bytes()).hexdigest(),"compiler modified source")
         return result, path
     def test_compiler_native_positive(self):
@@ -132,7 +176,7 @@ class ActualNativeGuard(unittest.TestCase):
                 if diagnostic:
                     self.assertIn(diagnostic.lower(),result.stderr.decode(errors="replace").lower(),
                                   "unexpected compiler diagnostic for "+name)
-                self.assertFalse((self.work/("reject_"+name+".native")).exists())
+                require_no_rejected_artifacts(path.parent, path, result.stdout)
                 print("ATTO_NATIVE_GUARD_REJECTED="+name+" source="+
                        hashlib.sha256(path.read_bytes()).hexdigest(),flush=True)
 
