@@ -4,7 +4,8 @@
 static bool valid(const atto_receipt_identity_v1 *i) {
     return i->protocol_major == 1 && i->tenant != 0 &&
         i->caller_incarnation != 0 && i->target_actor != 0 &&
-        i->target_incarnation != 0 && i->placement_epoch != 0 &&
+        i->target_incarnation != 0 && i->association_generation != 0 &&
+        i->placement_epoch != 0 &&
         i->message_id != 0 && i->attempt != 0;
 }
 static bool match(const atto_receipt_identity_v1 *a,
@@ -13,6 +14,7 @@ static bool match(const atto_receipt_identity_v1 *a,
         a->tenant == b->tenant && a->caller_incarnation == b->caller_incarnation &&
         a->target_actor == b->target_actor &&
         a->target_incarnation == b->target_incarnation &&
+        a->association_generation == b->association_generation &&
         a->placement_epoch == b->placement_epoch &&
         a->message_id == b->message_id && a->attempt == b->attempt;
 }
