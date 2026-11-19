@@ -25,7 +25,7 @@ def check():
     overlay = json.loads((ROOT / "ci/accepted-llvm-source-overlays.json").read_text())
     assert overlay.get("schema") == "atto.llvm.reviewed-compiler-overlays.v1"
     overrides = overlay.get("files")
-    assert isinstance(overrides, dict) and set(overrides) == set(["src/main/cpp/oreslang/backend/LlvmCodegen.cpp","src/main/cpp/oreslang/frontend/Parser.cpp","src/main/cpp/oreslang/frontend/Parser.hpp","src/main/cpp/oreslang/main.cpp","src/main/cpp/oreslang/runtime/TenantVm.cpp","src/main/cpp/oreslang/runtime/TenantVmGuestAbi.h","src/main/cpp/oreslang/types/OwnershipChecker.cpp"])
+    assert isinstance(overrides, dict) and set(overrides) == set(["src/main/cpp/oreslang/frontend/ModuleLoader.cpp","src/main/cpp/oreslang/frontend/ModuleLoader.hpp","src/main/cpp/oreslang/backend/LlvmCodegen.cpp","src/main/cpp/oreslang/frontend/Parser.cpp","src/main/cpp/oreslang/frontend/Parser.hpp","src/main/cpp/oreslang/main.cpp","src/main/cpp/oreslang/runtime/TenantVm.cpp","src/main/cpp/oreslang/runtime/TenantVmGuestAbi.h","src/main/cpp/oreslang/types/OwnershipChecker.cpp"])
     expected = os.environ.get("EXPECTED_CARRIER_HEAD_SHA", "")
     assert re.fullmatch("[0-9a-f]{40}", expected), "carrier checkout SHA must be pinned"
     actual_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
