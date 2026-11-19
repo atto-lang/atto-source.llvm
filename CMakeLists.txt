@@ -1990,6 +1990,14 @@ if(BUILD_TESTING)
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
             realtime-profile "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_realtime_profile_cli PROPERTIES TIMEOUT 60)
+    # Exact native LLVM source -> IR -> Clang -> guest scalar subset checks.
+    # No source-to-effect-IR parity is claimed by this observable output test.
+    add_test(NAME native_rust_scalar_guest_parity
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rust_scalar_guest_parity.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_rust_scalar_guest_parity PROPERTIES TIMEOUT 120)
 
     # Executable source admission gate: function values are not nominal classes.
     add_test(NAME native_callable_nominal_boundary
