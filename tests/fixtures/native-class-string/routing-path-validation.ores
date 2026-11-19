@@ -1,0 +1,77 @@
+define class PathSegment as
+  pub val int kind;
+  pub val String value;
+end
+define class PathPattern as
+  val String template_value;
+  val Array<PathSegment> segments_value;
+  pub size() -> int { return self.segments_value.size; }
+  pub segment_at(int index) -> PathSegment { return self.segments_value.get(index); }
+    pub is_valid() -> bool {
+      for (let int index = 0; index < self.segments_value.size; index = index + 1) {
+        val PathSegment segment = self.segments_value.get(index);
+
+        if segment.kind < 0 || segment.kind > 2; then
+          return false;
+        fi
+
+        if segment.kind == 1 || segment.kind == 2; then
+          if segment.value == ""; then
+            return false;
+          fi
+
+          for (let int earlier = 0; earlier < index; earlier = earlier + 1) {
+            val PathSegment previous = self.segments_value.get(earlier);
+            if (previous.kind == 1 || previous.kind == 2) && previous.value == segment.value; then
+              return false;
+            fi
+          }
+
+          if segment.kind == 2 && index != self.segments_value.size - 1; then
+            return false;
+          fi
+        fi
+      }
+
+      return true;
+    }
+
+
+  pub copy() -> PathPattern {
+    let mut Array<PathSegment> copied = new Array<PathSegment>();
+    for (const segment of self.segments_value) {
+      copied.add(new PathSegment(segment.kind, segment.value));
+    }
+    return new PathPattern(self.template_value, copied);
+  }
+  pub concat(String combined_template, borrow PathPattern suffix) -> PathPattern {
+    let mut Array<PathSegment> combined = new Array<PathSegment>();
+    for (const segment of self.segments_value) {
+      combined.add(new PathSegment(segment.kind, segment.value));
+    }
+    for (const segment of suffix.segments_value) {
+      combined.add(new PathSegment(segment.kind, segment.value));
+    }
+    return new PathPattern(combined_template, combined);
+  }
+end
+pub routine main(): int {
+  val Array<PathSegment> empty = new Array<PathSegment>();
+  val PathPattern empty_path = new PathPattern("/", empty);
+  val Array<PathSegment> valid = new Array<PathSegment>();
+  valid.add(new PathSegment(0, "foo"));valid.add(new PathSegment(1, "id"));valid.add(new PathSegment(2, "rest"));
+  val PathPattern good = new PathPattern("/foo/:id/*rest", valid);
+  val Array<PathSegment> invalid_kind = new Array<PathSegment>();invalid_kind.add(new PathSegment(3, "bad"));
+  val PathPattern bad_kind = new PathPattern("bad", invalid_kind);
+  val Array<PathSegment> negative_kind = new Array<PathSegment>();negative_kind.add(new PathSegment(-1, "bad"));
+  val PathPattern bad_negative = new PathPattern("bad", negative_kind);
+  val Array<PathSegment> missing = new Array<PathSegment>();missing.add(new PathSegment(1, ""));
+  val PathPattern bad_name = new PathPattern("bad", missing);
+  val Array<PathSegment> duplicate = new Array<PathSegment>();duplicate.add(new PathSegment(1, "id"));duplicate.add(new PathSegment(2, "id"));
+  val PathPattern bad_duplicate = new PathPattern("bad", duplicate);
+  val Array<PathSegment> misplaced = new Array<PathSegment>();misplaced.add(new PathSegment(2, "rest"));misplaced.add(new PathSegment(0, "after"));
+  val PathPattern bad_wildcard = new PathPattern("bad", misplaced);
+  val Array<PathSegment> repeated = new Array<PathSegment>();repeated.add(new PathSegment(0, "same"));repeated.add(new PathSegment(0, "same"));
+  val PathPattern good_repeated = new PathPattern("/same/same", repeated);
+  return empty_path.is_valid() && good.is_valid() && !bad_kind.is_valid() && !bad_negative.is_valid() && !bad_name.is_valid() && !bad_duplicate.is_valid() && !bad_wildcard.is_valid() && good_repeated.is_valid() ? 0 : 1;
+}

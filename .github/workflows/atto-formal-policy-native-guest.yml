@@ -1,0 +1,81 @@
+name: AttoLang five policy native guest plus six negative cases
+
+on:
+  pull_request:
+    paths:
+      - "tests/formal-policy-atto/**"
+      - "scripts/test-formal-policy-atto-native.sh"
+      - "scripts/compile-aot.sh"
+      - ".github/workflows/atto-formal-policy-native-guest.yml"
+      - "src/main/cpp/oreslang/**"
+      - "CMakeLists.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile-execute:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact PR source head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source Git head
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git ls-files --others --exclude-standard)"
+          echo "SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Install real LLVM, Clang and Rust build tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang llvm-dev jq
+          rustc --version
+      - name: Build real native compiler and no-GC IR auditor
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --target oreslang-llvmc oreslang-no-gc-ir-audit-build --parallel 2
+          test -x build/oreslang-llvmc
+          test -x build/oreslang-no-gc-ir-audit
+      - name: Compile ten native AttoLang guest binaries and reject six invalid sources
+        shell: bash
+        env:
+          ATTO_POLICY_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          ATTO_POLICY_RECEIPT: ${{ runner.temp }}/atto-policy-native-receipt.json
+        run: |
+          set -euo pipefail
+          bash scripts/test-formal-policy-atto-native.sh
+          jq -e --arg head "$ATTO_POLICY_EXPECTED_HEAD" \
+            --arg id "$GITHUB_RUN_ID" \
+            --arg attempt "$GITHUB_RUN_ATTEMPT" \
+            '.schema == "atto-native-policy-guest-receipt/v1"
+              and .sourceHead == $head
+              and .runId == $id
+              and .runAttempt == ($attempt|tonumber)
+              and .nativeGuestCount == 10
+              and .rejectedUndeclaredSymbol == true
+              and .negativeCount == 6
+              and (.negativeCompilerRejections | length == 6)
+              and (.negativeCompilerRejections | all(.compilerExitStatus > 0 and .compilerExitStatus < 128))
+              and (.scriptGitBlob | test("^[0-9a-f]{40}$"))
+              and (.negativeCompilerRejections | all(.diagnosticSha256 | test("^[0-9a-f]{64}$")))
+              and (.nativeGuestExecutions | all(.guestExitStatus == 0))' \
+            "$ATTO_POLICY_RECEIPT"
+      - name: Retain exact-head compiler, native output and negative-compile receipt
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: atto-policy-native-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/atto-policy-native-receipt.json
+          if-no-files-found: error
+          retention-days: 30

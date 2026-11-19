@@ -1,0 +1,5 @@
+// Type-first local must not smuggle an unlowered void-payload Result into IR.
+pub fnc main(): int {
+  let Result<void, ArrayError> outcome = Ok();
+  return 42;
+}
