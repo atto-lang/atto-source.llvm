@@ -122,7 +122,12 @@ public:
         return true;
     }
     // Only after all turns/loans have quiesced. Does not allocate or throw.
+    // Clearing sidecars alone resurrected old guest data on a new allocation.
+    // Scrub the complete *owned region* before its offsets become reusable.
+    // This is a teardown operation, not a scheduler hot-path operation.
     void reset() noexcept {
+        if (cage_ && capacity_)
+            std::memset(cage_ + base_, 0, capacity_);
         for (auto& page : pages_) page = Page{};
     }
     std::size_t metadata_bytes() const noexcept { return pages_.capacity() * sizeof(Page); }

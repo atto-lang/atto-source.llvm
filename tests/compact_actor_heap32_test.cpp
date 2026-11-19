@@ -84,6 +84,20 @@ int main() {
         yes(a.allocate(128, 16) == x);
     }
     {
+        std::vector<std::uint8_t> memory(16384, 0);
+        ActorSlabHeap32 heap(8192); heap.bind(memory.data(), 4096);
+        const auto small = heap.allocate(8, 8);
+        yes(small != 0);
+        memory[small] = 0x7f;
+        heap.reset();  // intentionally no explicit release: actor teardown
+        yes(memory[small] == 0);
+        const auto large = heap.allocate(5000, 16);
+        yes(large != 0);
+        memory[large + 4999] = 0x5a;
+        heap.reset(); // must scrub unreleased large runs as well
+        yes(memory[large + 4999] == 0);
+    }
+    {
         std::vector<std::uint8_t> memory(8192, 0);
         ActorSlabHeap32 heap(4096); heap.bind(memory.data(), 4096);
         yes(heap.allocate(100, 16) != 0);
