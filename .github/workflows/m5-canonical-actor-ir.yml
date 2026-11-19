@@ -1,0 +1,52 @@
+name: M5 real canonical LLVM parser and ownership-checked actor IR
+on:
+  push:
+    branches: [feat/m5-canonical-actor-mir-20261107]
+  pull_request:
+    paths:
+      - 'ci/m5/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/m5-canonical-actor-ir.yml'
+permissions:
+  contents: read
+jobs:
+  source-checked-mir:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      ATTO_BUILD_JOBS: "2"
+      LLVM_DIR: /usr/lib/llvm-18/lib/cmake/llvm
+      ATTO_E2E_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      EXPECTED_CARRIER_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify all 57 original compiler/test Git blobs unchanged
+        run: python3 ci/verify-source-subset.py
+      - name: Install LLVM18, Clang and WABT
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang-18 lld-18 llvm-18-dev libzstd-dev wabt cmake python3 file
+          sudo ln -sf /usr/bin/clang-18 /usr/local/bin/clang
+          sudo ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++
+          sudo ln -sf /usr/bin/wasm-ld-18 /usr/local/bin/wasm-ld
+      - name: Rebuild actual original LLVM compiler and checked-source native guest suite
+        run: bash tools/tenant-vm/verify-atto-e2e.sh
+      - name: Build canonical typed actor IR projection using original LLVM type checker
+        run: |
+          cmake --build build/atto-tenant-full-source/compiler --target atto-checked-actor-ir -j2
+          python3 ci/m5/verify_checked_actor_ir.py build/atto-tenant-full-source/compiler/atto-checked-actor-ir
+      - name: Install real GraalVM JDK25 Native Image for canonical checked IR backend integration
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: graalvm
+          java-version: '25'
+      - name: Compile actual LLVM checked AST through exact GraalVM codegen into Native Image
+        run: bash ci/m5/verify-canonical-graal-native.sh
+      - name: Explicit evidence boundary
+        run: |
+          echo 'ACTUAL_ORIGINAL_LLVM_CANONICAL_PARSER_OWNERSHIP_CHECKER_NARROW_TYPED_IR'
+          echo 'Restricted canonical checked AST --> GraalVM static native guest executed; NOT full language/scheduler/tenant security'
