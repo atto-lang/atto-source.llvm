@@ -53,10 +53,45 @@ int main() {
         boundary.force_native64 = true;
         check(plan_managed_reference(boundary)->field_bytes == 8,
               "explicit native64 selection ignored");
-        boundary = proven;
-        boundary.target_pointer_bits = 32;
-        check(!plan_managed_reference(boundary),
-              "uncertified wasm32 actor ref lowering must fail closed");
+        // 32-bit hosts (i686, ARMv7, wasm32) use the same 4-byte ref32 word.
+        auto host32 = proven;
+        host32.target_pointer_bits = 32;
+        auto plan32 = plan_managed_reference(host32);
+        check(plan32 && plan32->storage == PhysicalRefStorage::ActorOffset32
+                 && plan32->field_bytes == 4 && plan32->alignment == 8
+                 && plan32->needs_actor_base_at_dereference,
+              "32-bit target must lower actor-local refs to the shared ref32 word");
+        check(plan32->field_bytes == compressed->field_bytes
+                 && plan32->alignment == compressed->alignment,
+              "ref32 field layout differs between 32-bit and 64-bit targets");
+        host32.maximum_arena_span = UINT32_MAX;
+        check(plan_managed_reference(host32)->storage
+                  == PhysicalRefStorage::ActorOffset32,
+              "full 32-bit address-space arena rejected");
+        host32.maximum_arena_span = UINT64_C(1) << 32;
+        check(!plan_managed_reference(host32),
+              "arena larger than a 32-bit address space admitted on a 32-bit target");
+        host32 = proven;
+        host32.target_pointer_bits = 32;
+        host32.lifetime_proven = false;
+        check(!plan_managed_reference(host32),
+              "32-bit target admitted an unproven lifetime");
+        host32 = proven;
+        host32.target_pointer_bits = 32;
+        host32.minimum_alignment = 4;
+        check(!plan_managed_reference(host32),
+              "32-bit target admitted sub-quantum alignment for ref32");
+        host32 = proven;
+        host32.target_pointer_bits = 32;
+        host32.force_native64 = true;
+        check(plan_managed_reference(host32)->storage
+                  == PhysicalRefStorage::ActorAddress64
+                 && plan_managed_reference(host32)->field_bytes == 8,
+              "explicit native64 parity mode ignored on a 32-bit target");
+        auto host16 = proven;
+        host16.target_pointer_bits = 16;
+        check(!plan_managed_reference(host16),
+              "unsupported pointer width admitted");
 
         RefLayoutEvidence dense{};
         dense.domain = ReferenceDomain::DenseRow;

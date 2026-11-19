@@ -9,6 +9,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -42,6 +43,17 @@ public:
     std::uint64_t actor_id() const noexcept { return actor_id_; }
     std::uint64_t generation() const noexcept { return generation_; }
 
+    // Runtime-only, lock-free negative admission check for new external I/O.
+    // Not a live physical-turn claim and NOT atomic with concurrent STOP:
+    // the supervisor must revoke its WAL queue when STOP linearizes.
+    bool resource_admission_open() const noexcept {
+        return !ticket_->stop_issued.load(std::memory_order_acquire)
+            && !ticket_->detached_from_group.load(std::memory_order_acquire)
+            && !ticket_->physically_done.load(std::memory_order_acquire)
+            && !(ticket_->resource_state.load(std::memory_order_acquire)
+                 & terminal_resource_bit);
+    }
+
     // Trusted native resource accounting for physical loans issued to this
     // actor generation. The top bit seals registration at finalization; a
     // successful registration cannot race past physical DONE. This is not a
@@ -63,7 +75,10 @@ public:
     void release_resource_loan() const noexcept {
         auto current = ticket_->resource_state.load(std::memory_order_acquire);
         for (;;) {
-            if (current == 0 || (current & terminal_resource_bit))
+            // Terminal sealing blocks NEW loans but must not strand loans
+            // admitted before STOP/close/finalization. The low 63 bits remain
+            // a drainable count while the high bit stays sticky.
+            if ((current & (terminal_resource_bit - 1)) == 0)
                 std::terminate();
             if (ticket_->resource_state.compare_exchange_weak(
                     current, current - 1, std::memory_order_acq_rel,
@@ -351,34 +366,26 @@ public:
 
     ~NativeActorGroup() { close(); }
 
-    /** Immediate native equivalent of spawn: one *exclusive* manager. */
+    /** Host-owned root adoption and atomic same-group child admission. */
     NativeActorRef adopt(std::uint64_t runtime_id, std::uint64_t actor_id,
                          std::uint64_t generation, StopRequest stop_request) {
-        if (!stop_request || actor_id == 0 || generation == 0)
-            throw std::invalid_argument("invalid native actor admission");
-        if (runtime_id != runtime_id_)
-            throw std::invalid_argument("foreign runtime actor reference");
-        auto& owners = registry();
-        // All paths touching both locks take the same scoped pair.
-        std::scoped_lock guard(mutex_, owners.mutex);
-        if (closed_) throw std::logic_error("ActorGroup is closed");
-        if (workers_.find(actor_id) != workers_.end())
-            throw std::logic_error("actor already managed by group");
-        if (workers_.size() >= maximum_workers_)
-            throw std::logic_error("ActorGroup worker capacity exceeded");
-        const Key key{runtime_id, actor_id};
-        if (owners.live.find(key) != owners.live.end())
-            throw std::logic_error("actor already managed by another group");
-        auto ticket = std::make_shared<NativeActorRef::Ticket>();
-        NativeActorRef ref(runtime_id, actor_id, generation, std::move(ticket));
-        workers_.emplace(actor_id, Entry{ref, std::move(stop_request), Phase::starting, {}});
-        try {
-            owners.live.emplace(key, Owner{generation, group_id_, ref.ticket_});
-        } catch (...) {
-            workers_.erase(actor_id);
-            throw;
-        }
-        return ref;
+        return adopt_impl(runtime_id,actor_id,generation,std::move(stop_request),nullptr);
+    }
+
+    NativeActorRef adopt_child(const NativeActorRef& parent,
+                               std::uint64_t runtime_id, std::uint64_t actor_id,
+                               std::uint64_t generation, StopRequest stop_request) {
+        return adopt_impl(runtime_id,actor_id,generation,std::move(stop_request),&parent);
+    }
+
+    /** Read-only diagnostic lineage, never a supervisor/capability grant. */
+    std::optional<std::uint64_t> spawned_by(const NativeActorRef& child) const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        const auto it = workers_.find(child.actor_id());
+        if (child.runtime_id() != runtime_id_ || it == workers_.end()
+            || !it->second.ref.same_incarnation(child))
+            throw std::invalid_argument("unknown or stale child actor reference");
+        return it->second.spawned_by;
     }
 
     /**
@@ -436,18 +443,21 @@ public:
                 || ref.ticket_->control_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_reserved.load(std::memory_order_acquire))
                 return false;
-            std::uint64_t resource_state = 0;
-            if (!ref.ticket_->resource_state.compare_exchange_strong(
-                    resource_state, NativeActorRef::terminal_resource_bit,
-                    std::memory_order_acq_rel, std::memory_order_acquire)) {
-                // A prior serialized finalization attempt may already have
-                // sealed resource admission before settlement threw. Keep the
-                // seal sticky so late loans cannot resurrect physical state,
-                // but allow this owner to retry unfinished terminal settlement.
-                if (resource_state != NativeActorRef::terminal_resource_bit
-                        || ref.ticket_->physically_done.load(std::memory_order_acquire))
-                    return false;
-            }
+            // Seal resource admission even when existing loans remain. A
+            // failed finalization attempt is a terminal boundary: already
+            // admitted loans may drain, but no stale holder may create new
+            // physical work and starve DONE indefinitely.
+            const std::uint64_t resource_state =
+                ref.ticket_->resource_state.fetch_or(
+                    NativeActorRef::terminal_resource_bit,
+                    std::memory_order_acq_rel);
+            if ((resource_state & (NativeActorRef::terminal_resource_bit - 1)) != 0)
+                return false;
+            // The terminal-only state is also the retry marker after an
+            // allocation failure during readiness/DONE settlement.
+            if ((resource_state & NativeActorRef::terminal_resource_bit)
+                    && ref.ticket_->physically_done.load(std::memory_order_acquire))
+                return false;
             try {
                 // Close may settle readiness after detaching the worker table,
                 // outside the group lock. The ticket mutex decides the winner.
@@ -524,8 +534,16 @@ public:
                     rejection.ref, std::move(rejection.result));
             for (auto& item : workers_) {
                 Entry& worker = item.second;
-                if (worker.phase != Phase::stopping)
+                if (worker.phase != Phase::stopping) {
+                    // STOP is the logical terminal admission boundary. Race it
+                    // atomically with resource/message admission: a retain that
+                    // wins just before this seal is counted and may drain; a
+                    // retain after the seal is rejected.
+                    worker.ref.ticket_->resource_state.fetch_or(
+                        NativeActorRef::terminal_resource_bit,
+                        std::memory_order_acq_rel);
                     worker.phase = Phase::stopping;
+                }
             }
         }
         for (auto& rejection : rejections)
@@ -546,11 +564,21 @@ public:
             if (closed_) return;
             closed_ = true;
             detached.swap(workers_);
-            // Publish only AFTER detaching group ownership. The runtime-held
-            // finalizer may retire an actor following true physical quiescence.
-            for (const auto& item : detached)
+            // Closing the group is a terminal resource-admission fence.
+            // Atomically preserve any already-admitted loan count while
+            // blocking every later retain. Those existing loans may still
+            // release after this bit is set; DONE waits for the count to drain.
+            //
+            // Publish detached_from_group only after the admission seal, so a
+            // RuntimeFinalizer can never observe detachment while a stale
+            // holder is still permitted to register fresh physical work.
+            for (const auto& item : detached) {
+                item.second.ref.ticket_->resource_state.fetch_or(
+                    NativeActorRef::terminal_resource_bit,
+                    std::memory_order_acq_rel);
                 item.second.ref.ticket_->detached_from_group.store(
                     true, std::memory_order_release);
+            }
         }
         for (auto& item : detached) {
             Entry& worker = item.second;
@@ -610,6 +638,7 @@ private:
         StopRequest stop_request;
         Phase phase;
         std::function<void()> pending_control;
+        std::optional<std::uint64_t> spawned_by;
     };
 
     Entry* find_active_locked(const NativeActorRef& ref) {
@@ -618,6 +647,39 @@ private:
         if (it == workers_.end() || !(it->second.ref == ref)
             || it->second.ref.ticket_ != ref.ticket_) return nullptr;
         return &it->second;
+    }
+
+    NativeActorRef adopt_impl(std::uint64_t runtime_id, std::uint64_t actor_id,
+                              std::uint64_t generation, StopRequest stop_request,
+                              const NativeActorRef* parent) {
+        if (!stop_request || actor_id == 0 || generation == 0)
+            throw std::invalid_argument("invalid native actor admission");
+        if (runtime_id != runtime_id_)
+            throw std::invalid_argument("foreign runtime actor reference");
+        auto& owners = registry();
+        // Atomic parent validation + child insertion + group closure fence.
+        std::scoped_lock guard(mutex_, owners.mutex);
+        if (closed_) throw std::logic_error("ActorGroup is closed");
+        std::optional<std::uint64_t> lineage;
+        if (parent) {
+            Entry* p = find_active_locked(*parent);
+            if (!p || p->phase == Phase::stopping)
+                throw std::logic_error("nested spawn parent is stale, stopping, or foreign");
+            lineage = parent->actor_id();
+        }
+        if (workers_.find(actor_id) != workers_.end())
+            throw std::logic_error("actor already managed by group");
+        if (workers_.size() >= maximum_workers_)
+            throw std::logic_error("ActorGroup worker capacity exceeded");
+        const Key key{runtime_id,actor_id};
+        if (owners.live.find(key) != owners.live.end())
+            throw std::logic_error("actor already managed by another group");
+        auto ticket = std::make_shared<NativeActorRef::Ticket>();
+        NativeActorRef ref(runtime_id,actor_id,generation,std::move(ticket));
+        workers_.emplace(actor_id,Entry{ref,std::move(stop_request),Phase::starting,{},lineage});
+        try { owners.live.emplace(key,Owner{generation,group_id_,ref.ticket_}); }
+        catch (...) { workers_.erase(actor_id); throw; }
+        return ref;
     }
 
     /**
@@ -644,18 +706,21 @@ private:
                 || ref.ticket_->control_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_reserved.load(std::memory_order_acquire))
                 return false;
-            std::uint64_t resource_state = 0;
-            if (!ref.ticket_->resource_state.compare_exchange_strong(
-                    resource_state, NativeActorRef::terminal_resource_bit,
-                    std::memory_order_acq_rel, std::memory_order_acquire)) {
-                // A prior serialized finalization attempt may already have
-                // sealed resource admission before settlement threw. Keep the
-                // seal sticky so late loans cannot resurrect physical state,
-                // but allow this owner to retry unfinished terminal settlement.
-                if (resource_state != NativeActorRef::terminal_resource_bit
-                        || ref.ticket_->physically_done.load(std::memory_order_acquire))
-                    return false;
-            }
+            // Seal resource admission even when existing loans remain. A
+            // failed finalization attempt is a terminal boundary: already
+            // admitted loans may drain, but no stale holder may create new
+            // physical work and starve DONE indefinitely.
+            const std::uint64_t resource_state =
+                ref.ticket_->resource_state.fetch_or(
+                    NativeActorRef::terminal_resource_bit,
+                    std::memory_order_acq_rel);
+            if ((resource_state & (NativeActorRef::terminal_resource_bit - 1)) != 0)
+                return false;
+            // The terminal-only state is also the retry marker after an
+            // allocation failure during readiness/DONE settlement.
+            if ((resource_state & NativeActorRef::terminal_resource_bit)
+                    && ref.ticket_->physically_done.load(std::memory_order_acquire))
+                return false;
             try {
                 ActorReadyResult rejected{false,
                     failure.empty() ? "actor terminated before ready" : failure};

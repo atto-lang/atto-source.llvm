@@ -1,0 +1,1 @@
+// Must fail type admission before any LLVM IR is emitted: distance is not i64.\npub fnc main(): int { return 1 >> true; }\n

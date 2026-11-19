@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -75,6 +76,9 @@ class InvertedColumns {
         std::array<bool, field_count> writers{};
         std::mutex mutex;
         std::uint64_t owner;
+        // Increment before structural operations, including potentially
+        // partial capacity changes on failed allocation. Never wrap.
+        std::uint64_t layout_epoch = 1;
         // Capability stays alive while any issued handle holds it; cannot be
         // reconstructed from predictable owner/slot/generation integers.
         std::shared_ptr<const unsigned char> issuer = std::make_shared<const unsigned char>(0);
@@ -91,6 +95,34 @@ class InvertedColumns {
             if (s.readers[i] || s.writers[i]) return true;
         return false;
     }
+    // Close marks checked operations invalid immediately. An issued host
+    // span may still be in use while a loan survives owner destruction:
+    // writing to its backing before release would introduce a data race.
+    // Reclaim/scrub only after the final loan releases its accounting.
+    static void scrub_if_quiescent(State& s) noexcept {
+        if (!s.closed || any_loans(s)) return;
+        std::apply([](auto&... column) {
+            (std::fill(column.begin(), column.end(),
+                       typename std::decay_t<decltype(column)>::value_type{}), ...);
+        }, s.columns);
+        std::fill(s.row_slots.begin(), s.row_slots.end(), 0);
+        for (Slot& slot : s.slots) {
+            slot.row = 0;
+            slot.generation = 0;
+            slot.live = false;
+        }
+        std::fill(s.free_slots.begin(), s.free_slots.end(), 0);
+    }
+    static void invalidate_layout(State& s) {
+        if (s.layout_epoch == std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("inverted layout epoch exhausted");
+        ++s.layout_epoch;
+    }
+    static void require_layout_guard(const State& s, const auto& guard) {
+        ensure_open(s);
+        if (guard.issuer_.get() != s.issuer.get() || guard.epoch_ != s.layout_epoch)
+            throw std::logic_error("stale or foreign inverted layout guard");
+    }
     static std::size_t resolve(const State& s, const auto& h) {
         ensure_open(s);
         if (h.issuer_.get() != s.issuer.get() || h.owner_ != s.owner
@@ -100,6 +132,23 @@ class InvertedColumns {
         if (!slot.live || slot.generation != h.generation_)
             throw std::out_of_range("stale inverted row handle");
         return slot.row;
+    }
+    // All dense-index column operations hold this lock until the actual
+    // read/write finishes. Re-resolving via index()+get()/set() would leave a
+    // TOCTOU gap where erase_swap recycles the row's slot.
+    static std::size_t checked_dense_row(const State& s, std::int64_t index) {
+        ensure_open(s);
+        if (index < 0 || index > std::numeric_limits<std::int32_t>::max() ||
+                static_cast<std::uint64_t>(index) >= s.row_slots.size())
+            throw std::out_of_range("inverted row index outside current length");
+        const auto row = static_cast<std::size_t>(index);
+        const auto slot_index = s.row_slots[row];
+        if (slot_index >= s.slots.size())
+            throw std::logic_error("corrupt inverted dense-row mapping");
+        const auto& slot = s.slots[slot_index];
+        if (!slot.live || slot.row != row || slot.generation == 0)
+            throw std::logic_error("corrupt inverted dense-row mapping");
+        return row;
     }
     template<std::size_t... I>
     static void reserve_columns(State& s, std::size_t n, std::index_sequence<I...>) {
@@ -120,6 +169,11 @@ class InvertedColumns {
     template<std::size_t... I>
     static void grow_columns(State& s, std::size_t n, std::index_sequence<I...>) {
         (ensure_capacity(std::get<I>(s.columns), n), ...);
+    }
+    template<std::size_t... I>
+    static bool columns_have_capacity(const State& s, std::size_t n,
+                                      std::index_sequence<I...>) {
+        return ((std::get<I>(s.columns).capacity() >= n) && ...);
     }
     template<std::size_t... I>
     static void append_columns(State& s, const std::tuple<Fields...>& values,
@@ -148,6 +202,19 @@ class InvertedColumns {
     }
 
 public:
+    // Compiler/JIT layout guard: storage identity + monotonic physical epoch.
+    // This is not a pointer, a row capability, a source-code generation guard,
+    // or permission to skip field-loan, bounds, or generation checks.
+    class LayoutGuard {
+        std::shared_ptr<const unsigned char> issuer_;
+        std::uint64_t epoch_;
+        LayoutGuard(std::shared_ptr<const unsigned char> issuer, std::uint64_t epoch)
+            : issuer_(std::move(issuer)), epoch_(epoch) {}
+        friend class InvertedColumns;
+    public:
+        std::uint64_t epoch() const noexcept { return epoch_; }
+    };
+
     class Handle {
         // Native host callers cannot mint row capabilities from public
         // numeric coordinates or mutate them to alias another live row.
@@ -241,6 +308,7 @@ public:
             std::lock_guard<std::mutex> lock(hold->mutex);
             if constexpr (Write) hold->writers[I] = false;
             else --hold->readers[I];
+            scrub_if_quiescent(*hold);
         }
     };
 
@@ -252,16 +320,122 @@ public:
     InvertedColumns(InvertedColumns&&) = delete;
     InvertedColumns& operator=(InvertedColumns&&) = delete;
     ~InvertedColumns() {
-        // Outstanding loans retain backing state until their release, so
-        // destruction cannot free memory under a borrower.
+        // Revocation is immediate under the owner lock. Outstanding loans
+        // keep the backing storage alive; scrubbing them now could race
+        // an already-issued host-only span. The final Loan::release()
+        // performs the deferred wipe immediately before state reclamation.
         std::lock_guard<std::mutex> lock(state_->mutex);
         state_->closed = true;
+        scrub_if_quiescent(*state_);
     }
 
     std::size_t size() const {
         std::lock_guard<std::mutex> lock(state_->mutex);
         ensure_open(*state_);
         return state_->row_slots.size();
+    }
+    /**
+     * Dense source bracket index -> opaque logical row capability.
+     * The signed 32-bit source index is checked before any narrowing.
+     */
+    Handle index(std::int64_t row_index) const {
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        const auto row = checked_dense_row(*state_, row_index);
+        const auto slot_index = state_->row_slots[row];
+        const auto& slot = state_->slots[slot_index];
+        return Handle{state_->issuer, state_->owner, slot_index, slot.generation};
+    }
+
+    // Capture without exposing an interior address. The guard does not imply
+    // row-value immutability or cover the compiler's code-generation epoch.
+    LayoutGuard capture_layout_guard() const {
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        ensure_open(*state_);
+        return LayoutGuard{state_->issuer, state_->layout_epoch};
+    }
+
+    // Guard validation and the actual checked access happen under ONE lock.
+    // A separate validate-then-dereference sequence would race swap-delete,
+    // capacity growth, migration, and owner destruction.
+    template<std::size_t I>
+    auto read_index_guarded(const LayoutGuard& guard, std::int64_t row_index) const
+            -> std::tuple_element_t<I, std::tuple<Fields...>> {
+        static_assert(I < field_count);
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        require_layout_guard(*state_, guard);
+        const auto row = checked_dense_row(*state_, row_index);
+        if (state_->writers[I])
+            throw std::logic_error("column has a mutable loan");
+        return std::get<I>(state_->columns)[row];
+    }
+
+    template<std::size_t I>
+    void write_index_guarded(const LayoutGuard& guard, std::int64_t row_index,
+            std::tuple_element_t<I, std::tuple<Fields...>> value) {
+        static_assert(I < field_count);
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        require_layout_guard(*state_, guard);
+        const auto row = checked_dense_row(*state_, row_index);
+        if (state_->writers[I] || state_->readers[I])
+            throw std::logic_error("column has an outstanding loan");
+        std::get<I>(state_->columns)[row] = value;
+    }
+
+    /**
+     * Backend lowering target for an admitted a[i].field read. The row
+     * capability is consumed internally and never becomes a guest value.
+     */
+    template<std::size_t I>
+    auto read_index(std::int64_t row_index) const
+            -> std::tuple_element_t<I, std::tuple<Fields...>> {
+        static_assert(I < field_count);
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        const auto row = checked_dense_row(*state_, row_index);
+        if (state_->writers[I])
+            throw std::logic_error("column has a mutable loan");
+        return std::get<I>(state_->columns)[row];
+    }
+
+    /**
+     * Backend lowering target for an admitted a[i].field write.
+     */
+    template<std::size_t I>
+    void write_index(
+            std::int64_t row_index,
+            std::tuple_element_t<I, std::tuple<Fields...>> value) {
+        static_assert(I < field_count);
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        const auto row = checked_dense_row(*state_, row_index);
+        if (state_->writers[I] || state_->readers[I])
+            throw std::logic_error("column has an outstanding loan");
+        std::get<I>(state_->columns)[row] = value;
+    }
+
+    /**
+     * Read lowering order: receiver once, then index once.
+     */
+    template<std::size_t I, class ReceiverFn, class IndexFn>
+    static auto lower_read(ReceiverFn&& receiver, IndexFn&& index_value)
+            -> std::tuple_element_t<I, std::tuple<Fields...>> {
+        auto&& store = std::forward<ReceiverFn>(receiver)();
+        const auto row = std::forward<IndexFn>(index_value)();
+        return store.template read_index<I>(row);
+    }
+
+    /**
+     * Assignment lowering order: RHS once, receiver once, index once.
+     */
+    template<std::size_t I, class ValueFn, class ReceiverFn, class IndexFn>
+    static auto lower_write(
+            ValueFn&& value_fn,
+            ReceiverFn&& receiver,
+            IndexFn&& index_value)
+            -> std::tuple_element_t<I, std::tuple<Fields...>> {
+        auto value = std::forward<ValueFn>(value_fn)();
+        auto&& store = std::forward<ReceiverFn>(receiver)();
+        const auto row = std::forward<IndexFn>(index_value)();
+        store.template write_index<I>(row, value);
+        return value;
     }
     // Explicit growth avoids reallocations inside future append batches.
     // Reserving any field is structural and excludes every outstanding loan.
@@ -270,6 +444,14 @@ public:
         State& s = *state_;
         ensure_open(s);
         if (any_loans(s)) throw std::logic_error("cannot reserve borrowed inverted columns");
+        // A true no-op reserve never relocates metadata or columns and must
+        // preserve an issued layout guard, matching the Java backend.
+        if (s.row_slots.capacity() >= capacity && s.slots.capacity() >= capacity &&
+                columns_have_capacity(s, capacity, std::index_sequence_for<Fields...>{}))
+            return;
+        // A growth attempt can partially relocate earlier vectors before a
+        // later allocator fails. Invalidate *before* the first allocation.
+        invalidate_layout(s);
         s.row_slots.reserve(capacity);
         s.slots.reserve(capacity);
         reserve_columns(s, capacity, std::index_sequence_for<Fields...>{});
@@ -282,6 +464,7 @@ public:
         const auto row = s.row_slots.size();
         if (row == std::numeric_limits<std::size_t>::max())
             throw std::overflow_error("inverted row count exhausted");
+        invalidate_layout(s);
         // Allocate everything before changing logical size. If allocation
         // throws, no row/slot/column sizes change.
         ensure_capacity(s.row_slots, row + 1);
@@ -305,6 +488,7 @@ public:
         State& s = *state_;
         const auto row = resolve(s, h);
         if (any_loans(s)) throw std::logic_error("cannot erase borrowed inverted columns");
+        invalidate_layout(s);
         const auto last = s.row_slots.size() - 1;
         const bool recycle = s.slots[h.slot_].generation != std::numeric_limits<std::uint64_t>::max();
         if (recycle) ensure_capacity(s.free_slots, s.free_slots.size() + 1);

@@ -102,6 +102,38 @@ fn main() {
     }
     link_and_run(&clang, &root, &dir.0, "consumed", &output.stdout);
 
+    // A real .atto guest must execute through the same scheduler-backed
+    // Future<int> await path and emit actual native LLVM IR, not a host model.
+    let std_await_source = fs::read_to_string(
+        root.join("tests/fixtures/std-await-v1/native-future-42.atto"))
+        .expect("read std.await Atto fixture");
+    let adapter_output = compile(
+        &compiler, &dir.0, "std-await.atto", &std_await_source);
+    assert!(adapter_output.status.success(),
+        "std.await source compile failed: {}",
+        String::from_utf8_lossy(&adapter_output.stderr));
+    let adapter_ir = String::from_utf8_lossy(&adapter_output.stdout);
+    assert!(adapter_ir.contains("oreslang_source_task_await_i64"),
+        "std.await must emit the real checked source Future await");
+    link_and_run(&clang, &root, &dir.0, "std-await", &adapter_output.stdout);
+
+    for (name, rejected_source) in [
+        ("adapter-factory.atto", std_await_source.replace(
+            "pending |> std.await;", "pending |> std.await();")),
+        ("adapter-arity.atto", std_await_source.replace(
+            "pending |> std.await;", "pending |> std.await(1, 2);")),
+        ("adapter-numbered.atto", std_await_source.replace(
+            "pending |> std.await;", "pending |> std.await2;")),
+        ("adapter-double.atto", std_await_source.replace(
+            "pending |> std.await;", "pending |> std.await |> std.await;")),
+        ("adapter-wrong-namespace.atto", std_await_source.replace(
+            "pending |> std.await;", "pending |> user.await;")),
+        ("adapter-nonfuture.atto", std_await_source.replace(
+            "pending |> std.await;", "42 |> std.await;")),
+    ] {
+        rejected(&compiler, &dir.0, name, &rejected_source, "");
+    }
+
     let parenthesized = consumed.replace(
         "rt take source()", "rt take(source())");
     let parenthesized_output = compile(
@@ -119,22 +151,12 @@ fn main() {
     let async_stage = fs::read_to_string(
         root.join("tests/fixtures/source-future-pipeline-async-stage-i64.ores"))
         .expect("read async-stage Future pipeline fixture");
-    let async_output = compile(
-        &compiler, &dir.0, "async-stage.ores", &async_stage);
-    assert!(async_output.status.success(),
-        "async-stage Future source compile failed: {}",
-        String::from_utf8_lossy(&async_output.stderr));
-    let async_ir = String::from_utf8_lossy(&async_output.stdout);
-    for needle in [
-        ".future.pending.consumed.producer",
-        "pending.plus_one_async.value",
-        "pending.twice.value",
-    ] {
-        assert!(async_ir.contains(needle),
-            "missing async-stage Future pipeline IR marker {needle}");
-    }
-    link_and_run(
-        &clang, &root, &dir.0, "async-stage", &async_output.stdout);
+    rejected(
+        &compiler,
+        &dir.0,
+        "async-stage.ores",
+        &async_stage,
+        "implicit |> Future flattening is forbidden");
 
     let borrowed = consumed.replace("rt take source()", "source()");
     rejected(&compiler, &dir.0, "borrowed.ores", &borrowed,
@@ -227,5 +249,5 @@ pub fnc main(): int {
         "tree shaking currently rejects Task/Future pipeline metadata edges"),
         "wrong tree-shake Future diagnostic: {tree_stderr}");
 
-    println!("PASS: source Future<int> producer/async-stage -> checked |> -> scheduler carrier -> await -> native 42");
+    println!("PASS: source Future<int> sync-stage pipeline executes; async stage preserves Future nesting and is rejected until explicit flatten/flat_map lowering");
 }

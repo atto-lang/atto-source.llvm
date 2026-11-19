@@ -17,6 +17,20 @@ namespace oreslang::runtime {
 // One non-repeating identity sequence shared by every ActorHeap specialization.
 inline std::atomic<std::uint64_t> next_actor_heap_identity{1};
 
+// CAS reservation, never fetch_add: fetch_add keeps advancing after the
+// terminal value, wraps through 0 and hands out 1 again, so a heap created
+// after exhaustion would alias the first heap's handles. UINT64_MAX is terminal
+// and is never returned; 0 means exhausted.
+inline std::uint64_t reserve_actor_heap_identity() noexcept {
+    auto current = next_actor_heap_identity.load(std::memory_order_relaxed);
+    while (current != 0 && current != std::numeric_limits<std::uint64_t>::max()) {
+        if (next_actor_heap_identity.compare_exchange_weak(current, current + 1,
+                std::memory_order_relaxed, std::memory_order_relaxed))
+            return current;
+    }
+    return 0;
+}
+
 // Experimental per-actor fixed-capacity native object store. No malloc/free,
 // tracing, reference counting, or collector safepoint in the read/write/free
 // path. Only the one bound carrier may mutate it. Handles are generation-
@@ -30,6 +44,8 @@ class ActorHeap final {
     static_assert(Slots > 0 && SlotBytes > 0, "actor heap must have capacity");
     static_assert(Slots <= std::numeric_limits<std::uint32_t>::max(),
                   "slot index exceeds handle width");
+    static_assert(SlotBytes <= std::numeric_limits<std::uint32_t>::max(),
+                  "slot length is stored in 32 bits on every host");
 public:
     struct Handle {
         std::uint64_t heap = 0;
@@ -41,7 +57,8 @@ private:
     struct Slot {
         alignas(std::max_align_t) std::array<std::byte, SlotBytes> bytes{};
         std::uint64_t generation = 1;
-        std::size_t length = 0;
+        // 32-bit on every host: a 64-bit host no longer pays 8 bytes here.
+        std::uint32_t length = 0;
         bool live = false;
     };
     static void scrub(Slot& item) noexcept {
@@ -52,8 +69,7 @@ private:
             bytes[n] = std::byte{0};
     }
     std::array<Slot, Slots> slots_{};
-    const std::uint64_t identity_ =
-        next_actor_heap_identity.fetch_add(1, std::memory_order_relaxed);
+    const std::uint64_t identity_ = reserve_actor_heap_identity();
     // Binding may be attempted concurrently by startup/admission code.
     // The mutex is used ONLY during admission, never in the heap hot path.
     std::mutex bind_mutex_;
@@ -131,7 +147,7 @@ public:
             auto& item = slots_[i];
             if (item.live || item.generation == 0) continue;
             item.live = true;
-            item.length = bytes;
+            item.length = static_cast<std::uint32_t>(bytes); // bytes <= SlotBytes
             item.bytes.fill(std::byte{0}); // do not disclose contents of prior generation
             live_bytes_ += bytes;
             ++live_blocks_;
