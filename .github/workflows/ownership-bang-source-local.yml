@@ -87,9 +87,12 @@ jobs:
           ctest --test-dir build -N -R '^native_ownership_bang_' | tee ci-evidence/ctest-inventory.txt
           # Exhaustively require the frozen 24-case ownership-bang inventory.
           # Fail closed if any negative/guest/optimization case disappears.
+          # Compare parsed CTest names exactly, not substring grep hits.
+          # No missing, extra, or duplicated case may satisfy admission.
+          sed -nE 's/^[[:space:]]*Test[[:space:]]+#[[:space:]]*[0-9]+:[[:space:]]+(native_ownership_bang_[A-Za-z0-9_]+)[[:space:]]*$/\\1/p' ci-evidence/ctest-inventory.txt > ci-evidence/selected-tests.txt
           while IFS= read -r test_name; do
-            grep -Fq "$test_name" ci-evidence/ctest-inventory.txt
-          done <<'EXPECTED_CTESTS'
+            printf '%s\\n' "$test_name"
+          done <<'EXPECTED_CTESTS' > ci-evidence/expected-tests.txt
           native_ownership_bang_aliases_parser_and_checker
           native_ownership_bang_copy_compact_guest
           native_ownership_bang_copy_spaced_guest
@@ -115,7 +118,10 @@ jobs:
           native_ownership_bang_borrow_call_O2
           native_ownership_bang_rt_borrow_mut_O2
           EXPECTED_CTESTS
-          awk '/Total Tests:/ { if ($3+0 < 24) exit 1; found=1 } END { if (!found) exit 1 }' ci-evidence/ctest-inventory.txt
+          test "$(wc -l < ci-evidence/selected-tests.txt)" -eq 24
+          test "$(wc -l < ci-evidence/expected-tests.txt)" -eq 24
+          diff -u <(sort ci-evidence/expected-tests.txt) <(sort ci-evidence/selected-tests.txt)
+          awk '/Total Tests:/ { if ($3+0 != 24) exit 1; found=1 } END { if (!found) exit 1 }' ci-evidence/ctest-inventory.txt
       - name: Execute actual native guest, O0 O2, and negative CTests
         shell: bash
         run: |
@@ -136,6 +142,7 @@ jobs:
           sha256sum ci-evidence/receipt.txt build/oreslang-llvmc \
             tests/fixtures/ownership-bang-v1/rt-borrow-mut-native.atto \
             ci-evidence/ctest-inventory.txt ci-evidence/ctest-execution.txt \
+            ci-evidence/expected-tests.txt ci-evidence/selected-tests.txt \
             ci-evidence/ctest-detailed.log \
             > ci-evidence/objects-sha256.txt
           sha256sum --check --status ci-evidence/objects-sha256.txt
