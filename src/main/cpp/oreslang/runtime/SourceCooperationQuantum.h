@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdint>
 #include <limits>
+#include <type_traits>
 
 namespace oreslang::runtime {
 
@@ -13,6 +14,28 @@ constexpr std::uint64_t saturatingBackedgeSuccessor(
         std::uint64_t completed) noexcept {
     return completed == std::numeric_limits<std::uint64_t>::max()
         ? completed : completed + 1;
+}
+
+// Saturate elapsed time on clock regression or signed overflow. Subtracting
+// chrono::time_point values directly invokes signed duration subtraction,
+// which is undefined behavior when a fake/host clock crosses INT64 extremes.
+// Unsigned subtraction is exact after checking that now >= started, even
+// if the mathematical delta exceeds INT64_MAX.
+template <typename Clock>
+std::uint64_t elapsedClockTicksOrMax(
+        typename Clock::time_point now,
+        typename Clock::time_point started) noexcept {
+    using rep = typename Clock::duration::rep;
+    static_assert(std::is_integral_v<rep> && std::is_signed_v<rep> &&
+                  sizeof(rep) <= sizeof(std::uint64_t),
+                  "checkpoint clocks require bounded signed integral ticks");
+    using unsigned_rep = std::make_unsigned_t<rep>;
+    const rep current = now.time_since_epoch().count();
+    const rep baseline = started.time_since_epoch().count();
+    if (current < baseline) return std::numeric_limits<std::uint64_t>::max();
+    return static_cast<std::uint64_t>(
+        static_cast<unsigned_rep>(current) -
+        static_cast<unsigned_rep>(baseline));
 }
 }  // namespace detail
 
@@ -74,7 +97,11 @@ public:
         checkDue_ = false;
         if (watchdogRequested || backedges_ >= kMaxBackedgesPerDispatch)
             return true;
-        return Clock::now() - dispatchStarted_ >= kSoftDispatchQuantum;
+        const auto elapsed = detail::elapsedClockTicksOrMax<Clock>(
+            Clock::now(), dispatchStarted_);
+        const auto threshold = std::chrono::duration_cast<
+            typename Clock::duration>(kSoftDispatchQuantum).count();
+        return threshold <= 0 || elapsed >= static_cast<std::uint64_t>(threshold);
     }
 
     // Must only be called for an actual logical cooperate handoff.
@@ -82,9 +109,20 @@ public:
 
     // Generator 'yield value' is NOT a scheduler cooperation.
     std::chrono::nanoseconds timeSinceLastCooperate() const noexcept {
-        const auto elapsed = Clock::now() - lastCooperate_;
-        const auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed);
-        return nanos.count() < 0 ? std::chrono::nanoseconds::zero() : nanos;
+        const auto ticks = detail::elapsedClockTicksOrMax<Clock>(
+            Clock::now(), lastCooperate_);
+        if (ticks == std::numeric_limits<std::uint64_t>::max())
+            return std::chrono::nanoseconds::max();
+        // Diagnostics are cold-path only. Convert via wide floating point to
+        // avoid duration_cast's signed multiplication overflow for coarse
+        // or very large clock tick values, then saturate at max nanoseconds.
+        const long double nanos = static_cast<long double>(ticks)
+            * static_cast<long double>(Clock::period::num) * 1'000'000'000.0L
+            / static_cast<long double>(Clock::period::den);
+        if (nanos >= static_cast<long double>(
+                std::numeric_limits<std::int64_t>::max()))
+            return std::chrono::nanoseconds::max();
+        return std::chrono::nanoseconds(static_cast<std::int64_t>(nanos));
     }
 
     std::uint64_t completedBackedgesThisDispatch() const noexcept { return backedges_; }

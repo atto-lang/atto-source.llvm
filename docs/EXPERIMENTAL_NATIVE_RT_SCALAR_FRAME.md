@@ -36,3 +36,37 @@ host test interleaves **two frames on one thread** and proves bounds, progress,
 cancel isolation and exactly-once increments. Subsequent work must integrate
 this frame contract with HungryCarrier, source actors, pinned loans, watchdog
 requests and real task scheduling before expanding the supported grammar.
+
+## Frame integrity (forward-port of #1570 onto #1569's batching)
+
+#1569's batched step stays canonical: the endpoint
+`dispatch.batch.stop = min(counter + fuel, upperBound)` is computed once per
+dispatch and the only backedge test compares the SSA induction value
+(`counter.before`, seeded from the validated dispatch counter) against it.
+There is no per-iteration fuel decrement, clock read or scheduler call. Each
+committed tick is still stored to the frame before any COOPERATE return.
+
+On top of that the emitter enforces:
+
+- **Zero-initialised admission.** `init` requires state, counter *and* magic
+  to be zero; `state == 0` alone could resurrect a recycled incarnation.
+- **Counter range in every state.** `step` and `cancel` trap unless the
+  committed counter is inside the compiler-proven `[initial, upperBound]`
+  interval, including for DONE and CANCELLED frames.
+- **No forged completion.** DONE is accepted only with the exact terminal
+  counter `upperBound`, in `step`, `cancel` and `result`. A scheduler may
+  consume status 0 without ever calling `result`, so validating `result`
+  alone would leave a bypass.
+- **Cancellation is not completion.** A cancelled frame returns status 2
+  forever and `result` traps on it.
+
+`native_rt_scalar_frame_integrity_aot` (CTest, `tests/*.cmake`) links the
+compiler-emitted module with the C oracle at Clang `-O0/-O2/-O3`, plus
+UBSan/ASan where a sanitized probe builds and runs (`ORE_SANITIZER_CLANG`
+may name a second clang). It requires 20 child-signal trap scenarios on
+Linux/macOS, the exact dispatch-fuel boundaries 0/1/127/128/129/511/512
+(from a fresh frame and from `fuel`/`fuel + 1` short of the bound), and
+stable DONE/CANCELLED retirement. It then mutates the real emitted IR (fuel
+cap bypass, doubled commit, stale persisted counter, CANCELLED disguised as
+DONE, and removal of each new guard); every mutant must compile and be
+killed by the named oracle check, not by a parser error or a crash.

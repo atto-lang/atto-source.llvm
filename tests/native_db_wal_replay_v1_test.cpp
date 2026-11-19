@@ -182,7 +182,7 @@ int main(){
     pid_t pid=::fork(); assert(pid>=0);
     if(pid==0){
         append(fd,first); append(fd,second);
-        ::_exit(::fdatasync(fd)==0 ? 0:5);
+        ::_exit(oreslang::runtime::db_wal_datasync(fd)==0 ? 0:5);
     }
     int status=0;
     assert(::waitpid(pid,&status,0)==pid);
@@ -277,7 +277,12 @@ int main(){
     assert(::ftruncate(fd,62)==0);
     // Exercise the production-style trusted directory-relative locked
     // owner wrapper as a separate generation after full process reopen.
+#if defined(__APPLE__)
+    // /tmp is a symlink to /private/tmp on macOS; O_NOFOLLOW needs the real directory.
+    int root=::open("/private/tmp", O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);
+#else
     int root=::open("/tmp", O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);
+#endif
     assert(root>=0);
     {
         auto owned=oreslang::runtime::DbDurableWalFile::open_trusted(

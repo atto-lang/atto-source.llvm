@@ -25,7 +25,7 @@ for opt in 0 2; do
   status=$?
   set -e
   if [[ "$status" != 42 || -s "$work/stdout-$opt" || -s "$work/stderr-$opt" ]]; then
-    echo "real native trap Option<int> guest mismatch at O$opt (exit $status)" >&2
+    echo "real native trap Result<int, Error> guest mismatch at O$opt (exit $status)" >&2
     cat "$work/stdout-$opt" "$work/stderr-$opt" >&2
     exit 1
   fi

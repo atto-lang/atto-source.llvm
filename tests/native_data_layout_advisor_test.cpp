@@ -66,6 +66,56 @@ int main() {
     require(!has(advise_dop_plan_padding(packed), "ORES-LAYOUT141"),
             "fully occupied tile must not report padding waste");
 
+    // A hot workload observation is only advisory. It cannot grant the
+    // right to relocate live actor-owned rows, mutate layout under a loan,
+    // or create runtime machine code in a sealed NativeAOT/zero-GC profile.
+    auto cold = region(DataLayout::Aos);
+    cold.hot = false;
+    require(!has(advise_layout(cold), "ORES-LAYOUT101"),
+            "unobserved access must not suggest a physical layout rewrite");
+    cold.hot = true;
+    cold.rows = 127;
+    require(!has(advise_layout(cold), "ORES-LAYOUT101"),
+            "subthreshold region is not evidence of a hot optimized path");
+
+    auto not_relocatable = region(DataLayout::Aos);
+    not_relocatable.relocation_verified = false;
+    require(!has(advise_layout(not_relocatable), "ORES-LAYOUT101"),
+            "unverified relocation must suppress SoA suggestion");
+    not_relocatable.relocation_verified = true;
+    not_relocatable.whole_record_access = true;
+    require(!has(advise_layout(not_relocatable), "ORES-LAYOUT101"),
+            "whole-record access must suppress selective-column rewrite");
+
+    auto invalid_is_denied = [](LayoutRegion candidate) {
+        try {
+            (void)advise_layout(candidate);
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+        return false;
+    };
+    auto bad = region(DataLayout::Aos);
+    bad.accessed_fields = {0, 8};
+    require(invalid_is_denied(bad),
+            "field index beyond schema must be rejected before advice");
+    bad = region(DataLayout::Aos);
+    bad.field_bytes[0] = 0;
+    require(invalid_is_denied(bad),
+            "zero-byte columns must not become optimistic layout metadata");
+    bad = region(DataLayout::Aos);
+    bad.hints.aosoa_tile_rows = 8;
+    require(invalid_is_denied(bad),
+            "AoSoA tile authority cannot be attached to AoS");
+    bad = region(DataLayout::Aosoa);
+    bad.hints.aosoa_tile_rows = 4097;
+    require(invalid_is_denied(bad),
+            "oversized tile width must be rejected");
+    bad = region(DataLayout::Aosoa);
+    bad.hints.vector_bytes = 24;
+    require(invalid_is_denied(bad),
+            "non-power-of-two SIMD widths are not verified kernels");
+
     bool failed = false;
     try {
         aos.accessed_fields = {0, 0};

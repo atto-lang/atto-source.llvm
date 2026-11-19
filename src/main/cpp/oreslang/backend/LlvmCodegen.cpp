@@ -5,6 +5,7 @@
 #include "oreslang/frontend/NativeScalarSpecialization.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 #include "oreslang/runtime/OresIsolateAbi.h"
+#include "oreslang/runtime/SourceIdentityV1.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -25,6 +26,7 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
@@ -166,13 +168,13 @@ llvm::Value* lower(const Expression& expr,
                    const RegionMoveLowering* moves = nullptr) {
     switch (expr.kind) {
         case Expression::Kind::SumConstruct: {
-            // Independent backend gate: a trap-origin Some may only wrap the
+            // Independent backend gate: a trap-origin Ok may only wrap the
             // statically total integer subset. Never accidentally catch host,
             // ordinary guest, panic or cancellation errors by fabricating Some.
-            if (expr.trap_origin && (expr.name != "Some" ||
+            if (expr.trap_origin && (expr.name != "Ok" ||
                     expr.arguments.size() != 1 ||
                     !native_trap_pure_integer(*expr.arguments.front()) ||
-                    expr.sum_type != "Option<int>"))
+                    expr.sum_type != "Result<int,Error>"))
                 throw std::runtime_error("unproved native trap AST reached LLVM codegen");
             const auto& type = native_sum(*moves->sum_program, expr.sum_type);
             const bool option = type.kind == NativeSumType::Kind::Option;
@@ -358,6 +360,16 @@ llvm::Value* lower(const Expression& expr,
             return builder.CreateLoad(i64, field_storage.at(native_place_key(expr)),
                                       expr.left->name + "." + expr.name + ".read");
         case Expression::Kind::ArrayCall: {
+            if (expr.name == "contains_literal") {
+                if (!expr.left || expr.arguments.size() != 1)
+                    throw std::runtime_error("invalid checked String.contains_literal lowering");
+                auto* text = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+                auto* needle = lower(*expr.arguments.front(), builder, i64, storage, field_storage, functions, moves);
+                auto runtime = builder.GetInsertBlock()->getModule()->getOrInsertFunction(
+                    "ores_string_contains_literal",
+                    llvm::FunctionType::get(i64, {i64, i64}, false));
+                return builder.CreateCall(runtime, {text, needle}, "string.contains.literal");
+            }
             if (!expr.left)
                 throw std::runtime_error("native Array<int> call has no owned receiver");
             llvm::Value* handle = builder.CreateLoad(i64,
@@ -370,6 +382,33 @@ llvm::Value* lower(const Expression& expr,
             if (expr.name == "get" && args.size() == 1)
                 return builder.CreateCall(moves->array_get,
                     {selected_region, handle, args[0]}, "array.get");
+            if (expr.name == "get_copy" && args.size() == 1) {
+                // Native scalar copy is checked before pointer arithmetic.
+                // The C ABI validates region/handle authority even on None,
+                // and writes the payload only for a present element.
+                if (!moves || !moves->sum_program ||
+                        expr.sum_type != "Option<int>" ||
+                        native_sum(*moves->sum_program, expr.sum_type).value_type != ScalarType::I64)
+                    throw std::runtime_error("unproven native Array.get_copy Option<int>");
+                auto* payload_slot = entry_alloca(builder, i64,
+                    llvm::ConstantInt::get(i64, 1), "array.copy.payload");
+                builder.CreateStore(llvm::ConstantInt::get(i64, 0), payload_slot);
+                auto* module = builder.GetInsertBlock()->getModule();
+                auto checked_get = module->getOrInsertFunction(
+                    "oreslang_int_array_try_get_copy",
+                    llvm::FunctionType::get(builder.getInt32Ty(),
+                        {selected_region->getType(), i64, i64, payload_slot->getType()}, false));
+                llvm::Value* present = builder.CreateCall(checked_get,
+                    {selected_region, handle, args[0], payload_slot}, "array.copy.present");
+                auto* fields = entry_alloca(builder, i64,
+                    llvm::ConstantInt::get(i64, 2), "array.copy.option.fields");
+                builder.CreateStore(builder.CreateZExt(present, i64), fields);
+                builder.CreateStore(builder.CreateLoad(i64, payload_slot),
+                    builder.CreateGEP(i64, fields, llvm::ConstantInt::get(i64, 1)));
+                return builder.CreateCall(moves->record_new,
+                    {llvm::ConstantInt::get(i64, moves->record_schemas->at(expr.sum_type)),
+                     llvm::ConstantInt::get(i64, 2), fields}, "array.get_copy.option");
+            }
             if (expr.name == "add" && args.size() == 1) {
                 llvm::Value* status = builder.CreateCall(moves->array_add,
                     {selected_region, handle, args[0]}, "array.add.status");
@@ -505,7 +544,7 @@ llvm::Value* lower(const Expression& expr,
             // Native target currently uses a trap for typed runtime errors.
             // This is fail-closed rather than Java's exception-class parity.
             builder.CreateCall(
-                llvm::Intrinsic::getDeclaration(module, llvm::Intrinsic::trap));
+                native_trap(*module));
             builder.CreateUnreachable();
             builder.SetInsertPoint(valid);
             if (expr.kind == Expression::Kind::ShiftLeft)
@@ -529,7 +568,7 @@ llvm::Value* lower(const Expression& expr,
             builder.CreateCondBr(builder.CreateICmpEQ(right, llvm::ConstantInt::get(i64, 0), "rem.zero"),
                 failed, proceed);
             builder.SetInsertPoint(failed);
-            builder.CreateCall(llvm::Intrinsic::getDeclaration(module, llvm::Intrinsic::trap));
+            builder.CreateCall(native_trap(*module));
             builder.CreateUnreachable();
             builder.SetInsertPoint(proceed);
             // Any value modulo -1 is 0, including INT64_MIN, but LLVM srem INT64_MIN, -1
@@ -783,7 +822,163 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool cortex_m_target,
                                   bool bounded_allocator_provider,
                                   const std::string& isolate_entry,
-                                  bool actor_region_v1) {
+                                  bool actor_region_v1,
+                                  const std::vector<CheckedSourceRoutineV1>& checked_routines,
+                                  const std::vector<CheckedLogSiteV1>& checked_sites) {
+    // Every compiler retains its own frontend and source map. This optional
+    // LLVM-owned admission binds reviewed static IDs to the native typed
+    // source function selector; no source ID is synthesized at runtime.
+    // The caller must already have checked the registry's source-unit/build
+    // provenance. No guest log-site or dynamic instrumentation is implied.
+    std::unordered_map<std::string, std::string> routine_source_ids;
+    if (!checked_routines.empty()) {
+        // ModuleLoader may flatten imports into an independently renamed
+        // callable and clear the Program.imports list. Without per-unit
+        // provenance, a manifest for root.atto must never certify imported
+        // function bodies as if they originated in root.atto. Fail closed on
+        // both direct imports and compiler-qualified/imported symbols.
+        const bool has_cross_unit_callables = std::any_of(
+            source.functions.begin(), source.functions.end(),
+            [](const Function& fn) {
+                return fn.name.find('.') != std::string::npos ||
+                    fn.name.rfind("__ores_module_", 0) == 0;
+            });
+        if (checked_routines.size() != source.functions.size() ||
+            !source.imports.empty() || has_cross_unit_callables ||
+            !source.actors.empty() || !source.generators.empty() ||
+            !source.classes.empty()) {
+            throw std::runtime_error(
+                "checked source IDs require exact single-unit scalar function coverage");
+        }
+        std::unordered_set<std::string> unique_routine_ids;
+        for (const auto& id : checked_routines) {
+            telemetry::SourceId parsed{};
+            if (!telemetry::parse_source_id(id.routine_id,
+                                            telemetry::SourceKind::Routine, parsed)) {
+                throw std::runtime_error("malformed native checked routine source ID");
+            }
+            if (!unique_routine_ids.insert(id.routine_id).second)
+                throw std::runtime_error("duplicate cross-function native routine source ID");
+            if (!routine_source_ids.emplace(
+                    native_function_slot(id.symbol, id.arity), id.routine_id).second) {
+                throw std::runtime_error("duplicate checked native routine source selector");
+            }
+        }
+        for (const auto& fn : source.functions) {
+            if (!routine_source_ids.count(native_function_slot(fn.name, fn.parameters.size()))) {
+                throw std::runtime_error("checked source routine registry missing a native callable");
+            }
+            // The v1 manifest spells signatures as name(int,...):int.
+            // Name/arity matching alone is insufficient: bool, String,
+            // borrows and void methods can have the same selector. Never
+            // associate such a different typed ABI with a reviewed rid_.
+            const bool exact_int_parameters = std::all_of(
+                fn.parameters.begin(), fn.parameters.end(),
+                [](const Parameter& param) {
+                    return param.mode == Parameter::Mode::Value &&
+                        param.scalar_type == ScalarType::I64 &&
+                        param.class_name.empty() &&
+                        param.generic_type.empty() &&
+                        param.pending_type_alias.empty() &&
+                        param.sum_type.empty();
+                });
+            if (fn.returns_void || fn.return_type != ScalarType::I64 ||
+                !fn.return_class.empty() || !fn.return_sum.empty() ||
+                !fn.pending_return_type_alias.empty() ||
+                !fn.generic_parameters.empty() || !fn.method_owner.empty() ||
+                !exact_int_parameters) {
+                throw std::runtime_error(
+                    "checked source routine manifest requires exact int-only callable signature");
+            }
+        }
+    }
+    // Every lexical log.info literal is an actual compiler-owned site.
+    // The temporary selector+literal key is only an exact admission witness;
+    // source-controlled site_id is the persistent identity. Multiple calls
+    // to the same literal in one routine are ambiguous in this v1 slice.
+    auto log_key = [&](const std::string& symbol, std::size_t arity,
+                       const std::string& message) {
+        return native_function_slot(symbol, arity) + '\x1f' + message;
+    };
+    std::unordered_set<std::string> emitted_log_keys;
+    std::function<void(const Function&, const Statement&)> scan_log_site;
+    scan_log_site = [&](const Function& fn, const Statement& stmt) {
+        if (stmt.kind == Statement::Kind::TelemetryLogInfo) {
+            if (!emitted_log_keys.insert(log_key(
+                    fn.name, fn.parameters.size(), stmt.telemetry_operation)).second)
+                throw std::runtime_error("ambiguous repeated native log.info literal requires explicit site locator");
+        }
+        for (const auto& child : stmt.then_statements) scan_log_site(fn, child);
+        for (const auto& child : stmt.else_statements) scan_log_site(fn, child);
+    };
+    // A guest binding named "log" must never be silently treated as the
+    // compiler-owned logging intrinsic. Reject it even if it appears in a
+    // nested lexical scope or later in the function: v1 does not yet track
+    // all control-flow and shadowing provenance in the static-site table.
+    std::function<bool(const Statement&)> shadows_log;
+    shadows_log = [&](const Statement& stmt) -> bool {
+        if ((stmt.branch_local && stmt.branch_local->name == "log") ||
+            (stmt.kind == Statement::Kind::UsingTelemetrySpan &&
+             stmt.receiver == "log")) return true;
+        return std::any_of(stmt.then_statements.begin(), stmt.then_statements.end(), shadows_log)
+            || std::any_of(stmt.else_statements.begin(), stmt.else_statements.end(), shadows_log);
+    };
+    for (const auto& fn : source.functions) {
+        const auto prior = emitted_log_keys.size();
+        for (const auto& stmt : fn.statements) scan_log_site(fn, stmt);
+        if (emitted_log_keys.size() != prior &&
+            (std::any_of(fn.parameters.begin(), fn.parameters.end(),
+                    [](const Parameter& p) { return p.name == "log"; }) ||
+             std::any_of(fn.locals.begin(), fn.locals.end(),
+                    [](const LocalBinding& local) { return local.name == "log"; }) ||
+             std::any_of(fn.statements.begin(), fn.statements.end(), shadows_log)))
+            throw std::runtime_error(
+                "native compiler logging intrinsic cannot be shadowed by guest log binding");
+    }
+    if (emitted_log_keys.size() != checked_sites.size()) {
+        throw std::runtime_error("native log.info requires exact source-controlled site ID coverage");
+    }
+    if (checked_sites.size() > 4096) {
+        throw std::runtime_error("native static log site budget exceeded");
+    }
+    std::unordered_map<std::string, CheckedLogSiteV1> native_log_sites;
+    std::unordered_set<std::string> seen_site_ids;
+    for (const auto& site : checked_sites) {
+        telemetry::SourceId rid{}, sid{};
+        if (!telemetry::parse_source_id(
+                site.routine_id, telemetry::SourceKind::Routine, rid) ||
+            !telemetry::parse_source_id(
+                site.site_id, telemetry::SourceKind::Site, sid) ||
+            !seen_site_ids.insert(site.site_id).second) {
+            throw std::runtime_error("invalid or duplicate source-controlled native log site identity");
+        }
+        const auto fn_key = native_function_slot(site.symbol, site.arity);
+        auto parent = routine_source_ids.find(fn_key);
+        if (parent == routine_source_ids.end() ||
+            parent->second != site.routine_id) {
+            throw std::runtime_error("source log site does not belong to checked source routine");
+        }
+        const auto key = log_key(site.symbol, site.arity, site.message);
+        if (!emitted_log_keys.count(key) ||
+            !native_log_sites.emplace(key, site).second) {
+            throw std::runtime_error("stale, conflicting or misbound native static log site");
+        }
+    }
+    if (!checked_sites.empty() &&
+        (wasm32_target || cortex_m_target || !source.actors.empty() ||
+         !source.generators.empty() || !source.classes.empty() ||
+         std::any_of(source.functions.begin(), source.functions.end(),
+             [](const Function& fn) {
+                 return fn.async_source_i64 || !fn.source_tasks.empty() ||
+                     !fn.future_pipelines.empty() ||
+                     !fn.ready_await_actor.empty() ||
+                     !fn.done_await_actor.empty() ||
+                     !fn.actor_actions.empty() || !fn.actor_spawns.empty() ||
+                     !fn.actor_field_writes.empty();
+             }))) {
+        throw std::runtime_error(
+            "native log.info v1 only supports hosted non-suspending scalar AOT");
+    }
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
@@ -794,6 +989,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_native_telemetry_", 0) == 0)
             throw std::runtime_error("reserved native telemetry ABI symbol collision");
+    // Never allow guest names to shadow the checked actor ID runtime ABI,
+    // the actor-owned heap or compiler-emitted init/handler trampolines.
+    // Else LLVM may silently rename one symbol and link a guest callable
+    // in place of a trusted capability operation.
+    for (const auto& fn : source.functions)
+        if (fn.name.rfind("oreslang_source_actor_", 0) == 0 ||
+                fn.name.rfind("ores_actor_i64_heap_", 0) == 0 ||
+                fn.name.rfind("oreslang_actor_", 0) == 0)
+            throw std::runtime_error(
+                "reserved native checked source actor ABI symbol collision");
 
     // First OresVM entry is deliberately a one-function, pure scalar state
     // transition. Runtime-owned state is injected, never a mutable LLVM global.
@@ -846,6 +1051,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     if (!source.imports.empty())
         throw std::runtime_error("unresolved native module imports cannot reach LLVM emission");
     for (const auto& actor : source.actors) {
+        // The frontend can stage one typed, capture-free actor Task and its
+        // explicit 'return await' edge, but a synchronous on_message ABI
+        // cannot suspend. Never emit its placeholder scalar result or route
+        // it through the top-level synthetic Task<int> pool: that would
+        // silently execute guest work outside the owning actor domain.
+        if (!actor.on_message.actor_task_await_name.empty() ||
+                !actor.on_message.source_tasks.empty())
+            throw std::runtime_error(
+                "ATTO_TASK_E_ACTOR_LOWERING_PENDING: actor-owned task/await requires compiler-generated continuation frames on the native TASK/WAKE scheduler");
         if (actor.max_actor_threads != MaxActorThreads::LOW) {
             throw std::runtime_error("parallel actor LLVM lowering requires compiler-proven per-turn actor state isolation");
         }
@@ -1138,6 +1352,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             "ores_native_telemetry_span_end",
             llvm::FunctionType::get(llvm::Type::getVoidTy(context), {i64}, false));
     }
+    llvm::FunctionCallee telemetryLog;
+    if (!checked_sites.empty()) {
+        telemetryLog = module.getOrInsertFunction(
+            "ores_native_telemetry_log_info",
+            llvm::FunctionType::get(i32, {i64, i64, i64, i64, native_ptr, i64}, false));
+    }
     const bool has_source_tasks = std::any_of(
         source.functions.begin(), source.functions.end(),
         [](const Function& fn) {
@@ -1272,6 +1492,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // Only generated source actors resolve this native scheduler/heap ABI.
     // No actor imports appear in ordinary scalar/class compilation.
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
+    // All compiler-generated source actor references are non-address
+    // 64-bit incarnation IDs, including root CONTROL await callbacks.
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceRequestStop,
         sourceAwaitReady, sourceAwaitDone;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
@@ -1292,21 +1514,21 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         actorScopedDrop = module.getOrInsertFunction("ores_actor_i64_heap_scoped_drop",
             llvm::FunctionType::get(voidTy,
                 {native_ptr, i64, i64, native_ptr}, false));
-        sourceSpawn = module.getOrInsertFunction("oreslang_source_actor_spawn",
-            llvm::FunctionType::get(native_ptr, {native_ptr, native_ptr, i64}, false));
-        sourceSend = module.getOrInsertFunction("oreslang_source_actor_send",
-            llvm::FunctionType::get(voidTy, {native_ptr, i64}, false));
-        sourceStop = module.getOrInsertFunction("oreslang_source_actor_stop",
-            llvm::FunctionType::get(voidTy, {native_ptr}, false));
+        sourceSpawn = module.getOrInsertFunction("oreslang_source_actor_spawn_id",
+            llvm::FunctionType::get(i64, {native_ptr, native_ptr, i64}, false));
+        sourceSend = module.getOrInsertFunction("oreslang_source_actor_send_id",
+            llvm::FunctionType::get(voidTy, {i64, i64}, false));
+        sourceStop = module.getOrInsertFunction("oreslang_source_actor_stop_id",
+            llvm::FunctionType::get(voidTy, {i64}, false));
         sourceRequestStop = module.getOrInsertFunction(
-            "oreslang_source_actor_request_stop",
-            llvm::FunctionType::get(voidTy, {native_ptr}, false));
+            "oreslang_source_actor_request_stop_id",
+            llvm::FunctionType::get(voidTy, {i64}, false));
         sourceAwaitReady = module.getOrInsertFunction(
-            "oreslang_source_actor_await_ready",
-            llvm::FunctionType::get(i64, {native_ptr, native_ptr, i64}, false));
+            "oreslang_source_actor_await_ready_id",
+            llvm::FunctionType::get(i64, {i64, native_ptr, i64}, false));
         sourceAwaitDone = module.getOrInsertFunction(
-            "oreslang_source_actor_await_done",
-            llvm::FunctionType::get(i64, {native_ptr, native_ptr, i64}, false));
+            "oreslang_source_actor_await_done_id",
+            llvm::FunctionType::get(i64, {i64, native_ptr, i64}, false));
         for (const auto& actor : source.actors) {
             const std::string prefix = "oreslang_actor_" + actor.name + "_";
             actorInits.emplace(actor.name, llvm::Function::Create(
@@ -1442,6 +1664,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         // target even when our source-function symbol set is collision-free.
         if (declaration->getName().str() != symbol)
             throw std::runtime_error("native AOT direct dispatch linker symbol collision");
+        // Compiler-emitted metadata for the exact native callable. Native IR
+        // metadata is NOT a runtime probe and may not survive object emission:
+        // the authenticated artifact sidecar remains a separate future gate.
+        if (auto id = routine_source_ids.find(
+                native_function_slot(fn.name, fn.parameters.size()));
+                id != routine_source_ids.end()) {
+            declaration->setMetadata(
+                "atto.source.routine_id.v1",
+                llvm::MDNode::get(context, {llvm::MDString::get(context, id->second)}));
+        }
         if (specialization != nullptr) {
             const auto selector = native_function_slot(fn.name, fn.parameters.size());
             if (!frozen_scalar_callees.emplace(selector, declaration).second ||
@@ -1527,8 +1759,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             checked_sum_tag(builder, i64, handle, record_schemas.at(parameter.sum_type), native_sum(source, parameter.sum_type).kind == NativeSumType::Kind::Option ? 2 : 3, sum_check, record_get);
         }
 
-        // Every source actor ref is an opaque, unique capability owned by
-        // trusted top-level main; it cannot enter scalar values or calls.
+        // A compiler-minted actor incarnation ID, never an integer value
+        // converted from a host address. Linear ActorRef cannot escape into
+        // source scalar values, native calls, or foreign FFI.
         std::unordered_map<std::string, llvm::Value*> actorRefs;
         for (const auto& spawn : fn.actor_spawns) {
             llvm::Value* ctor = builder.CreatePointerCast(actorInits.at(spawn.actor_type),
@@ -1537,10 +1770,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 native_ptr);
             const auto actor = std::find_if(source.actors.begin(), source.actors.end(),
                 [&](const ActorDecl& a) { return a.name == spawn.actor_type; });
-            llvm::Value* ref = builder.CreateCall(sourceSpawn, {ctor, handler,
-                llvm::ConstantInt::get(i64,
-                    actor->fields.size() + actor->on_message.locals.size())},
-                spawn.name + ".actor.ref");
+            llvm::Value* ref = builder.CreateCall(sourceSpawn,
+                {ctor, handler,
+                    llvm::ConstantInt::get(i64,
+                        actor->fields.size() + actor->on_message.locals.size())},
+                spawn.name + ".actor.checked.id");
             actorRefs.emplace(spawn.name, ref);
         }
         // An explicitly "owned int" lives in a bounded native C region;
@@ -1758,7 +1992,44 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
 
         for (const auto& binding : fn.locals) {
             if (binding.int_array) {
+                llvm::Value* split_source = nullptr;
+                llvm::Value* split_delimiter = nullptr;
+                if (binding.initializer) {
+                    const Expression& split = *binding.initializer;
+                    if (split.kind != Expression::Kind::ArrayCall ||
+                            split.name != "split_literal" || !split.left ||
+                            split.arguments.size() != 1 ||
+                            binding.array_element_type != ScalarType::String)
+                        throw std::runtime_error("unchecked native owned String split initializer");
+                    // Preserve lexical evaluation of String expressions
+                    // before allocating the output array.
+                    split_source = lower(*split.left, builder, i64,
+                        storage, field_storage, declarations, &region_moves);
+                    split_delimiter = lower(*split.arguments.front(), builder, i64,
+                        storage, field_storage, declarations, &region_moves);
+                }
                 llvm::Value* handle = new_checked_array(binding.name);
+                if (binding.initializer) {
+                    if (!array_region || !array_failure || !array_failure_status)
+                        throw std::runtime_error("native String split has no owned array region");
+                    auto split_call = module.getOrInsertFunction(
+                        "ores_string_split_literal",
+                        llvm::FunctionType::get(llvm::Type::getInt32Ty(context),
+                            {native_ptr, i64, i64, i64}, false));
+                    auto* status = builder.CreateCall(split_call,
+                        {array_region, handle, split_source, split_delimiter},
+                        binding.name + ".split.status");
+                    auto* ok = llvm::BasicBlock::Create(context,
+                        binding.name + ".split.ok", function);
+                    auto* denied = llvm::BasicBlock::Create(context,
+                        binding.name + ".split.denied", function);
+                    builder.CreateCondBr(builder.CreateICmpEQ(status,
+                        llvm::ConstantInt::get(status->getType(), 0)), ok, denied);
+                    builder.SetInsertPoint(denied);
+                    builder.CreateStore(status, array_failure_status);
+                    builder.CreateBr(array_failure);
+                    builder.SetInsertPoint(ok);
+                }
                 llvm::Value* slot = builder.CreateAlloca(i64, nullptr,
                     binding.name + ".array.owner");
                 builder.CreateStore(handle, slot);
@@ -2121,6 +2392,43 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                         storage, field_storage, declarations, &region_moves);
                     builder.CreateStore(updated, field_storage.at(target));
                 }
+            } else if (effect.kind == Statement::Kind::TelemetryLogInfo) {
+                // The compiler IR call is a real AOT guest callsite. Runtime
+                // copies only source-controlled IDs and the bounded literal
+                // into its carrier-local ring, never a guest object/handle.
+                const auto key = log_key(fn.name, fn.parameters.size(),
+                                         effect.telemetry_operation);
+                auto found = native_log_sites.find(key);
+                if (found == native_log_sites.end() || !telemetryLog.getCallee())
+                    throw std::runtime_error("unverified native guest telemetry log site");
+                telemetry::SourceId rid{}, sid{};
+                if (!telemetry::parse_source_id(
+                        found->second.routine_id, telemetry::SourceKind::Routine, rid) ||
+                    !telemetry::parse_source_id(
+                        found->second.site_id, telemetry::SourceKind::Site, sid))
+                    throw std::runtime_error("corrupt checked native log source descriptor");
+                auto lane = [](const telemetry::SourceId& id, std::size_t begin) {
+                    std::uint64_t result = 0;
+                    for (std::size_t k = begin; k < begin + 8; ++k)
+                        result = (result << 8) | id.bytes[k];
+                    return result;
+                };
+                auto* literal = builder.CreateGlobalStringPtr(
+                    effect.telemetry_operation, "atto.telemetry.log.literal");
+                auto* siteCall = builder.CreateCall(telemetryLog, {
+                    llvm::ConstantInt::get(i64, lane(rid, 0)),
+                    llvm::ConstantInt::get(i64, lane(rid, 8)),
+                    llvm::ConstantInt::get(i64, lane(sid, 0)),
+                    llvm::ConstantInt::get(i64, lane(sid, 8)),
+                    literal,
+                    llvm::ConstantInt::get(i64, effect.telemetry_operation.size())
+                }, "atto.telemetry.log.receipt");
+                siteCall->setMetadata("atto.source.site_id.v1",
+                    llvm::MDNode::get(context, {
+                        llvm::MDString::get(context, found->second.site_id)}));
+                siteCall->setMetadata("atto.source.routine_id.v1",
+                    llvm::MDNode::get(context, {
+                        llvm::MDString::get(context, found->second.routine_id)}));
             } else if (effect.kind == Statement::Kind::Call) {
                 lower(*effect.expression, builder, i64, storage, field_storage, declarations, &region_moves);
             } else {
@@ -2156,9 +2464,43 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             if (!local.int_array) native_lifetime_start(builder, slot, bytes);
             ScopedSlot result{local.name, slot, bytes, {}, {}};
             if (local.int_array) {
+                llvm::Value* split_source = nullptr;
+                llvm::Value* split_delimiter = nullptr;
+                if (local.initializer) {
+                    const auto& split = *local.initializer;
+                    if (split.kind != Expression::Kind::ArrayCall ||
+                            split.name != "split_literal" || !split.left ||
+                            split.arguments.size() != 1 ||
+                            local.array_element_type != ScalarType::String)
+                        throw std::runtime_error("unchecked scoped String.split_literal owner");
+                    split_source = lower(*split.left, builder, i64,
+                        storage, field_storage, declarations, &region_moves);
+                    split_delimiter = lower(*split.arguments.front(), builder, i64,
+                        storage, field_storage, declarations, &region_moves);
+                }
                 init = new_checked_array(local.name);
                 result.array_shadow = array_failure_places.at(local.name);
                 array_names.insert(local.name);
+                if (local.initializer) {
+                    if (!array_region || !array_failure || !array_failure_status)
+                        throw std::runtime_error("scoped String.split_literal lacks array region");
+                    auto split_call = module.getOrInsertFunction("ores_string_split_literal",
+                        llvm::FunctionType::get(llvm::Type::getInt32Ty(context),
+                            {native_ptr, i64, i64, i64}, false));
+                    auto* status = builder.CreateCall(split_call,
+                        {array_region, init, split_source, split_delimiter},
+                        local.name + ".scoped.split.status");
+                    auto* ok = llvm::BasicBlock::Create(
+                        context, local.name + ".scoped.split.ok", function);
+                    auto* denied = llvm::BasicBlock::Create(
+                        context, local.name + ".scoped.split.denied", function);
+                    builder.CreateCondBr(builder.CreateICmpEQ(status,
+                        llvm::ConstantInt::get(status->getType(), 0)), ok, denied);
+                    builder.SetInsertPoint(denied);
+                    builder.CreateStore(status, array_failure_status);
+                    builder.CreateBr(array_failure);
+                    builder.SetInsertPoint(ok);
+                }
             }
             if (record) {
                 const auto& cls = *record_classes.at(local.class_name);
@@ -2221,11 +2563,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         };
         std::function<void(const std::vector<Statement>&)> lower_arm;
         std::function<void(const Statement&)> lower_control;
+        // Only lexical, synchronous scalar loop backedges are admitted.
+        // The source validator prohibits scoped owners, calls and suspension.
+        std::vector<std::pair<llvm::BasicBlock*, llvm::BasicBlock*>> loop_targets;
         lower_arm = [&](const std::vector<Statement>& arm) {
             const auto scope_start = active_scopes.size();
             for (const auto& action : arm) {
                 if (builder.GetInsertBlock()->getTerminator()) break;
-                if (action.kind == Statement::Kind::ForEach || action.kind == Statement::Kind::ForIndex || action.kind == Statement::Kind::Conditional || action.kind == Statement::Kind::Return || action.kind == Statement::Kind::UsingTelemetrySpan) {
+                if (action.kind == Statement::Kind::ForEach || action.kind == Statement::Kind::ForIndex || action.kind == Statement::Kind::Conditional || action.kind == Statement::Kind::Return || action.kind == Statement::Kind::UsingTelemetrySpan || action.kind == Statement::Kind::Loop || action.kind == Statement::Kind::Break || action.kind == Statement::Kind::Continue) {
                     lower_control(action); continue;
                 }
                 if (action.kind != Statement::Kind::ScopedLocal) {
@@ -2233,8 +2578,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     continue;
                 }
                 const LocalBinding& local = *action.branch_local;
-                llvm::Value* init = local.initializer ? lower(*local.initializer, builder, i64,
-                    storage, field_storage, declarations, &region_moves) : nullptr;
+                llvm::Value* init = (local.initializer && !local.int_array)
+                    ? lower(*local.initializer, builder, i64,
+                        storage, field_storage, declarations, &region_moves) : nullptr;
                 active_scopes.push_back(scoped_value(local, init));
             }
             while (active_scopes.size() > scope_start) {
@@ -2244,6 +2590,31 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             }
         };
         lower_control = [&](const Statement& stmt) {
+            if (stmt.kind == Statement::Kind::Break ||
+                    stmt.kind == Statement::Kind::Continue) {
+                if (loop_targets.empty())
+                    throw std::runtime_error("native break/continue has no lexical loop");
+                builder.CreateBr(stmt.kind == Statement::Kind::Break
+                    ? loop_targets.back().second
+                    : loop_targets.back().first);
+                return;
+            }
+            if (stmt.kind == Statement::Kind::Loop) {
+                auto* header = llvm::BasicBlock::Create(context, "scalar.loop.header", function);
+                auto* body = llvm::BasicBlock::Create(context, "scalar.loop.body", function);
+                auto* exit = llvm::BasicBlock::Create(context, "scalar.loop.exit", function);
+                builder.CreateBr(header);
+                builder.SetInsertPoint(header);
+                builder.CreateBr(body);
+                builder.SetInsertPoint(body);
+                loop_targets.emplace_back(header, exit);
+                lower_arm(stmt.then_statements);
+                loop_targets.pop_back();
+                if (!builder.GetInsertBlock()->getTerminator())
+                    builder.CreateBr(header);
+                builder.SetInsertPoint(exit);
+                return;
+            }
             if (stmt.kind == Statement::Kind::UsingTelemetrySpan) {
                 if (!has_native_telemetry || !telemetryBegin.getCallee()
                         || !telemetryEnd.getCallee())
@@ -2360,12 +2731,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             if (builder.GetInsertBlock()->getTerminator()) break;
             if (stmt.kind == Statement::Kind::ScopedLocal) {
                 const auto& local = *stmt.branch_local;
-                auto* value = local.initializer ? lower(*local.initializer, builder, i64, storage, field_storage, declarations, &region_moves) : nullptr;
+                auto* value = (local.initializer && !local.int_array)
+                    ? lower(*local.initializer, builder, i64, storage, field_storage, declarations, &region_moves)
+                    : nullptr;
                 ordered_root_scopes.push_back(scoped_value(local, value));
                 continue;
             }
             if (stmt.kind == Statement::Kind::ForEach || stmt.kind == Statement::Kind::ForIndex ||
-                    stmt.kind == Statement::Kind::Conditional || stmt.kind == Statement::Kind::UsingTelemetrySpan) {
+                    stmt.kind == Statement::Kind::Conditional || stmt.kind == Statement::Kind::UsingTelemetrySpan ||
+                    stmt.kind == Statement::Kind::Loop) {
                 lower_control(stmt); continue;
             }
             lower_effect(stmt);
@@ -2380,7 +2754,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         llvm::Value* awaited_result = nullptr;
         if (!fn.ready_await_actor.empty()) {
             auto* continuation_type =
-                llvm::FunctionType::get(i64, {native_ptr}, false);
+                llvm::FunctionType::get(i64, {i64}, false);
             auto* resume = llvm::Function::Create(
                 continuation_type,
                 llvm::Function::InternalLinkage,
@@ -2472,7 +2846,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             }
 
             auto* continuation_type =
-                llvm::FunctionType::get(i64, {native_ptr}, false);
+                llvm::FunctionType::get(i64, {i64}, false);
             auto* resume = llvm::Function::Create(
                 continuation_type,
                 llvm::Function::InternalLinkage,
@@ -2944,6 +3318,23 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             b.SetInsertPoint(null_invalid);
             return_i32(b, -1);
             b.SetInsertPoint(nonnull);
+            // The next() ABI writes a value through 'out' and advances the
+            // two-word frame. Disallow output aliasing either frame slot:
+            // otherwise out=frame could forge state and out=frame+1 could
+            // overwrite the just-updated index (violating single delivery).
+            auto* frame_index_addr = b.CreateInBoundsGEP(
+                i64, frame, llvm::ConstantInt::get(i64, 1));
+            auto* output_disjoint = b.CreateAnd(
+                b.CreateICmpNE(out, frame),
+                b.CreateICmpNE(out, frame_index_addr));
+            auto* alias_invalid = llvm::BasicBlock::Create(
+                context, "frame.output.alias", next);
+            auto* alias_valid = llvm::BasicBlock::Create(
+                context, "frame.output.disjoint", next);
+            b.CreateCondBr(output_disjoint, alias_valid, alias_invalid);
+            b.SetInsertPoint(alias_invalid);
+            return_i32(b, -1);
+            b.SetInsertPoint(alias_valid);
             auto* state = b.CreateLoad(i64, frame, "state");
             auto* active = llvm::BasicBlock::Create(context, "active", next);
             auto* done = llvm::BasicBlock::Create(context, "done", next);
@@ -3395,8 +3786,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             value, llvm::ConstantInt::get(i64, UINT32_MAX));
         b.CreateCondBr(in_range, accepted, rejected);
         b.SetInsertPoint(rejected);
-        b.CreateCall(llvm::Intrinsic::getDeclaration(
-            &module, llvm::Intrinsic::trap));
+        b.CreateCall(native_trap(module));
         b.CreateUnreachable();
         b.SetInsertPoint(accepted);
         b.CreateRet(b.CreateTrunc(value, i32));
@@ -3556,8 +3946,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                         : (expr.kind == K::Multiply)
                             ? llvm::Intrinsic::smul_with_overflow
                             : llvm::Intrinsic::sadd_with_overflow;
-                    auto* intrinsic = llvm::Intrinsic::getDeclaration(
-                        &module, op, {i64});
+                    auto* intrinsic = native_intrinsic(module, op, {i64});
                     auto* pair = b.CreateCall(intrinsic, {lhs, rhs},
                                                "isolate.arithmetic.checked");
                     auto* value = b.CreateExtractValue(pair, {0}, "isolate.arithmetic.value");

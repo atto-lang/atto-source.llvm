@@ -79,6 +79,9 @@ typedef struct {
      * carrier finds its next turn in O(1) instead of scanning every lane. */
     uint32_t rq_next[4], rq_prev[4];
     unsigned char rq_in[4];
+    /* Carrier slot that ran this lane's last turn, plus one (0 = none). A
+     * soft placement hint only: it never grants the carrier any authority. */
+    uint32_t last_carrier1;
 } ActorLane;
 /* Turn classes double as the dispatch `kind` and as ready-queue indexes.
  * Supervisor CONTROL outranks WAKE which outranks DATA. */
@@ -105,6 +108,13 @@ struct OresNativeActorScheduler {
     size_t actor_count, per_actor_capacity, worker_count, started_workers;
     size_t outstanding, runnable_lanes;
     uint32_t rq_head[TURN_CLASSES], rq_tail[TURN_CLASSES];
+    /* Carrier affinity (CONTINUATION_LOCALITY_V1 rule 5): a carrier picks a
+     * lane it ran last from the first affinity_window entries of a WAKE,
+     * TASK or DATA queue. head_skips bounds how often a queue head can be
+     * passed over, so affinity never starves FIFO order. */
+    uint32_t affinity_window;
+    unsigned char head_skips[TURN_CLASSES];
+    uint64_t affine_picks;
     /* Carriers parked in pthread_cond_wait(ready) / busy-polling work_epoch.
      * Both change only under `lock`, which is what makes skipping a signal
      * safe: a producer that sees a spinner knows it will re-check under the
@@ -351,18 +361,44 @@ static void wake_all_locked(OresNativeActorScheduler* s) {
 /* O(1): supervisor CONTROL outranks WAKE which outranks DATA. A carrier gets
  * two consecutive DATA turns on its most recent actor (warm cache) before
  * the head of the DATA queue gets priority. */
+enum { AFFINITY_WINDOW_DEFAULT = 8, AFFINITY_WINDOW_MAX = 64, AFFINITY_MAX_HEAD_SKIPS = 4 };
+/* Pick from class k: the first lane in the window that this carrier ran last,
+ * else the head. The head may be passed over at most AFFINITY_MAX_HEAD_SKIPS
+ * consecutive times, then it is taken regardless (bounded FIFO deviation).
+ * Never leaves a runnable turn waiting for a particular carrier. */
+static size_t pick_affine_locked(OresNativeActorScheduler* s, int k, size_t self) {
+    const uint32_t head = s->rq_head[k];
+    if (s->affinity_window == 0 || s->head_skips[k] >= AFFINITY_MAX_HEAD_SKIPS
+            || s->actors[head].last_carrier1 == (uint32_t)self + 1) {
+        s->head_skips[k] = 0;
+        return head;
+    }
+    uint32_t cursor = s->actors[head].rq_next[k];
+    for (uint32_t seen = 1; cursor != RQ_NIL && seen < s->affinity_window; ++seen) {
+        if (s->actors[cursor].last_carrier1 == (uint32_t)self + 1) {
+            ++s->head_skips[k];
+            ++s->affine_picks;
+            return cursor;
+        }
+        cursor = s->actors[cursor].rq_next[k];
+    }
+    s->head_skips[k] = 0;
+    return head;
+}
 static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* kind,
-        size_t recent_actor, unsigned consecutive) {
+        size_t recent_actor, unsigned consecutive, size_t self) {
     if (s->rq_head[TURN_CONTROL] != RQ_NIL) {
+        /* Supervisor CONTROL stays strict FIFO: priority, not locality. */
         *actor = s->rq_head[TURN_CONTROL]; *kind = TURN_CONTROL;
         return 1;
     }
     if (s->rq_head[TURN_WAKE] != RQ_NIL) {
-        *actor = s->rq_head[TURN_WAKE]; *kind = TURN_WAKE;
+        /* Resumed continuations prefer the carrier that suspended them. */
+        *actor = pick_affine_locked(s, TURN_WAKE, self); *kind = TURN_WAKE;
         return 1;
     }
     if (s->rq_head[TURN_TASK] != RQ_NIL) {
-        *actor = s->rq_head[TURN_TASK]; *kind = TURN_TASK;
+        *actor = pick_affine_locked(s, TURN_TASK, self); *kind = TURN_TASK;
         return 1;
     }
     if (recent_actor < s->actor_count && consecutive < 2
@@ -372,7 +408,7 @@ static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* kind,
         return 1;
     }
     if (s->rq_head[TURN_DATA] != RQ_NIL) {
-        *actor = s->rq_head[TURN_DATA]; *kind = TURN_DATA;
+        *actor = pick_affine_locked(s, TURN_DATA, self); *kind = TURN_DATA;
         return 1;
     }
     return 0;
@@ -466,7 +502,7 @@ static void* carrier(void* raw) {
         int gate_held = 0;
         int spun = 0;
         for (;;) {
-            int found = find_ready(s, &i, &kind, recent_actor, consecutive);
+            int found = find_ready(s, &i, &kind, recent_actor, consecutive, slot->index);
             if (found && (!s->physical_turn_gate
                     || ores_native_turn_gate_try_acquire(s->physical_turn_gate))) {
                 gate_held = s->physical_turn_gate != NULL;
@@ -521,6 +557,7 @@ static void* carrier(void* raw) {
                 ? (consecutive < 2 ? consecutive + 1 : 2) : 1;
         recent_actor = i;
         ActorLane* lane = &s->actors[i];
+        lane->last_carrier1 = (uint32_t)slot->index + 1;
         uint64_t payload = 0;
         uint64_t original_mail_sequence = 0;
         OresNativeActorTerminalFailure failure = {0};
@@ -737,6 +774,7 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_options(
         || !workers || workers > MAX_CARRIERS || actors > SIZE_MAX / capacity)
         return NULL;
     OresNativeActorScheduler* s = (OresNativeActorScheduler*)calloc(1, sizeof(*s));
+    if (s) s->affinity_window = AFFINITY_WINDOW_DEFAULT;
     if (!s) return NULL;
     size_t initialized = 0;
     s->actors = (ActorLane*)calloc(actors, sizeof(ActorLane));
@@ -1178,7 +1216,8 @@ OresNativeTaskAdmissionStatus ores_native_actor_scheduler_try_schedule_task(
         } else if (lane->task_queued >= ORES_NATIVE_TASK_SLOTS_PER_ACTOR) {
             status = ORES_NATIVE_TASK_MAILBOX_FULL;
         } else if (s->accepted >= UINT64_MAX - s->reserved_wakes
-                || s->outstanding == UINT64_MAX
+                /* size_t: UINT64_MAX made this guard dead on 32-bit hosts */
+                || s->outstanding == SIZE_MAX
                 || !execution_slot_available_locked(s)) {
             status = ORES_NATIVE_TASK_RESOURCE_EXHAUSTED;
         } else {
@@ -1901,4 +1940,22 @@ uint64_t ores_native_actor_scheduler_rejected(OresNativeActorScheduler* s) {
 }
 uint64_t ores_native_actor_scheduler_completed(OresNativeActorScheduler* s) {
     return counter(s, 2);
+}
+
+int ores_native_actor_scheduler_set_affinity_window(
+        OresNativeActorScheduler* s, uint32_t window) {
+    if (!s || window > AFFINITY_WINDOW_MAX) return 0;
+    lock(s);
+    s->affinity_window = window;
+    for (int k = 0; k < TURN_CLASSES; ++k) s->head_skips[k] = 0;
+    unlock(s);
+    return 1;
+}
+
+uint64_t ores_native_actor_scheduler_affine_picks(OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    const uint64_t picks = s->affine_picks;
+    unlock(s);
+    return picks;
 }
