@@ -1,7 +1,7 @@
 #include "atto/proxy_receipt_gate_v1.h"
 #include <assert.h>
 int main(void) {
-    atto_receipt_identity_v1 id = {1, 11, 12, 13, 14, 15, 16, 1};
+    atto_receipt_identity_v1 id = {1, 11, 12, 13, 14, 17, 15, 16, 1};
     atto_proxy_receipt_gate_v1 gate;
     atto_proxy_receipt_init(&gate, id);
     assert(gate.stage == ATTO_STAGE_DISPATCHED); /* local enqueue != admitted */
@@ -14,6 +14,8 @@ int main(void) {
     wrong = id; wrong.caller_incarnation++;
     assert(!atto_proxy_receipt_apply_verified(&gate, wrong, ATTO_RECEIPT_ADMITTED));
     wrong = id; wrong.target_incarnation++;
+    assert(!atto_proxy_receipt_apply_verified(&gate, wrong, ATTO_RECEIPT_ADMITTED));
+    wrong = id; wrong.association_generation++;
     assert(!atto_proxy_receipt_apply_verified(&gate, wrong, ATTO_RECEIPT_ADMITTED));
     wrong = id; wrong.placement_epoch++;
     assert(!atto_proxy_receipt_apply_verified(&gate, wrong, ATTO_RECEIPT_ADMITTED));
