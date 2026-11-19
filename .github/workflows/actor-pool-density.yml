@@ -1,0 +1,35 @@
+name: Actor pool density (host experiment)
+on:
+  push:
+    paths:
+      - tests/actor_pool_density.c
+      - docs/actor-pool-density-experiment.md
+      - .github/workflows/actor-pool-density.yml
+  pull_request:
+    paths:
+      - tests/actor_pool_density.c
+      - docs/actor-pool-density-experiment.md
+      - .github/workflows/actor-pool-density.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  host-density:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Build and run the two-carrier / 100k-actor host test
+        run: |
+          ${{ matrix.compiler }} -std=c11 -O2 -Wall -Wextra -Werror -pthread tests/actor_pool_density.c -o /tmp/actor_pool_density
+          /tmp/actor_pool_density
+      - name: ASan and UBSan (host only, NOT guest isolation proof)
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1
+        run: |
+          ${{ matrix.compiler }} -std=c11 -O1 -g -Wall -Wextra -Werror -pthread -fsanitize=address,undefined -fno-omit-frame-pointer tests/actor_pool_density.c -o /tmp/actor_pool_density_san
+          /tmp/actor_pool_density_san
