@@ -1,0 +1,2 @@
+// Map Entry "foo" => 5 are comments only: source remains scalar.
+pub fnc main(): int { return 42; }
