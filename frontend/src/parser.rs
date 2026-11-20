@@ -2243,6 +2243,7 @@ fn describe(t: &Tok) -> String {
                 Tok::Question => "?",
                 Tok::Pipe => "|",
                 Tok::PipeGt => "|>",
+                Tok::PipeLt => "<|",
                 Tok::Amp => "&",
                 Tok::At => "@",
                 _ => "?",
