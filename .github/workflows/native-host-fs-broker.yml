@@ -151,6 +151,15 @@ jobs:
           /tmp/atto-signed-loader-build/tenant_vm_test equal_offsets_are_different_memory
           /tmp/atto-signed-loader-build/tenant_vm_test messaging_stays_inside_the_vm
           /tmp/atto-signed-loader-build/tenant_vm_test a_confined_fault_restarts_only_that_actor
+      - name: ASan+UBSan C++ host-only Offset32 dispatch with real Linux broker
+        run: |
+          set -eu
+          cmake -S tests/tenant-vm -B /tmp/atto-host-dispatch-sanitize \
+            -DCMAKE_BUILD_TYPE=Debug -DTENANT_VM_SANITIZE=ON
+          cmake --build /tmp/atto-host-dispatch-sanitize \
+            --target tenant_vm_fs_host_dispatch_test --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 ctest --test-dir /tmp/atto-host-dispatch-sanitize \
+            --output-on-failure -R tenant_vm_fs_host_dispatch_host_only
       - name: State strict evidence boundaries
         run: |
           echo "HOST_ONLY: neither this suite nor the signed v4 fixture compiles or executes an Atto .atto guest."
