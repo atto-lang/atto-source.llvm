@@ -71,13 +71,31 @@ static int enqueue(atto_fs_async_service *s, const atto_fs_host_actor *actor,
         (write && !payload && length) || length > ATTO_FS_MAX_BYTES) return -EACCES;
     const size_t path_len = strnlen(path, ATTO_FS_SCOPE_LIMIT);
     if (!path_len || path_len == ATTO_FS_SCOPE_LIMIT) return -EINVAL;
+    /* Actor carriers must not wait for a service mutex held by another
+     * submitter, terminal read publication, or worker completion.  A full
+     * queue is also checked before copying an up-to-1MiB payload into host
+     * memory, so a malicious actor cannot force repeated large allocations
+     * when all tickets are occupied.  The preflight does not reserve a slot;
+     * contention or another submit after it may still cause -EAGAIN. */
+    const int probe = pthread_mutex_trylock(&s->lock);
+    if (probe) return probe == EBUSY ? -EAGAIN : -probe;
+    int room = 0;
+    for (unsigned i = 0; i < s->max_jobs; ++i) {
+        const job *j = &s->slots[i];
+        if (j->state == FREE && j->generation != UINT32_MAX) {room = 1; break;}
+    }
+    const int admitted = !s->stopping && valid_actor(s, actor);
+    (void)pthread_mutex_unlock(&s->lock);
+    if (!admitted) return -EACCES;
+    if (!room) return -EAGAIN;
     char *owned_path = (char *)malloc(path_len + 1u);
     uint8_t *bytes = (uint8_t *)malloc(length + 1u);
     if (!owned_path || !bytes) { free(owned_path); free(bytes); return -ENOMEM; }
     memcpy(owned_path, path, path_len + 1u);
     if (write && length) memcpy(bytes, payload, length);
     int rc = -EAGAIN;
-    pthread_mutex_lock(&s->lock);
+    const int queue_rc = pthread_mutex_trylock(&s->lock);
+    if (queue_rc) {free(owned_path); free(bytes); return queue_rc == EBUSY ? -EAGAIN : -queue_rc;}
     if (!s->stopping && valid_actor(s, actor)) {
         for (unsigned i = 0; i < s->max_jobs; ++i) {
             job *j = &s->slots[i];
