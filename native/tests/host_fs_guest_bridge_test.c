@@ -10,8 +10,36 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+typedef struct race_case {
+    const atto_fs_trusted_guest_frame *frame;
+    pthread_barrier_t *barrier;
+    int saw_revoke;
+} race_case;
+
+static void *read_until_revoke(void *opaque) {
+    race_case *r = (race_case *)opaque;
+    int start = pthread_barrier_wait(r->barrier);
+    assert(start == 0 || start == PTHREAD_BARRIER_SERIAL_THREAD);
+    for (unsigned i = 0; i < 10000u; ++i) {
+        uint32_t got = 777u;
+        const int rc = atto_fs_guest_read(r->frame, 16, 14, 768, 64, &got);
+        if (rc == -EACCES) {
+            r->saw_revoke = (got == 0u);
+            return NULL;
+        }
+        assert(rc == 0 && got == 5u);
+    }
+    /* The revoker is guaranteed to run after barrier release; regardless of
+     * scheduling, the late read must detect the revoked generation. */
+    uint32_t got = 999u;
+    assert(atto_fs_guest_read(r->frame, 16, 14, 768, 64, &got) == -EACCES);
+    r->saw_revoke = (got == 0u);
+    return NULL;
+}
 
 static void file_write(const char *path, const char *text) {
     int fd = open(path, O_CLOEXEC | O_CREAT | O_TRUNC | O_WRONLY, 0600);
@@ -50,7 +78,7 @@ int main(void) {
     memcpy(cage + 64, "out/copy.txt", 12);
     memcpy(cage + 96, "data/secret.txt", 15);
     memcpy(cage + 128, "out/denied.txt", 14);
-    atto_fs_trusted_guest_frame frame = {&broker, 77u, 5u, cage, sizeof(cage)};
+    atto_fs_trusted_guest_frame frame = {&broker, 77u, 5u, cage, sizeof(cage), 16u, 2032u};
     uint32_t count = 999u;
     assert(atto_fs_guest_read(&frame, 16, 14, 256, 64, &count) == 0);
     assert(count == 5u && memcmp(cage + 256, "hello", 5) == 0);
@@ -75,6 +103,17 @@ int main(void) {
     assert(atto_fs_guest_read(&frame, 16, 14, 4090, 32, &count) == -EFAULT);
     assert(atto_fs_guest_read(&frame, 16, 14, 256, ATTO_FS_MAX_BYTES + 1u, &count) == -EINVAL);
     assert(atto_fs_guest_write(&frame, 64, 12, UINT32_MAX, 9) == -EFAULT);
+    /* The guest can address its own region, not another actor's region in
+     * the SAME cage. Region start/end are trusted host-owned boundaries. */
+    memcpy(cage + 3000, "data/input.txt", 14);
+    assert(atto_fs_guest_read(&frame, 3000, 14, 256, 64, &count) == -EFAULT);
+    assert(atto_fs_guest_read(&frame, 16, 14, 3000, 64, &count) == -EFAULT);
+    assert(atto_fs_guest_write(&frame, 64, 12, 3000, 5) == -EFAULT);
+    assert(atto_fs_guest_read(&frame, 0, 14, 256, 64, &count) == -EFAULT);
+    /* A malformed host frame is rejected independently of caller's offsets. */
+    frame.actor_region_bytes = UINT32_MAX;
+    assert(atto_fs_guest_read(&frame, 16, 14, 256, 64, &count) == -EACCES);
+    frame.actor_region_bytes = 2032u;
     memcpy(cage + 160, "data/\0secret", 12);
     assert(atto_fs_guest_read(&frame, 160, 12, 256, 64, &count) == -EINVAL);
     memcpy(cage + 176, "data/../x", 9);
@@ -82,7 +121,21 @@ int main(void) {
     file_expect(dst, "hello");
     file_expect(other, "outside");
     /* Revocation has the final authority even if a stale trusted frame remains. */
+    /* Race host-side read completion with revocation. After revoke returns,
+     * an outstanding worker must never copy an earlier read into the cage. */
+    pthread_barrier_t barrier;
+    assert(pthread_barrier_init(&barrier, NULL, 2) == 0);
+    race_case racer = {&frame, &barrier, 0};
+    pthread_t reader;
+    assert(pthread_create(&reader, NULL, read_until_revoke, &racer) == 0);
+    const int start = pthread_barrier_wait(&barrier);
+    assert(start == 0 || start == PTHREAD_BARRIER_SERIAL_THREAD);
     assert(atto_fs_broker_revoke(&broker, 77u, 5u) == 0);
+    memset(cage + 768, 0xC3, 64);
+    assert(pthread_join(reader, NULL) == 0);
+    assert(racer.saw_revoke == 1);
+    for (size_t i = 0; i < 64; ++i) assert(cage[768 + i] == 0xC3);
+    assert(pthread_barrier_destroy(&barrier) == 0);
     count = 999u;
     assert(atto_fs_guest_read(&frame, 16, 14, 512, 32, &count) == -EACCES);
     assert(count == 0u && cage[512] == 0xAB);
