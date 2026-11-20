@@ -43,7 +43,7 @@ fn adt_discard_patterns_compile_real_guest_wasm_without_payload_reads() {
         let guest = compile(source).unwrap_or_else(|diagnostic| {
             panic!("ADT discard case {i} was rejected: {diagnostic}")
         });
-        assert!(guest.starts_with(b"\\0asm"), "case {i}: emitted invalid magic");
+        assert!(guest.starts_with(b"\0asm"), "case {i}: emitted invalid magic");
         assert!(guest.len() > 8, "case {i}: emitted truncated guest");
     }
 }

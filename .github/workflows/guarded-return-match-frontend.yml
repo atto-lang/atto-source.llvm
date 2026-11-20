@@ -25,8 +25,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          test "$(git hash-object frontend/src/check.rs)" = "a38f42b46f241bb37b75cf736a23825cdbc90bcd"
-          test "$(git hash-object frontend/src/parser.rs)" = "6094b9470be810105855b96cc8f102e07630d0d7"
+          test "$(git hash-object frontend/src/check.rs)" = "a1bc0be3f46ee46319fe92f66dce43254d0f6846"
+          test "$(git hash-object frontend/src/parser.rs)" = "69724a8e2518e383503aae72eb9aaf0d8c8ad54c"
           test "$(git hash-object frontend/src/lexer.rs)" = "d61877c91a83b0015ee9bdbf381e9a2d3069dab4"
           test "$(git hash-object frontend/tests/fixtures/pass/match-guard-block-return.atto)" = "603df679e1e9b7415cb8b798d4a2143545dd27b8"
           test "$(git hash-object frontend/tests/fixtures/pass/match-guard-block-caret.atto)" = "0b2addfef29cd76d60d90bf081f4d326ea2d70df"
@@ -36,6 +36,11 @@ jobs:
           test "$(git hash-object frontend/tests/fixtures/pass/adt-result-ok-guard.atto)" = "ee40cd523d2def9352ad43b8661949334756a9b3"
           test "$(git hash-object frontend/tests/fixtures/pass/adt-guard-skips-wrong-result-tag.atto)" = "4730792d63852a885c62642c2f79facf8956ad04"
           test "$(git hash-object frontend/tests/fixtures/pass/adt-whole-value-guard-binding.atto)" = "4bffdd8d9b828acb907988495e4ef303aa384d2e"
+          test "$(git hash-object frontend/tests/fixtures/pass/adt-result-err-discard.atto)" = "720b5d7c3e808b06b1b3bbfe1056a52ef483f1cb"
+          test "$(git hash-object frontend/tests/fixtures/pass/adt-result-ok-discard.atto)" = "8a36d6c7a1c9919fc0cf2330132c61fe41eef37e"
+          test "$(git hash-object frontend/tests/fixtures/pass/adt-option-some-discard.atto)" = "d85396ed3c3635459a4c560bb93ff233b89c956f"
+          test "$(git hash-object frontend/tests/fixtures/fail/adt-discard-duplicate-tag.atto)" = "36d288f29a9651868e6e3bda37fc2391a437f539"
+          test "$(git hash-object frontend/tests/fixtures/fail/adt-discard-none-arity.atto)" = "284ed9119ce66f69c85cb9580afa067487329d48"
           git diff --quiet HEAD --
           git rev-parse HEAD HEAD^{tree}
       - name: Rust 1.85.1 / wasm32 compiler toolchain
@@ -48,7 +53,7 @@ jobs:
         run: |
           cargo build --locked --manifest-path frontend/Cargo.toml --bin attoc
           cargo rustc --locked --release --manifest-path frontend/Cargo.toml --lib --target wasm32-unknown-unknown --crate-type cdylib -- -C link-arg=--max-memory=67108864
-      - name: Execute six real compiled guests, two no-artifact failures, byte parity
+      - name: Execute nine real compiled guests, four no-artifact failures, byte parity
         env:
           ATTO_COMPILER_WASM: frontend/target/wasm32-unknown-unknown/release/atto_compiler.wasm
         run: node frontend/tests/match-return-guest.mjs
