@@ -33,6 +33,11 @@ int main() {
     }
     ++checks;
     const auto before = b;
+    const auto invalid_endian = static_cast<Endian>(99);
+    assert(read(b.data(), b.size(), 0, 4, invalid_endian).code == Code::value);
+    assert(write(b.data(), b.size(), 0, 4, 42, invalid_endian) == Code::value);
+    assert(b == before);
+    checks += 3;
     for (std::int64_t off : std::array<std::int64_t, 4>{-1, 5, std::numeric_limits<std::int64_t>::max(),
                             std::numeric_limits<std::int64_t>::min()}) {
       assert(write(b.data(), b.size(), off, 4, 42, endian) == Code::bounds);
