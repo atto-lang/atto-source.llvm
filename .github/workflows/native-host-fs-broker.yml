@@ -14,6 +14,7 @@ on:
       - "native/include/atto/host_fs_async.h"
       - "native/src/host_fs_async.c"
       - "native/tests/host_fs_async_test.c"
+      - "native/tests/host_fs_async_contention_test.c"
       - "native/tests/host_fs_async_broker_test.c"
       - "src/main/cpp/oreslang/runtime/TenantVmIoAbiV5.h"
       - "native/tests/host_fs_io_v5_layout_test.c"
@@ -53,6 +54,7 @@ jobs:
           git hash-object native/src/host_fs_guest_bridge.c native/tests/host_fs_guest_bridge_test.c
           git hash-object native/src/host_fs_signed_ceiling.c native/tests/host_fs_signed_ceiling_test.c
           git hash-object native/src/host_fs_async.c native/tests/host_fs_async_test.c
+          git hash-object native/tests/host_fs_async_contention_test.c
           git hash-object native/src/host_fs_signed_admission.c native/tests/host_fs_signed_admission_test.c
           git hash-object src/main/cpp/oreslang/runtime/TenantVmGuestLoader.cpp src/main/cpp/oreslang/runtime/TenantVmSignedFsLoader.cpp
       - name: GCC and Clang O1/O2 ASan+UBSan (host only)
@@ -90,6 +92,11 @@ jobs:
               ASAN_OPTIONS=detect_leaks=1 "/tmp/atto_fs_async_${compiler}_${optimize}"
               "$compiler" -std=c11 "-$optimize" -Wall -Wextra -Wconversion -Werror -pedantic -pthread \
                 -fsanitize=address,undefined -fno-omit-frame-pointer -I native/include \
+                native/tests/host_fs_async_contention_test.c \
+                -o "/tmp/atto_fs_contention_${compiler}_${optimize}"
+              ASAN_OPTIONS=detect_leaks=1 "/tmp/atto_fs_contention_${compiler}_${optimize}"
+              "$compiler" -std=c11 "-$optimize" -Wall -Wextra -Wconversion -Werror -pedantic -pthread \
+                -fsanitize=address,undefined -fno-omit-frame-pointer -I native/include \
                 native/src/host_fs_broker.c native/src/host_fs_async.c \
                 native/tests/host_fs_async_broker_test.c \
                 -o "/tmp/atto_fs_async_broker_${compiler}_${optimize}"
@@ -120,7 +127,7 @@ jobs:
           cmake -S native -B /tmp/atto-fs-build -DCMAKE_BUILD_TYPE=Debug
           cmake --build /tmp/atto-fs-build --parallel 2
           ctest --test-dir /tmp/atto-fs-build --output-on-failure \
-            -R '^linux_(scoped_host_fs_broker|guest_offset_host_fs_bridge|signed_host_fs_ceiling|async_host_fs_queue_mock|async_host_fs_real_broker|host_fs_io_v5_layout|signed_host_fs_real_broker_admission)$'
+            -R '^linux_(scoped_host_fs_broker|guest_offset_host_fs_bridge|signed_host_fs_ceiling|async_host_fs_queue_mock|async_host_fs_contention_mock|async_host_fs_real_broker|host_fs_io_v5_layout|signed_host_fs_real_broker_admission)$'
       - name: Sealed-image signed loader (host-only C++ integration)
         run: |
           set -eu
