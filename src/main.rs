@@ -463,6 +463,21 @@ fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<Stri
     )) {
         return Err("E_UNSUPPORTED_MAP_ENTRY: native Map/Entry ownership, allocation and typed lowering are not implemented".into());
     }
+    // A closed Record key is a statically checked slot, never a dynamic
+    // Map hash key. This native scalar compiler has no Record field ABI yet.
+    if toks.iter().any(|token| matches!(
+        &token.tok, atto_compiler::lexer::Tok::Ident(word) if word == "Record"
+    )) {
+        return Err("E_UNSUPPORTED_RECORD: native closed Record field typing and mutable slot lowering are not implemented".into());
+    }
+    // Preserve the no-index-for-nominal-Struct boundary until the compiler
+    // can prove the receiver type. Do not fabricate a generic indexer or
+    // treat bracket assignment as a global name lookup.
+    if toks.iter().any(|token| matches!(
+        token.tok, atto_compiler::lexer::Tok::LBracket
+    )) {
+        return Err("E_UNSUPPORTED_INDEX_WRITE: checked bracket indexing requires a typed Map or closed Record receiver; nominal Struct indexing is forbidden".into());
+    }
     if profile == LibraryProfile::FreestandingCore {
         admit_freestanding_tokens(&toks)?;
     }
