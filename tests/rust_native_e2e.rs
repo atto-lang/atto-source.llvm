@@ -15,6 +15,8 @@ mod static_ffi;
 mod ffi_normal_positive;
 #[path = "rust_native_e2e/ffi_normal_negative.rs"]
 mod ffi_normal_negative;
+#[path = "rust_native_e2e/functional_pipelines.rs"]
+mod functional_pipelines;
 
 pub struct Harness {
     compiler: PathBuf,
@@ -151,5 +153,6 @@ fn main() {
     static_ffi::run(&mut h);
     ffi_normal_positive::run(&mut h);
     ffi_normal_negative::run(&mut h);
+    functional_pipelines::run(&mut h);
     h.finish();
 }
