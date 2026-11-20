@@ -1,0 +1,4 @@
+fnc total(int borrow, int critical, int enum, int gen, int pure, int requires, int serial, int suspend, int using): int {
+  return borrow + critical + enum + gen + pure + requires + serial + suspend + using;
+}
+pub fnc main(): int { return total(2, 4, 6, 8, 1, 3, 5, 7, 6); }

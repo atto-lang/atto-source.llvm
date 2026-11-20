@@ -1,0 +1,32 @@
+name: Atto native collections source identity (SOURCE ONLY)
+on:
+  pull_request:
+    paths:
+      - 'library/ores.core/collections.atto'
+      - 'tests/check_atto_collections_source.py'
+      - '.github/workflows/atto-native-collections-source-v1.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact head without saved credentials
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Validate exact checkout and canonical Git blob
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          python3 -I tests/check_atto_collections_source.py
+          echo "ATTO_COLLECTIONS_LLVM_EXECUTION=NOT_EXECUTED"

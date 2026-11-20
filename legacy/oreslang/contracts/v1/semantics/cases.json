@@ -1,0 +1,426 @@
+{
+  "schema_version": "1.1.0",
+  "cases": [
+    {
+      "id": "native.add",
+      "feature": "numeric.add",
+      "source": "fixtures/add.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.proxy-packed-receipt",
+      "feature": "proxy.receipt-scalar-abi",
+      "source": "fixtures/proxy-packed-receipt.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.precedence",
+      "feature": "numeric.precedence",
+      "source": "fixtures/precedence.ores",
+      "kind": "native_exit",
+      "expected_exit": 40,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.forward",
+      "feature": "function.forward-call",
+      "source": "fixtures/forward.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.owned-identifier",
+      "feature": "lexer.owned-is-identifier",
+      "source": "fixtures/owned-identifier.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.underscores",
+      "feature": "numeric.integer-separators",
+      "source": "fixtures/underscores.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.unary",
+      "feature": "numeric.unary-minus",
+      "source": "fixtures/unary.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.defer-lifo-cfg",
+      "feature": "control-flow.defer-lifo",
+      "source": "fixtures/native-defer-lifo-cfg.ores",
+      "kind": "native_exit",
+      "expected_exit": 111,
+      "backends": {
+        "llvm": "pending",
+        "graal": "required"
+      },
+      "pending_reason": "LLVM native execution and mutable-defer lowering have not yet been independently validated."
+    },
+    {
+      "id": "native.defer-field-return",
+      "feature": "control-flow.defer-return-snapshot",
+      "source": "fixtures/native-defer-field-return.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "pending",
+        "graal": "required"
+      },
+      "pending_reason": "LLVM native mutable-field defer and return snapshot execution still requires backend validation."
+    },
+    {
+      "id": "native.try-finally-return-snapshot",
+      "feature": "control-flow.finally-return-snapshot",
+      "source": "fixtures/native-try-finally-return-snapshot.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "pending",
+        "graal": "required"
+      },
+      "pending_reason": "LLVM native try/finally return snapshot and defer ordering still require backend validation."
+    },
+    {
+      "id": "diagnostic.unknown",
+      "feature": "type.unknown-name",
+      "source": "fixtures/unknown.ores",
+      "kind": "diagnostic",
+      "diagnostic_class": "unknown_name",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "diagnostic.arity",
+      "feature": "type.call-arity",
+      "source": "fixtures/arity.ores",
+      "kind": "diagnostic",
+      "diagnostic_class": "call_arity",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "diagnostic.duplicate",
+      "feature": "type.duplicate-name",
+      "source": "fixtures/duplicate.ores",
+      "kind": "diagnostic",
+      "diagnostic_class": "duplicate_declaration",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "diagnostic.overflow",
+      "feature": "numeric.literal-overflow",
+      "source": "fixtures/overflow.ores",
+      "kind": "diagnostic",
+      "diagnostic_class": "integer_overflow",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "diagnostic.comment",
+      "feature": "lexer.block-comment",
+      "source": "fixtures/comment.ores",
+      "kind": "diagnostic",
+      "diagnostic_class": "unterminated_comment",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "ownership.mutable-borrow",
+      "feature": "ownership.mutation-requires-borrow",
+      "source": "fixtures/ownership.ores",
+      "kind": "diagnostic",
+      "diagnostic_class": "ownership_violation",
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-precedence",
+      "feature": "numeric.oresllm-scalar-precedence",
+      "source": "fixtures/oresllm-precedence.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-scalar-gradient",
+      "feature": "numeric.oresllm-scalar-gradient",
+      "source": "fixtures/oresllm-scalar-gradient.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-signed-product",
+      "feature": "numeric.oresllm-scalar-signed-product",
+      "source": "fixtures/oresllm-signed-product.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-grouped-negative",
+      "feature": "numeric.oresllm-scalar-grouped-negative",
+      "source": "fixtures/oresllm-grouped-negative.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-nested-precedence",
+      "feature": "numeric.oresllm-scalar-nested-precedence",
+      "source": "fixtures/oresllm-nested-precedence.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-max-minus-one",
+      "feature": "numeric.oresllm-scalar-max-minus-one",
+      "source": "fixtures/oresllm-max-minus-one.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-zero-product",
+      "feature": "numeric.oresllm-zero-product",
+      "source": "fixtures/oresllm-zero-product.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-nested-arithmetic",
+      "feature": "numeric.oresllm-nested-arithmetic",
+      "source": "fixtures/oresllm-nested-arithmetic.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-subtract-self",
+      "feature": "numeric.oresllm-subtract-self",
+      "source": "fixtures/oresllm-subtract-self.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-zero-add",
+      "feature": "numeric.oresllm-zero-add",
+      "source": "fixtures/oresllm-zero-add.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-signed-subtract",
+      "feature": "numeric.oresllm-signed-subtract",
+      "source": "fixtures/oresllm-signed-subtract.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-left-associative",
+      "feature": "numeric.oresllm-left-associative",
+      "source": "fixtures/oresllm-left-associative.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-zero-times-max",
+      "feature": "numeric.oresllm-zero-times-max",
+      "source": "fixtures/oresllm-zero-times-max.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-over-2pow53",
+      "feature": "numeric.oresllm-over-2pow53",
+      "source": "fixtures/oresllm-over-2pow53.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-min-max-cancel",
+      "feature": "numeric.oresllm-min-max-cancel",
+      "source": "fixtures/oresllm-min-max-cancel.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-near-square",
+      "feature": "numeric.oresllm-near-square",
+      "source": "fixtures/oresllm-near-square.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-over53-cancel",
+      "feature": "numeric.oresllm-over53-cancel",
+      "source": "fixtures/oresllm-over53-cancel.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-budget-budget-headroom",
+      "feature": "numeric.oresllm-budget-extension-budget-headroom",
+      "source": "fixtures/oresllm-budget-budget-headroom.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-budget-near-max-budget",
+      "feature": "numeric.oresllm-budget-extension-near-max-budget",
+      "source": "fixtures/oresllm-budget-near-max-budget.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-budget-staged-subtractions",
+      "feature": "numeric.oresllm-budget-extension-staged-subtractions",
+      "source": "fixtures/oresllm-budget-staged-subtractions.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-budget-negative-product",
+      "feature": "numeric.oresllm-budget-extension-negative-product",
+      "source": "fixtures/oresllm-budget-negative-product.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
+      "id": "native.oresllm-budget-min-plus-zero",
+      "feature": "numeric.oresllm-budget-extension-min-plus-zero",
+      "source": "fixtures/oresllm-budget-min-plus-zero.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+fnc mark(String label,int value):int{stdio.print(label);return value;}
+fnc evaluate(bool early):int {
+  stdio.print("enter;");
+  if early; then return 7; fi
+  let int total=mark("initialize;",0);
+  for(let int index=0;index<4;index=index+1){
+    let int increment=index;
+    if index==2;then increment=10;fi
+    total=total+increment;
+  }
+  stdio.print("finish;");
+  val String label="done;";
+  stdio.print(label);
+  return total;
+}
+pub routine main():int{
+  val int skipped=evaluate(true);
+  val int calculated=evaluate(false);
+  return skipped==7&&calculated==14?0:1;
+}

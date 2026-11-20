@@ -1,0 +1,95 @@
+{
+  "schema": "atto.actor-trace.v2",
+  "version": 2,
+  "format": "JSON receipt; one complete run per file",
+  "status": "PROPOSED_NORMATIVE_CONFORMANCE_GATE_NOT_A_RUNTIME_PROOF",
+  "max_events": 100000,
+  "max_actor_incarnations": 256,
+  "max_active_receivers_per_actor": 256,
+  "producer": {
+    "required": [
+      "backend",
+      "subject",
+      "emission"
+    ],
+    "backends": [
+      "java",
+      "llvm",
+      "net",
+      "rust",
+      "wasm",
+      "forge",
+      "attomq",
+      "reference"
+    ],
+    "subjects": [
+      "compiled_atto_guest",
+      "runtime_host",
+      "reference_model"
+    ],
+    "emissions": [
+      "online_linearization_points",
+      "reconstructed_after_quiescence"
+    ],
+    "rule": "subject and emission must identify observational limits; a reconstructed host trace is never compiled guest proof"
+  },
+  "event_base_fields": [
+    "seq",
+    "kind",
+    "actor_id",
+    "generation"
+  ],
+  "events": {
+    "actor_spawn": [
+      "serial"
+    ],
+    "send_accept": [
+      "message_id"
+    ],
+    "receive_start": [
+      "message_id",
+      "receiver_id"
+    ],
+    "receive_complete": [
+      "message_id",
+      "receiver_id"
+    ],
+    "message_discard": [
+      "message_id"
+    ],
+    "control_admit": [],
+    "control_dispatch": [],
+    "critical_read_enter": [
+      "receiver_id"
+    ],
+    "critical_read_exit": [
+      "receiver_id"
+    ],
+    "critical_write_enter": [
+      "receiver_id"
+    ],
+    "critical_write_exit": [
+      "receiver_id"
+    ],
+    "actor_close": [],
+    "actor_retire": []
+  },
+  "semantics": {
+    "seq": "all events linearly ordered by observed linearization points, contiguous 0..N-1 (reconstructed evidence does not claim actual timing)",
+    "actor_id": "opaque nonempty identifier; generation is a positive integer; restarts require prior actor_retire and strictly incremented generation",
+    "serial": "serial actors allow at most one active receive; nonserial actors may have concurrent receiver methods, up to declared test budget",
+    "send_accept": "successful mailbox admission is a linearization point; failed sends MUST NOT generate send_accept",
+    "control_admit": "one outstanding supervisor CONTROL notice per generation; this path does not consume a DATA slot",
+    "control_dispatch": "consumes pending CONTROL and fences new DATA dispatch; active receives must finish or be independently unwound before retirement",
+    "receive_start": "must match admitted, not yet consumed message and cannot leapfrog a pending CONTROL notice",
+    "receive_complete": "must match the exact active receiver and message; settle exactly once",
+    "message_discard": "permitted only for queued, never running DATA during close/fence",
+    "critical_read_enter": "any number of readers permitted, no writer; receiver must be active",
+    "critical_write_enter": "exclusive; no other read/write holders; receiver must be active",
+    "critical_exit": "paired with the exact receiver that acquired it; no locks may outlive receive completion",
+    "actor_close": "closes future admissions; draining or discarding admitted work remains required",
+    "actor_retire": "after close, no outstanding CONTROL, DATA, receiver frames, or critical locks; release arena only after physical quiescence is independently verified",
+    "complete": "complete receipts must retire every spawned actor; no unsettled work; empty receipts are invalid unless a test explicitly expects empty",
+    "invariant_scope": "bounded finite observed histories, not arbitrary unbounded executions or hard real-time/GC certification"
+  }
+}
