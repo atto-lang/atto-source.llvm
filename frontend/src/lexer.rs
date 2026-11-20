@@ -49,6 +49,8 @@ pub enum Tok {
     Question,
     Pipe,
     PipeGt,
+    /// Reverse functional application, distinct from '<' and '|'.
+    PipeLt,
     Amp,
     At,
     Eof,
@@ -300,6 +302,7 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
             ('=', _) => (Tok::Assign, 1),
             ('!', Some('=')) => (Tok::NotEq, 2),
             ('!', _) => (Tok::Bang, 1),
+            ('<', Some('|')) => (Tok::PipeLt, 2),
             ('<', Some('=')) => (Tok::Le, 2),
             ('<', _) => (Tok::Lt, 1),
             ('>', Some('=')) => (Tok::Ge, 2),
