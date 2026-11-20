@@ -1,0 +1,7 @@
+// expect-error: E_UNSUPPORTED_NATIVE
+// This must not be mistaken for a working Error runtime or emitted IR.
+fnc parse_id(string text): Result<int,Error> {
+  val parsed = int.parse(text)?;
+  return Ok(parsed);
+}
+pub fnc main(): int { return 42; }

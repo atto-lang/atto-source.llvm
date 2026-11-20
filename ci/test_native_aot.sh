@@ -3,8 +3,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export CARGO_NET_OFFLINE=true
-test "$(git hash-object frontend/src/check.rs)" = "a38f42b46f241bb37b75cf736a23825cdbc90bcd"
-test "$(git hash-object frontend/src/parser.rs)" = "6094b9470be810105855b96cc8f102e07630d0d7"
+test "$(git hash-object frontend/src/check.rs)" = "a1bc0be3f46ee46319fe92f66dce43254d0f6846"
+test "$(git hash-object frontend/src/parser.rs)" = "69724a8e2518e383503aae72eb9aaf0d8c8ad54c"
 test "$(git hash-object frontend/src/lexer.rs)" = "d61877c91a83b0015ee9bdbf381e9a2d3069dab4"
 
 cargo test --offline
@@ -40,6 +40,34 @@ for case in tests/fixtures/1*.atto; do
   echo "PASS native-AOT $name"
 done
 test "$total" = "1255"
+
+# Heapless native Option<int> ADT parity. This is a native LLVM binary
+# (not a browser guest, host-model oracle or Result<int,Error> claim).
+for name in option-some-match option-none-question option-some-question; do
+  atto="tests/native-adt/$name.atto"
+  ir="$work/$name.ll"
+  target/release/atto-llvm "$atto" -o "$ir" --emit-llvm
+  grep -Fq 'insertvalue { i64, i64 }' "$ir" ||
+    { echo "missing typed Option constructor: $name" >&2; exit 1; }
+  for level in 0 2; do
+    elf="$work/$name-O$level.exe"
+    clang -x ir -O"$level" -fno-lto -o "$elf" "$ir"
+    readelf -h "$elf" | grep -q 'Class:[[:space:]]*ELF64'
+    set +e
+    timeout 10s "$elf"
+    exit_status=$?
+    set -e
+    test "$exit_status" -eq 42 ||
+      { echo "native Option guest failed: $name O$level exit=$exit_status" >&2; exit 1; }
+  done
+  echo "PASS native Option<int> $name O0/O2"
+done
+if target/release/atto-llvm tests/native-adt/reject-result-error.atto \
+  -o "$work/invalid-result.ll" --emit-llvm >"$work/invalid-result.out" 2>"$work/invalid-result.err"; then
+  echo "FAIL: native Result<int,Error> unsupported profile emitted IR" >&2; exit 1
+fi
+test ! -e "$work/invalid-result.ll"
+echo "PASS Result<int,Error> negative no-artifact"
 
 # Exercise the CLI's direct -o native-executable path, not merely emitted IR.
 target/release/atto-llvm tests/fixtures/167-quic-varint-rfc9000.atto -o "$work/direct-native.exe"
