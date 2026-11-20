@@ -9,6 +9,7 @@
 pub mod ast;
 pub mod check;
 pub mod diag;
+pub mod directed_pipe;
 pub mod generator_cfg;
 pub mod generator_frame;
 pub mod lexer;
@@ -33,6 +34,10 @@ pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
         ));
     }
     let toks = lexer::lex(source)?;
+    if let Some(pos) = directed_pipe::unlowered_pos(&toks) {
+        return Err(Diagnostic::new(pos, "E_UNSUPPORTED_CONTINUOUS_PIPE",
+            "typed pipe/rpipe DATA graph is planned but no guest transport or PipeHandle exists"));
+    }
     // Detect target declarations at any file-scope position, not only at
     // source byte zero. Ignore comments/strings (the lexer already tokenizes
     // them) and ignore nested brace bodies so a string or local expression
