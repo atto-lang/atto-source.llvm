@@ -97,11 +97,14 @@ pub fn check_unicast(plans: &[Plan]) -> Result<(), &'static str> {
     if plans.len() > 64 { return Err("E_PIPE_PLAN_LIMIT"); }
     let mut edges = HashSet::new();
     let mut outputs = HashSet::new();
+    let mut inputs = HashSet::new();
     for p in plans {
         for e in &p.edges {
             let source = (&p.tenant, &e.source);
             if !edges.insert((source, &e.sink)) { return Err("E_PIPE_DUPLICATE_EDGE"); }
             if !outputs.insert(source) { return Err("E_PIPE_OUTPUT_OCCUPIED"); }
+            // No implicit fan-in: each sink port has one upstream owner.
+            if !inputs.insert((&p.tenant, &e.sink)) { return Err("E_PIPE_INPUT_OCCUPIED"); }
         }
     }
     Ok(())
@@ -157,6 +160,11 @@ mod tests {
             Err("E_PIPE_DUPLICATE_STAGE"));
         assert_eq!(plan(vec![p.clone()],Direction::Pipe),Err("E_PIPE_STAGE_LIMIT"));
         assert_eq!(plan(vec![p.clone();17],Direction::Rpipe),Err("E_PIPE_STAGE_LIMIT"));
+        let upstream = actor("upstream", Some("int"), Some("int"));
+        let common_sink = actor("common_sink", Some("int"), None);
+        let f = plan(vec![p.clone(),common_sink.clone()],Direction::Pipe).unwrap();
+        let r = plan(vec![common_sink,upstream],Direction::Rpipe).unwrap();
+        assert_eq!(check_unicast(&[f,r]),Err("E_PIPE_INPUT_OCCUPIED"));
         let mut bad=p;bad.id="bad\u{202e}".into();
         assert_eq!(plan(vec![bad,c],Direction::Pipe),Err("E_PIPE_ID"));
     }
