@@ -205,7 +205,7 @@ mod directional_pipe_guest_gate_tests {
         }
     }
     #[test]
-    fn all_eight_exact_canonical_pipeline_guests_fail_before_wasm_codegen() {
+    fn all_twelve_exact_canonical_pipeline_guests_fail_before_wasm_codegen() {
         // These are byte-identical atto-platform-conformance #102 fixtures.
         // This backend has no actual typed continuous guest runtime yet.
         for (name, source) in [
@@ -217,6 +217,10 @@ mod directional_pipe_guest_gate_tests {
             ("mixed-channel-stream-reverse", include_str!("../../fixtures/pipe-rpipe-v1/mixed-channel-stream-reverse.atto")),
             ("actor-duplicate-direction", include_str!("../../fixtures/pipe-rpipe-v1/actor-duplicate-direction.atto")),
             ("actor-mixed-directions", include_str!("../../fixtures/pipe-rpipe-v1/actor-mixed-directions.atto")),
+            ("stopped-source", include_str!("../../fixtures/pipe-rpipe-v1/stopped-source.atto")),
+            ("closed-channel", include_str!("../../fixtures/pipe-rpipe-v1/closed-channel.atto")),
+            ("stopped-consumer", include_str!("../../fixtures/pipe-rpipe-v1/stopped-consumer.atto")),
+            ("stopped-actor-sink", include_str!("../../fixtures/pipe-rpipe-v1/stopped-actor-sink.atto")),
         ] {
             let d=compile(source).expect_err("unsupported pipeline cannot emit Wasm");
             assert_eq!(d.code,"E_UNSUPPORTED_CONTINUOUS_PIPE",
