@@ -82,6 +82,16 @@ int main(void) {
                                      &denied_ticket) == -EACCES);
     assert(denied_ticket == 0u);
     assert(atto_fs_async_cancel(service, &reincarnated, 1u) == -EACCES);
+    assert(atto_fs_async_cancel(service, &sibling, 1u) == -EACCES);
+    unsigned char foreign_output[8];
+    memset(foreign_output, 0xA5, sizeof foreign_output);
+    size_t foreign_used = 99u;
+    assert(atto_fs_async_poll(service, &sibling, 1u, foreign_output,
+                              sizeof foreign_output, &foreign_used) == -EACCES);
+    assert(foreign_used == 0u && foreign_output[0] == 0xA5);
+    assert(atto_fs_async_poll(service, &reincarnated, 1u, foreign_output,
+                              sizeof foreign_output, &foreign_used) == -EACCES);
+    assert(foreign_used == 0u && foreign_output[0] == 0xA5);
     assert(atto_fs_async_forget_actor(service, &sibling) == -EACCES);
     unsigned char output[16];
     memset(output, 0x9a, sizeof output);
