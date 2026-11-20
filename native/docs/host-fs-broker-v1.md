@@ -257,3 +257,62 @@ install scheduler-authenticated v5 callbacks, signed image admission
 as a mandatory gate, actor-bound async tickets and real `.atto`
 stdlib lowering, then produce exact-head positive and negative
 compiled-guest evidence.
+
+
+## Audit: carrier-safe submission and GitHub runner admission (2026-11-20)
+
+A follow-up audit found a **separate carrier parking gap** in
+`atto_fs_async_submit_read/write`: both operations still used
+`pthread_mutex_lock(&service->lock)` on the submit path, even after
+poll/cancel had been made nonparking. Submission now probes the service
+mutex with `pthread_mutex_trylock`, checks for a free, non-exhausted
+ticket **before** allocating or copying an up-to-1 MiB request, and
+try-locks again to admit the snapshotted job. A contended mutex or full
+queue returns `-EAGAIN` with ticket zero; the second capacity check
+inside the lock closes the preflight race. This avoids sleeping on a
+worker/other caller's mutex and prevents repeated payload allocation
+when the bounded queue is already full. A submit can still execute
+bounded memory allocation and copying on the caller; stricter realtime
+profiles require further scheduler budgeting/quotas.
+
+**Deterministic mock-backed regression:**
+`native/tests/host_fs_async_contention_test.c` intentionally includes
+the production async C module in one test-only translation unit so it
+can hold the private queue mutex on the same thread. The test proves
+submit/poll/cancel return `-EAGAIN` without deadlocking, then fills a
+capacity-1 queue with a blocked real worker and verifies that a second
+write submit fails without calling the mocked broker. This is
+**mock-broker host testing**, not proof of Linux filesystem isolation or
+compiled Atto guest execution.
+
+Local exact-source tests passed on GCC 14.2.0 and Clang 17.0.0, at
+-O1/-O2 with `-Wall -Wextra -Wconversion -Werror -pedantic`,
+`-pthread` and AddressSanitizer+UndefinedBehaviorSanitizer.
+The existing async mock regression passed 4/4 newly compiled variants.
+The new contention regression passed 4/4 compiler/optimization
+variants plus 120 additional invocations (30 per combination), with
+exact Git blob verification:
+- `native/src/host_fs_async.c`: `0c2b2bf4c5246844473d5146a278a634457bf6fb`
+- `native/tests/host_fs_async_contention_test.c`:
+  `7fcfc32ee0ccc14c56a5e915a60b04c3fabeb37f`
+
+**Token-free private Actions fallback probe:** Two approved private
+carrier orgs received **only the required exact source blob** via
+GitHub Git Data `create_blob`/`create_tree`/`create_commit`, with
+a temporary `ci/**` branch and their existing local checkout
+workflow. No cross-org checkout, token, credential, or source push.
+- `agent-pontifex/atto-ci`: run `44681945053`,
+  mirrored blob `9631a901af2e75bf7648047152e49fc46fd1ed16`
+  (note: source blob checks are separately recorded in the conformance
+  evidence), Linux and macOS each failed before any steps.
+- `athlet-o/atto-ci`: run `44682513534`, mirrored blob
+  `0c2b2bf4c5246844473d5146a278a634457bf6fb`,
+  Linux and macOS each failed before any steps.
+
+The other six approved organizations' most recent observed runs were
+also zero-step. These runs **do not establish active GHA minutes or
+current-head test failure**. Only a minimal one-blob probe was sent:
+a full source mirror was not created without a working carrier.
+All compiled `.atto` std.fs execution and ABI-v5 runtime dispatch
+remain `NOT_EXECUTED`; the signed loaded C fixture and real-broker
+integration still need admitted stepful CTest.
