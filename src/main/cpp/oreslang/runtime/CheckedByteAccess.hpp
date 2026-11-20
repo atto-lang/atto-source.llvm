@@ -27,6 +27,7 @@ inline ReadResult read(const std::uint8_t* ptr, std::size_t length,
                        std::int64_t offset, std::size_t width, Endian endian) noexcept {
   const auto code = validate(ptr, length, offset, width);
   if (code != Code::ok) return {code, 0};
+  if (endian != Endian::little && endian != Endian::big) return {Code::value, 0};
   const auto at = static_cast<std::size_t>(offset);
   std::uint64_t result = 0;
   for (std::size_t i = 0; i < width; ++i) {
@@ -40,6 +41,7 @@ inline Code write(std::uint8_t* ptr, std::size_t length, std::int64_t offset,
                   std::size_t width, std::int64_t value, Endian endian) noexcept {
   const auto code = validate(ptr, length, offset, width);
   if (code != Code::ok) return code;
+  if (endian != Endian::little && endian != Endian::big) return Code::value;
   const auto max = (std::uint64_t{1} << (8 * width)) - 1;
   if (value < 0 || static_cast<std::uint64_t>(value) > max) return Code::value;
   const auto at = static_cast<std::size_t>(offset);
