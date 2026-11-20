@@ -2,7 +2,7 @@
 //! This compiles real .atto into a Wasm module; it does NOT prove native
 //! LLVM/C++ AOT, actor mailbox delivery, or authenticated supervisor CONTROL.
 use atto_compiler::compile;
-use atto_compiler::{ast::Type, check, lexer, parser::Parser};
+use atto_compiler::{ast::{Type, ActorSendEffect}, check, lexer, parser::Parser};
 
 #[test]
 fn receives_header_survives_ast_and_checker_revalidates_mutated_metadata() {
@@ -102,8 +102,8 @@ fn sends_never_is_an_explicit_empty_actor_data_effect() {
     assert!(wasm.starts_with(b"\0asm"));
     let mut parser = Parser::new(lexer::lex(&source).unwrap());
     let ast = parser.parse_program().unwrap();
-    assert_eq!(ast.actors[0].sends, Some(Type::Void),
-        "private AST sentinel represents sends never, not a void message");
+    assert_eq!(ast.actors[0].sends, Some(ActorSendEffect::Never),
+        "never is a distinct actor effect, not Type::Void");
     let legacy = ACTOR.replace("receives int as", "sends never as");
     assert!(compile(&legacy).unwrap().starts_with(b"\0asm"));
 }
@@ -126,4 +126,12 @@ fn canonical_bool_never_fixture_compiles_to_wasm() {
     let source = include_str!("fixtures/actor-bool-never-parity-v1.atto");
     let wasm = compile(source).expect("bool inbox and empty outbound effect must compile");
     assert!(wasm.starts_with(b"\0asm"));
+}
+
+#[test]
+fn forged_void_payload_effect_does_not_bypass_parser_rejection() {
+    let mut parser = Parser::new(lexer::lex(ACTOR).unwrap());
+    let mut program = parser.parse_program().unwrap();
+    program.actors[0].sends = Some(ActorSendEffect::Payload(Type::Void));
+    assert_eq!(check::check(&program).unwrap_err().code, "E_ACTOR_SEND_CONTRACT");
 }
