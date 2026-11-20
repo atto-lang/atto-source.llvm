@@ -426,7 +426,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 !local.class_name.empty() || local.new_class ||
                 local.move_class || !local.move_source.empty() ||
                 local.field_mutable || local.name != loop.counter ||
-                loop.counter.empty() || !local.initializer ||
+                loop.counter.empty() || !loop.name.empty() ||
+                !local.initializer ||
                 local.initializer->kind != Expression::Kind::Integer ||
                 local.initializer->integer != loop.initial ||
                 local.initializer->left || local.initializer->right ||

@@ -206,6 +206,26 @@ int main() {
         loop.functions.front().locals.front().initializer->integer = 8;
         rejected(loop, "unverified experimental scalar-loop AST");
         loop.functions.front().locals.front().initializer->integer = 0;
+        // Loop names are not part of the certified frame ABI; a constructed
+        // AST may not smuggle extra metadata into the fast path.
+        loop.functions.front().scalar_while->name = "ignored";
+        rejected(loop, "unverified experimental scalar-loop AST");
+        loop.functions.front().scalar_while->name.clear();
+        // The frontend initializes these variant fields even though the
+        // frame emitter does not consume them. Reject forged payloads.
+        loop.functions.front().locals.front().field_mutable = true;
+        rejected(loop, "unverified experimental scalar-loop AST");
+        loop.functions.front().locals.front().field_mutable = false;
+        loop.functions.front().result->integer = 7;
+        rejected(loop, "unverified experimental scalar-loop AST");
+        loop.functions.front().result->integer = 0;
+        loop.functions.front().scalar_while->counter.clear();
+        loop.functions.front().locals.front().name.clear();
+        loop.functions.front().result->name.clear();
+        rejected(loop, "unverified experimental scalar-loop AST");
+        loop.functions.front().scalar_while->counter = "counter";
+        loop.functions.front().locals.front().name = "counter";
+        loop.functions.front().result->name = "counter";
         // With a second function, the ordinary LLVM path used to ignore the
         // pending scalar loop entirely. Mixed Programs fail before codegen.
         auto second = program("companion");
