@@ -1,0 +1,9 @@
+// expect-error: E_SYNTAX
+// Nested on-is extractors require a separate typed, budgeted pattern feature.
+fnc checked(): Option<int> { return Some(42); }
+pub fnc main(): int {
+  return match checked() over
+    on is Some<Some<n>> -> 0,
+    on is None -> 0
+  end;
+}
