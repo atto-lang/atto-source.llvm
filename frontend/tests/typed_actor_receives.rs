@@ -37,7 +37,7 @@ fn checked_outbound_effect_header_and_inert_susp_compile_to_real_wasm() {
         .replace("receive(ActorMail<int>", "susp receive(ActorMail<int>")
         .replace("pub fnc main()", "pub susp fnc main()");
     let compiled = compile(&typed).expect("a checked scalar actor contract must compile");
-    assert!(compiled.starts_with(b"\\0asm"), "the compiler must emit real Wasm");
+    assert!(compiled.starts_with(b"\0asm"), "the compiler must emit real Wasm");
     // Legacy actors may omit receives while still explicitly bounding sends.
     let legacy_inbox = ACTOR.replace("receives int as", "sends int as");
     assert!(compile(&legacy_inbox).is_ok());
