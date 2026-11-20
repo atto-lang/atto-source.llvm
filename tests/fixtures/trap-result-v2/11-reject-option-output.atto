@@ -1,0 +1,4 @@
+pub fnc main(): int {
+    val Option<int> wrong = trap 42;
+    return wrong.unwrap_or(0);
+}
