@@ -109,7 +109,11 @@ int main(void){
   assert(n==0 && readbuf[0]==0xAE);
   assert(atto_fs_async_submit_read(s,&actor,"data/input",30,&ticket)==0);
   assert(atto_fs_async_forget_actor(s,&actor)==0);
-  assert(finished(s,&actor,ticket,readbuf,sizeof readbuf,&n)==-ESTALE);
+  /* Irreversibly revoked: do not leak ticket existence as -ESTALE. */
+  assert(finished(s,&actor,ticket,readbuf,sizeof readbuf,&n)==-EACCES);
+  uint64_t denied = 7u;
+  assert(atto_fs_async_submit_read(s,&actor,"data/input",16u,&denied)==-EACCES);
+  assert(denied==0u);
   atto_fs_async_destroy(s);
   broker.policy_layer_count=0;
   assert(atto_fs_async_create(&s,&broker,&actor,4)==-EACCES);
