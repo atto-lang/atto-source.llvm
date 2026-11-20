@@ -835,3 +835,32 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod attached_actor_state_native_no_ir {
+    use super::compile_ir;
+
+    #[test]
+    fn parsed_attachment_does_not_lower_to_unprotected_native_state() {
+        let source=r#"
+            define actor Counter as end
+            define state on actor Counter as { let int count: 0; }
+        "#;
+        let error=compile_ir(source).expect_err("no native IR may be emitted for unverified actor state");
+        assert!(error.starts_with("E_UNSUPPORTED_NATIVE_STATE:"),"{error}");
+    }
+
+    #[test]
+    fn exact_shared_counter_examples_are_not_silently_accepted() {
+        let inputs=[
+            include_str!("../tests/fixtures/actor-attached-state-v1/inline_counter.atto"),
+            include_str!("../tests/fixtures/actor-attached-state-v1/attached_counter.atto"),
+            include_str!("../tests/fixtures/actor-attached-state-v1/attached_initialized.atto"),
+        ];
+        for input in inputs {
+            let error=compile_ir(input).expect_err(
+                "full guarded Counter actor startup/message lowering is not proven");
+            assert!(!error.is_empty());
+        }
+    }
+}
