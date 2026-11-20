@@ -131,6 +131,11 @@ int main(void) {
                                       (const uint8_t*)"BAD",3,&ticket)==0);
     assert(wait_ticket(service, &actor, ticket, NULL, 0, &used)==-EACCES);
     expect_file(dest, "host-async");
+    assert(atto_fs_async_revoke_actor(service,&actor)==0);
+    denied_ticket=899u;
+    assert(atto_fs_async_submit_read(service,&actor,"data/input.txt",16u,&denied_ticket)==-EACCES);
+    assert(denied_ticket==0u);
+    assert(atto_fs_async_cancel(service,&actor,ticket)==-EACCES);
     assert(atto_fs_async_forget_actor(service,&actor)==0);
     atto_fs_async_destroy(service);
     atto_fs_broker_close(&broker);
