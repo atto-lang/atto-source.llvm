@@ -7,6 +7,8 @@
 //! rejected with a diagnostic and never produces an artifact. See README.md.
 
 pub mod ast;
+/// Pure bounded typed-IR DATA send-effect closure, shared with peer frontend.
+pub mod actor_send_effect_graph;
 pub mod check;
 pub mod diag;
 pub mod generator_cfg;
