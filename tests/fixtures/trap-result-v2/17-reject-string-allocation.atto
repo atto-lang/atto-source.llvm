@@ -1,0 +1,4 @@
+pub fnc main(): int {
+    val Result<String,Error> wrong = trap "hello";
+    return wrong.is_ok() ? 42 : 0;
+}
