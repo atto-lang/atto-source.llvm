@@ -1,9 +1,10 @@
-//! Task parity admission against Rust canonical target. No guest runtime is implied.
+//! Narrow guest-checked inline task admission. Independently scheduled tasks
+//! still fail closed until TaskScope, Future cancellation and cleanup land.
 use atto_compiler::{compile, parser::is_reserved};
 
-fn reject_unlowered(source: &str) {
-    let d = compile(source).expect_err("unverified task lowering must not emit a Wasm guest");
-    assert_eq!(d.code, "E_UNSUPPORTED", "{d}");
+fn reject_unlowered(source: &str, expected: &str) {
+    let d = compile(source).expect_err("unverified task lowering must not emit a guest");
+    assert_eq!(d.code, expected, "{d}");
 }
 
 #[test]
@@ -11,21 +12,44 @@ fn sync_is_whole_word_reserved_not_a_user_variable() {
     assert!(is_reserved("sync"));
     assert!(!is_reserved("synchronize"));
     assert!(!is_reserved("sync_data"));
-    let d = compile("pub fnc main(): int { val sync = 42; return sync; }")
-        .expect_err("sync must not be a local");
-    assert_eq!(d.code, "E_RESERVED", "{d}");
+    reject_unlowered("pub fnc main(): int { val sync = 42; return sync; }", "E_RESERVED");
 }
 
 #[test]
-fn all_task_spellings_reject_without_structured_scope_runtime() {
+fn pure_sync_task_compiles_to_real_guest_bytes() {
+    for source in [
+        "pub fnc main(): int { val int x = sync task<int> { return 42; }; return x; }",
+        "pub fnc main(): int { val int x = sync task { val int y = 5; return y + 7; }; return x; }",
+        "pub fnc main(): int { do sync task<int> { return 5; }; return 9; }",
+        "pub fnc main(): int { sync task {}; return 9; }",
+        "pub fnc main(): int { val bool b = sync task<bool> { return true; }; if b then return 5; else return 4; fi }",
+        "pub fnc main(): int { val int x = sync task<int> { return sync task<int> { return 4; } + 3; }; return x; }",
+    ] {
+        let bytes = compile(source).unwrap_or_else(|e| panic!("inline task did not compile: {e}"));
+        assert!(bytes.starts_with(b"\0asm"), "missing real Wasm guest artifact");
+    }
+}
+
+#[test]
+fn task_spawning_and_unverified_inline_effects_still_fail_closed() {
     for source in [
         "pub fnc main(): int { val x = task<int> { return 42; }; return 0; }",
         "pub fnc main(): int { val x = task { return 42; }; return 0; }",
-        "pub fnc main(): int { val x = sync task<int> { return 42; }; return 0; }",
         "pub fnc main(): int { val x = await task<int> { return 42; }; return 0; }",
         "pub fnc main(): int { do task<int> { return 42; }; return 0; }",
-        "pub fnc main(): int { do sync task<int> { return 42; }; return 0; }",
+        "pub fnc main(): int { val x = sync task<int> { return 1; return 2; }; return x; }",
+        "pub fnc main(): int { val x = sync task<int> { return compute(); }; return x; }",
+        "pub fnc main(): int { do sync task { defer clean(); }; return 1; }",
+        "pub fnc main(): int { val x = sync task<int> { return await future; }; return x; }",
     ] {
-        reject_unlowered(source);
+        reject_unlowered(source, "E_UNSUPPORTED");
     }
+    reject_unlowered(
+        "pub fnc main(): int { val x = sync task<int> {}; return x; }",
+        "E_TASK_RETURN_TYPE",
+    );
+    reject_unlowered(
+        "pub fnc main(): int { val x = sync task<bool> { return 1; }; return 0; }",
+        "E_TASK_RETURN_TYPE",
+    );
 }

@@ -261,6 +261,17 @@ impl<'a> FunctionEmitter<'a> {
                 ));
                 Ok(String::new())
             }
+            TExpr::InlineTask { body, value } => {
+                self.instr("; InlineTaskEnter (caller TaskId, no dispatch)");
+                self.block(body)?;
+                let result = if let Some(value) = value {
+                    self.expr(value)?
+                } else {
+                    String::new()
+                };
+                self.instr("; InlineTaskExit");
+                Ok(result)
+            }
             TExpr::Ternary(cond, yes, no) => {
                 let cv = self.expr(cond)?;
                 let yes_label = self.id("tern_yes");

@@ -1192,8 +1192,13 @@ impl Parser {
                 Ok(Stmt::Continue(pos))
             }
             Some("match") => self.parse_match(false),
-            Some("do") if self.word_at(1) == Some("task")
-                || (self.word_at(1) == Some("sync") && self.word_at(2) == Some("task")) => {
+            Some("do") if self.word_at(1) == Some("sync") && self.word_at(2) == Some("task") => {
+                self.advance();
+                let expr = self.parse_expr()?;
+                self.terminator()?;
+                Ok(Stmt::Expr(expr))
+            }
+            Some("do") if self.word_at(1) == Some("task") => {
                 Err(unsupported(pos, "supervised task with cancellation/cleanup"))
             }
             Some("do") if self.word_at(1) == Some("match") => {
@@ -2121,10 +2126,36 @@ impl Parser {
                     self.advance();
                     ExprKind::Spawn(actor)
                 }
+                "sync" => {
+                    self.advance();
+                    self.expect_word("task")?;
+                    let declared = if self.eat(&Tok::Lt) {
+                        let payload = self.parse_type()?;
+                        self.expect(Tok::Gt, "'>' after task payload type")?;
+                        Some(payload)
+                    } else {
+                        None
+                    };
+                    let mut prelude = self.parse_block()?;
+                    let result = if matches!(prelude.last(), Some(Stmt::Return(..))) {
+                        match prelude.pop() {
+                            Some(Stmt::Return(expr, _)) => expr.map(Box::new),
+                            _ => unreachable!("checked terminal return"),
+                        }
+                    } else {
+                        None
+                    };
+                    if !prelude.iter().all(inline_task_pure_stmt)
+                        || result.as_ref().is_some_and(|v| !inline_task_pure_expr(v)) {
+                        return Err(unsupported(pos,
+                            "sync task requires a proven non-suspending scalar body; continuation, cleanup and nested exits are not lowered"));
+                    }
+                    ExprKind::InlineTask { declared, prelude, result }
+                }
                 "task" if matches!(self.peek_at(1), Tok::Lt | Tok::LBrace) => {
                     return Err(unsupported(pos, "task expression: typed Future, scoped cancellation and lock cleanup"));
                 }
-                "await" | "sync" | "super" | "match" | "select" | "readch" | "writech" | "obj" | "arr" | "typeof" => {
+                "await" | "super" | "match" | "select" | "readch" | "writech" | "obj" | "arr" | "typeof" => {
                     return Err(unsupported(pos, &format!("'{s}' expressions")))
                 }
                 w if is_reserved(w) => {
@@ -2153,6 +2184,36 @@ impl Parser {
     /// `f<int>(..)` heuristic: `<` Type `>` `(`.
     fn looks_generic(&self) -> bool {
         matches!(self.peek_at(1), Tok::Ident(_)) && *self.peek_at(2) == Tok::Gt && *self.peek_at(3) == Tok::LParen
+    }
+}
+
+// The initial executable inline-task profile is deliberately effect-free.
+// In particular, a call is not proven transitive-no-susp just because it has
+// a scalar return. This predicate runs over parsed AST nodes, never source
+// text, so comments/strings cannot bypass admission.
+fn inline_task_pure_expr(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Var(_) => true,
+        ExprKind::Unary(_, inner) => inline_task_pure_expr(inner),
+        ExprKind::Binary(_, a, b) => inline_task_pure_expr(a) && inline_task_pure_expr(b),
+        ExprKind::Ternary(c, a, b) => inline_task_pure_expr(c)
+            && inline_task_pure_expr(a) && inline_task_pure_expr(b),
+        ExprKind::InlineTask { prelude, result, .. } => prelude.iter().all(inline_task_pure_stmt)
+            && result.as_ref().is_none_or(|x| inline_task_pure_expr(x)),
+        _ => false,
+    }
+}
+
+fn inline_task_pure_stmt(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Bind { init, .. } => inline_task_pure_expr(init),
+        Stmt::Assign { value, .. } => inline_task_pure_expr(value),
+        Stmt::Expr(value) => inline_task_pure_expr(value),
+        Stmt::Block(body) => body.iter().all(inline_task_pure_stmt),
+        Stmt::If { arms, otherwise, .. } => arms.iter().all(|(test, body)|
+            inline_task_pure_expr(test) && body.iter().all(inline_task_pure_stmt))
+            && otherwise.as_ref().is_none_or(|body| body.iter().all(inline_task_pure_stmt)),
+        _ => false,
     }
 }
 
