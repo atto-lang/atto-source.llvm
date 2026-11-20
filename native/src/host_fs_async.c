@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -27,6 +28,7 @@ struct atto_fs_async_service {
     pthread_cond_t ready;
     pthread_t worker;
     int stopping;
+    atomic_int revoked; /* monotonic, carrier-safe lifetime denial */
     unsigned max_jobs;
     uint64_t next_sequence;
     atto_fs_broker *broker;
@@ -41,9 +43,9 @@ static int same_owner(const atto_fs_host_actor *a, const atto_fs_host_actor *b) 
            a->actor_ref == b->actor_ref && a->actor_generation == b->actor_generation;
 }
 static int valid_actor(const atto_fs_async_service *s, const atto_fs_host_actor *a) {
-    return s && a && s->broker &&
+    return s && a && !atomic_load_explicit(&s->revoked, memory_order_acquire) && s->broker &&
         s->broker->policy_layer_count == ATTO_FS_POLICY_LAYER_COUNT &&
-        a->tenant_id && a->tenant_generation && a->actor_ref && a->actor_generation &&
+        a->tenant_id && a->tenant_generation && a->actor_generation &&
         a->tenant_id == s->admitted_tenant &&
         a->tenant_generation == s->admitted_generation &&
         same_owner(a, &s->admitted_owner);
@@ -140,7 +142,11 @@ static void *worker_main(void *arg) {
         pthread_mutex_unlock(&s->lock);
         size_t used = 0;
         int rc;
-        if (selected->write) {
+        /* A revoked queued job must never begin I/O. A running write
+         * that passed this gate before revocation can still commit. */
+        if (atomic_load_explicit(&s->revoked, memory_order_acquire)) {
+            rc = -EACCES;
+        } else if (selected->write) {
             rc = atto_fs_broker_write(s->broker, owner.tenant_id, owner.tenant_generation,
                                        selected->path, selected->bytes, selected->length);
         } else {
@@ -163,11 +169,12 @@ int atto_fs_async_create(atto_fs_async_service **out, atto_fs_broker *broker,
     if (!broker || !owner || max_jobs == 0u || max_jobs > ATTO_FS_ASYNC_MAX_JOBS ||
         broker->policy_layer_count != ATTO_FS_POLICY_LAYER_COUNT ||
         !owner->tenant_id || !owner->tenant_generation ||
-        !owner->actor_ref || !owner->actor_generation ||
+        !owner->actor_generation ||
         owner->tenant_id != broker->tenant_id ||
         owner->tenant_generation != broker->generation) return -EACCES;
     atto_fs_async_service *s = (atto_fs_async_service *)calloc(1, sizeof(*s));
     if (!s) return -ENOMEM;
+    atomic_init(&s->revoked, 0);
     s->broker = broker; s->max_jobs = max_jobs;
     s->admitted_tenant = broker->tenant_id;
     s->admitted_generation = broker->generation;
@@ -185,6 +192,7 @@ void atto_fs_async_destroy(atto_fs_async_service *s) {
     if (!s) return;
     pthread_mutex_lock(&s->lock);
     s->stopping = 1;
+    atomic_store_explicit(&s->revoked, 1, memory_order_release);
     for (unsigned i = 0; i < s->max_jobs; ++i) {
         job *j = &s->slots[i];
         if (j->state == QUEUED) release_job(j);
@@ -218,6 +226,7 @@ int atto_fs_async_poll(atto_fs_async_service *s, const atto_fs_host_actor *actor
      * carrier while the worker is finishing another ticket. */
     const int lock_rc = pthread_mutex_trylock(&s->lock);
     if (lock_rc) return lock_rc == EBUSY ? -EAGAIN : -lock_rc;
+    if (!valid_actor(s, actor)) { pthread_mutex_unlock(&s->lock); return -EACCES; }
     job *j = find_ticket(s, ticket);
     int rc;
     if (!j) rc = -ESTALE;
@@ -228,6 +237,9 @@ int atto_fs_async_poll(atto_fs_async_service *s, const atto_fs_host_actor *actor
          * definitive safe cancellation when the outcome is indeterminate. */
         rc = j->cancelled_running_write ? -EINPROGRESS :
              (j->cancelled ? -ECANCELED : j->outcome);
+        if (rc == 0 && !j->write) {
+            if (!valid_actor(s, actor)) rc = -EACCES;
+        }
         if (rc == 0 && !j->write) {
             if ((!output && j->used) || j->used > capacity) rc = -EMSGSIZE;
             else rc = atto_fs_broker_publish_read(s->broker,
@@ -251,6 +263,7 @@ int atto_fs_async_cancel(atto_fs_async_service *s, const atto_fs_host_actor *act
     /* Cancellation itself must not park the carrier on worker lock. */
     const int lock_rc = pthread_mutex_trylock(&s->lock);
     if (lock_rc) return lock_rc == EBUSY ? -EAGAIN : -lock_rc;
+    if (!valid_actor(s, actor)) { pthread_mutex_unlock(&s->lock); return -EACCES; }
     job *j = find_ticket(s, ticket);
     int rc;
     if (!j) rc = -ESTALE;
@@ -265,9 +278,18 @@ int atto_fs_async_cancel(atto_fs_async_service *s, const atto_fs_host_actor *act
     pthread_mutex_unlock(&s->lock);
     return rc;
 }
-int atto_fs_async_forget_actor(atto_fs_async_service *s, const atto_fs_host_actor *actor) {
+/* Called only by trusted scheduler/lifecycle code. No locks or waits:
+ * this is the immediate irreversible cutoff, not the resource recycler. */
+int atto_fs_async_revoke_actor(atto_fs_async_service *s, const atto_fs_host_actor *actor) {
     if (!s || !actor) return -EINVAL;
     if (!same_owner(&s->admitted_owner, actor)) return -EACCES;
+    atomic_store_explicit(&s->revoked, 1, memory_order_release);
+    return 0;
+}
+int atto_fs_async_forget_actor(atto_fs_async_service *s, const atto_fs_host_actor *actor) {
+    if (!s || !actor) return -EINVAL;
+    if (atto_fs_async_revoke_actor(s, actor) != 0) return -EACCES;
+    /* Only the trusted host lifecycle worker may block on this mutex. */
     pthread_mutex_lock(&s->lock);
     for (unsigned i = 0; i < s->max_jobs; ++i) {
         job *j = &s->slots[i];
