@@ -20,7 +20,11 @@ typedef struct atto_fs_host_actor {
 /* A broker with ALL SIX layers is required. Service owns no root authority;
  * broker lifetime must outlive the service. Limit 1..16 pending/completed jobs.
  * Destroy only from host lifecycle management, NEVER on an actor carrier. */
-int atto_fs_async_create(atto_fs_async_service **out, atto_fs_broker *broker, unsigned max_jobs);
+/* One service per authenticated actor incarnation. The six-layer broker
+ * contains that actor's effective ceiling; another actor sharing its TenantVM
+ * MUST NOT be allowed to borrow this service's policy. */
+int atto_fs_async_create(atto_fs_async_service **out, atto_fs_broker *broker,
+                         const atto_fs_host_actor *trusted_actor, unsigned max_jobs);
 void atto_fs_async_destroy(atto_fs_async_service *service);
 /* Submit snapshots HOST-owned path and data before returning. The worker
  * never sees a guest cage pointer and never writes to guest memory. */
