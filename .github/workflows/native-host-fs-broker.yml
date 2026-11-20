@@ -127,12 +127,8 @@ jobs:
           cmake -S tests/tenant-vm -B /tmp/atto-signed-loader-build -DCMAKE_BUILD_TYPE=Debug
           cmake --build /tmp/atto-signed-loader-build --target tenant_vm_signed_fs_loader_test --parallel 2
           ctest --test-dir /tmp/atto-signed-loader-build --output-on-failure \
-            -R '^tenant_vm_signed_fs_loader_host_only
-        run: |
-          echo "HOST_ONLY: no compiled .atto guest executed."
-          echo "v5 remains layout-only and is not admitted by the loader; the worker is host-only and uses a mock in its unit test. No production key trust store, authenticated scheduler wiring or native syscall sandbox certified."
-
+            -R '^tenant_vm_signed_fs_loader_host_only$'
       - name: State strict evidence boundaries
         run: |
-          echo "HOST_ONLY: no compiled .atto guest executed."
-          echo "v5 remains layout-only and is not admitted by the loader; the worker is host-only and uses a mock in its unit test. No production key trust store, authenticated scheduler wiring or native syscall sandbox certified."
+          echo "HOST_ONLY: neither this suite nor the signed v4 fixture compiles or executes an Atto .atto guest."
+          echo "ABI v5 is unadmitted; no authenticated scheduler dispatch, production key store or native syscall fence is certified."
