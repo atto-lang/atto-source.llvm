@@ -155,6 +155,12 @@ llvm::Value* lower(const Expression& expr,
     switch (expr.kind) {
         case Expression::Kind::SumConstruct: {
             const auto& type = native_sum(*moves->sum_program, expr.sum_type);
+            // Independent codegen fence: no ordinary source Ok/Err may mint
+            // nominal Error and no forged trap tag may bypass type resolution.
+            if ((type.nominal_error && !expr.trap_origin) ||
+                    (expr.trap_origin && (!type.nominal_error || expr.name != "Ok" ||
+                     expr.arguments.size() != 1)))
+                throw std::runtime_error("unproven native Result<T,Error> trap reached LLVM lowering");
             const bool option = type.kind == NativeSumType::Kind::Option;
             const std::size_t count = option ? 2 : 3;
             const bool error = expr.name == "Err";
