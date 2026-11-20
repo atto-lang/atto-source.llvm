@@ -474,7 +474,7 @@ fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<Stri
     // can prove the receiver type. Do not fabricate a generic indexer or
     // treat bracket assignment as a global name lookup.
     if toks.iter().any(|token| matches!(
-        token.tok, atto_compiler::lexer::Tok::LBracket
+        &token.tok, atto_compiler::lexer::Tok::LBracket
     )) {
         return Err("E_UNSUPPORTED_INDEX_WRITE: checked bracket indexing requires a typed Map or closed Record receiver; nominal Struct indexing is forbidden".into());
     }
