@@ -1621,7 +1621,41 @@ impl Parser {
                     self.advance();
                     Ok(Pattern::Wild)
                 }
-                "is" | "structural" => Err(unsupported(pos, "type patterns")),
+                // Closed nominal Result/Option constructor syntax. These
+                // <...> tokens bind a payload: NOT generic type arguments,
+                // dynamic type tests, or user-supplied unapply() extractors.
+                "is" => {
+                    self.advance();
+                    let (constructor, at) = self.ident("Result/Option constructor after is")?;
+                    if !matches!(constructor.as_str(), "Ok" | "Err" | "Some" | "None") {
+                        return Err(Diagnostic::new(at, "E_PATTERN",
+                            "on is admits only sealed Ok, Err, Some, None in this frontend"));
+                    }
+                    if constructor == "None" {
+                        if *self.peek() == Tok::Lt || *self.peek() == Tok::LParen {
+                            return Err(Diagnostic::new(self.pos(), "E_ARITY",
+                                "None is a zero-payload variant"));
+                        }
+                        return Ok(Pattern::Adt(constructor, None));
+                    }
+                    if *self.peek() != Tok::Lt {
+                        if constructor == "Ok" {
+                            // The type checker enforces Result<void,E> for bare Ok.
+                            return Ok(Pattern::Adt(constructor, None));
+                        }
+                        return Err(Diagnostic::new(self.pos(), "E_ARITY",
+                            "on is payload variants require <name> or <_>"));
+                    }
+                    self.advance();
+                    let (binding, _) = self.ident("pattern payload binding or _")?;
+                    self.expect(Tok::Gt, "'>' after ADT payload binder")?;
+                    if *self.peek() == Tok::LParen || *self.peek() == Tok::Lt {
+                        return Err(Diagnostic::new(self.pos(), "E_PATTERN",
+                            "nested/untrusted extractors require separately checked structural matching"));
+                    }
+                    Ok(Pattern::Adt(constructor, Some(binding)))
+                }
+                "structural" => Err(unsupported(pos, "structural type patterns")),
                 _ => {
                     self.advance();
                     if *self.peek() == Tok::Dot {
