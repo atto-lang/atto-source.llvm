@@ -71,6 +71,12 @@ fn main() {
     run(&a[1],&a[2],&root,"invalid_do_void_value",
         "pub fnc main(): int { do sync task<void> { return 1; }; return 0; }",
         None,"E_TASK_RETURN_TYPE");
+    run(&a[1],&a[2],&root,"invalid_do_type_precedes_effect",
+        "pub fnc main(): int { do sync task<int> { return await future; }; return 0; }",
+        None,"E_TASK_RETURN_TYPE");
+    run(&a[1],&a[2],&root,"invalid_do_generic_precedes_effect",
+        "pub fnc main(): int { do sync task<Result<int,string>> { return await future; }; return 0; }",
+        None,"E_TASK_RETURN_TYPE");
     run(&a[1],&a[2],&root,"unverified_effect",
         "pub fnc helper(): int { return 8; } pub fnc main(): int { return sync task<int> { return helper(); }; }",
         None,"E_UNSUPPORTED");
@@ -78,5 +84,5 @@ fn main() {
         "pub fnc main(): int { val int n = task<int> { return 2; }; return n; }",
         None,"E_UNSUPPORTED");
     fs::remove_dir_all(&root).unwrap();
-    println!("ATTO_LLVM_SYNC_TASK_REAL_GUESTS=6 NEGATIVE=7");
+    println!("ATTO_LLVM_SYNC_TASK_REAL_GUESTS=6 NEGATIVE=9");
 }

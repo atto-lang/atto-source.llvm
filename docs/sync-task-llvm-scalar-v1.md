@@ -16,7 +16,10 @@ The `do` form is not a value-discard operator. Only `void` is permitted:
 `do sync task<int> { ... }` and `do sync task<bool> { ... }` are
 `E_TASK_RETURN_TYPE` even if the body is empty. Inferred `do sync task`
 also rejects `return expression;`, as does `do sync task<void>`.
-A final bare `return;` is legal and exits only the inline lexical body.
+An explicitly nonvoid `do` payload is diagnosed before its body's unsupported
+effects, so `do sync task<int> { return await x; }` cannot evade the
+void-only contract through a different diagnostic. A final bare
+`return;` is legal and exits only the inline lexical body.
 To produce a value, use `sync task<int> { return 42; }` without `do`.
 
 The checked IR retains an explicit `InlineTask` node; the LLVM emitter emits
