@@ -14,6 +14,8 @@
 static pthread_mutex_t broker_lock=PTHREAD_MUTEX_INITIALIZER;
 static char stored[128]="seed";
 static int revoked=0;
+static int defer_publication_once=0;
+static int observed_deferred_publication=0;
 int atto_fs_broker_read(atto_fs_broker *b,uint64_t t,uint64_t g,const char *p,unsigned char *out,size_t cap,size_t *size){
     pthread_mutex_lock(&broker_lock);
     int rc=(revoked||t!=b->tenant_id||g!=b->generation||strcmp(p,"data/input"))?-EACCES:0;
@@ -27,6 +29,11 @@ int atto_fs_broker_write(atto_fs_broker *b,uint64_t t,uint64_t g,const char *p,c
     pthread_mutex_unlock(&broker_lock);return rc;
 }
 int atto_fs_broker_publish_read(atto_fs_broker *b,uint64_t t,uint64_t g,const char *p,const unsigned char *in,size_t len,unsigned char *out,size_t cap){
+    if (defer_publication_once) {
+        defer_publication_once=0;
+        observed_deferred_publication=1;
+        return -EAGAIN; /* Simulate a contended real broker revoke gate. */
+    }
     pthread_mutex_lock(&broker_lock);
     int rc=(revoked||t!=b->tenant_id||g!=b->generation||strcmp(p,"data/input")||len>cap)?-EACCES:0;
     if(!rc)memcpy(out,in,len);
@@ -46,6 +53,13 @@ int main(void){
   assert(atto_fs_async_submit_read(s,&actor,"data/input",20,&ticket)==0 && ticket!=0);
   assert(atto_fs_async_poll(s,&other,ticket,readbuf,sizeof readbuf,&n)==-EACCES && n==0 && readbuf[0]==0xBC);
   assert(finished(s,&actor,ticket,readbuf,sizeof readbuf,&n)==0 && n==4 && memcmp(readbuf,"seed",4)==0);
+  assert(atto_fs_async_poll(s,&actor,ticket,readbuf,sizeof readbuf,&n)==-ESTALE);
+  /* A transient broker mutex conflict MUST NOT consume a ready ticket. */
+  defer_publication_once=1;
+  assert(atto_fs_async_submit_read(s,&actor,"data/input",20,&ticket)==0);
+  memset(readbuf,0xA4,sizeof readbuf);
+  assert(finished(s,&actor,ticket,readbuf,sizeof readbuf,&n)==0);
+  assert(observed_deferred_publication==1 && n==4 && memcmp(readbuf,"seed",4)==0);
   assert(atto_fs_async_poll(s,&actor,ticket,readbuf,sizeof readbuf,&n)==-ESTALE);
   unsigned char payload[]="updated";
   assert(atto_fs_async_submit_write(s,&actor,"out/copy",payload,7,&ticket)==0);
