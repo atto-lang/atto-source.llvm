@@ -140,3 +140,25 @@ if(WAT2WASM AND WASM2C AND WASM_RT_INCLUDE AND LOWER_CLANG AND Python3_FOUND)
         set_tests_properties(tenant_vm_source_main tenant_vm_source_fleet tenant_vm_source_isolation PROPERTIES TIMEOUT 300)
     endif()
 endif()
+
+# Host-only signature admission test for the existing sealed-image loader.
+# The fixture is a C ABI-v4 .so, NOT a compiled .atto guest; v5 remains
+# explicitly unsupported by the live TenantVM runtime.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+    add_library(tenant_vm_signed_fs_fixture SHARED signed_fs_guest.c)
+    target_include_directories(tenant_vm_signed_fs_fixture PRIVATE "${ROOT}/src/main/cpp")
+    set_target_properties(tenant_vm_signed_fs_fixture PROPERTIES PREFIX "" OUTPUT_NAME "signed_fs_fixture")
+    add_executable(tenant_vm_signed_fs_loader_test
+        signed_fs_loader_test.cpp
+        "${ROOT}/src/main/cpp/oreslang/runtime/TenantVmGuestLoader.cpp"
+        "${ROOT}/src/main/cpp/oreslang/runtime/TenantVmSignedFsLoader.cpp"
+        "${ROOT}/native/src/host_fs_signed_ceiling.c")
+    target_include_directories(tenant_vm_signed_fs_loader_test PRIVATE
+        "${ROOT}/src/main/cpp" "${ROOT}/native/include")
+    target_link_libraries(tenant_vm_signed_fs_loader_test PRIVATE OpenSSL::Crypto ${CMAKE_DL_LIBS})
+    add_dependencies(tenant_vm_signed_fs_loader_test tenant_vm_signed_fs_fixture)
+    add_test(NAME tenant_vm_signed_fs_loader_host_only
+        COMMAND tenant_vm_signed_fs_loader_test "$<TARGET_FILE:tenant_vm_signed_fs_fixture>")
+    set_tests_properties(tenant_vm_signed_fs_loader_host_only PROPERTIES TIMEOUT 30)
+endif()
