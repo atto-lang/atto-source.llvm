@@ -93,3 +93,30 @@ fn unsupported_actor_contracts_fail_closed_before_wasm() {
     assert!(compile(&ACTOR.replace("receives int as", "receives int receives int as")).is_err());
     assert!(compile(&ACTOR.replace("receives int as", "receives int | bool as")).is_err());
 }
+
+
+#[test]
+fn sends_never_is_an_explicit_empty_actor_data_effect() {
+    let source = ACTOR.replace("receives int as", "receives int sends never as");
+    let wasm = compile(&source).expect("empty outbound effect must compile");
+    assert!(wasm.starts_with(b"\0asm"));
+    let mut parser = Parser::new(lexer::lex(&source).unwrap());
+    let ast = parser.parse_program().unwrap();
+    assert_eq!(ast.actors[0].sends, Some(Type::Void),
+        "private AST sentinel represents sends never, not a void message");
+    let legacy = ACTOR.replace("receives int as", "sends never as");
+    assert!(compile(&legacy).unwrap().starts_with(b"\0asm"));
+}
+
+#[test]
+fn sends_void_and_duplicate_empty_effects_are_not_accepted() {
+    assert_eq!(compile(&ACTOR.replace("receives int as", "receives int sends void as"))
+        .unwrap_err().code, "E_ACTOR_SEND_CONTRACT");
+    for header in [
+        "receives int sends never sends int",
+        "receives int sends int sends never",
+        "sends never receives int",
+    ] {
+        assert!(compile(&ACTOR.replace("receives int", header)).is_err());
+    }
+}
