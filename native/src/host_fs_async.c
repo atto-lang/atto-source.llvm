@@ -211,6 +211,9 @@ int atto_fs_async_poll(atto_fs_async_service *s, const atto_fs_host_actor *actor
     if (bytes_read) *bytes_read = 0u;
     if (!s || !actor || !bytes_read || (!output && capacity) || capacity > ATTO_FS_MAX_BYTES)
         return -EINVAL;
+    /* Reject foreign actors before ticket lookup or mutex probing: a sibling
+     * or old incarnation must not learn ticket existence or queue pressure. */
+    if (!valid_actor(s, actor)) return -EACCES;
     /* This function is entered from a guest host-call. Never park its
      * carrier while the worker is finishing another ticket. */
     const int lock_rc = pthread_mutex_trylock(&s->lock);
@@ -243,6 +246,8 @@ int atto_fs_async_poll(atto_fs_async_service *s, const atto_fs_host_actor *actor
 int atto_fs_async_cancel(atto_fs_async_service *s, const atto_fs_host_actor *actor,
                          uint64_t ticket) {
     if (!s || !actor) return -EINVAL;
+    /* No cross-actor ticket existence oracle, including for unknown tickets. */
+    if (!valid_actor(s, actor)) return -EACCES;
     /* Cancellation itself must not park the carrier on worker lock. */
     const int lock_rc = pthread_mutex_trylock(&s->lock);
     if (lock_rc) return lock_rc == EBUSY ? -EAGAIN : -lock_rc;
