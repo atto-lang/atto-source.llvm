@@ -64,7 +64,7 @@ int admit_signed_loaded_guest_fs_broker(
      * The signing verifier already checked the precise bytes that dlopen
      * mapped via the loader's sealed private image. All other ceilings
      * remain independently host-provided and are NOT authenticated here. */
-    if (!out || !loaded.signature_verified || !loaded.guest.module ||
+    if (!out || out->initialized || !loaded.signature_verified || !loaded.guest.module ||
         !loaded.guest.owner ||
         loaded.guest.module->abi_version != ORES_VM_GUEST_ABI_VERSION ||
         trusted_root.empty() || ceilings.tenant_id == 0 ||
