@@ -1,0 +1,9 @@
+// expect-exit: 42
+// Native heapless Option<int> with the nominal on is binder syntax.
+fnc checked(): Option<int> { return Some(42); }
+pub fnc main(): int {
+  return match checked() over
+    on is Some<n> -> n,
+    on is None -> 0
+  end;
+}
