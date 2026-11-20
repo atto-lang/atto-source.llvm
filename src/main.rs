@@ -453,6 +453,24 @@ fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<Stri
         return Err("E_SOURCE_LIMIT: native Atto input exceeds 64 KiB".into());
     }
     let toks = atto_compiler::lexer::lex(source).map_err(|e|e.to_string())?;
+    // Native AOT may not reinterpret a protected actor state schema as
+    // ordinary fields, even when the scalar target linker would otherwise
+    // admit a nested actor declaration.
+    let has_attached_actor_state = toks.windows(5).any(|w|
+        matches!((&w[0].tok,&w[1].tok,&w[2].tok,&w[3].tok,&w[4].tok),
+            (atto_compiler::lexer::Tok::Ident(a),
+             atto_compiler::lexer::Tok::Ident(b),
+             atto_compiler::lexer::Tok::Ident(c),
+             atto_compiler::lexer::Tok::Ident(d),
+             atto_compiler::lexer::Tok::Ident(_))
+                if a=="define"&&b=="state"&&c=="on"&&d=="actor"));
+    if has_attached_actor_state {
+        let headers=atto_compiler::target_syntax::parse_target_declarations(&toks)
+            .map_err(|d|d.to_string())?;
+        if !headers.actor_state_attachments.is_empty() {
+            return Err("E_UNSUPPORTED_NATIVE_STATE: actor guarded state lowering, startup and fenced leases are not yet proven".into());
+        }
+    }
     if profile == LibraryProfile::FreestandingCore {
         admit_freestanding_tokens(&toks)?;
     }
