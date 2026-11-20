@@ -87,28 +87,4 @@ int admit_signed_loaded_guest_fs_broker(
     return atto_fs_broker_init_layers(out, trusted_root.c_str(), &layers);
 }
 
-
-int admit_loaded_guest_fs_broker(atto_fs_broker *broker,
-                                  const LoadedSignedFsGuest& verified,
-                                  const TrustedLoadedFsLimits& limits) {
-    /* No re-reading a path and no independently caller-supplied artifact
-     * policy: use the exact image verified by the sealed guest loader.
-     * This is still a host-only function; all callers and limits are trusted. */
-    if (!broker || broker->initialized || !verified.signature_verified ||
-        !verified.guest.module || !verified.guest.owner ||
-        !limits.trusted_root || !limits.tenant_id || !limits.generation)
-        return -EACCES;
-    const auto& ceiling = verified.verified_artifact_ceiling;
-    const auto scope = [](const char *s) -> const char * {
-        return s && s[0] ? s : nullptr;
-    };
-    const atto_fs_layered_policy policy = {
-        limits.tenant_id, limits.generation, limits.host,
-        {scope(ceiling.allow_read), scope(ceiling.allow_write),
-         scope(ceiling.deny_read), scope(ceiling.deny_write)},
-        limits.runtime, limits.tenant, limits.actor, limits.delegation
-    };
-    return atto_fs_broker_init_layers(broker, limits.trusted_root, &policy);
-}
-
 } // namespace oreslang::runtime::vm
