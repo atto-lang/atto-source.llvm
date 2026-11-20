@@ -1470,6 +1470,21 @@ impl<'a> FnCx<'a> {
         Ok(slot)
     }
 
+    // No actor reference, object owner or non-scalar temporary may enter the
+    // first pure-inline profile, including through a parent lexical capture.
+    // The existing checker proves types and loans before this admission gate.
+    fn pure_inline_scalar_body(body: &[TStmt]) -> bool {
+        body.iter().all(|s| match s {
+            TStmt::Set(_, value) | TStmt::Expr(value) =>
+                matches!(value.ty, Type::Int | Type::Bool | Type::Void),
+            TStmt::Block(nested) => Self::pure_inline_scalar_body(nested),
+            TStmt::If(arms, otherwise) => arms.iter().all(|(cond, branch)|
+                cond.ty == Type::Bool && Self::pure_inline_scalar_body(branch))
+                && otherwise.as_ref().is_none_or(|x| Self::pure_inline_scalar_body(x)),
+            _ => false,
+        })
+    }
+
     fn scoped(&mut self, body: &[Stmt]) -> R<Vec<TStmt>> {
         self.scopes.push(Vec::new());
         let r = self.stmts(body);
@@ -2580,6 +2595,10 @@ impl<'a> FnCx<'a> {
                 self.scopes.push(Vec::new());
                 let checked = (|| -> R<TE> {
                     let body = self.stmts(prelude)?;
+                    if !Self::pure_inline_scalar_body(&body) {
+                        return Err(Diagnostic::new(pos, "E_UNSUPPORTED",
+                            "inline task body cannot capture or move non-scalar owners"));
+                    }
                     let value = match result {
                         Some(expr) => Some(Box::new(self.value(expr)?)),
                         None => None,
