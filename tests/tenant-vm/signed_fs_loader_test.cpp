@@ -112,6 +112,10 @@ int main(int argc, char **argv) {
     ceilings.delegation = {"*", "*", nullptr, nullptr};
     atto_fs_broker broker{};
     assert(admit_signed_loaded_guest_fs_broker(&broker, loaded, root, ceilings) == 0);
+    /* Re-admitting a live broker would discard the existing root FD and
+     * pthread mutex without closing them. Refuse rather than overwrite. */
+    assert(admit_signed_loaded_guest_fs_broker(&broker, loaded, root, ceilings) == -EACCES);
+    assert(broker.initialized);
     assert(broker.policy_layer_count == ATTO_FS_POLICY_LAYER_COUNT);
     unsigned char buffer[80] = {};
     std::size_t copied = 0;
