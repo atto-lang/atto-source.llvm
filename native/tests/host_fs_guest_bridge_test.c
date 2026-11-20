@@ -185,6 +185,50 @@ int main(void) {
     assert(atto_fs_guest_read(&frame, 16, 14, 512, 32, &count) == -EACCES);
     assert(count == 0u && cage[512] == 0xAB);
     atto_fs_broker_close(&broker);
+
+    /* Prove each of the six independent ceilings is actually read by the
+     * broker. Every missing allow and every matching explicit deny rejects,
+     * rather than letting a different layer's broad allow override it. */
+    atto_fs_policy_layer *ceilings[] = {
+        &policy.host, &policy.artifact, &policy.runtime,
+        &policy.tenant, &policy.actor, &policy.delegation
+    };
+    for (size_t i = 0; i < sizeof(ceilings) / sizeof(ceilings[0]); ++i) {
+        atto_fs_policy_layer *layer = ceilings[i];
+        const char *saved_allow_read = layer->allow_read;
+        const char *saved_allow_write = layer->allow_write;
+        const char *saved_deny_read = layer->deny_read;
+        const char *saved_deny_write = layer->deny_write;
+        layer->allow_read = NULL;
+        assert(atto_fs_broker_init_layers(&broker, root, &policy) == 0);
+        count = 999u;
+        assert(atto_fs_guest_read(&frame, 16, 14, 512, 32, &count) == -EACCES);
+        assert(count == 0u && cage[512] == 0xAB);
+        atto_fs_broker_close(&broker);
+        layer->allow_read = saved_allow_read;
+
+        layer->allow_write = NULL;
+        assert(atto_fs_broker_init_layers(&broker, root, &policy) == 0);
+        assert(atto_fs_guest_write(&frame, 64, 12, 256, 5) == -EACCES);
+        file_expect(dst, "hello");
+        atto_fs_broker_close(&broker);
+        layer->allow_write = saved_allow_write;
+
+        layer->deny_read = "data/input.txt";
+        assert(atto_fs_broker_init_layers(&broker, root, &policy) == 0);
+        count = 999u;
+        assert(atto_fs_guest_read(&frame, 16, 14, 512, 32, &count) == -EACCES);
+        assert(count == 0u && cage[512] == 0xAB);
+        atto_fs_broker_close(&broker);
+        layer->deny_read = saved_deny_read;
+
+        layer->deny_write = "out/copy.txt";
+        assert(atto_fs_broker_init_layers(&broker, root, &policy) == 0);
+        assert(atto_fs_guest_write(&frame, 64, 12, 256, 5) == -EACCES);
+        file_expect(dst, "hello");
+        atto_fs_broker_close(&broker);
+        layer->deny_write = saved_deny_write;
+    }
     puts("ATTO_HOST_FS_GUEST_OFFSET_BRIDGE_HOST_ONLY_TEST_PASS");
     return 0;
 }
