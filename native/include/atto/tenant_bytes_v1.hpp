@@ -73,6 +73,12 @@ class Bytes {
     return *this;
   }
   ~Bytes() { std::lock_guard<std::mutex> guard(lock_); release_locked(); }
+  // Trusted cancellation/actor-teardown path: release immediately, idempotently.
+  // Guest code must not bypass the compiler's live-loan/drop checks.
+  void drop_now() noexcept {
+    std::lock_guard<std::mutex> guard(lock_);
+    release_locked();
+  }
   std::size_t length() const noexcept {
     std::lock_guard<std::mutex> guard(lock_);
     return length_;
