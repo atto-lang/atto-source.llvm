@@ -13,7 +13,7 @@
 
 namespace atto::tenant_bytes_v1 {
 
-enum class Code { ok, invalid_owner, quota, allocation, bounds, value, revoked };
+enum class Code { ok, invalid_owner, invalid_size, quota, allocation, bounds, value, revoked };
 struct Owner {
   std::uint64_t tenant_id;
   std::uint64_t actor_id;
@@ -73,7 +73,10 @@ class Bytes {
     return *this;
   }
   ~Bytes() { std::lock_guard<std::mutex> guard(lock_); release_locked(); }
-  std::size_t length() const noexcept { return length_; }
+  std::size_t length() const noexcept {
+    std::lock_guard<std::mutex> guard(lock_);
+    return length_;
+  }
   Code read_byte(const Arena& caller, std::int64_t index, std::uint8_t& out) const noexcept;
   Code write_byte(const Arena& caller, std::int64_t index, std::int64_t value) noexcept;
 };
@@ -95,14 +98,17 @@ class Arena {
   Arena(Arena&&) = delete;
   Arena& operator=(Arena&&) = delete;
   Allocation allocate_zeroed(std::int64_t n) noexcept {
-    if (n < 0 || !ledger_ || ledger_->owner.tenant_id == 0 ||
+    if (!ledger_ || ledger_->owner.tenant_id == 0 ||
         ledger_->owner.actor_id == 0 || ledger_->owner.generation == 0)
       return {Code::invalid_owner, std::nullopt};
+    if (n < 0) return {Code::invalid_size, std::nullopt};
     const auto length = static_cast<std::uint64_t>(n);
+    // Even zero-length regions reserve one physical byte. Charge it.
+    const auto capacity = length == 0 ? std::uint64_t{1} : length;
     constexpr std::size_t overhead = sizeof(Bytes);
-    if (length > std::numeric_limits<std::size_t>::max() - overhead)
+    if (capacity > std::numeric_limits<std::size_t>::max() - overhead)
       return {Code::quota, std::nullopt};
-    const auto charged = static_cast<std::size_t>(length) + overhead;
+    const auto charged = static_cast<std::size_t>(capacity) + overhead;
     {
       std::lock_guard<std::mutex> guard(ledger_->lock);
       if (ledger_->revoked) return {Code::revoked, std::nullopt};
