@@ -28,6 +28,8 @@ pub enum Tok {
     Colon,
     ColonColon,
     Arrow,
+    /// Exact U+2022 BULLET for return-first callable declarations.
+    Bullet,
     Dot,
     Assign,
     EqEq,
@@ -289,6 +291,7 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
             (',', _) => (Tok::Comma, 1),
             (':', Some(':')) => (Tok::ColonColon, 2),
             (':', _) => (Tok::Colon, 1),
+            ('•', _) => (Tok::Bullet, 1),
             ('-', Some('>')) => (Tok::Arrow, 2),
             ('-', Some('-')) => (Tok::MinusMinus, 2),
             ('-', _) => (Tok::Minus, 1),
