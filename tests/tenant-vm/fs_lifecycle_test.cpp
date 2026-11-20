@@ -119,6 +119,7 @@ int main() {
     const atto_fs_host_actor wrong{tenant, opened.handle.generation(), sibling.actor.ref(), 1u};
     atto_fs_async_service* old = nullptr;
     assert(atto_fs_async_create(&old, &broker, &owner, 4u) == 0);
+    assert(atto_fs_async_owner_matches(old, &wrong) == 0);
     assert(host.bind_actor_fs_lifecycle(sibling.actor, binding(tenant, old)) == Status::InvalidArgument);
     assert(host.bind_actor_fs_lifecycle(actor.actor, binding(tenant, old)) == Status::Ok);
     assert(host.bind_actor_fs_lifecycle(actor.actor, binding(tenant, old)) == Status::Busy);
