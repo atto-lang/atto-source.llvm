@@ -61,4 +61,24 @@ int admit_signed_loaded_guest_fs_broker(
 LoadedSignedFsGuest load_guest_library_with_signed_fs_ceiling(
     const std::string& path, const std::string& expected_sha256_hex,
     const SignedFsDescriptor& signature);
+
+/* Trusted host admission from a VERIFIED, loaded and still-owned sealed
+ * executable image. The caller provides five independently validated and
+ * scoped ceilings; the artifact ceiling comes ONLY from the previously
+ * verified loader result, not from an unsigned launch field.
+ * This function never takes guest input, does not mint actor capabilities,
+ * and is NOT the still-unimplemented guest ABI v5 dispatch. */
+struct TrustedLoadedFsLimits {
+    const char *trusted_root = nullptr;
+    std::uint64_t tenant_id = 0;
+    std::uint64_t generation = 0;
+    atto_fs_policy_layer host{};
+    atto_fs_policy_layer runtime{};
+    atto_fs_policy_layer tenant{};
+    atto_fs_policy_layer actor{};
+    atto_fs_policy_layer delegation{};
+};
+int admit_loaded_guest_fs_broker(atto_fs_broker *broker,
+                                  const LoadedSignedFsGuest& verified,
+                                  const TrustedLoadedFsLimits& limits);
 }
