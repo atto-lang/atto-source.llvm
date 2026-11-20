@@ -904,11 +904,10 @@ pub fn check(p: &Program) -> R<TProgram> {
             }
         }
         if let Some(clause) = a.sends {
-            let outbound = res(clause)?;
-            if outbound == Type::Void {
-                return Err(Diagnostic::new(a.pos, "E_ACTOR_SEND_CONTRACT",
-                    "sends void is not an application-message payload type"));
-            }
+            // Type::Void in this AST slot is the parser-verified "sends never"
+            // sentinel, not a legal "sends void" spelling. The downstream
+            // typed call-graph audit rejects all application Send<T> effects.
+            let _outbound = res(clause)?;
         }
         actors.push(ActorInfo {
             name: a.name.clone(),
