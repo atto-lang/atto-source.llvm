@@ -1935,11 +1935,15 @@ impl<'a> FnCx<'a> {
                         _ => return Err(type_err(arm.pos,
                             format!("variant '{name}' is not part of {}", self.tn(sty)))),
                     };
-                    if bind.is_some() != needed.is_some() {
+                    // A '_' or empty parenthesized pattern checks only
+                    // the tag. It must not declare a local or read the
+                    // payload: the opposite ADT tag may hold no payload.
+                    let discard = bind.as_deref() == Some("_");
+                    if !discard && bind.is_some() != needed.is_some() {
                         return Err(Diagnostic::new(arm.pos, "E_ARITY",
                             format!("pattern '{name}' has incorrect payload arity")));
                     }
-                    (Some(tag), bind.as_deref(), needed)
+                    (Some(tag), bind.as_deref().filter(|s| *s != "_"), needed)
                 }
                 _ => return Err(type_err(arm.pos,
                     format!("pattern is not a variant of {}", self.tn(sty)))),

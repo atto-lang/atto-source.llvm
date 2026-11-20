@@ -33,6 +33,33 @@ fn guarded_return_match_negative_contracts_fail_without_guest_artifacts() {
 }
 
 #[test]
+fn adt_discard_patterns_compile_real_guest_wasm_without_payload_reads() {
+    let cases = [
+        include_str!("fixtures/pass/adt-result-err-discard.atto"),
+        include_str!("fixtures/pass/adt-result-ok-discard.atto"),
+        include_str!("fixtures/pass/adt-option-some-discard.atto"),
+    ];
+    for (i, source) in cases.iter().enumerate() {
+        let guest = compile(source).unwrap_or_else(|diagnostic| {
+            panic!("ADT discard case {i} was rejected: {diagnostic}")
+        });
+        assert!(guest.starts_with(b"\\0asm"), "case {i}: emitted invalid magic");
+        assert!(guest.len() > 8, "case {i}: emitted truncated guest");
+    }
+}
+
+#[test]
+fn adt_discard_patterns_preserve_static_rejection_without_guest() {
+    for (source, expected) in [
+        (include_str!("fixtures/fail/adt-discard-duplicate-tag.atto"), "E_MATCH"),
+        (include_str!("fixtures/fail/adt-discard-none-arity.atto"), "E_ARITY"),
+    ] {
+        let err = compile(source).expect_err("invalid ADT match emitted a guest");
+        assert_eq!(err.code, expected, "unexpected negative diagnostic: {err}");
+    }
+}
+
+#[test]
 fn caret_is_a_return_alias_not_an_implicit_infix_operator() {
     // LLVM frontend's XOR lowering is not admitted by this profile yet.
     let valid = "pub fnc main(): int { ^ 7; }";

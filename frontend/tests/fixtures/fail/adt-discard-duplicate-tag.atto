@@ -1,0 +1,10 @@
+// expect-error: E_MATCH
+// Distinct discard spellings never make a duplicate variant reachable.
+fnc read_id(): Result<int,string> { return Err("invalid"); }
+pub fnc main(): int {
+  return match read_id() over
+    on Ok(_) -> 0,
+    on Err() -> 42,
+    on Err(_) -> 3
+  end;
+}

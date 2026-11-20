@@ -1605,9 +1605,17 @@ impl Parser {
                 "Some" | "Ok" | "Err" => {
                     self.advance();
                     self.expect(Tok::LParen, "'(' after payload variant")?;
-                    let (name, _) = self.ident("a payload binding name")?;
-                    self.expect(Tok::RParen, "')' after payload binding")?;
-                    Ok(Pattern::Adt(w, Some(name)))
+                    // Match a tagged constructor without binding its payload.
+                    // Err() and Err(_) are both checked discards, not a
+                    // zero-argument Err value. None remains bare 'on None'.
+                    let binding = if self.eat(&Tok::RParen) {
+                        "_".to_owned()
+                    } else {
+                        let (name, _) = self.ident("a payload binding name or '_'")?;
+                        self.expect(Tok::RParen, "')' after payload pattern")?;
+                        name
+                    };
+                    Ok(Pattern::Adt(w, Some(binding)))
                 },
                 "_" => {
                     self.advance();

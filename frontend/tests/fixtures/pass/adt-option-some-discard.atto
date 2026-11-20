@@ -1,0 +1,8 @@
+// expect-exit: 42
+fnc maybe_id(): Option<int> { return Some(17); }
+pub fnc main(): int {
+  return match maybe_id() over
+    on Some(_) -> 42,
+    on None -> 0
+  end;
+}
