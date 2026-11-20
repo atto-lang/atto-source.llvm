@@ -85,8 +85,10 @@ void validate_native_scalar_types(const Program& program) {
             case E::SumConstruct: {
                 const auto& type = native_sum(program, e.sum_type);
                 const bool option = type.kind == NativeSumType::Kind::Option;
-                if (type.nominal_error && e.name == "Err")
-                    fail(e.offset, "native Result<T,Error> Err requires sealed Error construction and cleanup ABI");
+                if (type.nominal_error && !e.trap_origin)
+                    fail(e.offset, "native Result<T,Error> values must originate from trap; explicit Ok/Err is forbidden");
+                if (e.trap_origin && (!type.nominal_error || e.name != "Ok" || e.arguments.size() != 1))
+                    fail(e.offset, "invalid compiler-authenticated trap Result value");
                 if ((option && e.name != "Some" && e.name != "None") || (!option && e.name != "Ok" && e.name != "Err") ||
                         e.arguments.size() != (e.name == "None" ? 0u : 1u)) fail(e.offset, "sum variant/payload arity");
                 if (!e.arguments.empty()) require(expression(*e.arguments[0], locals), scalar(e.name == "Err" ? type.error_type : type.value_type), e.offset, "sum payload type");
