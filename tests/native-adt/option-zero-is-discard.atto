@@ -1,0 +1,9 @@
+// expect-exit: 42
+// Some(0) is not EOF/None. Discarding payload checks the variant tag.
+fnc checked(): Option<int> { return Some(0); }
+pub fnc main(): int {
+  return match checked() over
+    on is Some<_> -> 42,
+    on is None -> 0
+  end;
+}
