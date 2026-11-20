@@ -903,11 +903,15 @@ pub fn check(p: &Program) -> R<TProgram> {
                     "actor receives contract disagrees with its concrete ActorMail<T> handler"));
             }
         }
-        if let Some(clause) = a.sends {
-            // Type::Void in this AST slot is the parser-verified "sends never"
-            // sentinel, not a legal "sends void" spelling. The downstream
-            // typed call-graph audit rejects all application Send<T> effects.
-            let _outbound = res(clause)?;
+        if let Some(declared) = a.sends {
+            // Defense in depth: a forged/lowered AST must not introduce
+            // Payload(void), even though the parser rejects "sends void".
+            if let ActorSendEffect::Payload(payload_type) = declared {
+                if res(payload_type)? == Type::Void {
+                    return Err(Diagnostic::new(a.pos, "E_ACTOR_SEND_CONTRACT",
+                        "an actor's outbound DATA payload may not be void"));
+                }
+            }
         }
         actors.push(ActorInfo {
             name: a.name.clone(),
