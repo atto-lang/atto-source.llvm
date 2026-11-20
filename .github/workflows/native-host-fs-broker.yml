@@ -31,7 +31,7 @@ jobs:
         run: |
           set -eu
           for compiler in gcc clang; do
-            "$compiler" -std=c11 -Wall -Wextra -Wconversion -Werror -pedantic \
+            "$compiler" -std=c11 -Wall -Wextra -Wconversion -Werror -pedantic -pthread \
               -fsanitize=address,undefined -fno-omit-frame-pointer \
               -I native/include \
               native/src/host_fs_broker.c native/tests/host_fs_broker_test.c \
