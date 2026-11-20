@@ -80,6 +80,10 @@ try {
     ['pass/adt-result-err-discard.atto', { exit: 42, stdout: '' }],
     ['pass/adt-result-ok-discard.atto', { exit: 42, stdout: '' }],
     ['pass/adt-option-some-discard.atto', { exit: 42, stdout: '' }],
+    ['pass/adt-question-err-propagation.atto', { exit: 42, stdout: '' }],
+    ['pass/adt-question-none-propagation.atto', { exit: 42, stdout: '' }],
+    ['fail/adt-question-incompatible-return.atto', { error: 'E_TYPE' }],
+    ['fail/adt-question-cross-family.atto', { error: 'E_TYPE' }],
     ['fail/adt-discard-duplicate-tag.atto', { error: 'E_MATCH' }],
     ['fail/adt-discard-none-arity.atto', { error: 'E_ARITY' }],
     ['fail/match-guard-no-fallback.atto', { error: 'E_MATCH' }],
@@ -111,7 +115,7 @@ try {
       }
     }
   }
-  console.log('PASS: 13/13 exact-match and ADT discard contracts executed by frontend; real guest stdout/exit and no-artifact proofs');
+  console.log('PASS: 17/17 exact-match, ADT discard and ? contracts executed by frontend; real guest stdout/exit and no-artifact proofs');
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

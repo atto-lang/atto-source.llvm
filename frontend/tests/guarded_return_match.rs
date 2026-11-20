@@ -60,6 +60,24 @@ fn adt_discard_patterns_preserve_static_rejection_without_guest() {
 }
 
 #[test]
+fn result_and_option_question_mark_propagation_compiles_to_guest_wasm() {
+    for source in [
+        include_str!("fixtures/pass/adt-question-err-propagation.atto"),
+        include_str!("fixtures/pass/adt-question-none-propagation.atto"),
+    ] {
+        let guest = compile(source).expect("typed ? propagation rejected");
+        assert!(guest.starts_with(b"\0asm"), "guest Wasm header");
+    }
+    for source in [
+        include_str!("fixtures/fail/adt-question-incompatible-return.atto"),
+        include_str!("fixtures/fail/adt-question-cross-family.atto"),
+    ] {
+        let error = compile(source).expect_err("cross-family ? emitted guest Wasm");
+        assert_eq!(error.code, "E_TYPE");
+    }
+}
+
+#[test]
 fn caret_is_a_return_alias_not_an_implicit_infix_operator() {
     // LLVM frontend's XOR lowering is not admitted by this profile yet.
     let valid = "pub fnc main(): int { ^ 7; }";
