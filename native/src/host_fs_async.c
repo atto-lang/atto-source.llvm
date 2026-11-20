@@ -182,7 +182,10 @@ int atto_fs_async_poll(atto_fs_async_service *s, const atto_fs_host_actor *actor
     if (bytes_read) *bytes_read = 0u;
     if (!s || !actor || !bytes_read || (!output && capacity) || capacity > ATTO_FS_MAX_BYTES)
         return -EINVAL;
-    pthread_mutex_lock(&s->lock);
+    /* This function is entered from a guest host-call. Never park its
+     * carrier while the worker is finishing another ticket. */
+    const int lock_rc = pthread_mutex_trylock(&s->lock);
+    if (lock_rc) return lock_rc == EBUSY ? -EAGAIN : -lock_rc;
     job *j = find_ticket(s, ticket);
     int rc;
     if (!j) rc = -ESTALE;
@@ -197,9 +200,10 @@ int atto_fs_async_poll(atto_fs_async_service *s, const atto_fs_host_actor *actor
                          j->path, j->bytes, j->used, output, capacity);
             if (rc == 0) *bytes_read = j->used;
         }
-        /* A write's completion has no guest output. A cancelled in-flight
-         * write may have committed, and is never reported as safe-to-retry. */
-        release_job(j);
+        /* A worker may hold the broker gate for filesystem I/O or revoke.
+         * A delayed publication is still PENDING, NOT consumed: the caller
+         * can retry this ticket without blocking a guest carrier. */
+        if (rc != -EAGAIN) release_job(j);
     }
     pthread_mutex_unlock(&s->lock);
     return rc;
