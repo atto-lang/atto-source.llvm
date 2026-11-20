@@ -15,14 +15,14 @@ fn receives_header_survives_ast_and_checker_revalidates_mutated_metadata() {
     let mut corrupted = parsed.clone();
     corrupted.actors[0].receives = Some(Type::Bool);
     match check::check(&corrupted) {
-        Err(err) => assert_eq!(err.code, "E_TYPE"),
+        Err(err) => assert_eq!(err.code, "E_ACTOR_RECEIVES"),
         Ok(_) => panic!("changed AST receives metadata must fail closed"),
     }
 
     corrupted = parsed.clone();
     corrupted.actors[0].receive = None;
     match check::check(&corrupted) {
-        Err(err) => assert_eq!(err.code, "E_TYPE"),
+        Err(err) => assert_eq!(err.code, "E_ACTOR_RECEIVES"),
         Ok(_) => panic!("removed receive handler must not satisfy original AST contract"),
     }
 
@@ -52,12 +52,12 @@ fn canonical_typed_int_header_compiles_real_wasm_artifact() {
 #[test]
 fn typed_headers_must_agree_with_exact_concrete_mailbox() {
     let mismatch = ACTOR.replace("receives int as", "receives bool as");
-    assert_eq!(compile(&mismatch).unwrap_err().code, "E_TYPE");
+    assert_eq!(compile(&mismatch).unwrap_err().code, "E_ACTOR_RECEIVES");
     let no_handler = ACTOR.replace(
         "receive(ActorMail<int> mail): void { return; }", "");
-    assert_eq!(compile(&no_handler).unwrap_err().code, "E_TYPE");
+    assert_eq!(compile(&no_handler).unwrap_err().code, "E_ACTOR_RECEIVES");
     let wrong_handler = ACTOR.replace("ActorMail<int>", "ActorMail<bool>");
-    assert_eq!(compile(&wrong_handler).unwrap_err().code, "E_TYPE");
+    assert_eq!(compile(&wrong_handler).unwrap_err().code, "E_ACTOR_RECEIVES");
 }
 
 #[test]
