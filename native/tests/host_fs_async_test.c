@@ -63,7 +63,7 @@ int main(void){
   assert(n==0 && readbuf[0]==0xAE);
   assert(atto_fs_async_submit_read(s,&actor,"data/input",30,&ticket)==0);
   assert(atto_fs_async_forget_actor(s,&actor)==0);
-  assert(atto_fs_async_poll(s,&actor,ticket,readbuf,sizeof readbuf,&n)==-ESTALE);
+  assert(finished(s,&actor,ticket,readbuf,sizeof readbuf,&n)==-ESTALE);
   atto_fs_async_destroy(s);
   broker.policy_layer_count=0;
   assert(atto_fs_async_create(&s,&broker,4)==-EACCES);
