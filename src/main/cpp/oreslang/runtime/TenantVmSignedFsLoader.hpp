@@ -6,6 +6,7 @@
  */
 #include "oreslang/runtime/TenantVmGuestLoader.hpp"
 #include "atto/host_fs_signed_ceiling.h"
+#include "atto/host_fs_broker.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -31,6 +32,32 @@ struct LoadedSignedFsGuest {
 /* Verifies against the exact byte vector which open_verified() copies into a
  * sealed private image. No second pathname check; fail before dlopen.
  * Does not prove the guest is safe for in-process hostile tenant execution. */
+/* Non-artifact ceilings MUST originate in trusted host/scheduler state;
+ * this struct is never mapped into guest memory. */
+struct TrustedFsExecutionCeilings {
+    std::uint64_t tenant_id = 0;
+    std::uint64_t generation = 0;
+    atto_fs_policy_layer host{};
+    atto_fs_policy_layer runtime{};
+    atto_fs_policy_layer tenant{};
+    atto_fs_policy_layer actor{};
+    atto_fs_policy_layer delegation{};
+};
+
+/* Creates the six-layer broker ONLY when a signed library was successfully
+ * loaded from verified bytes. The artifact layer is sourced from that
+ * verifier's private result; no caller-supplied artifact policy is accepted.
+ * A signed ABI-v4 guest remains UNPRIVILEGED; this is trusted host setup,
+ * not a guest-visible capability or runtime ABI-v5 admission.
+ *
+ * out must be fresh (zero-initialized), single-owner, and closed only after
+ * every worker has quiesced. loaded.guest.owner must outlive the broker.
+ */
+int admit_signed_loaded_guest_fs_broker(
+    atto_fs_broker *out, const LoadedSignedFsGuest& loaded,
+    const std::string& trusted_root,
+    const TrustedFsExecutionCeilings& ceilings);
+
 LoadedSignedFsGuest load_guest_library_with_signed_fs_ceiling(
     const std::string& path, const std::string& expected_sha256_hex,
     const SignedFsDescriptor& signature);
