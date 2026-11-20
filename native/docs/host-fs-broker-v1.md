@@ -316,3 +316,61 @@ a full source mirror was not created without a working carrier.
 All compiled `.atto` std.fs execution and ABI-v5 runtime dispatch
 remain `NOT_EXECUTED`; the signed loaded C fixture and real-broker
 integration still need admitted stepful CTest.
+
+
+## Actor-bound async authority and token-free carrier mirror (2026-11-20)
+
+Audit found that the bounded host I/O service validated only
+`tenant_id` and `tenant_generation` at its admission boundary.
+A scheduler error that passed one actor's service to another actor
+in the same TenantVM could therefore apply a different actor's
+six-layer broker policy. The host-only async service constructor now
+requires a **trusted scheduler-derived actor reference and actor
+generation**, snapshots that exact identity, and rejects a sibling
+actor on submit, poll, cancellation, and forget/retirement. A host
+must create one service per actor incarnation and must still bind the
+actor to its own broker policy; numeric actor IDs passed by a guest
+are **never credentials**. ABI-v5 guest dispatch remains uninstalled.
+
+The actor-bound source and negative test were compiled and executed
+**locally** using the in-memory mock filesystem:
+GCC 14.2 / Clang 17, -O1/-O2, ASan+UBSan, **4/4 PASS**. The
+locally executed `native/src/host_fs_async.c` Git blob
+`3e8c8345d0253773000c922d02adf7b17dd718e1` and
+`native/tests/host_fs_async_test.c` blob
+`cc0c2bf0f12bb5785e7961c6e7ac595410555b20`
+match the exact source commit. The local mock-broker header is not
+the production Linux broker, so these runs are NOT real broker proof.
+
+An approved private carrier `agent-pontifex/atto-ci` received a
+**complete 235-blob exact Git-tree mirror** of source commit
+`acdc52b9a53bbb87f79e5c57c8b118ce4d86bb50`:
+source and carrier root tree both
+`376de1370f7d66acbbf1e61542cf80488d4f56ca`.
+Four modified blobs were then copied into a second exact snapshot
+of hardened source commit
+`2034b3dc3e17f791c9f6ad95529d929428636bb4`,
+source and carrier root tree both
+`7c8f69da1a1f6eaa69e2da57aea78ff3947522ba`.
+The hardened mirror commit is
+`87eaa94bd5b0ef844e6a969fbedab172d3d8d595`.
+A separate carrier-local test workflow was added only in the child
+harness commit `a4f8037a031bc2454af6aceeca03c7b34d576b22`
+on temporary private branch
+`ci/fs-security-actor-bound-2034b3dc-20261120`. That workflow
+checks the exact parent tree before building any test. No cross-org
+checkout tokens or source repository secrets were supplied.
+
+**Carrier CI status:** GitHub Actions run `44684065317`, job
+`136114083220`, completed with failure at **zero recorded steps**.
+This does NOT mean a security test failed inside CI and is NOT a
+successful compilation. Eight approved private carrier orgs were
+audited and none had recent observed stepful capacity. Keep real
+Linux broker CTest, signed shared-library loader CTest, and all
+compiled `.atto` guest permission conformance **NOT EXECUTED**.
+
+The independently recorded machine-readable evidence lives in
+`atto-platform-conformance#106` at
+`evidence/host-permissions/llvm-actor-bound-private-mirror-audit-20261120.json`.
+Do not promote this draft or infer production in-process syscall
+isolation from these host-only tests.
