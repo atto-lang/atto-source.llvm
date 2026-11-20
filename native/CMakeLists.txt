@@ -17,6 +17,15 @@ enable_testing()
 add_test(NAME process_isolated_actor_fault COMMAND atto_actor_process_isolation_test)
 set_tests_properties(process_isolated_actor_fault PROPERTIES TIMEOUT 15)
 
+# Compare complete canonical source bytes before any native build.
+# Expected SHA-256 values are from atto-common-source PR #30.
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/include/atto/tenant_bytes_v1.hpp" ATTO_SHARED_ALLOC_HEADER_SHA)
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/tests/tenant_bytes_v1.cpp" ATTO_SHARED_ALLOC_TEST_SHA)
+if(NOT ATTO_SHARED_ALLOC_HEADER_SHA STREQUAL "9352a8513f3362e4fdf305e3e18223b11f44b9ca9c6d6a56ff7d9fe1f7d9b45c" OR
+   NOT ATTO_SHARED_ALLOC_TEST_SHA STREQUAL "2cc2293dd6fee073afeb420423da2ad658e4d5f3fd31577d829f08461e3f5319")
+  message(FATAL_ERROR "SHARED_ATTO_ALLOC_SOURCE_DRIFT: sync exact reviewed common-source bytes")
+endif()
+
 # The C++20 allocator host oracle is independent of LLVM/guest codegen.
 # Source byte identity is pinned to atto-common-source PR #30.
 add_executable(atto_tenant_bytes_host_test tests/tenant_bytes_v1.cpp)
