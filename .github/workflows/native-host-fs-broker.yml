@@ -11,6 +11,11 @@ on:
       - "native/tests/host_fs_broker_test.c"
       - "native/tests/host_fs_guest_bridge_test.c"
       - "native/tests/host_fs_signed_ceiling_test.c"
+      - "native/include/atto/host_fs_async.h"
+      - "native/src/host_fs_async.c"
+      - "native/tests/host_fs_async_test.c"
+      - "src/main/cpp/oreslang/runtime/TenantVmIoAbiV5.h"
+      - "native/tests/host_fs_io_v5_layout_test.c"
       - "native/CMakeLists.txt"
       - ".github/workflows/native-host-fs-broker.yml"
   workflow_dispatch:
@@ -36,6 +41,7 @@ jobs:
           git hash-object native/src/host_fs_broker.c native/tests/host_fs_broker_test.c
           git hash-object native/src/host_fs_guest_bridge.c native/tests/host_fs_guest_bridge_test.c
           git hash-object native/src/host_fs_signed_ceiling.c native/tests/host_fs_signed_ceiling_test.c
+          git hash-object native/src/host_fs_async.c native/tests/host_fs_async_test.c
       - name: GCC and Clang O1/O2 ASan+UBSan (host only)
         run: |
           set -eu
@@ -59,14 +65,31 @@ jobs:
               ASAN_OPTIONS=detect_leaks=1 "/tmp/atto_fs_signed_${compiler}_${optimize}"
             done
           done
+      - name: GCC and Clang host worker mock and versioned ABI layout
+        run: |
+          set -eu
+          for compiler in gcc clang; do
+            for optimize in O1 O2; do
+              "$compiler" -std=c11 "-$optimize" -Wall -Wextra -Wconversion -Werror -pedantic -pthread \
+                -fsanitize=address,undefined -fno-omit-frame-pointer -I native/include \
+                native/src/host_fs_async.c native/tests/host_fs_async_test.c \
+                -o "/tmp/atto_fs_async_${compiler}_${optimize}"
+              ASAN_OPTIONS=detect_leaks=1 "/tmp/atto_fs_async_${compiler}_${optimize}"
+              "$compiler" -std=c11 "-$optimize" -Wall -Wextra -Wconversion -Werror -pedantic \
+                -fsanitize=address,undefined -fno-omit-frame-pointer -I src/main/cpp \
+                native/tests/host_fs_io_v5_layout_test.c \
+                -o "/tmp/atto_fs_v5_${compiler}_${optimize}"
+              ASAN_OPTIONS=detect_leaks=1 "/tmp/atto_fs_v5_${compiler}_${optimize}"
+            done
+          done
       - name: CMake and CTest (host only)
         run: |
           set -eu
           cmake -S native -B /tmp/atto-fs-build -DCMAKE_BUILD_TYPE=Debug
           cmake --build /tmp/atto-fs-build --parallel 2
           ctest --test-dir /tmp/atto-fs-build --output-on-failure \
-            -R '^linux_(scoped_host_fs_broker|guest_offset_host_fs_bridge|signed_host_fs_ceiling)$'
+            -R '^linux_(scoped_host_fs_broker|guest_offset_host_fs_bridge|signed_host_fs_ceiling|async_host_fs_queue_mock|host_fs_io_v5_layout)$'
       - name: State strict evidence boundaries
         run: |
           echo "HOST_ONLY: no compiled .atto guest executed."
-          echo "No trusted actor-turn ABI v5, async worker, production key trust store or native syscall sandbox certified."
+          echo "v5 remains layout-only and is not admitted by the loader; the worker is host-only and uses a mock in its unit test. No production key trust store, authenticated scheduler wiring or native syscall sandbox certified."
