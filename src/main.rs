@@ -768,6 +768,19 @@ fn main() {
 mod tests {
     use super::*;
     #[test]
+    fn native_pipe_and_rpipe_fail_before_emitting_llvm_ir() {
+        for direction in ["pipe", "rpipe"] {
+            let source = format!("pub fnc main(): int {{ val x = a {direction} b; return 0; }}");
+            let e = compile_ir(&source).unwrap_err();
+            assert!(e.contains("E_UNSUPPORTED_CONTINUOUS_PIPE"), "{e}");
+            let e = compile_ir_with_profile(&source, LibraryProfile::FreestandingCore).unwrap_err();
+            assert!(e.contains("E_UNSUPPORTED_CONTINUOUS_PIPE"), "{e}");
+        }
+        let ir = compile_ir("// rpipe pipe\npub fnc main(): int { return 42; }").unwrap();
+        assert!(ir.contains("ret i64 42"));
+    }
+
+    #[test]
     fn native_main_is_direct_i64_call() {
         let ir = compile_ir("pub fnc main(): int { return 42; }").unwrap();
         assert!(ir.contains("define i32 @main()"));
