@@ -46,6 +46,7 @@ pub enum Tok {
     YieldStar,
     Slash,
     Caret,
+    DoubleCaret,
     Bang,
     Question,
     Pipe,
@@ -307,6 +308,7 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
             ('>', _) => (Tok::Gt, 1),
             ('*', _) => (Tok::Star, 1),
             ('/', _) => (Tok::Slash, 1),
+            ('^', Some('^')) => (Tok::DoubleCaret, 2),
             ('^', _) => (Tok::Caret, 1),
             ('%', _) => {
                 return Err(Diagnostic::new(
