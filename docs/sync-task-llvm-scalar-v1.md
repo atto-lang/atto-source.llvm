@@ -59,3 +59,13 @@ continue to fail closed. Additional regression inputs cover malformed
 payload generics, nested early returns, unsupported `await`/`defer`,
 actor-state field writes, and nesting exhaustion. Native IR emission on
 rejected input is tested to produce no partial output artifact.
+
+## CLI overlap reconciliation
+
+`attoc input.atto` streams binary Wasm bytes to stdout, preserving the
+existing CLI contract of overlapping LLVM PRs #46/#57. With `-o`, the CLI
+writes a same-directory staged file and atomically publishes a completed
+artifact using create-only hard-link semantics: it never replaces an existing
+output, symlink, or the input source. Compilation failures leave no guest
+output. Integrate competing PRs against this contract rather than silently
+replacing the CLI.

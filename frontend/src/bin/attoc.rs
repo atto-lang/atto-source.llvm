@@ -1,6 +1,6 @@
 //! Small native CLI for the checked Wasm compiler.
 //! The guest artifact is written only after full source/type checking.
-use std::{env,fs,io::Write,path::PathBuf,process,fs::OpenOptions};
+use std::{env,fs,io::{self,Write},path::PathBuf,process,fs::OpenOptions};
 
 fn run() -> Result<(), String> {
     let mut args = env::args_os().skip(1);
@@ -11,7 +11,7 @@ fn run() -> Result<(), String> {
     }
     let input = PathBuf::from(input);
     let output = match args.next() {
-        None => input.with_extension("wasm"),
+        None => PathBuf::new(),
         Some(flag) if flag == "-o" || flag == "--output" => {
             PathBuf::from(args.next().ok_or("missing output path after -o")?)
         }
@@ -23,6 +23,12 @@ fn run() -> Result<(), String> {
     let source = fs::read_to_string(&input)
         .map_err(|e| format!("E_INPUT: {}: {e}", input.display()))?;
     let bytes = atto_compiler::compile(&source).map_err(|e| e.to_string())?;
+    // Preserve the existing frontend CLI contract from LLVM PRs #46/#57:
+    // without -o stream binary Wasm directly to stdout, not to a disk file.
+    if output.as_os_str().is_empty() {
+        return io::stdout().write_all(&bytes)
+            .map_err(|e| format!("E_OUTPUT: stdout: {e}"));
+    }
     // Create-new temp file in the destination directory: compile failures and
     // I/O failures cannot leave behind a new, partially-written guest artifact.
     let temp = output.with_extension(format!("wasm.partial.{}", process::id()));
@@ -34,10 +40,15 @@ fn run() -> Result<(), String> {
         let _ = fs::remove_file(&temp);
         return Err(format!("E_OUTPUT: {}: {e}", temp.display()));
     }
-    if let Err(e) = fs::rename(&temp, &output) {
-        let _ = fs::remove_file(&temp);
+    // Create-only atomic publication: unlike rename, hard_link never
+    // overwrites existing artifacts, symlinks, or the input source even
+    // when a different process races with this compiler.
+    let published = fs::hard_link(&temp, &output);
+    let cleanup = fs::remove_file(&temp);
+    if let Err(e) = published {
         return Err(format!("E_OUTPUT: {}: {e}", output.display()));
     }
+    cleanup.map_err(|e| format!("E_OUTPUT: staging cleanup {}: {e}", temp.display()))?;
     Ok(())
 }
 
