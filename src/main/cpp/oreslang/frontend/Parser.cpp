@@ -1466,7 +1466,7 @@ private:
     ClassDecl class_declaration() {
         ClassDecl result;
         result.name = nominal_declaration_name();
-        if (result.name == "Option" || result.name == "Result") fail("native sum type names are compiler-owned");
+        if (result.name == "Option" || result.name == "Result" || result.name == "Error") fail("native sum and Error type names are compiler-owned");
         if (callable_nominal_name(result.name))
             fail("callable signatures cannot be declared as nominal class types");
         if (entry_builtin_name(result.name))
@@ -3422,10 +3422,13 @@ private:
                  "unary '*' dereference; use checked Pointer<T> methods");
         }
         if (token_.text == "trap") {
-            // Reserved for Option-valued ordinary-error capture. Reject it
-            // before IR generation: accepting a normal value here would erase
-            // the guest failure channel and violate panic/raise precedence.
-            fail("native trap expression unsupported: typed throw effects and cleanup lowering required");
+            // Resolver admits only values with already-checked, nonthrowing
+            // lowering. Native throw/catch/recover still require typed effects.
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::Trap, offset);
+            expr->left = unary();
+            return expr;
         }
         if (token_.text == "rt") {
             const auto offset = token_.offset;
@@ -4008,7 +4011,18 @@ private:
             };
             auto scalar_name = [](ScalarType t) { return t == ScalarType::String ? "String" : t == ScalarType::Bool ? "bool" : "int"; };
             type.value_type = payload(); name += "<" + std::string(scalar_name(type.value_type));
-            if (type.kind == NativeSumType::Kind::Result) { require(","); type.error_type = payload(); name += "," + std::string(scalar_name(type.error_type)); }
+            if (type.kind == NativeSumType::Kind::Result) {
+                require(",");
+                if (accept("Error")) {
+                    // Compiler-owned nominal error type: native Err construction
+                    // remains closed until immutable Error values can be lowered.
+                    type.nominal_error = true;
+                    name += ",Error";
+                } else {
+                    type.error_type = payload();
+                    name += "," + std::string(scalar_name(type.error_type));
+                }
+            }
             require(">"); type.name = name + ">";
             if (std::none_of(sum_types_.begin(), sum_types_.end(), [&](const NativeSumType& t) { return t.name == type.name; })) sum_types_.push_back(type);
             return type.name;
