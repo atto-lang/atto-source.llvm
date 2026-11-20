@@ -22,13 +22,22 @@ inline bool native_trap_pure_i64(const Expression& e, std::size_t depth = 0) noe
             native_trap_pure_i64(*e.right, depth + 1);
     return false;
 }
-inline std::string native_sum_name(NativeSumType::Kind kind, ScalarType value, ScalarType error = ScalarType::I64) {
+inline std::string native_sum_name(NativeSumType::Kind kind, ScalarType value,
+                                   ScalarType error = ScalarType::I64,
+                                   bool nominal_error = false) {
     auto name = [](ScalarType t) { return t == ScalarType::String ? "String" : t == ScalarType::Bool ? "bool" : "int"; };
+    if (nominal_error && (kind != NativeSumType::Kind::Result || error != ScalarType::I64))
+        throw std::runtime_error("invalid nominal Error sum descriptor");
     return std::string(kind == NativeSumType::Kind::Option ? "Option<" : "Result<") + name(value) +
-        (kind == NativeSumType::Kind::Result ? std::string(",") + name(error) : "") + ">";
+        (kind == NativeSumType::Kind::Result
+            ? std::string(",") + (nominal_error ? "Error" : name(error)) : "") + ">";
 }
 inline const NativeSumType& native_sum(const Program& program, const std::string& name) {
-    for (const auto& type : program.sum_types) if (type.name == name) return type;
+    for (const auto& type : program.sum_types) if (type.name == name) {
+        if (native_sum_name(type.kind, type.value_type, type.error_type, type.nominal_error) != type.name)
+            throw std::runtime_error("noncanonical native sum descriptor");
+        return type;
+    }
     throw std::runtime_error("unknown native sum type '" + name + "'");
 }
 // Context resolves constructors; the nominal type checker still independently
@@ -83,10 +92,8 @@ inline void resolve_native_sums(Program& program) {
                 throw std::runtime_error("native trap String allocation requires typed Error cleanup lowering");
             if (!expected.empty() && expected.rfind("Result<", 0) != 0)
                 throw std::runtime_error("native trap produces Result<T,Error>, not Option or scalar");
-            const auto type_name = [](ScalarType t) {
-                return t == ScalarType::String ? "String" : t == ScalarType::Bool ? "bool" : "int";
-            };
-            const std::string name = std::string("Result<") + type_name(inner.scalar) + ",Error>";
+            const std::string name = native_sum_name(NativeSumType::Kind::Result, inner.scalar,
+                                                      ScalarType::I64, true);
             if (!expected.empty() && expected != name)
                 throw std::runtime_error("native trap value type does not match Result<T,Error>");
             if (std::none_of(program.sum_types.begin(), program.sum_types.end(),
