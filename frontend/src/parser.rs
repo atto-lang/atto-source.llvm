@@ -95,6 +95,8 @@ const RESERVED: &[&str] = &[
     "shared",
     "untrusted",
     "spawn",
+    "pipe",
+    "rpipe",
     "stop",
     "rt",
     "await",
