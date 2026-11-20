@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  val UnlinkedWidget? value = None;
+  return 42;
+}

@@ -1,0 +1,59 @@
+name: Native LLVM checked Option suffix guest parity
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'CMakeLists.txt'
+      - 'tests/atto_option_suffix_native_gate.cmake'
+      - 'tests/fixtures/option-suffix-v1/**'
+      - '.github/workflows/native-option-suffix-v1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-option-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact PR head without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact head and immutable fixture blobs
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain)"
+          test "$(find tests/fixtures/option-suffix-v1 -maxdepth 1 -name '*.atto' -type f | wc -l)" -eq 10
+          for src in tests/fixtures/option-suffix-v1/*.atto; do
+            git ls-tree HEAD -- "$src" | grep -q "$(git hash-object "$src")"
+            echo "$(git hash-object "$src") $src"
+          done
+          echo "ATTO_OPTION_SOURCE_HEAD=$EXPECTED_SHA"
+          echo "ATTO_OPTION_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Install native compiler toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends llvm-dev clang cmake ninja-build
+          llvm-config --version
+          clang --version | head -1
+      - name: Compile real production LLVM compiler
+        run: |
+          set -euo pipefail
+          cmake -G Ninja -S . -B "$RUNNER_TEMP/atto-option-build"             -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON             -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build "$RUNNER_TEMP/atto-option-build" --target oreslang-llvmc --parallel 2
+          test -x "$RUNNER_TEMP/atto-option-build/oreslang-llvmc"
+          sha256sum "$RUNNER_TEMP/atto-option-build/oreslang-llvmc"
+      - name: Run O0/O2 native guest and fail-closed diagnostic CTest
+        run: |
+          set -euo pipefail
+          ctest --test-dir "$RUNNER_TEMP/atto-option-build" --output-on-failure -V             -R '^atto_option_suffix_guest_v1$' | tee "$RUNNER_TEMP/atto-option-receipt.log"
+          grep -q 'ATTO_LLVM_OPTION_SUFFIX_PASS guests=6 negatives=7' "$RUNNER_TEMP/atto-option-receipt.log"
+          echo "ATTO_OPTION_MATERIAL_STEPS=4"
