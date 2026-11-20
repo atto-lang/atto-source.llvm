@@ -18,6 +18,12 @@ typedef struct atto_fs_trusted_guest_frame {
     uint64_t generation;          /* authenticated by host scheduler, NOT from guest */
     uint8_t *cage;                /* verified private guest-memory window */
     size_t cage_size;             /* exact accessible extent supplied by host */
+    /* Only offsets within THIS actor's committed region may be used, even
+     * when another actor belongs to the same VM and shares the address cage.
+     * The trusted scheduler must fill these values from actor state, NEVER
+     * guest-provided fields. Region start 0 is deliberately rejected. */
+    uint32_t actor_region_start;
+    uint32_t actor_region_bytes;
 } atto_fs_trusted_guest_frame;
 
 /* All lengths are bytes. On denial no output bytes or filesystem bytes change.
