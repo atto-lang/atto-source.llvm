@@ -9,7 +9,12 @@ static const char *scope_or_null(const char *text) {
 
 int atto_fs_broker_admit_signed(atto_fs_broker *broker,
                                 const atto_fs_signed_launch *launch) {
-    if (!broker || !launch || !launch->trusted_root ||
+    if (!broker) return -EINVAL;
+    /* Never reinitialize a live broker: that would lose a pinned root fd,
+     * its mutex and any outstanding worker authorization. Callers must
+     * supply a fresh, zero-initialized host-only broker object. */
+    if (broker->initialized) return -EBUSY;
+    if (!launch || !launch->trusted_root ||
         !launch->artifact_bytes || !launch->artifact_size ||
         !launch->signed_descriptor || !launch->signed_descriptor_size ||
         !launch->signature_ed25519 || !launch->trusted_public_key ||
