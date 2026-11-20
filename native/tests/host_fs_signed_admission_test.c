@@ -108,6 +108,9 @@ int main(void) {
     atto_fs_broker broker = {0};
     assert(atto_fs_broker_admit_signed(&broker, &launch) == 0);
     assert(broker.policy_layer_count == ATTO_FS_POLICY_LAYER_COUNT);
+    /* Re-admission must never discard an active broker root FD or mutex. */
+    assert(atto_fs_broker_admit_signed(&broker, &launch) == -EBUSY);
+    assert(broker.initialized && broker.policy_layer_count == ATTO_FS_POLICY_LAYER_COUNT);
     unsigned char bytes[64] = {0};
     size_t used = 0u;
     assert(atto_fs_broker_read(&broker, 99u, 4u, "data/input.txt",
