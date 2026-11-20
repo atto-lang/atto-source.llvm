@@ -12,6 +12,7 @@ typedef struct job {
     int state;
     int write;
     int cancelled;
+    int cancelled_running_write;
     int abandoned;
     int outcome;
     size_t length;
@@ -48,7 +49,8 @@ static int valid_actor(const atto_fs_async_service *s, const atto_fs_host_actor 
 static void release_job(job *j) {
     free(j->path); free(j->bytes);
     j->path = NULL; j->bytes = NULL;
-    j->state = FREE; j->cancelled = 0; j->abandoned = 0;
+    j->state = FREE; j->cancelled = 0; j->cancelled_running_write = 0;
+    j->abandoned = 0;
     j->length = 0; j->used = 0; j->outcome = 0;
     j->sequence = 0;
     memset(&j->owner, 0, sizeof(j->owner));
@@ -85,7 +87,8 @@ static int enqueue(atto_fs_async_service *s, const atto_fs_host_actor *actor,
             j->write = write; j->owner = *actor;
             j->path = owned_path; j->bytes = bytes;
             j->length = length; j->used = 0;
-            j->cancelled = 0; j->abandoned = 0; j->outcome = 0;
+            j->cancelled = 0; j->cancelled_running_write = 0;
+            j->abandoned = 0; j->outcome = 0;
             j->sequence = ++s->next_sequence;
             *ticket = ((uint64_t)j->generation << 16u) | (uint64_t)(i + 1u);
             rc = 0;
@@ -192,7 +195,10 @@ int atto_fs_async_poll(atto_fs_async_service *s, const atto_fs_host_actor *actor
     else if (!same_owner(&j->owner, actor)) rc = -EACCES;
     else if (j->state != DONE) rc = -EAGAIN;
     else {
-        rc = j->cancelled ? -ECANCELED : j->outcome;
+        /* Running writes may already have committed. Never report a
+         * definitive safe cancellation when the outcome is indeterminate. */
+        rc = j->cancelled_running_write ? -EINPROGRESS :
+             (j->cancelled ? -ECANCELED : j->outcome);
         if (rc == 0 && !j->write) {
             if ((!output && j->used) || j->used > capacity) rc = -EMSGSIZE;
             else rc = atto_fs_broker_publish_read(s->broker,
@@ -211,14 +217,18 @@ int atto_fs_async_poll(atto_fs_async_service *s, const atto_fs_host_actor *actor
 int atto_fs_async_cancel(atto_fs_async_service *s, const atto_fs_host_actor *actor,
                          uint64_t ticket) {
     if (!s || !actor) return -EINVAL;
-    pthread_mutex_lock(&s->lock);
+    /* Cancellation itself must not park the carrier on worker lock. */
+    const int lock_rc = pthread_mutex_trylock(&s->lock);
+    if (lock_rc) return lock_rc == EBUSY ? -EAGAIN : -lock_rc;
     job *j = find_ticket(s, ticket);
     int rc;
     if (!j) rc = -ESTALE;
     else if (!same_owner(&j->owner, actor)) rc = -EACCES;
+    else if (j->state == DONE) rc = -EALREADY; /* Already completed; poll it. */
     else {
         j->cancelled = 1;
         if (j->state == QUEUED) { j->state = DONE; j->outcome = -ECANCELED; }
+        else if (j->state == RUNNING && j->write) j->cancelled_running_write = 1;
         rc = 0;
     }
     pthread_mutex_unlock(&s->lock);
