@@ -132,6 +132,35 @@ int main(void) {
     assert(got==4u && memcmp(output,"data",got)==0);
     assert(broker_read_count==1 && broker_write_count==0);
     assert(atto_fs_async_poll(service,&actor,ticket,output,sizeof output,&got)==-ESTALE);
+    /* Revocation MUST NOT park a scheduler carrier, even while the service
+     * mutex is held by a competing call. It permanently denies admission. */
+    assert(pthread_mutex_lock(&service->lock) == 0);
+    assert(atto_fs_async_revoke_actor(service, &actor) == 0);
+    assert(atto_fs_async_revoke_actor(service, &actor) == 0);
+    assert(atto_fs_async_revoke_actor(service, &sibling) == -EACCES);
+    assert(pthread_mutex_unlock(&service->lock) == 0);
+    denied_ticket = 777u;
+    assert(atto_fs_async_submit_read(service,&actor,"data/input",16u,&denied_ticket)==-EACCES);
+    assert(denied_ticket == 0u);
+    assert(atto_fs_async_submit_write(service,&actor,"out/copy",one,sizeof one,&denied_ticket)==-EACCES);
+    assert(denied_ticket == 0u);
+    got = 18u;
+    output[0] = 0x9a;
+    assert(atto_fs_async_poll(service,&actor,ticket,output,sizeof output,&got)==-EACCES);
+    assert(got == 0u && output[0] == 0x9a);
+    assert(atto_fs_async_cancel(service,&actor,ticket)==-EACCES);
+    assert(atto_fs_async_forget_actor(service,&actor)==0);
+    atto_fs_async_destroy(service);
+
+    /* Scheduler slot zero, generation zero yields actor_ref == 0. The
+     * separately authenticated incarnation is nonzero and must work. */
+    const atto_fs_host_actor first_slot = {7u,3u,0u,1u};
+    service = NULL;
+    assert(atto_fs_async_create(&service, &broker, &first_slot, 1u) == 0);
+    assert(atto_fs_async_revoke_actor(service, &first_slot) == 0);
+    denied_ticket = 333u;
+    assert(atto_fs_async_submit_read(service,&first_slot,"data/input",16u,&denied_ticket)==-EACCES);
+    assert(denied_ticket == 0u);
     atto_fs_async_destroy(service);
     puts("ATTO_FS_ASYNC_SUBMIT_CONTENTION_HOST_ONLY_PASS");
     return 0;
