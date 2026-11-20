@@ -8,7 +8,7 @@
 
 #define CHECK(condition) do { \
     if (!(condition)) { \
-        fprintf(stderr, "logical domain exhaustion failure:%d: %s\\n", \
+        fprintf(stderr, "logical domain exhaustion failure:%d: %s\n", \
                 __LINE__, #condition); \
         abort(); \
     } \
