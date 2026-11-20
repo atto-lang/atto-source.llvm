@@ -106,7 +106,7 @@ test('single caret returns from the containing named callable', () => {
     const src = join(dir, 'return-caret.atto');
     const ir = join(dir, 'return-caret.ll');
     const exe = join(dir, 'return-caret.exe');
-    const compiled = compileGuest('pub fnc main(): int { ^ (40 + 2); }\\n', src, ir);
+    const compiled = compileGuest('pub fnc main(): int { ^ (40 + 2); }\n', src, ir);
     assert.equal(compiled.status, 0, 'compiler rejected valid return caret: ' + compiled.stderr);
     assert.equal(compiled.signal, null);
     assert.equal(existsSync(ir), true, 'no emitted LLVM IR for return caret');
@@ -127,7 +127,7 @@ test('boolean operands do not overload integer ^^ XOR', () => {
   try {
     const src = join(dir, 'bool-xor.atto');
     const ir = join(dir, 'bool-xor.ll');
-    const compiled = compileGuest('pub fnc main(): int { return true ^^ false; }\\n', src, ir);
+    const compiled = compileGuest('pub fnc main(): int { return true ^^ false; }\n', src, ir);
     assert.equal(compiled.status, 1);
     assert.equal(compiled.signal, null);
     assert.match(compiled.stderr, /E_TYPE|E_UNSUPPORTED/);
