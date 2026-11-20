@@ -26,6 +26,11 @@ typedef struct atto_fs_host_actor {
 int atto_fs_async_create(atto_fs_async_service **out, atto_fs_broker *broker,
                          const atto_fs_host_actor *trusted_actor, unsigned max_jobs);
 void atto_fs_async_destroy(atto_fs_async_service *service);
+/* Trusted-host admission predicate only. Does NOT authenticate the caller:
+ * compare this actor incarnation against the already admitted service owner.
+ * Never expose this as a guest identity or permission oracle. */
+int atto_fs_async_owner_matches(const atto_fs_async_service *service,
+                                const atto_fs_host_actor *trusted_actor);
 /* Submit snapshots HOST-owned path and data before returning. The worker
  * never sees a guest cage pointer and never writes to guest memory. */
 int atto_fs_async_submit_read(atto_fs_async_service *service, const atto_fs_host_actor *actor,
