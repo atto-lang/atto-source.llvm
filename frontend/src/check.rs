@@ -1227,11 +1227,35 @@ pub fn check(p: &Program) -> R<TProgram> {
     }).collect();
     for (actor_index, actor) in p.actors.iter().enumerate() {
         let Some(clause) = actor.sends else { continue };
-        let allowed = res(clause)?;
+        let allowed: Option<Type> = match clause {
+            ActorSendEffect::Never => None,
+            ActorSendEffect::Payload(message_type) => Some(res(message_type)?),
+        };
         let info = &g.actors[actor_index];
         let mut pending = Vec::<u32>::new();
         if let Some(handler) = info.receive_idx { pending.push(handler); }
         pending.extend(info.methods.iter().map(|m| m.idx));
+        // Initializers may contain nested sends OR call helpers which send.
+        // Seed the same bounded transitive typed-IR call graph as receive().
+        // Only direct application DATA sends are counted; CONTROL is host-only.
+        for (_, initializer) in &tactors[actor_index].inits {
+            let invalid_send = std::cell::Cell::new(false);
+            let callees = std::cell::RefCell::new(Vec::<u32>::new());
+            let _ = any_in(initializer, &|node| {
+                match &node.e {
+                    TExpr::Send { value, .. } if Some(value.ty) != allowed =>
+                        invalid_send.set(true),
+                    TExpr::Call(target, _) => callees.borrow_mut().push(*target),
+                    _ => {}
+                }
+                false
+            });
+            if invalid_send.get() {
+                return Err(Diagnostic::new(actor.pos, "E_ACTOR_SEND_CONTRACT",
+                    "an actor field initializer sends outside its declared DATA effect"));
+            }
+            pending.extend(callees.into_inner());
+        }
         let mut visited = vec![false; funcs.len()];
         while let Some(index) = pending.pop() {
             let Some(seen) = visited.get_mut(index as usize) else {
@@ -1241,20 +1265,11 @@ pub fn check(p: &Program) -> R<TProgram> {
             if *seen { continue; }
             *seen = true;
             let (outbound, calls) = &send_graph[index as usize];
-            if outbound.iter().any(|payload| *payload != allowed) {
+            if outbound.iter().any(|payload| Some(*payload) != allowed) {
                 return Err(Diagnostic::new(actor.pos, "E_ACTOR_SEND_CONTRACT",
                     "an application send exceeds the actor's declared sends type"));
             }
             pending.extend(calls.iter().copied());
-        }
-        for (_, initializer) in &tactors[actor_index].inits {
-            if any_in(initializer, &|node| match &node.e {
-                TExpr::Send { value, .. } => value.ty != allowed,
-                _ => false,
-            }) {
-                return Err(Diagnostic::new(actor.pos, "E_ACTOR_SEND_CONTRACT",
-                    "an actor field initializer sends an undeclared payload"));
-            }
         }
     }
     let strings = funcs
