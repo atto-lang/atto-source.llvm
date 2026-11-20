@@ -18,6 +18,8 @@ Compile-time C ABI size/alignment assertions guard layout. The result is a trust
 
 **Current compiler boundary:** the existing frontend types `ActorRef.send` as `void` and the LLVM native emitter traps on nonzero raw send status. Both are deliberately unchanged to preserve historical runnable source guests. The new C entrypoint is not called by compiled guest code. Host-only evidence cannot promote any `.atto` guest Result contract to PASS.
 
+**Negative source guard:** `tests/actors/fail/205-typed-send-result-pending.atto` uses the canonical `match result over` + `on Ok(ack)` / `on Err(err)` spelling but requires `E_TYPE` and no native output, because the current actor `send()` is `void`. `ci/test_native_actors.sh` discovers this fixture through its fail-case loop. Once true native guest `Result` lowering lands, this fixture must be replaced by an executed positive guest (and separate full/closed/stale negative scenarios), not deleted silently or converted into a false green test.
+
 ## Follow-up to achieve actual semantic parity
 
 1. Align `Ack` and `SendError` with `atto-spec/spec/05-actors-and-state.md` and typed actor conformance PR #33; keep admission distinct from processed/durable acknowledgments and `get_done()`.
