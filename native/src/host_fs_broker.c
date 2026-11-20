@@ -296,3 +296,22 @@ int atto_fs_broker_write(atto_fs_broker *b, uint64_t tenant, uint64_t gen,
     (void)pthread_mutex_unlock(&b->gate);
     return result;
 }
+
+/* A worker may finish reading into a host-owned ticket long before the
+ * originating actor next polls. The permission decision is re-evaluated at
+ * publication, and final copying is serialized with generation revocation.
+ * The caller must independently authenticate the actor and its destination
+ * offset; this C function is deliberately never exposed to guest code. */
+int atto_fs_broker_publish_read(atto_fs_broker *b, uint64_t tenant,
+                                 uint64_t generation, const char *path,
+                                 const unsigned char *bytes, size_t length,
+                                 unsigned char *output, size_t capacity) {
+    if (!b || !b->initialized || (!bytes && length) || (!output && length) ||
+        length > ATTO_FS_MAX_BYTES || length > capacity) return -EINVAL;
+    const int rc = pthread_mutex_lock(&b->gate);
+    if (rc) return -rc;
+    const int result = authorized(b, tenant, generation, path, 0);
+    if (!result && length) memcpy(output, bytes, length);
+    (void)pthread_mutex_unlock(&b->gate);
+    return result;
+}
