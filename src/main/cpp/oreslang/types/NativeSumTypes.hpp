@@ -63,7 +63,7 @@ inline void resolve_native_sums(Program& program) {
             // publishing LLVM IR, rather than mislabel them as successful Ok.
             if (!e.left) throw std::runtime_error("native trap missing operand");
             if (!native_trap_pure_i64(*e.left) && e.left->kind != E::Boolean &&
-                    e.left->kind != E::Variable &&
+                    e.left->kind != E::String && e.left->kind != E::Variable &&
                     e.left->kind != E::SumConstruct && e.left->kind != E::Trap)
                 throw std::runtime_error("native trap requires nonthrowing scalar or existing Result value; typed effects and cleanup lowering required");
             const auto inner = expression(*e.left, env, expected);
