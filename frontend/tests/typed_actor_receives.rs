@@ -120,3 +120,10 @@ fn sends_void_and_duplicate_empty_effects_are_not_accepted() {
         assert!(compile(&ACTOR.replace("receives int", header)).is_err());
     }
 }
+
+#[test]
+fn canonical_bool_never_fixture_compiles_to_wasm() {
+    let source = include_str!("fixtures/actor-bool-never-parity-v1.atto");
+    let wasm = compile(source).expect("bool inbox and empty outbound effect must compile");
+    assert!(wasm.starts_with(b"\0asm"));
+}
