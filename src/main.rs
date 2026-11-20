@@ -791,6 +791,10 @@ mod tests {
             ("mixed-channel-stream-reverse", include_str!("../fixtures/pipe-rpipe-v1/mixed-channel-stream-reverse.atto")),
             ("actor-duplicate-direction", include_str!("../fixtures/pipe-rpipe-v1/actor-duplicate-direction.atto")),
             ("actor-mixed-directions", include_str!("../fixtures/pipe-rpipe-v1/actor-mixed-directions.atto")),
+            ("stopped-source", include_str!("../fixtures/pipe-rpipe-v1/stopped-source.atto")),
+            ("closed-channel", include_str!("../fixtures/pipe-rpipe-v1/closed-channel.atto")),
+            ("stopped-consumer", include_str!("../fixtures/pipe-rpipe-v1/stopped-consumer.atto")),
+            ("stopped-actor-sink", include_str!("../fixtures/pipe-rpipe-v1/stopped-actor-sink.atto")),
         ] {
             let standard=compile_ir(source)
                 .expect_err("native LLVM IR must not be emitted for unlowered actor pipeline");
