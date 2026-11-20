@@ -1,0 +1,5 @@
+// Overflow is a fatal checked arithmetic trap, not an invented Err.
+pub fnc main(): int {
+    val Result<int,Error> result = trap (9223372036854775807 + 1);
+    return result.unwrap_or(42);
+}
