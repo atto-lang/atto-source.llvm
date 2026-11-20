@@ -175,10 +175,31 @@ public:
           experimental_owned_int_(experimental_owned_int),
           experimental_rt_scalar_loop_(experimental_rt_scalar_loop) {}
 
+    /** Native scalar on_message(int) is not the new unary/stream protocol.
+     * Reject these forms explicitly rather than silently compiling a
+     * declaration as an ordinary fixed-int actor or losing its transport. */
+    void reject_unsupported_actor_family_prefix() {
+        std::string role;
+        std::string transport;
+        if (accept("unary")) role = "unary";
+        else if (accept("stream")) role = "stream";
+        if (accept("http")) transport = "http";
+        else if (accept("tcp")) transport = "tcp";
+        else if (accept("websocket")) transport = "websocket";
+        if (role.empty() && transport.empty()) return;
+        if (!accept("actor")) {
+            fail("native actor role/transport must immediately precede actor");
+        }
+        fail("native " + role + (role.empty() || transport.empty() ? "" : " ")
+                + transport + " actor requires typed unary/stream source dispatch, "
+                "response ownership and transport adapter lowering; unsupported in native scalar frontend");
+    }
+
     Program parse() {
         Program program;
         bool wrapped_module = false;
         if (accept("define")) {
+            reject_unsupported_actor_family_prefix();
             if (accept("serial")) {
                 require("actor");
                 fail("native serial actor requires shared HTTP/message lane lowering");
@@ -199,6 +220,7 @@ public:
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
             if (accept("define")) {
+                reject_unsupported_actor_family_prefix();
                 if (accept("serial")) {
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");

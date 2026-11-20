@@ -701,6 +701,20 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_owned_local_shared_borrow owned-local-shared-borrow.ores --ir "llvm.lifetime.end")
     oreslang_contract_test(native_owned_local_mutable_borrow owned-local-mutable-borrow.ores --ir "llvm.lifetime.end")
     oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "actor requires at least one scalar field")
+    # New unary/stream/network actor declarations may not be silently lowered
+    # to the old fixed-int on_message native actor subset.
+    oreslang_contract_test(native_unary_role_fails_closed source-unary-role-unsupported.ores
+        --diagnostic "requires typed unary/stream source dispatch")
+    oreslang_contract_test(native_stream_role_fails_closed source-stream-role-unsupported.ores
+        --diagnostic "requires typed unary/stream source dispatch")
+    oreslang_contract_test(native_http_actor_fails_closed source-http-actor-unsupported.ores
+        --diagnostic "requires typed unary/stream source dispatch")
+    oreslang_contract_test(native_tcp_actor_fails_closed source-tcp-actor-unsupported.ores
+        --diagnostic "requires typed unary/stream source dispatch")
+    oreslang_contract_test(native_websocket_actor_fails_closed source-websocket-actor-unsupported.ores
+        --diagnostic "requires typed unary/stream source dispatch")
+    oreslang_contract_test(native_unary_http_actor_fails_closed source-unary-http-actor-unsupported.ores
+        --diagnostic "requires typed unary/stream source dispatch")
     # Optional instance method marker: fnc, method, and no marker all lower
     # to the same native supported on_message(int) handler.
     oreslang_contract_test(native_actor_explicit_method source-actor-method-keyword.ores
