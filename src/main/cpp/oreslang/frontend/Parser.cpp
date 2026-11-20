@@ -6076,10 +6076,57 @@ void resolve_future_pipeline_contracts(Program& program) {
     }
 }
 
+// Nominal Mutex<T> constructor admission in the canonical native lexer.
+// The compiler has no proven nonparking MutexLease runtime. Do NOT reinterpret
+// this as a plain scalar-call/struct constructor or emit LLVM for either form.
+// Lexer::next() excludes comments and quoted literals from this check.
+void reject_unlowered_mutex_constructor(std::string_view source,
+                                       bool experimental_pointer_int_aot) {
+    Lexer scan(source, experimental_pointer_int_aot);
+    Token preceding{Kind::End, {}, 0};
+    bool expect_angle = false;
+    bool within_generic = false;
+    bool finished_generic = false;
+    bool owner_has_new = false;
+    std::size_t depth = 0;
+    std::size_t origin = 0;
+    for (auto token = scan.next(); token.kind != Kind::End; token = scan.next()) {
+        if (expect_angle) {
+            expect_angle = false;
+            if (token.text == "<") { within_generic = true; depth = 1; continue; }
+        } else if (within_generic) {
+            if (token.text == "<") {
+                if (++depth > 128) throw std::runtime_error(
+                    "native Mutex<T> generic nesting limit exceeded");
+            } else if (token.text == ">") {
+                if (--depth == 0) { within_generic = false; finished_generic = true; }
+            }
+            continue;
+        } else if (finished_generic) {
+            finished_generic = false;
+            if (token.text == "(") {
+                if (!owner_has_new) throw std::runtime_error(
+                    "E_NEW_REQUIRED: Mutex<T> is a resource class; use new Mutex<T>(value) at byte "
+                    + std::to_string(origin));
+                throw std::runtime_error(
+                    "E_LOCK_UNSUPPORTED: native LLVM lacks MutexLease/TenantVM scheduler lowering at byte "
+                    + std::to_string(origin));
+            }
+        }
+        if (token.kind == Kind::Identifier && token.text == "Mutex") {
+            owner_has_new = preceding.text == "new";
+            origin = token.offset;
+            expect_angle = true;
+        }
+        preceding = token;
+    }
+}
+
 } // namespace
 
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int,
                       bool experimental_rt_scalar_loop, bool experimental_pointer_int_aot) {
+    reject_unlowered_mutex_constructor(source, experimental_pointer_int_aot);
     Program program = Parser(source, experimental_owned_int,
                              experimental_rt_scalar_loop, experimental_pointer_int_aot).parse();
     if (experimental_rt_scalar_loop &&
