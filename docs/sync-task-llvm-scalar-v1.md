@@ -6,11 +6,18 @@ This is not a `task<T>` / `Future<T>` scheduler implementation and is not
 certification for the separate C++ `oreslang-llvmc` path.
 
 The parser recognizes `sync task<T> { ... }`, inferred `sync task { ... }`,
-`sync task {}`, and `do sync task<T> { ... }`. A scalar result requires
-a final direct `return expression;`; that return exits only the inline
-task expression. The body may use scalar bindings, assignments, conditional
-statements and nested sequential blocks, with their usual checked effects.
-The value is available immediately after the body executes. `do` discards it.
+`sync task {}`, and **void-only** `do sync task<void> { ... }` or
+`do sync task { ... }`. A scalar result requires a final direct
+`return expression;`; that return exits only the inline task expression.
+The body may use scalar bindings, assignments, conditional statements and
+nested sequential blocks, with their usual checked effects.
+
+The `do` form is not a value-discard operator. Only `void` is permitted:
+`do sync task<int> { ... }` and `do sync task<bool> { ... }` are
+`E_TASK_RETURN_TYPE` even if the body is empty. Inferred `do sync task`
+also rejects `return expression;`, as does `do sync task<void>`.
+A final bare `return;` is legal and exits only the inline lexical body.
+To produce a value, use `sync task<int> { return 42; }` without `do`.
 
 The checked IR retains an explicit `InlineTask` node; the LLVM emitter emits
 `InlineTaskEnter` / `InlineTaskExit` markers and executes the body at the
