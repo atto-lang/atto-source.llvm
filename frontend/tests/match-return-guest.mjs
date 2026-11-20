@@ -41,7 +41,8 @@ function guestRun(wasm) {
   const module = new WebAssembly.Module(wasm);
   let stdout = '';
   let instance;
-  const allowed = new Set(['print_i64', 'print_bool', 'print_str', 'print_newline', 'print_f64']);
+  const allowed = new Set(['print_i64', 'print_bool', 'print_str', 'print_newline', 'print_f64',
+    'actor_spawn', 'actor_send', 'state_register', 'state_enter', 'state_leave']);
   for (const item of WebAssembly.Module.imports(module)) {
     assert.equal(item.module, 'atto', 'guest may import only the atto host namespace');
     assert.ok(allowed.has(item.name), 'unexpected host capability: ' + item.name);
@@ -54,6 +55,13 @@ function guestRun(wasm) {
     },
     print_newline: () => { stdout += '\n'; },
     print_f64: value => { stdout += String(value); },
+    // Known ABI imports may exist in the module but the match fixture must not
+    // actually invoke any actor or state capability.
+    actor_spawn: () => { throw new Error('unexpected actor spawn in match guest'); },
+    actor_send: () => { throw new Error('unexpected actor send in match guest'); },
+    state_register: () => { throw new Error('unexpected state registration in match guest'); },
+    state_enter: () => { throw new Error('unexpected critical-state operation'); },
+    state_leave: () => { throw new Error('unexpected critical-state operation'); },
   }});
   const value = instance.exports.main();
   assert.equal(typeof value, 'bigint', 'main must return int64');
