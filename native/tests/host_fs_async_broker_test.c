@@ -31,7 +31,12 @@ static void expect_file(const char *path, const char *expected) {
     assert(fd >= 0);
     char output[80] = {0};
     const ssize_t got = read(fd, output, sizeof(output));
-    assert(got == (ssize_t)strlen(expected));
+    const size_t expected_len = strlen(expected);
+    if (got != (ssize_t)expected_len) {
+        fprintf(stderr, "ATTO_FS_ASYNC_BROKER_SIZE_MISMATCH path=%s got=%zd expected=%zu\\n",
+                path, got, expected_len);
+    }
+    assert(got == (ssize_t)expected_len);
     assert(memcmp(output, expected, (size_t)got) == 0);
     assert(close(fd) == 0);
 }
