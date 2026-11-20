@@ -33,14 +33,14 @@ int main() {
     }
     ++checks;
     const auto before = b;
-    for (std::int64_t off : {-1, 5, std::numeric_limits<std::int64_t>::max(),
+    for (std::int64_t off : std::array<std::int64_t, 4>{-1, 5, std::numeric_limits<std::int64_t>::max(),
                             std::numeric_limits<std::int64_t>::min()}) {
       assert(write(b.data(), b.size(), off, 4, 42, endian) == Code::bounds);
       assert(read(b.data(), b.size(), off, 4, endian).code == Code::bounds);
       assert(b == before);
       checks += 3;
     }
-    for (std::int64_t value : {-1, INT64_C(4294967296),
+    for (std::int64_t value : std::array<std::int64_t, 3>{-1, INT64_C(4294967296),
                                std::numeric_limits<std::int64_t>::max()}) {
       assert(write(b.data(), b.size(), 0, 4, value, endian) == Code::value);
       assert(b == before);
