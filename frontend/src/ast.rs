@@ -321,7 +321,7 @@ impl BinOp {
             BinOp::Sub => "-",
             BinOp::Mul => "*",
             BinOp::Div => "/",
-            BinOp::BitXor => "^",
+            BinOp::BitXor => "^^",
             BinOp::Eq => "eq",
             BinOp::Ne => "neq",
             BinOp::Lt => "<",
