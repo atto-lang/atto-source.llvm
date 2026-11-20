@@ -26,6 +26,8 @@ fn pure_sync_task_compiles_to_real_guest_bytes() {
         "pub fnc main(): int { do sync task<void> { return; }; return 9; }",
         "pub fnc main(): int { do sync /* legal comment */ task<void> { }; return 9; }",
         "pub fnc main(): int { do sync task { return; }; return 9; }",
+        "pub fnc main(): int { let int n = 1; do sync task<void> { n = n + 5; do sync task { n = n + 7; }; }; return n; }",
+        "pub fnc main(): int { let int n = 7; do sync task { val int n = 12; }; return n; }",
         "pub fnc main(): int { sync task {}; return 9; }",
         "pub fnc main(): int { val bool b = sync task<bool> { return true; }; if b then return 5; else return 4; fi }",
         "pub fnc main(): int { val int x = sync task<int> { return sync task<int> { return 4; } + 3; }; return x; }",

@@ -56,6 +56,12 @@ fn main() {
     run(&a[1],&a[2],&root,"empty_void",
         "pub fnc main(): int { sync task {}; return 46; }",
         Some(46),"");
+    run(&a[1],&a[2],&root,"caller_local_order",
+        "pub fnc main(): int { let int n = 1; do sync task<void> { n = n + 5; do sync task { n = n + 7; }; }; return n; }",
+        Some(13),"");
+    run(&a[1],&a[2],&root,"lexical_shadow",
+        "pub fnc main(): int { let int n = 7; do sync task { val int n = 12; }; return n; }",
+        Some(7),"");
     run(&a[1],&a[2],&root,"invalid_type",
         "pub fnc main(): int { val int n = sync task<bool> { return 1; }; return n; }",
         None,"E_TASK_RETURN_TYPE");
@@ -84,5 +90,5 @@ fn main() {
         "pub fnc main(): int { val int n = task<int> { return 2; }; return n; }",
         None,"E_UNSUPPORTED");
     fs::remove_dir_all(&root).unwrap();
-    println!("ATTO_LLVM_SYNC_TASK_REAL_GUESTS=6 NEGATIVE=9");
+    println!("ATTO_LLVM_SYNC_TASK_REAL_GUESTS=8 NEGATIVE=9");
 }
