@@ -32,7 +32,17 @@ fn run() -> Result<(), String> {
     // Create-new temp file in the destination directory: compile failures and
     // I/O failures cannot leave behind a new, partially-written guest artifact.
     let temp = output.with_extension(format!("wasm.partial.{}", process::id()));
-    let mut file = OpenOptions::new().write(true).create_new(true).open(&temp)
+    // A source compiler must not disclose staged guest bytes to unrelated
+    // local users before atomic publication. On Unix create owner-only,
+    // independently of a caller's permissive umask.
+    let mut stage_options = OpenOptions::new();
+    stage_options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        stage_options.mode(0o600);
+    }
+    let mut file = stage_options.open(&temp)
         .map_err(|e| format!("E_OUTPUT: {}: {e}", temp.display()))?;
     let written = file.write_all(&bytes).and_then(|_| file.sync_all());
     drop(file);

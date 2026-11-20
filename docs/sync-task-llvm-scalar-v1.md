@@ -69,3 +69,14 @@ artifact using create-only hard-link semantics: it never replaces an existing
 output, symlink, or the input source. Compilation failures leave no guest
 output. Integrate competing PRs against this contract rather than silently
 replacing the CLI.
+
+## File publication security regression
+
+The `attoc -o` staging file is created with `0o600` Unix permissions
+regardless of a permissive calling process umask. Tests also verify that
+existing destination files and symlinks are never replaced, the original input
+is never overwritten, rejected source never prints partial binary stdout,
+and failed compilation leaves no staged output artifacts. Output directories
+must be trusted: create-only pathname publication alone is not a substitute
+for tenant-scoped filesystem permissions or sandboxing in a writable directory
+shared with an adversary.
