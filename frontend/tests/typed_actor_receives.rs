@@ -2,6 +2,36 @@
 //! This compiles real .atto into a Wasm module; it does NOT prove native
 //! LLVM/C++ AOT, actor mailbox delivery, or authenticated supervisor CONTROL.
 use atto_compiler::compile;
+use atto_compiler::{ast::Type, check, lexer, parser::Parser};
+
+#[test]
+fn receives_header_survives_ast_and_checker_revalidates_mutated_metadata() {
+    let mut parser = Parser::new(lexer::lex(ACTOR).expect("lex valid actor"));
+    let parsed = parser.parse_program().expect("parse valid actor");
+    assert_eq!(parsed.actors.len(), 1);
+    assert_eq!(parsed.actors[0].receives, Some(Type::Int));
+    assert_eq!(parsed.actors[0].sends, None);
+
+    let mut corrupted = parsed.clone();
+    corrupted.actors[0].receives = Some(Type::Bool);
+    match check::check(&corrupted) {
+        Err(err) => assert_eq!(err.code, "E_TYPE"),
+        Ok(_) => panic!("changed AST receives metadata must fail closed"),
+    }
+
+    corrupted = parsed.clone();
+    corrupted.actors[0].receive = None;
+    match check::check(&corrupted) {
+        Err(err) => assert_eq!(err.code, "E_TYPE"),
+        Ok(_) => panic!("removed receive handler must not satisfy original AST contract"),
+    }
+
+    let legacy = ACTOR.replace("Worker receives int as", "Worker as");
+    let mut parser = Parser::new(lexer::lex(&legacy).expect("lex legacy actor"));
+    let legacy = parser.parse_program().expect("parse legacy actor");
+    assert_eq!(legacy.actors[0].receives, None);
+}
+
 
 const ACTOR: &str = "define actor Worker receives int as
     receive(ActorMail<int> mail): void { return; }
