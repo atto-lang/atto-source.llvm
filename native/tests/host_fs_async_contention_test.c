@@ -157,6 +157,21 @@ int main(void) {
     const atto_fs_host_actor first_slot = {7u,3u,0u,1u};
     service = NULL;
     assert(atto_fs_async_create(&service, &broker, &first_slot, 1u) == 0);
+    /* A long-lived service must retire at the 64-bit FIFO boundary, not
+     * wrap sequence 0 and reorder younger jobs ahead of older tickets.
+     * Verify its final legal admission and its overflow refusal. */
+    assert(pthread_mutex_lock(&service->lock) == 0);
+    service->next_sequence = UINT64_MAX - 1u;
+    assert(pthread_mutex_unlock(&service->lock) == 0);
+    uint64_t last_ticket = 0u;
+    assert(atto_fs_async_submit_read(service,&first_slot,"data/input",16u,&last_ticket)==0);
+    assert(last_ticket!=0u);
+    assert(poll_until_finished(service,&first_slot,last_ticket,output,&got)==0);
+    assert(got==4u);
+    denied_ticket = 333u;
+    assert(atto_fs_async_submit_read(service,&first_slot,"data/input",16u,&denied_ticket)==-EOVERFLOW);
+    assert(denied_ticket == 0u);
+    assert(service->next_sequence == UINT64_MAX);
     assert(atto_fs_async_revoke_actor(service, &first_slot) == 0);
     denied_ticket = 333u;
     assert(atto_fs_async_submit_read(service,&first_slot,"data/input",16u,&denied_ticket)==-EACCES);
