@@ -44,14 +44,32 @@ fn main() {
     run(&a[1],&a[2],&root,"inferred_nested",
         "pub fnc main(): int { val int got = sync task { return sync task<int> { return 5; } + 2; }; return got; }",
         Some(7),"");
-    run(&a[1],&a[2],&root,"do_inline_return_not_outer",
-        "pub fnc main(): int { do sync task<int> { return 1; }; return 43; }",
+    run(&a[1],&a[2],&root,"do_explicit_void",
+        "pub fnc main(): int { do sync task<void> { val int n = 1; return; }; return 43; }",
         Some(43),"");
-    run(&a[1],&a[2],&root,"empty_void",
-        "pub fnc main(): int { sync task {}; return 44; }",
+    run(&a[1],&a[2],&root,"do_inferred_void",
+        "pub fnc main(): int { do sync task { val int n = 1; }; return 44; }",
         Some(44),"");
+    run(&a[1],&a[2],&root,"do_empty_void",
+        "pub fnc main(): int { do sync task<void> {}; return 45; }",
+        Some(45),"");
+    run(&a[1],&a[2],&root,"empty_void",
+        "pub fnc main(): int { sync task {}; return 46; }",
+        Some(46),"");
     run(&a[1],&a[2],&root,"invalid_type",
         "pub fnc main(): int { val int n = sync task<bool> { return 1; }; return n; }",
+        None,"E_TASK_RETURN_TYPE");
+    run(&a[1],&a[2],&root,"invalid_do_typed_nonvoid",
+        "pub fnc main(): int { do sync task<int> { return 1; }; return 0; }",
+        None,"E_TASK_RETURN_TYPE");
+    run(&a[1],&a[2],&root,"invalid_do_typed_nonvoid_empty",
+        "pub fnc main(): int { do sync task<int> {}; return 0; }",
+        None,"E_TASK_RETURN_TYPE");
+    run(&a[1],&a[2],&root,"invalid_do_inferred_return",
+        "pub fnc main(): int { do sync task { return 1; }; return 0; }",
+        None,"E_TASK_RETURN_TYPE");
+    run(&a[1],&a[2],&root,"invalid_do_void_value",
+        "pub fnc main(): int { do sync task<void> { return 1; }; return 0; }",
         None,"E_TASK_RETURN_TYPE");
     run(&a[1],&a[2],&root,"unverified_effect",
         "pub fnc helper(): int { return 8; } pub fnc main(): int { return sync task<int> { return helper(); }; }",
@@ -60,5 +78,5 @@ fn main() {
         "pub fnc main(): int { val int n = task<int> { return 2; }; return n; }",
         None,"E_UNSUPPORTED");
     fs::remove_dir_all(&root).unwrap();
-    println!("ATTO_LLVM_SYNC_TASK_REAL_GUESTS=4 NEGATIVE=3");
+    println!("ATTO_LLVM_SYNC_TASK_REAL_GUESTS=6 NEGATIVE=7");
 }
