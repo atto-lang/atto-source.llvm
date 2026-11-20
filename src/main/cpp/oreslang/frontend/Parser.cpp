@@ -1589,6 +1589,12 @@ private:
                 field.scalar_type = accept("bool") ? ScalarType::Bool :
                     (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
                 if (field.scalar_type == ScalarType::I64 && field.sum_type.empty()) require("int");
+                if (field.sum_type.empty()) {
+                    const std::string scalar_name = field.scalar_type == ScalarType::Bool ? "bool" :
+                        field.scalar_type == ScalarType::String ? "String" : "int";
+                    const std::string annotated = checked_postfix_option_type(scalar_name);
+                    if (is_sum_name(annotated)) field.sum_type = annotated;
+                }
                 field.name = identifier();
                 if (!seen.insert(field.name).second)
                     fail("duplicate class field '" + field.name + "'");
@@ -2006,8 +2012,14 @@ private:
                     else if (is_sum_name(type)) parameter.sum_type = type;
                     else parameter.class_name = type;
                 }
-                if (token_.text == "?")
-                    fail("native optional type '?' requires versioned Option/default ABI lowering");
+                if (token_.text == "?") {
+                    if (!parameter.class_name.empty() || !parameter.generic_type.empty() ||
+                            !parameter.pending_type_alias.empty() || !parameter.sum_type.empty())
+                        fail("E_OPTION_TYPE_ABI_UNSUPPORTED: optional non-scalar or nested sum parameter needs a verified native ABI");
+                    const std::string scalar_name = parameter.scalar_type == ScalarType::Bool ? "bool" :
+                        parameter.scalar_type == ScalarType::String ? "String" : "int";
+                    parameter.sum_type = checked_postfix_option_type(scalar_name);
+                }
                 if (alias_extension && token_.text == "self")
                     fail("EXTENSION_SELF_SHADOW: explicit extension parameter cannot be named self");
                 parameter.name = identifier();
@@ -2046,8 +2058,16 @@ private:
                 value.return_type = ScalarType::I64;
             }
         }
-        if (token_.text == "?")
-            fail("native optional return type '?' requires versioned Option/default ABI lowering");
+        if (token_.text == "?") {
+            if (value.returns_void)
+                fail("E_OPTION_TYPE_INVALID: void? is not a value return type");
+            if (!value.return_class.empty() || !value.pending_return_type_alias.empty() ||
+                    !value.return_sum.empty())
+                fail("E_OPTION_TYPE_ABI_UNSUPPORTED: optional class, alias or nested sum return needs native ABI lowering");
+            const std::string scalar_name = value.return_type == ScalarType::Bool ? "bool" :
+                value.return_type == ScalarType::String ? "String" : "int";
+            value.return_sum = checked_postfix_option_type(scalar_name);
+        }
         if (accept("using")) {
             value.has_declared_effects = true;
             do {
@@ -2263,9 +2283,15 @@ private:
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
                 binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
                 if (binding.scalar_type == ScalarType::I64) require("int");
+                const std::string scalar_name = binding.scalar_type == ScalarType::Bool ? "bool" :
+                    binding.scalar_type == ScalarType::String ? "String" : "int";
+                const std::string annotated = checked_postfix_option_type(scalar_name);
+                if (is_sum_name(annotated)) binding.sum_type = annotated;
                 binding.name = identifier();
                 require("=");
                 if (accept("await")) {
+                    if (!binding.sum_type.empty())
+                        fail("E_OPTION_TYPE_ABI_UNSUPPORTED: Optional await results require owned continuation lowering");
                     if (binding.scalar_type != ScalarType::I64)
                         fail("native scalar await requires an int result binding");
                     if (!value.locals.empty())
@@ -2454,13 +2480,19 @@ private:
                         binding.heap_owned = experimental_owned_int_ && accept("owned");
                         if (accept("int")) {
                             binding.scalar_type = ScalarType::I64;
+                            const std::string annotated = checked_postfix_option_type("int");
+                            if (is_sum_name(annotated)) binding.sum_type = annotated;
                         } else if (accept("bool")) {
                             if (binding.heap_owned)
                                 fail("native owned bool region lowering is not admitted");
                             binding.scalar_type = ScalarType::Bool;
+                            const std::string annotated = checked_postfix_option_type("bool");
+                            if (is_sum_name(annotated)) binding.sum_type = annotated;
                         } else if (accept("string") || accept("String")) {
                             if (binding.heap_owned) fail("owned string qualifier is unsupported");
                             binding.scalar_type = ScalarType::String;
+                            const std::string annotated = checked_postfix_option_type("String");
+                            if (is_sum_name(annotated)) binding.sum_type = annotated;
                         } else if (token_.kind == Kind::Identifier &&
                                    scalar_alias_targets_.count(std::string(token_.text))) {
                             binding.pending_type_alias = identifier();
@@ -3422,7 +3454,7 @@ private:
                  "unary '*' dereference; use checked Pointer<T> methods");
         }
         if (token_.text == "trap") {
-            // Reserved for Option-valued ordinary-error capture. Reject it
+            // Reserved for Result-valued ordinary-error capture. Reject it
             // before IR generation: accepting a normal value here would erase
             // the guest failure channel and violate panic/raise precedence.
             fail("native trap expression unsupported: typed throw effects and cleanup lowering required");
@@ -3996,6 +4028,30 @@ private:
         else if (!accept("int")) binding.array_record_class = type_identifier();
     }
 
+    // Canonical Java/Atto type-only T? sugar.  Do not confuse it with
+    // parameter omission (name?) or the expression-level conditional '?'.
+    // The native compiler currently has an authenticated scalar Option ABI
+    // only; class, nested-sum and other resource payloads must fail closed.
+    std::string checked_postfix_option_type(const std::string& base) {
+        if (!accept("?")) return base;
+        if (token_.text == "?")
+            fail("E_OPTION_TYPE_DUPLICATE: repeated ?? type suffix is invalid");
+        const std::string payload = base == "string" ? "String" : base;
+        if (payload == "void" || payload == "null")
+            fail("E_OPTION_TYPE_INVALID: void? and null? are not value types");
+        if (payload != "int" && payload != "bool" && payload != "String")
+            fail("E_OPTION_TYPE_ABI_UNSUPPORTED: native optional class, alias or nested sum requires a verified ownership/tagged payload ABI");
+        NativeSumType type;
+        type.kind = NativeSumType::Kind::Option;
+        type.value_type = payload == "bool" ? ScalarType::Bool :
+            payload == "String" ? ScalarType::String : ScalarType::I64;
+        type.name = "Option<" + payload + ">";
+        if (std::none_of(sum_types_.begin(), sum_types_.end(),
+                [&](const NativeSumType& item) { return item.name == type.name; }))
+            sum_types_.push_back(type);
+        return type.name;
+    }
+
     std::string type_identifier() {
         auto name = identifier();
         if ((name == "Option" || name == "Result") && accept("<")) {
@@ -4011,10 +4067,10 @@ private:
             if (type.kind == NativeSumType::Kind::Result) { require(","); type.error_type = payload(); name += "," + std::string(scalar_name(type.error_type)); }
             require(">"); type.name = name + ">";
             if (std::none_of(sum_types_.begin(), sum_types_.end(), [&](const NativeSumType& t) { return t.name == type.name; })) sum_types_.push_back(type);
-            return type.name;
+            return checked_postfix_option_type(type.name);
         }
         if (module_names_.count(name) && accept(".")) name += "." + identifier();
-        return name;
+        return checked_postfix_option_type(name);
     }
 
     std::string nominal_declaration_name() {
