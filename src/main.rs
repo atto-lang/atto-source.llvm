@@ -827,3 +827,36 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod map_entry_feature_admission_tests {
+    use super::compile_ir;
+
+    #[test]
+    fn first_class_dual_ascriptions_fail_closed_until_real_guest_lowering() {
+        let source = include_str!("../tests/fixtures/map-entry/dual-entry-add.atto");
+        let error = compile_ir(source).expect_err("no native Map/Entry guest lowering exists");
+        assert!(error.contains("E_UNSUPPORTED_MAP_ENTRY"), "{error}");
+    }
+
+    #[test]
+    fn empty_typed_map_fails_closed_instead_of_emitting_scalar_stub() {
+        let source = include_str!("../tests/fixtures/map-entry/empty-map.atto");
+        let error = compile_ir(source).expect_err("typed Map cannot be lowered as scalar");
+        assert!(error.contains("E_UNSUPPORTED_MAP_ENTRY"), "{error}");
+    }
+
+    #[test]
+    fn quoted_operator_text_does_not_impersonate_entry_tokens() {
+        let source = include_str!("../tests/fixtures/map-entry/string-pseudocode.atto");
+        let error = compile_ir(source).expect_err("string guest runtime is unsupported here");
+        assert!(!error.contains("E_UNSUPPORTED_MAP_ENTRY"), "{error}");
+    }
+
+    #[test]
+    fn comments_do_not_impersonate_map_or_entry_tokens() {
+        let source = include_str!("../tests/fixtures/map-entry/comment-pseudocode.atto");
+        let ir = compile_ir(source).expect("ordinary scalar guest should remain executable");
+        assert!(ir.contains("define i32 @main"), "{ir}");
+    }
+}
