@@ -70,9 +70,17 @@ int main(void) {
     join(dst, sizeof(dst), out, "copy.txt");
     join(other, sizeof(other), home, "outside.txt"); file_write(other, "outside");
 
-    const atto_fs_policy policy = {"data", "out", "data/secret.txt", "out/denied.txt", 77u, 5u};
+    atto_fs_layered_policy policy = {
+        .tenant_id = 77u, .generation = 5u,
+        .host = {"*", "*", NULL, NULL},
+        .artifact = {"data", "out", NULL, NULL},
+        .runtime = {"data", "out", NULL, NULL},
+        .tenant = {"*", "*", NULL, NULL},
+        .actor = {"data", "out", NULL, NULL},
+        .delegation = {"*", "*", "data/secret.txt", "out/denied.txt"}
+    };
     atto_fs_broker broker;
-    assert(atto_fs_broker_init(&broker, root, &policy) == 0);
+    assert(atto_fs_broker_init_layers(&broker, root, &policy) == 0);
     uint8_t cage[4096]; memset(cage, 0xAB, sizeof(cage));
     memcpy(cage + 16, "data/input.txt", 14);
     memcpy(cage + 64, "out/copy.txt", 12);
@@ -141,6 +149,41 @@ int main(void) {
     assert(count == 0u && cage[512] == 0xAB);
     assert(atto_fs_guest_write(&frame, 64, 12, 256, 5) == -EACCES);
     file_expect(dst, "hello");
+    atto_fs_broker_close(&broker);
+
+    /* Six independent ceilings: a missing grant is a denial even when the
+     * other five layers are broad and the file is writable at the OS level. */
+    policy.runtime.allow_write = NULL;
+    assert(atto_fs_broker_init_layers(&broker, root, &policy) == 0);
+    assert(atto_fs_guest_write(&frame, 64, 12, 256, 5) == -EACCES);
+    file_expect(dst, "hello");
+    atto_fs_broker_close(&broker);
+    policy.runtime.allow_write = "out";
+
+    /* Every layer can deny regardless of more expansive allow grants in
+     * the others, including a host-wide deny and child-delegated deny. */
+    policy.host.deny_write = "out/copy.txt";
+    assert(atto_fs_broker_init_layers(&broker, root, &policy) == 0);
+    assert(atto_fs_guest_write(&frame, 64, 12, 256, 5) == -EACCES);
+    file_expect(dst, "hello");
+    atto_fs_broker_close(&broker);
+    policy.host.deny_write = NULL;
+
+    /* No policy-array alias remains: mutating a caller-owned scope after
+     * admission cannot broaden or narrow an existing broker snapshot. */
+    policy.runtime.allow_write = NULL;
+    assert(atto_fs_broker_init_layers(&broker, root, &policy) == 0);
+    policy.runtime.allow_write = "out";
+    assert(atto_fs_guest_write(&frame, 64, 12, 256, 5) == -EACCES);
+    atto_fs_broker_close(&broker);
+
+    /* The one-layer legacy constructor cannot be smuggled through the
+     * guest offset adapter as an apparently verified multi-layer policy. */
+    const atto_fs_policy legacy = {"data", "out", NULL, NULL, 77u, 5u};
+    assert(atto_fs_broker_init(&broker, root, &legacy) == 0);
+    count = 999u;
+    assert(atto_fs_guest_read(&frame, 16, 14, 512, 32, &count) == -EACCES);
+    assert(count == 0u && cage[512] == 0xAB);
     atto_fs_broker_close(&broker);
     puts("ATTO_HOST_FS_GUEST_OFFSET_BRIDGE_HOST_ONLY_TEST_PASS");
     return 0;
