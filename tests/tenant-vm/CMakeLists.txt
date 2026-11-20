@@ -166,6 +166,20 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set_tests_properties(tenant_vm_fs_lifecycle_host_only PROPERTIES TIMEOUT 45)
 endif()
 
+# Host-only, ABI-v5-shaped async FS adapter with synthetic trusted scheduler
+# witness and real six-layer Linux broker. No .atto guest or live v5 callbacks.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(tenant_vm_fs_host_dispatch_test
+        fs_host_dispatch_test.cpp
+        "${ROOT}/native/src/host_fs_async.c"
+        "${ROOT}/native/src/host_fs_broker.c")
+    target_include_directories(tenant_vm_fs_host_dispatch_test PRIVATE
+        "${ROOT}/src/main/cpp" "${ROOT}/native/include")
+    target_link_libraries(tenant_vm_fs_host_dispatch_test PRIVATE Threads::Threads)
+    add_test(NAME tenant_vm_fs_host_dispatch_host_only COMMAND tenant_vm_fs_host_dispatch_test)
+    set_tests_properties(tenant_vm_fs_host_dispatch_host_only PROPERTIES TIMEOUT 30)
+endif()
+
 # Host-only signature admission test for the existing sealed-image loader.
 # The fixture is a C ABI-v4 .so, NOT a compiled .atto guest; v5 remains
 # explicitly unsupported by the live TenantVM runtime.
