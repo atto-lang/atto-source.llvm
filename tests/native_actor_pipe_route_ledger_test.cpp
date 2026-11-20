@@ -28,6 +28,65 @@ static std::vector<PipeConnection> edges() {
             {"worker-b", "sink", "Event"}};
 }
 int main() {
+    // This exercises the ACTUAL native correlation ledger's key routing,
+    // not an independently copied hashing function or only the transport.
+    {
+        const std::vector<PipeStage> key_stages = {
+            {"Producer", PipeRole::readable, "", "Event", "source"},
+            {"Worker", PipeRole::writable, "Event", "", "worker-a"},
+            {"Worker", PipeRole::writable, "Event", "", "worker-b"},
+            {"Worker", PipeRole::writable, "Event", "", "worker-c"}
+        };
+        const std::vector<PipeConnection> key_edges = {
+            {"source", "worker-a", "Event"},
+            {"source", "worker-b", "Event"},
+            {"source", "worker-c", "Event"}
+        };
+        ActorPipeRouteLedger keyed(key_stages, key_edges, 11, 16);
+        const auto root = keyed.ingress("source");
+        const std::vector<std::pair<std::string, std::string>> vectors = {
+            {"customer-7", "worker-a"}, {"alpha", "worker-a"},
+            {"beta", "worker-c"}, {"\xf0\x9f\x8c\x8d", "worker-a"},
+            {"", "worker-c"}, {std::string(1, '\0'), "worker-a"}
+        };
+        for (const auto& [key, target] : vectors) {
+            const auto frame = keyed.forward_by_key(root, key);
+            check(frame->receiver() == target && frame->flow_id() == root->flow_id(),
+                  "canonical six-key FNV routing or correlation drift");
+            keyed.complete(frame);
+        }
+        const auto before = keyed.outstanding();
+        rejected([&] { (void)keyed.forward_by_key(root, "\xc0\xaf"); },
+                 "overlong UTF-8 route key accepted");
+        rejected([&] { (void)keyed.forward_by_key(root, "\xed\xa0\x80"); },
+                 "surrogate route key accepted");
+        rejected([&] { (void)keyed.forward_by_key(root, std::string(4097, 'x')); },
+                 "over-budget key accepted");
+        rejected([&] { (void)actor_pipe_key_slot("x", 0); },
+                 "zero downstream slot count accepted");
+        check(keyed.outstanding() == before,
+              "invalid routing key consumed or leaked route frame credit");
+        // Authorization and freshness MUST take precedence over untrusted
+        // malformed affinity keys. A writable worker is an authenticated
+        // graph receiver but not an authorized forward source.
+        const auto sink_frame = keyed.forward_to(root, "worker-a");
+        bool source_first = false;
+        try { (void)keyed.forward_by_key(sink_frame, "\xc0\xaf"); }
+        catch (const std::invalid_argument& error) {
+            source_first = std::string(error.what()).find(
+                "source has no outbound route") != std::string::npos;
+        }
+        check(source_first,
+              "malformed key masked unauthorized downstream source");
+        keyed.complete(sink_frame);
+        check(keyed.outstanding() == before,
+              "unauthorized keyed route consumed correlation frame credit");
+        keyed.complete(root);
+        keyed.advance_generation(12);
+        rejected([&] { (void)keyed.forward_by_key(root, "alpha"); },
+                 "stale keyed source survived epoch advance");
+        keyed.close();
+    }
     ActorPipeRouteLedger ledger(stages(), edges(), 7, 5);
     rejected([&] { (void)ledger.ingress("worker-a"); },
              "a middle worker originated a flow");
@@ -229,5 +288,49 @@ int main() {
     check(completed == 2000 && parallel.outstanding() == 1,
           "concurrent route IDs or frame retirement raced");
     parallel.complete(parent);
-    std::cout << "ORES_NATIVE_ACTOR_ROUTE_LEDGER_OK branches=2000" << std::endl;
+    // Parent + child frames cannot acquire new authority after a concurrent
+    // supervisor close barrier. Requests that raced *before* close may
+    // complete or fail; requests made after close returns must always fail.
+    ActorPipeRouteLedger retiring(stages(), edges(), 11, 4096);
+    const auto root = retiring.ingress("source");
+    std::atomic<bool> begin{false}, after_stop{false};
+    std::atomic<int> ready{0}, early{0}, denied{0}, unexpected{0};
+    std::vector<std::thread> contenders;
+    for (int t=0; t<8; ++t) {
+        contenders.emplace_back([&] {
+            ++ready;
+            while (!begin.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            while (!after_stop.load(std::memory_order_acquire)) {
+                try {
+                    const auto child = retiring.round_robin(root);
+                    retiring.complete(child);
+                } catch (const std::logic_error&) {
+                    // STOP may have linearized between select and complete.
+                }
+                ++early;
+            }
+            for (int i=0; i<1000; ++i) {
+                try {
+                    const auto child = retiring.round_robin(root);
+                    retiring.complete(child);
+                    ++unexpected;
+                } catch (const std::logic_error&) {
+                    ++denied;
+                }
+            }
+        });
+    }
+    while (ready.load() < 8) std::this_thread::yield();
+    begin.store(true, std::memory_order_release);
+    while (early.load() < 800) std::this_thread::yield();
+    retiring.close();
+    after_stop.store(true, std::memory_order_release);
+    for (auto& contender : contenders) contender.join();
+    check(denied == 8000 && unexpected == 0 && retiring.outstanding() == 0,
+          "post-STOP ledger selection admitted a stale route frame");
+    rejected([&] { retiring.advance_generation(12); },
+             "closed correlation ledger reopened through generation bump");
+    retiring.close();
+    std::cout << "ORES_NATIVE_ACTOR_ROUTE_LEDGER_OK branches=2000" << " post_stop_denials=8000" << std::endl;
 }

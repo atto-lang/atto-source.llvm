@@ -1,5 +1,6 @@
 #pragma once
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <unordered_map>
 #include <unordered_set>
@@ -39,6 +40,50 @@ inline bool valid_pipe_component(const std::string& value,
         i += width;
     }
     return true;
+}
+
+/** Shared, byte-stable v1 routing key validation. Unlike a graph name,
+ * an affinity key may include literal 0x00, but must be well-formed UTF-8,
+ * at most 4096 bytes and never hash a truncated ABI representation. */
+inline bool valid_pipe_route_key(const std::string& value) noexcept {
+    if (value.size() > 4096) return false;
+    for (std::size_t i = 0; i < value.size();) {
+        const auto lead = static_cast<unsigned char>(value[i]);
+        if (lead <= 0x7f) { ++i; continue; }
+        std::size_t width = 0;
+        if (lead >= 0xc2 && lead <= 0xdf) width = 2;
+        else if (lead >= 0xe0 && lead <= 0xef) width = 3;
+        else if (lead >= 0xf0 && lead <= 0xf4) width = 4;
+        else return false;
+        if (width > value.size() - i) return false;
+        for (std::size_t j = 1; j < width; ++j) {
+            const auto b = static_cast<unsigned char>(value[i + j]);
+            if ((b & 0xc0) != 0x80) return false;
+        }
+        const auto second = static_cast<unsigned char>(value[i + 1]);
+        if ((lead == 0xe0 && second < 0xa0)
+            || (lead == 0xed && second > 0x9f)
+            || (lead == 0xf0 && second < 0x90)
+            || (lead == 0xf4 && second > 0x8f)) return false;
+        i += width;
+    }
+    return true;
+}
+
+/** Unsigned FNV-1a64, modulo the EXACT ordered destination count.
+ * Selection affinity is not a security capability or actor authorization. */
+inline std::size_t actor_pipe_key_slot(const std::string& key,
+                                      std::size_t destinations) {
+    if (destinations == 0 || destinations > 4096)
+        throw std::invalid_argument("pipeline keyed route destination count invalid");
+    if (!valid_pipe_route_key(key))
+        throw std::invalid_argument("pipeline route key must be bounded UTF-8");
+    std::uint64_t digest = UINT64_C(14695981039346656037);
+    for (const unsigned char byte : key) {
+        digest ^= byte;
+        digest *= UINT64_C(1099511628211);
+    }
+    return static_cast<std::size_t>(digest % destinations);
 }
 
 /** Nominal actor-pipeline admission; not an executable transport. */

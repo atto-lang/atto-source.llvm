@@ -13,7 +13,7 @@ static void require(bool condition, const char* why) {
 }
 
 int main() {
-    NativeSupervisorRegistry registry(25, 128, 128);
+    NativeSupervisorRegistry registry(128, 128, 128);
     auto supervisor = registry.create_child(registry.root());
     std::vector<PipeStage> stages{
         {"Producer", PipeRole::readable, "", "Event"},
@@ -28,12 +28,12 @@ int main() {
         require(pipe.buffered_payload_bytes() == 9
                 && pipe.buffered_message_count() == 2,
                 "pending writer budget was not charged");
-#ifdef ORES_ACTOR_PIPE_TEST_FAULT_INJECTION
-        pipe.test_fail_next_writer_promotion();
+#ifdef ORESLANG_ACTOR_PIPE_FAULT_TESTS
+        pipe.fail_next_writer_promotion_for_test();
 #endif
         require(pipe.read_async(0).get() == "front",
                 "reader result changed by writer promotion");
-#ifdef ORES_ACTOR_PIPE_TEST_FAULT_INJECTION
+#ifdef ORESLANG_ACTOR_PIPE_FAULT_TESTS
         bool failed = false;
         try { pending.get(); }
         catch (const std::bad_alloc&) { failed = true; }
@@ -51,7 +51,7 @@ int main() {
                 "transport failed to recover after writer promotion");
         pipe.close();
     }
-#ifdef ORES_ACTOR_PIPE_TEST_FAULT_INJECTION
+#ifdef ORESLANG_ACTOR_PIPE_FAULT_TESTS
     // When a promotion fails, the buffer can have a vacant slot while
     // older writers still own charged pending admissions. A later write
     // must not overtake them. A second failure can also leave NO buffered
@@ -66,7 +66,7 @@ int main() {
                 && older.wait_for(0ms) == std::future_status::timeout,
                 "both older writers must start queued");
 
-        pipe.test_fail_next_writer_promotion();
+        pipe.fail_next_writer_promotion_for_test();
         require(pipe.read_async(0).get() == "A", "first buffered DATA changed");
         bool first_rejected = false;
         try { first_failed.get(); }
@@ -93,7 +93,7 @@ int main() {
                 "pending-writer edge quota bypassed after promotion failure");
 
         if (scenario == 1)
-            pipe.test_fail_next_writer_promotion();
+            pipe.fail_next_writer_promotion_for_test();
         require(pipe.read_async(0).get() == "B", "second buffered DATA changed");
 
         if (scenario == 1) {

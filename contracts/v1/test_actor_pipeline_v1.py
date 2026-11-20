@@ -38,6 +38,7 @@ def main():
         apply(altered)
         samples.append((name, altered))
 
+    mutation("altered schema", lambda d: d.update(schema="unknown"))
     mutation("missing NUL golden vector", lambda d: d["operations"]["by_key"].pop())
     mutation("forged key destination", lambda d: d["operations"]["by_key"][0].update(target="worker-b"))
     mutation("forged FNV hash", lambda d: d["operations"]["by_key"][1].update(fnv1a64_hex="0"*16))

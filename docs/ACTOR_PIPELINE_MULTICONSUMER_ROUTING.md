@@ -47,6 +47,14 @@ into current round-robin semantics.
    only for backward compatibility. In production the supervisor must bind
    these identifiers to authenticated runtime actor identities/epochs.
    No caller-supplied actor name grants authority to another actor's port.
+   **Java/LLVM identity parity:** graph instance IDs, nominal actor type names,
+   inbound/outbound type tags, and every link source/target/payload component
+   are each limited to **256 UTF-8 bytes**. Reject embedded NUL, malformed
+   Unicode, invalid UTF-8, overlong encodings and surrogate codepoints; count
+   bytes, not Java UTF-16 code units. Optional empty inbound/outbound ports
+   remain valid only where the stage role permits them. Reject these values
+   before building route maps or admitting any message. This check is graph
+   validation, **not** an actor identity/capability authentication substitute.
 2. **Single physical execution.** Routing-policy mutation (RR cursor,
    subscription membership, reply correlation) belongs to the VM scheduler,
    **not** a guest-writable global or hidden ordinary actor instance field.
@@ -140,60 +148,46 @@ constructor with independent bounded mailboxes and implements:
 - `write_by_key_async(source, key, payload)` — stable FNV-1a edge selection;
   rejects malformed/overlong UTF-8, surrogates and oversize keys. Unicode
   normalization (NFC), if required, belongs to the typed key codec upstream.
+- Each edge enforces a 16 MiB buffered-payload byte credit across already
+  admitted messages AND suspended writers, in addition to the existing
+  1 MiB individual payload and message/pending-writer count limits.
+- The **graph** also enforces a 64 MiB aggregate buffered-payload
+  credit across all edges (queued messages plus pending writers). This
+  prevents unbounded *transport-buffered* payload amplification across edges.
+  It does NOT bound completed read Futures, caller-retained copies, actor heaps,
+  codecs, or total process memory. Credits are reserved atomically
+  before storing a payload and returned when read/cancelled on STOP; moving
+  a pending writer into the queue must **not** double-charge its bytes.
+  Direct handoff to a waiting reader does not consume buffered credit.
+  Graph-wide admission failures are independently reported per fanout edge,
+  never mistaken for successful target execution.
+- Empty-message/host metadata safety: the trusted transport constructor
+  rejects edge queue capacity outside **1..4096**, worker capacity outside
+  **1..4096**, or more than **65,536 configured edge queue slots** in total
+  (`number_of_edges * edge_capacity`, checked by division before any
+  per-edge allocations). Per-edge pending readers and writers each also
+  have at most `edge_capacity` slots. These limits prevent tiny/zero-byte
+  payloads from bypassing the byte-credit policy; they are not guarantees of
+  a total-process heap quota, and do not authorize guest-controlled sizing.
+  Direct handoff to a waiting reader does not consume buffer credit;
+  draining a message or cancelling a pending writer returns its credit.
+  Exhaustion yields a failed per-edge admission Future and does not
+  block unrelated mailbox admissions except when the graph-wide 64 MiB
+  quota is exhausted. The graph quota limits *buffered* payload bytes only;
+  it is NOT a total actor-process memory limit.
+
+- A deque-allocation failure while promoting a pending writer is a
+  **terminal per-writer admission failure**: the already-delivered message
+  remains valid, the writer Future receives the allocation exception, and
+  both per-edge and graph-wide reservations for that writer are returned.
+  The routing CTest and standalone GCC/Clang host matrix compile a
+  deterministic injection seam **only into test binaries**, so this path is
+  exercised without relying on ambient OOM. The production transport does
+  not expose the injection control.
 
 These APIs are **host-only** and currently use `std::string` payloads;
 they are not a substitute for checked `ActorMail<T>` serialization,
 isolate memory ownership, or guest compiler lowering.
-
-### Native aggregate payload accounting (2026-10-15 hardening)
-
-The native transport now accepts optional graph-wide **buffered byte**
-and **buffered message** capacities, defaulting to **64 MiB / 65,536**
-and restricted to **1..64 MiB / 1..65,536** respectively. An individual
-DATA payload is limited to **1 MiB**, while the edge and supervisor worker
-capacities are each restricted to **1..4096**. These are independent,
-atomic pressure gates shared across *all* graph edges. A zero-byte DATA
-message still consumes one message slot, so empty messages cannot evade
-the resource bound.
-
-Pending **reader** promises have a separate graph-wide cap, defaulting to
-65,536 and configurable over 1..65,536. This closes the multiplicative
-allocation gap of up to 4,096 edges with 4,096 pending readers each.
-Each accepted pending read takes one global credit. A direct write handoff
-releases the reader credit, and STOP releases all remaining pending reader
-credits while failing their Futures. Per-edge reader bounds still apply.
-The host exposes `pending_reader_count()` for accounting diagnostics.
-Native regressions cover cross-edge saturation, credit reuse after handoff,
-STOP cancellation, and invalid global reader limits.
-
-Bytes are charged only for a buffered message or pending writer, before
-publication; a failed reservation never consumes credits. Reading a queued
-message releases its bytes. Promoting an already charged writer preserves
-the charge until its DATA is read. STOP releases cancelled pending-writer
-credits but preserves credits for previously admitted buffered DATA, which
-remains drainable. A direct handoff to an already-waiting reader is not a
-buffered transport allocation. The host-only `buffered_payload_bytes()` and
-`buffered_message_count()` diagnostics expose the currently charged
-payload bytes and buffered/pending messages.
-
-A failed pending-writer promotion may leave free buffer capacity while older
-writers are still queued. New writers MUST queue behind older pending writers,
-never fill the free slot ahead of them, and the per-edge pending-writer quota
-continues to apply independently of buffer occupancy. If repeated promotion
-failures empty the buffer while a charged writer remains, the next reader
-directly receives the oldest pending writer and releases its graph-wide byte
-and message credits. The failed writers' admission futures settle exceptionally;
-successful recovery does not reorder or duplicate DATA. The fault-injection
-regression covers FIFO, pending-writer capacity, stranded-reader prevention,
-and post-failure reuse under both GCC and Clang sanitizer targets.
-
-This is **not** a global heap cap on consumers holding already-delivered
-Futures or a claim of guest-level backpressure. The future scheduler
-`RouteReceipt`/typed `ActorMail<T>` integration must enforce the same
-generation-scoped credit policy (including accounting for actual encoded
-payload sizes) on Java/GraalVM, LLVM and other backends. It must also
-preserve one failure receipt per fan-out destination under byte pressure.
-
 
 ## Native host route-correlation ledger (2026-10-16)
 
@@ -213,15 +207,6 @@ paths; the original frame is consumed exactly once, the flow ID stays
 constant, and the reverse hop has its own route ID. Reverse data cannot
 re-enter forward selection or route above the origin.
 
-**Frame lifetime hardening:** the ledger retains owning references
-to active route frames until completion, STOP or generation abort.
-Dropping the final external handle cannot leave a dangling pointer or
-allow an allocator-reused address to authenticate a different frame (ABA).
-The updated exact C++ header and test blobs were compiled and run locally
-with GCC and Clang in C++17 ASan+UBSan mode (2,000 concurrent selections).
-Those local runs still used a lightweight graph-contract stub, not the
-production native graph validator or entire CTest matrix.
-
 **Important:** this ledger is NOT yet attached to native DATA mailbox
 envelopes and does not authenticate the current executing actor. It also
 does not lower any Oreslang source `self.forward_*`, `self.backward` or
@@ -238,6 +223,68 @@ route selections. The production DAG validator, actual native transport,
 full repository CTest and compiled guest actor code were **not executed**
 by that isolated test and remain release blockers.
 
+## Canonical keyed correlation parity (2026-10-16)
+
+The native `ActorPipeRouteLedger::forward_by_key` now selects a child
+correlation frame using the **same** `actor_pipe_key_slot` helper called by
+`NativeActorPipeTransport::write_by_key_async`. The common helper lives
+in `ActorPipeContract.hpp` and enforces strict UTF-8, a 4,096-byte
+maximum, unsigned FNV-1a64, and modulo the checked outgoing-edge order.
+An empty key and an embedded NUL are legal UTF-8 keys; NUL remains
+prohibited in graph stage/edge identity strings.
+
+The dedicated native ledger test now uses the six canonical key
+fixtures (including U+0000) with verified receiver and flow ID, rejects
+overlong/surrogate/over-budget keys, and checks that rejection does not
+consume route frame credits. This still proves **host correlation
+selection only**. It does not authenticate a native executing actor
+against its current scheduler-owned DATA envelope, deliver a correlated
+guest DATA message, or lower guest `self.forward_by_key` calls.
+
+A local extracted-implementation probe passed GCC and Clang optimized
+and ASan/UBSan builds (six key vectors and every key length 0..4096).
+That probe is *not* an execution of the full production header/CTest
+suite, which remains blocked on a runnable approved CI environment.
+
+### Graph-wide pending-reader budget and exact failure injection
+
+In addition to the 64 MiB buffered byte and 65,536 buffered message
+caps, the native transport independently limits **unresolved reader
+promises across the whole graph** (configurable 1..65,536). Accepted
+pending readers reserve a credit; direct handoff and STOP cancellation
+return it. Deque allocation failure must roll back the reservation.
+`pending_reader_count()` is host-only diagnostic accounting and is
+not total process-memory usage. The native test-only build can inject
+`std::bad_alloc` at the precise reader-enqueue site to exercise credit
+recovery and subsequent handoff.
+
+The native correlation ledger also retains owning `shared_ptr` handles
+for every active frame. Completion, abort, or STOP releases ownership;
+dropping all caller-owned copies does not prematurely free a live
+frame or allow a reused raw pointer to pass active-frame validation.
+The ledger's stale-frame and orphaned-frame regressions cover this ABA
+boundary. The separate native writer-promotion fault test runs 32
+write/read cycles to expose leaked reservations and failed recovery.
+
+All fault-injection controls require
+`ORESLANG_ACTOR_PIPE_FAULT_TESTS` and are absent from production builds.
+None of these host tests establishes scheduler-authenticated guest
+`self.forward_*`, `self.backward`, or `self.reply` execution.
+
+### FIFO after writer-promotion allocation failure
+
+A failed allocation while promoting an older pending writer may leave an
+unoccupied buffered slot. A new write **must not** enter that slot ahead
+of older queued writers, and the per-edge pending-writer capacity applies
+regardless of the currently buffered-message count. Once the buffer
+drains, the next reader receives the oldest charged pending writer
+directly rather than suspending indefinitely behind an empty queue.
+Both paths return the exact graph-wide byte/message credits and preserve
+per-edge FIFO admission ordering. A dedicated native regression covers
+single and repeated injected failures, pending-writer quota enforcement,
+stranded-read recovery, and post-recovery reuse in GCC/Clang and sanitizer
+test builds.
+
 ## Mandatory release gates
 
 - Compile and execute the new host graph/routing C++ CTests with both
@@ -252,31 +299,54 @@ by that isolated test and remain release blockers.
 - Verify exact source Git tree on the authorized runner; never mirror private
   source into an unapproved external organization.
 
-## Native aggregate correlation metadata budget — 2026-10-17
+# Native aggregate payload accounting (2026-10-15 hardening)
 
-The native `ActorPipeRouteLedger` now accepts a configurable **graph-wide
-active correlation-frame metadata budget** (default and maximum 64 MiB).
-The charge includes each owned frame, allocated immutable path vector
-slots, retained actor-instance string buffers, and an allowance for the
-per-frame active-index entry. This is a **conservative metadata accounting
-model, not an exact heap-allocation limit**: allocator internals,
-temporary copies during frame creation, and external retained handles
-are outside this accounting contract.
+The native transport now accepts optional graph-wide **buffered byte**
+and **buffered message** capacities, defaulting to **64 MiB / 65,536**
+and restricted to **1..64 MiB / 1..65,536** respectively. An individual
+DATA payload is limited to **1 MiB**, while the edge and supervisor worker
+capacities are each restricted to **1..4096**. These are independent,
+atomic pressure gates shared across *all* graph edges. A zero-byte DATA
+message still consumes one message slot, so empty messages cannot evade
+the resource bound.
 
-All-or-none `forward_all` preflights the aggregate path charge before
-publishing any frame. Single forward/ingress paths charge upon successful
-registry insertion; `backward` and direct `reply` replace an old frame
-transactionally, refunding its charged metadata while preserving its
-one-shot semantics. Completion, mailbox-side retirement, explicit
-generation abort and STOP refund credits. `metadata_bytes()` exposes
-outstanding ledger charges for assertions and host observability.
-New regressions cover per-graph saturation independently of frame count,
-zero partial fanout publication, reverse credit reuse, stale frame
-rejection and cancellation/STOP reclamation.
+Bytes are charged only for a buffered message or pending writer, before
+publication; a failed reservation never consumes credits. Reading a queued
+message releases its bytes. Promoting an already charged writer preserves
+the charge until its DATA is read. STOP releases cancelled pending-writer
+credits but preserves credits for previously admitted buffered DATA, which
+remains drainable. A direct handoff to an already-waiting reader is not a
+buffered transport allocation. The host-only `buffered_payload_bytes()` and
+`buffered_message_count()` diagnostics expose the currently charged
+payload bytes and buffered/pending messages.
 
-These regression sources are committed but have **not** been executed
-against the production full-tree graph validator/transport or under
-native sanitizers at this exact revision. Native DATA payload
-byte/message/pending-reader quotas are distinct limits. Compiler
-`self.*` still requires source execution and typed ownership gates.
+This is **not** a global heap cap on consumers holding already-delivered
+Futures or a claim of guest-level backpressure. The future scheduler
+`RouteReceipt`/typed `ActorMail<T>` integration must enforce the same
+generation-scoped credit policy (including accounting for actual encoded
+payload sizes) on Java/GraalVM, LLVM and other backends. It must also
+preserve one failure receipt per fan-out destination under byte pressure.
 
+
+##
+
+## Integration reconciliation: reader credits and correlation memory (2026-10-17)
+
+The native transport separately caps pending readers graph-wide (default 65,536;
+configurable 1..65,536), alongside edge-local reader bounds and buffered
+byte/message quotas. Direct write handoff refunds one reader credit; STOP
+fails queued read Futures and refunds credits. After an injected pending-writer
+promotion failure, new writes may not bypass older queued writers.
+
+The correlation ledger owns active immutable route frames until completion,
+generation abort, or STOP, preventing dangling-handle/ABA identity reuse.
+In addition to its 65,536-frame count limit it charges frame/path metadata
+against a configurable 64 MiB maximum graph-wide budget. This conservative
+accounting includes frame and path storage, but not all heap allocations.
+forward_all preflights full-batch metadata charges before committing frames.
+backward and direct reply replace a frame transactionally, without losing
+the original on quota or allocation failure. Completion, abort and STOP
+refund credits. Regression tests cover quotas, fan-in identity and races.
+
+These host guarantees do not establish source-compiled guest self.*
+availability or exact-revision native CI certification.
