@@ -1101,7 +1101,13 @@ impl Parser {
             self.terminator()?;
             return Ok(Stmt::YieldFrom(source, pos));
         }
-        let word = self.word_at(0).map(str::to_owned);
+        // Statement-position '^' is the return alias. This frontend does not
+        // yet lower expression-position XOR; keep that syntax distinct.
+        let word = if *self.peek() == Tok::Caret {
+            Some("return".to_owned())
+        } else {
+            self.word_at(0).map(str::to_owned)
+        };
         match word.as_deref() {
             Some("val" | "const" | "let") => {
                 let s = self.parse_binding()?;
@@ -1143,6 +1149,13 @@ impl Parser {
             }
             Some("return") => {
                 self.advance();
+                if self.is_word("match") {
+                    if self.in_generator {
+                        return Err(Diagnostic::new(pos, "E_RETURN",
+                            "generator cannot return a match value"));
+                    }
+                    return self.parse_return_match(pos);
+                }
                 let at_end = matches!(self.peek(), Tok::Semi | Tok::RBrace)
                     || matches!(self.word_at(0), Some("fi" | "end" | "done" | "elif" | "elseif" | "else"));
                 let value = if at_end { None } else { Some(self.parse_expr()?) };
@@ -1405,6 +1418,53 @@ impl Parser {
         // each elif arm nests one level deeper in the lowered if/else chain
         self.height -= arms.len() as u32 - 1;
         Ok(Stmt::If { arms, otherwise, pos })
+    }
+
+    /// A value-producing return-position match reuses the existing checked
+    /// exhaustive Match lowering rather than creating a second evaluator.
+    fn parse_return_match(&mut self, pos: Pos) -> R<Stmt> {
+        self.expect_word("match")?;
+        let subject = self.parse_expr()?;
+        self.expect_word("over")?;
+        let mut arms = Vec::new();
+        while !self.is_word("end") {
+            if *self.peek() == Tok::Eof {
+                return Err(Diagnostic::new(self.pos(), "E_EOF",
+                    "expected 'end' to close return match"));
+            }
+            self.grow(1)?;
+            let apos = self.pos();
+            self.expect_word("on")?;
+            let pattern = self.parse_pattern()?;
+            let guard = if self.eat_word("when") {
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
+            self.expect(Tok::Arrow, "'->' in a return match arm")?;
+            let braced = *self.peek() == Tok::LBrace;
+            let body = if braced {
+                self.parse_block()?
+            } else {
+                let value = self.parse_expr()?;
+                vec![Stmt::Return(Some(value), apos)]
+            };
+            arms.push(MatchArm { pattern, guard, body, pos: apos });
+            if braced {
+                self.eat(&Tok::Comma);
+            } else if !self.eat(&Tok::Comma) && !self.is_word("end") {
+                return Err(Diagnostic::new(self.pos(), "E_SYNTAX",
+                    "expected ',' between return match value arms"));
+            }
+        }
+        self.expect_word("end")?;
+        self.height -= arms.len() as u32;
+        if arms.is_empty() {
+            return Err(Diagnostic::new(pos, "E_SYNTAX",
+                "return match requires at least one arm"));
+        }
+        self.terminator()?;
+        Ok(Stmt::Match { subject, arms, pos })
     }
 
     /// Java Parser.parseMatch. Canonical `match x over on P -> { } end`
@@ -2206,6 +2266,7 @@ fn describe(t: &Tok) -> String {
                 Tok::Pipe => "|",
                 Tok::PipeGt => "|>",
                 Tok::Amp => "&",
+                Tok::Caret => "^",
                 Tok::At => "@",
                 _ => "?",
             };
