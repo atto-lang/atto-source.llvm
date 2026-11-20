@@ -3,7 +3,7 @@ on:
   push:
     branches: [main, feat/native-atto-http3-policy-20261114]
   pull_request:
-    paths: ['Cargo.toml', 'src/**', 'frontend/**', 'tests/fixtures/**', 'tests/actors/**', 'tests/native_actor_mailbox_stress.c', 'runtime/**', 'contracts/native-llvm-actor-aot-v1.json', 'ci/**', 'stdlib/**', 'fixtures/hosted-policy-main.atto', '.github/workflows/native-aot.yml']
+    paths: ['Cargo.toml', 'src/**', 'frontend/**', 'tests/fixtures/**', 'tests/actors/**', 'tests/native_actor_mailbox_stress.c', 'runtime/**', 'contracts/native-llvm-actor-aot-v1.json', 'ci/**', 'stdlib/**', 'fixtures/hosted-policy-main.atto', 'fixtures/hosted-policy-vectors-main.atto', '.github/workflows/native-aot.yml']
 permissions:
   contents: read
 jobs:
