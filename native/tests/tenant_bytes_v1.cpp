@@ -95,4 +95,19 @@ int main() {
     assert(second.value->length() == 0);
   }
   assert(replacement.charged() == 0);
+  // Cancellation-style explicit drop releases charge now; repeated drop is safe.
+  Arena cancel({12, 12, 12}, 2048);
+  {
+    auto active = cancel.allocate_zeroed(24);
+    assert(active.code == Code::ok && active.value.has_value());
+    assert(cancel.charged() == sizeof(Bytes) + 24);
+    active.value->drop_now();
+    assert(cancel.charged() == 0);
+    active.value->drop_now();
+    assert(cancel.charged() == 0);
+    std::uint8_t out = 123;
+    assert(active.value->read_byte(cancel, 0, out) == Code::invalid_owner);
+    assert(out == 123);
+  }
+  assert(cancel.charged() == 0);
 }
