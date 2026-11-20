@@ -43,7 +43,7 @@ test "$total" = "1255"
 
 # Heapless native Option<int> ADT parity. This is a native LLVM binary
 # (not a browser guest, host-model oracle or Result<int,Error> claim).
-for name in option-some-match option-none-question option-some-question option-zero-is-some option-parameter-abi; do
+for name in option-some-match option-none-question option-some-question option-zero-is-some option-parameter-abi option-some-is-match option-zero-is-discard; do
   atto="tests/native-adt/$name.atto"
   ir="$work/$name.ll"
   target/release/atto-llvm "$atto" -o "$ir" --emit-llvm
@@ -68,6 +68,16 @@ if target/release/atto-llvm tests/native-adt/reject-result-error.atto \
 fi
 test ! -e "$work/invalid-result.ll"
 echo "PASS Result<int,Error> negative no-artifact"
+# ADT syntax must fail without IR when a zero-payload None is bound.
+if target/release/atto-llvm tests/native-adt/reject-is-none-payload.atto \
+  -o "$work/invalid-is-none.ll" --emit-llvm >"$work/is-none.out" 2>"$work/is-none.err"; then
+  echo "FAIL: nominal is None<value> incorrectly emitted native LLVM" >&2; exit 1
+fi
+test ! -e "$work/invalid-is-none.ll"
+grep -q E_ARITY "$work/is-none.err"
+echo "PASS nominal on-is Option<int> arity error, no guest artifact"
+
+
 # Invalid '?': an Option<int> failure cannot cross main():int.
 if target/release/atto-llvm tests/native-adt/reject-question-main.atto \
   -o "$work/invalid-question.ll" --emit-llvm >"$work/invalid-question.out" 2>"$work/invalid-question.err"; then
