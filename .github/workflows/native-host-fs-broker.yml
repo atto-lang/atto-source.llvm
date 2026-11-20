@@ -34,19 +34,21 @@ jobs:
         run: |
           set -eu
           for compiler in gcc clang; do
-            "$compiler" -std=c11 -Wall -Wextra -Wconversion -Werror -pedantic -pthread \
-              -fsanitize=address,undefined -fno-omit-frame-pointer \
-              -I native/include \
-              native/src/host_fs_broker.c native/tests/host_fs_broker_test.c \
-              -o "/tmp/atto_fs_broker_$compiler"
-            ASAN_OPTIONS=detect_leaks=1 "/tmp/atto_fs_broker_$compiler"
-            "$compiler" -std=c11 -Wall -Wextra -Wconversion -Werror -pedantic -pthread \
-              -fsanitize=address,undefined -fno-omit-frame-pointer \
-              -I native/include \
-              native/src/host_fs_broker.c native/src/host_fs_guest_bridge.c \
-              native/tests/host_fs_guest_bridge_test.c \
-              -o "/tmp/atto_fs_bridge_$compiler"
-            ASAN_OPTIONS=detect_leaks=1 "/tmp/atto_fs_bridge_$compiler"
+            for optimize in O1 O2; do
+              "$compiler" -std=c11 "-$optimize" -Wall -Wextra -Wconversion -Werror -pedantic -pthread \
+                -fsanitize=address,undefined -fno-omit-frame-pointer \
+                -I native/include \
+                native/src/host_fs_broker.c native/tests/host_fs_broker_test.c \
+                -o "/tmp/atto_fs_broker_${compiler}_${optimize}"
+              ASAN_OPTIONS=detect_leaks=1 "/tmp/atto_fs_broker_${compiler}_${optimize}"
+              "$compiler" -std=c11 "-$optimize" -Wall -Wextra -Wconversion -Werror -pedantic -pthread \
+                -fsanitize=address,undefined -fno-omit-frame-pointer \
+                -I native/include \
+                native/src/host_fs_broker.c native/src/host_fs_guest_bridge.c \
+                native/tests/host_fs_guest_bridge_test.c \
+                -o "/tmp/atto_fs_bridge_${compiler}_${optimize}"
+              ASAN_OPTIONS=detect_leaks=1 "/tmp/atto_fs_bridge_${compiler}_${optimize}"
+            done
           done
       - name: CMake integration / CTest (host only)
         run: |
