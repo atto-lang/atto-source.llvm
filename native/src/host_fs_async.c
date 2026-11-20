@@ -89,8 +89,10 @@ static int enqueue(atto_fs_async_service *s, const atto_fs_host_actor *actor,
         if (j->state == FREE && j->generation != UINT32_MAX) {room = 1; break;}
     }
     const int admitted = !s->stopping && valid_actor(s, actor);
+    const int sequence_exhausted = s->next_sequence == UINT64_MAX;
     (void)pthread_mutex_unlock(&s->lock);
     if (!admitted) return -EACCES;
+    if (sequence_exhausted) return -EOVERFLOW;
     if (!room) return -EAGAIN;
     char *owned_path = (char *)malloc(path_len + 1u);
     uint8_t *bytes = (uint8_t *)malloc(length + 1u);
@@ -101,7 +103,11 @@ static int enqueue(atto_fs_async_service *s, const atto_fs_host_actor *actor,
     const int queue_rc = pthread_mutex_trylock(&s->lock);
     if (queue_rc) {free(owned_path); free(bytes); return queue_rc == EBUSY ? -EAGAIN : -queue_rc;}
     if (!s->stopping && valid_actor(s, actor)) {
-        for (unsigned i = 0; i < s->max_jobs; ++i) {
+        /* A wrapped FIFO sequence would let a younger job overtake older
+         * jobs. Fail closed before allocating a new ticket or modifying a
+         * reusable slot; this service is permanently sequence-exhausted. */
+        if (s->next_sequence == UINT64_MAX) rc = -EOVERFLOW;
+        else for (unsigned i = 0; i < s->max_jobs; ++i) {
             job *j = &s->slots[i];
             if (j->state != FREE || j->generation == UINT32_MAX) continue;
             ++j->generation;
