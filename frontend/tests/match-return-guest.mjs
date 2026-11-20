@@ -73,6 +73,10 @@ try {
   const cases = [
     ['pass/match-guard-block-return.atto', { exit: 0, stdout: '2\n2\n' }],
     ['pass/match-guard-block-caret.atto', { exit: 0, stdout: '2\n2\n' }],
+    ['pass/adt-option-guard-hit.atto', { exit: 21, stdout: '' }],
+    ['pass/adt-result-ok-guard.atto', { exit: 42, stdout: '' }],
+    ['pass/adt-guard-skips-wrong-result-tag.atto', { exit: 42, stdout: '' }],
+    ['pass/adt-whole-value-guard-binding.atto', { exit: 42, stdout: '' }],
     ['fail/match-guard-no-fallback.atto', { error: 'E_MATCH' }],
     ['fail/match-guard-block-fallthrough.atto', { error: 'E_RETURN' }],
   ];
@@ -102,7 +106,7 @@ try {
       }
     }
   }
-  console.log('PASS: 4/4 exact-match contracts executed by frontend; real guest stdout/exit and no-artifact proofs');
+  console.log('PASS: 8/8 exact-match and ADT contracts executed by frontend; real guest stdout/exit and no-artifact proofs');
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }
