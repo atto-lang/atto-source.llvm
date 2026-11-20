@@ -29,7 +29,9 @@ on:
       - "src/main/cpp/oreslang/runtime/TenantVm.cpp"
       - "src/main/cpp/oreslang/runtime/TenantVm.hpp"
       - "src/main/cpp/oreslang/runtime/TenantVmFsTurnAuth.hpp"
+      - "src/main/cpp/oreslang/runtime/TenantVmFsHostDispatch.hpp"
       - "tests/tenant-vm/fs_lifecycle_test.cpp"
+      - "tests/tenant-vm/fs_host_dispatch_test.cpp"
       - "tests/tenant-vm/tenant_vm_fs_turn_auth_test.cpp"
       - "tests/tenant-vm/tenant_vm_test.cpp"
       - "tests/tenant-vm/signed_fs_loader_test.cpp"
@@ -144,7 +146,7 @@ jobs:
       - name: Authenticated scheduler turn and restart witnesses (host only)
         run: |
           set -eu
-          cmake --build /tmp/atto-signed-loader-build --target tenant_vm_fs_turn_auth_test tenant_vm_fs_lifecycle_test tenant_vm_test --parallel 2
+          cmake --build /tmp/atto-signed-loader-build --target tenant_vm_fs_turn_auth_test tenant_vm_fs_lifecycle_test tenant_vm_fs_host_dispatch_test tenant_vm_test --parallel 2
           ctest --test-dir /tmp/atto-signed-loader-build --output-on-failure -R tenant_vm_fs_
           /tmp/atto-signed-loader-build/tenant_vm_test equal_offsets_are_different_memory
           /tmp/atto-signed-loader-build/tenant_vm_test messaging_stays_inside_the_vm
