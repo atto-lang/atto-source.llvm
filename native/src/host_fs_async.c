@@ -106,22 +106,25 @@ static int enqueue(atto_fs_async_service *s, const atto_fs_host_actor *actor,
         /* A wrapped FIFO sequence would let a younger job overtake older
          * jobs. Fail closed before allocating a new ticket or modifying a
          * reusable slot; this service is permanently sequence-exhausted. */
-        if (s->next_sequence == UINT64_MAX) rc = -EOVERFLOW;
-        else for (unsigned i = 0; i < s->max_jobs; ++i) {
-            job *j = &s->slots[i];
-            if (j->state != FREE || j->generation == UINT32_MAX) continue;
-            ++j->generation;
-            j->state = QUEUED;
-            j->write = write; j->owner = *actor;
-            j->path = owned_path; j->bytes = bytes;
-            j->length = length; j->used = 0;
-            j->cancelled = 0; j->cancelled_running_write = 0;
-            j->abandoned = 0; j->outcome = 0;
-            j->sequence = ++s->next_sequence;
-            *ticket = ((uint64_t)j->generation << 16u) | (uint64_t)(i + 1u);
-            rc = 0;
-            pthread_cond_signal(&s->ready);
-            break;
+        if (s->next_sequence == UINT64_MAX) {
+            rc = -EOVERFLOW;
+        } else {
+            for (unsigned i = 0; i < s->max_jobs; ++i) {
+                job *j = &s->slots[i];
+                if (j->state != FREE || j->generation == UINT32_MAX) continue;
+                ++j->generation;
+                j->state = QUEUED;
+                j->write = write; j->owner = *actor;
+                j->path = owned_path; j->bytes = bytes;
+                j->length = length; j->used = 0;
+                j->cancelled = 0; j->cancelled_running_write = 0;
+                j->abandoned = 0; j->outcome = 0;
+                j->sequence = ++s->next_sequence;
+                *ticket = ((uint64_t)j->generation << 16u) | (uint64_t)(i + 1u);
+                rc = 0;
+                pthread_cond_signal(&s->ready);
+                break;
+            }
         }
     } else rc = -EACCES;
     pthread_mutex_unlock(&s->lock);
