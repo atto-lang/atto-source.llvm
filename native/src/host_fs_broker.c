@@ -18,7 +18,8 @@
  * Resolve policy closes symlinks, magic links and bind/mount traversal.
  * It does not sandbox native code that can directly issue syscalls. */
 static int valid_rel(const char *text) {
-    if (!text || !*text || *text == '/' || *text == '-' || strlen(text) >= ATTO_FS_SCOPE_LIMIT) return 0;
+    if (!text || !*text || *text == '/' || *text == '-' ||
+        strnlen(text, ATTO_FS_SCOPE_LIMIT) >= ATTO_FS_SCOPE_LIMIT) return 0;
     const char *start = text;
     for (const char *p = text;; ++p) {
         const unsigned char c = (unsigned char)*p;
