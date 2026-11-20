@@ -4,15 +4,18 @@ use std::{env, fs, path::PathBuf, process::Command, time::{SystemTime, UNIX_EPOC
 fn run(comp: &str, clang: &str, dir: &PathBuf, name: &str, src: &str, expected: Option<i32>, diagnostic: &str) {
     let path=dir.join(format!("{name}.atto"));
     fs::write(&path,src).unwrap();
-    let result=Command::new(comp).arg("--target=host").arg(&path).output()
+    // This is the Rust atto-llvm CLI, NOT the C++ oreslang-llvmc CLI:
+    // it requires input.atto -o output.ll --emit-llvm, writes IR to disk
+    // atomically, and emits diagnostics on stderr.
+    let ir=dir.join(format!("{name}.ll"));
+    let result=Command::new(comp).arg(&path).arg("-o").arg(&ir).arg("--emit-llvm").output()
         .expect("native atto-llvm compiler executable required");
+    assert!(result.stdout.is_empty(), "{name}: unexpected compiler stdout");
     if let Some(code)=expected {
         assert!(result.status.success(), "{name}: {:?}", String::from_utf8_lossy(&result.stderr));
-        let llvm=String::from_utf8(result.stdout).unwrap();
+        let llvm=fs::read_to_string(&ir).expect("Rust compiler wrote no LLVM IR file");
         assert!(llvm.contains("; InlineTaskEnter") && llvm.contains("; InlineTaskExit"), "{name}: no inline task IR");
         assert!(!llvm.contains("call void @atto_task_spawn"), "{name}: inline became spawn");
-        let ir=dir.join(format!("{name}.ll"));
-        fs::write(&ir,llvm).unwrap();
         let exe=dir.join(format!("{name}.native"));
         let cc=Command::new(clang).args(["-O1", "-fsanitize=address,undefined",
             "-fno-omit-frame-pointer", "-Wno-override-module", "-x", "ir"])
@@ -24,7 +27,7 @@ fn run(comp: &str, clang: &str, dir: &PathBuf, name: &str, src: &str, expected: 
             "{name}: native guest: {}", String::from_utf8_lossy(&guest.stderr));
     } else {
         assert!(!result.status.success(), "{name} unexpectedly compiled");
-        assert!(result.stdout.is_empty(), "{name}: partial LLVM IR on rejected source");
+        assert!(!ir.exists(), "{name}: compiler left partial LLVM IR on rejected source");
         assert!(String::from_utf8_lossy(&result.stderr).contains(diagnostic),
             "{name}: missing {diagnostic}: {}",String::from_utf8_lossy(&result.stderr));
     }
