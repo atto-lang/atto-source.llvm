@@ -121,6 +121,83 @@ impl Harness {
             String::from_utf8_lossy(&executed.stdout), String::from_utf8_lossy(&executed.stderr));
     }
 
+    /// Observe the complete signed i64 guest return through a fixed test-only
+    /// LLVM entry adapter. The emitted @atto_func_N body is unchanged: only
+    /// the compiler-generated i32 main wrapper is renamed to avoid OS-exit
+    /// truncation. The observer calls that same native guest body and prints
+    /// its 64-bit result using the OS C printf ABI.
+    pub fn positive_full_i64(&mut self, name: &str, source: &str, expected: &str) {
+        let (case, compiled) = self.compile(name, source, &[]);
+        must_succeed(&compiled, &format!("LLVM i64 guest admission {name}"));
+        let original = String::from_utf8(compiled.stdout)
+            .expect("compiler emitted valid UTF-8 LLVM IR");
+        let entry = "define i32 @main()";
+        assert_eq!(original.matches(entry).count(), 1,
+            "{name}: requires exactly one compiled main entry");
+        let marker = "%answer = call i64 @atto_func_";
+        let at = original.find(marker)
+            .expect("compiler main must call native Atto i64 function") + marker.len();
+        let digits: String = original[at..].chars()
+            .take_while(|c| c.is_ascii_digit()).collect();
+        assert!(!digits.is_empty(), "{name}: missing native guest function index");
+        let idx: usize = digits.parse().expect("valid typed function index");
+        assert!(original.contains(&format!("define internal i64 @atto_func_{idx}(")),
+            "{name}: full-width Atto guest symbol not found");
+        let mut observed_ir = original.replacen(
+            entry, "define i32 @atto_unobserved_process_entry()", 1);
+        observed_ir.push_str(&format!(r#"
+@atto_observer_fmt = private constant [6 x i8] c"%lld\0A\00"
+declare i32 @printf(ptr, ...)
+define i32 @main() {{
+entry:
+  %atto_observed_value = call i64 @atto_func_{idx}()
+  %atto_written = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([6 x i8], ptr @atto_observer_fmt, i64 0, i64 0), i64 %atto_observed_value)
+  ret i32 0
+}}
+"#));
+        let ir = case.join("full-i64-observer.ll");
+        fs::write(&ir, observed_ir).expect("write fixed observer LLVM IR");
+        let executable = case.join("observed-i64.native");
+        let mut cc = Command::new(&self.clang);
+        cc.args(["-O2", "-Wno-override-module", "-x", "ir"])
+            .arg(&ir).arg("-o").arg(&executable);
+        must_succeed(&output(cc, "Clang full-i64 observer build"),
+            "Clang full-i64 observer build");
+        let executed = output(Command::new(&executable), "compiled native i64 guest observer");
+        assert_eq!(executed.status.code(), Some(0),
+            "{name}: observer process failed");
+        assert_eq!(executed.stdout, format!("{expected}\n").as_bytes(),
+            "{name}: full-width native guest value was truncated or miscompiled");
+        assert!(executed.stderr.is_empty(), "{name}: unexpected observer errors");
+        println!("ATTO_LLVM_FULL_I64_NATIVE_GUEST_PASS={name} value={expected}");
+    }
+
+    /// Checked overflow is a *runtime* native failure after successful
+    /// compilation, never a compile-time literal-range rejection or wrap.
+    pub fn runtime_checked_overflow(&mut self, name: &str, source: &str) {
+        let (case, compiled) = self.compile(name, source, &[]);
+        must_succeed(&compiled, &format!("LLVM checked overflow guest admission {name}"));
+        let ir_string = String::from_utf8_lossy(&compiled.stdout);
+        assert!(ir_string.contains("llvm.sadd.with.overflow.i64"),
+            "{name}: emitted IR lacks checked signed add");
+        assert!(ir_string.contains("llvm.trap"),
+            "{name}: emitted IR has no checked-overflow trap");
+        let ir = case.join("overflow.ll");
+        fs::write(&ir, &compiled.stdout).expect("write actual overflow LLVM IR");
+        let executable = case.join("overflow.native");
+        let mut cc = Command::new(&self.clang);
+        cc.args(["-O2", "-Wno-override-module", "-x", "ir"])
+            .arg(&ir).arg("-o").arg(&executable);
+        must_succeed(&output(cc, "Clang checked-overflow guest"),
+            "Clang checked-overflow guest");
+        let result = output(Command::new(&executable), "execute checked-overflow guest");
+        assert!(!result.status.success(),
+            "{name}: overflowing native guest returned normally");
+        assert!(result.stdout.is_empty(),
+            "{name}: overflowing guest emitted a normal result");
+        println!("ATTO_LLVM_NATIVE_CHECKED_OVERFLOW_TRAP_PASS={name}");
+    }
+
     pub fn negative(&mut self, name: &str, source: &str, flags: &[&str], diagnostic: Option<&str>) {
         let (case, result) = self.compile(name, source, flags);
         assert!(!result.status.success(), "unsupported Atto source was admitted: {}", name);
