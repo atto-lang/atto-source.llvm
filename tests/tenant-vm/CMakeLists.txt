@@ -176,6 +176,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_include_directories(tenant_vm_fs_host_dispatch_test PRIVATE
         "${ROOT}/src/main/cpp" "${ROOT}/native/include")
     target_link_libraries(tenant_vm_fs_host_dispatch_test PRIVATE Threads::Threads)
+    if(TENANT_VM_SANITIZE)
+        target_compile_options(tenant_vm_fs_host_dispatch_test PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(tenant_vm_fs_host_dispatch_test PRIVATE -fsanitize=address,undefined)
+    endif()
     add_test(NAME tenant_vm_fs_host_dispatch_host_only COMMAND tenant_vm_fs_host_dispatch_test)
     set_tests_properties(tenant_vm_fs_host_dispatch_host_only PROPERTIES TIMEOUT 30)
 endif()
