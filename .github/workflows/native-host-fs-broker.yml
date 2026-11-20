@@ -1,13 +1,16 @@
-name: Linux scoped host filesystem broker (host-only)
+name: Linux scoped host filesystem security (host-only)
 on:
   pull_request:
     paths:
       - "native/include/atto/host_fs_broker.h"
       - "native/include/atto/host_fs_guest_bridge.h"
+      - "native/include/atto/host_fs_signed_ceiling.h"
       - "native/src/host_fs_broker.c"
       - "native/src/host_fs_guest_bridge.c"
+      - "native/src/host_fs_signed_ceiling.c"
       - "native/tests/host_fs_broker_test.c"
       - "native/tests/host_fs_guest_bridge_test.c"
+      - "native/tests/host_fs_signed_ceiling_test.c"
       - "native/CMakeLists.txt"
       - ".github/workflows/native-host-fs-broker.yml"
   workflow_dispatch:
@@ -22,45 +25,48 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Pin exact source and test commit
+      - name: Verify exact source and test commit
         env:
           EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
+          set -eu
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           git diff --exit-code
           git rev-parse HEAD^{tree}
-          git hash-object native/src/host_fs_broker.c native/tests/host_fs_broker_test.c native/src/host_fs_guest_bridge.c native/tests/host_fs_guest_bridge_test.c
-      - name: GCC and Clang Linux ASan/UBSan host broker
+          git hash-object native/src/host_fs_broker.c native/tests/host_fs_broker_test.c
+          git hash-object native/src/host_fs_guest_bridge.c native/tests/host_fs_guest_bridge_test.c
+          git hash-object native/src/host_fs_signed_ceiling.c native/tests/host_fs_signed_ceiling_test.c
+      - name: GCC and Clang O1/O2 ASan+UBSan (host only)
         run: |
           set -eu
           for compiler in gcc clang; do
             for optimize in O1 O2; do
               "$compiler" -std=c11 "-$optimize" -Wall -Wextra -Wconversion -Werror -pedantic -pthread \
                 -fsanitize=address,undefined -fno-omit-frame-pointer \
-                -I native/include \
-                native/src/host_fs_broker.c native/tests/host_fs_broker_test.c \
+                -I native/include native/src/host_fs_broker.c native/tests/host_fs_broker_test.c \
                 -o "/tmp/atto_fs_broker_${compiler}_${optimize}"
               ASAN_OPTIONS=detect_leaks=1 "/tmp/atto_fs_broker_${compiler}_${optimize}"
               "$compiler" -std=c11 "-$optimize" -Wall -Wextra -Wconversion -Werror -pedantic -pthread \
                 -fsanitize=address,undefined -fno-omit-frame-pointer \
-                -I native/include \
-                native/src/host_fs_broker.c native/src/host_fs_guest_bridge.c \
-                native/tests/host_fs_guest_bridge_test.c \
-                -o "/tmp/atto_fs_bridge_${compiler}_${optimize}"
+                -I native/include native/src/host_fs_broker.c native/src/host_fs_guest_bridge.c \
+                native/tests/host_fs_guest_bridge_test.c -o "/tmp/atto_fs_bridge_${compiler}_${optimize}"
               ASAN_OPTIONS=detect_leaks=1 "/tmp/atto_fs_bridge_${compiler}_${optimize}"
+              "$compiler" -std=c11 "-$optimize" -Wall -Wextra -Wconversion -Werror -pedantic \
+                -fsanitize=address,undefined -fno-omit-frame-pointer \
+                -I native/include native/src/host_fs_signed_ceiling.c \
+                native/tests/host_fs_signed_ceiling_test.c -lcrypto \
+                -o "/tmp/atto_fs_signed_${compiler}_${optimize}"
+              ASAN_OPTIONS=detect_leaks=1 "/tmp/atto_fs_signed_${compiler}_${optimize}"
             done
           done
-      - name: CMake integration / CTest (host only)
+      - name: CMake and CTest (host only)
         run: |
+          set -eu
           cmake -S native -B /tmp/atto-fs-build -DCMAKE_BUILD_TYPE=Debug
           cmake --build /tmp/atto-fs-build --parallel 2
-          ctest --test-dir /tmp/atto-fs-build --output-on-failure -R '^linux_(scoped_host_fs_broker|guest_offset_host_fs_bridge)
-      - name: Explicitly exclude guest security certification
+          ctest --test-dir /tmp/atto-fs-build --output-on-failure \
+            -R '^linux_(scoped_host_fs_broker|guest_offset_host_fs_bridge|signed_host_fs_ceiling)$'
+      - name: State strict evidence boundaries
         run: |
-          echo "HOST_ONLY: this job does not compile or execute an Atto .atto guest."
-          echo "No compiled std.fs API, signed artifact manifest, tenant sandbox, or syscall fencing is proven."
-
-      - name: Explicitly exclude guest security certification
-        run: |
-          echo "HOST_ONLY: this job does not compile or execute an Atto .atto guest."
-          echo "No compiled std.fs API, signed artifact manifest, tenant sandbox, or syscall fencing is proven."
+          echo "HOST_ONLY: no compiled .atto guest executed."
+          echo "No trusted actor-turn ABI v5, async worker, production key trust store or native syscall sandbox certified."
