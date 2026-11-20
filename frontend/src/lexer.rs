@@ -296,6 +296,16 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
             ('+', Some('=')) => (Tok::PlusAssign, 2),
             ('+', _) => (Tok::Plus, 1),
             ('.', _) => (Tok::Dot, 1),
+            // The expression-level fat arrow is a valid Atto entry delimiter,
+            // but this backend has no checked Map/Entry guest lowering yet.
+            // Fail with a stable feature diagnostic rather than E_TOKEN or
+            // accidentally treating it as assignment followed by comparison.
+            ('=', Some('>')) => {
+                return Err(Diagnostic::new(
+                    pos, "E_UNSUPPORTED_MAP_ENTRY",
+                    "first-class Entry<K,V> and Map<K,V> require verified native lowering",
+                ));
+            }
             ('=', Some('=')) => (Tok::EqEq, 2),
             ('=', _) => (Tok::Assign, 1),
             ('!', Some('=')) => (Tok::NotEq, 2),
