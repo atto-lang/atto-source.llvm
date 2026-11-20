@@ -188,3 +188,25 @@ mod abi {
         })
     }
 }
+
+#[cfg(test)]
+mod directional_pipe_guest_gate_tests {
+    use super::*;
+    #[test]
+    fn rejects_continuous_pipe_and_rpipe_without_guest_runtime() {
+        let samples = [
+            "pub fnc main(): int { val c = producer pipe consumer; return 0; }",
+            "pub fnc main(): int { val c = consumer rpipe producer; return 0; }",
+            "define actor Producer as end pub fnc main(): int { val c = spawn Producer() pipe spawn Producer(); return 0; }",
+        ];
+        for source in samples {
+            let d = compile(source).expect_err("continuous graph cannot reach wasm codegen");
+            assert_eq!(d.code, "E_UNSUPPORTED_CONTINUOUS_PIPE", "{source}");
+        }
+    }
+    #[test]
+    fn commented_words_are_not_continuous_pipeline_tokens() {
+        let source = "// pipe rpipe\npub fnc main(): int { return 42; }";
+        assert!(compile(source).is_ok());
+    }
+}
