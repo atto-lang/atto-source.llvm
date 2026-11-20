@@ -16,3 +16,18 @@ endif()
 enable_testing()
 add_test(NAME process_isolated_actor_fault COMMAND atto_actor_process_isolation_test)
 set_tests_properties(process_isolated_actor_fault PROPERTIES TIMEOUT 15)
+
+# Trusted Linux host-side scoped filesystem broker. This is not an Atto guest
+# or secure TenantVM runtime. openat2 is deliberately NOT emulated on other OSes.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_library(atto_host_fs_broker STATIC src/host_fs_broker.c)
+  target_include_directories(atto_host_fs_broker PUBLIC include)
+  add_executable(atto_host_fs_broker_test tests/host_fs_broker_test.c)
+  target_link_libraries(atto_host_fs_broker_test PRIVATE atto_host_fs_broker)
+  if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(atto_host_fs_broker PRIVATE -Wall -Wextra -Wconversion -Werror)
+    target_compile_options(atto_host_fs_broker_test PRIVATE -Wall -Wextra -Wconversion -Werror -UNDEBUG)
+  endif()
+  add_test(NAME linux_scoped_host_fs_broker COMMAND atto_host_fs_broker_test)
+  set_tests_properties(linux_scoped_host_fs_broker PROPERTIES TIMEOUT 15)
+endif()
