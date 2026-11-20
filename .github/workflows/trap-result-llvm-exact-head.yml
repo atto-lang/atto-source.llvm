@@ -44,13 +44,13 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake python3 clang-19 llvm-19-dev
-          clang-19 --version | head -n 1
+          sudo apt-get install -y --no-install-recommends cmake python3 clang-18 llvm-18-dev
+          clang-18 --version | head -n 1
       - name: Build real LLVM C++ frontend/compiler
         shell: bash
         run: |
           set -euo pipefail
-          cmake -S . -B build -DLLVM_DIR=/usr/lib/llvm-19/lib/cmake/llvm -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
+          cmake -S . -B build -DLLVM_DIR="$(llvm-config-18 --cmakedir)" -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
           cmake --build build --target oreslang-llvmc -j 2
           test -x build/oreslang-llvmc
       - name: Run 18 compiler/IR/native guest and no-IR refusal CTests
