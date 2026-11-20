@@ -1,0 +1,5 @@
+// Option type suffix must normalize to the same checked tagged sum as Option<int>.
+pub fnc main(): int {
+  val int? value = Some(42);
+  return value.unwrap_or(0);
+}
