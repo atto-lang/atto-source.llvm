@@ -164,6 +164,8 @@ pub struct Receive {
 pub struct ActorDecl {
     pub name: String,
     pub pos: Pos,
+    /// Explicit inbound DATA message contract; retained for all downstream AST checks.
+    pub receives: Option<Type>,
     /// Explicit outbound application-message type upper bound, not a recipient count.
     pub sends: Option<Type>,
     pub fields: Vec<Field>,
