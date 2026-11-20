@@ -68,8 +68,15 @@ int main(void) {
     };
     atto_fs_broker broker;
     assert(atto_fs_broker_init_layers(&broker, root, &policy) == 0);
+    atto_fs_host_actor actor = {77u, 5u, 123u, 6u};
+    atto_fs_host_actor foreign = {77u, 5u, 999u, 6u};
     atto_fs_async_service *service = NULL;
-    assert(atto_fs_async_create(&service, &broker, 4u) == 0);
+    assert(atto_fs_async_create(&service, &broker, &actor, 4u) == 0);
+    assert(atto_fs_async_forget_actor(service, &foreign) == -EACCES);
+    uint64_t denied_ticket = 999u;
+    assert(atto_fs_async_submit_read(service, &foreign, "data/input.txt",
+                                      16u, &denied_ticket) == -EACCES);
+    assert(denied_ticket == 0u);
     /* The broker's host worker can hold gate across Linux I/O. Poll-side
      * read publication must fail promptly rather than park a carrier:
      * holding the mutex on THIS test thread catches a blocking lock call. */
@@ -82,8 +89,6 @@ int main(void) {
            == -EAGAIN);
     assert(publication_probe[0] == 0xAC);
     assert(pthread_mutex_unlock(&broker.gate) == 0);
-    atto_fs_host_actor actor = {77u, 5u, 123u, 6u};
-    atto_fs_host_actor foreign = {77u, 5u, 999u, 6u};
     uint64_t ticket = 0;
     uint8_t bytes[64];
     memset(bytes, 0xAB, sizeof(bytes));
