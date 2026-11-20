@@ -77,6 +77,22 @@ test ! -e "$work/invalid-is-none.ll"
 grep -q E_ARITY "$work/is-none.err"
 echo "PASS nominal on-is Option<int> arity error, no guest artifact"
 
+# Dynamic and nested extractors must not be approximated as static ADT tags.
+for invalid in arbitrary-extractor nested-extractor; do
+  diagnostic=E_PATTERN
+  if [[ "$invalid" == nested-extractor ]]; then diagnostic=E_SYNTAX; fi
+  casefile="tests/native-adt/reject-is-$invalid.atto"
+  generated="$work/reject-is-$invalid.ll"
+  if target/release/atto-llvm "$casefile" -o "$generated" --emit-llvm \
+    >"$work/$invalid.out" 2>"$work/$invalid.err"; then
+    echo "FAIL: $invalid on-is pattern unexpectedly compiled to LLVM" >&2; exit 1
+  fi
+  test ! -e "$generated"
+  grep -q "$diagnostic" "$work/$invalid.err"
+done
+echo "PASS native LLVM rejects unsafe on-is extractors without IR"
+
+
 
 # Invalid '?': an Option<int> failure cannot cross main():int.
 if target/release/atto-llvm tests/native-adt/reject-question-main.atto \
