@@ -2401,7 +2401,7 @@ impl<'a> FnCx<'a> {
                 BinOp::Add | BinOp::Sub | BinOp::Mul => Type::Int,
                 BinOp::BitXor => {
                     if a.ty != Type::Int || b.ty != Type::Int {
-                        return Err(type_err(pos, "bitwise XOR '^' requires two int operands"));
+                        return Err(type_err(pos, "bitwise XOR '^^' requires two int operands"));
                     }
                     Type::Int
                 },
