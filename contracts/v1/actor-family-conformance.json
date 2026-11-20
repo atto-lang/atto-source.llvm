@@ -479,6 +479,174 @@
       "description": "Java/Graal and LLVM compiled source fixtures return identical unary/stream network outcomes",
       "status": "not_verified",
       "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-067",
+      "expected": "accept_target",
+      "description": "actor @ActorMiddleware(A,B,C) annotation parsed as ordered statically resolved class references",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-068",
+      "expected": "reject",
+      "description": "actor duplicate @ActorMiddleware decorators or empty middleware list",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-069",
+      "expected": "reject",
+      "description": "@ActorMiddleware on non-actor class and @SupervisorMiddleware on untrusted actor declaration",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-070",
+      "expected": "reject",
+      "description": "middleware annotation argument unknown ambiguous borrowed generic literal or duplicate class",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-071",
+      "expected": "reject",
+      "description": "middleware class lacks exact async next(MiddlewareContext, MiddlewareNext): MiddlewareOutcome ABI",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-072",
+      "expected": "reject",
+      "description": "middleware class has mutable instance fields constructor inheritance or unsupported implicit capabilities",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-073",
+      "expected": "runtime_target",
+      "description": "compiler does not start decorated actors unless middleware continuation lowering is installed",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-074",
+      "expected": "runtime_target",
+      "description": "middleware-only dependency retained through annotation expansion and dead-code tree shaking",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-075",
+      "expected": "runtime_target",
+      "description": "supervisor middleware runs before actor admission; rejection never allocates actor mail credit",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-076",
+      "expected": "runtime_target",
+      "description": "actor middleware runs within one actor guest lane and preserves actor turn ownership",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-077",
+      "expected": "runtime_target",
+      "description": "middleware next is one-shot and cannot escape to state actor messages or detached tasks",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-078",
+      "expected": "runtime_target",
+      "description": "middleware short-circuit omits handler and commits at most one reply or terminal stream event",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-079",
+      "expected": "runtime_target",
+      "description": "middleware cannot issue late next after short-circuit return",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-080",
+      "expected": "runtime_target",
+      "description": "middleware stack preserves ordered entry and reverse completion order for async continuations",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-081",
+      "expected": "runtime_target",
+      "description": "application metadata/header enrichment normalizes case and rejects CRLF, reserved framing and over-budget headers",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-082",
+      "expected": "reject",
+      "description": "actor middleware rewrites trusted sender recipient request correlation session generation CONTROL or security principal",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-083",
+      "expected": "runtime_target",
+      "description": "supervisor receipt cannot be forged by client application header cookie or actor message",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-084",
+      "expected": "runtime_target",
+      "description": "idempotent middleware skip requires verified supervisor equivalence and matching exact stage version",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-085",
+      "expected": "runtime_target",
+      "description": "middleware skip proof invalidated by downstream message/header mutation generation change",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-086",
+      "expected": "runtime_target",
+      "description": "middleware cancellation deadline disconnect and timeout clean up pending continuations and writers",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-087",
+      "expected": "runtime_target",
+      "description": "middleware panic/raise/throw propagate to proper request and supervisor lane without forging CONTROL",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-088",
+      "expected": "runtime_target",
+      "description": "ProxyActor transport cannot transmit guest-forged supervisor receipt or cloned MiddlewareNext",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-089",
+      "expected": "runtime_target",
+      "description": "unary HTTP middleware cannot manually commit writer and return second automatic reply",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-090",
+      "expected": "runtime_target",
+      "description": "Java and LLVM execute equivalent middleware annotated stream/unary guest fixtures and failure cases",
+      "status": "not_verified",
+      "required_in_both_backends": true
     }
   ]
 }

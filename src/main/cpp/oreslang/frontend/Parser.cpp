@@ -90,6 +90,23 @@ public:
         }
         const std::size_t start = at_;
         const char ch = source_[at_];
+        if (ch == '@') {
+            const auto decorator = source_.substr(at_ + 1);
+            if (decorator.substr(0, 15) == "ActorMiddleware" &&
+                    (decorator.size() == 15 || !identifier_part(decorator[15]))) {
+                throw std::runtime_error(
+                    "native @ActorMiddleware requires typed actor-turn middleware "
+                    "continuation and trusted proof lowering; not implemented");
+            }
+            if (decorator.substr(0, 20) == "SupervisorMiddleware" &&
+                    (decorator.size() == 20 || !identifier_part(decorator[20]))) {
+                throw std::runtime_error(
+                    "native @SupervisorMiddleware requires trusted supervisor "
+                    "policy binding; not allowed on an actor");
+            }
+            throw std::runtime_error("native source annotation requires explicit "
+                                     "typed metadata lowering; not implemented");
+        }
         if (identifier_start(ch)) {
             ++at_;
             while (at_ < source_.size() && identifier_part(source_[at_])) ++at_;
