@@ -161,6 +161,22 @@ llvm::Value* lower(const Expression& expr,
                     (expr.trap_origin && (!type.nominal_error || expr.name != "Ok" ||
                      expr.arguments.size() != 1)))
                 throw std::runtime_error("unproven native Result<T,Error> trap reached LLVM lowering");
+            if (expr.trap_origin) {
+                // This must remain independent of source resolver admission:
+                // corrupt or rewritten AST nodes cannot turn calls, allocation
+                // or unproved Error effects into a manufactured success Ok.
+                const auto& payload = *expr.arguments.front();
+                const bool checked_i64 = type.value_type == ScalarType::I64 &&
+                    native_trap_pure_i64(payload);
+                const bool constant_bool = type.value_type == ScalarType::Bool &&
+                    payload.kind == Expression::Kind::Boolean;
+                const bool scalar_local = payload.kind == Expression::Kind::Variable &&
+                    (type.value_type == ScalarType::I64 || type.value_type == ScalarType::Bool) &&
+                    payload.resolved_type == type.value_type;
+                if (!checked_i64 && !constant_bool && !scalar_local)
+                    throw std::runtime_error(
+                        "unproved native trap operand reached LLVM lowering");
+            }
             const bool option = type.kind == NativeSumType::Kind::Option;
             const std::size_t count = option ? 2 : 3;
             const bool error = expr.name == "Err";
