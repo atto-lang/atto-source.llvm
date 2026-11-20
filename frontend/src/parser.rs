@@ -963,13 +963,28 @@ impl Parser {
         }
         self.expect(Tok::LParen, "'('")?;
         let params = self.parse_params()?;
+        let colon_type = *self.peek() == Tok::Colon;
         let ret = self.parse_return_spec()?;
         if is_generator && ret != Type::GeneratorInt {
             return Err(Diagnostic::new(pos, "E_TYPE",
                 "a 'fnc *gen' declaration must return Generator<int> in this frontend stage"));
         }
         self.in_generator = is_generator;
-        let body = self.parse_block()?;
+        let body = if colon_type && self.eat(&Tok::Arrow) {
+            if *self.peek() == Tok::LBrace {
+                self.parse_block()?
+            } else {
+                // A single : T -> expression; body is exactly a checked
+                // return expression. The semicolon is mandatory and braced
+                // bodies still require an explicit return.
+                let pos = self.pos();
+                let expression = self.parse_expr()?;
+                self.expect(Tok::Semi, "';' after inline callable expression")?;
+                vec![Stmt::Return(Some(expression), pos)]
+            }
+        } else {
+            self.parse_block()?
+        };
         self.in_generator = false;
         let _ = start;
         Ok(Func {
@@ -1746,6 +1761,29 @@ impl Parser {
             c = Expr { kind: ExprKind::Call(name, args), pos };
         }
         self.height -= links;
+        // Right associative: f <| g <| x is f(g(x)); retain existing
+        // checked call/type/overflow semantics. Mixed bare |> / <| is
+        // deliberately rejected instead of silently reordering effects.
+        if *self.peek() == Tok::PipeLt {
+            let pos = self.pos();
+            let (name, mut args) = match c.kind {
+                ExprKind::Var(name) => (name, Vec::new()),
+                ExprKind::Call(name, args) if links == 0 => (name, args),
+                _ => return Err(unsupported(pos, "reverse-pipeline callee other than a named function")),
+            };
+            if args.len() >= MAX_PARAMS {
+                return Err(Diagnostic::new(pos, "E_SOURCE_LIMIT", "pipeline exceeds call argument limit"));
+            }
+            self.advance();
+            self.enter()?;
+            let argument = self.parse_ternary();
+            self.leave();
+            let argument = argument?;
+            self.grow(1)?;
+            args.insert(0, argument);
+            c = Expr { kind: ExprKind::Call(name, args), pos };
+            self.height -= 1;
+        }
         match self.peek() {
             Tok::Pipe => {
                 return Err(Diagnostic::new(
