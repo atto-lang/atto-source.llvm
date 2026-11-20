@@ -1,0 +1,54 @@
+name: Exact guarded return-match frontend compiler and guest proof
+on:
+  pull_request:
+    paths:
+      - 'frontend/src/**'
+      - 'frontend/tests/**'
+      - 'ci/test_native_aot.sh'
+      - '.github/workflows/guarded-return-match-frontend.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  rust-wasm-frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Exact head, parser and shared fixture admission
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git hash-object frontend/src/parser.rs)" = "9271d542a8711e5b9ab98c7009126629ee0402f9"
+          test "$(git hash-object frontend/src/lexer.rs)" = "d61877c91a83b0015ee9bdbf381e9a2d3069dab4"
+          test "$(git hash-object frontend/tests/fixtures/pass/match-guard-block-return.atto)" = "603df679e1e9b7415cb8b798d4a2143545dd27b8"
+          test "$(git hash-object frontend/tests/fixtures/pass/match-guard-block-caret.atto)" = "0b2addfef29cd76d60d90bf081f4d326ea2d70df"
+          test "$(git hash-object frontend/tests/fixtures/fail/match-guard-no-fallback.atto)" = "23f8597125af43b3cab294ba8dc9b110d9983ef5"
+          test "$(git hash-object frontend/tests/fixtures/fail/match-guard-block-fallthrough.atto)" = "a8ec2c699c4a521508bee85f55a49888064c6948"
+          git diff --quiet HEAD --
+          git rev-parse HEAD HEAD^{tree}
+      - name: Rust 1.85.1 / wasm32 compiler toolchain
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal --target wasm32-unknown-unknown
+          rustup default 1.85.1
+      - name: Compile parser, checker and full negative corpus
+        run: cargo test --locked --manifest-path frontend/Cargo.toml --all-targets --verbose
+      - name: Build host attoc and compiled wasm32 attoc library
+        run: |
+          cargo build --locked --manifest-path frontend/Cargo.toml --bin attoc
+          cargo rustc --locked --release --manifest-path frontend/Cargo.toml --lib --target wasm32-unknown-unknown --crate-type cdylib -- -C link-arg=--max-memory=67108864
+      - name: Run two exact guest stdout/exit proofs, two no-artifact failures, byte parity
+        env:
+          ATTO_COMPILER_WASM: frontend/target/wasm32-unknown-unknown/release/atto_compiler.wasm
+        run: node frontend/tests/match-return-guest.mjs
+      - name: Evidence boundary
+        run: |
+          echo "FRONTEND_NATIVE_RUST_AND_WASM32_COMPILED_GUEST=EXECUTED"
+          echo "NATIVE_CPP_LLVM_AOT=NOT_PROVEN_BY_THIS_JOB"
+          echo "JAVA_NET_FORGE_CRANELIFT_JS=NOT_PROVEN_BY_THIS_JOB"
