@@ -153,10 +153,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         signed_fs_loader_test.cpp
         "${ROOT}/src/main/cpp/oreslang/runtime/TenantVmGuestLoader.cpp"
         "${ROOT}/src/main/cpp/oreslang/runtime/TenantVmSignedFsLoader.cpp"
-        "${ROOT}/native/src/host_fs_signed_ceiling.c")
+        "${ROOT}/native/src/host_fs_signed_ceiling.c"
+        "${ROOT}/native/src/host_fs_broker.c")
     target_include_directories(tenant_vm_signed_fs_loader_test PRIVATE
         "${ROOT}/src/main/cpp" "${ROOT}/native/include")
-    target_link_libraries(tenant_vm_signed_fs_loader_test PRIVATE OpenSSL::Crypto ${CMAKE_DL_LIBS})
+    target_link_libraries(tenant_vm_signed_fs_loader_test PRIVATE OpenSSL::Crypto Threads::Threads ${CMAKE_DL_LIBS})
     add_dependencies(tenant_vm_signed_fs_loader_test tenant_vm_signed_fs_fixture)
     add_test(NAME tenant_vm_signed_fs_loader_host_only
         COMMAND tenant_vm_signed_fs_loader_test "$<TARGET_FILE:tenant_vm_signed_fs_fixture>")
