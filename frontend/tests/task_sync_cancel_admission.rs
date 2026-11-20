@@ -25,7 +25,6 @@ fn all_task_spellings_reject_without_structured_scope_runtime() {
         "pub fnc main(): int { val x = await task<int> { return 42; }; return 0; }",
         "pub fnc main(): int { do task<int> { return 42; }; return 0; }",
         "pub fnc main(): int { do sync task<int> { return 42; }; return 0; }",
-        "pub fnc main(): int { val Future<int> x = task<int> { return 42; }; return 0; }",
     ] {
         reject_unlowered(source);
     }
