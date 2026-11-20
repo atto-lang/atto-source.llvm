@@ -82,6 +82,12 @@ llvm::Value* lower(const Expression& expr,
                    const RegionMoveLowering* moves = nullptr) {
     switch (expr.kind) {
         case Expression::Kind::Integer:
+            // A source integer literal has no children, callee or labels.
+            // Crafted ASTs must not smuggle operations that this fast path
+            // would silently discard when creating a constant.
+            if (!expr.name.empty() || expr.left || expr.right ||
+                    !expr.arguments.empty() || !expr.argument_names.empty())
+                throw std::runtime_error("unverified native integer literal AST");
             return llvm::ConstantInt::getSigned(i64, expr.integer);
         case Expression::Kind::Variable: {
             llvm::Value* stored = builder.CreateLoad(i64, storage.at(expr.name),
@@ -213,6 +219,10 @@ llvm::Value* lower(const Expression& expr,
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             return builder.CreateMul(left, right, "mul");
         }
+        case Expression::Kind::Boolean:
+            // i1 values may only be lowered by verified typed bool returns,
+            // never by the generic native i64 expression code generator.
+            throw std::runtime_error("typed bool cannot be lowered as native i64");
         case Expression::Kind::ModuleCall:
             // Import AST has no native symbol until typed stdlib linking is
             // certified. Do not create a fake user/host function.
@@ -220,6 +230,8 @@ llvm::Value* lower(const Expression& expr,
                 "native Assert module call awaits typed source-owned linking");
         case Expression::Kind::Call: {
             llvm::Function* callee = functions.at(native_function_slot(expr.name, expr.arguments.size()));
+            if (callee->getReturnType()->isIntegerTy(1))
+                throw std::runtime_error("typed bool call requires bool-aware expression lowering");
             if (callee->arg_size() != expr.arguments.size()) {
                 throw std::runtime_error("native named call argument count mismatch");
             }
@@ -277,10 +289,152 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     if (!source.imports.empty())
         throw std::runtime_error(
             "native module imports are unsupported until linked stdlib and typed assertion/trap lowering are implemented");
+    // The public backend accepts constructed Program ASTs that did not pass
+    // source parsing. Reject synthetic linker names which the lexer could
+    // never have produced (including NUL, dots and native arity suffixes).
+    const auto source_identifier = [](const std::string& name) {
+        if (name.empty()) return false;
+        const auto start = [](char c) {
+            return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+        };
+        if (!start(name.front())) return false;
+        return std::all_of(name.begin() + 1, name.end(), [&](char c) {
+            return start(c) || (c >= '0' && c <= '9');
+        });
+    };
+    if (!source.module.empty() && !source_identifier(source.module))
+        throw std::runtime_error("invalid native module linker identifier");
+    // Parser admission permits exactly one standalone cooperative continuation.
+    // This alternative codegen path must not silently accept a mixed or
+    // duplicate continuation list from an unverified Program.
+    if (!source.cooperative_loops.empty()) {
+        if (wasm32_target || source.cooperative_loops.size() != 1 ||
+                !source.functions.empty() || !source.classes.empty() ||
+                !source.actors.empty() || !source.module.empty())
+            throw std::runtime_error(
+                "unverified native cooperative-loop Program shape");
+        const auto& loop = source.cooperative_loops.front();
+        if (!source_identifier(loop.name) || !source_identifier(loop.variable))
+            throw std::runtime_error("invalid native cooperative-loop identifier");
+    }
+    // The parser rejects duplicate user type names, but this public emitter
+    // also accepts constructed Program ASTs. LLVM silently renames duplicate
+    // StructType and Function symbols, breaking source-to-ABI identity;
+    // reject them before any native or scalar-loop fast path is selected.
+    std::unordered_set<std::string> type_names;
+    for (const auto& cls : source.classes) {
+        if (!source_identifier(cls.name) || !type_names.insert(cls.name).second)
+            throw std::runtime_error("duplicate or unnamed native class/actor declaration");
+    }
+    for (const auto& actor : source.actors) {
+        if (!source_identifier(actor.name) || !type_names.insert(actor.name).second)
+            throw std::runtime_error("duplicate or unnamed native class/actor declaration");
+    }
+    // Native field indices and initialized actor slots are derived from
+    // ordered source declarations. A parser-bypassing AST with duplicate
+    // fields would silently bind reads/writes to the first field, while
+    // allocating and initializing multiple distinct slots.
+    for (const auto& cls : source.classes) {
+        if (cls.fields.empty() || cls.fields.size() > 16)
+            throw std::runtime_error("invalid native class field layout");
+        std::unordered_set<std::string> fields;
+        for (const auto& field : cls.fields)
+            if (field.name.empty() || !fields.insert(field.name).second)
+                throw std::runtime_error("duplicate or unnamed native class field");
+    }
+    for (const auto& actor : source.actors) {
+        if (actor.fields.empty() || actor.fields.size() > 16)
+            throw std::runtime_error("invalid native actor field layout");
+        std::unordered_set<std::string> fields;
+        for (const auto& field : actor.fields)
+            if (field.name.empty() || !fields.insert(field.name).second)
+                throw std::runtime_error("duplicate or unnamed native actor field");
+    }
+    // The source parser guarantees one binding per lexical slot, but this
+    // public backend accepts constructed Programs too. Ignore no duplicate:
+    // storage.emplace and actorRefs.emplace otherwise retain an earlier
+    // address/ActorRef, potentially using an unintended owner or capability.
+    for (const auto& fn : source.functions) {
+        std::unordered_set<std::string> bindings;
+        for (const auto& param : fn.parameters)
+            if (param.name.empty() || !bindings.insert(param.name).second)
+                throw std::runtime_error("duplicate or unnamed native function binding");
+        for (const auto& local : fn.locals)
+            if (local.name.empty() || !bindings.insert(local.name).second)
+                throw std::runtime_error("duplicate or unnamed native function binding");
+        for (const auto& spawn : fn.actor_spawns)
+            if (spawn.name.empty() || !bindings.insert(spawn.name).second)
+                throw std::runtime_error("duplicate or unnamed native function binding");
+    }
+    // Public AST entrypoint: validate reserved linker ABI names before the
+    // scalar-loop fast path can return without emitting ordinary functions.
+    // Do not permit LLVM's collision renaming to change guest symbol identity.
+    for (const auto& fn : source.functions) {
+        if (!source_identifier(fn.name))
+            throw std::runtime_error("invalid native function linker identifier");
+        if (fn.name.rfind("oreslang_int_array_", 0) == 0)
+            throw std::runtime_error("reserved native Array<int> ABI symbol");
+        if (source.module.empty()) {
+            const bool reserved =
+                fn.name == "abort" ||
+                fn.name == "__oreslang_guest_main" ||
+                fn.name.rfind("oreslang_owned_i64_region_", 0) == 0 ||
+                fn.name.rfind("ores_actor_i64_heap_", 0) == 0 ||
+                fn.name.rfind("oreslang_source_actor_", 0) == 0 ||
+                fn.name.rfind("oreslang_actor_", 0) == 0 ||
+                fn.name.rfind("oreslang_wasm_actor_", 0) == 0 ||
+                fn.name.rfind("oreslang_rt_", 0) == 0 ||
+                fn.name.rfind("oreslang_assert_", 0) == 0;
+            if (reserved)
+                throw std::runtime_error(
+                    "reserved native runtime ABI symbol '" + fn.name + "'");
+        }
+        if (fn.returns_bool && fn.scalar_while)
+            throw std::runtime_error("unverified typed bool native result lowering");
+        // Never silently ignore a scalar continuation on a multi-function
+        // synthetic Program: the single-function frame path is the only
+        // certified lowering of this AST node.
+        if (fn.scalar_while && source.functions.size() != 1)
+            throw std::runtime_error(
+                "experimental scalar loop requires exactly one standalone function");
+    }
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
             throw std::runtime_error("experimental scalar loop unsupported target/owners");
-        return emit_scalar_while_frame_llvm_ir(*source.functions.front().scalar_while);
+        // This early-return path bypasses normal function emission. Reject
+        // AST mutations that would erase owners, effects or actual return
+        // computation, rather than trusting parser-only admission rules.
+        const Function& fn = source.functions.front();
+        const ScalarWhileLoop& loop = *fn.scalar_while;
+        if (!source.module.empty() || !source.cooperative_loops.empty() ||
+                fn.returns_bool || fn.returns_void || !fn.parameters.empty() ||
+                fn.has_declared_effects || fn.declared_effects.bits != 0 ||
+                !fn.statements.empty() || !fn.early_returns.empty() ||
+                !fn.actor_spawns.empty() || !fn.actor_actions.empty() ||
+                !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
+                !fn.actor_field_writes.empty() || fn.caught_throw_value ||
+                !fn.catch_binding.empty() || !fn.caught_throw_defers.empty() ||
+                fn.locals.size() != 1 || !fn.result ||
+                fn.result->kind != Expression::Kind::Variable ||
+                fn.result->name != loop.counter || fn.result->integer != 0 ||
+                fn.result->left || fn.result->right ||
+                !fn.result->arguments.empty() ||
+                !fn.result->argument_names.empty())
+            throw std::runtime_error("unverified experimental scalar-loop AST");
+        const LocalBinding& local = fn.locals.front();
+        if (!local.owner_mutable || local.heap_owned || local.int_array ||
+                !local.class_name.empty() || local.new_class ||
+                local.move_class || !local.move_source.empty() ||
+                local.field_mutable || local.name != loop.counter ||
+                loop.counter.empty() || !local.initializer ||
+                local.initializer->kind != Expression::Kind::Integer ||
+                local.initializer->integer != loop.initial ||
+                local.initializer->left || local.initializer->right ||
+                !local.initializer->name.empty() ||
+                !local.initializer->arguments.empty() ||
+                !local.initializer->argument_names.empty())
+            throw std::runtime_error("unverified experimental scalar-loop AST");
+        return emit_scalar_while_frame_llvm_ir(loop);
     }
     llvm::LLVMContext context;
     // A bounded, import-free Wasm guest may lower ONE synchronous actor.
@@ -482,36 +636,72 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
     // Unique free functions retain their ABI symbol, overloaded families use arity slots.
     std::unordered_map<std::string, std::size_t> family_sizes;
     for (const auto& fn : source.functions) ++family_sizes[fn.name];
+    std::unordered_set<std::string> emitted_slots;
     for (const auto& fn : source.functions) {
-        if (source.module.empty() && fn.name.rfind("oreslang_assert_", 0) == 0)
-            throw std::runtime_error(
-                "reserved native runtime ABI symbol '" + fn.name + "'");
+        // Linker-owned names were already checked before all lowering paths.
+        if (fn.returns_bool && fn.returns_void)
+            throw std::runtime_error("native bool/void return flags conflict");
+        if (fn.returns_bool && fn.name == "main")
+            throw std::runtime_error("native bool main violates process exit ABI");
+        if (fn.name == "main" && family_sizes.at(fn.name) != 1)
+            throw std::runtime_error("duplicate native entrypoint 'main'");
+        const std::string slot = native_function_slot(fn.name, fn.parameters.size());
+        if (!emitted_slots.insert(slot).second)
+            throw std::runtime_error("duplicate native function slot '" + slot + "'");
         const std::string base_symbol = native_main && source.module.empty() && fn.name == "main"
             ? guest_main_symbol
             : (source.module.empty() ? fn.name : source.module + "." + fn.name);
         const std::string symbol = family_sizes.at(fn.name) > 1
             ? native_function_slot(base_symbol, fn.parameters.size())
             : base_symbol;
+        if (module.getNamedValue(symbol))
+            throw std::runtime_error("native LLVM symbol collision '" + symbol + "'");
         std::vector<llvm::Type*> argument_types;
         for (const auto& param : fn.parameters)
             argument_types.push_back(param.class_name.empty()
                 ? (param.mode == Parameter::Mode::Value ? i64 : loan_ptr)
                 : class_types.at(param.class_name)->getPointerTo());
         llvm::FunctionType* signature = llvm::FunctionType::get(
-            fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
+            fn.returns_void ? llvm::Type::getVoidTy(context) :
+            (fn.returns_bool ? llvm::Type::getInt1Ty(context) : i64),
             argument_types, false);
         llvm::Function* declaration = llvm::Function::Create(
             signature, llvm::Function::ExternalLinkage, symbol, module);
+        if (declaration->getName().str() != symbol)
+            throw std::runtime_error("native LLVM export was silently renamed");
         // Forward references must already expose parameter labels.
         std::size_t label_index = 0;
         for (auto& formal : declaration->args())
             formal.setName(fn.parameters[label_index++].name);
-        declarations.emplace(native_function_slot(fn.name, fn.parameters.size()), declaration);
+        if (!declarations.emplace(slot, declaration).second)
+            throw std::runtime_error("duplicate native function declaration slot");
     }
     for (const auto& fn : source.functions) {
         llvm::Function* function = declarations.at(native_function_slot(fn.name, fn.parameters.size()));
         llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", function);
         llvm::IRBuilder<> builder(entry);
+        if (fn.returns_bool) {
+            // Strictly pure, zero-argument source Boolean literal slice:
+            // no integer coercion, host callbacks, heap or GC allocation.
+            // All other typed bool forms remain parser-gated, and imported
+            // std/assert stays rejected before LLVM module creation.
+            if (!fn.result || fn.result->kind != Expression::Kind::Boolean ||
+                    !fn.parameters.empty() || !fn.locals.empty() ||
+                    !fn.statements.empty() || !fn.early_returns.empty() ||
+                    !fn.actor_spawns.empty() || !fn.actor_actions.empty() ||
+                    !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
+                    !fn.actor_field_writes.empty() || fn.caught_throw_value ||
+                    !fn.caught_throw_defers.empty() || !fn.catch_binding.empty() ||
+                    fn.scalar_while || fn.has_declared_effects ||
+                    fn.declared_effects.bits != 0 ||
+                    !fn.result->name.empty() || fn.result->left || fn.result->right ||
+                    !fn.result->arguments.empty() ||
+                    !fn.result->argument_names.empty() ||
+                    (fn.result->integer != 0 && fn.result->integer != 1))
+                throw std::runtime_error("unverified typed bool native result lowering");
+            builder.CreateRet(builder.getInt1(fn.result->integer == 1));
+            continue;
+        }
         std::unordered_map<std::string, llvm::Value*> storage;
         std::unordered_map<std::string, llvm::Value*> field_storage;
         std::size_t index = 0;
@@ -676,7 +866,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                     binding.name + ".array.owner");
                 builder.CreateStore(handle, slot);
                 storage.emplace(binding.name, slot);
-                lexical_slots.push_back({binding.name, slot, false, 8, true});
+                lexical_slots.push_back({binding.name, slot, false, 8, true, {}});
                 continue;
             }
             if (binding.new_class || binding.move_class) {
@@ -755,7 +945,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
                 builder.CreateStore(initial, slot);
             }
             storage.emplace(binding.name, slot);
-            lexical_slots.push_back({binding.name, slot, binding.heap_owned, 8});
+            lexical_slots.push_back({binding.name, slot, binding.heap_owned, 8, false, {}});
         }
         std::vector<const Statement*> deferred_effects;
         auto lower_effect = [&](const Statement& effect) {

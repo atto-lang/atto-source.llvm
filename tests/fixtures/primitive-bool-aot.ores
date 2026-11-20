@@ -1,0 +1,10 @@
+// Initial native typed Boolean source slice: zero args, pure literal returns.
+// No imported std/assert/Option/GC/actor functionality is inferred.
+define module BoolProbe as
+    pub fnc yes(): bool {
+        return true;
+    }
+    pub fnc no(): bool {
+        return false;
+    }
+end
