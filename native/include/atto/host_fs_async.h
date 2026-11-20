@@ -37,9 +37,12 @@ int atto_fs_async_submit_write(atto_fs_async_service *service, const atto_fs_hos
 int atto_fs_async_poll(atto_fs_async_service *service, const atto_fs_host_actor *actor,
                        uint64_t ticket, uint8_t *host_validated_output, size_t capacity,
                        size_t *bytes_read);
-/* Cancellation of a queued job prevents its side effect. Cancellation of an
- * already executing write CANNOT undo its side effect; poll returns CANCELLED
- * only after the underlying operation finishes. */
+/* Nonparking cancellation can return -EAGAIN on service-lock contention.
+ * Queued cancellation yields poll -ECANCELED with no filesystem side effect.
+ * A running write cannot be rolled back: after cancel the terminal poll
+ * reports -EINPROGRESS (indeterminate commit, DO NOT auto-retry). A request
+ * already DONE returns -EALREADY to cancel and retains its true poll result.
+ * Running reads can be cancelled without publication of guest output. */
 int atto_fs_async_cancel(atto_fs_async_service *service, const atto_fs_host_actor *actor,
                          uint64_t ticket);
 /* Abandon all tickets of a dead actor incarnation. In-flight jobs finish in
