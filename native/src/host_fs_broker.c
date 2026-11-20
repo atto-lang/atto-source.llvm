@@ -308,8 +308,12 @@ int atto_fs_broker_publish_read(atto_fs_broker *b, uint64_t tenant,
                                  unsigned char *output, size_t capacity) {
     if (!b || !b->initialized || (!bytes && length) || (!output && length) ||
         length > ATTO_FS_MAX_BYTES || length > capacity) return -EINVAL;
-    const int rc = pthread_mutex_lock(&b->gate);
-    if (rc) return -rc;
+    /* Called from the async poll path on an actor carrier. The worker may
+     * hold this gate across real filesystem I/O; never wait for it here.
+     * -EAGAIN means the host-owned completion remains pending and MUST NOT
+     * consume its one-shot ticket. */
+    const int rc = pthread_mutex_trylock(&b->gate);
+    if (rc) return rc == EBUSY ? -EAGAIN : -rc;
     const int result = authorized(b, tenant, generation, path, 0);
     if (!result && length) memcpy(output, bytes, length);
     (void)pthread_mutex_unlock(&b->gate);
