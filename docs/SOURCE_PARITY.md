@@ -111,14 +111,26 @@ implementation budgets, not the long-term Oreslang language specification.
 Invalid programs must terminate compilation with diagnostics and no LLVM IR.
 The limits do not certify other parser forms as recursion-safe.
 
-## Canonical ordered match parity correction (October 11, 2026)
+## Scalar match fallback contract aligned with Java (October 12, 2026)
 
-This section supersedes the earlier experimental **Scalar match default fallback
-parity** paragraph above. Canonical `match x over` is **source ordered**:
-`on _` is terminal and any later concrete arm is rejected as unreachable.
-Bare `default` and `on default` are not valid match patterns (use `on _`).
-Duplicate wildcards are rejected. `switch` retains its separate designated
-`default` fallback, which may appear before concrete `case` arms. Both
-backends must reject invalid match source consistently, and native tests now
-exercise explicit first-hit and wildcard-fallback executions. These fixtures
-do not establish the remaining nominal-pattern/async parity.
+The earlier experimental rule requiring `on _` to be lexically last is
+superseded. A `match x over` now accepts `default`, `on default`, and
+`on _` as aliases for one designated catch-all. The fallback may precede
+concrete arms in source but is selected only if none of the ordered concrete
+patterns match. Duplicate fallback aliases or folded duplicate integer cases
+are rejected. A source-ordered concrete match still prioritizes its first
+matching explicit pattern; `switch` similarly tries cases before fallback.
+
+The native scalar compiler admits `match<int>` and
+`match<ret=int>` (and typed procedural `do match<ret=int>`)
+for i64-only values. Its typed procedural form requires a fallback and an
+explicit value return in every arm. Unknown types and non-scalar effects
+remain unsupported and are rejected, rather than silently lowered.
+
+CTest includes generated LLVM IR and actual native execution for default
+before concrete cases, fallback hit/miss, and `ret=int` forms, alongside
+negative duplicate/unsupported-type/nonexhaustive coverage. Test definitions
+are not evidence of passing CI: exact-source funded CTest, GraalVM guest
+execution and cross-backend differential runs must still complete. General
+tuples, nominals, strings, async/await and cleanup are not implemented by
+this native scalar compiler, so full semantic parity is not yet proven.

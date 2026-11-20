@@ -1,0 +1,5 @@
+pub fnc main(): int {
+  return match<ret=string> 1 over
+    default { return 42; }
+  end
+}

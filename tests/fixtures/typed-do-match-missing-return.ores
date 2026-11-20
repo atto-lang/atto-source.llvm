@@ -1,0 +1,7 @@
+pub fnc main(): int {
+  do match<ret=int> 1 over
+    on 1 { }
+    default { return 42; }
+  end
+  return 0;
+}
