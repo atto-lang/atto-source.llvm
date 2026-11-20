@@ -188,6 +188,12 @@ int atto_fs_async_create(atto_fs_async_service **out, atto_fs_broker *broker,
     *out = s;
     return 0;
 }
+/* Host-only registration check; never callable from the guest. This
+ * predicate cannot mint an actor identity or authorize an arbitrary caller. */
+int atto_fs_async_owner_matches(const atto_fs_async_service *s,
+                                const atto_fs_host_actor *actor) {
+    return valid_actor(s, actor) ? 1 : 0;
+}
 void atto_fs_async_destroy(atto_fs_async_service *s) {
     if (!s) return;
     pthread_mutex_lock(&s->lock);
