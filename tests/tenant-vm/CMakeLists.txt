@@ -150,6 +150,22 @@ if(WAT2WASM AND WASM2C AND WASM_RT_INCLUDE AND LOWER_CLANG AND Python3_FOUND)
     endif()
 endif()
 
+# Trusted scheduler-to-real-broker actor-incarnation lifecycle test. All
+# filesystem I/O here is initiated by trusted host test code; there is no
+# guest ABI-v5 filesystem callback and no compiled Atto .atto FS guest.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(tenant_vm_fs_lifecycle_test
+        fs_lifecycle_test.cpp
+        "${ROOT}/src/main/cpp/oreslang/runtime/TenantVm.cpp"
+        "${ROOT}/native/src/host_fs_async.c"
+        "${ROOT}/native/src/host_fs_broker.c")
+    target_include_directories(tenant_vm_fs_lifecycle_test PRIVATE
+        "${ROOT}/src/main/cpp" "${ROOT}/native/include")
+    target_link_libraries(tenant_vm_fs_lifecycle_test PRIVATE tenant_vm_guests Threads::Threads)
+    add_test(NAME tenant_vm_fs_lifecycle_host_only COMMAND tenant_vm_fs_lifecycle_test)
+    set_tests_properties(tenant_vm_fs_lifecycle_host_only PROPERTIES TIMEOUT 45)
+endif()
+
 # Host-only signature admission test for the existing sealed-image loader.
 # The fixture is a C ABI-v4 .so, NOT a compiled .atto guest; v5 remains
 # explicitly unsupported by the live TenantVM runtime.
