@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  val int?? value = Some(42);
+  return 0;
+}
