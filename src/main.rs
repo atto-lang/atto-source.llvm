@@ -781,6 +781,29 @@ mod tests {
     }
 
     #[test]
+    fn native_and_freestanding_compilers_fail_closed_on_canonical_source_bytes() {
+        for (name, source) in [
+            ("actor-forward", include_str!("../fixtures/pipe-rpipe-v1/actor-forward.atto")),
+            ("actor-reverse", include_str!("../fixtures/pipe-rpipe-v1/actor-reverse.atto")),
+            ("actor-missing-emits", include_str!("../fixtures/pipe-rpipe-v1/actor-missing-emits.atto")),
+            ("actor-wrong-direction", include_str!("../fixtures/pipe-rpipe-v1/actor-wrong-direction.atto")),
+            ("mixed-channel-stream-forward", include_str!("../fixtures/pipe-rpipe-v1/mixed-channel-stream-forward.atto")),
+            ("mixed-channel-stream-reverse", include_str!("../fixtures/pipe-rpipe-v1/mixed-channel-stream-reverse.atto")),
+            ("actor-duplicate-direction", include_str!("../fixtures/pipe-rpipe-v1/actor-duplicate-direction.atto")),
+            ("actor-mixed-directions", include_str!("../fixtures/pipe-rpipe-v1/actor-mixed-directions.atto")),
+        ] {
+            let standard=compile_ir(source)
+                .expect_err("native LLVM IR must not be emitted for unlowered actor pipeline");
+            assert!(standard.contains("E_UNSUPPORTED_CONTINUOUS_PIPE"),
+                "{name}: {standard}");
+            let freestanding=compile_ir_with_profile(source, LibraryProfile::FreestandingCore)
+                .expect_err("freestanding cannot instantiate guest actor graphs");
+            assert!(freestanding.contains("E_UNSUPPORTED_CONTINUOUS_PIPE"),
+                "{name}: {freestanding}");
+        }
+    }
+
+    #[test]
     fn native_main_is_direct_i64_call() {
         let ir = compile_ir("pub fnc main(): int { return 42; }").unwrap();
         assert!(ir.contains("define i32 @main()"));
