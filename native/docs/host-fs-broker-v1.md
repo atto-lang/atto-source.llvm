@@ -202,3 +202,58 @@ nonblocking guest suspension/continuation, native compiler lowering of
 real `.atto` `std.fs` source, and independently observed positive and
 negative compiled-guest tests. Hostile native guests remain rejected
 without a proven syscall and memory isolation boundary.
+
+
+## Same-image signed admission and six-ceiling broker handoff (2026-11-20)
+
+This draft now has two **trusted-host-only** admission paths:
+
+- `native/src/host_fs_signed_admission.c` verifies the signed artifact
+  ceiling using the exact artifact byte array supplied by its host caller.
+  It constructs the six-layer broker with its **artifact layer taken only
+  from the verified descriptor**, never an unchecked caller field. The
+  other five independent ceilings still come from the trusted host.
+  The caller must guarantee the byte array is the executable image;
+  this C API alone cannot prove that relationship.
+- `TenantVmGuestLoader.cpp` has a new pre-dlopen gate which receives
+  the **same in-memory byte vector** subsequently copied into the sealed
+  private guest image. `TenantVmSignedFsLoader.cpp` uses that gate to
+  Ed25519-verify the descriptor and exact SHA-256 identity *before*
+  mapping executable code. A helper can construct a six-layer broker
+  from a successfully loaded and signature-verified host object,
+  rejecting a missing/unloaded module or invalid host tenant context.
+  The resulting artifact layer is copied from the verifier output;
+  runtime, TenantVM, actor, delegation, and host limits are independent.
+
+**Security limitations:** the verified guest result is ordinary mutable
+**host-owned** C++ memory, **not** a guest-mintable capability or an
+unforgeable authorization token against a compromised host process. The
+host loader must keep the module-owner lifetime tied to its FS broker
+and outstanding async worker tickets. No active TenantVM host constructor
+yet binds that lifecycle, and a caller must not re-open or rehash another
+pathname to choose privileges. Dynamic linker dependencies also require
+separate closure/audit and instruction-level/syscall confinement for
+hostile native guest code. The current runtime still admits only ABI v4
+and gives v4 guests **no filesystem host callbacks**; v5 remains a
+candidate with no scheduler-authenticated dispatch.
+
+**Executable evidence:** the exact new C signed-admission source blob
+passed GCC/Clang O1/O2 ASan+UBSan local compilation and four positive/
+negative signed-verifier executions with an **in-memory mock** broker
+constructor. The exact signed C++ loader wrapper and header passed
+GCC/Clang++ O1/O2 ASan+UBSan with a **mock** pre-dlopen loader and broker
+constructor. Those test doubles prove signature propagation and failure
+handling, not real OS filesystem isolation or a real mapped guest.
+The checked-in real `host_fs_signed_admission_test.c` executes against
+the Linux broker, and `tests/tenant-vm/signed_fs_loader_test.cpp`
+builds and loads a v4 C shared library and exercises a real Linux
+broker, but **neither checked-in integration test has yet executed**
+on source-owned CI. A C fixture is not compiled Atto source.
+
+As of this checkpoint, source-owned Actions failed without recording
+test steps. All compiler `.atto` filesystem security statuses remain
+`NOT_EXECUTED`; no PR is ready to merge. The next integration must
+install scheduler-authenticated v5 callbacks, signed image admission
+as a mandatory gate, actor-bound async tickets and real `.atto`
+stdlib lowering, then produce exact-head positive and negative
+compiled-guest evidence.
