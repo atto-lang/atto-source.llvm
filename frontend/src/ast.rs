@@ -159,6 +159,16 @@ pub struct Receive {
     pub body: Vec<Stmt>,
 }
 
+/// Checked actor outbound application DATA effect.
+/// The absence of a clause is distinct from an explicit empty effect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActorSendEffect {
+    /// `sends never`: no application DATA sends, including via helpers.
+    Never,
+    /// `sends T`: application DATA may only carry payload T.
+    Payload(Type),
+}
+
 /// `define actor Name as ... end` or `actor Name ... end` (Java Parser).
 #[derive(Clone, Debug)]
 pub struct ActorDecl {
@@ -167,7 +177,7 @@ pub struct ActorDecl {
     /// Explicit inbound DATA message contract; retained for all downstream AST checks.
     pub receives: Option<Type>,
     /// Explicit outbound application-message type upper bound, not a recipient count.
-    pub sends: Option<Type>,
+    pub sends: Option<ActorSendEffect>,
     pub fields: Vec<Field>,
     pub receive: Option<Receive>,
     pub methods: Vec<Method>,
