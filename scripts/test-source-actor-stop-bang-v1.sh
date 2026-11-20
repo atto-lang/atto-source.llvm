@@ -19,6 +19,8 @@ inputs=(
   tests/fixtures/source-actor-stop-bang-no-boundary.ores
   tests/fixtures/source-actor-stop-bang-no-adjacency.ores
   tests/fixtures/source-actor-stop-double-bang.ores
+  tests/fixtures/source-actor-pipe-bang-unlowered-reject.ores
+  tests/fixtures/source-actor-rpipe-bang-unlowered-reject.ores
 )
 for f in "${inputs[@]}"; do
   [[ -f "$root/$f" && ! -L "$root/$f" ]] || exit 78
@@ -62,7 +64,9 @@ for opt in 0 2; do
     source-actor-send-after-stop-bang.ores \
     source-actor-stop-bang-no-boundary.ores \
     source-actor-stop-bang-no-adjacency.ores \
-    source-actor-stop-double-bang.ores; do
+    source-actor-stop-double-bang.ores \
+    source-actor-pipe-bang-unlowered-reject.ores \
+    source-actor-rpipe-bang-unlowered-reject.ores; do
     result=0
     timeout 60s "$compiler" --target=host "$root/tests/fixtures/$negative" \
        >"$work/rejected.ll" 2>"$work/rejected.err" || result=$?
@@ -73,4 +77,4 @@ for opt in 0 2; do
   done
 done
 [[ "$(git -C "$root" rev-parse HEAD)" == "$EXPECTED_HEAD" ]] || exit 78
-echo "STOP_BANG_EXACT_HEAD_MATRIX_EXECUTED|head=$EXPECTED_HEAD|native_runs=12|negative_rejections=8"
+echo "STOP_BANG_EXACT_HEAD_MATRIX_EXECUTED|head=$EXPECTED_HEAD|native_runs=12|negative_rejections=12"
