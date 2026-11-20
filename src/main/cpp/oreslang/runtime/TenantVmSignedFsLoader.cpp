@@ -49,4 +49,41 @@ LoadedSignedFsGuest load_guest_library_with_signed_fs_ceiling(
     std::memset(&context.verified, 0, sizeof(context.verified));
     return result;
 }
+namespace {
+const char* nonempty_scope(const char* value) noexcept {
+    return value && value[0] ? value : nullptr;
+}
+}
+
+int admit_signed_loaded_guest_fs_broker(
+    atto_fs_broker *out, const LoadedSignedFsGuest& loaded,
+    const std::string& trusted_root,
+    const TrustedFsExecutionCeilings& ceilings) {
+    /* No re-reading of file paths or separate artifact policy injection.
+     * The signing verifier already checked the precise bytes that dlopen
+     * mapped via the loader's sealed private image. All other ceilings
+     * remain independently host-provided and are NOT authenticated here. */
+    if (!out || !loaded.signature_verified || !loaded.guest.module ||
+        !loaded.guest.owner ||
+        loaded.guest.module->abi_version != ORES_VM_GUEST_ABI_VERSION ||
+        trusted_root.empty() || ceilings.tenant_id == 0 ||
+        ceilings.generation == 0) return -EACCES;
+    const auto& artifact = loaded.verified_artifact_ceiling;
+    atto_fs_layered_policy layers{};
+    layers.tenant_id = ceilings.tenant_id;
+    layers.generation = ceilings.generation;
+    layers.host = ceilings.host;
+    layers.artifact = {
+        nonempty_scope(artifact.allow_read),
+        nonempty_scope(artifact.allow_write),
+        nonempty_scope(artifact.deny_read),
+        nonempty_scope(artifact.deny_write)
+    };
+    layers.runtime = ceilings.runtime;
+    layers.tenant = ceilings.tenant;
+    layers.actor = ceilings.actor;
+    layers.delegation = ceilings.delegation;
+    return atto_fs_broker_init_layers(out, trusted_root.c_str(), &layers);
+}
+
 } // namespace oreslang::runtime::vm
