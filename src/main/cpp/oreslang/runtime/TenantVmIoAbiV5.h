@@ -31,6 +31,11 @@ extern "C" {
 /* A cancelled write was already executing: it MAY have committed. This is
  * distinct from a safely cancelled queued request, never auto-retry it. */
 #define ORES_VM_IO_WRITE_INDETERMINATE (-8LL)
+/* Transient queue/service contention on SUBMIT or CANCEL: retry later.
+ * This is distinct from a poll's PENDING (an accepted ticket in flight). */
+#define ORES_VM_IO_WOULD_BLOCK (-9LL)
+/* Cancelling a job that is already done: poll the original ticket. */
+#define ORES_VM_IO_ALREADY_DONE (-10LL)
 
 typedef struct OresVmHostApiV5 {
     /* Exact ABI-v4 prefix, never a reinterpretation of a v4-sized table. */
