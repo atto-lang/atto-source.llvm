@@ -46,3 +46,16 @@ target_include_directories(atto-checked-actor-ir PRIVATE
   "${LLVM_INCLUDE_DIRS}"
 )
 target_link_libraries(atto-checked-actor-ir PRIVATE ${ORE_LLVM_LIBS})
+
+# Real production-compiler/LLVM-IR/Clang guest gate, not a host-only model.
+include(CTest)
+if(BUILD_TESTING)
+  add_test(
+    NAME atto_option_suffix_guest_v1
+    COMMAND ${CMAKE_COMMAND}
+      "-DATTO_OPTION_LLVM_CLI=$<TARGET_FILE:oreslang-llvmc>"
+      "-DATTO_OPTION_FIXTURE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/option-suffix-v1"
+      "-DATTO_OPTION_CLANG=clang"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_option_suffix_native_gate.cmake")
+  set_tests_properties(atto_option_suffix_guest_v1 PROPERTIES TIMEOUT 180)
+endif()
