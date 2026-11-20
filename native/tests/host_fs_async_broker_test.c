@@ -33,7 +33,7 @@ static void expect_file(const char *path, const char *expected) {
     const ssize_t got = read(fd, output, sizeof(output));
     const size_t expected_len = strlen(expected);
     if (got != (ssize_t)expected_len) {
-        fprintf(stderr, "ATTO_FS_ASYNC_BROKER_SIZE_MISMATCH path=%s got=%zd expected=%zu\\n",
+        fprintf(stderr, "ATTO_FS_ASYNC_BROKER_SIZE_MISMATCH path=%s got=%zd expected=%zu\n",
                 path, got, expected_len);
     }
     assert(got == (ssize_t)expected_len);
@@ -103,8 +103,13 @@ int main(void) {
     assert(used==0u && bytes[0]==0xAB);
     assert(wait_ticket(service, &actor, ticket, bytes, sizeof(bytes), &used)==0);
     assert(used==10u && memcmp(bytes,"host-async",10)==0);
+    /* Polling a consumed ticket must clear its output length. Preserve the
+     * completed read's length for the subsequent copy operation. */
+    const size_t read_length = used;
     assert(atto_fs_async_poll(service, &actor, ticket, bytes, sizeof(bytes), &used)==-ESTALE);
-    assert(atto_fs_async_submit_write(service, &actor, "out/copy.txt", bytes, used, &ticket)==0);
+    assert(used == 0u);
+    assert(atto_fs_async_submit_write(service, &actor, "out/copy.txt", bytes,
+                                      read_length, &ticket)==0);
     assert(wait_ticket(service, &actor, ticket, NULL, 0, &used)==0);
     expect_file(dest, "host-async");
     assert(atto_fs_async_submit_write(service, &actor, "data/input.txt",
