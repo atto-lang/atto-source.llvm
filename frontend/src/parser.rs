@@ -1195,6 +1195,14 @@ impl Parser {
             Some("do") if self.word_at(1) == Some("sync") && self.word_at(2) == Some("task") => {
                 self.advance();
                 let expr = self.parse_expr()?;
+                // In the "do" form the payload is void-only, including
+                // when omitted and inferred. Never silently discard a value.
+                match &expr.kind {
+                    ExprKind::InlineTask { declared, result, .. }
+                        if declared.is_none_or(|ty| ty == Type::Void) && result.is_none() => {}
+                    _ => return Err(Diagnostic::new(pos, "E_TASK_RETURN_TYPE",
+                        "do sync task requires void and must not return a value")),
+                }
                 self.terminator()?;
                 Ok(Stmt::Expr(expr))
             }
