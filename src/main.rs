@@ -980,6 +980,30 @@ mod tests {
     }
 
     #[test]
+    fn native_option_tag_arity_is_deny_by_default() {
+        let src = "fnc maybe(): Option<int> { return Some(42); } \
+                   pub fnc main(): int { return match maybe() over \
+                     on Some(n) -> n, on None -> 0 end; }";
+        let parsed = atto_compiler::parser::Parser::new(
+            atto_compiler::lexer::lex(src).unwrap()).parse_program().unwrap();
+        let mut typed = check::check(&parsed).unwrap();
+        assert!(heapless_option_program(&typed));
+        let main_idx = typed.main as usize;
+        typed.funcs[main_idx].body.insert(0, TStmt::Expr(TE {
+            e: TExpr::AdtNew { tag: 2, payload: None, tmp: 0 },
+            ty: Type::OptionInt,
+        }));
+        assert!(!heapless_option_program(&typed), "invalid tag must never produce native IR");
+    }
+    #[test]
+    fn native_option_rejects_wrong_return_channel() {
+        let source = "fnc maybe(): Option<int> { return None; } \
+                      pub fnc main(): int { return maybe()?; }";
+        let err = compile_ir(source).unwrap_err();
+        assert!(err.contains("postfix '?'"), "{err}");
+    }
+
+    #[test]
     fn native_heapless_option_match_uses_value_aggregate() {
         let src = "fnc maybe(): Option<int> { return Some(42); } \
                    pub fnc main(): int { return match maybe() over \
