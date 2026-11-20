@@ -42,7 +42,10 @@ bool reserved(std::string_view name) {
         "interface", "trait", "struct", "impl", "abstract", "void",
         "static", "pub", "private", "return", "defer", "val", "const",
         "let", "mut", "self", "true", "false", "null", "obj", "arr",
-        "int", "owned", "declare", "receive", "Message", "bool", "string",
+        "int", "owned", "declare", "receive", "receive_forward",
+        "receive_backward", "transform", "pipe", "forward_messages",
+        "backward_messages", "Message", "bool", "string", "state",
+        "critical", "handle_state", "using", "with",
         "Array", "List"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
@@ -98,7 +101,15 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
-        if (std::string_view("()[]{},:;+-*=.<>").find(ch) != std::string_view::npos) {
+        if (ch == '-' && at_ + 1 < source_.size() && source_[at_ + 1] == '>') {
+            at_ += 2;
+            return {Kind::Symbol, source_.substr(start, 2), start};
+        }
+        if (ch == ':' && at_ + 1 < source_.size() && source_[at_ + 1] == ':') {
+            at_ += 2;
+            return {Kind::Symbol, source_.substr(start, 2), start};
+        }
+        if (std::string_view("()[]{},:;+-*=.<>|").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -133,12 +144,16 @@ public:
                 wrapped_module = true;
             } else if (accept("actor")) {
                 program.actors.push_back(actor());
+            } else if (accept("transform")) {
+                require("pipe"); require("actor");
+                program.actors.push_back(actor(true));
             } else if (accept("enum")) {
                 program.enums.push_back(tagged_enum());
-            } else if (accept("pattern")) {
+            } else if (accept("match")) {
+                require("pattern");
                 program.tagged_patterns.push_back(tagged_pattern());
             } else {
-                fail("expected 'module', 'actor', 'enum' or 'pattern'");
+                fail("expected 'module', 'actor', 'enum' or 'match pattern'");
             }
         }
         while (token_.kind != Kind::End
@@ -147,9 +162,16 @@ public:
                 program.message_patterns.push_back(message_pattern());
             } else if (accept("define")) {
                 if (accept("actor")) program.actors.push_back(actor());
+                else if (accept("transform")) {
+                    require("pipe"); require("actor");
+                    program.actors.push_back(actor(true));
+                }
                 else if (accept("enum")) program.enums.push_back(tagged_enum());
-                else if (accept("pattern")) program.tagged_patterns.push_back(tagged_pattern());
-                else fail("expected 'actor', 'enum' or 'pattern'");
+                else if (accept("match")) {
+                    require("pattern");
+                    program.tagged_patterns.push_back(tagged_pattern());
+                }
+                else fail("expected 'actor', 'enum' or 'match pattern'");
             } else {
                 program.functions.push_back(function());
             }
@@ -319,11 +341,31 @@ private:
         return pattern;
     }
 
-    Actor actor() {
+    Actor actor(bool transform_pipe = false) {
         Actor value;
         value.offset = token_.offset;
+        value.transform_pipe = transform_pipe;
         value.name = identifier();
-        if (accept("<")) {
+        if (transform_pipe) {
+            require("<");
+            // Both directional input/output domains are required. The first
+            // native profile uses one domain per direction, not implicit Message.
+            for (unsigned i = 0; i < 2; ++i) {
+                if (accept("forward_messages")) {
+                    if (!value.forward_messages_type.empty())
+                        fail("duplicate forward_messages domain");
+                    require("="); value.forward_messages_type = identifier();
+                } else if (accept("backward_messages")) {
+                    if (!value.backward_messages_type.empty())
+                        fail("duplicate backward_messages domain");
+                    require("="); value.backward_messages_type = identifier();
+                } else fail("transform pipe actor requires forward_messages and backward_messages");
+                if (i == 0) require(",");
+            }
+            require(">");
+            if (value.forward_messages_type.empty() || value.backward_messages_type.empty())
+                fail("transform pipe actor requires both directional domains");
+        } else if (accept("<")) {
             require("messages");
             require("=");
             value.messages_type = identifier();
@@ -331,26 +373,37 @@ private:
         }
         require("as");
         const bool braced = accept("{");
-        // The first native actor subset deliberately admits only immutable
-        // scalar fields and read-only methods; no async or user destructors.
-        while (token_.text == "const" || token_.text == "val" || token_.text == "let") {
-            LocalBinding field;
-            field.offset = token_.offset;
-            field.field_mutable = token_.text == "let";
-            advance();
-            field.name = identifier();
-            require(":");
-            require("int");
-            require("=");
-            field.initializer = expression();
-            require(";");
-            value.fields.push_back(std::move(field));
+        // Actor data lives only in a single declared fixed-key state map.
+        // Ordinary class fields are never admitted on an actor, even when
+        // private, immutable, or declared before all methods.
+        if (accept("state")) {
+            value.state_declared = true;
+            require("{");
+            while (!accept("}")) {
+                if (token_.kind == Kind::End || value.fields.size() >= 64)
+                    fail("actor state requires closing '}' and at most 64 keys");
+                LocalBinding field;
+                field.offset = token_.offset;
+                field.name = identifier();
+                require(":");
+                require("int");
+                require("=");
+                field.initializer = expression();
+                require(";");
+                field.field_mutable = true;
+                value.fields.push_back(std::move(field));
+            }
+            accept(";");
         }
-        if (value.fields.empty() && value.messages_type.empty())
-            fail("actor requires at least one scalar field");
+        if (token_.text == "const" || token_.text == "val"
+                || token_.text == "let" || token_.text == "state")
+            fail("actor instance data must be declared in one state map");
         while (token_.text == "fnc" || token_.text == "routine"
-               || token_.text == "pub" || token_.text == "receive") {
-            value.methods.push_back(function(true));
+               || token_.text == "pub" || token_.text == "receive"
+               || token_.text == "receive_forward" || token_.text == "receive_backward") {
+            value.methods.push_back(function(true,
+                transform_pipe ? value.forward_messages_type : value.messages_type,
+                value.backward_messages_type, transform_pipe));
         }
         if (value.methods.empty()) fail("actor requires at least one read-only method");
         if (braced) require("}");
@@ -358,23 +411,103 @@ private:
         return value;
     }
 
-    Function function(bool actor_method = false) {
+    // Inline spawns are admitted into the same owned reference list as named
+    // spawns, so all mailbox, route and teardown validation remains shared.
+    std::string pipeline_stage(Function& fn) {
+        if (!accept("spawn")) return identifier();
+        ActorSpawnBinding ref;
+        ref.offset = token_.offset;
+        ref.name = "$pipe" + std::to_string(fn.actor_spawns.size());
+        ref.actor_type = identifier();
+        ref.declared_type.kind = SourceType::Kind::ActorRef;
+        ref.declared_type.argument = ref.actor_type;
+        require("("); require(")");
+        std::string name = ref.name;
+        fn.actor_spawns.push_back(std::move(ref));
+        fn.actor_stops.insert(fn.actor_stops.begin(), name);
+        return name;
+    }
+
+    std::unique_ptr<StateLoan> parse_scoped_state_loan() {
+        require("const");
+        auto loan = std::make_unique<StateLoan>();
+        loan->result_binding = identifier();
+        require("=");
+        if (accept("using")) {
+            require("state"); require(".");
+            if (accept("read"))
+                loan->mode = StateLoan::Mode::Read;
+            else if (accept("write"))
+                loan->mode = StateLoan::Mode::Write;
+            else fail("using state capability must be read or write");
+            require("(");
+            if (loan->mode == StateLoan::Mode::Write)
+                require("critical");
+            else if (token_.text == "critical")
+                fail("using state.read cannot request a critical write loan");
+        } else {
+            require("self"); require(".");
+            require("handle_state"); require("(");
+            loan->mode = accept("critical")
+                ? StateLoan::Mode::Write
+                : StateLoan::Mode::Read;
+        }
+        require("|"); require("state"); require("|");
+        require("->"); require("{");
+        state_loan_depth_ = 1;
+        while (token_.text == "state") {
+            if (loan->mode == StateLoan::Mode::Read)
+                fail("read-only actor state loan cannot mutate state");
+            FieldAssignment assignment;
+            assignment.offset = token_.offset;
+            require("state"); require(".");
+            assignment.field = identifier();
+            require("=");
+            assignment.value = expression();
+            require(";");
+            loan->assignments.push_back(std::move(assignment));
+        }
+        if (token_.text == "await" || token_.text == "select"
+                || token_.text == "nb" || token_.text == "using")
+            fail("state read/write loan cannot suspend or nest");
+        require("return");
+        loan->result = expression();
+        require(";");
+        state_loan_depth_ = 0;
+        require("}"); require(")"); require(";");
+        return loan;
+    }
+
+    Function function(bool actor_method = false,
+                      const std::string& message_type = "",
+                      const std::string& backward_type = "",
+                      bool transform_pipe = false) {
         Function value;
         value.offset = token_.offset;
         value.exported = accept("pub");
-        value.is_receiver = actor_method && accept("receive");
-        if (value.is_receiver) {
-            value.name = "receive";
+        if (actor_method && (token_.text == "receive"
+                || token_.text == "receive_forward"
+                || token_.text == "receive_backward")) {
+            value.is_receiver = true;
+            value.name = std::string(token_.text);
+            advance();
             value.exported = true;
+            if (transform_pipe != (value.name != "receive"))
+                fail("transform pipe actor requires directional receive handlers");
         } else {
             if (!accept("fnc") && !accept("routine")) fail("expected fnc or routine");
             value.name = identifier();
         }
         require("(");
         if (value.is_receiver) {
-            require("Message");
+            const std::string& domain =
+                value.name == "receive_backward" ? backward_type : message_type;
+            if (domain.empty() || token_.text != domain)
+                fail(value.name + " parameter type must match declared message domain '" + domain + "'");
+            require(domain);
             value.parameters.push_back(identifier());
             require(")");
+            if (transform_pipe) { require(":"); require("void"); }
         } else {
             if (!accept(")")) {
                 do {
@@ -386,9 +519,35 @@ private:
             require(":");
             require("int");
         }
+        // "with" is a declaration of permitted effects, not a loan.
+        // "using" remains a scoped expression at the actual access site.
+        value.effects_declared = accept("with");
+        if (value.effects_declared) {
+            do {
+                require("state"); require(".");
+                const auto effect = identifier();
+                if (effect != "read" && effect != "write")
+                    fail("unsupported with effect in restricted native profile");
+                const std::string named = "state." + effect;
+                if (std::find(value.declared_effects.begin(),
+                              value.declared_effects.end(), named)
+                        != value.declared_effects.end())
+                    fail("duplicate with state effect");
+                value.declared_effects.push_back(named);
+            } while (accept(","));
+        }
+        if (token_.text == "using")
+            fail("using acquires scoped capabilities; use with for function effects");
         require("{");
         bool scalar_local_seen = false;
         while (token_.text == "const" || token_.text == "val") {
+            // A method-level const binding of an actor-owned state callback
+            // is handled as a sealed loan, not an ordinary scalar initializer.
+            if (actor_method && !value.is_receiver && token_.text == "const") {
+                Lexer probe = lexer_;
+                const Token next = probe.next(), separator = probe.next();
+                if (next.kind == Kind::Identifier && separator.text == "=") break;
+            }
             LocalBinding binding;
             binding.offset = token_.offset;
             advance();
@@ -448,9 +607,38 @@ private:
             }
         }
         if (!actor_method) {
-            if (accept("pipeline")) {
+            bool pipe_call = accept("pipeline");
+            if (!pipe_call && token_.text == "ActorUtils") {
+                Lexer probe = lexer_;
+                const auto delimiter = probe.next().text;
+                if ((delimiter == "." || delimiter == "::") && probe.next().text == "pipe") {
+                    if (delimiter == "." && std::any_of(value.actor_spawns.begin(),
+                            value.actor_spawns.end(), [](const ActorSpawnBinding& ref) {
+                                return ref.name == "ActorUtils";
+                            })) fail("ambiguous ActorUtils.pipe; use ActorUtils::pipe");
+                    advance();
+                    if (!accept(".")) require("::");
+                    require("pipe");
+                    pipe_call = true;
+                }
+            }
+            bool pipe_operator = token_.text == "spawn";
+            if (!pipe_call && token_.kind == Kind::Identifier) {
+                Lexer probe = lexer_;
+                pipe_operator = pipe_operator || probe.next().text == "pipe";
+            }
+            if (!pipe_call && pipe_operator) {
+                value.pipeline_actors.push_back(pipeline_stage(value));
+                require("pipe");
+                do { value.pipeline_actors.push_back(pipeline_stage(value)); }
+                while (accept("pipe"));
+                require(";");
+                if (value.pipeline_actors.size() < 2 || value.pipeline_actors.size() > 16)
+                    fail("pipeline requires between 2 and 16 ordered actors");
+            }
+            if (pipe_call) {
                 require("(");
-                do { value.pipeline_actors.push_back(identifier()); }
+                do { value.pipeline_actors.push_back(pipeline_stage(value)); }
                 while (accept(","));
                 require(")");
                 require(";");
@@ -563,15 +751,17 @@ private:
                         }
                     }
                     require("{");
-                    while (token_.kind == Kind::Identifier && !reserved(token_.text)) {
-                        FieldAssignment assignment;
-                        assignment.offset = token_.offset;
-                        assignment.field = identifier();
-                        require("=");
-                        assignment.value = expression();
-                        require(";");
-                        arm.assignments.push_back(std::move(assignment));
-                    }
+                    // Canonical actor state API:
+                    // self.handle_state(|state| -> {...})          -> read loan
+                    // self.handle_state(critical |state| -> {...}) -> write loan.
+                    // The earlier using state.read/write syntax is retained
+                    // only as a restricted equivalent for this migration.
+                    // No loan may escape the callback or suspend.
+                    if (token_.text == "const")
+                        arm.state_loan = parse_scoped_state_loan();
+                    // Legacy direct field mutation is intentionally rejected.
+                    if (token_.kind == Kind::Identifier && !reserved(token_.text))
+                        fail("actor state mutation requires scoped handle_state callback");
                     if (accept("self")) {
                         require(".");
                         if (accept("forward")) arm.route_direction = "forward";
@@ -617,6 +807,8 @@ private:
                         require(";");
                         arm.assignments.push_back(std::move(assignment));
                     }
+                    if (token_.text == "const")
+                        arm.state_loan = parse_scoped_state_loan();
                     require("}");
                     value.boolean_arms.push_back(std::move(arm));
                     accept(";");
@@ -650,7 +842,10 @@ private:
             require(";");
             value.assignments.push_back(std::move(assignment));
         }
-        if (value.is_receiver && token_.text == "}") {
+        if (actor_method && !value.is_receiver && token_.text == "const")
+            value.method_state_loan = parse_scoped_state_loan();
+        if (value.is_receiver && (token_.text == "}" || (transform_pipe && token_.text == "return"))) {
+            if (accept("return")) require(";");
             value.result = make_expression(Expression::Kind::Integer, token_.offset);
             value.result->integer = 0;
         } else {
@@ -758,8 +953,19 @@ private:
             advance();
             return expr;
         }
-        if (token_.kind != Kind::Identifier || reserved(token_.text)) {
+        if (token_.kind != Kind::Identifier
+                || (reserved(token_.text)
+                    && !(state_loan_depth_ && token_.text == "state"))) {
             fail("expected int expression");
+        }
+        if (state_loan_depth_ && token_.text == "state") {
+            require("state");
+            if (token_.text != ".")
+                fail("actor state reference cannot escape handle_state callback");
+            require(".");
+            auto value = make_expression(Expression::Kind::Variable, offset);
+            value->name = "@state." + identifier();
+            return value;
         }
         auto expr = make_expression(Expression::Kind::Variable, offset);
         expr->name = identifier();
@@ -851,6 +1057,15 @@ private:
         return text + "]";
     }
 
+    static bool contains_call(const Expression& e) {
+        if (e.kind == Expression::Kind::Call) return true;
+        if (e.left && contains_call(*e.left)) return true;
+        if (e.right && contains_call(*e.right)) return true;
+        for (const auto& arg : e.arguments)
+            if (contains_call(*arg)) return true;
+        return false;
+    }
+
     static bool contains_boolean(const Expression& e) {
         if (e.kind == Expression::Kind::Boolean) return true;
         if (e.left && contains_boolean(*e.left)) return true;
@@ -866,6 +1081,16 @@ private:
         if (e.right && reads_name(*e.right, name)) return true;
         for (const auto& arg : e.arguments)
             if (reads_name(*arg, name)) return true;
+        return false;
+    }
+
+    static bool reads_state_value(const Expression& e) {
+        if (e.kind == Expression::Kind::Variable
+                && e.name.rfind("@state.", 0) == 0) return true;
+        if (e.left && reads_state_value(*e.left)) return true;
+        if (e.right && reads_state_value(*e.right)) return true;
+        for (const auto& arg : e.arguments)
+            if (reads_state_value(*arg)) return true;
         return false;
     }
 
@@ -915,6 +1140,11 @@ private:
         // A route intrinsic is admitted only inside a source-defined actor
         // with a compiler-checked, owned pipeline role in trusted main.
         std::unordered_map<std::string, unsigned> pipelineRoles;
+        // A routed nominal case must belong to the actual destination's
+        // declared ingress domain, not merely the emitting actor's domain.
+        // Keys are actor types; unique types per linear pipeline are required.
+        std::unordered_map<std::string,
+            std::pair<std::string, std::string>> pipelineNeighbors;
         std::unordered_map<std::string, std::size_t> functions;
         for (const auto& fn : program.functions) {
             if (!functions.emplace(fn.name, fn.parameters.size()).second) {
@@ -969,15 +1199,46 @@ private:
                         throw std::runtime_error("pipeline actor ref missing or repeated");
                     const auto found = std::find_if(program.actors.begin(), program.actors.end(),
                         [&](const Actor& a) { return a.name == actorTypes.at(refName); });
-                    if (found == program.actors.end() || !typedDomains.count(found->messages_type))
+                    if (found == program.actors.end()
+                        || (found->transform_pipe
+                            ? (!typedDomains.count(found->forward_messages_type)
+                               || !typedDomains.count(found->backward_messages_type))
+                            : !typedDomains.count(found->messages_type)))
                         throw std::runtime_error("pipeline actors require nominal typed mailbox");
                     if (!uniqueTypes.insert(found->name).second)
                         throw std::runtime_error("linear pipeline requires distinct actor types");
                     pipelineRoles.emplace(found->name,
                         (unsigned)(&refName - &fn.pipeline_actors.front()));
-                    if (contract.empty()) contract = found->messages_type;
-                    else if (contract != found->messages_type)
-                        throw std::runtime_error("pipeline actor message domains must match");
+                    // Directional transform domains are resolved to a shared
+                    // pipeline wire table by the native backend. Ordinary
+                    // legacy pipelines continue to require one domain.
+                    if (!found->transform_pipe) {
+                        if (contract.empty()) contract = found->messages_type;
+                        else if (contract != found->messages_type
+                                 && std::none_of(program.actors.begin(), program.actors.end(),
+                                        [](const Actor& a) { return a.transform_pipe; }))
+                            throw std::runtime_error("pipeline actor message domains must match");
+                    }
+                }
+                // A transform needs upstream forward ingress and downstream
+                // backward ingress. Root external DATA is direction 0 and
+                // cannot safely be dispatched to a transform hook.
+                const auto& firstType = actorTypes.at(fn.pipeline_actors.front());
+                const auto& lastType = actorTypes.at(fn.pipeline_actors.back());
+                for (const auto& actor : program.actors)
+                    if ((actor.name == firstType || actor.name == lastType)
+                            && actor.transform_pipe)
+                        throw std::runtime_error(
+                            "transform pipe actor must be an interior pipeline stage");
+                for (std::size_t i = 0; i < fn.pipeline_actors.size(); ++i) {
+                    const auto& type = actorTypes.at(fn.pipeline_actors[i]);
+                    const auto upstream = i ? actorTypes.at(fn.pipeline_actors[i-1]) : "";
+                    const auto downstream = i+1 < fn.pipeline_actors.size()
+                        ? actorTypes.at(fn.pipeline_actors[i+1]) : "";
+                    if (!pipelineNeighbors.emplace(type,
+                            std::make_pair(upstream, downstream)).second)
+                        throw std::runtime_error(
+                            "actor type cannot belong to multiple pipeline routes");
                 }
                 if (fn.pipeline_expect_actor != fn.pipeline_actors.front())
                     throw std::runtime_error("expect_pipeline must name pipeline source");
@@ -1099,15 +1360,26 @@ private:
                 throw std::runtime_error("conflicting generated actor symbol '" + name + "'");
         };
         for (const auto& actor : program.actors) {
-            if (!actor.messages_type.empty()) {
-                if (!messagePatterns.count(actor.messages_type)
+            if (!actor.messages_type.empty() || actor.transform_pipe) {
+                if (actor.transform_pipe
+                    && (!typedDomains.count(actor.forward_messages_type)
+                        || !typedDomains.count(actor.backward_messages_type)))
+                    throw std::runtime_error("unknown transform pipe message domain");
+                if (!actor.transform_pipe && !messagePatterns.count(actor.messages_type)
                         && !typedDomains.count(actor.messages_type))
                     throw std::runtime_error(
                         "unknown actor message match contract '" + actor.messages_type + "'");
                 const auto count = std::count_if(actor.methods.begin(), actor.methods.end(),
                     [](const Function& f) { return f.is_receiver; });
-                if (count != 1)
-                    throw std::runtime_error("typed actor requires exactly one receive(Message m)");
+                if (actor.transform_pipe) {
+                    const auto forward = std::count_if(actor.methods.begin(), actor.methods.end(),
+                        [](const Function& f) { return f.name == "receive_forward"; });
+                    const auto backward = std::count_if(actor.methods.begin(), actor.methods.end(),
+                        [](const Function& f) { return f.name == "receive_backward"; });
+                    if (count != 2 || forward != 1 || backward != 1)
+                        throw std::runtime_error("transform pipe actor requires exactly one receive_forward and receive_backward");
+                } else if (count != 1)
+                    throw std::runtime_error("typed actor requires exactly one receive with its declared message domain");
                 if (std::any_of(actor.methods.begin(), actor.methods.end(),
                     [](const Function& f) { return f.name == "on_message"; }))
                     throw std::runtime_error(
@@ -1124,6 +1396,7 @@ private:
                 + (program.module.empty() ? "" : program.module + "_")
                 + actor.name + "_";
             reserveGenerated(prefix + "init");
+            if (actor.transform_pipe) reserveGenerated(prefix + "receive");
             std::unordered_set<std::string> fields;
             std::unordered_set<std::string> mutableFields;
             // Deliberately restrict initializers to closed arithmetic:
@@ -1131,17 +1404,41 @@ private:
             const std::unordered_set<std::string> none;
             const std::unordered_map<std::string, std::size_t> noCalls;
             for (const auto& field : actor.fields) {
+                if (contains_boolean(*field.initializer))
+                    throw std::runtime_error(
+                        "actor state initializer requires int expression");
                 validate_expression(*field.initializer, none, noCalls);
+                if (field.name == "state" || field.name == "using"
+                        || field.name == "read" || field.name == "write")
+                    throw std::runtime_error("actor state key conflicts with reserved capability name");
                 if (!fields.insert(field.name).second)
-                    throw std::runtime_error("duplicate actor field '" + field.name + "'");
+                    throw std::runtime_error(
+                        std::string(actor.state_declared
+                            ? "duplicate actor state key '" : "duplicate actor field '")
+                        + field.name + "'");
                 if (field.field_mutable) mutableFields.insert(field.name);
             }
             std::unordered_set<std::string> methods;
             for (const auto& method : actor.methods) {
+                // Neither ordinary actor methods nor the legacy boolean
+                // receive matcher may touch actor state outside a scoped
+                // handle_state callback. Reject before the LLVM lowering
+                // attempts to resolve state as an ordinary class local.
+                if (!method.assignments.empty()
+                    || std::any_of(method.boolean_arms.begin(),
+                        method.boolean_arms.end(),
+                        [](const ReceiveBooleanArm& arm) {
+                            return !arm.assignments.empty();
+                        }))
+                    throw std::runtime_error(
+                        "actor state mutation requires scoped handle_state callback");
                 if (!methods.insert(method.name).second)
                     throw std::runtime_error("duplicate actor method '" + method.name + "'");
                 reserveGenerated(prefix + method.name);
-                std::unordered_set<std::string> available = fields;
+                // Actor class fields are never ordinary lexical values.
+                // The only legal field reads/writes happen under a state
+                // loan with explicit compiler-owned @state.key bindings.
+                std::unordered_set<std::string> available;
                 for (const auto& param : method.parameters) {
                     if (!available.insert(param).second)
                         throw std::runtime_error("actor parameter shadows field '" + param + "'");
@@ -1152,12 +1449,16 @@ private:
                         throw std::runtime_error("actor local shadows field/parameter '" + local.name + "'");
                 }
                 if (method.is_receiver) {
+                    const std::string methodDomain = actor.transform_pipe
+                        ? (method.name == "receive_forward"
+                            ? actor.forward_messages_type : actor.backward_messages_type)
+                        : actor.messages_type;
                     const std::string& parameter = method.parameters.at(0);
                     if (!method.boolean_arms.empty()) {
-                        if (typedDomains.count(actor.messages_type))
+                        if (typedDomains.count(methodDomain))
                             throw std::runtime_error("boolean match cannot inspect tagged enum");
                         const MessagePattern& contract =
-                            *messagePatterns.at(actor.messages_type);
+                            *messagePatterns.at(methodDomain);
                         if (contract.alternatives.size() != 1 ||
                             contract.alternatives[0].kind != MessageShape::Kind::Boolean)
                             throw std::runtime_error(
@@ -1180,13 +1481,60 @@ private:
                                         "match arm Message payload binding is not narrowed");
                                 validate_expression(*assignment.value, available, functions);
                             }
+                            if (arm.state_loan) {
+                                const auto& loan = *arm.state_loan;
+                                if (!actor.state_declared)
+                                    throw std::runtime_error("handle_state requires an actor state map");
+                                if (!method.effects_declared)
+                                    throw std::runtime_error("actor state method requires explicit with effects");
+                                const auto permits = [&](std::string_view effect) {
+                                    return std::find(method.declared_effects.begin(),
+                                        method.declared_effects.end(), effect)
+                                            != method.declared_effects.end();
+                                };
+                                if (loan.mode == StateLoan::Mode::Read && !permits("state.read"))
+                                    throw std::runtime_error("state.read loan not permitted by with effects");
+                                if (loan.mode == StateLoan::Mode::Write && !permits("state.write"))
+                                    throw std::runtime_error("state.write loan not permitted by with effects");
+                                bool reads = reads_state_value(*loan.result);
+                                for (const auto& assignment : loan.assignments)
+                                    reads |= reads_state_value(*assignment.value);
+                                if (reads && !permits("state.read"))
+                                    throw std::runtime_error("state.read operation not permitted by with effects");
+                                if (loan.mode == StateLoan::Mode::Read && !loan.assignments.empty())
+                                    throw std::runtime_error("read-only actor state loan cannot mutate state");
+                                auto loanAvailable = available;
+                                for (const auto& field : actor.fields)
+                                    loanAvailable.insert("@state." + field.name);
+                                for (const auto& assignment : loan.assignments) {
+                                    if (!mutableFields.count(assignment.field))
+                                        throw std::runtime_error("state callback writes unknown or immutable key");
+                                    if (reads_name(*assignment.value, parameter))
+                                        throw std::runtime_error("match arm Message payload binding is not narrowed");
+                                    if (contains_boolean(*assignment.value))
+                                        throw std::runtime_error("actor state callback requires int expressions");
+                                    if (contains_call(*assignment.value))
+                                        throw std::runtime_error("state read/write loan cannot invoke arbitrary functions");
+                                    validate_expression(*assignment.value, loanAvailable, functions);
+                                }
+                                if (reads_name(*loan.result, parameter))
+                                    throw std::runtime_error("match arm Message payload binding is not narrowed");
+                                if (contains_boolean(*loan.result))
+                                    throw std::runtime_error("actor state callback requires int expressions");
+                                if (contains_call(*loan.result))
+                                    throw std::runtime_error("state read/write loan cannot invoke arbitrary functions");
+                                validate_expression(*loan.result, loanAvailable, functions);
+                                if (available.count(loan.result_binding)
+                                        || fields.count(loan.result_binding))
+                                    throw std::runtime_error("state callback result shadows actor state or method local");
+                            }
                         }
                         if (!seenTrue || !seenFalse)
                             throw std::runtime_error(
                                 "nonexhaustive receive boolean match");
                     }
                     if (!method.tagged_arms.empty()) {
-                        if (!typedDomains.count(actor.messages_type))
+                        if (!typedDomains.count(methodDomain))
                             throw std::runtime_error(
                                 "tagged receive match requires named enum or pattern");
                         if (method.match_subject != parameter)
@@ -1194,11 +1542,11 @@ private:
                                 "tagged receive match must inspect Message parameter");
                         std::unordered_set<std::string> allowed;
                         for (const auto& pattern : program.tagged_patterns) {
-                            if (pattern.name == actor.messages_type)
+                            if (pattern.name == methodDomain)
                                 allowed.insert(pattern.alternatives.begin(),
                                                pattern.alternatives.end());
                         }
-                        const auto directEnum = enumNames.find(actor.messages_type);
+                        const auto directEnum = enumNames.find(methodDomain);
                         if (directEnum != enumNames.end()) {
                             for (const auto& c : directEnum->second->cases)
                                 allowed.insert(directEnum->first + "." + c.name);
@@ -1222,7 +1570,70 @@ private:
                                 throw std::runtime_error("unresolved tagged enum case");
                             auto armAvailable = available;
                             for (const auto& binder : arm.binders) {
-                                if (binder != "_") armAvailable.insert(binder);
+                                if (binder != "_") {
+                                    if (!armAvailable.insert(binder).second)
+                                        throw std::runtime_error("tagged binder shadows parameter or local");
+                                }
+                            }
+                            if (arm.state_loan) {
+                                // No implicit effect escalation: tagged receive
+                                // callbacks follow the same explicit signature
+                                // upper bound as ordinary and boolean methods.
+                                if (!method.effects_declared)
+                                    throw std::runtime_error(
+                                        "actor state method requires explicit with effects");
+                                {
+                                    const auto permits = [&](std::string_view effect) {
+                                        return std::find(method.declared_effects.begin(),
+                                            method.declared_effects.end(), effect)
+                                                != method.declared_effects.end();
+                                    };
+                                    if (arm.state_loan->mode == StateLoan::Mode::Read
+                                            && !permits("state.read"))
+                                        throw std::runtime_error(
+                                            "state.read loan not permitted by with effects");
+                                    if (arm.state_loan->mode == StateLoan::Mode::Write
+                                            && !permits("state.write"))
+                                        throw std::runtime_error(
+                                            "state.write loan not permitted by with effects");
+                                    bool reads = reads_state_value(*arm.state_loan->result);
+                                    for (const auto& assignment : arm.state_loan->assignments)
+                                        reads |= reads_state_value(*assignment.value);
+                                    if (reads && !permits("state.read"))
+                                        throw std::runtime_error(
+                                            "state.read operation not permitted by with effects");
+                                }
+                                if (!actor.state_declared)
+                                    throw std::runtime_error("handle_state requires an actor state map");
+                                if (arm.state_loan->mode == StateLoan::Mode::Read
+                                        && !arm.state_loan->assignments.empty())
+                                    throw std::runtime_error(
+                                        "read-only actor state loan cannot mutate state");
+                                std::unordered_set<std::string> loanAvailable = armAvailable;
+                                for (const auto& field : actor.fields)
+                                    loanAvailable.insert("@state." + field.name);
+                                for (const auto& assignment : arm.state_loan->assignments) {
+                                    if (!mutableFields.count(assignment.field))
+                                        throw std::runtime_error(
+                                            "state callback writes unknown or immutable key");
+                                    if (contains_boolean(*assignment.value))
+                                        throw std::runtime_error("actor state callback requires int expressions");
+                                    if (contains_call(*assignment.value))
+                                        throw std::runtime_error(
+                                            "state read/write loan cannot invoke arbitrary functions");
+                                    validate_expression(*assignment.value, loanAvailable, functions);
+                                }
+                                if (contains_boolean(*arm.state_loan->result))
+                                    throw std::runtime_error("actor state callback requires int expressions");
+                                if (contains_call(*arm.state_loan->result))
+                                    throw std::runtime_error(
+                                        "state read/write loan cannot invoke arbitrary functions");
+                                validate_expression(*arm.state_loan->result,
+                                                    loanAvailable, functions);
+                                if (fields.count(arm.state_loan->result_binding)
+                                        || !armAvailable.insert(arm.state_loan->result_binding).second)
+                                    throw std::runtime_error(
+                                        "state callback result shadows actor state or arm local");
                             }
                             for (const auto& assignment : arm.assignments) {
                                 if (!mutableFields.count(assignment.field))
@@ -1234,6 +1645,10 @@ private:
                                 validate_expression(*assignment.value, armAvailable, functions);
                             }
                             if (!arm.route_direction.empty()) {
+                                if (actor.transform_pipe
+                                    && ((method.name == "receive_forward" && arm.route_direction != "forward")
+                                        || (method.name == "receive_backward" && arm.route_direction != "backward")))
+                                    throw std::runtime_error("transform handler must emit in its ingress direction");
                                 const auto role = pipelineRoles.find(actor.name);
                                 if (role == pipelineRoles.end())
                                     throw std::runtime_error("pipeline actor routing requires declared pipeline topology");
@@ -1246,6 +1661,42 @@ private:
                                 if (arm.route_variant.find('.') == std::string::npos
                                         || !allowed.count(arm.route_variant))
                                     throw std::runtime_error("pipeline route outside nominal message contract");
+                                const auto neighbor = pipelineNeighbors.find(actor.name);
+                                if (neighbor == pipelineNeighbors.end())
+                                    throw std::runtime_error("pipeline route lacks a registered neighbor");
+                                const std::string& targetName =
+                                    arm.route_direction == "forward"
+                                        ? neighbor->second.second : neighbor->second.first;
+                                const auto receiver = std::find_if(
+                                    program.actors.begin(), program.actors.end(),
+                                    [&](const Actor& other) { return other.name == targetName; });
+                                if (targetName.empty() || receiver == program.actors.end())
+                                    throw std::runtime_error("pipeline route has no target actor");
+                                const std::string recipientDomain = !receiver->transform_pipe
+                                    ? receiver->messages_type
+                                    : arm.route_direction == "forward"
+                                        ? receiver->forward_messages_type
+                                        : receiver->backward_messages_type;
+                                bool recipientAccepts = false;
+                                for (const auto& pattern : program.tagged_patterns)
+                                    if (pattern.name == recipientDomain
+                                        && std::find(pattern.alternatives.begin(),
+                                                      pattern.alternatives.end(),
+                                                      arm.route_variant) != pattern.alternatives.end())
+                                        recipientAccepts = true;
+                                if (const auto en = enumNames.find(recipientDomain);
+                                        en != enumNames.end()) {
+                                    const auto& prefix = recipientDomain + ".";
+                                    if (arm.route_variant.rfind(prefix, 0) == 0)
+                                        recipientAccepts = std::any_of(
+                                            en->second->cases.begin(), en->second->cases.end(),
+                                            [&](const EnumCase& c) {
+                                                return arm.route_variant == prefix + c.name;
+                                            });
+                                }
+                                if (!recipientAccepts)
+                                    throw std::runtime_error(
+                                        "pipeline destination ingress domain rejects routed case");
                                 const auto output = enumNames.at(arm.route_variant.substr(0,
                                     arm.route_variant.find('.')));
                                 const auto outputCase = std::find_if(output->cases.begin(),
@@ -1303,46 +1754,117 @@ private:
                     }
                     validate_expression(*assignment.value, available, functions);
                 }
-                validate_expression(*method.result, available, functions);
+                if (method.method_state_loan) {
+                    // Ordinary methods require explicit effect bounds; no
+                    // implicit escalation via compiler inference.
+                    const auto& loan = *method.method_state_loan;
+                    if (!actor.state_declared)
+                        throw std::runtime_error("handle_state requires an actor state map");
+                    if (!method.effects_declared)
+                        throw std::runtime_error("actor state method requires explicit with effects");
+                    const auto permits = [&](std::string_view effect) {
+                        return std::find(method.declared_effects.begin(),
+                            method.declared_effects.end(), effect)
+                                != method.declared_effects.end();
+                    };
+                    if (loan.mode == StateLoan::Mode::Read && !permits("state.read"))
+                        throw std::runtime_error("state.read loan not permitted by with effects");
+                    if (loan.mode == StateLoan::Mode::Write && !permits("state.write"))
+                        throw std::runtime_error("state.write loan not permitted by with effects");
+                    bool reads = reads_state_value(*loan.result);
+                    for (const auto& assignment : loan.assignments)
+                        reads |= reads_state_value(*assignment.value);
+                    if (reads && !permits("state.read"))
+                        throw std::runtime_error("state.read operation not permitted by with effects");
+                    if (loan.mode == StateLoan::Mode::Read && !loan.assignments.empty())
+                        throw std::runtime_error("read-only actor state loan cannot mutate state");
+                    auto loanAvailable = available;
+                    for (const auto& field : actor.fields)
+                        loanAvailable.insert("@state." + field.name);
+                    for (const auto& assignment : loan.assignments) {
+                        if (!mutableFields.count(assignment.field))
+                            throw std::runtime_error("state callback writes unknown or immutable key");
+                        if (contains_boolean(*assignment.value))
+                            throw std::runtime_error("actor state callback requires int expressions");
+                        if (contains_call(*assignment.value))
+                            throw std::runtime_error("state read/write loan cannot invoke arbitrary functions");
+                        validate_expression(*assignment.value, loanAvailable, functions);
+                    }
+                    if (contains_boolean(*loan.result))
+                        throw std::runtime_error("actor state callback requires int expressions");
+                    if (contains_call(*loan.result))
+                        throw std::runtime_error("state read/write loan cannot invoke arbitrary functions");
+                    validate_expression(*loan.result, loanAvailable, functions);
+                    if (!available.insert(loan.result_binding).second
+                            || fields.count(loan.result_binding))
+                        throw std::runtime_error("state callback result shadows actor state or method local");
+                }
+                // A copied scalar may be returned from a tagged match
+                // only when every arm defines the same callback result.
+                // This is a definite-assignment check, not a state loan
+                // escaping its critical callback.
+                auto returnAvailable = available;
+                if (!method.boolean_arms.empty()) {
+                    const auto& firstLoan = method.boolean_arms.front().state_loan;
+                    if (firstLoan && std::all_of(method.boolean_arms.begin(),
+                            method.boolean_arms.end(), [&](const ReceiveBooleanArm& arm) {
+                                return arm.state_loan
+                                    && arm.state_loan->result_binding == firstLoan->result_binding;
+                            }))
+                        returnAvailable.insert(firstLoan->result_binding);
+                }
+                if (!method.tagged_arms.empty()) {
+                    const auto& firstLoan = method.tagged_arms.front().state_loan;
+                    if (firstLoan && std::all_of(method.tagged_arms.begin(),
+                            method.tagged_arms.end(), [&](const TaggedReceiveArm& arm) {
+                                return arm.state_loan
+                                    && arm.state_loan->result_binding
+                                        == firstLoan->result_binding;
+                            }))
+                        returnAvailable.insert(firstLoan->result_binding);
+                }
+                validate_expression(*method.result, returnAvailable, functions);
             }
             // Static variant coverage alone cannot authorize execution:
             // per-case MessagePack DATA and typed continuation lowering
             // must be implemented before guest source reaches LLVM IR.
-            if (typedDomains.count(actor.messages_type)) {
-                // The first executable LLVM slice accepts only valueless
-                // tagged cases, no payload destructuring, and an exhaustive
-                // set of side-effect-only scalar field assignments.
-                std::vector<std::string> allowed;
-                for (const auto& pattern : program.tagged_patterns)
-                    if (pattern.name == actor.messages_type)
-                        allowed = pattern.alternatives;
-                if (const auto found = enumNames.find(actor.messages_type);
-                        found != enumNames.end())
-                    for (const auto& c : found->second->cases)
-                        allowed.push_back(found->first + "." + c.name);
-                if (allowed.empty() || allowed.size() > 64)
-                    throw std::runtime_error("LLVM tagged actor supports 1..64 variants");
-                for (const auto& alternative : allowed) {
-                    const auto dot = alternative.find('.');
-                    const auto owner = enumNames.at(alternative.substr(0, dot));
-                    const auto it = std::find_if(owner->cases.begin(), owner->cases.end(),
-                        [&](const EnumCase& c) {
-                            return c.name == alternative.substr(dot + 1);
-                        });
-                    if (it == owner->cases.end()
-                            || (it->has_payload
-                                && it->payload.kind != MessageShape::Kind::Integer))
+            if (typedDomains.count(actor.messages_type) || actor.transform_pipe) {
+                // Exhaustiveness is directional for transform pipe actors:
+                // each handler matches exactly its declared input domain.
+                for (const auto& receiver : actor.methods) {
+                    if (!receiver.is_receiver) continue;
+                    const std::string domain = !actor.transform_pipe
+                        ? actor.messages_type
+                        : receiver.name == "receive_forward"
+                            ? actor.forward_messages_type : actor.backward_messages_type;
+                    std::vector<std::string> allowed;
+                    for (const auto& pattern : program.tagged_patterns)
+                        if (pattern.name == domain) allowed = pattern.alternatives;
+                    if (const auto found = enumNames.find(domain);
+                            found != enumNames.end())
+                        for (const auto& c : found->second->cases)
+                            allowed.push_back(found->first + "." + c.name);
+                    if (allowed.empty() || allowed.size() > 64)
+                        throw std::runtime_error("LLVM tagged actor supports 1..64 variants per direction");
+                    for (const auto& alternative : allowed) {
+                        const auto dot = alternative.find('.');
+                        const auto owner = enumNames.at(alternative.substr(0, dot));
+                        const auto it = std::find_if(owner->cases.begin(), owner->cases.end(),
+                            [&](const EnumCase& c) {
+                                return c.name == alternative.substr(dot + 1);
+                            });
+                        if (it == owner->cases.end()
+                                || (it->has_payload
+                                    && it->payload.kind != MessageShape::Kind::Integer))
+                            throw std::runtime_error(
+                                "LLVM tagged source subset requires payloadless or int cases");
+                    }
+                    if (receiver.tagged_arms.size() != allowed.size()
+                            || !receiver.boolean_arms.empty()
+                            || !receiver.assignments.empty())
                         throw std::runtime_error(
-                            "LLVM tagged source subset requires payloadless or int cases");
+                            "LLVM tagged actor requires exhaustive side-effect-only match");
                 }
-                const auto receiver = std::find_if(actor.methods.begin(),
-                    actor.methods.end(), [](const Function& f) { return f.is_receiver; });
-                if (receiver == actor.methods.end()
-                        || receiver->tagged_arms.size() != allowed.size()
-                        || !receiver->boolean_arms.empty()
-                        || !receiver->assignments.empty())
-                    throw std::runtime_error(
-                        "LLVM tagged actor requires exhaustive side-effect-only match");
             }
         }
     }
@@ -1354,6 +1876,7 @@ private:
 
     Lexer lexer_;
     Token token_;
+    unsigned state_loan_depth_ = 0;
 };
 
 } // namespace

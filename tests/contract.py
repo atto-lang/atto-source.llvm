@@ -93,12 +93,21 @@ def verify_three_actor_flow_context(stderr):
         raise ValueError("broken runtime-owned causal chain")
 
 
+def require(condition, message):
+    if not condition:
+        raise ValueError(str(message))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", required=True)
     parser.add_argument("--fixture", required=True)
     parser.add_argument("--ir")
+    parser.add_argument("--ir-not", action="append",
+                        help="Forbidden LLVM IR regex (checked even with python -O)")
     parser.add_argument("--diagnostic")
+    parser.add_argument("--diagnostic-not", action="append",
+                        help="Forbidden compiler diagnostic text in negative tests")
     parser.add_argument("--run", type=int)
     parser.add_argument("--clang")
     parser.add_argument("--native-runtime")
@@ -121,19 +130,27 @@ def main():
     compile_result = subprocess.run(
         [args.compiler, args.fixture], capture_output=True, text=True, check=False, timeout=20
     )
+    require(not args.diagnostic_not or args.diagnostic,
+            "--diagnostic-not requires --diagnostic")
     if args.diagnostic:
-        assert compile_result.returncode != 0, "invalid source unexpectedly accepted"
-        assert args.diagnostic in compile_result.stderr, compile_result.stderr
-        assert not compile_result.stdout.strip(), "emitted IR after rejection"
+        require(compile_result.returncode != 0, "invalid source unexpectedly accepted")
+        require(args.diagnostic in compile_result.stderr, compile_result.stderr)
+        for forbidden in args.diagnostic_not or ():
+            require(forbidden not in compile_result.stderr,
+                    "unexpected compiler rejection reason: " + forbidden)
+        require(not compile_result.stdout.strip(), "emitted IR after rejection")
         return
-    assert compile_result.returncode == 0, compile_result.stderr
-    assert compile_result.stdout.startswith("; ModuleID"), compile_result.stdout
-    assert not compile_result.stderr, compile_result.stderr
+    require(compile_result.returncode == 0, compile_result.stderr)
+    require(compile_result.stdout.startswith("; ModuleID"), compile_result.stdout)
+    require(not compile_result.stderr, compile_result.stderr)
     if args.ir:
-        assert args.ir in compile_result.stdout, compile_result.stdout
+        require(args.ir in compile_result.stdout, compile_result.stdout)
+    for forbidden in args.ir_not or ():
+        require(re.search(forbidden, compile_result.stdout) is None,
+                "forbidden LLVM IR evidence: " + forbidden)
     if args.run is None:
         return
-    assert args.clang, "--run requires a clang executable"
+    require(args.clang, "--run requires a clang executable")
     with tempfile.TemporaryDirectory(prefix="oreslang-llvm-test-") as directory:
         executable = str(pathlib.Path(directory) / "guest")
         clang_args = [args.clang, "-x", "ir", "-"]
@@ -173,24 +190,24 @@ def main():
             clang_args, input=compile_result.stdout,
             capture_output=True, text=True, check=False, timeout=30
         )
-        assert native.returncode == 0, native.stderr
-        assert 1 <= args.runs <= 100, "unreasonable repeat count"
+        require(native.returncode == 0, native.stderr)
+        require(1 <= args.runs <= 100, "unreasonable repeat count")
         for trial in range(args.runs):
             result = subprocess.run(
                 [executable], capture_output=True, text=True, check=False, timeout=10
             )
             # The native platform truncates main's i64 return to its exit code.
-            assert result.returncode == args.run, (
+            require(result.returncode == args.run, (
                 f"trial {trial}: native exit {result.returncode}, "
                 f"expected {args.run}: {result.stderr}"
-            )
+            ))
             if args.stderr:
-                assert args.stderr in result.stderr, result.stderr
+                require(args.stderr in result.stderr, result.stderr)
             if args.stderr_count is not None:
-                assert args.stderr, "--stderr-count needs --stderr"
-                assert result.stderr.count(args.stderr) == args.stderr_count, (
+                require(args.stderr, "--stderr-count needs --stderr")
+                require(result.stderr.count(args.stderr) == args.stderr_count, (
                     f"trial {trial}: {result.stderr}"
-                )
+                ))
             if args.pipeline_three_actor_summary:
                 if result.returncode != 43:
                     raise ValueError("compiled three-actor guest returned wrong exit status")

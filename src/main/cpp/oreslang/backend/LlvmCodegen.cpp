@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <set>
 #include <cstdint>
 #include <stdexcept>
 #include <string_view>
@@ -40,6 +41,18 @@ struct GuestNominalCase {
     std::vector<std::uint8_t> wire;
     bool i64_payload = false;
 };
+// This is a syntactic variable-use test over the restricted i64 AST, not
+// an ownership proof. The parser has already forbidden callback escape and
+// arbitrary guest calls; it permits omitting unused native heap reads.
+bool uses_scalar_name(const Expression& expr, std::string_view name) {
+    if (expr.kind == Expression::Kind::Variable && expr.name == name)
+        return true;
+    if (expr.left && uses_scalar_name(*expr.left, name)) return true;
+    if (expr.right && uses_scalar_name(*expr.right, name)) return true;
+    for (const auto& argument : expr.arguments)
+        if (uses_scalar_name(*argument, name)) return true;
+    return false;
+}
 std::array<std::uint8_t, 32> sha(std::string_view text) {
     return llvm::SHA256::hash(llvm::ArrayRef<std::uint8_t>(
         reinterpret_cast<const std::uint8_t*>(text.data()), text.size()));
@@ -108,22 +121,30 @@ void mp_signed_i64(std::vector<std::uint8_t>& out, std::int64_t number) {
         out.push_back(static_cast<std::uint8_t>(bits >> shift));
 }
 std::vector<GuestNominalCase> tagged_cases(
-    const Program& program, const Actor& actor) {
-    if (actor.messages_type.empty()) return {};
+    const Program& program, const Actor& actor,
+    const std::vector<std::string>* shared_pipeline_cases = nullptr) {
+    if (actor.messages_type.empty() && !shared_pipeline_cases) return {};
     std::vector<std::string> names;
-    for (const auto& p : program.tagged_patterns)
-        if (p.name == actor.messages_type) names = p.alternatives;
-    for (const auto& e : program.enums)
-        if (e.name == actor.messages_type)
-            for (const auto& c : e.cases)
-                names.push_back(e.name + "." + c.name);
+    if (shared_pipeline_cases) names = *shared_pipeline_cases;
+    else {
+        for (const auto& p : program.tagged_patterns)
+            if (p.name == actor.messages_type) names = p.alternatives;
+        for (const auto& e : program.enums)
+            if (e.name == actor.messages_type)
+                for (const auto& c : e.cases)
+                    names.push_back(e.name + "." + c.name);
+    }
     if (names.empty()) return {};
     if (names.size() > 64)
         throw std::runtime_error("tagged actor exceeds native 64-case limit");
     std::vector<std::string> sorted = names;
     std::sort(sorted.begin(), sorted.end());
+    // In a pipeline, the same canonical union descriptor belongs to every
+    // stage. Transport ordinals and schema IDs must match across actors.
     std::string fingerprint = "oreslang.tagged.domain.v1/"
-                            + actor.messages_type + "/";
+                            + (shared_pipeline_cases
+                                ? std::string("pipeline.shared.v1")
+                                : actor.messages_type) + "/";
     for (const auto& name : sorted)
         fingerprint += std::to_string(name.size()) + ":" + name + ";";
     const std::string domain_hash = hex(sha(fingerprint));
@@ -250,12 +271,55 @@ std::string emit_verified_llvm_ir(const Program& source) {
     std::unordered_map<std::string, llvm::Constant*> taggedIdentities;
     std::unordered_map<std::string,
         std::unordered_map<std::string, llvm::Constant*>> taggedFrames;
+    // Resolve a single identical nominal wire ABI for each compiled linear
+    // pipeline. Handler ingress domains remain independent subsets; the
+    // scheduler supplies trusted direction and each handler rejects the
+    // opposite direction. An actor never chooses its own dispatch direction.
+    std::unordered_map<std::string, std::vector<std::string>> pipelineWireCases;
+    for (const auto& fn : source.functions) {
+        if (fn.pipeline_actors.empty()) continue;
+        std::set<std::string> unionCases;
+        std::vector<std::string> actorTypes;
+        for (const auto& ref : fn.pipeline_actors) {
+            const auto binding = std::find_if(fn.actor_spawns.begin(), fn.actor_spawns.end(),
+                [&](const ActorSpawnBinding& b) { return b.name == ref; });
+            if (binding == fn.actor_spawns.end())
+                throw std::runtime_error("pipeline binding lost before LLVM lowering");
+            actorTypes.push_back(binding->actor_type);
+            const auto actor = std::find_if(source.actors.begin(), source.actors.end(),
+                [&](const Actor& a) { return a.name == binding->actor_type; });
+            if (actor == source.actors.end())
+                throw std::runtime_error("pipeline actor lost before LLVM lowering");
+            const std::vector<std::string> domains = actor->transform_pipe
+                ? std::vector<std::string>{actor->forward_messages_type, actor->backward_messages_type}
+                : std::vector<std::string>{actor->messages_type};
+            for (const auto& domain : domains) {
+                for (const auto& pattern : source.tagged_patterns)
+                    if (pattern.name == domain)
+                        unionCases.insert(pattern.alternatives.begin(),
+                                          pattern.alternatives.end());
+                for (const auto& en : source.enums)
+                    if (en.name == domain)
+                        for (const auto& item : en.cases)
+                            unionCases.insert(en.name + "." + item.name);
+            }
+        }
+        if (unionCases.empty() || unionCases.size() > 64)
+            throw std::runtime_error("pipeline wire union requires 1..64 nominal cases");
+        for (const auto& type : actorTypes) {
+            if (!pipelineWireCases.emplace(type,
+                    std::vector<std::string>(unionCases.begin(), unionCases.end())).second)
+                throw std::runtime_error("source actor appears in multiple pipeline groups");
+        }
+    }
     llvm::IRBuilder<> constants(context);
     auto* i32 = llvm::Type::getInt32Ty(context);
     auto* contractTy = llvm::StructType::get(context, {ptr, ptr, ptr});
     auto* nominalTy = llvm::StructType::get(context, {ptr, i32});
     for (const auto& actor : source.actors) {
-        auto cases = tagged_cases(source, actor);
+        const auto pipeline = pipelineWireCases.find(actor.name);
+        auto cases = tagged_cases(source, actor,
+            pipeline == pipelineWireCases.end() ? nullptr : &pipeline->second);
         if (cases.empty()) continue;
         std::vector<llvm::Constant*> contracts, identities;
         const auto prefix = actor.name + ".tagged.";
@@ -308,7 +372,8 @@ std::string emit_verified_llvm_ir(const Program& source) {
         actorFieldCounts.emplace(actor.name, std::max<std::size_t>(1, actor.fields.size()));
         const auto method = std::find_if(actor.methods.begin(), actor.methods.end(),
             [&](const Function& f) { return f.name ==
-                (actor.messages_type.empty() ? "on_message" : "receive"); });
+                (actor.transform_pipe ? "receive_forward"
+                    : actor.messages_type.empty() ? "on_message" : "receive"); });
         if (method != actor.methods.end() && method->parameters.size() == 1) {
             auto* msgType = taggedCases.count(actor.name)
                 ? llvm::FunctionType::get(i64, {ptr, i64, i64, i64, ptr, i64}, false)
@@ -316,7 +381,8 @@ std::string emit_verified_llvm_ir(const Program& source) {
             actorMessageHandlers.emplace(actor.name, llvm::Function::Create(
                 msgType, llvm::Function::ExternalLinkage,
                 actorSymbolPrefix + actor.name + "_"
-                + (actor.messages_type.empty() ? "on_message" : "receive"), module));
+                + (actor.transform_pipe ? "receive"
+                    : actor.messages_type.empty() ? "on_message" : "receive"), module));
         }
     }
     const auto sourceSpawn = module.getOrInsertFunction(
@@ -640,16 +706,10 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 nominalWire = &*args++;
                 nominalWireSize = &*args++;
             }
+            // Actor fields are intentionally absent from the ordinary
+            // method-local namespace. State can be read only while lowering
+            // an authenticated, synchronous handle_state loan in an arm.
             std::unordered_map<std::string, llvm::Value*> locals;
-            for (std::size_t index = 0; index < actor.fields.size(); ++index) {
-                llvm::Value* value = builder.CreateCall(fieldRead,
-                    {heap, currentDomain, currentEpoch,
-                     llvm::ConstantInt::get(i64, index)}, actor.fields[index].name);
-                auto* slot = builder.CreateAlloca(i64, nullptr,
-                                                actor.fields[index].name + ".field");
-                builder.CreateStore(value, slot);
-                locals.emplace(actor.fields[index].name, slot);
-            }
             struct LocalSlot {llvm::Value* slot; bool heap;};
             std::vector<LocalSlot> ownedSlots;
             const auto count = std::count_if(method.locals.begin(), method.locals.end(),
@@ -672,6 +732,7 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 ownedSlots.push_back({address, local.heap_owned});
             }
             if (!method.tagged_arms.empty()) {
+                std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> copiedStateResults;
                 const auto& cases = taggedCases.at(actor.name);
                 auto* invalid = llvm::BasicBlock::Create(context, "match.invalid", fn);
                 auto* joined = llvm::BasicBlock::Create(context, "match.join", fn);
@@ -703,20 +764,61 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             armParameters.emplace(arm.binders.front(), bound);
                         }
                     }
-                    for (const auto& assignment : arm.assignments) {
-                        const auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
-                            [&](const LocalBinding& f) {
-                                return f.name == assignment.field;
-                            });
-                        if (field == actor.fields.end() || !field->field_mutable)
-                            throw std::runtime_error("invalid tagged actor field mutation");
-                        auto* updated = lower(*assignment.value, builder, i64,
-                                              armParameters, locals, declarations);
-                        builder.CreateCall(fieldWrite,
-                            {heap, currentDomain, currentEpoch,
-                             llvm::ConstantInt::get(i64,
-                                 std::distance(actor.fields.begin(), field)), updated});
-                        builder.CreateStore(updated, locals.at(assignment.field));
+                    if (!arm.assignments.empty())
+                        throw std::runtime_error(
+                            "direct actor class field mutation is forbidden");
+                    llvm::Value* armCopiedState = nullptr;
+                    if (arm.state_loan) {
+                        // The heap snapshot, all mutations and the scalar
+                        // result are confined to this callback-lowering
+                        // region. The result is copied into the outer arm,
+                        // never an address or mutable reference.
+                        auto loanLocals = locals;
+                        // A declared write-only effect must not generate
+                        // implicit native reads of unrelated or blind-written
+                        // fields. Preload only actual state references; keep
+                        // write-only slots for the callback-local updated value.
+                        for (std::size_t i = 0; i < actor.fields.size(); ++i) {
+                            const auto& field = actor.fields[i];
+                            const std::string borrowed = "@state." + field.name;
+                            bool needsRead = uses_scalar_name(
+                                *arm.state_loan->result, borrowed);
+                            bool willWrite = false;
+                            for (const auto& assignment : arm.state_loan->assignments) {
+                                if (assignment.field == field.name) willWrite = true;
+                                needsRead |= uses_scalar_name(*assignment.value, borrowed);
+                            }
+                            if (!needsRead && !willWrite) continue;
+                            auto* key = builder.CreateAlloca(
+                                i64, nullptr, "state." + field.name);
+                            if (needsRead) {
+                                auto* snapshot = builder.CreateCall(fieldRead,
+                                    {heap, currentDomain, currentEpoch,
+                                     llvm::ConstantInt::get(i64, i)},
+                                    "state.snapshot." + field.name);
+                                builder.CreateStore(snapshot, key);
+                            }
+                            loanLocals.emplace(borrowed, key);
+                        }
+                        for (const auto& assignment : arm.state_loan->assignments) {
+                            const auto it = std::find_if(actor.fields.begin(), actor.fields.end(),
+                                [&](const LocalBinding& f) { return f.name == assignment.field; });
+                            if (it == actor.fields.end() || !it->field_mutable)
+                                throw std::runtime_error(
+                                    "state loan references invalid or immutable key");
+                            auto* updated = lower(*assignment.value, builder, i64,
+                                armParameters, loanLocals, declarations);
+                            const auto index = std::distance(actor.fields.begin(), it);
+                            builder.CreateCall(fieldWrite,
+                                {heap, currentDomain, currentEpoch,
+                                 llvm::ConstantInt::get(i64, index), updated});
+                            builder.CreateStore(updated,
+                                loanLocals.at("@state." + assignment.field));
+                        }
+                        auto* copied = lower(*arm.state_loan->result, builder, i64,
+                                            armParameters, loanLocals, declarations);
+                        armCopiedState = copied;
+                        armParameters.emplace(arm.state_loan->result_binding, copied);
                     }
                     if (!arm.route_direction.empty()) {
                         const auto output = std::find_if(cases.begin(), cases.end(),
@@ -734,6 +836,8 @@ std::string emit_verified_llvm_ir(const Program& source) {
                                 std::distance(cases.begin(), output)),
                             routed});
                     }
+                    if (armCopiedState)
+                        copiedStateResults.emplace_back(armCopiedState, builder.GetInsertBlock());
                     builder.CreateBr(joined);
                 }
                 builder.SetInsertPoint(invalid);
@@ -742,6 +846,63 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 // an arbitrary arm on an out-of-range case ordinal.
                 builder.CreateRet(llvm::ConstantInt::getSigned(i64, -1));
                 builder.SetInsertPoint(joined);
+                if (!copiedStateResults.empty()) {
+                    if (copiedStateResults.size() != method.tagged_arms.size())
+                        throw std::runtime_error(
+                            "state callback result is not defined for every tagged arm");
+                    const auto& name = method.tagged_arms.front().state_loan->result_binding;
+                    auto* merged = builder.CreatePHI(
+                        i64, static_cast<unsigned>(copiedStateResults.size()), "state.loan.copy");
+                    for (const auto& [copy, predecessor] : copiedStateResults)
+                        merged->addIncoming(copy, predecessor);
+                    parameters.emplace(name, merged);
+                }
+            }
+            if (method.method_state_loan) {
+                // Native actor-state operations are admitted by the scheduler
+                // turn token and compile only inside the sealed callback.
+                // Copy out an i64; neither heap addresses nor state grants
+                // enter the surrounding method namespace.
+                const auto& loan = *method.method_state_loan;
+                auto loanLocals = locals;
+                for (std::size_t i = 0; i < actor.fields.size(); ++i) {
+                    const auto& field = actor.fields[i];
+                    const auto borrowedName = "@state." + field.name;
+                    bool needsRead = uses_scalar_name(*loan.result, borrowedName);
+                    bool willWrite = false;
+                    for (const auto& assignment : loan.assignments) {
+                        if (assignment.field == field.name) willWrite = true;
+                        needsRead |= uses_scalar_name(*assignment.value, borrowedName);
+                    }
+                    if (!needsRead && !willWrite) continue;
+                    auto* key = builder.CreateAlloca(i64, nullptr,
+                        "state." + field.name);
+                    if (needsRead) {
+                        auto* snapshot = builder.CreateCall(fieldRead,
+                            {heap, currentDomain, currentEpoch,
+                             llvm::ConstantInt::get(i64, i)},
+                            "state.snapshot." + field.name);
+                        builder.CreateStore(snapshot, key);
+                    }
+                    loanLocals.emplace(borrowedName, key);
+                }
+                for (const auto& assignment : loan.assignments) {
+                    const auto it = std::find_if(actor.fields.begin(), actor.fields.end(),
+                        [&](const LocalBinding& f) { return f.name == assignment.field; });
+                    if (it == actor.fields.end() || !it->field_mutable)
+                        throw std::runtime_error("invalid method state loan field");
+                    auto* updated = lower(*assignment.value, builder, i64,
+                        parameters, loanLocals, declarations);
+                    const auto index = std::distance(actor.fields.begin(), it);
+                    builder.CreateCall(fieldWrite,
+                        {heap, currentDomain, currentEpoch,
+                         llvm::ConstantInt::get(i64, index), updated});
+                    builder.CreateStore(updated, loanLocals.at("@state." + assignment.field));
+                }
+                auto* copied = lower(*loan.result, builder, i64,
+                    parameters, loanLocals, declarations);
+                if (!parameters.emplace(loan.result_binding, copied).second)
+                    throw std::runtime_error("state result conflicts with method parameter");
             }
             if (!method.boolean_arms.empty()) {
                 auto* subject = parameters.at(method.match_subject);
@@ -751,26 +912,67 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 auto* whenFalse = llvm::BasicBlock::Create(context, "match.false", fn);
                 auto* joined = llvm::BasicBlock::Create(context, "match.join", fn);
                 builder.CreateCondBr(condition, whenTrue, whenFalse);
-                // The parser proves exactly two exhaustive, nonoverlapping
-                // bool arms; no implicit fallthrough or untyped default.
+                std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> copiedResults;
+                // Each bool arm has exclusive admission for the duration of
+                // its synchronous sealed callback. No loan pointer escapes.
                 for (const auto& arm : method.boolean_arms) {
                     builder.SetInsertPoint(arm.match_value ? whenTrue : whenFalse);
-                    for (const auto& assignment : arm.assignments) {
-                        const auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
-                            [&](const LocalBinding& f) { return f.name == assignment.field; });
-                        if (field == actor.fields.end() || !field->field_mutable)
-                            throw std::runtime_error("invalid receive match field mutation");
-                        auto* updated = lower(*assignment.value, builder, i64,
-                                              parameters, locals, declarations);
-                        builder.CreateCall(fieldWrite,
-                            {heap, currentDomain, currentEpoch,
-                             llvm::ConstantInt::get(i64,
-                                std::distance(actor.fields.begin(), field)), updated});
-                        builder.CreateStore(updated, locals.at(assignment.field));
+                    if (!arm.assignments.empty())
+                        throw std::runtime_error("direct actor boolean field mutation forbidden");
+                    if (arm.state_loan) {
+                        const auto& loan = *arm.state_loan;
+                        auto loanLocals = locals;
+                        for (std::size_t i = 0; i < actor.fields.size(); ++i) {
+                            const auto& field = actor.fields[i];
+                            const auto borrowed = "@state." + field.name;
+                            bool needsRead = uses_scalar_name(*loan.result, borrowed);
+                            bool willWrite = false;
+                            for (const auto& assignment : loan.assignments) {
+                                if (assignment.field == field.name) willWrite = true;
+                                needsRead |= uses_scalar_name(*assignment.value, borrowed);
+                            }
+                            if (!needsRead && !willWrite) continue;
+                            auto* key = builder.CreateAlloca(i64, nullptr,
+                                "state." + field.name);
+                            if (needsRead) {
+                                auto* snapshot = builder.CreateCall(fieldRead,
+                                    {heap, currentDomain, currentEpoch,
+                                     llvm::ConstantInt::get(i64, i)},
+                                    "state.snapshot." + field.name);
+                                builder.CreateStore(snapshot, key);
+                            }
+                            loanLocals.emplace(borrowed, key);
+                        }
+                        for (const auto& assignment : loan.assignments) {
+                            const auto it = std::find_if(actor.fields.begin(), actor.fields.end(),
+                                [&](const LocalBinding& f) { return f.name == assignment.field; });
+                            if (it == actor.fields.end() || !it->field_mutable)
+                                throw std::runtime_error("invalid boolean state loan field");
+                            auto* updated = lower(*assignment.value, builder, i64,
+                                parameters, loanLocals, declarations);
+                            const auto index = std::distance(actor.fields.begin(), it);
+                            builder.CreateCall(fieldWrite,
+                                {heap, currentDomain, currentEpoch,
+                                 llvm::ConstantInt::get(i64, index), updated});
+                            builder.CreateStore(updated, loanLocals.at("@state." + assignment.field));
+                        }
+                        auto* copied = lower(*loan.result, builder, i64,
+                            parameters, loanLocals, declarations);
+                        copiedResults.emplace_back(copied, builder.GetInsertBlock());
                     }
                     builder.CreateBr(joined);
                 }
                 builder.SetInsertPoint(joined);
+                if (!copiedResults.empty()) {
+                    if (copiedResults.size() != method.boolean_arms.size())
+                        throw std::runtime_error("boolean state result missing on some arms");
+                    const auto& name = method.boolean_arms.front().state_loan->result_binding;
+                    auto* merged = builder.CreatePHI(i64,
+                        static_cast<unsigned>(copiedResults.size()), "bool.state.loan.copy");
+                    for (const auto& [copy, block] : copiedResults)
+                        merged->addIncoming(copy, block);
+                    parameters.emplace(name, merged);
+                }
             }
             for (const auto& assignment : method.assignments) {
                 const auto match = std::find_if(actor.fields.begin(), actor.fields.end(),
@@ -793,6 +995,71 @@ std::string emit_verified_llvm_ir(const Program& source) {
             }
             if (region) builder.CreateCall(heapClose, {region});
             builder.CreateRet(result);
+        }
+        if (actor.transform_pipe) {
+            // The callback ABI is unchanged: direction comes only from the
+            // runtime's authenticated scheduler DATA turn, not user payload.
+            auto* callback = actorMessageHandlers.at(actor.name);
+            auto* forward = module.getFunction(symbol + "_receive_forward");
+            auto* backward = module.getFunction(symbol + "_receive_backward");
+            if (!forward || !backward
+                    || forward->getFunctionType() != callback->getFunctionType()
+                    || backward->getFunctionType() != callback->getFunctionType())
+                throw std::runtime_error("transform pipe callback ABI mismatch");
+            auto* entry = llvm::BasicBlock::Create(context, "direction.entry", callback);
+            auto* forwardBlock = llvm::BasicBlock::Create(context, "direction.forward", callback);
+            auto* backwardBlock = llvm::BasicBlock::Create(context, "direction.backward", callback);
+            auto* invalid = llvm::BasicBlock::Create(context, "direction.invalid", callback);
+            llvm::IRBuilder<> dispatch(entry);
+            auto ingress = module.getOrInsertFunction(
+                "oreslang_source_actor_pipeline_ingress",
+                llvm::FunctionType::get(i64, {}, false));
+            auto* direction = dispatch.CreateCall(ingress, {}, "scheduler.ingress");
+            auto* branches = dispatch.CreateSwitch(direction, invalid, 2);
+            branches->addCase(llvm::ConstantInt::get(i64, 1), forwardBlock);
+            branches->addCase(llvm::ConstantInt::get(i64, 2), backwardBlock);
+            std::vector<llvm::Value*> arguments;
+            for (auto& arg : callback->args()) arguments.push_back(&arg);
+            // Reject an intact but directionally incorrect nominal frame
+            // *before* entering user code. All actors share the union wire
+            // schema; the two handlers do not share ingress permissions.
+            const auto& unionCases = taggedCases.at(actor.name);
+            auto permitCases = [&](llvm::BasicBlock* block,
+                                   const std::string& domain,
+                                   llvm::Function* handler,
+                                   const char* label) {
+                std::vector<std::string> allowed;
+                for (const auto& p : source.tagged_patterns)
+                    if (p.name == domain) allowed = p.alternatives;
+                for (const auto& e : source.enums)
+                    if (e.name == domain)
+                        for (const auto& c : e.cases)
+                            allowed.push_back(e.name + "." + c.name);
+                dispatch.SetInsertPoint(block);
+                auto* invoke = llvm::BasicBlock::Create(context, label, callback);
+                auto* guard = dispatch.CreateSwitch(arguments.at(3), invalid,
+                                                   static_cast<unsigned>(allowed.size()));
+                for (const auto& name : allowed) {
+                    const auto found = std::find_if(unionCases.begin(), unionCases.end(),
+                        [&](const GuestNominalCase& c) { return c.qualified == name; });
+                    if (found == unionCases.end())
+                        throw std::runtime_error("transform ingress escaped nominal union");
+                    guard->addCase(llvm::ConstantInt::get(i64,
+                        std::distance(unionCases.begin(), found)), invoke);
+                }
+                dispatch.SetInsertPoint(invoke);
+                dispatch.CreateRet(dispatch.CreateCall(handler, arguments));
+            };
+            permitCases(forwardBlock, actor.forward_messages_type, forward,
+                        "dispatch.allowed.forward");
+            permitCases(backwardBlock, actor.backward_messages_type, backward,
+                        "dispatch.allowed.backward");
+            dispatch.SetInsertPoint(invalid);
+            auto reject = module.getOrInsertFunction(
+                "oreslang_source_actor_pipeline_reject_delivery",
+                llvm::FunctionType::get(llvm::Type::getVoidTy(context), {}, false));
+            dispatch.CreateCall(reject);
+            dispatch.CreateRet(llvm::ConstantInt::getSigned(i64, -1));
         }
     }
 
@@ -834,6 +1101,8 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             && name != "oreslang_source_actor_pipeline_connect"
                             && name != "oreslang_source_actor_pipeline_connect_many"
                             && name != "oreslang_source_actor_pipeline_emit_i64"
+                            && name != "oreslang_source_actor_pipeline_ingress"
+                            && name != "oreslang_source_actor_pipeline_reject_delivery"
                             && name != "oreslang_source_actor_pipeline_expect"
                             && name != "oreslang_source_actor_pipeline_expect_status"
                             && name != "oreslang_source_actor_pipeline_cancel"

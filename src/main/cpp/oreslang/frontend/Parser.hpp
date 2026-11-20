@@ -60,16 +60,28 @@ struct FieldAssignment {
     std::size_t offset = 0;
 };
 
-struct ReceiveBooleanArm {
-    bool match_value = false;
-    std::vector<FieldAssignment> assignments;
-    std::size_t offset = 0;
-};
-
 // Static admission representation for source `match m over { on Enum.Case
 // as (...) { } }`. Bodies remain unavailable to native codegen; matching
 // contracts are checked before the explicit fail-closed lowering gate.
+// Fixed-shape state is visible only during this scoped, synchronous
+// callback. The callback returns a copied i64 scalar, never a state loan.
+struct StateLoan {
+    enum class Mode { Read, Write };
+    Mode mode = Mode::Write;
+    std::string result_binding;
+    std::vector<FieldAssignment> assignments;
+    std::unique_ptr<Expression> result;
+};
+
+struct ReceiveBooleanArm {
+    bool match_value = false;
+    std::vector<FieldAssignment> assignments; // legacy direct writes rejected
+    std::unique_ptr<StateLoan> state_loan;
+    std::size_t offset = 0;
+};
+
 struct TaggedReceiveArm {
+    std::unique_ptr<StateLoan> state_loan;
     std::string qualified_case;
     // One terminal directional send after any field assignments; lowered
     // into a scheduler-admitted message, never a synchronous actor call.
@@ -86,6 +98,8 @@ struct TaggedReceiveArm {
 struct Function {
     std::string name;
     std::vector<std::string> parameters;
+    bool effects_declared = false;
+    std::vector<std::string> declared_effects; // restricted state.read / state.write row
     std::vector<LocalBinding> locals;
     std::vector<ActorSpawnBinding> actor_spawns;
     std::vector<ActorSend> actor_sends;
@@ -101,6 +115,9 @@ struct Function {
     std::string match_subject;
     std::vector<ReceiveBooleanArm> boolean_arms;
     std::vector<TaggedReceiveArm> tagged_arms;
+    // One synchronous, copied-scalar state callback in an ordinary actor method.
+    // No guest-visible loan can survive this lexical region.
+    std::unique_ptr<StateLoan> method_state_loan;
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool exported = false;
@@ -144,7 +161,12 @@ struct TaggedPattern {
 struct Actor {
     std::string name;
     std::string messages_type;
-    std::vector<LocalBinding> fields;
+    // Explicit two-direction actor role. Ordinary actors retain messages_type.
+    bool transform_pipe = false;
+    std::string forward_messages_type;
+    std::string backward_messages_type;
+    bool state_declared = false;
+    std::vector<LocalBinding> fields; // compiler-owned fixed-key state map
     std::vector<Function> methods;
     std::size_t offset = 0;
 };

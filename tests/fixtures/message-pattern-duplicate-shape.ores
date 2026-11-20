@@ -3,5 +3,5 @@ declare type match Patterns as
     bool
 end
 define actor Foo<messages=Patterns> as
-    receive(Message m) { }
+    receive(Patterns m) { }
 end

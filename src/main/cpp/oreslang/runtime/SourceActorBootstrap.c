@@ -129,6 +129,13 @@ static _Thread_local SourceActor* active_pipeline_actor;
 static _Thread_local uint8_t active_pipeline_ingress;
 static _Thread_local uint64_t active_pipeline_flow_id;
 static _Thread_local uint64_t active_pipeline_message_id;
+
+/* Compiler-only actor callback dispatch; the trusted route direction lives
+ * in carrier-local state for exactly the duration of the admitted DATA turn.
+ * No guest-supplied flags or wire properties may set this value. */
+uint64_t oreslang_source_actor_pipeline_ingress(void) {
+    return active_pipeline_actor ? (uint64_t)active_pipeline_ingress : 0;
+}
 static _Atomic uint64_t next_pipeline_flow_id = 1;
 static _Atomic uint64_t next_pipeline_message_id = 1;
 /* Identity allocation is monotonic for the process lifetime, including
@@ -147,13 +154,17 @@ static uint64_t pipeline_issue_id(_Atomic uint64_t* counter) {
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
 __attribute__((weak))
 void oreslang_source_actor_test_before_pipeline_publish(void* actor,
-                                                         unsigned direction);
+                                                         unsigned direction) {
+    (void)actor; (void)direction;
+}
 /* Deterministic fault injection on the caller's scheduler-issued TLS
  * ancestry, before acquiring group.mutex. No hook executes under the
  * publication/cancellation linearization monitor. Testing-only symbol. */
 __attribute__((weak))
 void oreslang_source_actor_test_corrupt_causal_parent(
-    uint64_t* active_parent, unsigned direction);
+    uint64_t* active_parent, unsigned direction) {
+    (void)active_parent; (void)direction;
+}
 #endif
 static _Atomic uint64_t next_actor_id = 4100;
 static void check_invariant(int condition, const char* predicate, int line) {
@@ -753,11 +764,10 @@ static int source_send_binary_unlocked(SourceActor* actor,
      * bytes but BEFORE the nonblocking scheduler admission commit. */
     /* The test hook compares the PUBLIC actor capability, not a private
      * heap address. Fault injection must still work after handle fencing. */
-    if (pipeline_route && oreslang_source_actor_test_before_pipeline_publish)
+    if (pipeline_route)
         oreslang_source_actor_test_before_pipeline_publish(
             (void*)(uintptr_t)actor->id, direction);
-    if (pipeline_route && direction != 0
-            && oreslang_source_actor_test_corrupt_causal_parent)
+    if (pipeline_route && direction != 0)
         oreslang_source_actor_test_corrupt_causal_parent(
             &active_pipeline_message_id, direction);
 #endif
@@ -963,6 +973,15 @@ void oreslang_source_actor_pipeline_connect_many(void* const* opaque,
 void oreslang_source_actor_pipeline_connect(void* first, void* middle, void* last) {
     void* const stages[3] = {first, middle, last};
     oreslang_source_actor_pipeline_connect_many(stages, 3);
+}
+/* The compiler inserts this gate in the transform callback's invalid
+ * ingress/direction switch arm. Do not allow wrong-domain frames to fall
+ * through as a normal user-handler return and later time out ambiguously. */
+void oreslang_source_actor_pipeline_reject_delivery(void) {
+    SourceActor* actor = active_pipeline_actor;
+    if (!actor || actor->magic != SOURCE_ACTOR_MAGIC)
+        return; /* no user hook is invoked without admitted DATA authority */
+    pipeline_fail(SOURCE_PIPELINE_INVALID_ROUTE);
 }
 static size_t pipeline_write_positive(uint8_t* dst, uint64_t n) {
     if (n <= 127) { dst[0] = (uint8_t)n; return 1; }
