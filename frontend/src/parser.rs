@@ -1196,7 +1196,7 @@ impl Parser {
                 // Check the explicit payload before parsing the body. A
                 // nonvoid annotation is always E_TASK_RETURN_TYPE, even if
                 // the body contains other unsupported effects.
-                if *self.peek_at(2) == Tok::Lt && self.word_at(3) != Some("void") {
+                if *self.peek_at(3) == Tok::Lt && self.word_at(4) != Some("void") {
                     return Err(Diagnostic::new(pos, "E_TASK_RETURN_TYPE",
                         "do sync task accepts only void; use sync task<T> without do"));
                 }
