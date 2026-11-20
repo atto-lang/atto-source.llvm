@@ -140,3 +140,65 @@ per-TenantVM policies. The existing Atto compiler has not lowered a
 real `.atto` `std.fs` call through this bridge. Any untrusted native
 guest able to issue arbitrary syscalls/FFI remains outside the proven
 security boundary.
+
+
+## Candidate guest ABI v5, signed artifact maximum and host worker (2026-11-20)
+
+This draft now also includes:
+
+* `src/main/cpp/oreslang/runtime/TenantVmIoAbiV5.h` — a **separate** proposed
+  ABI v5 with `fs_submit_read`, `fs_submit_write`, `fs_poll`, and
+  `fs_cancel`. These consume guest Offset32 ranges and return opaque one-shot
+  tickets / typed status candidates. ABI v4 is **unchanged**. The existing
+  TenantVM loader admits only ABI v4; it intentionally does not accept v5
+  until a trusted actor-turn dispatch and compiler emitter are implemented.
+* `native/include/atto/host_fs_signed_ceiling.h` and
+  `native/src/host_fs_signed_ceiling.c` — an executable **host-only**
+  Ed25519 verifier for the proposed signed artifact maximum. Its canonical
+  format contains the fixed ASCII domain marker, SHA-256 of the **exact
+  artifact bytes**, a required explicit-denies marker, and length-prefixed
+  ASCII allow/deny scopes. The public key is supplied by the trusted host,
+  not the artifact. No production signing key or loader integration exists.
+  A raw, mutable verified-ceiling C struct is not a capability; a trusted
+  loader still must bind it to `atto_fs_broker_init_layers` and the actual
+  execution image and derive all other permission ceilings independently.
+* `native/include/atto/host_fs_async.h` and
+  `native/src/host_fs_async.c` — a **host-only** bounded single-worker
+  async queue (1–16 outstanding tickets). Submission snapshots inputs into
+  owned buffers, the worker performs blocking Linux FS calls **off the
+  actor carrier**, and polling never waits for I/O. Tickets are one-shot,
+  generation-numbered and tied to a host-provided actor incarnation. The
+  worker does not hold a guest cage pointer. When a read completes, the
+  broker reauthorizes the original path and copies its staged bytes under
+  the same lock as permission revocation. The caller must validate a
+  live actor and its output region before passing a destination pointer.
+* `native/tests/host_fs_async_test.c` tests queue/ticket/cancellation
+  behavior using an intentionally mocked broker. A passing mock test
+  **does not prove filesystem isolation**.
+  `native/tests/host_fs_async_broker_test.c` exercises the queue against
+  the actual Linux rooted broker, but is awaiting source-owned CI execution.
+
+**Executed local evidence:** the exact source/test blobs of the signed
+ceiling verifier and mocked async queue passed GCC and Clang at -O1/-O2,
+with AddressSanitizer and UndefinedBehaviorSanitizer (four runs of each).
+The real-broker async integration CTest, v5 header layout CTest, full
+native CMake/CTest suite and source-owned Actions remain **NOT EXECUTED**
+as of this checkpoint.
+
+**Cancellation and privilege limits:** a queued write can be cancelled
+before admission. Cancellation of a *running* write cannot undo committed
+side effects; it must not be blindly retried. When an actor terminates,
+the trusted runtime must revoke its effective capability and drain/forget
+its tickets before reusing its memory. This standalone queue does not
+authenticate the `atto_fs_host_actor` IDs, track live TenantVM state,
+enforce aggregate process-wide resource budgets, or integrate suspension
+and exactly-once guest continuation into the scheduler. The v5 header's
+callbacks are deliberately not installed in `TenantVm.cpp` yet.
+Do not expose this worker's host-only C API to untrusted code.
+
+**Release gates:** finish the trusted versioned v5 loader, actor-derived
+context, signed artifact-to-broker admission path, per-actor revocation,
+nonblocking guest suspension/continuation, native compiler lowering of
+real `.atto` `std.fs` source, and independently observed positive and
+negative compiled-guest tests. Hostile native guests remain rejected
+without a proven syscall and memory isolation boundary.
