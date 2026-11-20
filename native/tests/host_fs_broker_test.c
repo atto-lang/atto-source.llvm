@@ -11,6 +11,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <pthread.h>
 #include <unistd.h>
 static void put_file(const char *p, const char *s) {
     int fd=open(p,O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC,0600); assert(fd>=0);
@@ -27,6 +28,28 @@ static void join_path(char *out, size_t capacity, const char *parent, const char
     memcpy(out, parent, n);
     out[n] = '/';
     memcpy(out + n + 1u, leaf, m + 1u);
+}
+typedef struct revoke_reader {
+    atto_fs_broker *broker;
+    pthread_barrier_t *start;
+    int saw_revoke;
+} revoke_reader;
+
+static void *revoke_reader_run(void *arg) {
+    revoke_reader *r = (revoke_reader *)arg;
+    int code = pthread_barrier_wait(r->start);
+    assert(code == 0 || code == PTHREAD_BARRIER_SERIAL_THREAD);
+    for (;;) {
+        unsigned char bytes[32] = {0};
+        size_t used = 99u;
+        const int code = atto_fs_broker_read(r->broker, 42u, 17u,
+                                              "data/input.txt", bytes, sizeof(bytes), &used);
+        if (code == -EACCES) {
+            r->saw_revoke = (used == 0u);
+            return NULL;
+        }
+        assert(code == 0 && used == 11u && memcmp(bytes, "secret-data", used) == 0);
+    }
 }
 int main(void) {
     char base[]="/tmp/atto-fs-broker-XXXXXX"; assert(mkdtemp(base));
@@ -112,6 +135,26 @@ int main(void) {
     assert(rename(root,renamed)==0);
     assert(symlink(base,root)==0);
     assert(atto_fs_broker_read(&broker,42,17,"data/input.txt",output,sizeof(output),&nread)==0);
+    /* Host-controlled generation revocation serializes against in-flight I/O.
+     * Denied post-revocation writes do not modify an already committed file. */
+    pthread_barrier_t start_gate;
+    assert(pthread_barrier_init(&start_gate, NULL, 2u)==0);
+    revoke_reader watcher = {&broker, &start_gate, 0};
+    pthread_t reader;
+    assert(pthread_create(&reader,NULL,revoke_reader_run,&watcher)==0);
+    int gate_code = pthread_barrier_wait(&start_gate);
+    assert(gate_code == 0 || gate_code == PTHREAD_BARRIER_SERIAL_THREAD);
+    assert(atto_fs_broker_revoke(&broker,43,17)==-EACCES);
+    assert(atto_fs_broker_revoke(&broker,42,18)==-EACCES);
+    assert(atto_fs_broker_revoke(&broker,42,17)==0);
+    assert(pthread_join(reader,NULL)==0);
+    assert(pthread_barrier_destroy(&start_gate)==0);
+    assert(watcher.saw_revoke == 1);
+    assert(atto_fs_broker_revoke(&broker,42,17)==-EACCES);
+    assert(atto_fs_broker_read(&broker,42,17,"data/input.txt",output,sizeof(output),&nread)==-EACCES && nread==0);
+    assert(atto_fs_broker_write(&broker,42,17,"out/copy.txt",(const unsigned char*)"BAD",3)==-EACCES);
+    char renamed_copy[512]; join_path(renamed_copy,sizeof(renamed_copy),renamed,"out/copy.txt");
+    expect_file(renamed_copy,"NEW");
     atto_fs_broker_close(&broker);
     assert(atto_fs_broker_read(&broker,42,17,"data/input.txt",output,sizeof(output),&nread)==-EACCES);
     atto_fs_broker new_broker;
