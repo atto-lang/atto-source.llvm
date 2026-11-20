@@ -899,7 +899,7 @@ pub fn check(p: &Program) -> R<TProgram> {
         if let Some(header) = a.receives {
             let declared = res(header)?;
             if a.receive.is_none() || declared != payload {
-                return Err(Diagnostic::new(a.pos, "E_TYPE",
+                return Err(Diagnostic::new(a.pos, "E_ACTOR_RECEIVES",
                     "actor receives contract disagrees with its concrete ActorMail<T> handler"));
             }
         }
