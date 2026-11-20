@@ -2,6 +2,7 @@
 #define ATTO_HOST_FS_BROKER_H
 #include <stddef.h>
 #include <stdint.h>
+#include <pthread.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -22,6 +23,11 @@ typedef struct atto_fs_policy {
 } atto_fs_policy;
 
 typedef struct atto_fs_broker {
+    /* Trusted-host-only object. Never copy, place in guest memory or expose to
+     * untrusted code. This mutex guards admission THROUGH the I/O commit. */
+    pthread_mutex_t gate;
+    int initialized;
+    int revoked;
     int root_fd;
     uint64_t tenant_id;
     uint64_t generation;
@@ -35,6 +41,13 @@ typedef struct atto_fs_broker {
  * unavailable. This intentionally uses a trusted host-supplied root. */
 int atto_fs_broker_init(atto_fs_broker *out, const char *trusted_root,
                         const atto_fs_policy *policy);
+/* Revoke an entire host-created policy generation. Returns after previously
+ * admitted I/O completes, and prevents later I/O. Authentication of caller
+ * identity is the responsibility of the trusted runtime, not these integers. */
+int atto_fs_broker_revoke(atto_fs_broker *broker, uint64_t tenant_id,
+                          uint64_t expected_generation);
+/* Call after all worker threads have quiesced. No concurrent close/init/use;
+ * a successfully initialized broker is single-owner and must not be copied. */
 void atto_fs_broker_close(atto_fs_broker *broker);
 
 /* Operations read or write only regular files below the pinned root. Caller
