@@ -171,6 +171,35 @@ public:
 struct VmOpenResult { Status status = Status::HostClosed; VmHandle handle; };
 struct VmSpawnResult { Status status = Status::HostClosed; VmActor actor; };
 
+/* Trusted host-only bridge. These callbacks never enter a guest ABI. The
+ * identity is assembled from the verified VmActor handle and live scheduler
+ * state; the host supplies only a broker-authorized numeric tenant ID. The
+ * service is externally owned and MUST outlive the VM's wait_closed() result.
+ *
+ * Both callbacks MUST be bounded, nonallocating and nonblocking: revocation
+ * may execute on a scheduler carrier, with the VM mutex held. Never do
+ * filesystem I/O, join a worker, wait on a condition variable or acquire an
+ * I/O mutex from either callback. The verifier must compare the service's
+ * immutable admitted owner, rather than trusting this numeric struct.
+ *
+ * Revocation failures mean a trusted-host security invariant broke, and
+ * deliberately terminate the host process rather than reuse actor memory
+ * while stale authority could survive. */
+struct HostFsActorIdentity final {
+    std::uint64_t tenant_id = 0;
+    std::uint64_t tenant_generation = 0;
+    std::uint64_t actor_ref = 0;
+    std::uint64_t actor_incarnation = 0;
+};
+struct HostFsLifecycleBinding final {
+    std::uint64_t trusted_tenant_id = 0;
+    void* trusted_service = nullptr;
+    bool (*matches)(void*, const HostFsActorIdentity&) noexcept = nullptr;
+    bool (*revoke)(void*, const HostFsActorIdentity&) noexcept = nullptr;
+};
+
+
+
 struct HostStats {
     std::size_t live_vms = 0;
     std::uint64_t admitted_heap_bytes = 0;
@@ -195,6 +224,11 @@ public:
     std::future<TurnResult> call(const VmActor& actor, std::vector<std::uint8_t> payload);
     // Queued mail still runs; then the actor's memory is scrubbed and its slot reusable.
     Status stop_actor(const VmActor& actor);
+    // Trusted host registration only. The caller must already own a six-layer
+    // signed-admitted broker/service bound to this actor incarnation.
+    // No FS callbacks are made available to ABI-v4 or ABI-v5 guest code.
+    Status bind_actor_fs_lifecycle(const VmActor& actor,
+                                   const HostFsLifecycleBinding& binding);
 
     Status begin_shutdown(const VmHandle& vm);
     Status kill(const VmHandle& vm);
