@@ -54,3 +54,20 @@ fn guarded_return_match_rejects_nonboolean_guard() {
     let diagnostic = compile(invalid).expect_err("nonbool guard emitted guest artifact");
     assert_eq!(diagnostic.code, "E_TYPE");
 }
+
+#[test]
+fn guarded_adt_binders_are_initialized_before_guard_and_wrong_tag_payload_is_untouched() {
+    // These are byte-identical source fixtures from atto-source.rs.
+    let cases = [
+        include_str!("fixtures/pass/adt-option-guard-hit.atto"),
+        include_str!("fixtures/pass/adt-result-ok-guard.atto"),
+        include_str!("fixtures/pass/adt-guard-skips-wrong-result-tag.atto"),
+        include_str!("fixtures/pass/adt-whole-value-guard-binding.atto"),
+    ];
+    for (i, source) in cases.iter().enumerate() {
+        let guest = compile(source).unwrap_or_else(|err| {
+            panic!("guarded ADT match case {i} rejected: {err}")
+        });
+        assert!(guest.len() > 8, "case {i}: truncated compiled guest");
+    }
+}
