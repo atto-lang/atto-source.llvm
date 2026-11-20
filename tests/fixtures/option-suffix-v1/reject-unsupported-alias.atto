@@ -1,0 +1,2 @@
+define type MaybeInt = int?;
+pub fnc main(): int { return 42; }
