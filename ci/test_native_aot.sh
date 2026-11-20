@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export CARGO_NET_OFFLINE=true
-bash ci/assert_legacy_frontend_frozen.sh
+bash ci/test_legacy_frontend_frozen.sh
 
 cargo test --offline
 cargo build --offline --release --bin atto-llvm
