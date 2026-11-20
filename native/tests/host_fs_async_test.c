@@ -102,6 +102,35 @@ int main(void){
   pthread_mutex_lock(&io_gate); hold_write=0; pthread_cond_broadcast(&io_signal); pthread_mutex_unlock(&io_gate);
   assert(finished(s,&actor,running,NULL,0,&n)==-EINPROGRESS);
   assert(strcmp(stored,"started")==0);
+  /* ADVERSE RACE: revoke an actor's service while its write has already
+   * entered the mocked broker and is blocked in I/O. Revocation must not
+   * park on the worker, admit subsequent tickets or publish guest output.
+   * An already-running write is not rolled back: it can still commit. */
+  atto_fs_async_service *racing=NULL;
+  assert(atto_fs_async_create(&racing,&broker,&other,1)==0);
+  pthread_mutex_lock(&io_gate); hold_write=1; write_started=0; pthread_mutex_unlock(&io_gate);
+  uint64_t racing_ticket=0;
+  assert(atto_fs_async_submit_write(racing,&other,"out/copy",
+                                    (const unsigned char*)"latecommit",10,&racing_ticket)==0);
+  pthread_mutex_lock(&io_gate);
+  while(!write_started) pthread_cond_wait(&io_signal,&io_gate);
+  pthread_mutex_unlock(&io_gate);
+  assert(atto_fs_async_revoke_actor(racing,&other)==0);
+  assert(atto_fs_async_owner_matches(racing,&other)==0);
+  uint64_t denied_after_revoke=111u;
+  assert(atto_fs_async_submit_write(racing,&other,"out/copy",
+                                   (const unsigned char*)"BAD",3,&denied_after_revoke)==-EACCES);
+  assert(denied_after_revoke==0u);
+  assert(atto_fs_async_cancel(racing,&other,racing_ticket)==-EACCES);
+  memset(readbuf,0xD7,sizeof readbuf);
+  n=99u;
+  assert(atto_fs_async_poll(racing,&other,racing_ticket,readbuf,sizeof readbuf,&n)==-EACCES);
+  assert(n==0u && readbuf[0]==0xD7);
+  pthread_mutex_lock(&io_gate); hold_write=0; pthread_cond_broadcast(&io_signal); pthread_mutex_unlock(&io_gate);
+  /* forget is HOST-ONLY cleanup; destroy joins the worker before broker close. */
+  assert(atto_fs_async_forget_actor(racing,&other)==0);
+  atto_fs_async_destroy(racing);
+  assert(strcmp(stored,"latecommit")==0); /* indeterminate at revoke, later committed */
   assert(atto_fs_async_submit_read(s,&actor,"data/input",30,&ticket)==0);
   pthread_mutex_lock(&broker_lock);revoked=1;pthread_mutex_unlock(&broker_lock);
   memset(readbuf,0xAE,sizeof readbuf);
