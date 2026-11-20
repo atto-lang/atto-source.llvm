@@ -1,12 +1,27 @@
 #pragma once
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
+#include <algorithm>
 #include <functional>
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
 
 namespace oreslang {
+// Checked i64 operators may trap terminally on overflow; they are not
+// converted into Err until the backend has typed exception unwinding.
+inline bool native_trap_pure_i64(const Expression& e, std::size_t depth = 0) noexcept {
+    if (depth >= 64) return false;
+    using K = Expression::Kind;
+    if (e.kind == K::Integer) return true;
+    if (e.kind == K::Negate && e.left)
+        return native_trap_pure_i64(*e.left, depth + 1);
+    if ((e.kind == K::Add || e.kind == K::Subtract || e.kind == K::Multiply)
+            && e.left && e.right)
+        return native_trap_pure_i64(*e.left, depth + 1) &&
+            native_trap_pure_i64(*e.right, depth + 1);
+    return false;
+}
 inline std::string native_sum_name(NativeSumType::Kind kind, ScalarType value, ScalarType error = ScalarType::I64) {
     auto name = [](ScalarType t) { return t == ScalarType::String ? "String" : t == ScalarType::Bool ? "bool" : "int"; };
     return std::string(kind == NativeSumType::Kind::Option ? "Option<" : "Result<") + name(value) +
@@ -47,8 +62,8 @@ inline void resolve_native_sums(Program& program) {
             // The parser will reject all unsupported effectful operands before
             // publishing LLVM IR, rather than mislabel them as successful Ok.
             if (!e.left) throw std::runtime_error("native trap missing operand");
-            if (e.left->kind != E::Integer && e.left->kind != E::Boolean &&
-                    e.left->kind != E::String && e.left->kind != E::Variable &&
+            if (!native_trap_pure_i64(*e.left) && e.left->kind != E::Boolean &&
+                    e.left->kind != E::Variable &&
                     e.left->kind != E::SumConstruct && e.left->kind != E::Trap)
                 throw std::runtime_error("native trap requires nonthrowing scalar or existing Result value; typed effects and cleanup lowering required");
             const auto inner = expression(*e.left, env, expected);
@@ -64,6 +79,8 @@ inline void resolve_native_sums(Program& program) {
             }
             if (!inner.cls.empty() || inner.array)
                 throw std::runtime_error("native trap compound ownership requires checked cleanup lowering");
+            if (inner.scalar == ScalarType::String)
+                throw std::runtime_error("native trap String allocation requires typed Error cleanup lowering");
             if (!expected.empty() && expected.rfind("Result<", 0) != 0)
                 throw std::runtime_error("native trap produces Result<T,Error>, not Option or scalar");
             const auto type_name = [](ScalarType t) {
@@ -80,6 +97,7 @@ inline void resolve_native_sums(Program& program) {
             e.kind = E::SumConstruct;
             e.name = "Ok";
             e.sum_type = name;
+            e.trap_origin = true;
             e.arguments.push_back(std::move(operand));
             return {ScalarType::I64, name};
         }
@@ -93,6 +111,10 @@ inline void resolve_native_sums(Program& program) {
             }
             const NativeSumType type = native_sum(program, selected);
             const bool option = type.kind == NativeSumType::Kind::Option;
+            if (type.nominal_error && !e.trap_origin)
+                throw std::runtime_error("native Result<T,Error> may only be constructed by checked trap");
+            if (e.trap_origin && (!type.nominal_error || e.name != "Ok" || e.arguments.size() != 1))
+                throw std::runtime_error("invalid compiler trap Result construction");
             if ((option && e.name != "Some" && e.name != "None") || (!option && e.name != "Ok" && e.name != "Err"))
                 throw std::runtime_error("native sum constructor variant does not match declared sum type");
             if (e.arguments.size() != (e.name == "None" ? 0u : 1u)) throw std::runtime_error("native sum constructor payload arity mismatch");
