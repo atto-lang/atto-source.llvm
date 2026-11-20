@@ -65,3 +65,78 @@ current head.
    this standalone C adapter is not a sandbox
 5. Re-run real compiled guest positive/negative conformance and exact-SHA
    CI before changing any backend status from `NOT_EXECUTED`
+
+
+## Tightened admission and read-completion boundary (2026-11-20)
+
+The candidate host-side guest bridge now enforces **actor-local** guest
+memory ranges. The host-owned frame must provide `actor_region_start`
+(nonzero) and `actor_region_bytes` as well as the committed cage size.
+All path, input and output spans are rejected if they enter a sibling
+actor's region, including when both actors share the same TenantVM cage.
+Guest callers cannot supply these two trusted region fields.
+
+Previously the bridge called the broker with a private intermediate
+buffer and copied that buffer into guest memory *after* releasing the
+broker mutex. That allowed a revocation to return between host read and
+guest-memory completion. The broker itself stages read bytes privately
+and copies only on successful validation while holding its admission
+mutex. The bridge now passes a pre-validated actor-region output span
+to the broker; the read, final copy and permission generation check are
+serialized with `atto_fs_broker_revoke`. After revocation returns,
+a pending read cannot complete an earlier authorized guest-memory copy.
+The negative test races host reads and revoke, sets a sentinel after
+revoke and proves no late writer modifies it.
+
+### Six mandatory permission ceilings
+
+`atto_fs_broker_init_layers()` accepts six **host-created, independent**
+read/write allow/deny policies:
+
+1. Host/OS ceiling
+2. Independently verified artifact ceiling
+3. Explicit operator runtime launch request
+4. TenantVM ceiling
+5. Actor capability ceiling
+6. Delegation/child/group ceiling
+
+For an operation/path, **all six allow entries must match** and **none
+of the six deny entries may match**. A missing allow entry means denied.
+Each scope string is snapshotted on initialization so later mutation
+of the caller's policy struct cannot change an admitted broker. Every
+layer is checked *on each read/write* while the broker mutex is held;
+there is no flattening operation that might accidentally discard
+explicit deny entries. The guest-memory bridge rejects the old
+single-layer constructor entirely. That old constructor continues to
+exist only for isolated host-only compatibility tests.
+
+The C struct is **not a signed permission descriptor**. The trusted
+loader must authenticate the artifact bytes, independently verify its
+permission ceiling, and derive actor/tenant identities before it creates
+these policy layers; a guest-forged pointer or policy descriptor must
+never be admitted. This implementation neither authenticates those
+inputs nor verifies that they originated in the compiler or operator.
+
+### Executed test evidence vs unresolved work
+
+Exact-source local host tests (not Atto guest execution) passed on
+Linux with GCC and Clang, each at `-O1` and `-O2`,
+`-Wall -Wextra -Wconversion -Werror -pedantic -pthread`, and
+`-fsanitize=address,undefined`. Both test binaries passed in all
+four toolchain/optimization combinations (eight successful
+executions), including an active symlink-swap race, read/revoke
+completion race, sibling actor memory-range rejections, and **24
+separate missing-grant/explicit-deny checks** covering every
+read/write policy dimension in every layer. Successful local host tests
+do not establish exact-head stepful GitHub Actions or compiled guest
+security.
+
+**Compiler integration still missing:** review and version a new
+guest host-call ABI without changing TenantVmGuestAbi v4; only the
+trusted carrier/actor scheduler may create the host frame or enqueue
+bounded async FS operations. A host-owned permission manifest must
+be authenticated against the executable and intersected with
+per-TenantVM policies. The existing Atto compiler has not lowered a
+real `.atto` `std.fs` call through this bridge. Any untrusted native
+guest able to issue arbitrary syscalls/FFI remains outside the proven
+security boundary.
