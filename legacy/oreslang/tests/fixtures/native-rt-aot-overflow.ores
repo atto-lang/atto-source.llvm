@@ -1,0 +1,7 @@
+// Same expression semantics as ordinary LLVM i64 add: no signed saturation.
+suspend fnc spin():void {
+    val count: int = 9223372036854775806;
+    while (true) {
+        count = count + 1;
+    }
+}

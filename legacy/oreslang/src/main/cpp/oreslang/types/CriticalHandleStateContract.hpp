@@ -1,0 +1,77 @@
+#pragma once
+
+#include "oreslang/types/FunctionEffects.hpp"
+
+#include <cstdint>
+
+namespace oreslang {
+
+/**
+ * Native admission ABI for the sealed critical handle_state intrinsic.
+ * LLVM has no full guest actor-state codegen yet. This is a shared semantic
+ * contract, not a claim that actor-state guest source compiles to LLVM.
+ */
+enum class CriticalStateAdmission : std::uint8_t {
+    Accept,
+    MissingIntrinsicCritical,
+    MissingCallbackCritical,
+    InvalidStateCallback,
+    CallbackEscape,
+    EffectExceedsWith,
+    LoanAcrossSuspension,
+    MissingContinuationFence,
+    ScopeDenied,
+    // Appended to keep the previously published native enum ordinals stable.
+    // Sealed actor callback loans must not nest, even on the same turn.
+    NestedStateLoan
+};
+
+struct CriticalStateCallback {
+    bool intrinsic_critical = true;  // sealed runtime intrinsic
+    bool callback_critical = false;
+    // Compiler-proven builtin serial actor superclass, not guest-provided flags.
+    bool actor_is_serial = false;
+    // Trusted scheduler must hold the actor-wide request/message lifetime lease.
+    bool serial_lifetime_admission_proven = false;
+    bool lexical = true;
+    bool one_state_parameter = false;
+    bool escapes = false;
+    bool state_loan_live_across_suspend = false;
+    bool continuation_generation_fenced = false;
+    FunctionEffects inferred{};
+};
+
+inline CriticalStateAdmission admit_critical_handle_state(
+        const CriticalStateCallback& callback,
+        FunctionEffects with_effects,
+        bool verified_serial_actor = false) noexcept {
+    if (!callback.intrinsic_critical) return CriticalStateAdmission::MissingIntrinsicCritical;
+    // Spec ch.05/ch.22: serial actors keep the same sealed-state and loan
+    // rules, and unguarded state mutation fails before emission. An unmarked
+    // callback is READ-only on every actor; any state write needs explicit
+    // critical marking. A verified serial actor (trusted declaration +
+    // scheduler, never guest metadata) cannot mint implicit WRITE authority.
+    (void) verified_serial_actor;
+    if (!callback.callback_critical
+            && callback.inferred.has(FunctionEffect::StateWrite)) {
+        return CriticalStateAdmission::MissingCallbackCritical;
+    }
+    if (!callback.lexical || !callback.one_state_parameter) {
+        return CriticalStateAdmission::InvalidStateCallback;
+    }
+    if (callback.escapes) return CriticalStateAdmission::CallbackEscape;
+    if (!with_effects.permits(callback.inferred)) {
+        return CriticalStateAdmission::EffectExceedsWith;
+    }
+    // A generation-fenced continuation permits resumption only AFTER a
+    // lexical state loan ends. An effect row advertising suspend still
+    // cannot run while this sealed callback holds its state capability.
+    // Never trust the caller's "live across suspend" flag to waive this.
+    if (callback.inferred.has(FunctionEffect::Suspend) ||
+            callback.state_loan_live_across_suspend) {
+        return CriticalStateAdmission::LoanAcrossSuspension;
+    }
+    return CriticalStateAdmission::Accept;
+}
+
+} // namespace oreslang

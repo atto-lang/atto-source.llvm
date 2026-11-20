@@ -1,0 +1,173 @@
+name: LLVM PostgreSQL durable actor claim (HOST ONLY)
+on:
+  pull_request:
+  push:
+    branches: [feat/agent-dispatch-host-gate-parity-20261029]
+permissions:
+  contents: read
+jobs:
+  native-pg-claim:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: '5432'
+      PGDATABASE: ores_dispatch_test
+      ORES_TEST_PG_CONNINFO: host=127.0.0.1 port=5432 dbname=ores_dispatch_test user=ores_dispatch_test_runtime connect_timeout=3
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          git rev-parse HEAD^{tree}
+          test -z "$(git status --porcelain --untracked-files=no)"
+      - name: Install PostgreSQL native headers and psql client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libpq-dev postgresql-client
+          # Dynamically generated test credentials exist only on this runner.
+          admin_pw="$(openssl rand -hex 32)"
+          role_pw="$(openssl rand -hex 32)"
+          echo "::add-mask::$admin_pw"
+          echo "::add-mask::$role_pw"
+          {
+            echo "ORES_PG_ADMIN_PASSWORD=$admin_pw"
+            echo "ORES_PG_RUNTIME_PASSWORD=$role_pw"
+            echo "ORES_TEST_PG_PASSWORD=$role_pw"
+          } >> "$GITHUB_ENV"
+          docker run -d --name ores-actor-pg-test \
+            -p 127.0.0.1:5432:5432 \
+            -e POSTGRES_DB=ores_dispatch_test \
+            -e POSTGRES_PASSWORD="$admin_pw" \
+            -e POSTGRES_INITDB_ARGS="--auth-host=scram-sha-256" \
+            postgres:17 >/dev/null
+          ready=0
+          for attempt in {1..90}; do
+            if PGPASSWORD="$admin_pw" psql -U postgres -tAc 'SELECT 1' >/dev/null 2>&1; then
+              ready=1; break
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+          echo "EPHEMERAL_POSTGRES_SCRAM_AUTH_READY"
+
+      - name: Apply schema and least-privileged fixture
+        run: |
+          set -euo pipefail
+          export PGPASSWORD="$ORES_PG_ADMIN_PASSWORD"
+          # The SECURITY DEFINER function must not be owned by a superuser.
+          psql -U postgres -v ON_ERROR_STOP=1 -c 'CREATE ROLE ores_dispatch_migration_owner NOLOGIN'
+          psql -U postgres -v ON_ERROR_STOP=1 -c 'GRANT CREATE ON DATABASE ores_dispatch_test TO ores_dispatch_migration_owner'
+          {
+            printf 'SET ROLE ores_dispatch_migration_owner;\n'
+            cat contracts/v1/agent-dispatch/postgresql/001_actor_dispatch_v1.sql
+          } | psql -U postgres -v ON_ERROR_STOP=1
+          owner=$(psql -U postgres -tAc "SELECT nspowner::regrole::text FROM pg_namespace WHERE nspname='ores_dispatch'")
+          test "$owner" = 'ores_dispatch_migration_owner'
+          test "$(psql -U postgres -tAc "SELECT rolsuper FROM pg_roles WHERE rolname='ores_dispatch_migration_owner'")" = 'f'
+          function_owner=$(psql -U postgres -tAc "SELECT proowner::regrole::text FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='ores_dispatch' AND p.proname='claim_once_v1'")
+          test "$function_owner" = 'ores_dispatch_migration_owner'
+          # Reapplying an initial schema migration must fail, not replace objects.
+          if {
+            printf 'SET ROLE ores_dispatch_migration_owner;\n'
+            cat contracts/v1/agent-dispatch/postgresql/001_actor_dispatch_v1.sql
+          } | psql -U postgres -v ON_ERROR_STOP=1 >/dev/null 2>&1; then
+            echo 'SECURITY_FAILURE schema migration was silently reapplied'; exit 2
+          fi
+          psql -U postgres -v ON_ERROR_STOP=1 -f contracts/v1/agent-dispatch/postgresql/002_test_fixture.sql
+
+          printf "ALTER ROLE ores_dispatch_test_runtime LOGIN PASSWORD '%s';\n" "$ORES_PG_RUNTIME_PASSWORD" |
+            psql -U postgres -v ON_ERROR_STOP=1
+          PGPASSWORD="$ORES_PG_RUNTIME_PASSWORD" psql -U ores_dispatch_test_runtime -tAc 'SELECT 1' >/dev/null
+          if PGPASSWORD="$ORES_PG_RUNTIME_PASSWORD" psql -U postgres -tAc 'SELECT 1' >/dev/null 2>&1; then
+            echo 'SECURITY_FAILURE runtime can impersonate migration administrator'; exit 2
+          fi
+          if PGPASSWORD="$ORES_PG_RUNTIME_PASSWORD" psql -U ores_dispatch_test_runtime -tAc 'SELECT count(*) FROM ores_dispatch.claim_v1' >/dev/null 2>&1; then
+            echo 'SECURITY_FAILURE direct claim table access'; exit 2
+          fi
+      - name: Build and execute PostgreSQL native host contract
+        run: |
+          set -euo pipefail
+          export PGPASSWORD="$ORES_PG_RUNTIME_PASSWORD"
+          # Source-backed, no live DB required: prove timeout parameters
+          # override an attempted conninfo downgrade before any connection.
+          g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Icontracts/v1/agent-dispatch -I/usr/include/postgresql \
+            contracts/v1/agent-dispatch/agent_pg_connection_timeout_test.cpp \
+            -Wl,--wrap=PQconnectdbParams -lpq -o "$RUNNER_TEMP/pg_timeout_contract"
+          "$RUNNER_TEMP/pg_timeout_contract"
+          # Independent host-only libpq protocol proof: precise bound values,
+          # accepted/duplicate results, unknown DB error and no retry.
+          WRAP_FLAGS="-Wl,--wrap=PQconnectdbParams -Wl,--wrap=PQstatus -Wl,--wrap=PQtransactionStatus -Wl,--wrap=PQexecParams -Wl,--wrap=PQresultStatus -Wl,--wrap=PQntuples -Wl,--wrap=PQnfields -Wl,--wrap=PQgetisnull -Wl,--wrap=PQgetvalue -Wl,--wrap=PQclear -Wl,--wrap=PQfinish"
+          g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Icontracts/v1/agent-dispatch -I/usr/include/postgresql \
+            contracts/v1/agent-dispatch/agent_pg_parameterized_claim_test.cpp \
+            $WRAP_FLAGS -lpq -o "$RUNNER_TEMP/pg_parameterized_contract"
+          "$RUNNER_TEMP/pg_parameterized_contract"
+          clang++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Icontracts/v1/agent-dispatch -I/usr/include/postgresql \
+            contracts/v1/agent-dispatch/agent_pg_parameterized_claim_test.cpp \
+            $WRAP_FLAGS -lpq -o "$RUNNER_TEMP/pg_parameterized_asan"
+          ASAN_OPTIONS=detect_leaks=1 "$RUNNER_TEMP/pg_parameterized_asan"
+          g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
+            -Icontracts/v1/agent-dispatch -I/usr/include/postgresql \
+            contracts/v1/agent-dispatch/pg_dispatch_integration_test.cpp \
+            -lpq -o "$RUNNER_TEMP/pg_dispatch_native"
+          # Function must reject asynchronous-commit sessions and not
+          # allocate a claim key while the durability precondition fails.
+          verdict=$(PGPASSWORD="$ORES_PG_RUNTIME_PASSWORD" psql -U ores_dispatch_test_runtime -tA -v ON_ERROR_STOP=1 -c "SET synchronous_commit=off; SELECT ores_dispatch.claim_once_v1('tenant','worker','async-durability-denied',repeat('b',64),7,9,repeat('a',40),9223372036854775807,1024,24)")
+          test "$(printf '%s\n' "$verdict" | tail -n 1)" = 'f'
+          rows=$(PGPASSWORD="$ORES_PG_ADMIN_PASSWORD" psql -U postgres -tAc "SELECT count(*) FROM ores_dispatch.claim_v1 WHERE dispatch_id='async-durability-denied'")
+          test "$rows" -eq 0
+          "$RUNNER_TEMP/pg_dispatch_native"
+          # Independent native processes compete on a shared database key.
+          pids=()
+          for i in {1..12}; do
+            "$RUNNER_TEMP/pg_dispatch_native" probe native-process-race >"$RUNNER_TEMP/native-proc-$i.log" 2>&1 &
+            pids+=("$!")
+          done
+          winners=0; denied=0
+          for pid in "${pids[@]}"; do
+            rc=0
+            wait "$pid" || rc=$?
+            if [ "$rc" -eq 0 ]; then winners=$((winners+1))
+            elif [ "$rc" -eq 2 ]; then denied=$((denied+1))
+            else echo "unexpected native process status $rc"; exit 1; fi
+          done
+          test "$winners" -eq 1
+          test "$denied" -eq 11
+          rows=$(PGPASSWORD="$ORES_PG_ADMIN_PASSWORD" psql -U postgres -tAc "SELECT count(*) FROM ores_dispatch.claim_v1 WHERE tenant_id='tenant' AND actor_id='worker' AND dispatch_id='native-process-race'")
+          test "$rows" -eq 1
+          if PGPASSWORD="$ORES_PG_RUNTIME_PASSWORD" psql -U ores_dispatch_test_runtime -tAc "SELECT count(*) FROM ores_dispatch.runtime_binding_v1" >/dev/null 2>&1; then
+            echo 'SECURITY_FAILURE runtime can read actor bindings'; exit 2
+          fi
+          "$RUNNER_TEMP/pg_dispatch_native" probe-hold native-killed > "$RUNNER_TEMP/native-claim.log" 2>&1 &
+          pid=$!
+          seen=0
+          for i in {1..60}; do
+            if grep -q '^CLAIM_COMMITTED$' "$RUNNER_TEMP/native-claim.log"; then seen=1; break; fi
+            sleep 0.25
+          done
+          test "$seen" -eq 1
+          kill -9 "$pid"
+          wait "$pid" || true
+          rc=0
+          "$RUNNER_TEMP/pg_dispatch_native" probe native-killed || rc=$?
+          test "$rc" -eq 2
+          PGPASSWORD="$ORES_PG_ADMIN_PASSWORD" psql -U postgres -v ON_ERROR_STOP=1 -c "UPDATE ores_dispatch.actor_fence_v1 SET actor_generation=8, activation_epoch=10, exact_revision=repeat('c',40) WHERE tenant_id='tenant' AND actor_id='worker'"
+          rc=0
+          "$RUNNER_TEMP/pg_dispatch_native" probe native-after-fence || rc=$?
+          test "$rc" -eq 2
+          # A new generation cannot recycle a previously committed effect.
+          rc=0
+          "$RUNNER_TEMP/pg_dispatch_native" probe-newgen native-killed || rc=$?
+          test "$rc" -eq 2
+          "$RUNNER_TEMP/pg_dispatch_native" probe-newgen native-fresh
+          echo "PG_NATIVE_REAL_DB_CLAIM_PASS host_only=true native_guest=false"
+      - name: Destroy ephemeral test database container
+        if: always()
+        run: docker rm -f ores-actor-pg-test >/dev/null 2>&1 || true
