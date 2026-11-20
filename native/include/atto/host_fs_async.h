@@ -54,18 +54,28 @@ int atto_fs_async_poll(atto_fs_async_service *service, const atto_fs_host_actor 
  * Running reads can be cancelled without publication of guest output. */
 int atto_fs_async_cancel(atto_fs_async_service *service, const atto_fs_host_actor *actor,
                          uint64_t ticket);
-/* Irreversibly revoke this actor-incarnation's async service without taking
- * its queue mutex or waiting for the worker. Safe for a scheduler carrier.
- * Returns -EACCES for an unrelated actor. This closes future admission,
- * polling and cancellation. A write already running MAY have committed; do
- * not interpret revocation as a write rollback.
- * The trusted host MUST wait for the actor turn to finish before recycling
- * actor memory and MUST use forget_actor/destroy on a non-carrier host worker.
- * The service and broker must outlive all outstanding trusted calls. */
+/* Irreversibly revoke this actor incarnation's async service, without
+ * acquiring its queue mutex or waiting for any worker: safe on a scheduler
+ * carrier. Denies NEW admission/poll/cancel and rejects foreign actors.
+ *
+ * Revocation is NOT a completion barrier: an operation already running,
+ * including a write inside the broker, MAY complete afterward. Even an
+ * already-entered host read-publication call may finish; callers MUST wait
+ * for the actor's executing scheduler turn to exit before recycling its
+ * memory. An in-progress write has an indeterminate commit outcome; never
+ * auto-retry it as though revocation rolled it back.
+ *
+ * The trusted host must subsequently retire/forget and destroy the service
+ * on a non-carrier lifecycle worker, joining I/O before closing its broker.
+ * Service, broker and registered callback storage must outlive every caller
+ * and the VM's wait_closed() barrier. */
 int atto_fs_async_revoke_actor(atto_fs_async_service *service,
                                const atto_fs_host_actor *actor);
-/* Host lifecycle cleanup; also revokes irreversibly. This function may BLOCK\n * and MUST NOT be called on a scheduler carrier. In-flight jobs finish in
- * host memory and are discarded, never committed to reused actor memory. */
+/* Host lifecycle cleanup; also revokes irreversibly. This function may
+ * BLOCK and MUST NOT be called on a scheduler carrier. RUNNING jobs may
+ * continue after it returns; destroy joins the worker and is required
+ * before the broker or its backing resources can be released. No worker
+ * ever retains a pointer into guest actor memory. */
 int atto_fs_async_forget_actor(atto_fs_async_service *service,
                                const atto_fs_host_actor *actor);
 #ifdef __cplusplus
