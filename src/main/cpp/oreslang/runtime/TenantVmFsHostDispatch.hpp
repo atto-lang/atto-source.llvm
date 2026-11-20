@@ -78,7 +78,10 @@ class HostFsDispatch final {
         case 0: return 0;
         case -EAGAIN: return polling ? ORES_VM_IO_PENDING : ORES_VM_IO_WOULD_BLOCK;
         case -EACCES:
-        case -EPERM: return ORES_VM_IO_PERMISSION_DENIED;
+        case -EPERM:
+        /* The broker rejects malformed/traversal paths with EINVAL. Never
+         * reinterpret this as an admitted resource or a successful read. */
+        case -EINVAL: return ORES_VM_IO_PERMISSION_DENIED;
         case -ESTALE: return ORES_VM_IO_STALE_TICKET;
         case -ECANCELED: return ORES_VM_IO_CANCELLED;
         case -EINPROGRESS: return ORES_VM_IO_WRITE_INDETERMINATE;
