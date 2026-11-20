@@ -1,0 +1,5 @@
+// Positive control: canonical explicit Option<int> must execute like int?.
+pub fnc main(): int {
+  val Option<int> value = Some(42);
+  return value.unwrap_or(0);
+}
