@@ -1223,6 +1223,13 @@ impl Parser {
             Some("do") if matches!(self.word_at(1), Some("switch" | "select" | "nb")) => {
                 Err(unsupported(pos, &format!("'do {}'", self.word_at(1).unwrap())))
             }
+            Some("sync") if self.word_at(1) == Some("task") => {
+                // The inline expression is also valid in statement position.
+                // Keep every other 'sync' spelling behind the unsupported gate.
+                let expr = self.parse_expr()?;
+                self.terminator()?;
+                Ok(Stmt::Expr(expr))
+            }
             Some("trap") => {
                 // Caller-side trap also works in expression-statement position.
                 let e = self.parse_expr()?;

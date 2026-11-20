@@ -6,6 +6,7 @@ This is not a `task<T>` / `Future<T>` scheduler implementation and is not
 certification for the separate C++ `oreslang-llvmc` path.
 
 The parser recognizes `sync task<T> { ... }`, inferred `sync task { ... }`,
+and `sync task { ... }` as a standalone expression statement,
 `sync task {}`, and **void-only** `do sync task<void> { ... }` or
 `do sync task { ... }`. A scalar result requires a final direct
 `return expression;`; that return exits only the inline task expression.

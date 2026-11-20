@@ -29,6 +29,8 @@ fn pure_sync_task_compiles_to_real_guest_bytes() {
         "pub fnc main(): int { let int n = 1; do sync task<void> { n = n + 5; do sync task { n = n + 7; }; }; return n; }",
         "pub fnc main(): int { let int n = 7; do sync task { val int n = 12; }; return n; }",
         "pub fnc main(): int { sync task {}; return 9; }",
+        "pub fnc main(): int { sync task<void> { return; }; return 9; }",
+        "pub fnc main(): int { sync /* lexed comment */ task {}; return 9; }",
         "pub fnc main(): int { val bool b = sync task<bool> { return true; }; if b then return 5; else return 4; fi }",
         "pub fnc main(): int { val int x = sync task<int> { return sync task<int> { return 4; } + 3; }; return x; }",
     ] {
@@ -64,6 +66,14 @@ fn task_spawning_and_unverified_inline_effects_still_fail_closed() {
     ] {
         reject_unlowered(source, "E_TASK_RETURN_TYPE");
     }
+    reject_unlowered(
+        "pub fnc main(): int { sync other {}; return 9; }",
+        "E_UNSUPPORTED",
+    );
+    reject_unlowered(
+        "pub fnc main(): int { sync task<int> { return; }; return 9; }",
+        "E_TASK_RETURN_TYPE",
+    );
     reject_unlowered(
         "pub fnc main(): int { val x = sync task<int> {}; return x; }",
         "E_TASK_RETURN_TYPE",
