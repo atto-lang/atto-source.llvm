@@ -893,6 +893,13 @@ pub fn check(p: &Program) -> R<TProgram> {
             }
             None => Type::Void,
         };
+        if let Some(clause) = a.sends {
+            let outbound = res(clause)?;
+            if outbound == Type::Void {
+                return Err(Diagnostic::new(a.pos, "E_ACTOR_SEND_CONTRACT",
+                    "sends void is not an application-message payload type"));
+            }
+        }
         actors.push(ActorInfo {
             name: a.name.clone(),
             fields,
@@ -1189,6 +1196,54 @@ pub fn check(p: &Program) -> R<TProgram> {
     imports.sort();
     imports.dedup();
     let funcs: Vec<TFunc> = funcs.into_iter().map(|f| f.expect("every function index is defined")).collect();
+    // Typed IR audit, not lexical inspection: traverse every reachable call
+    // edge from each actor's handler and methods. CONTROL messages do not
+    // inhabit the application Send node. No recipient cardinality is implied.
+    let send_graph: Vec<(Vec<Type>, Vec<u32>)> = funcs.iter().map(|f| {
+        let sends = std::cell::RefCell::new(Vec::<Type>::new());
+        let calls = std::cell::RefCell::new(Vec::<u32>::new());
+        let _ = any_in_stmts(&f.body, &|node| {
+            match &node.e {
+                TExpr::Send { value, .. } => sends.borrow_mut().push(value.ty),
+                TExpr::Call(index, _) => calls.borrow_mut().push(*index),
+                _ => {}
+            }
+            false
+        });
+        (sends.into_inner(), calls.into_inner())
+    }).collect();
+    for (actor_index, actor) in p.actors.iter().enumerate() {
+        let Some(clause) = actor.sends else { continue };
+        let allowed = res(clause)?;
+        let info = &g.actors[actor_index];
+        let mut pending = Vec::<u32>::new();
+        if let Some(handler) = info.receive_idx { pending.push(handler); }
+        pending.extend(info.methods.iter().map(|m| m.idx));
+        let mut visited = vec![false; funcs.len()];
+        while let Some(index) = pending.pop() {
+            let Some(seen) = visited.get_mut(index as usize) else {
+                return Err(Diagnostic::new(actor.pos, "E_ACTOR_SEND_CONTRACT",
+                    "unresolved actor send-effect call target"));
+            };
+            if *seen { continue; }
+            *seen = true;
+            let (outbound, calls) = &send_graph[index as usize];
+            if outbound.iter().any(|payload| *payload != allowed) {
+                return Err(Diagnostic::new(actor.pos, "E_ACTOR_SEND_CONTRACT",
+                    "an application send exceeds the actor's declared sends type"));
+            }
+            pending.extend(calls.iter().copied());
+        }
+        for (_, initializer) in &tactors[actor_index].inits {
+            if any_in(initializer, &|node| match &node.e {
+                TExpr::Send { value, .. } => value.ty != allowed,
+                _ => false,
+            }) {
+                return Err(Diagnostic::new(actor.pos, "E_ACTOR_SEND_CONTRACT",
+                    "an actor field initializer sends an undeclared payload"));
+            }
+        }
+    }
     let strings = funcs
         .iter()
         .any(|f| f.params.contains(&Type::Str) || f.ret == Type::Str || f.locals.contains(&Type::Str) || any_in_stmts(&f.body, &uses_str))
