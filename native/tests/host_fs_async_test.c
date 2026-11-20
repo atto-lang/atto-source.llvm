@@ -16,6 +16,10 @@ static char stored[128]="seed";
 static int revoked=0;
 static int defer_publication_once=0;
 static int observed_deferred_publication=0;
+static pthread_mutex_t io_gate=PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t io_signal=PTHREAD_COND_INITIALIZER;
+static int hold_write=0;
+static int write_started=0;
 int atto_fs_broker_read(atto_fs_broker *b,uint64_t t,uint64_t g,const char *p,unsigned char *out,size_t cap,size_t *size){
     pthread_mutex_lock(&broker_lock);
     int rc=(revoked||t!=b->tenant_id||g!=b->generation||strcmp(p,"data/input"))?-EACCES:0;
@@ -23,6 +27,13 @@ int atto_fs_broker_read(atto_fs_broker *b,uint64_t t,uint64_t g,const char *p,un
     pthread_mutex_unlock(&broker_lock);return rc;
 }
 int atto_fs_broker_write(atto_fs_broker *b,uint64_t t,uint64_t g,const char *p,const unsigned char *in,size_t len){
+    pthread_mutex_lock(&io_gate);
+    if (hold_write) {
+        write_started=1;
+        pthread_cond_broadcast(&io_signal);
+        while (hold_write) pthread_cond_wait(&io_signal,&io_gate);
+    }
+    pthread_mutex_unlock(&io_gate);
     pthread_mutex_lock(&broker_lock);
     int rc=(revoked||t!=b->tenant_id||g!=b->generation||strcmp(p,"out/copy")||len>=sizeof(stored))?-EACCES:0;
     if(!rc){memcpy(stored,in,len);stored[len]=0;}
@@ -67,9 +78,25 @@ int main(void){
   assert(finished(s,&actor,ticket,NULL,0,&n)==0);
   assert(strcmp(stored,"updated")==0);
   assert(atto_fs_async_cancel(s,&actor,ticket)==-ESTALE);
-  assert(atto_fs_async_submit_write(s,&actor,"out/copy",(const unsigned char*)"new",3,&ticket)==0);
-  assert(atto_fs_async_cancel(s,&actor,ticket)==0);
-  assert(finished(s,&actor,ticket,NULL,0,&n)==-ECANCELED);
+  /* Hold the real worker in a write to prove that a second queued write
+   * can be cancelled before execution, whereas the running write has an
+   * indeterminate side-effect outcome even after a cancel request. */
+  uint64_t running=0,queued=0;
+  pthread_mutex_lock(&io_gate); hold_write=1; write_started=0; pthread_mutex_unlock(&io_gate);
+  assert(atto_fs_async_submit_write(s,&actor,"out/copy",(const unsigned char*)"started",7,&running)==0);
+  pthread_mutex_lock(&io_gate);
+  while(!write_started) pthread_cond_wait(&io_signal,&io_gate);
+  pthread_mutex_unlock(&io_gate);
+  assert(atto_fs_async_submit_write(s,&actor,"out/copy",(const unsigned char*)"queued",6,&queued)==0);
+  int cr;
+  do { cr=atto_fs_async_cancel(s,&actor,queued); } while(cr==-EAGAIN);
+  assert(cr==0);
+  assert(finished(s,&actor,queued,NULL,0,&n)==-ECANCELED);
+  do { cr=atto_fs_async_cancel(s,&actor,running); } while(cr==-EAGAIN);
+  assert(cr==0);
+  pthread_mutex_lock(&io_gate); hold_write=0; pthread_cond_broadcast(&io_signal); pthread_mutex_unlock(&io_gate);
+  assert(finished(s,&actor,running,NULL,0,&n)==-EINPROGRESS);
+  assert(strcmp(stored,"started")==0);
   assert(atto_fs_async_submit_read(s,&actor,"data/input",30,&ticket)==0);
   pthread_mutex_lock(&broker_lock);revoked=1;pthread_mutex_unlock(&broker_lock);
   memset(readbuf,0xAE,sizeof readbuf);
