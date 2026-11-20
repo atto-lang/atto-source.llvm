@@ -1,0 +1,49 @@
+name: Linux scoped host filesystem broker (host-only)
+on:
+  pull_request:
+    paths:
+      - "native/include/atto/host_fs_broker.h"
+      - "native/src/host_fs_broker.c"
+      - "native/tests/host_fs_broker_test.c"
+      - "native/CMakeLists.txt"
+      - ".github/workflows/native-host-fs-broker.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  host-security-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Pin exact source and test commit
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git diff --exit-code
+          git rev-parse HEAD^{tree}
+          git hash-object native/src/host_fs_broker.c native/tests/host_fs_broker_test.c
+      - name: GCC and Clang Linux ASan/UBSan host broker
+        run: |
+          set -eu
+          for compiler in gcc clang; do
+            "$compiler" -std=c11 -Wall -Wextra -Wconversion -Werror -pedantic \
+              -fsanitize=address,undefined -fno-omit-frame-pointer \
+              -I native/include \
+              native/src/host_fs_broker.c native/tests/host_fs_broker_test.c \
+              -o "/tmp/atto_fs_broker_$compiler"
+            ASAN_OPTIONS=detect_leaks=1 "/tmp/atto_fs_broker_$compiler"
+          done
+      - name: CMake integration / CTest (host only)
+        run: |
+          cmake -S native -B /tmp/atto-fs-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build /tmp/atto-fs-build --parallel 2
+          ctest --test-dir /tmp/atto-fs-build --output-on-failure -R '^linux_scoped_host_fs_broker$'
+      - name: Explicitly exclude guest security certification
+        run: |
+          echo "HOST_ONLY: this job does not compile or execute an Atto .atto guest."
+          echo "No compiled std.fs API, signed artifact manifest, tenant sandbox, or syscall fencing is proven."
