@@ -576,6 +576,7 @@ impl Parser {
         Ok(ActorDecl {
             name,
             pos,
+            receives: declared_receives,
             sends,
             fields: m.fields,
             receive: m.receive,
