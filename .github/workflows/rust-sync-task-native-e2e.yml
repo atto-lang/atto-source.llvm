@@ -31,7 +31,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --manifest-path frontend/Cargo.toml --test task_sync_cancel_admission --locked
-          cargo build --release --locked --bin atto-llvm
+          cargo build --release --bin atto-llvm
           rustc --edition=2021 -O tests/rust_sync_task_e2e.rs -o /tmp/atto-sync-task-e2e
           /tmp/atto-sync-task-e2e "$(pwd)/target/release/atto-llvm" "$(command -v clang)"
       - name: Evidence boundary
