@@ -146,6 +146,7 @@ void validate_native_scalar_types(const Program& program) {
                 return left;
             }
             case E::Subtract: case E::Multiply: case E::Remainder:
+            case E::ShiftLeft: case E::ShiftRight: case E::ShiftUnsignedRight:
                 require(expression(*e.left, locals), scalar(false), e.offset, "arithmetic requires int");
                 require(expression(*e.right, locals), scalar(false), e.offset, "arithmetic requires int");
                 return scalar(false);

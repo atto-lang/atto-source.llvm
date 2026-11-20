@@ -45,7 +45,9 @@ struct Expression {
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
-        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field
+        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field,
+        // Appended so existing native AST ordinals keep their identities.
+        ShiftLeft, ShiftRight, ShiftUnsignedRight
     };
     Kind kind;
     std::size_t offset = 0;
