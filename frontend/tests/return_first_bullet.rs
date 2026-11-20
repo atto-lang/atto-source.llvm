@@ -48,3 +48,12 @@ fn return_first_does_not_steal_less_than_and_unary_minus() {
             && w[1].tok == Tok::Lt
             && w[2].tok == Tok::Minus));
 }
+
+#[test]
+fn return_first_marker_is_not_an_overload_discriminator() {
+    let source = "int <- compute(int x) { return x; }\n\
+                  int • compute(int x) { return x; }\n\
+                  pub fnc main(): int { return compute(42); }\n";
+    assert!(compile(source).is_err(),
+        "duplicate return-first signature must fail before Wasm artifact emission");
+}
