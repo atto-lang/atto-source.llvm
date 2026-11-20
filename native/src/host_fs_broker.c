@@ -52,6 +52,16 @@ static int authorized(atto_fs_broker *b, uint64_t tenant, uint64_t generation,
     if (!b || !b->initialized || b->revoked || b->root_fd < 0 || !tenant || !generation ||
         tenant != b->tenant_id || generation != b->generation) return -EACCES;
     if (!valid_rel(path)) return -EINVAL;
+    if (b->policy_layer_count == ATTO_FS_POLICY_LAYER_COUNT) {
+        for (uint32_t i = 0; i < ATTO_FS_POLICY_LAYER_COUNT; ++i) {
+            const char *allow = write ? b->write_allow_layers[i] : b->read_allow_layers[i];
+            const char *deny = write ? b->write_deny_layers[i] : b->read_deny_layers[i];
+            if (!matches(allow, path) || matches(deny, path)) return -EACCES;
+        }
+        return 0;
+    }
+    /* Legacy one-layer constructor: host-only compatibility, NEVER a
+     * sufficient guest permission manifest. The guest bridge rejects it. */
     const char *allow = write ? b->write_scope : b->read_scope;
     const char *deny = write ? b->deny_write_scope : b->deny_read_scope;
     if (!matches(allow, path) || matches(deny, path)) return -EACCES;
@@ -97,6 +107,36 @@ int atto_fs_broker_init(atto_fs_broker *out, const char *trusted_root,
     copy_scope(out->deny_write_scope, policy->deny_write);
     return 0;
 }
+
+int atto_fs_broker_init_layers(atto_fs_broker *out, const char *trusted_root,
+                               const atto_fs_layered_policy *policy) {
+    if (!out || !policy) return -EINVAL;
+    const atto_fs_policy_layer *layers[ATTO_FS_POLICY_LAYER_COUNT] = {
+        &policy->host, &policy->artifact, &policy->runtime,
+        &policy->tenant, &policy->actor, &policy->delegation
+    };
+    for (uint32_t i = 0; i < ATTO_FS_POLICY_LAYER_COUNT; ++i) {
+        const atto_fs_policy_layer *layer = layers[i];
+        if (!valid_scope(layer->allow_read) || !valid_scope(layer->allow_write) ||
+            !valid_scope(layer->deny_read) || !valid_scope(layer->deny_write)) return -EINVAL;
+    }
+    const atto_fs_policy first = {
+        policy->host.allow_read, policy->host.allow_write,
+        policy->host.deny_read, policy->host.deny_write,
+        policy->tenant_id, policy->generation
+    };
+    const int rc = atto_fs_broker_init(out, trusted_root, &first);
+    if (rc) return rc;
+    for (uint32_t i = 0; i < ATTO_FS_POLICY_LAYER_COUNT; ++i) {
+        const atto_fs_policy_layer *layer = layers[i];
+        copy_scope(out->read_allow_layers[i], layer->allow_read);
+        copy_scope(out->write_allow_layers[i], layer->allow_write);
+        copy_scope(out->read_deny_layers[i], layer->deny_read);
+        copy_scope(out->write_deny_layers[i], layer->deny_write);
+    }
+    out->policy_layer_count = ATTO_FS_POLICY_LAYER_COUNT;
+    return 0;
+}
 int atto_fs_broker_revoke(atto_fs_broker *b, uint64_t tenant,
                           uint64_t generation) {
     if (!b || !b->initialized) return -EACCES;
@@ -126,6 +166,11 @@ void atto_fs_broker_close(atto_fs_broker *b) {
     memset(b->write_scope, 0, sizeof(b->write_scope));
     memset(b->deny_read_scope, 0, sizeof(b->deny_read_scope));
     memset(b->deny_write_scope, 0, sizeof(b->deny_write_scope));
+    memset(b->read_allow_layers, 0, sizeof(b->read_allow_layers));
+    memset(b->write_allow_layers, 0, sizeof(b->write_allow_layers));
+    memset(b->read_deny_layers, 0, sizeof(b->read_deny_layers));
+    memset(b->write_deny_layers, 0, sizeof(b->write_deny_layers));
+    b->policy_layer_count = 0;
     (void)pthread_mutex_unlock(&b->gate);
     (void)pthread_mutex_destroy(&b->gate);
     b->initialized = 0;
