@@ -91,6 +91,7 @@ int main(void){
   int cr;
   do { cr=atto_fs_async_cancel(s,&actor,queued); } while(cr==-EAGAIN);
   assert(cr==0);
+  assert(atto_fs_async_cancel(s,&actor,queued)==-EALREADY);
   assert(finished(s,&actor,queued,NULL,0,&n)==-ECANCELED);
   do { cr=atto_fs_async_cancel(s,&actor,running); } while(cr==-EAGAIN);
   assert(cr==0);
