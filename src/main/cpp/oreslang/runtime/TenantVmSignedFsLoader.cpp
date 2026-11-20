@@ -1,5 +1,6 @@
 #include "oreslang/runtime/TenantVmSignedFsLoader.hpp"
 #include <cstring>
+#include <cerrno>
 
 namespace oreslang::runtime::vm {
 namespace {
