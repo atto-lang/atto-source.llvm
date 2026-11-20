@@ -46,6 +46,7 @@ const RESERVED: &[&str] = &[
     "fnc",
     "routine",
     "async",
+    "sync",
     "suspends",
     "generator",
     "yield",
@@ -137,6 +138,7 @@ const UNSUPPORTED_STMT: &[&str] = &[
     "define",
     "import",
     "async",
+    "sync",
     "yield",
     "guard",
     "nb",
@@ -1190,6 +1192,10 @@ impl Parser {
                 Ok(Stmt::Continue(pos))
             }
             Some("match") => self.parse_match(false),
+            Some("do") if self.word_at(1) == Some("task")
+                || (self.word_at(1) == Some("sync") && self.word_at(2) == Some("task")) => {
+                Err(unsupported(pos, "supervised task with cancellation/cleanup"))
+            }
             Some("do") if self.word_at(1) == Some("match") => {
                 self.advance();
                 self.parse_match(true)
@@ -2115,7 +2121,10 @@ impl Parser {
                     self.advance();
                     ExprKind::Spawn(actor)
                 }
-                "await" | "super" | "match" | "select" | "readch" | "writech" | "obj" | "arr" | "typeof" => {
+                "task" if matches!(self.peek_at(1), Tok::Lt | Tok::LBrace) => {
+                    return Err(unsupported(pos, "task expression: typed Future, scoped cancellation and lock cleanup"));
+                }
+                "await" | "sync" | "super" | "match" | "select" | "readch" | "writech" | "obj" | "arr" | "typeof" => {
                     return Err(unsupported(pos, &format!("'{s}' expressions")))
                 }
                 w if is_reserved(w) => {
