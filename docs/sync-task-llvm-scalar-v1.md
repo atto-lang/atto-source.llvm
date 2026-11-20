@@ -29,3 +29,11 @@ Unknown input must produce a diagnostic and zero native IR bytes.
 Canonical target: atto-spec #129, including the 2026-11-20 same-logical-TaskId
 revision. Existing atto-source.llvm #72 is upgraded from reservation-only to
 this deliberately narrow executable slice. No full backend parity is claimed.
+
+## Separate native C++ path
+
+The canonical C++ `oreslang-llvmc` parser now reserves `sync` and explicitly
+returns `E_UNSUPPORTED_SYNC_TASK` before any LLVM IR emission. It does **not**
+claim executable inline-task parity with the Rust `atto-llvm` path.
+`tests/sync_task_native_cpp_gate.py` checks exact-token rejection (including
+empty and `do` syntax) and makes sure comments and `synchronize` do not trigger it.

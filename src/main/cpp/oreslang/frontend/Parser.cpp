@@ -146,7 +146,7 @@ bool reserved(std::string_view name) {
         "import", "from", "as", "extends", "implements", "try", "catch",
         "throw", "raise", "panic", "recover",
         "finally", "end", "fi", "if", "guard", "do", "else", "then", "new",
-        "spawn", "stop", "done", "await", "rt", "async", "suspends", "suspend", "critical", "gen", "generator",
+        "spawn", "stop", "done", "await", "sync", "rt", "async", "suspends", "suspend", "critical", "gen", "generator",
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
@@ -6080,6 +6080,20 @@ void resolve_future_pipeline_contracts(Program& program) {
 
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int,
                       bool experimental_rt_scalar_loop, bool experimental_pointer_int_aot) {
+    // Canonical Atto spec reserves sync as a whole word. This C++ compiler
+    // has no checked InlineTaskEnter/Exit typed lowering yet. Inspect *lexer
+    // tokens*, not source substrings: comments and quoted strings are data,
+    // not language constructs. Never treat 'sync task' as a no-op and emit
+    // misleading native LLVM IR.
+    Lexer keyword_scan(source, experimental_pointer_int_aot);
+    for (Token tok = keyword_scan.next(); tok.kind != Kind::End; tok = keyword_scan.next()) {
+        if (tok.kind == Kind::Identifier && tok.text == "sync") {
+            throw std::runtime_error(
+                "E_UNSUPPORTED_SYNC_TASK: native C++ inline task lowering "
+                "requires checked scoped effects, ownership and cleanup at byte " +
+                std::to_string(tok.offset));
+        }
+    }
     Program program = Parser(source, experimental_owned_int,
                              experimental_rt_scalar_loop, experimental_pointer_int_aot).parse();
     if (experimental_rt_scalar_loop &&
