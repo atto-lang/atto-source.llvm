@@ -142,6 +142,8 @@ struct Actor {
     const OresVmGuestKind* kind = nullptr;
     std::uint32_t generation = 0; // bumped at every release, so stale refs never match
     std::uint64_t fs_incarnation = 1; // restart changes this even when actor ref remains
+    HostFsLifecycleBinding fs_lifecycle{}; // trusted borrowed service, never guest-visible
+    HostFsActorIdentity fs_bound_owner{};
     std::uint32_t region = 0;
     std::uint32_t region_bytes = 0;
     // Trusted bitmap metadata; allocated at actor spawn, never in guest cage.
@@ -652,8 +654,21 @@ struct TenantVmHost::Core {
         return vm.actors[slot]->terminated_generation == generation;
     }
 
+    // An I/O service is owned by a single actor incarnation. Revocation
+    // MUST precede restart, memory scrub, and slot reuse. It is a lock-free
+    // trusted host callback; an impossible failure is host-integrity fatal.
+    static void revoke_actor_fs_locked(Actor& actor) noexcept {
+        const HostFsLifecycleBinding bound = actor.fs_lifecycle;
+        if (!bound.revoke) return;
+        const HostFsActorIdentity identity = actor.fs_bound_owner;
+        actor.fs_lifecycle = {};
+        actor.fs_bound_owner = {};
+        if (!bound.revoke(bound.trusted_service, identity)) std::abort();
+    }
+
     // As it was when spawned, except for what the guest committed to its stored state, and its mail.
     void reset_actor_locked(Vm& vm, Actor& actor) {
+        revoke_actor_fs_locked(actor);
         // Restart preserves actor_ref: deny old tickets on the new incarnation.
         actor.fs_incarnation = internal::next_fs_incarnation(actor.fs_incarnation);
         std::memset(vm.cage + actor.region, 0, actor.region_bytes);
@@ -851,6 +866,8 @@ struct TenantVmHost::Core {
         }
         Actor& actor = *v.actors[slot];
         actor.kind = kind;
+        actor.fs_lifecycle = {};
+        actor.fs_bound_owner = {};
         actor.fs_incarnation = 1; // a reused slot has a new actor ref generation
         actor.region = region;
         actor.region_bytes = bytes;
@@ -870,6 +887,7 @@ struct TenantVmHost::Core {
 
     // Scrubs before reuse, so a later actor can never read what this one left behind.
     void release_actor_locked(Vm& vm, Actor& actor, std::uint32_t slot) {
+        revoke_actor_fs_locked(actor);
         std::memset(vm.cage + actor.region, 0, actor.region_bytes);
         vm.free_regions[actor.region_bytes].push_back(actor.region);
         vm.used -= actor.region_bytes;
@@ -1045,6 +1063,7 @@ struct TenantVmHost::Core {
         Actor* actor = resolve_actor_locked(*shared, target);
         if (!actor || actor->stopping) return 0;
         actor->stopping = true;
+        revoke_actor_fs_locked(*actor);
         if (!actor->running && actor->mailbox.empty())
             release_actor_locked(*shared, *actor, static_cast<std::uint32_t>(target));
         return 1;
@@ -1089,6 +1108,7 @@ struct TenantVmHost::Core {
             vm->terminal.reason = reason;
             vm->terminal.fault_offset = fault_offset;
             for (auto& actor : vm->actors) {
+                revoke_actor_fs_locked(*actor);
                 for (auto& mail : actor->mailbox) {
                     refund_mail_locked(*vm, mail.bytes.size());
                     doomed.push_back(std::move(mail));
@@ -1389,6 +1409,30 @@ std::future<TurnResult> TenantVmHost::call(const VmActor& ref, std::vector<std::
     return future;
 }
 
+Status TenantVmHost::bind_actor_fs_lifecycle(const VmActor& ref,
+                                               const HostFsLifecycleBinding& binding) {
+    // Host-only: the verifier compares a fully admitted service's immutable
+    // actor owner with the identity resolved from this unforgeable VmActor.
+    if (!binding.trusted_tenant_id || !binding.trusted_service ||
+        !binding.matches || !binding.revoke) return Status::InvalidArgument;
+    Status status = Status::Ok;
+    auto vm = core_->resolve(ref.root_, ref.vm_, ref.generation_, status);
+    if (!vm) return status;
+    std::lock_guard<std::mutex> lock(vm->mutex);
+    if (vm->current_phase() != Phase::Running) return Status::NotRunning;
+    Actor* actor = core_->resolve_actor_locked(*vm, ref.ref_);
+    if (!actor) return Status::UnknownActor;
+    if (actor->stopping) return Status::ActorStopping;
+    if (actor->running || actor->fs_lifecycle.revoke) return Status::Busy;
+    if (!actor->fs_incarnation) return Status::NotRunning; // exhausted incarnation
+    const HostFsActorIdentity owner{binding.trusted_tenant_id, vm->generation,
+                                    ref.ref_, actor->fs_incarnation};
+    if (!binding.matches(binding.trusted_service, owner)) return Status::InvalidArgument;
+    actor->fs_bound_owner = owner;
+    actor->fs_lifecycle = binding;
+    return Status::Ok;
+}
+
 Status TenantVmHost::stop_actor(const VmActor& ref) {
     Status status = Status::Ok;
     auto vm = core_->resolve(ref.root_, ref.vm_, ref.generation_, status);
@@ -1399,6 +1443,7 @@ Status TenantVmHost::stop_actor(const VmActor& ref) {
     if (!actor) return core_->was_terminated_locked(*vm, ref.ref_) ? Status::ActorTerminated : Status::UnknownActor;
     if (actor->stopping) return Status::ActorStopping;
     actor->stopping = true;
+    Core::revoke_actor_fs_locked(*actor);
     if (!actor->running && actor->mailbox.empty())
         core_->release_actor_locked(*vm, *actor, static_cast<std::uint32_t>(ref.ref_));
     return Status::Ok;
@@ -1412,6 +1457,7 @@ Status TenantVmHost::begin_shutdown(const VmHandle& handle) {
         std::lock_guard<std::mutex> lock(vm->mutex);
         if (vm->current_phase() != Phase::Running) return Status::NotRunning;
         vm->phase.store(static_cast<int>(Phase::Quiescing), std::memory_order_seq_cst);
+        for (auto& actor : vm->actors) Core::revoke_actor_fs_locked(*actor);
     }
     core_->maybe_retire(vm);
     return Status::Ok;
