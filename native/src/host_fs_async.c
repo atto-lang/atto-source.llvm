@@ -191,7 +191,7 @@ int atto_fs_async_poll(atto_fs_async_service *s, const atto_fs_host_actor *actor
     else {
         rc = j->cancelled ? -ECANCELED : j->outcome;
         if (rc == 0 && !j->write) {
-            if (!output || j->used > capacity) rc = -EMSGSIZE;
+            if ((!output && j->used) || j->used > capacity) rc = -EMSGSIZE;
             else rc = atto_fs_broker_publish_read(s->broker,
                          actor->tenant_id, actor->tenant_generation,
                          j->path, j->bytes, j->used, output, capacity);
