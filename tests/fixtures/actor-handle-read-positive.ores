@@ -6,7 +6,7 @@ define match pattern PipeMessages as
 end
 define actor Probe<messages=PipeMessages> as
     state { value: int = 0; }
-    receive(PipeMessages m) {
+    receive(PipeMessages m) with state.read {
         do match m over {
             on Signal.Data as n {
                 const next = self.handle_state(|state| -> { return state.value + n; });

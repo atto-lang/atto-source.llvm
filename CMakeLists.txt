@@ -32,6 +32,21 @@ if(BUILD_TESTING)
     # removes test setup/side effects, producing false passes and hangs.
     # Keep assertions live whenever BUILD_TESTING is enabled.
     add_compile_options(-UNDEBUG)
+    # Canonical with/using state authorization is an independent native
+    # admission boundary. Run these in the normal CTest target graph, not
+    # only as an out-of-tree mirror smoke test.
+    foreach(contract IN ITEMS
+            critical_handle_state_contract
+            critical_state_loan_bridge
+            actor_owned_scalar_state)
+        add_executable(oreslang-${contract}-test
+            "tests/${contract}_test.cpp")
+        target_include_directories(oreslang-${contract}-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        add_test(NAME native_${contract}_admission
+            COMMAND oreslang-${contract}-test)
+    endforeach()
+
     # Standalone LLVM frontend admission proof. The parser is linked directly
     # so nominal declarations, monotonic tags and fail-closed actor usage can
     # be tested without generating IR for unsupported tagged operations.
@@ -328,6 +343,37 @@ if(BUILD_TESTING)
     # A read capability must not emit any write-capable heap call.
     # with is the function effect upper bound; using obtains a scoped
     # capability. Neither may substitute for the other.
+    oreslang_contract_test(reject_with_using_omitted_effect_clause
+        actor-with-using-no-effect-reject.ores
+        --diagnostic "actor state loan requires with effect declaration")
+    # Reference-valued state maps are not yet lowered as owned LLVM heaps.
+    # Fail closed at the source boundary rather than casting them to i64.
+    oreslang_contract_test(reject_reference_state_result_without_typed_snapshot
+        actor-reference-state-result-unsupported-reject.ores
+        --diagnostic "expected 'int'")
+    # Granting a read/write capability is an effect even when its body does
+    # not perform a field operation. Enforce at source admission, not merely
+    # via IR read/write detection.
+    oreslang_contract_test(reject_noop_handle_read_without_read_effect
+        actor-loan-noop-handle-read-missing-effect-reject.ores
+        --diagnostic "with clause omits state.read effect")
+    oreslang_contract_test(reject_noop_handle_write_without_write_effect
+        actor-loan-noop-handle-write-missing-effect-reject.ores
+        --diagnostic "with clause omits state.write effect")
+    oreslang_contract_test(reject_noop_using_read_without_read_effect
+        actor-loan-noop-using-read-missing-effect-reject.ores
+        --diagnostic "with clause omits state.read effect")
+    oreslang_contract_test(reject_noop_using_write_without_write_effect
+        actor-loan-noop-using-write-missing-effect-reject.ores
+        --diagnostic "with clause omits state.write effect")
+    oreslang_contract_test(native_noop_handle_read_with_read_effect
+        actor-loan-noop-handle-read-positive.ores
+        --ir-not "call .*@ores_actor_i64_heap_field_write")
+    oreslang_contract_test(native_noop_using_write_with_write_effect
+        actor-loan-noop-using-write-positive.ores
+        --ir-not "call .*@ores_actor_i64_heap_field_write")
+
+
     oreslang_contract_test(native_with_using_read_no_mutation
         actor-with-using-read-positive.ores
         --ir-not "call .*@ores_actor_i64_heap_field_write")
@@ -352,7 +398,41 @@ if(BUILD_TESTING)
 
     oreslang_contract_test(native_with_using_write_only
         actor-with-using-write-only-positive.ores
-        --ir "call void @ores_actor_i64_heap_field_write")
+        --ir "call void @ores_actor_i64_heap_field_write"
+        --ir-not "call .*@ores_actor_i64_heap_field_read")
+    # Ordered callback dataflow: reads *after* a first write observe the
+    # callback-local value and must not trigger pre-callback heap reads.
+    # Conversely, self-updates need a real native heap read; reading another
+    # untouched field must never cause a read of the already-written field.
+    oreslang_contract_test(native_state_write_then_read_no_snapshot
+        actor-state-write-before-read-no-snapshot-positive.ores
+        --ir "call void @ores_actor_i64_heap_field_write"
+        --ir-not "call .*@ores_actor_i64_heap_field_read")
+    oreslang_contract_test(native_state_self_update_requires_snapshot
+        actor-state-self-update-must-snapshot-positive.ores
+        --ir "call i64 @ores_actor_i64_heap_field_read")
+    oreslang_contract_test(native_state_mixed_first_use_only
+        actor-state-mixed-first-use-reads-positive.ores
+        --ir "call i64 @ores_actor_i64_heap_field_read"
+        --ir-not "call i64 @ores_actor_i64_heap_field_read.*i64 0")
+    # Source-compiled callback checked against the real persistent actor
+    # heap, across two distinct admitted turns. This is a direct-ABI test;
+    # separate 15-actor pipeline tests prove trusted wire admission.
+    if(ORE_CLANG)
+        foreach(mode normal sanitized)
+            set(firstuse_sanitizer_args)
+            if(mode STREQUAL "sanitized")
+                list(APPEND firstuse_sanitizer_args --sanitize)
+            endif()
+            oreslang_contract_test(native_state_firstuse_callback_${mode}
+                actor-state-first-use-native-behavior-positive.ores
+                --run 0 --clang "${ORE_CLANG}"
+                --native-harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_first_use_behavior.c"
+                --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+                --stderr "FIRST_USE_BEHAVIOR_PASS turns=2 result=15"
+                ${firstuse_sanitizer_args})
+        endforeach()
+    endif()
     oreslang_contract_test(reject_with_direct_handle_read_missing_effect
         actor-with-using-read-outside-bound-reject.ores
         --diagnostic "with clause omits state.read effect")
@@ -447,6 +527,30 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_handle_noncritical_write
         actor-handle-read-mut-reject.ores
         --diagnostic "read-only actor state loan cannot mutate state")
+    # Java/Graal-compatible explicit critical mode spellings. READ never
+    # acquires write authority, even with an inclusive `with` effect row.
+    oreslang_contract_test(native_handle_explicit_critical_read
+        actor-handle-explicit-critical-read-positive.ores
+        --ir-not "call .*@ores_actor_i64_heap_field_write")
+    oreslang_contract_test(native_handle_explicit_critical_write
+        actor-handle-explicit-critical-write-positive.ores
+        --ir "call void @ores_actor_i64_heap_field_write")
+    oreslang_contract_test(native_using_explicit_critical_read
+        actor-using-explicit-critical-read-positive.ores
+        --ir-not "call .*@ores_actor_i64_heap_field_write")
+    oreslang_contract_test(native_using_explicit_critical_write
+        actor-using-explicit-critical-write-positive.ores
+        --ir "call void @ores_actor_i64_heap_field_write")
+    oreslang_contract_test(reject_using_read_critical_write
+        actor-using-critical-write-reject.ores
+        --diagnostic "using state.read cannot request a critical write loan")
+    oreslang_contract_test(reject_using_write_critical_read
+        actor-using-critical-read-reject.ores
+        --diagnostic "using state.write requires critical write callback")
+    oreslang_contract_test(reject_handle_critical_read_mutation
+        actor-handle-critical-read-mutate-reject.ores
+        --diagnostic "read-only actor state loan cannot mutate state")
+
     oreslang_contract_test(reject_handle_read_await
         actor-handle-read-await-reject.ores
         --diagnostic "state read/write loan cannot suspend or nest")
