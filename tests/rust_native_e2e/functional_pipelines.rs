@@ -107,4 +107,14 @@ pub fnc main(): int -> double <| 20 |> increment;"#, &[], None);
             _ => unreachable!("all edge cases explicitly classified"),
         }
     }
+
+    // Never interpret reserved actor, task and effect keywords as scalar
+    // function names merely because they appear near a functional |> pipe.
+    for keyword in ["unsafe", "sync", "task", "pipe", "rpipe"] {
+        let source = format!(
+            "fnc {keyword}(int x): int -> x;\npub fnc main(): int -> 42 |> {keyword};"
+        );
+        h.negative(&format!("functional_edge_reserved_{keyword}"),
+            &source, &[], None);
+    }
 }
