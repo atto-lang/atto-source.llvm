@@ -32,7 +32,6 @@ on:
       - "tests/tenant-vm/fs_lifecycle_test.cpp"
       - "tests/tenant-vm/tenant_vm_fs_turn_auth_test.cpp"
       - "tests/tenant-vm/tenant_vm_test.cpp"
-      - "native/include/atto/host_fs_async.h"
       - "tests/tenant-vm/signed_fs_loader_test.cpp"
       - "tests/tenant-vm/signed_fs_guest.c"
       - "native/CMakeLists.txt"
