@@ -32,6 +32,7 @@ struct atto_fs_async_service {
     atto_fs_broker *broker;
     uint64_t admitted_tenant;
     uint64_t admitted_generation;
+    atto_fs_host_actor admitted_owner; /* immutable one-actor ceiling binding */
     job slots[ATTO_FS_ASYNC_MAX_JOBS];
 };
 static int same_owner(const atto_fs_host_actor *a, const atto_fs_host_actor *b) {
@@ -44,7 +45,8 @@ static int valid_actor(const atto_fs_async_service *s, const atto_fs_host_actor 
         s->broker->policy_layer_count == ATTO_FS_POLICY_LAYER_COUNT &&
         a->tenant_id && a->tenant_generation && a->actor_ref && a->actor_generation &&
         a->tenant_id == s->admitted_tenant &&
-        a->tenant_generation == s->admitted_generation;
+        a->tenant_generation == s->admitted_generation &&
+        same_owner(a, &s->admitted_owner);
 }
 static void release_job(job *j) {
     free(j->path); free(j->bytes);
@@ -154,16 +156,22 @@ static void *worker_main(void *arg) {
     pthread_mutex_unlock(&s->lock);
     return NULL;
 }
-int atto_fs_async_create(atto_fs_async_service **out, atto_fs_broker *broker, unsigned max_jobs) {
+int atto_fs_async_create(atto_fs_async_service **out, atto_fs_broker *broker,
+                         const atto_fs_host_actor *owner, unsigned max_jobs) {
     if (!out) return -EINVAL;
     *out = NULL;
-    if (!broker || max_jobs == 0u || max_jobs > ATTO_FS_ASYNC_MAX_JOBS ||
-        broker->policy_layer_count != ATTO_FS_POLICY_LAYER_COUNT) return -EACCES;
+    if (!broker || !owner || max_jobs == 0u || max_jobs > ATTO_FS_ASYNC_MAX_JOBS ||
+        broker->policy_layer_count != ATTO_FS_POLICY_LAYER_COUNT ||
+        !owner->tenant_id || !owner->tenant_generation ||
+        !owner->actor_ref || !owner->actor_generation ||
+        owner->tenant_id != broker->tenant_id ||
+        owner->tenant_generation != broker->generation) return -EACCES;
     atto_fs_async_service *s = (atto_fs_async_service *)calloc(1, sizeof(*s));
     if (!s) return -ENOMEM;
     s->broker = broker; s->max_jobs = max_jobs;
     s->admitted_tenant = broker->tenant_id;
     s->admitted_generation = broker->generation;
+    s->admitted_owner = *owner;
     int rc = pthread_mutex_init(&s->lock, NULL);
     if (rc) { free(s); return -rc; }
     rc = pthread_cond_init(&s->ready, NULL);
@@ -254,6 +262,7 @@ int atto_fs_async_cancel(atto_fs_async_service *s, const atto_fs_host_actor *act
 }
 int atto_fs_async_forget_actor(atto_fs_async_service *s, const atto_fs_host_actor *actor) {
     if (!s || !actor) return -EINVAL;
+    if (!same_owner(&s->admitted_owner, actor)) return -EACCES;
     pthread_mutex_lock(&s->lock);
     for (unsigned i = 0; i < s->max_jobs; ++i) {
         job *j = &s->slots[i];
