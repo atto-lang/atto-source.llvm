@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 static void put_file(const char *p, const char *s) {
     int fd=open(p,O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC,0600); assert(fd>=0);
@@ -68,6 +69,32 @@ int main(void) {
     char out_link[512]; join_path(out_link,sizeof(out_link),root,"out/escape.txt");
     assert(symlink(outside,out_link)==0);
     assert(atto_fs_broker_write(&broker,42,17,"out/escape.txt",(const unsigned char*)"BAD",3)!=0);
+    expect_file(outside,"outside");
+    /* Actively race symlink replacement against the trusted openat2 reader.
+     * A successful read must be solely from the in-root regular file. */
+    char race[512], staged[512];
+    join_path(race,sizeof(race),data,"race.txt");
+    join_path(staged,sizeof(staged),data,"race-staged.txt");
+    pid_t race_child = fork(); assert(race_child >= 0);
+    if (race_child == 0) {
+        for (int k=0; k<300; ++k) {
+            (void)unlink(race);
+            if ((k & 1) == 0) { if (symlink(outside,race)!=0) _exit(2); }
+            else {
+                put_file(staged,"inside");
+                if (rename(staged,race)!=0) _exit(3);
+            }
+        }
+        _exit(0);
+    }
+    for (int k=0; k<600; ++k) {
+        unsigned char observed[16]={0}; size_t size=0;
+        const int rc=atto_fs_broker_read(&broker,42,17,"data/race.txt",observed,sizeof(observed),&size);
+        if (rc==0) assert(size==6 && memcmp(observed,"inside",6)==0);
+    }
+    int race_status=0;
+    assert(waitpid(race_child,&race_status,0)==race_child);
+    assert(WIFEXITED(race_status) && WEXITSTATUS(race_status)==0);
     expect_file(outside,"outside");
     /* Atomic replacement does not mutate old inode contents outside the root. */
     char external_copy[512]; join_path(external_copy,sizeof(external_copy),base,"old-inode.txt");
