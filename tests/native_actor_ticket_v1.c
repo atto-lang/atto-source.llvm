@@ -33,10 +33,11 @@ void atto_actor_receive(int32_t type_id, int64_t value, int64_t seq) {
     if (type_id == 0) atomic_fetch_add(&slow_count, 1);
     if (type_id == 1) atomic_fetch_add(&fast_count, 1);
 }
-static atto_host_receipt_route_v1 scoped(uint64_t incarnation, uint64_t id) {
+static atto_host_receipt_route_v1 scoped(int32_t ref, uint64_t id) {
     return (atto_host_receipt_route_v1){
         .protocol_major=1, .tenant=11, .caller_incarnation=12,
-        .target_actor=13, .target_incarnation=incarnation,
+        .target_actor=(uint32_t)ref,
+        .target_incarnation=((uint32_t)ref) >> 16,
         .association_generation=17, .placement_epoch=15,
         .message_id=id, .attempt=1
     };
@@ -60,11 +61,9 @@ static int wait_for(int32_t ref, uint64_t ticket,
 int main(void) {
     int32_t slow = atto_actor_spawn(0), fast = atto_actor_spawn(1);
     assert(slow > 0 && fast > 0);
-    uint64_t slow_generation = ((uint32_t)slow) >> 16;
-    uint64_t fast_generation = ((uint32_t)fast) >> 16;
-    atto_host_receipt_route_v1 a = scoped(slow_generation, 101);
-    atto_host_receipt_route_v1 b = scoped(slow_generation, 102);
-    atto_host_receipt_route_v1 c = scoped(fast_generation, 103);
+    atto_host_receipt_route_v1 a = scoped(slow, 101);
+    atto_host_receipt_route_v1 b = scoped(slow, 102);
+    atto_host_receipt_route_v1 c = scoped(fast, 103);
     uint64_t ta=0, tb=0, tc=0;
     assert(atto_host_actor_send_ticket(slow, 11, &a, &ta) == 0 && ta != 0);
     pthread_mutex_lock(&pause_lock);
@@ -78,6 +77,11 @@ int main(void) {
     assert(state(slow, ta, &a) == ATTO_TICKET_STARTED);
     assert(state(slow, tb, &b) == ATTO_TICKET_ADMITTED);
     atto_host_receipt_route_v1 bad = b;
+    bad.target_actor = (uint32_t)fast;
+    uint64_t wrongTargetTicket = 999;
+    assert(atto_host_actor_send_ticket(slow, 123, &bad, &wrongTargetTicket) == -1 &&
+           wrongTargetTicket == 0);
+    bad = b;
     bad.tenant = 99;
     atto_host_ticket_state_v1 ignored;
     assert(atto_host_actor_ticket_snapshot(slow, tb, &bad, &ignored) == -1);
@@ -95,7 +99,7 @@ int main(void) {
     for (int i = 1; i < 128; ++i)
         assert(atto_actor_send(slow, 200 + i) == 0);
     uint64_t denied = 999;
-    atto_host_receipt_route_v1 extra = scoped(slow_generation, 200);
+    atto_host_receipt_route_v1 extra = scoped(slow, 200);
     assert(atto_host_actor_send_ticket(slow, 77, &extra, &denied) == -2 &&
            denied == 0);
     assert(atto_actor_send(slow, 77) == -2);
