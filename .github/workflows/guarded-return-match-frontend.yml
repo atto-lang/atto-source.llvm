@@ -32,6 +32,10 @@ jobs:
           test "$(git hash-object frontend/tests/fixtures/pass/match-guard-block-caret.atto)" = "0b2addfef29cd76d60d90bf081f4d326ea2d70df"
           test "$(git hash-object frontend/tests/fixtures/fail/match-guard-no-fallback.atto)" = "23f8597125af43b3cab294ba8dc9b110d9983ef5"
           test "$(git hash-object frontend/tests/fixtures/fail/match-guard-block-fallthrough.atto)" = "a8ec2c699c4a521508bee85f55a49888064c6948"
+          test "$(git hash-object frontend/tests/fixtures/pass/adt-option-guard-hit.atto)" = "7fb872ba97236df6e1a6b83df55f215665486fad"
+          test "$(git hash-object frontend/tests/fixtures/pass/adt-result-ok-guard.atto)" = "ee40cd523d2def9352ad43b8661949334756a9b3"
+          test "$(git hash-object frontend/tests/fixtures/pass/adt-guard-skips-wrong-result-tag.atto)" = "4730792d63852a885c62642c2f79facf8956ad04"
+          test "$(git hash-object frontend/tests/fixtures/pass/adt-whole-value-guard-binding.atto)" = "4bffdd8d9b828acb907988495e4ef303aa384d2e"
           git diff --quiet HEAD --
           git rev-parse HEAD HEAD^{tree}
       - name: Rust 1.85.1 / wasm32 compiler toolchain
@@ -44,7 +48,7 @@ jobs:
         run: |
           cargo build --locked --manifest-path frontend/Cargo.toml --bin attoc
           cargo rustc --locked --release --manifest-path frontend/Cargo.toml --lib --target wasm32-unknown-unknown --crate-type cdylib -- -C link-arg=--max-memory=67108864
-      - name: Run two exact guest stdout/exit proofs, two no-artifact failures, byte parity
+      - name: Execute six real compiled guests, two no-artifact failures, byte parity
         env:
           ATTO_COMPILER_WASM: frontend/target/wasm32-unknown-unknown/release/atto_compiler.wasm
         run: node frontend/tests/match-return-guest.mjs
