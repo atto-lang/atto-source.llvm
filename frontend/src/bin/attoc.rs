@@ -11,13 +11,13 @@ fn run() -> Result<(), String> {
     }
     let input = PathBuf::from(input);
     let output = match args.next() {
-        None => PathBuf::new(),
+        None => None,
         Some(flag) if flag == "-o" || flag == "--output" => {
-            PathBuf::from(args.next().ok_or("missing output path after -o")?)
+            Some(PathBuf::from(args.next().ok_or("missing output path after -o")?))
         }
         Some(_) => return Err("usage: attoc <source.atto> [-o output.wasm]".into()),
     };
-    if args.next().is_some() || output.as_os_str().is_empty() {
+    if args.next().is_some() || output.as_ref().is_some_and(|p| p.as_os_str().is_empty()) {
         return Err("unexpected extra argument or empty output path".into());
     }
     let source = fs::read_to_string(&input)
@@ -25,10 +25,10 @@ fn run() -> Result<(), String> {
     let bytes = atto_compiler::compile(&source).map_err(|e| e.to_string())?;
     // Preserve the existing frontend CLI contract from LLVM PRs #46/#57:
     // without -o stream binary Wasm directly to stdout, not to a disk file.
-    if output.as_os_str().is_empty() {
+    let Some(output) = output else {
         return io::stdout().write_all(&bytes)
             .map_err(|e| format!("E_OUTPUT: stdout: {e}"));
-    }
+    };
     // Create-new temp file in the destination directory: compile failures and
     // I/O failures cannot leave behind a new, partially-written guest artifact.
     let temp = output.with_extension(format!("wasm.partial.{}", process::id()));
