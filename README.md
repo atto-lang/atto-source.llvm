@@ -51,6 +51,14 @@ AttoLang is the canonical project identity. Use `.atto` source, `atto-*` package
 
 **Evidence gate:** record exact compiler/runtime head and tree, target/toolchain, nonzero executed steps, positive and negative guest results, and explicit passed/failed/unsupported/not-executed states. Host-only CI and `steps=[]` do not establish guest support. README scope is not a feature-completeness claim.
 
+## Compiler ownership correction (migration underway)
+
+**Authoritative Rust language frontend and Rust-to-Wasm code generation:** [`atto-source.rs`](https://github.com/atto-lang/atto-source.rs). **WebAssembly execution and Workers:** [`atto-source.wasm`](https://github.com/atto-lang/atto-source.wasm). **Native C++/LLVM backend:** this repository.
+
+The `frontend/` directory below is a **frozen legacy 16-blob copy** of a 2026-11-14 Rust compiler snapshot, not a second supported source-to-Wasm compiler. It is retained only while the original Rust LLVM AOT bootstrap is transferred to the canonical Rust repository in [draft #468](https://github.com/atto-lang/atto-source.rs/pull/468). The Rust LLVM AOT emitter, target linker and actor runtime have been copied there with their original Git blob SHAs; compilation against the newer canonical frontend is **NOT_EXECUTED**. The legacy copy must not receive new syntax/parser/type-check changes. Run `bash ci/assert_legacy_frontend_frozen.sh` to verify its exact blobs.
+
+The subsequent cleanup must remove `frontend/` and obsolete Rust LLVM bootstrap entrypoints here **only after** source-local compiler and native guest tests pass and all workflow/script consumers are reconciled. The independent C++/LLVM compiler and its native security checks are retained. No private-source export or new CI permission is authorized.
+
 ## Experimental Rust-hosted native AOT and actor slice
 
 The separate `Cargo.toml`, `frontend/`, `src/main.rs`, `src/target_native.rs`, and `runtime/` path stages an **experimental bounded native compiler and actor runtime** alongside the existing checked C++ LLVM compiler slice. It is not a replacement for the canonical language specification or a claim that both compiler pipelines have identical feature coverage.
