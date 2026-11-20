@@ -212,10 +212,11 @@ int32_t atto_actor_send(int32_t ref, int64_t value) {
  * Receipt slots stay pinned until released; exhaustion is backpressure,
  * not silent overwrite. A failed host process requires indeterminate recovery.
  */
-static int route_valid(const atto_host_receipt_route_v1 *r, uint32_t generation) {
+static int route_valid(const atto_host_receipt_route_v1 *r, uint32_t actor_ref) {
     return r && r->protocol_major == 1 && r->tenant &&
-        r->caller_incarnation && r->target_actor &&
-        r->target_incarnation == generation && r->association_generation &&
+        r->caller_incarnation && r->target_actor == (uint64_t)actor_ref &&
+        r->target_incarnation == (actor_ref >> 16) &&
+        r->association_generation &&
         r->placement_epoch && r->message_id && r->attempt;
 }
 static int route_equal(const atto_host_receipt_route_v1 *a,
@@ -247,7 +248,7 @@ int32_t atto_host_actor_send_ticket(int32_t ref, int64_t value,
     uint32_t token = (uint32_t)ref;
     uint32_t slot = token & UINT32_C(0xffff);
     uint32_t generation = token >> 16;
-    if (slot == 0 || slot > ATTO_MAX_ACTORS || !route_valid(route, generation))
+    if (slot == 0 || slot > ATTO_MAX_ACTORS || !route_valid(route, token))
         return -1;
     pthread_mutex_lock(&registry_lock);
     Actor *actor = registry[slot - 1];
@@ -295,7 +296,7 @@ int32_t atto_host_actor_ticket_snapshot(int32_t ref, uint64_t id,
     uint32_t token = (uint32_t)ref, slot = token & UINT32_C(0xffff);
     uint32_t generation = token >> 16;
     if (slot == 0 || slot > ATTO_MAX_ACTORS ||
-        !route_valid(route, generation)) return -1;
+        !route_valid(route, token)) return -1;
     pthread_mutex_lock(&registry_lock);
     Actor *actor = registry[slot - 1];
     if (finishing || !actor || actor->generation != generation) {
@@ -319,7 +320,7 @@ int32_t atto_host_actor_ticket_release(int32_t ref, uint64_t id,
     uint32_t token = (uint32_t)ref, slot = token & UINT32_C(0xffff);
     uint32_t generation = token >> 16;
     if (slot == 0 || slot > ATTO_MAX_ACTORS ||
-        !route_valid(route, generation)) return -1;
+        !route_valid(route, token)) return -1;
     pthread_mutex_lock(&registry_lock);
     Actor *actor = registry[slot - 1];
     if (finishing || !actor || actor->generation != generation) {
