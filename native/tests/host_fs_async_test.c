@@ -56,9 +56,13 @@ static int finished(atto_fs_async_service *s,atto_fs_host_actor *a,uint64_t tick
 int main(void){
   atto_fs_broker broker={0};
   broker.tenant_id=71; broker.generation=4; broker.policy_layer_count=6;
-  atto_fs_async_service *s=NULL;
-  assert(atto_fs_async_create(&s,&broker,4)==0);
   atto_fs_host_actor actor={71,4,10,2},other={71,4,11,2};
+  atto_fs_async_service *s=NULL;
+  assert(atto_fs_async_create(&s,&broker,&actor,4)==0);
+  uint64_t forged_ticket=0u;
+  assert(atto_fs_async_submit_read(s,&other,"data/input",20,&forged_ticket)==-EACCES);
+  assert(forged_ticket==0u);
+  assert(atto_fs_async_forget_actor(s,&other)==-EACCES);
   unsigned char readbuf[80];memset(readbuf,0xBC,sizeof readbuf);size_t n=99;
   uint64_t ticket=0;
   assert(atto_fs_async_submit_read(s,&actor,"data/input",20,&ticket)==0 && ticket!=0);
@@ -108,6 +112,6 @@ int main(void){
   assert(finished(s,&actor,ticket,readbuf,sizeof readbuf,&n)==-ESTALE);
   atto_fs_async_destroy(s);
   broker.policy_layer_count=0;
-  assert(atto_fs_async_create(&s,&broker,4)==-EACCES);
+  assert(atto_fs_async_create(&s,&broker,&actor,4)==-EACCES);
   puts("ATTO_FS_ASYNC_HOST_ONLY_TEST_PASS");return 0;
 }
