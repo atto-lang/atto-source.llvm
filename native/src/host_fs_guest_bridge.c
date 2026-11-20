@@ -11,8 +11,16 @@ static int cage_range(const atto_fs_trusted_guest_frame *frame,
                       uint32_t off, uint32_t length) {
     if (!frame || !frame->broker || !frame->cage || !frame->cage_size ||
         !frame->tenant_id || !frame->generation) return -EACCES;
-    if ((size_t)off > frame->cage_size ||
-        (size_t)length > frame->cage_size - (size_t)off) return -EFAULT;
+    /* The VM's cage is bigger than any one actor's private region. Bounds
+     * against cage_size alone would permit an actor to read/write another
+     * actor's state via its host-I/O paths and output offset. */
+    const size_t start = (size_t)frame->actor_region_start;
+    const size_t region_bytes = (size_t)frame->actor_region_bytes;
+    if (start == 0 || region_bytes == 0 || frame->cage_size > UINT32_MAX ||
+        start > frame->cage_size ||
+        region_bytes > frame->cage_size - start) return -EACCES;
+    if ((size_t)off < start || (size_t)off - start > region_bytes ||
+        (size_t)length > region_bytes - ((size_t)off - start)) return -EFAULT;
     return 0;
 }
 static int load_path(const atto_fs_trusted_guest_frame *frame,
@@ -42,22 +50,22 @@ int atto_fs_guest_read(const atto_fs_trusted_guest_frame *frame,
     if (rc) return rc;
     rc = cage_range(frame, out_off, out_cap);
     if (rc) return rc;
-    /* Never allow FS operation to write directly into guest memory while the
-     * host is validating the resulting size and completion. */
-    uint8_t *tmp = (uint8_t *)malloc((size_t)out_cap + 1u);
-    if (!tmp) return -ENOMEM;
+    /* The broker reads into a private staging buffer and copies into the
+     * caller output ONLY on success, while holding the same mutex as revoke.
+     * Calling it with this already-validated actor output span keeps the
+     * entire read->guest-copy commit atomic with respect to revocation.
+     * Copying our own staging buffer AFTER broker_read() returned would
+     * permit revoked I/O to write into guest memory after revoke completed. */
     size_t got = 0u;
     rc = atto_fs_broker_read(frame->broker, frame->tenant_id, frame->generation,
-                             path, tmp, (size_t)out_cap, &got);
+                             path, frame->cage + (size_t)out_off, (size_t)out_cap, &got);
     if (rc == 0) {
         if (got > (size_t)out_cap || got > UINT32_MAX) {
             rc = -EOVERFLOW;
         } else {
-            memcpy(frame->cage + (size_t)out_off, tmp, got);
             *bytes_read = (uint32_t)got;
         }
     }
-    free(tmp);
     return rc;
 }
 int atto_fs_guest_write(const atto_fs_trusted_guest_frame *frame,
