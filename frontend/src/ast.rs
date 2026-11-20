@@ -164,6 +164,8 @@ pub struct Receive {
 pub struct ActorDecl {
     pub name: String,
     pub pos: Pos,
+    /// Explicit outbound application-message type upper bound, not a recipient count.
+    pub sends: Option<Type>,
     pub fields: Vec<Field>,
     pub receive: Option<Receive>,
     pub methods: Vec<Method>,
