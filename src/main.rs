@@ -453,6 +453,9 @@ fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<Stri
         return Err("E_SOURCE_LIMIT: native Atto input exceeds 64 KiB".into());
     }
     let toks = atto_compiler::lexer::lex(source).map_err(|e|e.to_string())?;
+    if atto_compiler::directed_pipe::unlowered_pos(&toks).is_some() {
+        return Err("E_UNSUPPORTED_CONTINUOUS_PIPE: typed source/sink DATA graph needs native guest transport and PipeHandle".into());
+    }
     if profile == LibraryProfile::FreestandingCore {
         admit_freestanding_tokens(&toks)?;
     }
