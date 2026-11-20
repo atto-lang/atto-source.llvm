@@ -1609,15 +1609,10 @@ impl Parser {
                         if next != "when" && next != "_" {
                             return Err(unsupported(pos, "typed binding patterns ('Type name')"));
                         }
-                        if next == "when" {
-                            // Java parses `name when` as the typed binding
-                            // pattern `name when` and then fails; mirror that.
-                            return Err(Diagnostic::new(
-                                self.pos(),
-                                "E_SYNTAX",
-                                "a binding pattern cannot take a 'when' guard",
-                            ));
-                        }
+                        // A binding followed by 'when' is a guarded
+                        // binder, not a typed pattern. parse_match and
+                        // parse_return_match will read the guard in the arm
+                        // scope, after the bound name is introduced.
                     }
                     if w.chars().next().is_some_and(|c| c.is_uppercase()) {
                         return Err(unsupported(pos, "constructor patterns"));
