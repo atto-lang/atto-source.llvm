@@ -64,3 +64,27 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_test(NAME linux_signed_host_fs_ceiling COMMAND atto_host_fs_signed_ceiling_test)
   set_tests_properties(linux_signed_host_fs_ceiling PROPERTIES TIMEOUT 15)
 endif()
+
+# Bounded host I/O worker with one-shot actor-owned tickets. The unit test
+# intentionally substitutes an in-memory mock for the rooted broker; a mock
+# proves queue/cancellation behavior, NOT filesystem isolation.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_library(atto_host_fs_async STATIC src/host_fs_async.c)
+  target_include_directories(atto_host_fs_async PUBLIC include)
+  target_link_libraries(atto_host_fs_async PUBLIC atto_host_fs_broker Threads::Threads)
+  add_executable(atto_host_fs_async_mock_test src/host_fs_async.c tests/host_fs_async_test.c)
+  target_include_directories(atto_host_fs_async_mock_test PRIVATE include)
+  target_link_libraries(atto_host_fs_async_mock_test PRIVATE Threads::Threads)
+  add_test(NAME linux_async_host_fs_queue_mock COMMAND atto_host_fs_async_mock_test)
+  set_tests_properties(linux_async_host_fs_queue_mock PROPERTIES TIMEOUT 15)
+
+  add_executable(atto_host_fs_io_v5_layout_test tests/host_fs_io_v5_layout_test.c)
+  target_include_directories(atto_host_fs_io_v5_layout_test PRIVATE ../src/main/cpp)
+  add_test(NAME linux_host_fs_io_v5_layout COMMAND atto_host_fs_io_v5_layout_test)
+  set_tests_properties(linux_host_fs_io_v5_layout PROPERTIES TIMEOUT 15)
+  if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(atto_host_fs_async PRIVATE -Wall -Wextra -Wconversion -Werror -pedantic)
+    target_compile_options(atto_host_fs_async_mock_test PRIVATE -Wall -Wextra -Wconversion -Werror -pedantic -UNDEBUG)
+    target_compile_options(atto_host_fs_io_v5_layout_test PRIVATE -Wall -Wextra -Wconversion -Werror -pedantic -UNDEBUG)
+  endif()
+endif()
