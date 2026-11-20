@@ -95,6 +95,9 @@ int main(void) {
     int race_status=0;
     assert(waitpid(race_child,&race_status,0)==race_child);
     assert(WIFEXITED(race_status) && WEXITSTATUS(race_status)==0);
+    unsigned char final_bytes[16]={0}; size_t final_count=0;
+    assert(atto_fs_broker_read(&broker,42,17,"data/race.txt",final_bytes,sizeof(final_bytes),&final_count)==0);
+    assert(final_count==6 && memcmp(final_bytes,"inside",6)==0);
     expect_file(outside,"outside");
     /* Atomic replacement does not mutate old inode contents outside the root. */
     char external_copy[512]; join_path(external_copy,sizeof(external_copy),base,"old-inode.txt");
