@@ -65,6 +65,7 @@ typedef struct SourceActor {
     uint64_t id;
     struct SourceActor* upstream;
     struct SourceActor* downstream;
+    uint64_t pipeline_role;
     size_t pipeline_index; /* bound once at compiler-owned registration */
     OresActorI64Heap* heap;
     OresNativeActorRef ref;
@@ -127,15 +128,14 @@ static SourceActorGroup group = {
  * is executing. A source program cannot forge it through message bytes. */
 static _Thread_local SourceActor* active_pipeline_actor;
 static _Thread_local uint8_t active_pipeline_ingress;
+static _Thread_local int active_pipeline_response_set;
+static _Thread_local int64_t active_pipeline_response;
 static _Thread_local uint64_t active_pipeline_flow_id;
 static _Thread_local uint64_t active_pipeline_message_id;
 
 /* Compiler-only actor callback dispatch; the trusted route direction lives
  * in carrier-local state for exactly the duration of the admitted DATA turn.
  * No guest-supplied flags or wire properties may set this value. */
-uint64_t oreslang_source_actor_pipeline_ingress(void) {
-    return active_pipeline_actor ? (uint64_t)active_pipeline_ingress : 0;
-}
 static _Atomic uint64_t next_pipeline_flow_id = 1;
 static _Atomic uint64_t next_pipeline_message_id = 1;
 /* Identity allocation is monotonic for the process lifetime, including
@@ -157,6 +157,9 @@ void oreslang_source_actor_test_before_pipeline_publish(void* actor,
                                                          unsigned direction) {
     (void)actor; (void)direction;
 }
+/* Response/cancellation race injection occurs outside the commit lock. */
+__attribute__((weak))
+void oreslang_source_actor_test_before_pipeline_response(void* actor) { (void)actor; }
 /* Deterministic fault injection on the caller's scheduler-issued TLS
  * ancestry, before acquiring group.mutex. No hook executes under the
  * publication/cancellation linearization monitor. Testing-only symbol. */
@@ -177,6 +180,28 @@ static void check_invariant(int condition, const char* predicate, int line) {
 #define ensure(expr) check_invariant((expr), #expr, __LINE__)
 static void group_lock(void) { ensure(pthread_mutex_lock(&group.mutex) == 0); }
 static void group_unlock(void) { ensure(pthread_mutex_unlock(&group.mutex) == 0); }
+/* Caller must hold group.mutex. A DATA turn pins this actor until finalization. */
+static int pipeline_context_valid_locked(const SourceActor* actor) {
+    return actor && actor->magic == SOURCE_ACTOR_MAGIC
+        && active_pipeline_flow_id != 0 && active_pipeline_message_id != 0
+        && active_pipeline_flow_id == group.pipeline_flow_id
+        && group.pipeline_count >= 2 && group.pipeline_count <= SOURCE_PIPELINE_MAX_STAGES
+        && actor->pipeline_index < group.pipeline_count
+        && group.pipeline_stages[actor->pipeline_index] == actor
+        && actor->ref.actor_slot < group.next_slot
+        && group.actors[actor->ref.actor_slot] == actor
+        && !group.pipeline_done
+        && !atomic_load_explicit(&group.pipeline_failure, memory_order_acquire);
+}
+uint64_t oreslang_source_actor_pipeline_ingress(void) {
+    if (!active_pipeline_actor || !active_pipeline_flow_id || !active_pipeline_message_id)
+        return UINT64_MAX;
+    group_lock();
+    const uint64_t direction = pipeline_context_valid_locked(active_pipeline_actor)
+        ? (uint64_t)active_pipeline_ingress : UINT64_MAX;
+    group_unlock();
+    return direction;
+}
 /* Public refs are monotonically issued ID capabilities, never heap addresses.
  * Lookup runs under group.mutex before inspecting any mutable SourceActor.
  * The ID is never recycled when the scheduler closes/reopens or slots reuse.
@@ -284,6 +309,9 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
         if (instance->on_variant) {
             SourceActor* prior = active_pipeline_actor;
             uint8_t prior_ingress = active_pipeline_ingress;
+            int prior_response_set = active_pipeline_response_set;
+            int64_t prior_response = active_pipeline_response;
+            active_pipeline_response_set = 0;
             uint64_t prior_flow_id = active_pipeline_flow_id;
             uint64_t prior_message_id = active_pipeline_message_id;
             if (instance->upstream || instance->downstream) {
@@ -307,6 +335,12 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
             result = instance->on_variant(instance->heap, turn.domain, turn.epoch,
                     accepted->variant_index, accepted->packet.bytes,
                     accepted->packet.size);
+            if (instance->pipeline_role == 1 && accepted->direction == 2) {
+                if (!active_pipeline_response_set) pipeline_fail(SOURCE_PIPELINE_INVALID_ROUTE);
+                else result = active_pipeline_response;
+            }
+            active_pipeline_response_set = prior_response_set;
+            active_pipeline_response = prior_response;
             active_pipeline_ingress = prior_ingress;
             active_pipeline_actor = prior;
             active_pipeline_flow_id = prior_flow_id;
@@ -938,6 +972,9 @@ void oreslang_source_actor_pipeline_connect_many(void* const* opaque,
             && actor->variant_count == first->variant_count
             && actor->ref.actor_slot < group.next_slot
             && group.actors[actor->ref.actor_slot] == actor);
+        ensure(actor->pipeline_role == 0
+            || (i == 0 ? actor->pipeline_role == 1
+                : i + 1 == count ? actor->pipeline_role == 3 : actor->pipeline_role == 2));
         for (size_t k = 0; k < i; ++k) ensure(stages[k] != actor);
         for (size_t v = 0; v < first->variant_count; ++v) {
             const SourceVariantContract* lhs = &first->variants[v];
@@ -1013,6 +1050,36 @@ static size_t pipeline_write_string(uint8_t* dst, const char* s) {
     else { dst[off++] = 0xda; dst[off++] = 1; dst[off++] = 0; }
     memcpy(dst + off, s, n);
     return off + n;
+}
+void oreslang_source_actor_pipeline_set_role(void* opaque, uint64_t role) {
+    ensure(!active_pipeline_actor && role >= 1 && role <= 3);
+    group_lock();
+    SourceActor* actor = source_resolve_locked(opaque);
+    ensure(actor && !actor->pipeline_role && !actor->upstream && !actor->downstream
+        && group.pipeline_count == 0);
+    actor->pipeline_role = role;
+    group_unlock();
+}
+void oreslang_source_actor_pipeline_respond_i64(int64_t value) {
+    SourceActor* actor = active_pipeline_actor;
+    ensure(actor && actor->pipeline_role == 1 && active_pipeline_ingress == 2);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    oreslang_source_actor_test_before_pipeline_response((void*)(uintptr_t)actor->id);
+#endif
+    group_lock();
+    if (!pipeline_context_valid_locked(actor) || group.pipeline_source != actor
+        || actor->pipeline_index != 0 || active_pipeline_response_set
+        || atomic_load_explicit(&group.pipeline_phase, memory_order_acquire)
+            != (int)(2 * (group.pipeline_count - 1))) {
+        group_unlock();
+        pipeline_fail(SOURCE_PIPELINE_INVALID_ROUTE);
+        return;
+    }
+    /* Response admission and cancellation share the same linearization lock.
+     * Completion still waits for the DATA finalizer and processed publication. */
+    active_pipeline_response = value;
+    active_pipeline_response_set = 1;
+    group_unlock();
 }
 void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
                                               uint64_t variant, int64_t value) {

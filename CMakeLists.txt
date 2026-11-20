@@ -303,7 +303,7 @@ if(BUILD_TESTING)
         --diagnostic "receive_forward parameter type must match declared message domain")
     oreslang_contract_test(reject_transform_pipe_scalar_return
         transform-pipe-return-value-reject.ores
-        --diagnostic "expected ';'")
+        --diagnostic "must return void")
     oreslang_contract_test(reject_transform_pipe_unknown_domain
         transform-pipe-unknown-domain-reject.ores
         --diagnostic "unknown transform pipe message domain")
@@ -569,7 +569,7 @@ if(BUILD_TESTING)
         --diagnostic "duplicate with state effect")
     oreslang_contract_test(reject_using_signature
         actor-with-using-signature-reject.ores
-        --diagnostic "using acquires scoped capabilities; use with for function effects")
+        --diagnostic "using acquires scoped capabilities")
     foreach(bad_receive_type domain-mismatch message-placeholder)
         oreslang_contract_test(reject_receive_${bad_receive_type}
             source-actor-receive-${bad_receive_type}-reject.ores
@@ -615,6 +615,56 @@ if(BUILD_TESTING)
             endif()
         endforeach()
     endforeach()
+    oreslang_contract_test(reject_pipe_audit_direct_lifecycle
+        pipe-audit-direct-lifecycle-reject.ores --diagnostic "actor method cannot call lifecycle entry function")
+    oreslang_contract_test(reject_pipe_audit_transitive_lifecycle
+        pipe-audit-transitive-lifecycle-reject.ores --diagnostic "actor method cannot call lifecycle entry function")
+    oreslang_contract_test(reject_pipe_audit_unused_role_domain
+        pipe-audit-unused-role-domain-reject.ores --diagnostic "pipeline actor message domains must match")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_pipe_audit_pure_helper
+            pipe-audit-pure-helper.ores --run 43 --clang "${ORE_CLANG}" --runs 5
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=3 typed=1 forward=2 backward=2 result=6" --stderr-count 1)
+        oreslang_contract_test(native_pipe_audit_unbound_ingress
+            pipe-audit-unbound-roles.ores --run 43 --clang "${ORE_CLANG}" --runs 5
+            --native-harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_pipe_unbound_ingress_harness.c"
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c")
+        oreslang_contract_test(native_pipe_audit_response_cancel
+            source-pipe-explicit-fifteen-colon.ores --run 77 --clang "${ORE_CLANG}" --runs 10
+            --native-harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_pipe_response_cancel_harness.c"
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=1 released=1 processed=2 last=0" --stderr-count 14)
+    endif()
+    if(ORE_CLANG)
+        foreach(style dot colon operator)
+            oreslang_contract_test(native_exec_explicit_pipe_fifteen_${style}
+                source-pipe-explicit-fifteen-${style}.ores
+                --run 43 --clang "${ORE_CLANG}" --runs 10
+                --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+                --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+                --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+                --stderr "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=15 typed=1 forward=14 backward=14 result=30" --stderr-count 1)
+        endforeach()
+        oreslang_contract_test(native_exec_explicit_pipe_overlap
+            source-pipe-explicit-overlap.ores --run 43 --clang "${ORE_CLANG}" --runs 10
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_PIPELINE_ROUNDTRIP_PASS actors=15 typed=1 forward=14 backward=14 result=44" --stderr-count 1)
+        oreslang_contract_test(native_exec_explicit_pipe_missing_response
+            source-pipe-explicit-missing-response.ores --run 71 --clang "${ORE_CLANG}" --runs 5
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "SOURCE_PIPELINE_TERMINAL_STATUS code=1" --stderr-count 1)
+    endif()
     oreslang_contract_test(native_ir_sixteen_actor_bidirectional_pipeline
         source-actor-pipeline-sixteen-stage.ores
         --ir "oreslang_source_actor_pipeline_connect_many")

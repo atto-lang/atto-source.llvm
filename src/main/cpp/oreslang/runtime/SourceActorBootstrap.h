@@ -131,11 +131,14 @@ void* oreslang_source_actor_spawn_tagged_variants(
 void oreslang_source_actor_pipeline_connect_many(void* const* stages, uint64_t count);
 /* Legacy C embedding ABI; guest LLVM lowering always uses connect_many. */
 void oreslang_source_actor_pipeline_connect(void* source, void* transform, void* sink);
+void oreslang_source_actor_pipeline_set_role(void* actor, uint64_t role);
+void oreslang_source_actor_pipeline_respond_i64(int64_t value);
 void oreslang_source_actor_pipeline_emit_i64(uint64_t direction,
                                                uint64_t variant, int64_t value);
 /* Read-only, scheduler-authored DATA direction for the currently running
  * compiled variant callback: 1 upstream->downstream, 2 downstream->upstream,
- * 0 without a pipeline delivery. Never accepts an untrusted direction arg. */
+ * 0 for admitted source input, UINT64_MAX without a live pipeline DATA turn.
+ * Never accepts an untrusted direction arg. */
 uint64_t oreslang_source_actor_pipeline_ingress(void);
 /* Compiler-only invalid-direction or wrong-nominal-domain delivery gate.
  * Marks terminal pipeline failure, never invokes guest handler code. */

@@ -163,6 +163,7 @@ struct Actor {
     std::string messages_type;
     // Explicit two-direction actor role. Ordinary actors retain messages_type.
     bool transform_pipe = false;
+    unsigned pipe_role = 0; // 1 source, 2 transform, 3 sink
     std::string forward_messages_type;
     std::string backward_messages_type;
     bool state_declared = false;

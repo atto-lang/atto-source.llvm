@@ -17,7 +17,7 @@ end
 
 define actor Stage0<messages=PipeMessages> as
     state { value: int = 0; }
-    receive(PipeMessages m) {
+    receive(PipeMessages m) with state.read, state.write {
         do match m over {
             on Signal.Data as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -32,7 +32,7 @@ define actor Stage0<messages=PipeMessages> as
 end
 define transform pipe actor Stage1<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     state { value: int = 0; }
-    receive_forward(PipeForwardMessages m): void {
+    receive_forward(PipeForwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Data as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -41,7 +41,7 @@ define transform pipe actor Stage1<forward_messages=PipeForwardMessages,backward
         }
         return;
     }
-    receive_backward(PipeBackwardMessages m): void {
+    receive_backward(PipeBackwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Result as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -53,7 +53,7 @@ define transform pipe actor Stage1<forward_messages=PipeForwardMessages,backward
 end
 define transform pipe actor Stage2<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     state { value: int = 0; }
-    receive_forward(PipeForwardMessages m): void {
+    receive_forward(PipeForwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Data as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -62,7 +62,7 @@ define transform pipe actor Stage2<forward_messages=PipeForwardMessages,backward
         }
         return;
     }
-    receive_backward(PipeBackwardMessages m): void {
+    receive_backward(PipeBackwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Result as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -74,7 +74,7 @@ define transform pipe actor Stage2<forward_messages=PipeForwardMessages,backward
 end
 define transform pipe actor Stage3<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     state { value: int = 0; }
-    receive_forward(PipeForwardMessages m): void {
+    receive_forward(PipeForwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Data as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -83,7 +83,7 @@ define transform pipe actor Stage3<forward_messages=PipeForwardMessages,backward
         }
         return;
     }
-    receive_backward(PipeBackwardMessages m): void {
+    receive_backward(PipeBackwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Result as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -95,7 +95,7 @@ define transform pipe actor Stage3<forward_messages=PipeForwardMessages,backward
 end
 define transform pipe actor Stage4<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     state { value: int = 0; }
-    receive_forward(PipeForwardMessages m): void {
+    receive_forward(PipeForwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Data as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -104,7 +104,7 @@ define transform pipe actor Stage4<forward_messages=PipeForwardMessages,backward
         }
         return;
     }
-    receive_backward(PipeBackwardMessages m): void {
+    receive_backward(PipeBackwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Result as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -116,7 +116,7 @@ define transform pipe actor Stage4<forward_messages=PipeForwardMessages,backward
 end
 define transform pipe actor Stage5<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     state { value: int = 0; }
-    receive_forward(PipeForwardMessages m): void {
+    receive_forward(PipeForwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Data as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -125,7 +125,7 @@ define transform pipe actor Stage5<forward_messages=PipeForwardMessages,backward
         }
         return;
     }
-    receive_backward(PipeBackwardMessages m): void {
+    receive_backward(PipeBackwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Result as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -137,7 +137,7 @@ define transform pipe actor Stage5<forward_messages=PipeForwardMessages,backward
 end
 define transform pipe actor Stage6<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     state { value: int = 0; }
-    receive_forward(PipeForwardMessages m): void {
+    receive_forward(PipeForwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Data as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -146,7 +146,7 @@ define transform pipe actor Stage6<forward_messages=PipeForwardMessages,backward
         }
         return;
     }
-    receive_backward(PipeBackwardMessages m): void {
+    receive_backward(PipeBackwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Result as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -158,7 +158,7 @@ define transform pipe actor Stage6<forward_messages=PipeForwardMessages,backward
 end
 define transform pipe actor Stage7<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     state { value: int = 0; }
-    receive_forward(PipeForwardMessages m): void {
+    receive_forward(PipeForwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Data as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -167,7 +167,7 @@ define transform pipe actor Stage7<forward_messages=PipeForwardMessages,backward
         }
         return;
     }
-    receive_backward(PipeBackwardMessages m): void {
+    receive_backward(PipeBackwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Result as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -179,7 +179,7 @@ define transform pipe actor Stage7<forward_messages=PipeForwardMessages,backward
 end
 define transform pipe actor Stage8<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     state { value: int = 0; }
-    receive_forward(PipeForwardMessages m): void {
+    receive_forward(PipeForwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Data as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -188,7 +188,7 @@ define transform pipe actor Stage8<forward_messages=PipeForwardMessages,backward
         }
         return;
     }
-    receive_backward(PipeBackwardMessages m): void {
+    receive_backward(PipeBackwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Result as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -200,7 +200,7 @@ define transform pipe actor Stage8<forward_messages=PipeForwardMessages,backward
 end
 define transform pipe actor Stage9<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     state { value: int = 0; }
-    receive_forward(PipeForwardMessages m): void {
+    receive_forward(PipeForwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Data as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -209,7 +209,7 @@ define transform pipe actor Stage9<forward_messages=PipeForwardMessages,backward
         }
         return;
     }
-    receive_backward(PipeBackwardMessages m): void {
+    receive_backward(PipeBackwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Result as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -221,7 +221,7 @@ define transform pipe actor Stage9<forward_messages=PipeForwardMessages,backward
 end
 define transform pipe actor Stage10<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     state { value: int = 0; }
-    receive_forward(PipeForwardMessages m): void {
+    receive_forward(PipeForwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Data as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -230,7 +230,7 @@ define transform pipe actor Stage10<forward_messages=PipeForwardMessages,backwar
         }
         return;
     }
-    receive_backward(PipeBackwardMessages m): void {
+    receive_backward(PipeBackwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Result as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -242,7 +242,7 @@ define transform pipe actor Stage10<forward_messages=PipeForwardMessages,backwar
 end
 define transform pipe actor Stage11<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     state { value: int = 0; }
-    receive_forward(PipeForwardMessages m): void {
+    receive_forward(PipeForwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Data as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -251,7 +251,7 @@ define transform pipe actor Stage11<forward_messages=PipeForwardMessages,backwar
         }
         return;
     }
-    receive_backward(PipeBackwardMessages m): void {
+    receive_backward(PipeBackwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Result as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -263,7 +263,7 @@ define transform pipe actor Stage11<forward_messages=PipeForwardMessages,backwar
 end
 define transform pipe actor Stage12<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     state { value: int = 0; }
-    receive_forward(PipeForwardMessages m): void {
+    receive_forward(PipeForwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Data as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -272,7 +272,7 @@ define transform pipe actor Stage12<forward_messages=PipeForwardMessages,backwar
         }
         return;
     }
-    receive_backward(PipeBackwardMessages m): void {
+    receive_backward(PipeBackwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Result as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -284,7 +284,7 @@ define transform pipe actor Stage12<forward_messages=PipeForwardMessages,backwar
 end
 define transform pipe actor Stage13<forward_messages=PipeForwardMessages,backward_messages=PipeBackwardMessages> as
     state { value: int = 0; }
-    receive_forward(PipeForwardMessages m): void {
+    receive_forward(PipeForwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Data as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -293,7 +293,7 @@ define transform pipe actor Stage13<forward_messages=PipeForwardMessages,backwar
         }
         return;
     }
-    receive_backward(PipeBackwardMessages m): void {
+    receive_backward(PipeBackwardMessages m): void with state.read, state.write {
         do match m over {
             on Signal.Result as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });
@@ -305,7 +305,7 @@ define transform pipe actor Stage13<forward_messages=PipeForwardMessages,backwar
 end
 define actor Stage14<messages=PipeMessages> as
     state { value: int = 0; }
-    receive(PipeMessages m) {
+    receive(PipeMessages m) with state.read, state.write {
         do match m over {
             on Signal.Data as n {
                 const next = self.handle_state(critical |state| -> { state.value = n + 1; return state.value; });

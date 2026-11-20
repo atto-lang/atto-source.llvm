@@ -318,8 +318,23 @@ std::string emit_verified_llvm_ir(const Program& source) {
     auto* nominalTy = llvm::StructType::get(context, {ptr, i32});
     for (const auto& actor : source.actors) {
         const auto pipeline = pipelineWireCases.find(actor.name);
+        std::vector<std::string> standaloneCases;
+        if (pipeline == pipelineWireCases.end() && actor.transform_pipe) {
+            std::set<std::string> alternatives;
+            for (const auto& domain : {actor.forward_messages_type, actor.backward_messages_type}) {
+                for (const auto& pattern : source.tagged_patterns)
+                    if (pattern.name == domain)
+                        alternatives.insert(pattern.alternatives.begin(), pattern.alternatives.end());
+                for (const auto& enumeration : source.enums)
+                    if (enumeration.name == domain)
+                        for (const auto& item : enumeration.cases)
+                            alternatives.insert(enumeration.name + "." + item.name);
+            }
+            standaloneCases.assign(alternatives.begin(), alternatives.end());
+        }
         auto cases = tagged_cases(source, actor,
-            pipeline == pipelineWireCases.end() ? nullptr : &pipeline->second);
+            pipeline != pipelineWireCases.end() ? &pipeline->second
+                : actor.transform_pipe ? &standaloneCases : nullptr);
         if (cases.empty()) continue;
         std::vector<llvm::Constant*> contracts, identities;
         const auto prefix = actor.name + ".tagged.";
@@ -466,6 +481,13 @@ std::string emit_verified_llvm_ir(const Program& source) {
                     {actorInitializers.at(spawn.actor_type), handler,
                      llvm::ConstantInt::get(i64, actorFieldCounts.at(spawn.actor_type))},
                     spawn.name + ".native.actor.ref");
+            }
+            const auto spawnedActor = std::find_if(source.actors.begin(), source.actors.end(),
+                [&](const Actor& actor) { return actor.name == spawn.actor_type; });
+            if (spawnedActor->pipe_role) {
+                auto setRole = module.getOrInsertFunction("oreslang_source_actor_pipeline_set_role",
+                    llvm::FunctionType::get(llvm::Type::getVoidTy(context), {ptr, i64}, false));
+                builder.CreateCall(setRole, {ref, llvm::ConstantInt::get(i64, spawnedActor->pipe_role)});
             }
             actorRefs.emplace(spawn.name, ref);
             actorRefTypes.emplace(spawn.name, spawn.actor_type);
@@ -829,7 +851,11 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             throw std::runtime_error("LLVM pipeline route type contract mismatch");
                         llvm::Value* routed = lower(*arm.route_payload, builder, i64,
                                                     armParameters, locals, declarations);
-                        builder.CreateCall(pipelineEmit, {
+                        if (arm.route_direction == "respond") {
+                            auto respond = module.getOrInsertFunction("oreslang_source_actor_pipeline_respond_i64",
+                                llvm::FunctionType::get(llvm::Type::getVoidTy(context), {i64}, false));
+                            builder.CreateCall(respond, {routed});
+                        } else builder.CreateCall(pipelineEmit, {
                             llvm::ConstantInt::get(i64,
                                 arm.route_direction == "forward" ? 1 : 2),
                             llvm::ConstantInt::get(i64,
@@ -1002,9 +1028,9 @@ std::string emit_verified_llvm_ir(const Program& source) {
             auto* callback = actorMessageHandlers.at(actor.name);
             auto* forward = module.getFunction(symbol + "_receive_forward");
             auto* backward = module.getFunction(symbol + "_receive_backward");
-            if (!forward || !backward
+            if (!forward || (actor.pipe_role != 3 && !backward)
                     || forward->getFunctionType() != callback->getFunctionType()
-                    || backward->getFunctionType() != callback->getFunctionType())
+                    || (backward && backward->getFunctionType() != callback->getFunctionType()))
                 throw std::runtime_error("transform pipe callback ABI mismatch");
             auto* entry = llvm::BasicBlock::Create(context, "direction.entry", callback);
             auto* forwardBlock = llvm::BasicBlock::Create(context, "direction.forward", callback);
@@ -1016,8 +1042,8 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 llvm::FunctionType::get(i64, {}, false));
             auto* direction = dispatch.CreateCall(ingress, {}, "scheduler.ingress");
             auto* branches = dispatch.CreateSwitch(direction, invalid, 2);
-            branches->addCase(llvm::ConstantInt::get(i64, 1), forwardBlock);
-            branches->addCase(llvm::ConstantInt::get(i64, 2), backwardBlock);
+            branches->addCase(llvm::ConstantInt::get(i64, actor.pipe_role == 1 ? 0 : 1), forwardBlock);
+            if (backward) branches->addCase(llvm::ConstantInt::get(i64, 2), backwardBlock);
             std::vector<llvm::Value*> arguments;
             for (auto& arg : callback->args()) arguments.push_back(&arg);
             // Reject an intact but directionally incorrect nominal frame
@@ -1052,8 +1078,9 @@ std::string emit_verified_llvm_ir(const Program& source) {
             };
             permitCases(forwardBlock, actor.forward_messages_type, forward,
                         "dispatch.allowed.forward");
-            permitCases(backwardBlock, actor.backward_messages_type, backward,
+            if (backward) permitCases(backwardBlock, actor.backward_messages_type, backward,
                         "dispatch.allowed.backward");
+            else { dispatch.SetInsertPoint(backwardBlock); dispatch.CreateBr(invalid); }
             dispatch.SetInsertPoint(invalid);
             auto reject = module.getOrInsertFunction(
                 "oreslang_source_actor_pipeline_reject_delivery",
@@ -1102,6 +1129,8 @@ std::string emit_verified_llvm_ir(const Program& source) {
                             && name != "oreslang_source_actor_pipeline_connect_many"
                             && name != "oreslang_source_actor_pipeline_emit_i64"
                             && name != "oreslang_source_actor_pipeline_ingress"
+                            && name != "oreslang_source_actor_pipeline_set_role"
+                            && name != "oreslang_source_actor_pipeline_respond_i64"
                             && name != "oreslang_source_actor_pipeline_reject_delivery"
                             && name != "oreslang_source_actor_pipeline_expect"
                             && name != "oreslang_source_actor_pipeline_expect_status"
