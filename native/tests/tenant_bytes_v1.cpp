@@ -32,7 +32,9 @@ int main() {
     assert(moved.read_byte(alice, 0, out) == Code::ok && out == 42);
   }
   assert(alice.charged() == baseline);
-  assert(alice.allocate_zeroed(-1).code == Code::invalid_owner);
+  const auto before_negative = alice.charged();
+  assert(alice.allocate_zeroed(-1).code == Code::invalid_size);
+  assert(alice.charged() == before_negative);
   assert(alice.allocate_zeroed(std::numeric_limits<std::int64_t>::max()).code == Code::quota);
   {
     auto old = alice.allocate_zeroed(8);
@@ -65,4 +67,32 @@ int main() {
   assert(tiny.allocate_zeroed(2).code == Code::quota);
   assert(tiny.allocate_zeroed(1).code == Code::ok);
   assert(tiny.charged() == 0);
+  // Logical zero length still consumes the one-byte physical allocation.
+  Arena zero_limit({8, 8, 9}, sizeof(Bytes));
+  assert(zero_limit.allocate_zeroed(0).code == Code::quota);
+  Arena zero_ok({8, 8, 10}, sizeof(Bytes) + 1);
+  {
+    auto empty = zero_ok.allocate_zeroed(0);
+    assert(empty.code == Code::ok && empty.value.has_value());
+    assert(empty.value->length() == 0);
+    assert(zero_ok.charged() == sizeof(Bytes) + 1);
+    std::uint8_t unchanged = 88;
+    assert(empty.value->read_byte(zero_ok, 0, unchanged) == Code::bounds);
+    assert(unchanged == 88);
+    assert(empty.value->write_byte(zero_ok, 0, 12) == Code::bounds);
+  }
+  assert(zero_ok.charged() == 0);
+  // Move assignment retires the previous charge exactly once.
+  Arena replacement({8, 8, 11}, 4096);
+  {
+    auto first = replacement.allocate_zeroed(4);
+    auto second = replacement.allocate_zeroed(6);
+    assert(first.code == Code::ok && second.code == Code::ok);
+    assert(replacement.charged() == sizeof(Bytes) * 2 + 10);
+    *first.value = std::move(*second.value);
+    assert(replacement.charged() == sizeof(Bytes) + 6);
+    assert(first.value->length() == 6);
+    assert(second.value->length() == 0);
+  }
+  assert(replacement.charged() == 0);
 }
