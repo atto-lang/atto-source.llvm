@@ -41,6 +41,10 @@ jobs:
           test "$(git hash-object frontend/tests/fixtures/pass/adt-option-some-discard.atto)" = "d85396ed3c3635459a4c560bb93ff233b89c956f"
           test "$(git hash-object frontend/tests/fixtures/fail/adt-discard-duplicate-tag.atto)" = "36d288f29a9651868e6e3bda37fc2391a437f539"
           test "$(git hash-object frontend/tests/fixtures/fail/adt-discard-none-arity.atto)" = "284ed9119ce66f69c85cb9580afa067487329d48"
+          test "$(git hash-object frontend/tests/fixtures/pass/adt-question-err-propagation.atto)" = "6bc02a6b44efd0949ec19b8969c0801d2946e5c8"
+          test "$(git hash-object frontend/tests/fixtures/pass/adt-question-none-propagation.atto)" = "71d3fcc15a233df76b34ad576f49f3b7f61ecb4f"
+          test "$(git hash-object frontend/tests/fixtures/fail/adt-question-incompatible-return.atto)" = "9d4023e778ef52af7734aa5f68b3e523ae41d5f8"
+          test "$(git hash-object frontend/tests/fixtures/fail/adt-question-cross-family.atto)" = "d966eb0b932ba4931daf2593fff35b36aa3bfa7c"
           git diff --quiet HEAD --
           git rev-parse HEAD HEAD^{tree}
       - name: Rust 1.85.1 / wasm32 compiler toolchain
@@ -53,7 +57,7 @@ jobs:
         run: |
           cargo build --locked --manifest-path frontend/Cargo.toml --bin attoc
           cargo rustc --locked --release --manifest-path frontend/Cargo.toml --lib --target wasm32-unknown-unknown --crate-type cdylib -- -C link-arg=--max-memory=67108864
-      - name: Execute nine real compiled guests, four no-artifact failures, byte parity
+      - name: Execute eleven real compiled guests, six no-artifact failures, byte parity
         env:
           ATTO_COMPILER_WASM: frontend/target/wasm32-unknown-unknown/release/atto_compiler.wasm
         run: node frontend/tests/match-return-guest.mjs
