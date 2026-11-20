@@ -1151,6 +1151,132 @@
       "description": "MoE host routing rejects forged out-of-range overflow policy and maintains total selected expert weights",
       "status": "not_verified",
       "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-163",
+      "expected": "runtime_target",
+      "description": "typed next admission and parent middleware settlement are atomic under overlapping threads",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-164",
+      "expected": "runtime_target",
+      "description": "procedural next admission publishes pending child before terminal result is observed",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-165",
+      "expected": "runtime_target",
+      "description": "parent error after admitting child waits for downstream completion before reporting terminal error",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-166",
+      "expected": "reject",
+      "description": "late next call after parent completes cannot schedule guest or host terminal work",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-167",
+      "expected": "reject",
+      "description": "reentrant repeated next invocation cannot execute the same child twice",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-168",
+      "expected": "runtime_target",
+      "description": "supervisor response draft survives Continue and actor next to terminal Reply<R>",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-169",
+      "expected": "runtime_target",
+      "description": "response draft status and headers remain immutable during asynchronous typed continuation",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-170",
+      "expected": "runtime_target",
+      "description": "cancelled typed middleware chain fences final result after downstream drain",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-171",
+      "expected": "runtime_target",
+      "description": "guest @ActorMiddleware continuation resumes solely on serialized actor turn after suspension",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-172",
+      "expected": "runtime_target",
+      "description": "unary actor request reply slot is correlated to original request and settles exactly once",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-173",
+      "expected": "reject",
+      "description": "supervisor around hook cannot fabricate typed Reply without actor child execution",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-174",
+      "expected": "reject",
+      "description": "supervisor around hook cannot replace exact downstream typed Reply after invoking next",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-175",
+      "expected": "runtime_target",
+      "description": "supervisor around hook forwards exact actor Reply by identity or returns explicit Reject",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-176",
+      "expected": "runtime_target",
+      "description": "response draft withHeader replaces an existing key case-insensitively without losing status or allowing protected headers",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-177",
+      "expected": "reject",
+      "description": "two sequential or concurrent unary bridge dispatch calls with same reply ticket execute at most one middleware chain",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-178",
+      "expected": "runtime_target",
+      "description": "a cancelled unary ticket is checked before starting middleware, and cancellation during execution fences late replies",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-179",
+      "expected": "reject",
+      "description": "untyped supervisor procedural middleware cannot synthesize successful application Outcome without child",
+      "status": "not_verified",
+      "required_in_both_backends": true
+    },
+    {
+      "id": "ACT-180",
+      "expected": "reject",
+      "description": "untyped supervisor cannot replace successful Outcome returned by child; exact identity forwarding and explicit 4xx/5xx rejection remain allowed",
+      "status": "not_verified",
+      "required_in_both_backends": true
     }
   ]
 }
