@@ -12,6 +12,30 @@ extern "C" {
  * be intersected by the caller before constructing the broker. */
 #define ATTO_FS_SCOPE_LIMIT 1024u
 #define ATTO_FS_MAX_BYTES 1048576u
+#define ATTO_FS_POLICY_LAYER_COUNT 6u
+
+/* Each host-provided layer independently constrains the allowed resource.
+ * No layer is allowed to substitute for another. A missing grant at ANY
+ * layer denies the operation. Every deny takes precedence over every allow.
+ * Caller MUST verify the artifact signature and host identity before
+ * creating this structure: its mere existence is not authenticated proof. */
+typedef struct atto_fs_policy_layer {
+    const char *allow_read;
+    const char *allow_write;
+    const char *deny_read;
+    const char *deny_write;
+} atto_fs_policy_layer;
+
+typedef struct atto_fs_layered_policy {
+    uint64_t tenant_id;
+    uint64_t generation;
+    atto_fs_policy_layer host;
+    atto_fs_policy_layer artifact;
+    atto_fs_policy_layer runtime;
+    atto_fs_policy_layer tenant;
+    atto_fs_policy_layer actor;
+    atto_fs_policy_layer delegation;
+} atto_fs_layered_policy;
 
 typedef struct atto_fs_policy {
     const char *allow_read;    /* e.g. "data"; NULL = deny */
@@ -35,12 +59,26 @@ typedef struct atto_fs_broker {
     char write_scope[ATTO_FS_SCOPE_LIMIT];
     char deny_read_scope[ATTO_FS_SCOPE_LIMIT];
     char deny_write_scope[ATTO_FS_SCOPE_LIMIT];
+    /* Six separate, immutable ceilings are required for guest-facing FS.
+     * The original single-layer constructor remains host-test-only; the
+     * candidate guest bridge refuses it rather than guessing a ceiling. */
+    uint32_t policy_layer_count;
+    char read_allow_layers[ATTO_FS_POLICY_LAYER_COUNT][ATTO_FS_SCOPE_LIMIT];
+    char write_allow_layers[ATTO_FS_POLICY_LAYER_COUNT][ATTO_FS_SCOPE_LIMIT];
+    char read_deny_layers[ATTO_FS_POLICY_LAYER_COUNT][ATTO_FS_SCOPE_LIMIT];
+    char write_deny_layers[ATTO_FS_POLICY_LAYER_COUNT][ATTO_FS_SCOPE_LIMIT];
 } atto_fs_broker;
 
 /* Return 0 on success, otherwise negative errno; fail closed if openat2
  * unavailable. This intentionally uses a trusted host-supplied root. */
 int atto_fs_broker_init(atto_fs_broker *out, const char *trusted_root,
                         const atto_fs_policy *policy);
+/* Trusted-host-only constructor with all six independent permission ceilings.
+ * A NULL or non-matching allow in any layer means deny. The caller must
+ * independently authenticate artifact, operator, tenant and actor context.
+ * This constructor DOES NOT verify signatures or mint permission authority. */
+int atto_fs_broker_init_layers(atto_fs_broker *out, const char *trusted_root,
+                               const atto_fs_layered_policy *policy);
 /* Revoke an entire host-created policy generation. Returns after previously
  * admitted I/O completes, and prevents later I/O. Authentication of caller
  * identity is the responsibility of the trusted runtime, not these integers. */
