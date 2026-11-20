@@ -1101,6 +1101,20 @@ impl Parser {
             self.terminator()?;
             return Ok(Stmt::YieldFrom(source, pos));
         }
+        // Single caret is a return *statement*, never exponentiation or XOR.
+        // Keep the same cleanup and generator checks as the 'return' arm.
+        if *self.peek() == Tok::Caret {
+            self.advance();
+            let at_end = matches!(self.peek(), Tok::Semi | Tok::RBrace)
+                || matches!(self.word_at(0), Some("fi" | "end" | "done" | "elif" | "elseif" | "else"));
+            let value = if at_end { None } else { Some(self.parse_expr()?) };
+            if self.in_generator && value.is_some() {
+                return Err(Diagnostic::new(pos, "E_RETURN",
+                    "generators may terminate with '^;' but cannot return a value"));
+            }
+            self.terminator()?;
+            return Ok(Stmt::Return(value, pos));
+        }
         let word = self.word_at(0).map(str::to_owned);
         match word.as_deref() {
             Some("val" | "const" | "let") => {
@@ -1772,13 +1786,13 @@ impl Parser {
         Ok(c)
     }
 
-    // Bitwise XOR binds less tightly than value equality and arithmetic.
-    // Unlike ^^ (boolean XOR), ^ requires two int operands; the checker
-    // owns that distinction. The front end does not silently coerce bool.
+    // Integer XOR uses contiguous ^^; a single ^ only introduces a return
+    // statement.  Type checking rejects bool XOR until separately specified.
+    // XOR binds less tightly than value equality and arithmetic.
     fn parse_bitxor(&mut self) -> R<Expr> {
         let mut links = 0;
         let mut left = self.parse_equality()?;
-        while *self.peek() == Tok::Caret {
+        while *self.peek() == Tok::DoubleCaret {
             let pos = self.pos();
             self.advance();
             self.grow(1)?;
@@ -1790,6 +1804,10 @@ impl Parser {
             };
         }
         self.height -= links;
+        if *self.peek() == Tok::Caret {
+            return Err(Diagnostic::new(self.pos(), "E_OPERATOR_SPELLING",
+                "single '^' is a return statement marker; use '^^' for integer XOR"));
+        }
         Ok(left)
     }
 
