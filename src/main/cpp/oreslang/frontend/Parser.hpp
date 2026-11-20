@@ -72,6 +72,7 @@ struct Expression {
     std::vector<GenericTypeArgument> type_arguments;
     bool type_arguments_present = false;
     mutable std::string sum_type;
+    bool trap_origin = false; // compiler-produced Ok only, never guest Ok/Err forging
 };
 
 struct Parameter {
