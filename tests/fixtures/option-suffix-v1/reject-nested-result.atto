@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  val Result<int,int>? value = None;
+  return 42;
+}
