@@ -7,7 +7,7 @@ export CARGO_NET_OFFLINE=true
 
 test "$(git hash-object stdlib/std/http_response_policy.atto)" = 22757dafe89bc9601d04c8726a09ddf676206c7e
 test "$(git hash-object stdlib/std/fs_text_policy.atto)" = 0cd53216e91ef8de1a764ba5b80ce85c5796c1f2
-test "$(git hash-object fixtures/hosted-policy-main.atto)" = 4e37cbd939098de5b73e47941af5c0ed335ac407
+test "$(git hash-object fixtures/hosted-policy-main.atto)" = 0153665aac3e7cc51c8ac3412a11c0ab51cbb6be
 
 cargo build --offline --release --bin atto-llvm
 work="$(mktemp -d)"
