@@ -38,6 +38,15 @@ endif()
 add_test(NAME tenant_vm_test COMMAND tenant_vm_test)
 set_tests_properties(tenant_vm_test PROPERTIES TIMEOUT 300)
 
+# Security substrate only: checks live turn identity predicates and actor-private
+# Offset32 bounds. This is NOT an admitted guest ABI-v5 filesystem test.
+add_executable(tenant_vm_fs_turn_auth_test tenant_vm_fs_turn_auth_test.cpp)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(tenant_vm_fs_turn_auth_test PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+endif()
+add_test(NAME tenant_vm_fs_turn_auth_host_only COMMAND tenant_vm_fs_turn_auth_test)
+set_tests_properties(tenant_vm_fs_turn_auth_host_only PROPERTIES TIMEOUT 15)
+
 # Enforced path: tenant source or Wasm, admitted and lowered to a loadable library. Needs WABT.
 find_program(WAT2WASM wat2wasm)
 find_program(WASM2C wasm2c)
