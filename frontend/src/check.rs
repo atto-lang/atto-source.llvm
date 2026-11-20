@@ -893,6 +893,16 @@ pub fn check(p: &Program) -> R<TProgram> {
             }
             None => Type::Void,
         };
+        // Defense in depth: annotation/lowering passes must not be able to
+        // erase or alter an inbound contract after the parser checked it.
+        // A missing handler is never a valid receives T implementation.
+        if let Some(header) = a.receives {
+            let declared = res(header)?;
+            if a.receive.is_none() || declared != payload {
+                return Err(Diagnostic::new(a.pos, "E_TYPE",
+                    "actor receives contract disagrees with its concrete ActorMail<T> handler"));
+            }
+        }
         if let Some(clause) = a.sends {
             let outbound = res(clause)?;
             if outbound == Type::Void {
