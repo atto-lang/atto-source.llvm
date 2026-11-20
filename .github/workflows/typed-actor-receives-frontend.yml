@@ -6,12 +6,22 @@ on:
     paths:
       - '.github/workflows/typed-actor-receives-frontend.yml'
       - 'frontend/src/parser.rs'
+      - 'frontend/src/ast.rs'
+      - 'frontend/src/check.rs'
+      - 'frontend/src/lib.rs'
+      - 'frontend/src/actor_send_effect_graph.rs'
+      - 'frontend/tests/fixtures/actor-bool-never-parity-v1.atto'
       - 'frontend/src/bin/attoc.rs'
       - 'frontend/tests/typed_actor_receives.rs'
   push:
     paths:
       - '.github/workflows/typed-actor-receives-frontend.yml'
       - 'frontend/src/parser.rs'
+      - 'frontend/src/ast.rs'
+      - 'frontend/src/check.rs'
+      - 'frontend/src/lib.rs'
+      - 'frontend/src/actor_send_effect_graph.rs'
+      - 'frontend/tests/fixtures/actor-bool-never-parity-v1.atto'
       - 'frontend/src/bin/attoc.rs'
       - 'frontend/tests/typed_actor_receives.rs'
   workflow_dispatch:
@@ -38,6 +48,12 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           echo "ATTO_LLVM_RUST_FRONTEND_HEAD=$EXPECTED_HEAD"
           echo "ATTO_LLVM_RUST_FRONTEND_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Compile byte-identical actor DATA effect graph and tests
+        run: |
+          set -euo pipefail
+          rustc --version
+          rustc --edition=2021 --test -D warnings frontend/src/actor_send_effect_graph.rs -o "$RUNNER_TEMP/actor-effect-tests"
+          "$RUNNER_TEMP/actor-effect-tests"
       - name: Compile real typed-actor frontend tests and verify produced Wasm
         run: |
           cargo --version
