@@ -138,8 +138,16 @@ jobs:
       - name: Authenticated scheduler turn and restart witnesses (host only)
         run: |
           set -eu
-          cmake --build /tmp/atto-signed-loader-build --target tenant_vm_fs_turn_auth_test tenant_vm_test --parallel 2
-          ctest --test-dir /tmp/atto-signed-loader-build --output-on-failure -R tenant_vm_fs_turn_auth_host_only
+          cmake --build /tmp/atto-signed-loader-build --target tenant_vm_fs_turn_auth_test tenant_vm_fs_lifecycle_test tenant_vm_test --parallel 2
+          ctest --test-dir /tmp/atto-signed-loader-build --output-on-failure -R '^(tenant_vm_fs_turn_auth_host_only|tenant_vm_fs_lifecycle_host_only)
+          /tmp/atto-signed-loader-build/tenant_vm_test equal_offsets_are_different_memory
+          /tmp/atto-signed-loader-build/tenant_vm_test messaging_stays_inside_the_vm
+          /tmp/atto-signed-loader-build/tenant_vm_test a_confined_fault_restarts_only_that_actor
+      - name: State strict evidence boundaries
+        run: |
+          echo "HOST_ONLY: neither this suite nor the signed v4 fixture compiles or executes an Atto .atto guest."
+          echo "ABI v5 is unadmitted; no authenticated scheduler dispatch, production key store or native syscall fence is certified."
+
           /tmp/atto-signed-loader-build/tenant_vm_test equal_offsets_are_different_memory
           /tmp/atto-signed-loader-build/tenant_vm_test messaging_stays_inside_the_vm
           /tmp/atto-signed-loader-build/tenant_vm_test a_confined_fault_restarts_only_that_actor
