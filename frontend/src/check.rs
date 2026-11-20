@@ -1738,6 +1738,10 @@ impl<'a> FnCx<'a> {
         let mut seen: BTreeSet<i64> = BTreeSet::new();
         let mut covered = false;
         let mut out = Vec::new();
+        // Arm-local binder slots are physical locals. A guard reads its slot
+        // before the corresponding arm body, so eagerly copy the once-only
+        // scalar subject into those hidden slots before dispatch.
+        let mut binder_initializers = Vec::new();
         let mut after: BTreeSet<u32> = BTreeSet::new();
         for (i, arm) in arms.iter().enumerate() {
             if covered {
@@ -1830,7 +1834,7 @@ impl<'a> FnCx<'a> {
                 let mut body = Vec::new();
                 if let Some(n) = bind {
                     let slot = self.declare(n, sty, false, arm.pos)?;
-                    body.push(TStmt::Set(slot, get()));
+                    binder_initializers.push(TStmt::Set(slot, get()));
                 }
                 let guard = match &arm.guard {
                     Some(g) => Some(self.cond(g, "match guard")?),
@@ -1891,10 +1895,10 @@ impl<'a> FnCx<'a> {
             ));
         }
         self.moved = after;
-        Ok(TStmt::Block(vec![
-            TStmt::Set(tmp, subj),
-            TStmt::If(out, Some(vec![TStmt::Unreachable])),
-        ]))
+        let mut dispatch = vec![TStmt::Set(tmp, subj)];
+        dispatch.extend(binder_initializers);
+        dispatch.push(TStmt::If(out, Some(vec![TStmt::Unreachable])));
+        Ok(TStmt::Block(dispatch))
     }
 
 
@@ -1908,6 +1912,9 @@ impl<'a> FnCx<'a> {
         let mut seen: BTreeSet<i64> = BTreeSet::new();
         let mut covered = false;
         let mut out = Vec::new();
+        // Prebind hidden guard locals only after their ADT tag is proven;
+        // unmatched variants must never expose or decode their payload.
+        let mut binder_initializers = Vec::new();
         let mut after: BTreeSet<u32> = BTreeSet::new();
         for (i, arm) in arms.iter().enumerate() {
             if covered {
@@ -1956,7 +1963,16 @@ impl<'a> FnCx<'a> {
                     } else {
                         TE { e: TExpr::AdtPayload(Box::new(get())), ty }
                     };
-                    body.push(TStmt::Set(slot, value));
+                    let init = TStmt::Set(slot, value);
+                    if let Some(tag) = key {
+                        let tag_test = TE {
+                            e: TExpr::AdtIs { obj: Box::new(get()), tag: tag as u32 },
+                            ty: Type::Bool,
+                        };
+                        binder_initializers.push(TStmt::If(vec![(tag_test, vec![init])], None));
+                    } else {
+                        binder_initializers.push(init);
+                    }
                 }
                 let guard = match &arm.guard {
                     Some(g) => Some(self.cond(g, "match guard")?),
@@ -2001,10 +2017,10 @@ impl<'a> FnCx<'a> {
                 format!("non-exhaustive match for {}; cover both variants or use on _", self.tn(sty))));
         }
         self.moved = after;
-        Ok(TStmt::Block(vec![
-            TStmt::Set(tmp, subj),
-            TStmt::If(out, Some(vec![TStmt::Unreachable])),
-        ]))
+        let mut dispatch = vec![TStmt::Set(tmp, subj)];
+        dispatch.extend(binder_initializers);
+        dispatch.push(TStmt::If(out, Some(vec![TStmt::Unreachable])));
+        Ok(TStmt::Block(dispatch))
     }
 
     fn field_assign(&mut self, target: &Expr, field: &str, value: &Expr, pos: Pos) -> R<TStmt> {
