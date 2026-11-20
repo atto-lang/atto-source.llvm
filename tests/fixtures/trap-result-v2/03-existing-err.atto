@@ -1,0 +1,8 @@
+// An existing Err must survive trap without nesting or conversion to Ok.
+fnc unchanged(Result<int,int> value): Result<int,int> {
+    return trap value;
+}
+pub fnc main(): int {
+    val Result<int,int> original = Err(7);
+    return unchanged(original).is_err() ? 42 : 0;
+}

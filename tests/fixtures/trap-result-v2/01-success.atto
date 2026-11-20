@@ -1,0 +1,5 @@
+// trap pure checked integer -> exactly one Result<int,Error> Ok.
+pub fnc main(): int {
+    val Result<int,Error> result = trap (40 + 2);
+    return result.unwrap();
+}

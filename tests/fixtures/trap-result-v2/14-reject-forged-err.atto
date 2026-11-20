@@ -1,0 +1,4 @@
+pub fnc main(): int {
+    val Result<int,Error> forged = Err(7);
+    return forged.unwrap_or(0);
+}

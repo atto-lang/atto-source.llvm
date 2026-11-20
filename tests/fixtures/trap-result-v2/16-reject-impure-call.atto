@@ -1,0 +1,5 @@
+fnc may_fail(): int { return 42; }
+pub fnc main(): int {
+    val Result<int,Error> wrong = trap may_fail();
+    return wrong.unwrap();
+}

@@ -1,0 +1,63 @@
+name: LLVM trap Result exact-head native regression
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/**'
+      - 'src/main/cpp/oreslang/types/**'
+      - 'src/main/cpp/oreslang/backend/**'
+      - 'tests/fixtures/trap-result-v2/**'
+      - 'tests/trap_result_terminal_aot.py'
+      - 'CMakeLists.txt'
+      - '.github/workflows/trap-result-llvm-exact-head.yml'
+  push:
+    branches:
+      - 'fix/trap-result-idempotent-llvm-20261120'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compiler-to-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout exact reviewed head
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact source SHA and clean tree
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          echo "EXACT_SOURCE_HEAD=$actual"
+          echo "EXACT_SOURCE_TREE=$(git rev-parse HEAD^{tree})"
+      - name: Install compiler and native guest toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake python3 clang-18 llvm-18-dev
+          clang-18 --version | head -n 1
+      - name: Build real LLVM C++ frontend/compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DLLVM_DIR="$(llvm-config-18 --cmakedir)" -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
+          cmake --build build --target oreslang-llvmc -j 2
+          test -x build/oreslang-llvmc
+      - name: Run 18 compiler/IR/native guest and no-IR refusal CTests
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -N -R '^atto_trap_' | tee /tmp/atto-trap-inventory.log
+          grep -Eq 'Total Tests: 18$' /tmp/atto-trap-inventory.log
+          ctest --test-dir build --output-on-failure -R '^atto_trap_' -j 2
+          echo "ATTO_TRAP_RESULT_EXACT_HEAD_18_CTESTS_PASS"

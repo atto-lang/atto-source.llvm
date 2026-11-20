@@ -1,0 +1,4 @@
+pub fnc main(): int {
+    val Result<int,Error> forged = Ok(42);
+    return forged.unwrap();
+}

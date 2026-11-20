@@ -1,0 +1,5 @@
+pub fnc main(): int {
+    val Option<int> previous = Some(42);
+    val Result<int,Error> wrong = trap previous;
+    return wrong.unwrap();
+}

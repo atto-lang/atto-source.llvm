@@ -1,0 +1,4 @@
+pub fnc main(): int {
+    val Result<int,int> wrong = trap 42;
+    return wrong.unwrap();
+}

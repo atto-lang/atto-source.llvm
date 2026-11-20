@@ -81,7 +81,16 @@ public:
             if (index && !unit.program.actors.empty())
                 fail(unit, "native imported actor declarations require typed module actor placement lowering");
             for (const auto& type : unit.program.sum_types) {
-                bool found = false; for (const auto& existing : linked.sum_types) if (existing.name == type.name) found = true;
+                bool found = false;
+                for (const auto& existing : linked.sum_types) {
+                    if (existing.name != type.name) continue;
+                    if (existing.kind != type.kind ||
+                            existing.value_type != type.value_type ||
+                            existing.error_type != type.error_type ||
+                            existing.nominal_error != type.nominal_error)
+                        fail(unit, "conflicting linked native sum descriptors");
+                    found = true;
+                }
                 if (!found) linked.sum_types.push_back(type);
             }
             for (auto& fn : unit.program.functions) {
