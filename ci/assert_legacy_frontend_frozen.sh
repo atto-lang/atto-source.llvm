@@ -6,6 +6,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 expected_count=16
+# The legacy snapshot must be an exact tracked-only subtree. A worker-local
+# ignored/untracked parser file is not in the pinned 16-blob Git tree and
+# must never be an implicit input to the Rust compiler build.
+if [[ -n "$(git ls-files --others --exclude-standard -- frontend)" ||
+      -n "$(git ls-files --others --ignored --exclude-standard -- frontend)" ]]; then
+  echo "FROZEN_FRONTEND_MISMATCH: untracked/ignored frontend source shadow" >&2
+  exit 1
+fi
 mapfile -t tracked < <(git ls-files -- frontend)
 if (( ${#tracked[@]} != expected_count )); then
   echo "FROZEN_FRONTEND_MISMATCH: expected ${expected_count} tracked files, found ${#tracked[@]}" >&2
