@@ -9,7 +9,9 @@
  * until the trusted host has verified the full 32-bit range. */
 static int cage_range(const atto_fs_trusted_guest_frame *frame,
                       uint32_t off, uint32_t length) {
-    if (!frame || !frame->broker || !frame->cage || !frame->cage_size ||
+    if (!frame || !frame->broker ||
+        frame->broker->policy_layer_count != ATTO_FS_POLICY_LAYER_COUNT ||
+        !frame->cage || !frame->cage_size ||
         !frame->tenant_id || !frame->generation) return -EACCES;
     /* The VM's cage is bigger than any one actor's private region. Bounds
      * against cage_size alone would permit an actor to read/write another
