@@ -119,4 +119,53 @@ int main() {
     validate_ownership(p);
     assert(p.ownership_admitted);
     std::cout << "POINTER_HIR_ADVERSARIAL_REJECTIONS=9\n";
+    // The local borrowed pointer form has separate authority and uses the
+    // *same* independent verifier as the owning Pointer.alloc region.
+    Plan local;
+    local.form = Plan::Form::BorrowedLocal;
+    local.owner = "value";
+    local.local_handle = "ptr";
+    local.count = 1;
+    local.local_initial = 42;
+    Step copy;
+    copy.kind = Step::Kind::Scalar;
+    copy.name = "answer";
+    copy.value = read_slot(0, 42);
+    local.steps.push_back(std::move(copy));
+    Step unref;
+    unref.kind = Step::Kind::Close;
+    local.steps.push_back(std::move(unref));
+    local.result = variable("answer", 42);
+    validate_ownership(local);
+    verify_plan(local);
+    assert(local.ownership_admitted);
+
+    local.local_handle = "value";
+    must_reject("borrowed handle cannot shadow referent", [&] { verify_plan(local); });
+    local.local_handle = "ptr";
+
+    local.steps[0].value->known = 41;
+    must_reject("forged borrowed read value", [&] { verify_plan(local); });
+    local.steps[0].value->known = 42;
+
+    local.steps[1].kind = Step::Kind::Write;
+    local.steps[1].value = literal(13);
+    must_reject("cannot rewrite borrowed unref as write", [&] { verify_plan(local); });
+    local.steps[1].kind = Step::Kind::Close;
+    local.steps[1].value.reset();
+
+    local.result->name = "ptr";
+    must_reject("cannot return pointer handle", [&] { verify_plan(local); });
+    local.result->name = "answer";
+
+    local.form = Plan::Form::OwnedRegion;
+    must_reject("cannot recast borrowed pointer to owning allocator", [&] { verify_plan(local); });
+    local.form = Plan::Form::BorrowedLocal;
+
+    local.ownership_admitted = false;
+    verify_plan(local);
+    assert(!local.ownership_admitted);
+    validate_ownership(local);
+    assert(local.ownership_admitted);
+    std::cout << "POINTER_LOCAL_HIR_ADVERSARIAL_REJECTIONS=5\n";
 }
