@@ -49,7 +49,17 @@ int atto_fs_async_poll(atto_fs_async_service *service, const atto_fs_host_actor 
  * Running reads can be cancelled without publication of guest output. */
 int atto_fs_async_cancel(atto_fs_async_service *service, const atto_fs_host_actor *actor,
                          uint64_t ticket);
-/* Abandon all tickets of a dead actor incarnation. In-flight jobs finish in
+/* Irreversibly revoke this actor-incarnation's async service without taking
+ * its queue mutex or waiting for the worker. Safe for a scheduler carrier.
+ * Returns -EACCES for an unrelated actor. This closes future admission,
+ * polling and cancellation. A write already running MAY have committed; do
+ * not interpret revocation as a write rollback.
+ * The trusted host MUST wait for the actor turn to finish before recycling
+ * actor memory and MUST use forget_actor/destroy on a non-carrier host worker.
+ * The service and broker must outlive all outstanding trusted calls. */
+int atto_fs_async_revoke_actor(atto_fs_async_service *service,
+                               const atto_fs_host_actor *actor);
+/* Host lifecycle cleanup; also revokes irreversibly. This function may BLOCK\n * and MUST NOT be called on a scheduler carrier. In-flight jobs finish in
  * host memory and are discarded, never committed to reused actor memory. */
 int atto_fs_async_forget_actor(atto_fs_async_service *service,
                                const atto_fs_host_actor *actor);
