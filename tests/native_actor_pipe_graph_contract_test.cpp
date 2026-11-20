@@ -70,6 +70,43 @@ int main() {
                (void)check_actor_pipeline_graph(stages, bad); });
 
 
+    // Java and LLVM must accept the same strict UTF-8 graph IDs and types.
+    // Byte budgets are 256 bytes, not 256 Unicode codepoints.
+    std::string multibyte;
+    for (int i = 0; i < 129; ++i) multibyte += "\\xc3\\xa9";
+    deny([&] { auto bad = linear_instances;
+               bad[1].instance_id = multibyte;
+               (void)check_actor_pipeline(bad); });
+    deny([&] { auto bad = stages;
+               bad[0].actor_type = multibyte;
+               (void)check_actor_pipeline_graph(bad, links); });
+    deny([&] { auto bad = stages;
+               bad[1].inbound = multibyte;
+               (void)check_actor_pipeline_graph(bad, links); });
+    deny([&] { auto bad = links;
+               bad[0].payload = multibyte;
+               (void)check_actor_pipeline_graph(stages, bad); });
+    deny([&] { auto bad = linear_instances;
+               bad[1].instance_id = std::string("\\xc0\\xaf", 2);
+               (void)check_actor_pipeline(bad); });
+    deny([&] { auto bad = stages;
+               bad[0].actor_type = std::string("\\xed\\xa0\\x80", 3);
+               (void)check_actor_pipeline_graph(bad, links); });
+    deny([&] { auto bad = links;
+               bad[0].target = std::string("\\xf4\\x90\\x80\\x80", 4);
+               (void)check_actor_pipeline_graph(stages, bad); });
+    deny([&] { auto bad = links;
+               bad[0].payload = std::string("\\xe2\\x82", 2);
+               (void)check_actor_pipeline_graph(stages, bad); });
+    std::vector<PipeStage> unicode_stages = {
+        {"Source", PipeRole::readable, "", "Event", "producer-\\xc3\\xa9"},
+        {"Sink", PipeRole::writable, "Event", "", "consumer-\\xf0\\x9f\\x8c\\x8d"}
+    };
+    std::vector<PipeConnection> unicode_links = {
+        {"producer-\\xc3\\xa9", "consumer-\\xf0\\x9f\\x8c\\x8d", "Event"}
+    };
+    expect(check_actor_pipeline_graph(unicode_stages, unicode_links).size() == 1);
+
     // Two worker *instances* of one nominal actor type are legal. Graph
     // endpoints resolve instance IDs, not nominal class names.
     std::vector<PipeStage> identical_workers = {

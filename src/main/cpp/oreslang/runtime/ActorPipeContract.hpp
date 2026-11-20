@@ -32,9 +32,37 @@ struct PipeConnection {
     std::string payload;
 };
 
-// Bound every identity and payload-type component before graph construction.
+// Accept only shortest-form scalar-value UTF-8. This must match Java's
+// CharsetEncoder(REPORT) admission for graph IDs and nominal port/type tags.
+// UTF-8 keys use a separately bounded decoder in the native transport.
+inline bool valid_pipe_utf8(const std::string& value) noexcept {
+    const auto* b = reinterpret_cast<const unsigned char*>(value.data());
+    for (std::size_t i = 0; i < value.size();) {
+        const unsigned char lead = b[i];
+        if (lead == 0) return false;
+        if (lead < 0x80) { ++i; continue; }
+        std::size_t width = 0;
+        if (lead >= 0xC2 && lead <= 0xDF) width = 2;
+        else if (lead >= 0xE0 && lead <= 0xEF) width = 3;
+        else if (lead >= 0xF0 && lead <= 0xF4) width = 4;
+        else return false;
+        if (width > value.size() - i) return false;
+        for (std::size_t j = 1; j < width; ++j)
+            if ((b[i + j] & 0xC0u) != 0x80u) return false;
+        const unsigned char second = b[i + 1];
+        if ((lead == 0xE0 && second < 0xA0) ||
+                (lead == 0xED && second > 0x9F) ||
+                (lead == 0xF0 && second < 0x90) ||
+                (lead == 0xF4 && second > 0x8F)) return false;
+        i += width;
+    }
+    return true;
+}
+
+// Bound identity/type components in bytes, reject embedded NUL and malformed
+// UTF-8 consistently in the linear and DAG graph constructors.
 inline bool valid_pipe_component(const std::string& value) noexcept {
-    return value.size() <= 256 && value.find(char(0)) == std::string::npos;
+    return value.size() <= 256 && valid_pipe_utf8(value);
 }
 
 inline std::vector<PipeConnection> check_actor_pipeline(
