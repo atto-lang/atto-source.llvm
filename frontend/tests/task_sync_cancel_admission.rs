@@ -30,6 +30,8 @@ fn pure_sync_task_compiles_to_real_guest_bytes() {
         "pub fnc main(): int { let int n = 7; do sync task { val int n = 12; }; return n; }",
         "pub fnc main(): int { sync task {}; return 9; }",
         "pub fnc main(): int { sync task<void> { return; }; return 9; }",
+        "pub fnc main(): int { sync task<void> {}; return 9; }",
+        "pub fnc main(): int { sync task { val int inside = 4; }; return 9; }",
         "pub fnc main(): int { sync /* lexed comment */ task {}; return 9; }",
         "pub fnc main(): int { val bool b = sync task<bool> { return true; }; if b then return 5; else return 4; fi }",
         "pub fnc main(): int { val int x = sync task<int> { return sync task<int> { return 4; } + 3; }; return x; }",
@@ -82,4 +84,45 @@ fn task_spawning_and_unverified_inline_effects_still_fail_closed() {
         "pub fnc main(): int { val x = sync task<bool> { return 1; }; return 0; }",
         "E_TASK_RETURN_TYPE",
     );
+}
+
+#[test]
+fn sync_task_statement_admission_and_security_rejections() {
+    // 'sync' remains a reserved word and cannot open unrelated statements.
+    for source in [
+        "pub fnc main(): int { sync other {}; return 0; }",
+        "pub fnc main(): int { sync {}; return 0; }",
+    ] {
+        reject_unlowered(source, "E_UNSUPPORTED");
+    }
+    for source in [
+        "pub fnc main(): int { sync task<int,bool> { return 1; }; return 0; }",
+        "pub fnc main(): int { sync task<> {}; return 0; }",
+    ] {
+        reject_unlowered(source, "E_SYNTAX");
+    }
+    for source in [
+        "pub fnc main(): int { sync task { await other; }; return 0; }",
+        "pub fnc main(): int { sync task { defer cleanup(); }; return 0; }",
+        "pub fnc main(): int { sync task { if true then return; fi }; return 0; }",
+        "pub fnc main(): int { sync task<int> { return 1; return 2; }; return 0; }",
+        "pub fnc main(): int { sync task { self.count = 42; }; return 0; }",
+    ] {
+        reject_unlowered(source, "E_UNSUPPORTED");
+    }
+    reject_unlowered(
+        "pub fnc main(): int { sync task<void> { return 1; }; return 0; }",
+        "E_TASK_RETURN_TYPE",
+    );
+}
+
+#[test]
+fn deeply_nested_inline_tasks_hit_compiler_budget() {
+    // Deeply recursive guest source must fail before emission.
+    let mut source = String::from("pub fnc main(): int { ");
+    for _ in 0..140 { source.push_str("do sync task { "); }
+    source.push_str("val int x = 1;");
+    for _ in 0..140 { source.push_str(" };"); }
+    source.push_str(" return 0; }");
+    reject_unlowered(&source, "E_NESTING");
 }

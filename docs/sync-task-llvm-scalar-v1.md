@@ -48,3 +48,14 @@ returns `E_UNSUPPORTED_SYNC_TASK` before any LLVM IR emission. It does **not**
 claim executable inline-task parity with the Rust `atto-llvm` path.
 `tests/sync_task_native_cpp_gate.py` checks exact-token rejection (including
 empty and `do` syntax) and makes sure comments and `synchronize` do not trigger it.
+
+
+## Standalone statement parser hardening
+
+A source-level `sync task {}` or `sync task<void> {}` is admitted as a
+standalone expression statement before the unsupported-statement keyword
+filter. This does not unreserve `sync`: `sync other` and `sync {}`
+continue to fail closed. Additional regression inputs cover malformed
+payload generics, nested early returns, unsupported `await`/`defer`,
+actor-state field writes, and nesting exhaustion. Native IR emission on
+rejected input is tested to produce no partial output artifact.

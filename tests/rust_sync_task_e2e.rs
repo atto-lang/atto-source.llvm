@@ -59,6 +59,12 @@ fn main() {
     run(&a[1],&a[2],&root,"standalone_void_explicit",
         "pub fnc main(): int { sync task<void> { return; }; return 47; }",
         Some(47),"");
+    run(&a[1],&a[2],&root,"standalone_empty_explicit_void",
+        "pub fnc main(): int { sync task<void> {}; return 48; }",
+        Some(48),"");
+    run(&a[1],&a[2],&root,"standalone_nested_order",
+        "pub fnc main(): int { let int n = 1; sync task { n = n + 2; do sync task<void> { n = n + 3; }; }; return n; }",
+        Some(6),"");
     run(&a[1],&a[2],&root,"caller_local_order",
         "pub fnc main(): int { let int n = 1; do sync task<void> { n = n + 5; do sync task { n = n + 7; }; }; return n; }",
         Some(13),"");
@@ -92,6 +98,24 @@ fn main() {
     run(&a[1],&a[2],&root,"no_spawn",
         "pub fnc main(): int { val int n = task<int> { return 2; }; return n; }",
         None,"E_UNSUPPORTED");
+    run(&a[1],&a[2],&root,"malformed_generic",
+        "pub fnc main(): int { sync task<int,bool> { return 1; }; return 0; }",
+        None,"E_SYNTAX");
+    run(&a[1],&a[2],&root,"unrelated_sync",
+        "pub fnc main(): int { sync other {}; return 0; }",
+        None,"E_UNSUPPORTED");
+    run(&a[1],&a[2],&root,"unverified_await",
+        "pub fnc main(): int { sync task { await future; }; return 0; }",
+        None,"E_UNSUPPORTED");
+    run(&a[1],&a[2],&root,"unverified_defer",
+        "pub fnc main(): int { sync task { defer cleanup(); }; return 0; }",
+        None,"E_UNSUPPORTED");
+    run(&a[1],&a[2],&root,"nested_early_exit",
+        "pub fnc main(): int { sync task { if true then return; fi }; return 0; }",
+        None,"E_UNSUPPORTED");
+    run(&a[1],&a[2],&root,"invalid_standalone_void_return",
+        "pub fnc main(): int { sync task<void> { return 1; }; return 0; }",
+        None,"E_TASK_RETURN_TYPE");
     fs::remove_dir_all(&root).unwrap();
-    println!("ATTO_LLVM_SYNC_TASK_REAL_GUESTS=9 NEGATIVE=9");
+    println!("ATTO_LLVM_SYNC_TASK_REAL_GUESTS=11 NEGATIVE=15");
 }
