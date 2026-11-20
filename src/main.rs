@@ -419,6 +419,11 @@ impl<'a> FunctionEmitter<'a> {
                 self.terminated = true;
             }
             TStmt::Block(block) => self.block(block)?,
+            TStmt::Unreachable => {
+                self.instr("call void @llvm.trap()");
+                self.instr("unreachable");
+                self.terminated = true;
+            },
             TStmt::If(arms, fallback) => {
                 let end_label = self.id("if_end");
                 for (test, body) in arms {
@@ -483,6 +488,86 @@ impl<'a> FunctionEmitter<'a> {
     }
 }
 
+// This is the only allocation bypass for the Rust-authored native LLVM
+// bootstrap. Inspect *all* checked functions and typed expressions, including
+// unused code: one Option<int> local must never admit an unrelated guest heap,
+// object constructor, string allocation or exception path.
+fn heapless_option_expr(e: &TE, owner_ret: Type) -> bool {
+    if !matches!(e.ty, Type::Int | Type::Bool | Type::Void | Type::OptionInt) {
+        return false;
+    }
+    match &e.e {
+        TExpr::I64(_) | TExpr::Bool(_) | TExpr::Local(_) => true,
+        TExpr::Neg(a) | TExpr::Not(a) =>
+            heapless_option_expr(a, owner_ret),
+        TExpr::Bin(_, a, b) =>
+            matches!(a.ty, Type::Int | Type::Bool) &&
+            matches!(b.ty, Type::Int | Type::Bool) &&
+            heapless_option_expr(a, owner_ret) &&
+            heapless_option_expr(b, owner_ret),
+        TExpr::Ternary(cond, yes, no) =>
+            cond.ty == Type::Bool && yes.ty == no.ty &&
+            heapless_option_expr(cond, owner_ret) &&
+            heapless_option_expr(yes, owner_ret) &&
+            heapless_option_expr(no, owner_ret),
+        TExpr::Call(_, args) =>
+            args.iter().all(|arg| heapless_option_expr(arg, owner_ret)),
+        TExpr::AdtNew { tag, payload, .. } =>
+            e.ty == Type::OptionInt && *tag <= 1 &&
+            (*tag == 1) == payload.is_some() &&
+            payload.as_ref().is_none_or(|value|
+                value.ty == Type::Int && heapless_option_expr(value, owner_ret)),
+        TExpr::AdtIs { obj, tag } =>
+            e.ty == Type::Bool && obj.ty == Type::OptionInt &&
+            *tag <= 1 && heapless_option_expr(obj, owner_ret),
+        TExpr::AdtPayload(obj) =>
+            e.ty == Type::Int && obj.ty == Type::OptionInt &&
+            heapless_option_expr(obj, owner_ret),
+        TExpr::AdtPropagate { source, success_tag, .. } =>
+            owner_ret == Type::OptionInt && source.ty == Type::OptionInt &&
+            e.ty == Type::Int && *success_tag == 1 &&
+            heapless_option_expr(source, owner_ret),
+        // Explicit denylist by exhaustive default: Alloc, FieldGet, Trap,
+        // strings, heap-backed objects, actor effects, and later IR variants.
+        _ => false,
+    }
+}
+
+fn heapless_option_stmt(s: &TStmt, ret: Type) -> bool {
+    match s {
+        TStmt::Set(_, e) | TStmt::Expr(e) | TStmt::Return(Some(e)) =>
+            heapless_option_expr(e, ret),
+        TStmt::Return(None) | TStmt::Unreachable => true,
+        TStmt::Block(body) =>
+            body.iter().all(|s| heapless_option_stmt(s, ret)),
+        TStmt::If(arms, fallback) =>
+            arms.iter().all(|(test, body)| test.ty == Type::Bool &&
+                heapless_option_expr(test, ret) &&
+                body.iter().all(|s| heapless_option_stmt(s, ret))) &&
+            fallback.as_ref().is_none_or(|body|
+                body.iter().all(|s| heapless_option_stmt(s, ret))),
+        // Do not authorize cleanup, loops, actor state or throws merely
+        // because some other expression contains Option<int>.
+        _ => false,
+    }
+}
+
+fn heapless_option_program(p: &TProgram) -> bool {
+    if !p.actors.is_empty() || !p.generators.is_empty() ||
+       !p.globals.is_empty() || !p.imports.is_empty() ||
+       p.strings || p.guest_eh || !p.data.is_empty() {
+        return false;
+    }
+    let valid_type = |ty| matches!(ty, Type::Int | Type::Bool | Type::Void | Type::OptionInt);
+    let contains_option = p.funcs.iter().any(|f|
+        f.ret == Type::OptionInt || f.params.contains(&Type::OptionInt) ||
+        f.locals.contains(&Type::OptionInt));
+    contains_option && p.funcs.iter().all(|f|
+        valid_type(f.ret) &&
+        f.params.iter().chain(f.locals.iter()).copied().all(valid_type) &&
+        f.body.iter().all(|s| heapless_option_stmt(s, f.ret)))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LibraryProfile {
     Hosted,
@@ -542,10 +627,7 @@ fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<Stri
             .map_err(|e|e.to_string())?
     };
     let typed = check::check(&program).map_err(|e|e.to_string())?;
-    let typed_option_only = typed.actors.is_empty() && typed.funcs.iter().any(|f| {
-        f.ret == Type::OptionInt || f.params.contains(&Type::OptionInt) ||
-        f.locals.contains(&Type::OptionInt)
-    });
+    let typed_option_only = heapless_option_program(&typed);
     if profile == LibraryProfile::FreestandingCore {
         if !typed.imports.is_empty() {
             return Err("E_FREESTANDING_FORBIDDEN_IMPORT: typed host imports".into());
@@ -560,9 +642,9 @@ fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<Stri
         }
     }
     let native_actor_mode = !typed.actors.is_empty();
-    // The browser front end conservatively flags any ADT constructor as a
-    // heap allocation. Our closed Option<int> ABI is a native value aggregate
-    // and requires no heap. Other heap-marked features still fail closed.
+    // Browser frontend allocates ADTs via the heap. The native Option ABI
+    // uses only value slots. This exception requires a complete typed-IR
+    // structural proof; declarations alone never authorize heap bypass.
     let heapless_option = !native_actor_mode && typed_option_only;
     if !typed.generators.is_empty() || (typed.heap && !heapless_option) || typed.strings ||
        typed.guest_eh || !typed.data.is_empty() {
@@ -859,6 +941,44 @@ mod tests {
         assert!(ir.contains("ret i64 42"));
         assert!(!ir.contains("wasm"));
     }
+    #[test]
+    fn heapless_option_admission_checks_every_typed_expression() {
+        let src = "fnc checked(): Option<int> { return Some(42); } \
+                   pub fnc main(): int { return match checked() over \
+                     on Some(value) -> value, on None -> 0 end; }";
+        let tokens = atto_compiler::lexer::lex(src).unwrap();
+        let parsed = atto_compiler::parser::Parser::new(tokens).parse_program().unwrap();
+        let mut typed = check::check(&parsed).unwrap();
+        assert!(heapless_option_program(&typed), "closed native Option should pass");
+        // Mutate a *different function* with an artificial heap operation.
+        // The old contains(Option<int>) bypass would have admitted it.
+        typed.funcs[typed.main as usize].body.insert(
+            0,
+            TStmt::Expr(TE { e: TExpr::Alloc(16), ty: Type::Int })
+        );
+        assert!(!heapless_option_program(&typed), "unrelated allocation bypassed admission");
+    }
+
+    #[test]
+    fn heapless_option_admission_rejects_nested_unlowered_effects() {
+        let src = "fnc checked(): Option<int> { return Some(42); } \
+                   pub fnc main(): int { return match checked() over \
+                     on Some(value) -> value, on None -> 0 end; }";
+        let tokens = atto_compiler::lexer::lex(src).unwrap();
+        let parsed = atto_compiler::parser::Parser::new(tokens).parse_program().unwrap();
+        let mut typed = check::check(&parsed).unwrap();
+        typed.funcs[typed.main as usize].body.push(
+            TStmt::Block(vec![TStmt::Expr(TE { e: TExpr::Alloc(8), ty: Type::Int })])
+        );
+        assert!(!heapless_option_program(&typed), "nested heap effect bypassed gate");
+        typed.funcs[typed.main as usize].body.pop();
+        typed.strings = true;
+        assert!(!heapless_option_program(&typed), "hidden strings bypassed gate");
+        typed.strings = false;
+        typed.guest_eh = true;
+        assert!(!heapless_option_program(&typed), "guest exception handling bypassed gate");
+    }
+
     #[test]
     fn native_heapless_option_match_uses_value_aggregate() {
         let src = "fnc maybe(): Option<int> { return Some(42); } \
