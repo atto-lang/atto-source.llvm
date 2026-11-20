@@ -453,6 +453,16 @@ fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<Stri
         return Err("E_SOURCE_LIMIT: native Atto input exceeds 64 KiB".into());
     }
     let toks = atto_compiler::lexer::lex(source).map_err(|e|e.to_string())?;
+    // Capability gate for the new first-class Entry/Map target. This only
+    // inspects real lexer tokens; strings and comments cannot impersonate a
+    // type name. Do not emit a scalar stub or silently reinterpret Map as
+    // Record or an unsupported host-side hash table.
+    if toks.iter().any(|token| matches!(
+        &token.tok, atto_compiler::lexer::Tok::Ident(word)
+            if word == "Map" || word == "Entry"
+    )) {
+        return Err("E_UNSUPPORTED_MAP_ENTRY: native Map/Entry ownership, allocation and typed lowering are not implemented".into());
+    }
     if profile == LibraryProfile::FreestandingCore {
         admit_freestanding_tokens(&toks)?;
     }
