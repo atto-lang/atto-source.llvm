@@ -25,7 +25,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          test "$(git hash-object frontend/src/parser.rs)" = "9271d542a8711e5b9ab98c7009126629ee0402f9"
+          test "$(git hash-object frontend/src/parser.rs)" = "6094b9470be810105855b96cc8f102e07630d0d7"
           test "$(git hash-object frontend/src/lexer.rs)" = "d61877c91a83b0015ee9bdbf381e9a2d3069dab4"
           test "$(git hash-object frontend/tests/fixtures/pass/match-guard-block-return.atto)" = "603df679e1e9b7415cb8b798d4a2143545dd27b8"
           test "$(git hash-object frontend/tests/fixtures/pass/match-guard-block-caret.atto)" = "0b2addfef29cd76d60d90bf081f4d326ea2d70df"
