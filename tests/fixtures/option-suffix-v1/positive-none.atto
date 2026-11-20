@@ -1,0 +1,5 @@
+// A native Option<int> None remains absent; no default allocation or truthiness.
+pub fnc main(): int {
+  val int? value = None;
+  return value.unwrap_or(42);
+}
