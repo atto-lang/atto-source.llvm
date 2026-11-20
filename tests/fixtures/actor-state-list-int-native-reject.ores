@@ -1,0 +1,10 @@
+// LLVM's current actor-state ABI is fixed-key int64-only.
+// Reject reference-backed List[int] until native owned snapshot lowering exists.
+// Java/GraalVM has a bounded detached snapshot milestone, but that alone
+// does not authorize a native pointer/heap representation here.
+define actor Snapshot as {
+  state { items: List[int] = [1, 2]; }
+  pub fnc current(): int with state.read {
+    return self.handle_state(|s| -> { return s.items[0]; });
+  }
+}
