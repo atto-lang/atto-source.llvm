@@ -29,7 +29,8 @@ int atto_fs_async_submit_read(atto_fs_async_service *service, const atto_fs_host
 int atto_fs_async_submit_write(atto_fs_async_service *service, const atto_fs_host_actor *actor,
                                const char *host_path, const uint8_t *host_bytes, size_t length,
                                uint64_t *ticket);
-/* Nonblocking; -EAGAIN until ready, then exactly one terminal result.
+/* Carrier-safe polling: -EAGAIN while I/O is pending OR the service or
+ * broker revocation mutex is busy. An -EAGAIN never consumes a ticket.
  * A read publishes its bytes ONLY under the broker's revoke lock after a
  * renewed authorization check. output is HOST-VALIDATED actor memory;
  * the caller must check actor-private offsets and live incarnation first. */
