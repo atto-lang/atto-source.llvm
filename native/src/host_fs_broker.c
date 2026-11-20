@@ -49,7 +49,7 @@ static int matches(const char *scope, const char *path) {
 }
 static int authorized(atto_fs_broker *b, uint64_t tenant, uint64_t generation,
                       const char *path, int write) {
-    if (!b || b->root_fd < 0 || !tenant || !generation ||
+    if (!b || !b->initialized || b->revoked || b->root_fd < 0 || !tenant || !generation ||
         tenant != b->tenant_id || generation != b->generation) return -EACCES;
     if (!valid_rel(path)) return -EINVAL;
     const char *allow = write ? b->write_scope : b->read_scope;
@@ -84,6 +84,10 @@ int atto_fs_broker_init(atto_fs_broker *out, const char *trusted_root,
         return -err;
     }
     /* No guest supplied root path; host has to validate its directory origin. */
+    int gate_code = pthread_mutex_init(&out->gate, NULL);
+    if (gate_code) { (void)close(fd); return -gate_code; }
+    out->initialized = 1;
+    out->revoked = 0;
     out->root_fd = fd;
     out->tenant_id = policy->tenant_id;
     out->generation = policy->generation;
@@ -93,8 +97,27 @@ int atto_fs_broker_init(atto_fs_broker *out, const char *trusted_root,
     copy_scope(out->deny_write_scope, policy->deny_write);
     return 0;
 }
+int atto_fs_broker_revoke(atto_fs_broker *b, uint64_t tenant,
+                          uint64_t generation) {
+    if (!b || !b->initialized) return -EACCES;
+    const int rc = pthread_mutex_lock(&b->gate);
+    if (rc) return -rc;
+    const int result = (!b->revoked && b->root_fd >= 0 && tenant && generation &&
+                        tenant == b->tenant_id && generation == b->generation)
+        ? 0 : -EACCES;
+    if (!result) {
+        b->revoked = 1;
+        b->generation = 0;
+    }
+    (void)pthread_mutex_unlock(&b->gate);
+    return result;
+}
 void atto_fs_broker_close(atto_fs_broker *b) {
-    if (!b) return;
+    if (!b || !b->initialized) return;
+    /* Host lifecycle guarantees no concurrently starting worker and no use
+     * after close. Revoke first when running actors may still send requests. */
+    if (pthread_mutex_lock(&b->gate) != 0) return;
+    b->revoked = 1;
     if (b->root_fd >= 0) (void)close(b->root_fd);
     b->root_fd = -1;
     b->tenant_id = 0;
@@ -103,8 +126,11 @@ void atto_fs_broker_close(atto_fs_broker *b) {
     memset(b->write_scope, 0, sizeof(b->write_scope));
     memset(b->deny_read_scope, 0, sizeof(b->deny_read_scope));
     memset(b->deny_write_scope, 0, sizeof(b->deny_write_scope));
+    (void)pthread_mutex_unlock(&b->gate);
+    (void)pthread_mutex_destroy(&b->gate);
+    b->initialized = 0;
 }
-int atto_fs_broker_read(atto_fs_broker *b, uint64_t tenant, uint64_t gen,
+static int read_locked(atto_fs_broker *b, uint64_t tenant, uint64_t gen,
                         const char *path, unsigned char *output,
                         size_t capacity, size_t *nread) {
     if (nread) *nread = 0;
@@ -155,7 +181,7 @@ static int open_parent(atto_fs_broker *b, const char *path,
     (void)snprintf(basename, ATTO_FS_SCOPE_LIMIT, "%s", slash + 1);
     return open_beneath(b->root_fd, parent, O_RDONLY | O_DIRECTORY, 0);
 }
-int atto_fs_broker_write(atto_fs_broker *b, uint64_t tenant, uint64_t gen,
+static int write_locked(atto_fs_broker *b, uint64_t tenant, uint64_t gen,
                          const char *path, const unsigned char *input,
                          size_t length) {
     if ((!input && length) || length > ATTO_FS_MAX_BYTES) return -EINVAL;
@@ -203,4 +229,25 @@ int atto_fs_broker_write(atto_fs_broker *b, uint64_t tenant, uint64_t gen,
     if (code) (void)unlinkat(dirfd, temp, 0);
     (void)close(dirfd);
     return code;
+}
+
+int atto_fs_broker_read(atto_fs_broker *b, uint64_t tenant, uint64_t gen,
+                        const char *path, unsigned char *output,
+                        size_t capacity, size_t *nread) {
+    if (nread) *nread = 0;
+    if (!b || !b->initialized) return -EACCES;
+    const int rc = pthread_mutex_lock(&b->gate);
+    if (rc) return -rc;
+    const int result = read_locked(b, tenant, gen, path, output, capacity, nread);
+    (void)pthread_mutex_unlock(&b->gate);
+    return result;
+}
+int atto_fs_broker_write(atto_fs_broker *b, uint64_t tenant, uint64_t gen,
+                         const char *path, const unsigned char *input, size_t length) {
+    if (!b || !b->initialized) return -EACCES;
+    const int rc = pthread_mutex_lock(&b->gate);
+    if (rc) return -rc;
+    const int result = write_locked(b, tenant, gen, path, input, length);
+    (void)pthread_mutex_unlock(&b->gate);
+    return result;
 }
