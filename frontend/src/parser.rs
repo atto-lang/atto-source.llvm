@@ -579,10 +579,10 @@ impl Parser {
             match &m.receive {
                 Some(handler) if handler.payload == expected => {}
                 Some(_) => return Err(Diagnostic::new(
-                    pos, "E_TYPE", "actor receives header disagrees with concrete ActorMail<T>",
+                    pos, "E_ACTOR_RECEIVES", "actor receives header disagrees with concrete ActorMail<T>",
                 )),
                 None => return Err(Diagnostic::new(
-                    pos, "E_TYPE", "typed actor requires a matching receive(ActorMail<T>) handler",
+                    pos, "E_ACTOR_RECEIVES", "typed actor requires a matching receive(ActorMail<T>) handler",
                 )),
             }
         }
