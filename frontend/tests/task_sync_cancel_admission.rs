@@ -20,7 +20,11 @@ fn pure_sync_task_compiles_to_real_guest_bytes() {
     for source in [
         "pub fnc main(): int { val int x = sync task<int> { return 42; }; return x; }",
         "pub fnc main(): int { val int x = sync task { val int y = 5; return y + 7; }; return x; }",
-        "pub fnc main(): int { do sync task<int> { return 5; }; return 9; }",
+        "pub fnc main(): int { do sync task<void> {}; return 9; }",
+        "pub fnc main(): int { do sync task {}; return 9; }",
+        "pub fnc main(): int { do sync task<void> { val int n = 5; }; return 9; }",
+        "pub fnc main(): int { do sync task<void> { return; }; return 9; }",
+        "pub fnc main(): int { do sync task { return; }; return 9; }",
         "pub fnc main(): int { sync task {}; return 9; }",
         "pub fnc main(): int { val bool b = sync task<bool> { return true; }; if b then return 5; else return 4; fi }",
         "pub fnc main(): int { val int x = sync task<int> { return sync task<int> { return 4; } + 3; }; return x; }",
@@ -43,6 +47,17 @@ fn task_spawning_and_unverified_inline_effects_still_fail_closed() {
         "pub fnc main(): int { val x = sync task<int> { return await future; }; return x; }",
     ] {
         reject_unlowered(source, "E_UNSUPPORTED");
+    }
+    // The do-inline form is void-only even if it could discard a result.
+    for source in [
+        "pub fnc main(): int { do sync task<int> { return 5; }; return 9; }",
+        "pub fnc main(): int { do sync task<int> {}; return 9; }",
+        "pub fnc main(): int { do sync task<bool> { return; }; return 9; }",
+        "pub fnc main(): int { do sync task { return 5; }; return 9; }",
+        "pub fnc main(): int { do sync task<void> { return 5; }; return 9; }",
+        "pub fnc main(): int { do sync task { return sync task<int> { return 3; }; }; return 9; }",
+    ] {
+        reject_unlowered(source, "E_TASK_RETURN_TYPE");
     }
     reject_unlowered(
         "pub fnc main(): int { val x = sync task<int> {}; return x; }",
