@@ -31,8 +31,10 @@ class NominalSealedAudit(unittest.TestCase):
         self.assertEqual(s["exact_git_tree"],
                          "c5e1f150fa628f3985a535efd83bcfcbffb03cb0")
         self.assertEqual(s["exact_blob_count"], 69)
+        # Do not silently repin old native execution to today's checker.
+        self.assertEqual(s["checked_type_resolver_blob"],
+                         "fc8806e97d94f408fd145f48b73ab33324dae2fa")
         for path, field in (
-            ("frontend/src/check.rs", "checked_type_resolver_blob"),
             ("src/target_native.rs", "native_target_linker_blob"),
             ("ci/test_native_actors.sh", "native_actor_script_blob"),
             ("ci/test_native_aot.sh", "scalar_script_blob"),

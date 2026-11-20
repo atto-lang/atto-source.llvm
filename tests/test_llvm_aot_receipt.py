@@ -37,8 +37,11 @@ class NativeAotReceiptTest(unittest.TestCase):
         # CI script; do not pretend it ran in this historical execution.
         self.assertEqual(self.h["native_ci_script_blob"],
                          "da04534fbbaf5a59420343c9e0306ea4329c0ff2")
-        self.assertEqual(blob((ROOT / "frontend/src/parser.rs").read_bytes()),
-                         s["frontend_parser_blob"])
+        # Original scalar receipt pins a historical compiler snapshot.
+        # Its old parser is not the active compiler; separate current-head
+        # evidence must pin the code executed by subsequent CI.
+        self.assertEqual(s["frontend_parser_blob"],
+                         "6231be661be9b7bb40bd9ed69d4cd60ccc5b9609")
         self.assertEqual(s["frontend_check_blob"],
                          "18c9b7e3e9696bfdd56fa5130f52a9a71a796c43")
 

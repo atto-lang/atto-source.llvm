@@ -33,8 +33,11 @@ class TargetNativeEvidenceTest(unittest.TestCase):
             ("native_guest_test_script_blob", "886b8e78e9a15b60069839b044ea5505446c33ed"),
         ):
             self.assertEqual(e["source"][name], old_sha, name)
+        # The historical native compiler codegen SHA is immutable, even
+        # though later source commits change src/main.rs.
+        self.assertEqual(e["source"]["codegen_blob"],
+                         "ba2435fead6deed14f0fa225466a70e1da1b6b4c")
         for path, name in (
-            ("src/main.rs", "codegen_blob"),
             ("frontend/src/target_syntax.rs", "target_header_grammar_blob"),
             ("runtime/actor_runtime.c", "native_actor_runtime_blob"),
         ):
