@@ -28,6 +28,9 @@ extern "C" {
 #define ORES_VM_IO_TOO_LARGE (-5LL)
 #define ORES_VM_IO_HOST_ERROR (-6LL)
 #define ORES_VM_IO_UNSUPPORTED (-7LL)
+/* A cancelled write was already executing: it MAY have committed. This is
+ * distinct from a safely cancelled queued request, never auto-retry it. */
+#define ORES_VM_IO_WRITE_INDETERMINATE (-8LL)
 
 typedef struct OresVmHostApiV5 {
     /* Exact ABI-v4 prefix, never a reinterpretation of a v4-sized table. */
