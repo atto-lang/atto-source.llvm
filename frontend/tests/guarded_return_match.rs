@@ -13,7 +13,7 @@ fn exact_return_match_block_and_expression_arms_compile() {
         let guest = compile(source).unwrap_or_else(|err| {
             panic!("guarded return match case {i} rejected: {err}")
         });
-        assert!(guest.starts_with(b"\\0asm"), "case {i}: not a Wasm guest");
+        assert!(guest.starts_with(b"\0asm"), "case {i}: not a Wasm guest");
         assert!(guest.len() > 8, "case {i}: truncated Wasm guest");
     }
 }
