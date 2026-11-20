@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Source-level native Result no-IR admission gate.
 
-The LLVM frontend recognizes the closed nominal Result<void, ArrayError>
-signature but has not implemented tagged construction, must-use and match
-lowering. Every variant must fail before emitting even partial LLVM IR.
+The LLVM frontend implements a *constructor-only* tagged return
+specialization for zero-argument private functions. Parameter/local storage,
+nonvoid/foreign Result specializations and match must still fail without IR.
+Do not mistake the negative admission test for a positive constructor test.
 """
 import argparse
 from pathlib import Path
@@ -14,9 +15,6 @@ import tempfile
 NEGATIVE = {
     "param-closed": (
         "fnc consume(Result<void, ArrayError> value): int { return 0; }",
-        "native Result<void, ArrayError> requires tagged construction"),
-    "return-closed": (
-        "fnc make(): Result<void, ArrayError> { return Ok(); }",
         "native Result<void, ArrayError> requires tagged construction"),
     "return-foreign-error": (
         "fnc make(): Result<void, String> { return Ok(); }",
@@ -32,10 +30,10 @@ NEGATIVE = {
         "native Result<void, ArrayError> requires tagged construction"),
     "spoof-result-class": (
         "define class Result as\n  int code: 1\nend\npub fnc main(): int { return 0; }",
-        "native builtin Result/Option names cannot be redefined as classes"),
+        "native builtin Result/Option/ArrayError names cannot be redefined as classes"),
     "spoof-option-class": (
         "define class Option as\n  int code: 1\nend\npub fnc main(): int { return 0; }",
-        "native builtin Result/Option names cannot be redefined as classes"),
+        "native builtin Result/Option/ArrayError names cannot be redefined as classes"),
 }
 
 CONTROL = "pub fnc main(): int { return 42; }"

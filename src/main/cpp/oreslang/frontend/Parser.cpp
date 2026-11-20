@@ -212,17 +212,34 @@ public:
             } else if (token_.text == "suspend") {
                 program.cooperative_loops.push_back(cooperative_scalar_loop());
             } else {
-                program.functions.push_back(function());
+                Function parsed = function();
+                if (parsed.closed_array_result) {
+                    if (program.closed_array_results.size() >= 64) {
+                        fail("native tagged Result constructor function limit exceeded (64)");
+                    }
+                    program.closed_array_results.push_back({
+                        parsed.name, parsed.exported, parsed.closed_result_ok,
+                        parsed.closed_result_error, parsed.offset
+                    });
+                } else {
+                    program.functions.push_back(std::move(parsed));
+                }
             }
         }
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
-        if (program.functions.empty() && program.actors.empty() &&
-                program.cooperative_loops.empty())
+        if (!program.closed_array_results.empty()
+                && (program.module == "Result" || program.module == "Option"
+                    || program.module == "ArrayError")) {
+            fail("native builtin Result/Option/ArrayError cannot be shadowed by module namespace");
+        }
+        if (program.functions.empty() && program.closed_array_results.empty()
+                && program.actors.empty() && program.cooperative_loops.empty())
             fail("expected at least one function or actor");
         if (!program.cooperative_loops.empty() &&
                 (program.cooperative_loops.size() != 1 || !program.functions.empty() ||
-                 !program.actors.empty() || !program.classes.empty() || !program.module.empty())) {
+                 !program.closed_array_results.empty() || !program.actors.empty()
+                 || !program.classes.empty() || !program.module.empty())) {
             fail("first AOT continuation slice requires exactly one standalone suspend function");
         }
         validate(program);
@@ -234,6 +251,10 @@ private:
         ActorDecl actor;
         actor.offset = token_.offset;
         actor.name = identifier();
+        if (actor.name == "Result" || actor.name == "Option"
+                || actor.name == "ArrayError") {
+            fail("native builtin Result/Option/ArrayError names cannot be redefined as actors");
+        }
         require("as");
         const bool braced = accept("{");
         if (token_.text == "state") {
@@ -316,8 +337,9 @@ private:
         // Result and Option are compiler-managed tagged sum type families.
         // A user class with either spelling must not spoof nominal ADT
         // identity or inherit the old scalar-only class representation.
-        if (result.name == "Result" || result.name == "Option") {
-            fail("native builtin Result/Option names cannot be redefined as classes");
+        if (result.name == "Result" || result.name == "Option"
+                || result.name == "ArrayError") {
+            fail("native builtin Result/Option/ArrayError names cannot be redefined as classes");
         }
         require("as");
         std::unordered_set<std::string> seen;
@@ -481,7 +503,56 @@ private:
             require(")");
         }
         require(":");
-        reject_unlowered_result_type();
+        if (accept("Result")) {
+            // Closed constructor-only source admission. This path cannot
+            // return i64 or call the scalar lowering machinery. The entire
+            // function is validated before LLVM IR creation.
+            require("<");
+            if (!accept("void")) {
+                fail("native generic Result<T,E> requires source tagged-value lowering");
+            }
+            require(",");
+            if (!accept("ArrayError")) {
+                fail("native Result<void,E> requires nominal ArrayError specialization and tagged lowering");
+            }
+            require(">");
+            if (!value.parameters.empty() || value.name == "main") {
+                fail("native tagged Result constructor slice requires zero parameters and non-main function");
+            }
+            // Public export makes an unverified cross-module/FFI return ABI
+            // observable before the language has typed Result callers,
+            // status validation or must-use ownership at that boundary.
+            if (value.exported) {
+                fail("native tagged Result public export requires verified cross-module ABI and must-use proof");
+            }
+            require("{");
+            require("return");
+            value.closed_array_result = true;
+            if (accept("Ok")) {
+                require("(");
+                require(")");
+                value.closed_result_ok = true;
+                value.closed_result_error = 0;
+            } else if (accept("Err")) {
+                require("(");
+                require("ArrayError");
+                require(".");
+                if (accept("Limit")) {
+                    value.closed_result_error = 1;
+                } else if (accept("NoMemory")) {
+                    value.closed_result_error = 2;
+                } else {
+                    fail("unknown nominal ArrayError case; expected Limit or NoMemory");
+                }
+                require(")");
+                value.closed_result_ok = false;
+            } else {
+                fail("native tagged Result return requires Ok() or Err(ArrayError.Limit/NoMemory)");
+            }
+            require(";");
+            require("}");
+            return value;
+        }
         value.returns_void = accept("void");
         if (!value.returns_void) require("int");
         if (accept("using")) {
@@ -1454,6 +1525,28 @@ private:
                 }
             }
         }
+        // The constructor-only tagged functions are a separate nominal
+        // ABI, not zero-arity i64 overloads. Refuse collisions with any
+        // existing function family, actor, class, or reserved host symbol.
+        std::unordered_set<std::string> closed_names;
+        for (const auto& tagged : program.closed_array_results) {
+            if (!closed_names.insert(tagged.name).second
+                    || functions.count(tagged.name) || classes.count(tagged.name)
+                    || tagged.name == "main" || tagged.name == "__oreslang_guest_main"
+                    || tagged.name == "abort"
+                    || tagged.name.rfind("oreslang_", 0) == 0
+                    || std::any_of(program.actors.begin(), program.actors.end(),
+                        [&](const ActorDecl& actor) { return actor.name == tagged.name; })) {
+                throw std::runtime_error(
+                    "native tagged Result name collides with an existing source or reserved ABI symbol '"
+                    + tagged.name + "'");
+            }
+            if (tagged.ok ? tagged.error != 0
+                          : (tagged.error != 1 && tagged.error != 2)) {
+                throw std::runtime_error("invalid nominal Result<void,ArrayError> constructor");
+            }
+        }
+
         std::unordered_map<std::string, const ActorDecl*> actor_types;
         for (const auto& actor : program.actors) {
             if (!actor_types.emplace(actor.name, &actor).second || classes.count(actor.name)
@@ -1645,6 +1738,8 @@ Program parse_program(std::string_view source, bool experimental_owned_int,
                              experimental_rt_scalar_loop).parse();
     if (experimental_rt_scalar_loop &&
             (program.functions.size() != 1 || !program.functions.front().scalar_while ||
+             !program.closed_array_results.empty() ||
+             !program.cooperative_loops.empty() ||
              !program.classes.empty() || !program.actors.empty() ||
              !program.module.empty()))
         throw std::runtime_error("experimental scalar loop requires exactly one standalone function");

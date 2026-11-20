@@ -108,6 +108,15 @@ if(BUILD_TESTING)
         message(WARNING "Native array LLVM ABI gate cannot pass without Clang")
         set(ORE_NATIVE_ARRAY_CLANG "${CMAKE_CURRENT_BINARY_DIR}/missing-clang")
     endif()
+    # Resolve the selected Clang path only AFTER the missing-tool fallback;
+    # never pass a -NOTFOUND sentinel to a source-level conformance test.
+    add_test(NAME native_result_closed_constructor_execution
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_closed_result_constructor.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_NATIVE_ARRAY_CLANG}")
+    set_tests_properties(native_result_closed_constructor_execution
+        PROPERTIES TIMEOUT 120)
     add_test(NAME native_annotation_macro_aot_admission
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/annotation_macro_aot_admission_matrix.py"
