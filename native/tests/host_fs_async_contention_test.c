@@ -67,9 +67,22 @@ int main(void) {
     broker.policy_layer_count = ATTO_FS_POLICY_LAYER_COUNT;
     broker.tenant_id = 7u;
     broker.generation = 3u;
-    atto_fs_async_service *service = NULL;
-    assert(atto_fs_async_create(&service, &broker, 1u) == 0);
     const atto_fs_host_actor actor = {7u,3u,55u,9u};
+    const atto_fs_host_actor sibling = {7u,3u,56u,9u};
+    const atto_fs_host_actor reincarnated = {7u,3u,55u,10u};
+    atto_fs_async_service *service = NULL;
+    assert(atto_fs_async_create(&service, &broker, &actor, 1u) == 0);
+    /* A tenant match alone is never enough: the service is bound to this
+     * exact trusted actor incarnation for its complete lifetime. */
+    uint64_t denied_ticket = 991u;
+    assert(atto_fs_async_submit_read(service, &sibling, "data/input", 16u, &denied_ticket)
+           == -EACCES);
+    assert(denied_ticket == 0u);
+    assert(atto_fs_async_submit_read(service, &reincarnated, "data/input", 16u,
+                                     &denied_ticket) == -EACCES);
+    assert(denied_ticket == 0u);
+    assert(atto_fs_async_cancel(service, &reincarnated, 1u) == -EACCES);
+    assert(atto_fs_async_forget_actor(service, &sibling) == -EACCES);
     unsigned char output[16];
     memset(output, 0x9a, sizeof output);
     size_t got = 123u;
