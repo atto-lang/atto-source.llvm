@@ -96,8 +96,9 @@ int atto_fs_broker_read(atto_fs_broker *broker, uint64_t tenant_id,
                         unsigned char *output, size_t capacity, size_t *nread);
 /* Publish already-read HOST-OWNED bytes into a host-validated actor-local
  * destination only if the read scope and generation are STILL authorized.
- * The check and the final copy occur under the broker's revoke mutex. This
- * performs no OS I/O: safe for a bounded, nonblocking host-call poll path.
+ * The check and final copy use the revoke mutex with trylock: return
+ * -EAGAIN if a filesystem worker/revoke holds it, leaving the pending
+ * completion/ticket intact. Never park an actor carrier behind I/O.
  * The caller must authenticate actor identity and validate cage offsets. */
 int atto_fs_broker_publish_read(atto_fs_broker *broker, uint64_t tenant_id,
                                  uint64_t generation, const char *relative_path,
