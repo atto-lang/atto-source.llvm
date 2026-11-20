@@ -790,6 +790,23 @@ fn main() {
 mod tests {
     use super::*;
     #[test]
+    fn typed_record_write_and_nominal_struct_brackets_never_lower_as_native_scalar() {
+        let cases = [
+            ("pub fnc main(): int { let mut Record r = {foo: 1}; r[\"foo\"] = 3; return 0; }",
+             "E_UNSUPPORTED_RECORD"),
+            ("define struct Point as int foo; end pub fnc main(): int { p[\"foo\"] = 3; return 0; }",
+             "E_UNSUPPORTED_INDEX_WRITE"),
+        ];
+        for (source, expected) in cases {
+            let error = compile_ir(source).expect_err("guest index write is unlowered");
+            assert!(error.contains(expected), "{source}: {error}");
+        }
+        let scalar = compile_ir("// Record x[\"foo\"] = 3; Entry => Map\npub fnc main(): int { return 42; }")
+            .expect("comments are not compiler tokens");
+        assert!(scalar.contains("ret i64 42"));
+    }
+
+    #[test]
     fn native_main_is_direct_i64_call() {
         let ir = compile_ir("pub fnc main(): int { return 42; }").unwrap();
         assert!(ir.contains("define i32 @main()"));
