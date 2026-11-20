@@ -11,6 +11,10 @@
 #include <iterator>
 #include <string>
 #include <vector>
+#include <cerrno>
+#include <cstring>
+#include <sys/stat.h>
+#include <unistd.h>
 
 using namespace oreslang::runtime::vm;
 static std::vector<std::uint8_t> read_file(const char *path) {
@@ -81,6 +85,64 @@ int main(int argc, char **argv) {
     assert(loaded.signature_verified);
     assert(std::string(loaded.verified_artifact_ceiling.allow_read) == "data");
     assert(std::string(loaded.verified_artifact_ceiling.allow_write) == "out");
+
+    /* This test loads the actual signed C guest shared library, then asks
+     * the trusted HOST to create a six-ceiling broker from its verified
+     * artifact maximum. The guest itself is ABI v4 and cannot call FS. */
+    char temporary[] = "/tmp/atto-signed-fs-loader-XXXXXX";
+    assert(mkdtemp(temporary) != nullptr);
+    const std::string root = std::string(temporary) + "/root";
+    const std::string data = root + "/data";
+    const std::string output = root + "/out";
+    assert(mkdir(root.c_str(), 0700) == 0);
+    assert(mkdir(data.c_str(), 0700) == 0);
+    assert(mkdir(output.c_str(), 0700) == 0);
+    {
+        std::ofstream file(data + "/input.txt", std::ios::binary);
+        assert(file.good());
+        file << "signed-input";
+    }
+    TrustedFsExecutionCeilings ceilings{};
+    ceilings.tenant_id = 901u;
+    ceilings.generation = 7u;
+    ceilings.host = {"*", "*", nullptr, nullptr};
+    ceilings.runtime = {"data", "out", nullptr, nullptr};
+    ceilings.tenant = {"*", "*", nullptr, nullptr};
+    ceilings.actor = {"data", "out", nullptr, nullptr};
+    ceilings.delegation = {"*", "*", nullptr, nullptr};
+    atto_fs_broker broker{};
+    assert(admit_signed_loaded_guest_fs_broker(&broker, loaded, root, ceilings) == 0);
+    assert(broker.policy_layer_count == ATTO_FS_POLICY_LAYER_COUNT);
+    unsigned char buffer[80] = {};
+    std::size_t copied = 0;
+    assert(atto_fs_broker_read(&broker, 901u, 7u, "data/input.txt",
+                               buffer, sizeof(buffer), &copied) == 0);
+    assert(copied == 12u && std::memcmp(buffer, "signed-input", copied) == 0);
+    assert(atto_fs_broker_write(&broker, 901u, 7u, "out/copy.txt",
+                                buffer, copied) == 0);
+    assert(atto_fs_broker_write(&broker, 901u, 7u, "data/input.txt",
+                                buffer, copied) == -EACCES);
+    assert(atto_fs_broker_read(&broker, 901u, 7u, "../outside.txt",
+                               buffer, sizeof(buffer), &copied) != 0);
+    assert(atto_fs_broker_revoke(&broker, 901u, 7u) == 0);
+    assert(atto_fs_broker_write(&broker, 901u, 7u, "out/copy.txt",
+                                buffer, 12u) == -EACCES);
+    atto_fs_broker_close(&broker);
+
+    auto forged = loaded;
+    forged.signature_verified = false;
+    assert(admit_signed_loaded_guest_fs_broker(&broker, forged, root, ceilings) == -EACCES);
+    assert(!broker.initialized);
+    auto unloaded = loaded;
+    unloaded.guest.owner.reset();
+    assert(admit_signed_loaded_guest_fs_broker(&broker, unloaded, root, ceilings) == -EACCES);
+    assert(!broker.initialized);
+    ceilings.runtime.allow_read = nullptr;
+    assert(admit_signed_loaded_guest_fs_broker(&broker, loaded, root, ceilings) == 0);
+    assert(atto_fs_broker_read(&broker, 901u, 7u, "data/input.txt",
+                               buffer, sizeof(buffer), &copied) == -EACCES);
+    atto_fs_broker_close(&broker);
+
     loaded.guest.owner.reset();
     loaded.guest.module = nullptr;
 
