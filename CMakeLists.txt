@@ -1622,6 +1622,40 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_resource_loan_terminal_race
         COMMAND oreslang-actor-resource-loan-terminal-race-test)
     set_tests_properties(native_actor_resource_loan_terminal_race PROPERTIES TIMEOUT 60)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        add_executable(oreslang-actor-resource-loan-terminal-race-asan-ubsan-test
+            tests/actor_resource_loan_terminal_race_test.cpp)
+        target_include_directories(oreslang-actor-resource-loan-terminal-race-asan-ubsan-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(oreslang-actor-resource-loan-terminal-race-asan-ubsan-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            -fsanitize=address,undefined -fno-sanitize-recover=undefined
+            -fno-omit-frame-pointer)
+        target_link_options(oreslang-actor-resource-loan-terminal-race-asan-ubsan-test PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_libraries(oreslang-actor-resource-loan-terminal-race-asan-ubsan-test PRIVATE Threads::Threads)
+        add_test(NAME native_actor_resource_loan_terminal_race_asan_ubsan
+            COMMAND oreslang-actor-resource-loan-terminal-race-asan-ubsan-test)
+        set_tests_properties(native_actor_resource_loan_terminal_race_asan_ubsan PROPERTIES
+            TIMEOUT 90
+            ENVIRONMENT "ASAN_OPTIONS=halt_on_error=1;UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1")
+
+        add_executable(oreslang-actor-resource-loan-terminal-race-tsan-test
+            tests/actor_resource_loan_terminal_race_test.cpp)
+        target_include_directories(oreslang-actor-resource-loan-terminal-race-tsan-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(oreslang-actor-resource-loan-terminal-race-tsan-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            -fsanitize=thread -fno-omit-frame-pointer)
+        target_link_options(oreslang-actor-resource-loan-terminal-race-tsan-test PRIVATE
+            -fsanitize=thread -fno-omit-frame-pointer)
+        target_link_libraries(oreslang-actor-resource-loan-terminal-race-tsan-test PRIVATE Threads::Threads)
+        add_test(NAME native_actor_resource_loan_terminal_race_tsan
+            COMMAND oreslang-actor-resource-loan-terminal-race-tsan-test)
+        set_tests_properties(native_actor_resource_loan_terminal_race_tsan PROPERTIES
+            TIMEOUT 90
+            ENVIRONMENT "TSAN_OPTIONS=halt_on_error=1")
+    endif()
 
     add_executable(oreslang-actor-mailbox-completion-model-test
         tests/actor_mailbox_completion_model_test.cpp)
@@ -3918,4 +3952,126 @@ if(BUILD_TESTING)
   add_test(NAME native_string_utf8_json_host_contract
     COMMAND oreslang-native-string-host-test)
   set_tests_properties(native_string_utf8_json_host_contract PROPERTIES TIMEOUT 30)
+endif()
+
+# #931 reconciliation: VM-owned wake-only CONTROL service plus host scalar
+# Future scheduling. These are prerequisites, not general guest Future<T>.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+        add_executable(oreslang-native-continuation-ready-resume-asan-ubsan-test
+            tests/native_continuation_ready_resume_test.c
+            src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+            src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+            src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c)
+        set_target_properties(oreslang-native-continuation-ready-resume-asan-ubsan-test PROPERTIES
+            C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+        target_include_directories(oreslang-native-continuation-ready-resume-asan-ubsan-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-continuation-ready-resume-asan-ubsan-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-native-continuation-ready-resume-asan-ubsan-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(oreslang-native-continuation-ready-resume-asan-ubsan-test PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        add_test(NAME native_continuation_ready_cancel_resume_race_asan_ubsan
+            COMMAND oreslang-native-continuation-ready-resume-asan-ubsan-test)
+        set_tests_properties(native_continuation_ready_cancel_resume_race_asan_ubsan PROPERTIES TIMEOUT 60)
+
+        add_executable(oreslang-native-continuation-ready-resume-tsan-test
+            tests/native_continuation_ready_resume_test.c
+            src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+            src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+            src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c)
+        set_target_properties(oreslang-native-continuation-ready-resume-tsan-test PROPERTIES
+            C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+        target_include_directories(oreslang-native-continuation-ready-resume-tsan-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-continuation-ready-resume-tsan-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-native-continuation-ready-resume-tsan-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG
+            -fsanitize=thread -fno-omit-frame-pointer)
+        target_link_options(oreslang-native-continuation-ready-resume-tsan-test PRIVATE
+            -fsanitize=thread -fno-omit-frame-pointer)
+        add_test(NAME native_continuation_ready_cancel_resume_race_tsan
+            COMMAND oreslang-native-continuation-ready-resume-tsan-test)
+        set_tests_properties(native_continuation_ready_cancel_resume_race_tsan PROPERTIES TIMEOUT 60)
+    endif()
+
+    add_executable(oreslang-native-vm-main-control-loop-test
+        tests/native_vm_main_control_loop_test.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-vm-main-control-loop-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-vm-main-control-loop-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-vm-main-control-loop-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_vm_main_control_bootstrap_and_shutdown
+        COMMAND oreslang-native-vm-main-control-loop-test)
+    set_tests_properties(native_vm_main_control_bootstrap_and_shutdown PROPERTIES TIMEOUT 25)
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        add_executable(oreslang-native-vm-main-control-create-failure-test
+            tests/native_vm_main_control_create_failure_test.c
+            src/main/cpp/oreslang/runtime/NativeActorFuture.c
+            src/main/cpp/oreslang/runtime/NativeOresVM.c
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+        target_include_directories(oreslang-native-vm-main-control-create-failure-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-vm-main-control-create-failure-test PRIVATE Threads::Threads)
+        target_link_options(oreslang-native-vm-main-control-create-failure-test PRIVATE
+            "LINKER:--wrap=pthread_create")
+        target_compile_options(oreslang-native-vm-main-control-create-failure-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME native_vm_main_control_pthread_failure_retry
+            COMMAND oreslang-native-vm-main-control-create-failure-test)
+        set_tests_properties(native_vm_main_control_pthread_failure_retry PROPERTIES TIMEOUT 25)
+    endif()
+
+    add_executable(oreslang-native-scalar-future-await-test
+        tests/native_scalar_future_await_test.cpp)
+    target_include_directories(oreslang-native-scalar-future-await-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-scalar-future-await-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-scalar-future-await-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-scalar-future-await-test PRIVATE Threads::Threads)
+    add_test(NAME native_scalar_future_single_winner_control
+        COMMAND oreslang-native-scalar-future-await-test)
+    set_tests_properties(native_scalar_future_single_winner_control PROPERTIES TIMEOUT 60)
+
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        add_executable(oreslang-native-scalar-future-await-asan-ubsan-test
+            tests/native_scalar_future_await_test.cpp)
+        target_include_directories(oreslang-native-scalar-future-await-asan-ubsan-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features(oreslang-native-scalar-future-await-asan-ubsan-test PRIVATE cxx_std_17)
+        target_compile_options(oreslang-native-scalar-future-await-asan-ubsan-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(oreslang-native-scalar-future-await-asan-ubsan-test PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_libraries(oreslang-native-scalar-future-await-asan-ubsan-test PRIVATE Threads::Threads)
+        add_test(NAME native_scalar_future_single_winner_control_asan_ubsan
+            COMMAND oreslang-native-scalar-future-await-asan-ubsan-test)
+        set_tests_properties(native_scalar_future_single_winner_control_asan_ubsan PROPERTIES TIMEOUT 90)
+
+        add_executable(oreslang-native-scalar-future-await-tsan-test
+            tests/native_scalar_future_await_test.cpp)
+        target_include_directories(oreslang-native-scalar-future-await-tsan-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features(oreslang-native-scalar-future-await-tsan-test PRIVATE cxx_std_17)
+        target_compile_options(oreslang-native-scalar-future-await-tsan-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            -fsanitize=thread -fno-omit-frame-pointer)
+        target_link_options(oreslang-native-scalar-future-await-tsan-test PRIVATE
+            -fsanitize=thread -fno-omit-frame-pointer)
+        target_link_libraries(oreslang-native-scalar-future-await-tsan-test PRIVATE Threads::Threads)
+        add_test(NAME native_scalar_future_single_winner_control_tsan
+            COMMAND oreslang-native-scalar-future-await-tsan-test)
+        set_tests_properties(native_scalar_future_single_winner_control_tsan PROPERTIES TIMEOUT 90)
+    endif()
 endif()

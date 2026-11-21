@@ -150,12 +150,21 @@ int ores_native_vm_current_execution_context(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeExecutionContext* out);
 
-/* Metadata-only VM master CONTROL coordinator. Coalesces one host wake bit
- * per domain. The host event loop explicitly pumps it; no master pthread or
- * actor carrier starts and no guest callback runs on this path.
- * A wake is NOT actor CONTROL admission, receipt, or supervisor delivery:
- * use ores_native_vm_publish_control() for actual actor mailbox admission.
- * Producer/API calls must be externally fenced before final vm_close(). */
+/* VM-owned CONTROL wake coordinator. Legacy hosts can explicitly pump it
+ * with zero additional threads; trusted source bootstrap can prestart exactly
+ * one dedicated blocking CONTROL pthread before actor admission.
+ *
+ * The CONTROL pthread only coalesces domain wake signals. It never executes
+ * guest/supervisor callbacks and is not an actor carrier. Actual actor CONTROL
+ * delivery still uses ores_native_vm_publish_control().
+ *
+ * Starting after guest admission, NIO bootstrap, retirement, or a realtime
+ * provisioning attempt fails closed. If both CONTROL and realtime carrier
+ * prestart are required, CONTROL must start first.
+ */
+int ores_native_vm_start_main_control_loop(OresNativeVM* vm);
+int ores_native_vm_main_control_loop_started(OresNativeVM* vm);
+uint64_t ores_native_vm_control_wakes_dispatched(OresNativeVM* vm);
 int ores_native_vm_control_notify(
     OresNativeVM* vm, enum OresNativeVMDomain domain);
 unsigned ores_native_vm_control_pending(OresNativeVM* vm);

@@ -528,6 +528,8 @@ static void open_group_locked(void) {
     }
     group.vm = ores_native_vm_open(&cfg);
     ensure(group.vm != NULL);
+    /* Wake-only CONTROL service must exist before root actor admission. */
+    ensure(ores_native_vm_start_main_control_loop(group.vm));
 
     /*
      * The compiler-generated top-level continuation owns one reserved logical
@@ -539,6 +541,7 @@ static void open_group_locked(void) {
         && group.root_ref.actor_slot == SOURCE_GROUP_ROOT_SLOT);
 
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    ensure(ores_native_vm_main_control_loop_started(group.vm));
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         ensure(ores_native_vm_started_carriers(
             group.vm, (enum OresNativeVMDomain)i) == 0);

@@ -87,6 +87,21 @@ public:
         return ticket_->control_dropped.load(std::memory_order_acquire);
     }
 
+    /** Generation-fenced no-new-delivery barrier for this exact incarnation. */
+    bool delivery_closed() const noexcept {
+        return ticket_->detached_from_group.load(std::memory_order_acquire);
+    }
+
+    /**
+     * Physical finalization seals resource admission before settling DONE and
+     * publishing delivery_closed(). Host-only frame admission can use this as
+     * the earlier half of a fail-closed finalization fence.
+     */
+    bool resource_admission_closed() const noexcept {
+        return (ticket_->resource_state.load(std::memory_order_acquire)
+                & terminal_resource_bit) != 0;
+    }
+
     /**
      * Nonblocking host subscription to DONE. Callbacks must enqueue guest
      * resumption on the scheduler's exclusive CONTROL lane, never run guest
@@ -149,6 +164,20 @@ private:
         std::vector<ReadyContinuation> waiters;
         std::vector<DoneContinuation> done_waiters;
         ActorDoneResult done_result;
+        // Once physical finalization seals resource admission, the first
+        // requested terminal failure is immutable across retry. Settlement
+        // allocation failure must never let a later retry rewrite failure
+        // into success or a different error.
+        bool terminal_failure_committed = false;
+        std::string terminal_failure;
+        // close() is noexcept and runs after the worker table is detached.
+        // Pre-stage its canonical startup failure while actor admission is
+        // still fallible, so close can settle STARTING readiness without any
+        // heap allocation or partially published waiter state.
+        std::string close_before_ready_error{"ActorGroup closed before ready"};
+        std::exception_ptr close_before_ready_failure =
+            std::make_exception_ptr(
+                std::runtime_error(close_before_ready_error));
         std::promise<void> ready_promise;
         std::promise<void> done_promise;
         std::shared_future<void> ready_future = ready_promise.get_future().share();
@@ -156,7 +185,8 @@ private:
         bool done_settled = false;
         std::atomic<bool> stop_issued{false};
         std::atomic<bool> physically_done{false};
-        // True only after the group worker table was detached by close().
+        // True after this exact actor incarnation is removed from the group's
+        // delivery table, either by per-actor finalization or group close.
         std::atomic<bool> detached_from_group{false};
         std::atomic<bool> control_active{false};
         std::atomic<bool> control_reserved{false};
@@ -208,7 +238,8 @@ public:
         {
             std::lock_guard<std::mutex> guard(mutex_);
             Entry* worker = find_active_locked(ref);
-            if (closed_ || !worker || worker->phase == Phase::starting)
+            if (closed_ || !worker || worker->phase == Phase::starting
+                    || worker->ref.resource_admission_closed())
                 return UserTurn::retired;
             if (worker->pending_control) return UserTurn::busy;
             ticket = worker->ref.ticket_;
@@ -280,7 +311,8 @@ public:
         std::lock_guard<std::mutex> guard(mutex_);
         Entry* worker = find_active_locked(ref);
         if (!worker || closed_ || worker->phase == Phase::starting
-            || worker->pending_control) return false;
+            || worker->pending_control
+            || worker->ref.resource_admission_closed()) return false;
         worker->pending_control = std::move(handler);
         worker->ref.ticket_->control_reserved.store(true, std::memory_order_release);
         return true;
@@ -405,7 +437,9 @@ public:
         {
             std::lock_guard<std::mutex> guard(mutex_);
             Entry* entry = find_active_locked(ref);
-            if (!entry || entry->phase != Phase::starting || closed_) return false;
+            if (!entry || entry->phase != Phase::starting || closed_
+                    || entry->ref.resource_admission_closed())
+                return false;
             entry->phase = Phase::ready;
             callbacks = settle_ticket(entry->ref, {true, ""});
         }
@@ -449,6 +483,10 @@ public:
                     return false;
             }
             try {
+                // The first terminal outcome becomes immutable at the same
+                // sealed-resource boundary. A later retry may omit or change
+                // its argument, but cannot rewrite the original outcome.
+                failure = commit_terminal_failure(ref, std::move(failure));
                 // Close may settle readiness after detaching the worker table,
                 // outside the group lock. The ticket mutex decides the winner.
                 ActorReadyResult rejected{false,
@@ -472,6 +510,11 @@ public:
                 // physical-resource resurrection after logical termination.
                 throw;
             }
+            // No delivery can be admitted after this point: the group mutex is
+            // still held and this exact incarnation is about to leave the routing table.
+            // Publish the same generation-fenced barrier that close() exposes so host
+            // Future frames cannot remain READY/PENDING after per-actor finalization.
+            ref.ticket_->detached_from_group.store(true, std::memory_order_release);
             ref.ticket_->physically_done.store(true, std::memory_order_release);
             workers_.erase(ref.actor_id());
             owners.live.erase(it);
@@ -498,6 +541,7 @@ public:
         struct Rejection {
             NativeActorRef ref;
             ActorReadyResult result;
+            std::exception_ptr failure;
             std::vector<NativeActorRef::ReadyContinuation> callbacks;
         };
         std::vector<std::pair<NativeActorRef, StopRequest>> stops;
@@ -512,25 +556,40 @@ public:
                 if (worker.phase == Phase::stopping) continue;
                 stops.emplace_back(worker.ref, worker.stop_request);
                 if (worker.phase == Phase::starting) {
-                    // Construct every failure string BEFORE touching any
-                    // readiness ticket or stop phase. OOM leaves the entire
-                    // group unchanged and allows a later stop/close retry.
-                    rejections.push_back(
-                        Rejection{worker.ref, {false, "worker stopped before ready"}, {}});
+                    // Stage every allocating failure object BEFORE touching any
+                    // readiness ticket or stop phase. Without the exception_ptr
+                    // staging, OOM while settling a later worker could leave an
+                    // earlier ticket settled with its waiter vector already
+                    // removed but never notified.
+                    ActorReadyResult result{false, "worker stopped before ready"};
+                    auto failure = std::make_exception_ptr(
+                        std::runtime_error(result.error));
+                    rejections.push_back(Rejection{
+                        worker.ref, std::move(result), std::move(failure), {}});
                 }
             }
+            // All potentially allocating rejection construction is complete.
+            // Ticket settlement below is now a no-allocation commit/swap phase,
+            // so stop_workers is all-or-nothing with respect to waiter removal.
             for (auto& rejection : rejections)
-                rejection.callbacks = settle_ticket(
-                    rejection.ref, std::move(rejection.result));
+                rejection.callbacks = settle_ticket_prepared(
+                    rejection.ref,
+                    std::move(rejection.result),
+                    rejection.failure);
             for (auto& item : workers_) {
                 Entry& worker = item.second;
                 if (worker.phase != Phase::stopping)
                     worker.phase = Phase::stopping;
             }
         }
+        // Physical shutdown progress must not depend on subscriber behavior.
+        // Dispatch the idempotent stop requests before invoking readiness
+        // callbacks: a host callback may block indefinitely, and concurrent
+        // close() deliberately does not re-dispatch a worker already marked
+        // stopping.
+        request_stops(stops);
         for (auto& rejection : rejections)
             notify(rejection.callbacks, rejection.ref.ticket_->result);
-        request_stops(stops);
     }
 
     /**
@@ -552,6 +611,19 @@ public:
                 item.second.ref.ticket_->detached_from_group.store(
                     true, std::memory_order_release);
         }
+        // First pass: request physical shutdown for every detached worker
+        // before running subscriber callbacks or destroying queued CONTROL
+        // captures. Either operation may execute arbitrary host code or block;
+        // neither may prevent a sibling actor from receiving its stop request.
+        for (auto& item : detached) {
+            Entry& worker = item.second;
+            if (worker.phase != Phase::stopping)
+                dispatch_stop(worker.ref, worker.stop_request);
+        }
+
+        // Second pass: retire queued delivery and publish STARTING readiness.
+        // These operations may invoke/destruct host objects, but all physical
+        // stop requests are already committed exactly once.
         for (auto& item : detached) {
             Entry& worker = item.second;
             if (worker.pending_control) {
@@ -560,18 +632,12 @@ public:
                 worker.ref.ticket_->control_dropped.store(true, std::memory_order_release);
             }
             if (worker.phase == Phase::starting) {
-                try {
-                    ActorReadyResult rejected{false, "ActorGroup closed before ready"};
-                    auto callbacks = settle_ticket(worker.ref, std::move(rejected));
-                    notify(callbacks, worker.ref.ticket_->result);
-                } catch (...) {
-                    // Keep processing all detached workers. A true OOM can
-                    // still prevent notifying an awaiter; it must never
-                    // prevent the group from requesting actor shutdown.
-                }
+                // No allocation is permitted here: close() is noexcept and the
+                // group is already detached. The ticket pre-staged its canonical
+                // close-before-READY error/exception during fallible adoption.
+                auto callbacks = settle_closed_before_ready(worker.ref);
+                notify(callbacks, worker.ref.ticket_->result);
             }
-            if (worker.phase != Phase::stopping)
-                dispatch_stop(worker.ref, worker.stop_request);
         }
     }
 
@@ -657,6 +723,9 @@ private:
                     return false;
             }
             try {
+                // Preserve the first terminal outcome even if promise/error
+                // staging allocates and this finalization attempt must retry.
+                failure = commit_terminal_failure(ref, std::move(failure));
                 ActorReadyResult rejected{false,
                     failure.empty() ? "actor terminated before ready" : failure};
                 callbacks = settle_ticket(ref, std::move(rejected));
@@ -681,13 +750,42 @@ private:
         return true;
     }
 
-    static std::vector<NativeActorRef::ReadyContinuation> settle_ticket(
-            const NativeActorRef& ref, ActorReadyResult result) {
+    static std::string commit_terminal_failure(
+            const NativeActorRef& ref, std::string failure) {
+        std::lock_guard<std::mutex> guard(ref.ticket_->mutex);
+        if (!ref.ticket_->terminal_failure_committed) {
+            // swap is non-allocating for std::string and therefore commits
+            // the caller's already-owned bytes before any retryable staging.
+            ref.ticket_->terminal_failure.swap(failure);
+            ref.ticket_->terminal_failure_committed = true;
+        }
+        // This copy may allocate; that is intentional. If it throws, the
+        // canonical failure is already durable on the generation ticket.
+        return ref.ticket_->terminal_failure;
+    }
+
+    static std::vector<NativeActorRef::ReadyContinuation>
+    settle_closed_before_ready(const NativeActorRef& ref) noexcept {
         std::lock_guard<std::mutex> guard(ref.ticket_->mutex);
         if (ref.ticket_->settled) return {};
-        std::exception_ptr failure;
-        if (!result.ready)
-            failure = std::make_exception_ptr(std::runtime_error(result.error));
+        ref.ticket_->result.ready = false;
+        ref.ticket_->result.error.swap(
+            ref.ticket_->close_before_ready_error);
+        ref.ticket_->ready_promise.set_exception(
+            ref.ticket_->close_before_ready_failure);
+        ref.ticket_->settled = true;
+        std::vector<NativeActorRef::ReadyContinuation> callbacks;
+        callbacks.swap(ref.ticket_->waiters);
+        return callbacks;
+    }
+
+    static std::vector<NativeActorRef::ReadyContinuation>
+    settle_ticket_prepared(
+            const NativeActorRef& ref,
+            ActorReadyResult result,
+            std::exception_ptr failure) {
+        std::lock_guard<std::mutex> guard(ref.ticket_->mutex);
+        if (ref.ticket_->settled) return {};
         ref.ticket_->result = std::move(result);
         if (failure) ref.ticket_->ready_promise.set_exception(failure);
         else ref.ticket_->ready_promise.set_value();
@@ -695,6 +793,15 @@ private:
         std::vector<NativeActorRef::ReadyContinuation> callbacks;
         callbacks.swap(ref.ticket_->waiters);
         return callbacks;
+    }
+
+    static std::vector<NativeActorRef::ReadyContinuation> settle_ticket(
+            const NativeActorRef& ref, ActorReadyResult result) {
+        std::exception_ptr failure;
+        if (!result.ready)
+            failure = std::make_exception_ptr(std::runtime_error(result.error));
+        return settle_ticket_prepared(
+            ref, std::move(result), std::move(failure));
     }
 
     static std::vector<NativeActorRef::DoneContinuation> settle_done(
