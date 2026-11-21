@@ -5,6 +5,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+#if defined(__linux__)
+#include <cerrno>
+#include <sys/random.h>
+#endif
 
 namespace oreslang::runtime::vm::confidential {
 
@@ -73,6 +77,33 @@ public:
         ttl_ms_ = ttl_ms;
         state_ = State::ChallengeIssued;
         return true;
+    }
+
+    // Mint a challenge directly from Linux's kernel CSPRNG. On unsupported
+    // platforms or entropy failure, do not issue a challenge or fall back
+    // to deterministic randomness. This runs only on the trusted host,
+    // never on a real-time actor turn.
+    bool issue_os_challenge(std::uint64_t issued_at_ms, std::uint64_t ttl_ms,
+                            std::array<std::uint8_t, 32>& emitted) noexcept {
+        emitted.fill(0);
+#if defined(__linux__)
+        std::size_t done = 0;
+        while (done < emitted.size()) {
+            const auto n = ::getrandom(emitted.data() + done, emitted.size() - done, 0);
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0) { emitted.fill(0); return false; }
+            done += static_cast<std::size_t>(n);
+        }
+        if (!issue_challenge(emitted, issued_at_ms, ttl_ms)) {
+            emitted.fill(0);
+            return false;
+        }
+        return true;
+#else
+        (void) issued_at_ms;
+        (void) ttl_ms;
+        return false;
+#endif
     }
 
     // A single call consumes the challenge on success OR failure.
