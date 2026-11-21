@@ -22,6 +22,8 @@ FIXTURES = (
 DIAGNOSTIC = "native ActorGroup/Topic source lowering unsupported"
 CANONICAL_ATTO = "actor-pubsub-formal-suspends-v1.atto"
 CANONICAL_GIT_BLOB = "fe10d9e5018a3f030a10bc31586e851198aaa4a3"
+SHARE_BANG_DENIAL = "actor-pubsub-reject-unlowered-share-bang-try-publish.atto"
+SHARE_BANG_GIT_BLOB = "c562ad380bb283da9ffa26160653c1186ab63462"
 
 
 def verify_canonical_source(root: pathlib.Path) -> None:
@@ -45,6 +47,16 @@ def verify_fixture_identity(root: pathlib.Path) -> int:
                 f"{stem}: .atto differs from canonical .ores guest source"
             )
     verify_canonical_source(root)
+    # Pin canonical share! negative source independently of the legacy .ores
+    # twins; the compiler must refuse it BEFORE generating any guest IR.
+    source = fixtures / SHARE_BANG_DENIAL
+    data = source.read_bytes()
+    if not data or len(data) > 131072:
+        raise AssertionError("share! .atto denial source missing or too large")
+    digest = hashlib.sha1(b"blob " + str(len(data)).encode("ascii")
+                          + b"\0" + data).hexdigest()
+    if digest != SHARE_BANG_GIT_BLOB:
+        raise AssertionError("share! .atto denial fixture differs from pinned Git blob")
     return len(FIXTURES)
 
 
@@ -55,6 +67,7 @@ def verify_compiler_rejections(root: pathlib.Path, compiler: str) -> int:
     names = [stem + suffix for stem in FIXTURES
              for suffix in (".ores", ".atto")]
     names.append(CANONICAL_ATTO)
+    names.append(SHARE_BANG_DENIAL)
     for name in names:
         source = root / "contracts" / "v1" / "fixtures" / name
         run = subprocess.run(

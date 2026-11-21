@@ -1473,7 +1473,7 @@ if(BUILD_TESTING)
             --verify-fixtures-only)
     set_tests_properties(source_actor_pubsub_atto_fixture_identity PROPERTIES TIMEOUT 15)
     # Compiler-negative gate: both legacy extensions and the canonical
-    # suspends-only .atto guest must reject unsupported ActorGroup/Topic.
+    # suspends-only .atto and canonical share! try_publish negative must fail closed.
     # Successful rejection is not native source pub-sub execution.
     add_test(NAME reject_shared_actor_pubsub_source_corpus
         COMMAND "${Python3_EXECUTABLE}"

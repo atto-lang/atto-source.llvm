@@ -87,3 +87,9 @@ without copying an owning String struct by value. `Subscription.next()` also
 remains blocked on continuation-aware nonblocking read lowering. Therefore the
 positive String golden fixture still rejects before IR and is not counted as
 LLVM source parity.
+
+## Canonical `share! try_publish` compiler-negative gate (2026-11-21)
+
+The original actor.group and Topic<T> preflight did not explicitly reject a call to `imported_topic.try_publish(share! event)?` where the topic handle is provided by an enclosing scope. The parser gate now recognizes the bare `.try_publish` member and fails with the existing `native ActorGroup/Topic source lowering unsupported` diagnostic before native IR emission; it does not reserve free functions named `try_publish`. `tests/actor_pubsub_source_gate.py` pins a new `.atto` negative fixture by Git blob `c562ad380bb283da9ffa26160653c1186ab63462` and makes the exact compiler-negative CTest require it.
+
+**NOT_IMPLEMENTED / NOT_EXECUTED:** This is a compiler preflight hardening change on the existing LLVM pub/sub PR. It is not successful LLVM guest lowering, not a typed Result ABI, not sanitizer execution, and not Atto Ensemble 28-case guest parity. See [cross-backend gate #551](https://github.com/atto-lang/atto-platform-conformance/pull/551). Independent source-local CTest, ASan and UBSan evidence remains required.
