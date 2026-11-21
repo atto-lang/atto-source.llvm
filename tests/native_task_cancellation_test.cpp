@@ -358,6 +358,36 @@ static void admission_and_retirement_have_one_linearization_point() {
     assert(!invoked);
 }
 
+static void exact_parent_request_scope_admission() {
+    auto parent = TaskCancellation::root();
+    auto unrelated = TaskCancellation::root();
+    auto child = parent->child();
+    unsigned calls = 0;
+    assert(!child->with_active_child_of(unrelated, [&] {
+        ++calls; return true;
+    }));
+    assert(child->with_active_child_of(parent, [&] {
+        ++calls; return true;
+    }));
+    assert(calls == 1);
+    child->adopt_into(unrelated);
+    assert(!child->with_active_child_of(parent, [&] {
+        ++calls; return true;
+    }));
+    assert(child->with_active_child_of(unrelated, [&] {
+        ++calls; return true;
+    }));
+    assert(calls == 2);
+    assert(unrelated->cancel("request-shutdown"));
+    assert(!child->with_active_child_of(unrelated, [&] {
+        ++calls; return true;
+    }));
+    assert(calls == 2);
+    child->retire();
+    unrelated->retire();
+    parent->retire();
+}
+
 static void invalid_reasons_fail_without_cancelling() {
     auto root = TaskCancellation::root();
     for (const std::string& invalid :
@@ -397,4 +427,5 @@ int main() {
     retirement_drains_throwing_revoker_before_observer_cleanup();
     admission_and_retirement_have_one_linearization_point();
     invalid_reasons_fail_without_cancelling();
+    exact_parent_request_scope_admission();
 }

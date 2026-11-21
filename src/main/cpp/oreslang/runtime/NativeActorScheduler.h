@@ -228,6 +228,16 @@ int ores_native_actor_scheduler_is_current_actor(
  * authenticated current turn. */
 int ores_native_actor_scheduler_current_execution_context(
     OresNativeActorScheduler* scheduler, OresNativeExecutionContext* out);
+/* Trusted-host DATA envelope identity of the current physically executing
+ * callback. Not a guest capability: the argument is the scheduler-delivered
+ * mailbox payload, never ambient producer-thread provenance. Returns 0 for
+ * CONTROL, wake, panic, outside turn, or wrong actor/scheduler.
+ * The dispatch bridge MUST mint distinct nonreused request tickets and pass
+ * them as the actual scheduler DATA payload for each HTTP request.
+ */
+int ores_native_actor_scheduler_current_data_payload(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
+    uint64_t* out_payload);
 /* Host CONTROL-plane wake only: signals an existing scheduler condition.
  * Does not admit actor mail, start workers, invoke guest code, or count as
  * a supervisor delivery receipt. Returns zero once retired.

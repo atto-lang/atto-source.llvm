@@ -9,6 +9,26 @@ static void check(bool success, const char* description) {
     if (!success) throw std::runtime_error(description);
 }
 int main() {
+    // Complete scheduler-domain / actor-slot / generation identity is
+    // required for HTTP request physical leases, even if a legacy IO ticket
+    // happens to share the same numeric actor_id and operation generation.
+    {
+        const AsyncIoTicket t{42,7,15};
+        PinnedContinuationGate plain(t);
+        check(!plain.matches_request_owner({42,3,7}),
+              "ticket-only I/O gate accidentally authorized request ownership");
+        PinnedContinuationGate actor_bound(t,{42,3,7});
+        PinnedContinuationGate inconsistent({42,8,15},{42,3,7});
+        check(!inconsistent.matches_request_owner({42,3,7}),
+              "I/O operation generation mismatched the bound actor incarnation");
+        check(actor_bound.matches_request_owner({42,3,7}),
+              "registered complete owner identity was lost");
+        check(!actor_bound.matches_request_owner({42,4,7}) &&
+              !actor_bound.matches_request_owner({42,3,8}) &&
+              !actor_bound.matches_request_owner({43,3,7}) &&
+              !actor_bound.matches_request_owner({0,3,7}),
+              "foreign actor slot, domain or incarnation acquired I/O request authority");
+    }
     for (std::uint64_t i = 1; i <= 1200; ++i) {
         AsyncIoTicket token{21, i + 40, i};
         PinnedContinuationGate gate(token);
@@ -102,5 +122,83 @@ int main() {
               gate.broker_acknowledge(token) && gate.try_claim_resume(token) &&
               gate.finish_resume(token) && gate.try_retire(token),
               "bounded frame leaked after completion");
+    }
+    // Two concurrent host threads race request-lease binding against
+    // terminal cleanup. Exactly one authority wins, and an already-retired
+    // operation can never acquire a new request pin.
+    for (std::uint64_t iteration=1; iteration<=256; ++iteration) {
+        const AsyncIoTicket token{67,iteration,iteration+2000};
+        PinnedContinuationGate gate(token);
+        std::atomic<bool> start{false},bound{false},normal_retired{false};
+        std::thread registrar([&] {
+            while(!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            const bool reserved=gate.try_bind_request(token);
+            if(reserved)
+                check(gate.commit_request_binding(token),
+                      "request reservation failed irreversible publication");
+            bound.store(reserved,std::memory_order_release);
+        });
+        std::thread cleanup([&] {
+            while(!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            check(gate.settle(token,AsyncIoTerminal::cancelled),
+                  "missing terminal cancellation");
+            check(gate.broker_acknowledge(token) &&
+                  gate.try_claim_resume(token) && gate.finish_resume(token),
+                  "broker or scheduler cleanup barrier absent");
+            normal_retired.store(gate.try_retire(token),
+                                 std::memory_order_release);
+        });
+        start.store(true,std::memory_order_release);
+        registrar.join(); cleanup.join();
+        if(bound.load(std::memory_order_acquire)) {
+            check(!normal_retired.load(std::memory_order_acquire) &&
+                  gate.request_binding_state()==2,
+                  "normal retirement escaped a live request binding");
+            check(!gate.try_bind_request(token) &&
+                  !gate.try_retire(token),
+                  "duplicate binding or unowned retirement admitted");
+            check(gate.try_retire_bound_request(token),
+                  "bound request could not retire after physical completion");
+        } else {
+            if(!normal_retired.load(std::memory_order_acquire))
+                check(gate.try_retire(token),
+                      "rejected binding stranded terminal operation");
+            check(gate.request_binding_state()==3,
+                  "unbound operation not terminally retired");
+        }
+        check(gate.retired() && gate.request_binding_state()==3 &&
+              !gate.try_bind_request(token) &&
+              !gate.try_retire_bound_request(token) &&
+              !gate.try_retire(token),
+              "retired operation resurrected request or double-retired");
+    }
+    // Cancellation before registry pin publication permits rollback of only
+    // the still-unpublished binding. Published leases must use bound retirement.
+    {
+        const AsyncIoTicket token{67,999,88};
+        PinnedContinuationGate gate(token);
+        check(!gate.try_bind_request({67,999,89}),
+              "wrong operation could reserve request");
+        check(gate.try_bind_request(token) &&
+              !gate.try_bind_request(token),
+              "one-operation request reservation was not exclusive");
+        check(gate.abort_request_binding(token) &&
+              gate.request_binding_state()==0,
+              "failed registry admission did not release its reservation");
+        check(gate.try_bind_request(token) &&
+              gate.commit_request_binding(token),
+              "aborted, unpublished bind cannot retry and publish");
+        check(!gate.abort_request_binding(token) &&
+              gate.request_binding_state()==2,
+              "published request was illegally unbound");
+        check(gate.settle(token,AsyncIoTerminal::cancelled) &&
+              gate.broker_acknowledge(token) &&
+              gate.try_claim_resume(token) && gate.finish_resume(token),
+              "cancel cleanup absent");
+        check(!gate.try_retire(token) &&
+              gate.try_retire_bound_request(token),
+              "bound owner was bypassed at cancellation cleanup");
     }
 }
