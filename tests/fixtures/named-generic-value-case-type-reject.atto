@@ -1,0 +1,3 @@
+// Generic type argument labels are case-sensitive (foo != Foo).
+fnc identity<foo=int>(foo value):int { return value; }
+pub fnc main():int { return identity<Foo=int>(value:42); }

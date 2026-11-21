@@ -46,7 +46,19 @@ public:
           root_provider_bits(admitted_provider_bits) {}
     Program run(const std::string& path, std::string text, SourceIdentity identity) {
         read_bytes = text.size();
-        visit(fs::canonical(path), std::move(text), identity, 0, false,
+        const fs::path submitted(path);
+        // A source filename is an explicit dialect boundary. Do not
+        // silently interpret arbitrary, extensionless or case-folded host
+        // filenames as the legacy language while accepting .atto sources.
+        if (submitted.extension() != ".atto" && submitted.extension() != ".ores")
+            throw std::runtime_error("native entry source must use .atto or .ores extension");
+        const fs::path physical = fs::canonical(submitted);
+        // A .atto alias of a physical .ores file must not silently change
+        // extensionless import resolution to the legacy dialect (or vice versa).
+        // Same-suffix symlinks remain valid and descriptor identity is retained.
+        if (submitted.extension() != physical.extension())
+            throw std::runtime_error("native source suffix changes across symlink");
+        visit(physical, std::move(text), identity, 0, false,
               frontend::CompilerLibraryTier::Core, root_provider_bits);
         if (units.front()->program.imports.empty()) {
             auto root = std::move(units.front()->program);
@@ -260,13 +272,23 @@ private:
                     if (raw.rfind("./", 0) != 0 && raw.rfind("../", 0) != 0)
                         fail(current, "native imports require relative ./ or ../, project-root +/, or compiler-owned ores.core/* source paths");
                     dependency = fs::path(raw);
-                    if (dependency.extension().empty()) dependency += ".ores";
-                    if (dependency.extension() != ".ores")
-                        fail(current, "native module source must use .ores extension");
+                    // An extensionless import follows the importing source
+                    // dialect. Explicit .atto/.ores imports remain supported
+                    // for migration; never guess the other suffix on failure.
+                    // Keep canonicalization and descriptor identity checks below.
+                    if (dependency.extension().empty())
+                        dependency += current.path.extension() == ".atto"
+                            ? ".atto" : ".ores";
+                    if (dependency.extension() != ".atto" &&
+                            dependency.extension() != ".ores")
+                        fail(current, "native module source must use .atto or .ores extension");
                     dependency = current.path.parent_path() / dependency;
+                    const auto requested_extension = dependency.extension();
                     std::error_code error;
                     dependency = fs::canonical(dependency, error);
                     if (error) fail(current, "cannot resolve native import '" + raw + "'");
+                    if (dependency.extension() != requested_extension)
+                        fail(current, "native import source suffix changes across symlink");
                 }
 
                 const auto known = paths.find(dependency.string());
@@ -287,6 +309,12 @@ private:
                     // not bypass self-edge rejection or duplicate unit identity.
                     for (std::size_t i = 0; i < units.size(); ++i) {
                         if (same_file(units[i]->identity, child_identity)) {
+                            // One inode cannot be admitted as both .atto and
+                            // .ores. Hard links bypass canonical-suffix checks;
+                            // accepting both would select an import dialect
+                            // based on visitation order.
+                            if (units[i]->path.extension() != dependency.extension())
+                                fail(current, "native source hard-link aliases disagree on .atto/.ores dialect");
                             selected = i;
                             break;
                         }

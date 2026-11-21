@@ -1175,6 +1175,55 @@ if(BUILD_TESTING)
           "$<TARGET_FILE:oreslang-llvmc>"
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/named-call-source-order.ores")
     set_tests_properties(native_named_call_lexical_ir_order PROPERTIES TIMEOUT 30)
+    # Native i64-only intersection of named compile-time generic arguments
+    # and named runtime value arguments. IR lexical order is checked even on
+    # machines without Clang; linked guest execution is a separate gate.
+    add_test(NAME native_atto_named_generic_value_lexical_ir_order
+        COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" named-call-order
+          "$<TARGET_FILE:oreslang-llvmc>"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/named-generic-value-source-order.ores")
+    set_tests_properties(native_atto_named_generic_value_lexical_ir_order
+        PROPERTIES TIMEOUT 30)
+    if(ORE_CLANG)
+        oreslang_contract_test(native_atto_named_generic_value_combined_guest
+            named-generic-value-combined-main.ores
+            --ir "call i64 @encode" --run 42 --clang "${ORE_CLANG}")
+        # The AttoLang filename is a genuine compiler input, not a
+        # declaration-only manifest or renamed .ores test label.
+        oreslang_contract_test(native_atto_named_generic_value_dot_atto_guest
+            named-generic-value-combined-main.atto
+            --ir "call i64 @encode" --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_atto_named_generic_value_lowercase_dot_atto_guest
+            named-generic-value-lowercase-main.atto
+            --ir "call i64 @encode" --run 42 --clang "${ORE_CLANG}")
+        # 24 named type slots need ~96 lookahead tokens; ensure the parser
+        # recognizes a generic call rather than falling back to comparison.
+        oreslang_contract_test(native_atto_named_generic_value_large_type_list_guest
+            named-generic-value-large-arity-main.atto
+            --ir "call i64 @identity" --run 42 --clang "${ORE_CLANG}")
+        # Type parameter names and runtime formal labels may overlap.
+        # Their mappings must stay independent and preserve formal ABI order.
+        oreslang_contract_test(native_atto_named_generic_value_overlapping_labels_guest
+            named-generic-value-overlapping-labels-main.atto
+            --ir "call i64 @combine" --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_atto_named_generic_value_routine_guest
+            named-generic-value-routine-main.ores
+            --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_atto_named_generic_value_inference_hole_guest
+            named-generic-value-hole-main.ores
+            --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_atto_named_generic_value_positional_prefix_guest
+            named-generic-value-prefix-main.ores
+            --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_atto_named_generic_value_source_order_guest
+            named-generic-value-source-order.ores
+            --run 12 --clang "${ORE_CLANG}")
+        add_test(NAME native_atto_named_generic_value_36_guest_matrix
+            COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" named-generic-matrix
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}")
+        set_tests_properties(native_atto_named_generic_value_36_guest_matrix
+            PROPERTIES TIMEOUT 600)
+    endif()
     if(ORE_CLANG)
         oreslang_contract_test(native_named_call_reordered_guest named-call-reordered-main.ores
             --run 43 --clang "${ORE_CLANG}")
@@ -2535,6 +2584,42 @@ if(BUILD_TESTING)
         --diagnostic "positional argument cannot follow named argument")
     oreslang_contract_test(native_named_call_mut_borrow_conflict named-call-mut-borrow-after-loan-reject.ores
         --diagnostic "field read conflicts with active mutable borrow")
+    # These cases must be rejected by the REAL LLVM frontend without IR.
+    # A generic T with native i64 representation cannot admit bool or string
+    # even if a named value call correctly resolves T's formal slot.
+    oreslang_contract_test(native_atto_named_generic_reject_bool_as_i64
+        named-generic-value-bool-reject.ores
+        --diagnostic "requires int ABI, got bool")
+    oreslang_contract_test(native_atto_named_generic_reject_string_as_i64
+        named-generic-value-string-reject.ores
+        --diagnostic "requires int ABI, got string")
+    oreslang_contract_test(native_atto_named_generic_reject_reordered_bool
+        named-generic-value-reordered-bool-reject.ores
+        --diagnostic "requires int ABI, got bool")
+    oreslang_contract_test(native_atto_named_generic_reject_duplicate_type
+        named-generic-value-duplicate-type-reject.ores
+        --diagnostic "duplicate generic argument")
+    oreslang_contract_test(native_atto_named_generic_reject_unknown_type
+        named-generic-value-unknown-type-reject.ores
+        --diagnostic "unknown named generic argument")
+    oreslang_contract_test(native_atto_named_generic_reject_positional_after_named_type
+        named-generic-value-type-order-reject.ores
+        --diagnostic "positional generic argument after named argument")
+    oreslang_contract_test(native_atto_named_generic_reject_duplicate_value_slot
+        named-generic-value-duplicate-value-reject.ores
+        --diagnostic "duplicate binding of parameter")
+    oreslang_contract_test(native_atto_named_generic_reject_unknown_value
+        named-generic-value-unknown-value-reject.ores
+        --diagnostic "unknown named argument")
+    oreslang_contract_test(native_atto_named_generic_reject_uninferable_hole
+        named-generic-value-hole-missing-reject.ores
+        --diagnostic "cannot infer generic parameter")
+    oreslang_contract_test(native_atto_named_generic_reject_case_sensitive_type_atto
+        named-generic-value-case-type-reject.atto
+        --diagnostic "unknown named generic argument 'Foo'")
+    oreslang_contract_test(native_atto_named_generic_reject_case_sensitive_value_atto
+        named-generic-value-case-value-reject.atto
+        --diagnostic "unknown named argument 'Value'")
     oreslang_contract_test(native_named_member_positional_array_baseline
         named-member-array-positional-main.ores
         --ir "define i64 @__oreslang_guest_main")

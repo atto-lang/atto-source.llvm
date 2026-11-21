@@ -122,13 +122,44 @@ def main():
         'main.ores': 'import module Math from "./math"; pub fnc main():int{return Math.identity<int>(42);}',
         'math.ores': 'define module Math as pub fnc identity<T>(T x):T{return x;} end',
     }, 42))
+    # The extensionless resolver follows the importing source's suffix.
+    # Use actual .atto compiler inputs and link+execute the native guest.
+    positives.append(('atto-named-generic-module', {
+        'main.atto': 'import module Math from "./math"; pub fnc main():int{return Math.add<B=int,A=int>(y:2,x:40);}',
+        'math.atto': 'define module Math as pub fnc add<A,B=int>(A x,B y):int{return x+y;} end',
+    }, 42))
+    positives.append(('atto-project-root', {
+        'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}',
+        '.ores.pkg.toml': 'schema_version = "1"\n',
+        'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+    }, 42))
+    positives.append(('atto-import-explicit-legacy', {
+        'main.atto': 'import module Lib from "./lib.ores"; pub fnc main():int{return Lib.answer();}',
+        'lib.ores': 'define module Lib as pub fnc answer():int{return 42;} end',
+    }, 42))
+    positives.append(('legacy-import-explicit-atto', {
+        'main.ores': 'import module Lib from "./lib.atto"; pub fnc main():int{return Lib.answer();}',
+        'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+    }, 42))
+    positives.append(('atto-ambiguous-pair-chooses-atto', {
+        'main.atto': 'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}',
+        'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+        'lib.ores': 'define module Lib as pub fnc answer():int{return 99;} end',
+    }, 42))
+    positives.append(('legacy-ambiguous-pair-chooses-ores', {
+        'main.ores': 'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}',
+        'lib.atto': 'define module Lib as pub fnc answer():int{return 99;} end',
+        'lib.ores': 'define module Lib as pub fnc answer():int{return 42;} end',
+    }, 42))
+
     passed = compared = 0
     with tempfile.TemporaryDirectory(prefix='ores-native-imports-') as temporary:
         root = Path(temporary)
         for name, files, expected in positives:
             directory = root/name; directory.mkdir()
             for path, source in files.items(): (directory/path).write_text(source)
-            result = run([a.compiler, str(directory/'main.ores')])
+            entry = directory/('main.atto' if 'main.atto' in files else 'main.ores')
+            result = run([a.compiler, str(entry)])
             if result.returncode: raise AssertionError((name, result.stderr))
             if name == 'private-helper' and 'define internal i64 @__ores_module_1.delta(' not in result.stdout:
                 raise AssertionError('private imported helper leaked as an external ABI symbol')
@@ -140,8 +171,8 @@ def main():
             executed = run([str(directory/'guest')], env={'PATH':'/nonexistent'})
             if executed.returncode != expected: raise AssertionError((name, executed.returncode, executed.stderr))
             for path in files: (directory/(path+'.hidden')).rename(directory/path)
-            if a.java_command and name not in ('named-arguments-native-only', 'qualified-generic-native-only'):
-                reference = run([*a.java_command, str(directory/'main.ores')])
+            if a.java_command and 'main.atto' not in files and name not in ('named-arguments-native-only', 'qualified-generic-native-only'):
+                reference = run([*a.java_command, str(entry)])
                 if reference.returncode != expected: raise AssertionError(('Java differential', name, reference.returncode, reference.stderr))
                 compared += 1
             passed += 1
@@ -150,6 +181,36 @@ def main():
             (directory/'main.ores').write_text(main_source)
             (directory/'lib.ores').write_bytes(library_source if isinstance(library_source, bytes) else library_source.encode())
             result = run([a.compiler, str(directory/'main.ores')])
+            if not result.returncode or result.stdout or diagnostic not in result.stderr:
+                raise AssertionError((name, diagnostic, result.returncode, result.stdout[:150], result.stderr))
+            passed += 1
+        # Valid source bytes under an unrecognized entry filename must
+        # never acquire .ores semantics by an implicit fallback.
+        for filename in ('main', 'main.txt', 'main.ATTO', 'main.ores.bak'):
+            name='entry-reject-'+filename.replace('.', '-')
+            directory=root/name; directory.mkdir()
+            entry=directory/filename
+            entry.write_text('pub fnc main():int{return 42;}')
+            result=run([a.compiler, str(entry)])
+            diagnostic='native entry source must use .atto or .ores extension'
+            if not result.returncode or result.stdout or diagnostic not in result.stderr:
+                raise AssertionError((name, result.returncode, result.stdout[:150], result.stderr))
+            passed+=1
+        # Wrong suffix and missing implicit .atto are compiler rejects,
+        # not permissive fallbacks to an existing legacy source.
+        for name, raw, extra_files, diagnostic in (
+            ('atto-no-implicit-legacy', './lib', {'lib.ores': library}, 'cannot resolve native import'),
+            ('atto-reject-unknown-extension', './lib.txt', {'lib.txt': library}, 'must use .atto or .ores extension'),
+            ('atto-no-implicit-project-legacy', '+/lib',
+                {'.ores.pkg.toml': 'schema_version = "1"\n', 'lib.ores': library},
+                'cannot resolve native project-root import'),
+        ):
+            directory = root/name; directory.mkdir()
+            (directory/'main.atto').write_text(
+                f'import module Lib from "{raw}"; pub fnc main():int{{return 0;}}')
+            for filename, text in extra_files.items():
+                (directory/filename).write_text(text)
+            result = run([a.compiler, str(directory/'main.atto')])
             if not result.returncode or result.stdout or diagnostic not in result.stderr:
                 raise AssertionError((name, diagnostic, result.returncode, result.stdout[:150], result.stderr))
             passed += 1
@@ -169,6 +230,67 @@ def main():
         if not result.returncode or result.stdout or 'multiline TOML' not in result.stderr:
             raise AssertionError(('project-root multiline manifest',result.stderr))
         passed+=1
+        # TOML's nested project.root table syntax is not implemented by
+        # the bounded native manifest reader. Reject it before any guest IR;
+        # never silently reinterpret a caller-selected package root.
+        manifest_rejects = [
+            ('nested-project-root', '[project.root]\nnote = "ignored"\n', 'project.root'),
+            ('nested-project-root-array', '[[project.root]]\nnote = "ignored"\n', 'project.root'),
+            ('nested-project-root-quoted', "['project'.'root']\nnote = 'ignored'\n", 'project.root'),
+            ('nested-project-root-mixed', '["project" . "root"] # comment\nnote = "ignored"\n', 'project.root'),
+            ('project-array', '[[project]]\nroot = "src"\n', 'project.root'),
+            ('project-array-quoted', '[["project"]]\nroot = "src"\n', 'project.root'),
+            ('project-array-spaced', "[[ 'project' ]]\nroot = 'src'\n", 'project.root'),
+            ('escaped-project-key', '["pro\\u006aect".root]\nnote="ignored"\n', 'escaped keys'),
+            ('escaped-root-key', '[project."ro\\u006ft"]\nnote="ignored"\n', 'escaped keys'),
+            ('escaped-root-assignment', 'project."ro\\u006ft" = "src"\n', 'escaped keys'),
+            ('escaped-project-assignment', '"proj\\u0065ct".root = "src"\n', 'escaped keys'),
+            ('nested-project-descendant', '[project.root.extra]\nnote="ignored"\n', 'nested project table'),
+            ('unknown-project-subtable', '[project.logging]\nnote="ignored"\n', 'nested project table'),
+            ('project-dotted-subkey', 'project.root.path = "elsewhere"\n', 'project.root'),
+            ('project-dotted-spaced-subkey', 'project . root . path = "elsewhere"\n', 'project.root'),
+            ('project-dotted-other', 'project.logging = "debug"\n', 'project.root'),
+            ('project-dotted-quoted', '"project" . "root" . "extra" = "x"\n', 'project.root'),
+            ('section-root-subkey', '[project]\nroot.path = "elsewhere"\n', 'project.root'),
+            ('section-root-spaced-subkey', '[project]\nroot . config = "elsewhere"\n', 'project.root'),
+            ('section-root-quoted-subkey', '[project]\n"root" . "config" = "elsewhere"\n', 'project.root'),
+            ('section-root-literal-subkey', "[project]\n'root' . 'path' = 'elsewhere'\n", 'project.root'),
+            ('duplicate-project-table', '[project]\nname="first"\n[project]\nname="second"\n', 'duplicate project table'),
+        ]
+        for name, manifest_tail, diagnostic in manifest_rejects:
+            directory=root/name; directory.mkdir()
+            (directory/'main.atto').write_text(
+                'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}')
+            (directory/'lib.atto').write_text(
+                'define module Lib as pub fnc answer():int{return 42;} end')
+            (directory/'.ores.pkg.toml').write_text('schema_version = "1"\n' + manifest_tail)
+            result=run([a.compiler,str(directory/'main.atto')])
+            if not result.returncode or result.stdout or diagnostic not in result.stderr:
+                raise AssertionError((name, diagnostic, result.returncode, result.stdout[:150], result.stderr))
+            passed+=1
+        # Dotted metadata outside [project] remains supported. Exercise
+        # the real compiler, Clang native link and guest exit rather than
+        # relying solely on the manifest reader's direct C++ oracle.
+        directory=root/'project-root-dotted-build-allowed'; directory.mkdir()
+        (directory/'.ores.pkg.toml').write_text(
+            'schema_version = "1"\n[build]\nroot . config = "src"\n'
+            'project . root . path = "metadata"\n'
+            '[build.metadata]\nnote = "safe"\n[project]\nname = "demo"\n')
+        (directory/'lib.atto').write_text(
+            'define module Lib as pub fnc answer():int{return 42;} end')
+        (directory/'main.atto').write_text(
+            'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}')
+        result=run([a.compiler,str(directory/'main.atto')])
+        if result.returncode:
+            raise AssertionError(('project-root dotted build positive compile', result.stderr))
+        (directory/'guest.ll').write_text(result.stdout)
+        linked=run([a.clang,str(directory/'guest.ll'),'-O0','-o',str(directory/'guest')])
+        if linked.returncode:
+            raise AssertionError(('project-root dotted build positive link', linked.stderr))
+        guest=run([str(directory/'guest')])
+        if guest.returncode != 42:
+            raise AssertionError(('project-root dotted build positive guest', guest.returncode, guest.stderr))
+        passed+=1
         # Physical aliases are not new code-unit identities.
         for alias in ('symlink', 'hardlink'):
             directory=root/alias; directory.mkdir()
@@ -181,6 +303,85 @@ def main():
             if not result.returncode or result.stdout or 'cannot import itself' not in result.stderr:
                 raise AssertionError((alias,result.stderr))
             passed+=1
+        # Hard links share file identity without a symlink path.
+        # Cross-dialect deduplication would depend on import visitation order.
+        for first, second in (('.atto', '.ores'), ('.ores', '.atto')):
+            name=f'hardlink-cross-dialect-{first[1:]}-first'
+            directory=root/name; directory.mkdir()
+            (directory/('lib'+first)).write_text(
+                'define module Lib as pub fnc answer():int{return 42;} end')
+            os.link(directory/('lib'+first), directory/('lib'+second))
+            (directory/'main.atto').write_text(
+                f'import module Lib as A from "./lib{first}"; '
+                f'import module Lib as B from "./lib{second}"; '
+                'pub fnc main():int{return A.answer()+B.answer();}')
+            result=run([a.compiler, str(directory/'main.atto')])
+            diagnostic='native source hard-link aliases disagree on .atto/.ores dialect'
+            if not result.returncode or result.stdout or diagnostic not in result.stderr:
+                raise AssertionError((name, result.returncode, result.stdout[:150], result.stderr))
+            passed+=1
+        for source_dialect, alias_dialect in (('.atto', '.ores'), ('.ores', '.atto')):
+            name=f'hardlink-self-cross-dialect-{source_dialect[1:]}'
+            directory=root/name; directory.mkdir()
+            (directory/('main'+source_dialect)).write_text(
+                f'import module Self from "./alias{alias_dialect}"; '
+                'define module Self as pub fnc main():int{return 0;} end')
+            os.link(directory/('main'+source_dialect), directory/('alias'+alias_dialect))
+            result=run([a.compiler, str(directory/('main'+source_dialect))])
+            diagnostic='native source hard-link aliases disagree on .atto/.ores dialect'
+            if not result.returncode or result.stdout or diagnostic not in result.stderr:
+                raise AssertionError((name, result.returncode, result.stdout[:150], result.stderr))
+            passed+=1
+        # A symlink may preserve source identity but must not switch the
+        # importing dialect between the canonical .atto and legacy .ores.
+        # The same-suffix symlink remains permitted.
+        for logical, physical in (('.atto', '.ores'), ('.ores', '.atto')):
+            name=f'root-cross-suffix-{logical[1:]}'
+            directory=root/name; directory.mkdir()
+            (directory/('real'+physical)).write_text('pub fnc main():int{return 42;}')
+            entry=directory/('main'+logical)
+            entry.symlink_to('real'+physical)
+            result=run([a.compiler,str(entry)])
+            if not result.returncode or result.stdout or 'native source suffix changes across symlink' not in result.stderr:
+                raise AssertionError((name, result.returncode, result.stdout[:150], result.stderr))
+            passed+=1
+        for mode in ('relative', 'project-root'):
+            for logical, physical in (('.atto', '.ores'), ('.ores', '.atto')):
+                name=f'{mode}-cross-suffix-{logical[1:]}'
+                directory=root/name; directory.mkdir()
+                (directory/('real'+physical)).write_text(
+                    'define module Lib as pub fnc answer():int{return 42;} end')
+                (directory/('lib'+logical)).symlink_to('real'+physical)
+                if mode == 'project-root':
+                    (directory/'.ores.pkg.toml').write_text('schema_version = "1"\n')
+                reference = '+/lib' if mode == 'project-root' else './lib'
+                entry=directory/('main'+logical)
+                entry.write_text(
+                    f'import module Lib from "{reference}"; pub fnc main():int{{return Lib.answer();}}')
+                result=run([a.compiler,str(entry)])
+                diagnostic=('native project-root import source suffix changes across symlink'
+                            if mode=='project-root' else
+                            'native import source suffix changes across symlink')
+                if not result.returncode or result.stdout or diagnostic not in result.stderr:
+                    raise AssertionError((name, result.returncode, result.stdout[:150], result.stderr))
+                passed+=1
+        directory=root/'atto-same-suffix-symlink'; directory.mkdir()
+        (directory/'real.atto').write_text(
+            'define module Lib as pub fnc answer():int{return 42;} end')
+        (directory/'lib.atto').symlink_to('real.atto')
+        (directory/'main.atto').write_text(
+            'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}')
+        result=run([a.compiler,str(directory/'main.atto')])
+        if result.returncode:
+            raise AssertionError(('atto same suffix import symlink', result.stderr))
+        (directory/'guest.ll').write_text(result.stdout)
+        linked=run([a.clang,str(directory/'guest.ll'),'-O0','-o',str(directory/'guest')])
+        if linked.returncode:
+            raise AssertionError(('atto same suffix import symlink link', linked.stderr))
+        guest=run([str(directory/'guest')])
+        if guest.returncode != 42:
+            raise AssertionError(('atto same suffix import symlink guest', guest.returncode, guest.stderr))
+        passed+=1
         directory=root/'fifo'; directory.mkdir()
         (directory/'main.ores').write_text('import module Lib from "./lib"; pub fnc main():int{return 0;}')
         if hasattr(os, 'mkfifo'):

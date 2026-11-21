@@ -122,6 +122,82 @@ int main() {
                   [&] { (void)resolve(dir/"main.ores", "+/lib"); });
     }
     {
+        const auto dir = temp / "project-root-table-forms";
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.atto", "");
+        const std::string schema = "schema_version = \"1\"\n";
+        const std::string fixtures[] = {
+            "[project.root]\nnote = \"unsupported\"\n",
+            "[[project.root]]\nnote = \"unsupported\"\n",
+            "['project'.'root']\nnote = \"unsupported\"\n",
+            "[\"project\" . \"root\"] # nested\nnote = \"unsupported\"\n",
+            "[[project]]\nroot = \"src\"\n",
+            "[[\"project\"]]\nroot = \"src\"\n",
+            "[[ 'project' ]]\nroot = \"src\"\n",
+        };
+        for (std::size_t i = 0; i < sizeof(fixtures)/sizeof(fixtures[0]); ++i) {
+            write_text(dir/".ores.pkg.toml", schema + fixtures[i]);
+            must_fail("nested project root table " + std::to_string(i), "project.root",
+                      [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+        }
+        // TOML basic keys can Unicode-escape project/root to evade a
+        // byte-only table-name check. This bounded parser rejects escapes
+        // in keys rather than pretending to decode full TOML.
+        const std::string escaped_keys[] = {
+            "[\"pro\\u006aect\".root]\nnote=\"unsupported\"\n",
+            "[project.\"ro\\u006ft\"]\nnote=\"unsupported\"\n",
+            "project.\"ro\\u006ft\" = \"src\"\n",
+            "\"proj\\u0065ct\".root = \"src\"\n",
+        };
+        for (std::size_t i = 0; i < sizeof(escaped_keys)/sizeof(escaped_keys[0]); ++i) {
+            write_text(dir/".ores.pkg.toml", schema + escaped_keys[i]);
+            must_fail("escaped project/root key " + std::to_string(i), "escaped keys",
+                      [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+        }
+        const std::string deeper_tables[] = {
+            "[project.root.extra]\nnote=\"unsupported\"\n",
+            "[project.logging]\nnote=\"unsupported\"\n",
+        };
+        for (std::size_t i = 0; i < sizeof(deeper_tables)/sizeof(deeper_tables[0]); ++i) {
+            write_text(dir/".ores.pkg.toml", schema + deeper_tables[i]);
+            must_fail("unsupported project subtable " + std::to_string(i), "nested project table",
+                      [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+        }
+        // A dotted key may contain whitespace and arbitrarily deep parts.
+        // Narrow TOML parsing must never accept unsupported project.* or
+        // [project] root.* assignments as harmless metadata.
+        const std::string dotted_keys[] = {
+            "project.root.path = \"elsewhere\"\n",
+            "project . root . path = \"elsewhere\"\n",
+            "project.logging = \"debug\"\n",
+            "\"project\" . \"root\" . \"extra\" = \"x\"\n",
+            "[project]\nroot.path = \"elsewhere\"\n",
+            "[project]\nroot . config = \"elsewhere\"\n",
+            "[project]\n\"root\" . \"config\" = \"elsewhere\"\n",
+            "[project]\n'root' . 'path' = 'elsewhere'\n",
+        };
+        for (std::size_t i = 0; i < sizeof(dotted_keys)/sizeof(dotted_keys[0]); ++i) {
+            write_text(dir/".ores.pkg.toml", schema + dotted_keys[i]);
+            must_fail("nested dotted project key " + std::to_string(i), "project.root",
+                      [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+        }
+        // A duplicated TOML table declaration is invalid even when no
+        // root key is present. Accepting it can hide conflicting policy.
+        write_text(dir/".ores.pkg.toml",
+                   schema + "[project]\nname=\"first\"\n[project]\nname=\"second\"\n");
+        must_fail("duplicate project table", "duplicate project table",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+    {
+        const auto dir = temp / "unrelated-root-table-allowed";
+        write_text(dir/".ores.pkg.toml",
+                   "schema_version = \"1\"\n[build.logging]\nname=\"safe\"\n[build]\nroot . config = \"src\"\nproject . root . path = \"metadata\"\n[project]\nname=\"demo\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.atto", "");
+        if (resolve(dir/"main.atto", "+/lib") != fs::canonical(dir/"lib.atto"))
+            throw std::runtime_error("unrelated build.root table must not alter source-root admission");
+    }
+    {
         const auto dir = temp / "traversal";
         write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"main.ores", "");
@@ -182,12 +258,126 @@ int main() {
     }
 #endif
     {
+        const auto dir = temp / "atto-extension";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"src/main.atto", "");
+        write_text(dir/"src/main.ores", "");
+        write_text(dir/"lib.atto", "");
+        write_text(dir/"lib.ores", "");
+        // Both files exist: extensionless imports must preserve source dialect.
+        if (resolve(dir/"src/main.atto", "+/lib") != fs::canonical(dir/"lib.atto"))
+            throw std::runtime_error("AttoLang project-root import selected legacy file");
+        if (resolve(dir/"src/main.ores", "+/lib") != fs::canonical(dir/"lib.ores"))
+            throw std::runtime_error("legacy project-root import selected AttoLang file");
+        // Explicit cross-extension import is unambiguous for migration.
+        if (resolve(dir/"src/main.atto", "+/lib.ores") != fs::canonical(dir/"lib.ores"))
+            throw std::runtime_error("explicit legacy source import mismatch");
+        if (resolve(dir/"src/main.ores", "+/lib.atto") != fs::canonical(dir/"lib.atto"))
+            throw std::runtime_error("explicit AttoLang source import mismatch");
+    }
+    {
+        const auto dir = temp / "atto-no-fallback";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.ores", "");
+        must_fail("AttoLang missing native source", "cannot resolve native project-root import",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+    {
+        const auto dir = temp / "atto-nested-package";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"nested/.ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"nested/lib.atto", "");
+        must_fail("AttoLang nested package boundary", "nested package boundary",
+                  [&] { (void)resolve(dir/"main.atto", "+/nested/lib"); });
+    }
+#if !defined(_WIN32)
+    {
+        const auto dir = temp / "atto-symlink-escape";
+        const auto outside = temp / "outside-source.atto";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(outside, "");
+        fs::create_symlink(outside, dir/"lib.atto");
+        must_fail("AttoLang symlink target escape", "escapes physical package root",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+#endif
+#if !defined(_WIN32)
+    {
+        const auto dir = temp / "atto-cross-suffix-importing-source";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"real.ores", "");
+        write_text(dir/"lib.atto", "");
+        fs::create_symlink("real.ores", dir/"main.atto");
+        must_fail("AttoLang source alias cannot switch dialect",
+                  "native importing source suffix changes across symlink",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+    {
+        const auto dir = temp / "legacy-cross-suffix-importing-source";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"real.atto", "");
+        write_text(dir/"lib.ores", "");
+        fs::create_symlink("real.atto", dir/"main.ores");
+        must_fail("legacy source alias cannot switch dialect",
+                  "native importing source suffix changes across symlink",
+                  [&] { (void)resolve(dir/"main.ores", "+/lib"); });
+    }
+    {
+        const auto dir = temp / "atto-cross-suffix-import-target";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"real.ores", "");
+        fs::create_symlink("real.ores", dir/"lib.atto");
+        must_fail("AttoLang target alias cannot switch dialect",
+                  "native project-root import source suffix changes across symlink",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+    {
+        const auto dir = temp / "legacy-cross-suffix-import-target";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.ores", "");
+        write_text(dir/"real.atto", "");
+        fs::create_symlink("real.atto", dir/"lib.ores");
+        must_fail("legacy target alias cannot switch dialect",
+                  "native project-root import source suffix changes across symlink",
+                  [&] { (void)resolve(dir/"main.ores", "+/lib"); });
+    }
+    {
+        const auto dir = temp / "atto-same-suffix-import-symlink";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"real-main.atto", "");
+        write_text(dir/"real-lib.atto", "");
+        fs::create_symlink("real-main.atto", dir/"main.atto");
+        fs::create_symlink("real-lib.atto", dir/"lib.atto");
+        if (resolve(dir/"main.atto", "+/lib") != fs::canonical(dir/"real-lib.atto"))
+            throw std::runtime_error("same-suffix AttoLang symlink import should remain valid");
+    }
+#endif
+    {
+        const auto dir = temp / "invalid-importing-source-extension";
+        write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
+        write_text(dir/"lib.atto", "");
+        write_text(dir/"lib.ores", "");
+        for (const char* filename : {"main", "main.txt", "main.ATTO", "main.ores.bak"}) {
+            write_text(dir/filename, "");
+            must_fail(std::string("invalid importing source ") + filename,
+                      "native importing source must use .atto or .ores extension",
+                      [&] { (void)resolve(dir/filename, "+/lib"); });
+        }
+    }
+    {
         const auto dir = temp / "extension";
         write_text(dir/".ores.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"main.ores", "");
+        write_text(dir/"main.atto", "");
         write_text(dir/"lib.txt", "");
-        must_fail("extension", ".ores source files",
+        must_fail("extension", ".atto or .ores source files",
                   [&] { (void)resolve(dir/"main.ores", "+/lib.txt"); });
+        must_fail("AttoLang extension", ".atto or .ores source files",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib.txt"); });
     }
 
     std::cout << "PASS project-root import resolver security cases\n";

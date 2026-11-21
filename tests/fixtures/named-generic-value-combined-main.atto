@@ -1,0 +1,7 @@
+// Canonical AttoLang .atto entrypoint, same native i64 ABI as the legacy fixture.
+fnc encode<A, B=int, C=B>(A first, B second): int {
+  return first * 10 + second;
+}
+pub fnc main(): int {
+  return encode<C=int, A=int>(second: 2, first: 4);
+}

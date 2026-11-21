@@ -1,0 +1,3 @@
+// Reordered labeled actual must be checked against its declared generic formal.
+fnc add<T>(int first, T second): int { return first + second; }
+pub fnc main(): int { return add<T=int>(second: true, first: 40); }

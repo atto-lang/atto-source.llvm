@@ -1,0 +1,3 @@
+// Explicit '_' forbids fallback to this default when there is no inference source.
+fnc fixed<T=int>(): int { return 42; }
+pub fnc main(): int { return fixed<T=_>(); }

@@ -5,9 +5,18 @@ on:
     paths:
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
       - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      - 'src/main/cpp/oreslang/frontend/ModuleLoader.cpp'
+      - 'src/main/cpp/oreslang/frontend/ProjectRootImport.hpp'
+      - 'src/main/cpp/oreslang/main.cpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
       - 'CMakeLists.txt'
       - 'tests/fixtures/named-call-*.ores'
       - 'tests/fixtures/named-member-*.ores'
+      - 'tests/fixtures/named-generic-value-*.ores'
+      - 'tests/fixtures/named-generic-value-*.atto'
+      - 'tests/project_root_import_test.cpp'
+      - 'tests/native_module_imports.py'
+      - 'tests/rust-harness/src/main.rs'
       - '.github/workflows/named-call-exact-head.yml'
   workflow_dispatch:
 
@@ -57,9 +66,38 @@ jobs:
             native_named_member_duplicate_label
             native_named_member_positional_after_named
             native_named_call_lexical_ir_order
+            native_named_call_reordered_guest
+            native_named_call_mixed_guest
+            native_named_call_mut_borrow_binding
+            native_named_call_overload_arity_guest
+            native_named_call_mut_borrow_conflict
             native_named_call_unknown_label
             native_named_call_duplicate_slot
             native_named_call_positional_after_named
+            native_atto_named_generic_value_lexical_ir_order
+            native_atto_named_generic_value_combined_guest
+            native_atto_named_generic_value_dot_atto_guest
+            native_atto_named_generic_value_lowercase_dot_atto_guest
+            native_atto_named_generic_value_large_type_list_guest
+            native_atto_named_generic_value_overlapping_labels_guest
+            native_source_module_graph_execution
+            native_project_root_import_security
+            native_atto_named_generic_value_routine_guest
+            native_atto_named_generic_value_inference_hole_guest
+            native_atto_named_generic_value_positional_prefix_guest
+            native_atto_named_generic_value_source_order_guest
+            native_atto_named_generic_value_36_guest_matrix
+            native_atto_named_generic_reject_bool_as_i64
+            native_atto_named_generic_reject_string_as_i64
+            native_atto_named_generic_reject_reordered_bool
+            native_atto_named_generic_reject_duplicate_type
+            native_atto_named_generic_reject_unknown_type
+            native_atto_named_generic_reject_positional_after_named_type
+            native_atto_named_generic_reject_duplicate_value_slot
+            native_atto_named_generic_reject_unknown_value
+            native_atto_named_generic_reject_uninferable_hole
+            native_atto_named_generic_reject_case_sensitive_type_atto
+            native_atto_named_generic_reject_case_sensitive_value_atto
           )
           for name in "${required[@]}"; do
             if ! grep -Fxq -- "$name" build/named-call-test-names.txt; then
@@ -70,5 +108,6 @@ jobs:
           echo "NAMED_CALL_MANIFEST_PASS: ${#required[@]} required tests registered"
       - name: Execute parser, diagnostic, lexical order and native guest tests
         run: |
-          ctest --test-dir build -R '^native_named_(call_|member_)' \
-            --output-on-failure --no-tests=error --timeout 180 --parallel 2
+          python3 -m py_compile tests/native_module_imports.py
+          ctest --test-dir build -R '^(native_named_(call_|member_)|native_atto_named_generic_|native_source_module_graph_execution$|native_project_root_import_security$)' \
+            --output-on-failure --no-tests=error --timeout 600 --parallel 2

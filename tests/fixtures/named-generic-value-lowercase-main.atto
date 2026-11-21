@@ -1,0 +1,7 @@
+// Lowercase generic declaration identities bind independently of value labels.
+fnc encode<foo=int,bar=foo>(foo first,bar second):int {
+    return first*10+second;
+}
+pub fnc main():int {
+    return encode<bar=int,foo=int>(second:2,first:4);
+}

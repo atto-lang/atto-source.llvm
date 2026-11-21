@@ -56,19 +56,62 @@ inline void validate_manifest(const std::string& manifest_bytes) {
         R"ores(^[ \t]*(?:schema_version|"schema_version"|'schema_version')[ \t]*=.*$)ores");
     const std::regex project_section(
         R"ores(^[ \t]*\[[ \t]*(?:project|"project"|'project')[ \t]*\][ \t]*(?:#.*)?$)ores");
+    // TOML dotted keys admit arbitrary whitespace and nested assignments.
+    // The narrow manifest reader does not implement project.* semantics,
+    // so reject every dotted project key rather than only project.root =.
     const std::regex project_assignment(
-        R"ores(^[ \t]*(?:project|"project"|'project')[ \t]*(?:=|\.[ \t]*(?:root|"root"|'root')[ \t]*=).*$)ores");
+        R"ores(^[ \t]*(?:project|"project"|'project')[ \t]*(?:=|\.).*$)ores");
+    // Likewise, inside [project], root.anything is a root value even when
+    // separated by spaces or quoted as a TOML key component.
     const std::regex root_assignment(
-        R"ores(^[ \t]*(?:root|"root"|'root')[ \t]*=.*$)ores");
+        R"ores(^[ \t]*(?:root|"root"|'root')[ \t]*(?:=|\.).*$)ores");
+    // The manifest parser intentionally supports only a narrow TOML subset.
+    // Reject nested root tables and project arrays-of-tables: otherwise a
+    // valid TOML project.root value is silently ignored, changing the
+    // package boundary trusted by +/ import resolution.
+    const std::regex project_root_table(
+        R"ores(^[ \t]*\[{1,2}[ \t]*(?:project|"project"|'project')[ \t]*\.[ \t]*(?:root|"root"|'root')[ \t]*\]{1,2}[ \t]*(?:#.*)?$)ores");
+    const std::regex project_array_table(
+        R"ores(^[ \t]*\[\[[ \t]*(?:project|"project"|'project')[ \t]*\]\][ \t]*(?:#.*)?$)ores");
+    // Even non-root sub-tables of project are outside the supported TOML
+    // subset. In particular, [project.root.extra] must not evade the exact
+    // [project.root] check and turn an unsupported root into a silent no-op.
+    const std::regex project_dotted_table(
+        R"ores(^[ \t]*\[{1,2}[ \t]*(?:project|"project"|'project')[ \t]*\..*$)ores");
 
     std::size_t version_count = 0;
+    std::size_t project_table_count = 0;
     bool in_root_section = true;
     bool in_project_section = false;
     std::istringstream lines(manifest_bytes);
     std::string line;
     while (std::getline(lines, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (std::regex_match(line, project_assignment) ||
+        // TOML basic quoted keys can encode 'project' and 'root' using
+        // Unicode escapes. Since this reader does not decode quoted keys,
+        // reject all escaped key spellings rather than trusting regexes on
+        // their undecoded bytes. Values after '=' remain unaffected.
+        const auto first_key = line.find_first_not_of(" \t");
+        if (first_key != std::string::npos && line[first_key] != '#') {
+            const auto key_end = line.find(
+                line[first_key] == '[' ? ']' : '=', first_key);
+            if (key_end != std::string::npos &&
+                    line.find('\\', first_key) < key_end)
+                throw std::runtime_error(
+                    "native package manifest escaped keys require full TOML parser");
+        }
+        if (std::regex_match(line, project_root_table) ||
+                std::regex_match(line, project_array_table))
+            throw std::runtime_error("native project.root requires full TOML parser");
+        if (std::regex_match(line, project_dotted_table))
+            throw std::runtime_error("native nested project table requires full TOML parser");
+        if (std::regex_match(line, project_section) && ++project_table_count > 1)
+            throw std::runtime_error("native package manifest duplicate project table");
+        // Top-level project.* names control package semantics, but the
+        // identical key spelling under an unrelated [build] table describes
+        // build.project.*, not the root-level project table. Keep strict
+        // denial scoped to the TOML table that owns the actual key.
+        if ((in_root_section && std::regex_match(line, project_assignment)) ||
                 (in_project_section && std::regex_match(line, root_assignment)))
             throw std::runtime_error("native project.root requires full TOML parser");
 
@@ -124,11 +167,24 @@ inline std::filesystem::path resolve_project_root_import(
 
     if (raw.rfind("+/", 0) != 0)
         throw std::runtime_error("native project-root resolver requires +/ import");
+    // Standalone callers must not bypass the module loader's entry-dialect
+    // admission gate merely by using a different source extension.
+    if (importing_source.extension() != ".atto" &&
+            importing_source.extension() != ".ores")
+        throw std::runtime_error(
+            "native importing source must use .atto or .ores extension");
 
     std::error_code error;
     const auto source = fs::canonical(importing_source, error);
     if (error)
         throw std::runtime_error("cannot resolve native importing source");
+    // This resolver is also called directly by tests and embedding clients,
+    // not only by ModuleLoader's protected entry/graph path. Never allow an
+    // aliased .atto file to inherit the legacy .ores import dialect (or vice
+    // versa) merely because canonicalization changed its source suffix.
+    if (importing_source.extension() != source.extension())
+        throw std::runtime_error(
+            "native importing source suffix changes across symlink");
 
     fs::path cursor = source.parent_path();
     fs::path package_root;
@@ -161,9 +217,14 @@ inline std::filesystem::path resolve_project_root_import(
     const auto suffix = raw.substr(2);
     validate_suffix(suffix);
     fs::path candidate = package_root / fs::path(std::string(suffix));
-    if (candidate.extension().empty()) candidate += ".ores";
-    if (candidate.extension() != ".ores")
-        throw std::runtime_error("native project-root imports require .ores source files");
+    // Match extensionless project-root imports to the importing unit,
+    // without a fallback search that might silently select a different
+    // source when both legacy and AttoLang files exist.
+    if (candidate.extension().empty())
+        candidate += source.extension() == ".atto" ? ".atto" : ".ores";
+    if (candidate.extension() != ".atto" && candidate.extension() != ".ores")
+        throw std::runtime_error(
+            "native project-root imports require .atto or .ores source files");
 
     const auto physical_root = fs::canonical(package_root, error);
     if (error)
@@ -174,6 +235,11 @@ inline std::filesystem::path resolve_project_root_import(
     const auto target = fs::canonical(candidate, error);
     if (error)
         throw std::runtime_error("cannot resolve native project-root import");
+    // Keep the explicit or inferred source dialect bound to the physical
+    // source. A cross-suffix symlink cannot silently select .ores for .atto.
+    if (target.extension() != candidate.extension())
+        throw std::runtime_error(
+            "native project-root import source suffix changes across symlink");
     reject_nested_package(physical_root, target);
     return target;
 }
