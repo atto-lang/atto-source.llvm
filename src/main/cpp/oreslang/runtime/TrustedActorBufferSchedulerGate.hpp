@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <thread>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -44,19 +45,25 @@ public:
         std::shared_ptr<State> state_;
         TrustedBufferActor actor_{};
         bool active_ = false;
+        const std::thread::id thread_;
         Turn(std::shared_ptr<State> s, TrustedBufferActor a)
-            : state_(std::move(s)), actor_(a), active_(true) {}
+            : state_(std::move(s)), actor_(a), active_(true),
+              thread_(std::this_thread::get_id()) {}
     public:
         Turn() = delete;
         Turn(const Turn&) = delete;
         Turn& operator=(const Turn&) = delete;
         Turn(Turn&& other) noexcept
             : state_(std::move(other.state_)), actor_(other.actor_),
-              active_(std::exchange(other.active_, false)) {}
+              active_(std::exchange(other.active_, false)),
+              thread_(other.thread_) {}
         Turn& operator=(Turn&&) = delete;
         ~Turn() { release(); }
         void release() noexcept {
             if (!active_) return;
+            // A scheduler-minted turn is scoped to its admitting carrier.
+            // Foreign-thread destruction cannot silently revoke authority.
+            if (thread_ != std::this_thread::get_id()) std::terminate();
             std::lock_guard<std::mutex> lock(state_->mutex);
             const auto it = state_->actors.find(actor_.id);
             if (it != state_->actors.end() &&
@@ -163,14 +170,36 @@ public:
         state_->pool->drop(buffer, require_turn(turn));
     }
 
-    // Recipient identity and liveness are checked under the same gate as
-    // send publication. The mailbox then reserves a slot BEFORE pool.take().
-    void send(const Turn& sender, TrustedBufferActor recipient,
-              const Handle& buffer) {
+    enum class SendStatus {
+        Accepted, UnknownRecipient, RecipientStopped, MailboxFull
+    };
+    // Authenticated host-turn admission is serialized against receiver STOP.
+    // Only ACCEPTED transfers ownership. Expected failures return a typed
+    // status; illegal/stale source handles still fail closed with an error.
+    SendStatus try_send(const Turn& sender, TrustedBufferActor recipient,
+                        const Handle& buffer) {
         std::lock_guard<std::mutex> lock(state_->mutex);
         const auto from = require_turn(sender);
-        auto& target = require_actor(recipient);
-        target.mailbox->send(buffer, from);
+        // A stale, foreign or borrowed source is an ownership error even
+        // when the requested receiver does not exist or has stopped.
+        // Do not disguise invalid authority as an ordinary send rejection.
+        state_->pool->require_transferable(buffer, from);
+        const auto it = state_->actors.find(recipient.id);
+        if (it == state_->actors.end() || it->second.incarnation != recipient.incarnation)
+            return SendStatus::UnknownRecipient;
+        if (!it->second.live) return SendStatus::RecipientStopped;
+        switch (it->second.mailbox->try_send(buffer, from)) {
+            case Mailbox::Admission::Accepted: return SendStatus::Accepted;
+            case Mailbox::Admission::Closed: return SendStatus::RecipientStopped;
+            case Mailbox::Admission::Full: return SendStatus::MailboxFull;
+        }
+        std::terminate();
+    }
+    void send(const Turn& sender, TrustedBufferActor recipient,
+              const Handle& buffer) {
+        const SendStatus status = try_send(sender, recipient, buffer);
+        if (status != SendStatus::Accepted)
+            throw std::logic_error("trusted actor buffer send was not admitted");
     }
     Handle receive(const Turn& recipient) {
         std::lock_guard<std::mutex> lock(state_->mutex);
@@ -191,7 +220,8 @@ public:
         auto& rec = require_actor(actor);
         if (rec.in_turn) throw std::logic_error("active turn blocks retirement");
         state_->pool->require_actor_quiescent(actor);
-        rec.mailbox->close();
+        if (!rec.mailbox->close())
+            throw std::logic_error("immutable loans block mailbox retirement");
         state_->pool->reclaim_actor(actor);
         rec.live = false;
         rec.mailbox.reset();
@@ -228,6 +258,8 @@ private:
         require_open();
         if (turn.state_ != state_ || !turn.active_)
             throw std::logic_error("foreign or released execution turn");
+        if (turn.thread_ != std::this_thread::get_id())
+            throw std::logic_error("execution turn belongs to another carrier thread");
         auto& actor = require_actor(turn.actor_);
         if (!actor.in_turn) throw std::logic_error("execution turn not admitted");
         return turn.actor_;

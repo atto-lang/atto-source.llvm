@@ -3267,6 +3267,24 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_nonblocking_ready_queue
         COMMAND oreslang-native-actor-ready-queue-test)
     set_tests_properties(native_actor_nonblocking_ready_queue PROPERTIES TIMEOUT 30)
+
+    # Real C scheduler tagged buffer DATA callback and exactly-once STOP
+    # abandonment contract. Host-only mock tickets, not .ores guest execution.
+    add_executable(oreslang-native-actor-owned-buffer-scheduler-test
+        tests/native_actor_owned_buffer_scheduler_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-owned-buffer-scheduler-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-actor-owned-buffer-scheduler-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+    target_link_libraries(oreslang-native-actor-owned-buffer-scheduler-test PRIVATE
+        Threads::Threads)
+    target_compile_options(oreslang-native-actor-owned-buffer-scheduler-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_tagged_owned_buffer_stop_cleanup
+        COMMAND oreslang-native-actor-owned-buffer-scheduler-test)
+    set_tests_properties(native_actor_tagged_owned_buffer_stop_cleanup
+        PROPERTIES TIMEOUT 45)
     # Scheduler-owned producer continuation wake escrow: independent from
     # supervisor CONTROL and USER mail capacity. Native host substrate only.
     add_executable(oreslang-native-continuation-wake-escrow-test
@@ -4519,4 +4537,21 @@ if(BUILD_TESTING)
     add_test(NAME native_trusted_actor_buffer_scheduler_gate
         COMMAND oreslang-trusted-actor-buffer-scheduler-gate-test)
     set_tests_properties(native_trusted_actor_buffer_scheduler_gate PROPERTIES TIMEOUT 60)
+endif()
+
+# Host-only typed DATA delivery adapter. This is not yet a compiler-generated
+# .ores actor-send conformance test; it must not count as such.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-trusted-actor-buffer-delivery-test
+        tests/trusted_actor_buffer_delivery_test.cpp)
+    target_include_directories(oreslang-trusted-actor-buffer-delivery-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-trusted-actor-buffer-delivery-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-trusted-actor-buffer-delivery-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-trusted-actor-buffer-delivery-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_trusted_actor_buffer_delivery
+        COMMAND oreslang-trusted-actor-buffer-delivery-test)
+    set_tests_properties(native_trusted_actor_buffer_delivery PROPERTIES TIMEOUT 60)
 endif()

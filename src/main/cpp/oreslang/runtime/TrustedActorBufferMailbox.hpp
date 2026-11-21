@@ -2,6 +2,7 @@
 #include "oreslang/runtime/TrustedActorBufferPool.hpp"
 
 #include <cstddef>
+#include <exception>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -30,20 +31,31 @@ public:
     }
     TrustedActorBufferMailbox(const TrustedActorBufferMailbox&) = delete;
     TrustedActorBufferMailbox& operator=(const TrustedActorBufferMailbox&) = delete;
-    ~TrustedActorBufferMailbox() { close(); }
+    ~TrustedActorBufferMailbox() noexcept { if (!close()) std::terminate(); }
 
-    // Reserve a queue slot under the publication mutex, then move ownership.
-    // There is no allocation or throwable publication action after take().
-    // If quota, ownership, loan or close validation fails, the old handle
-    // remains owned by the sender and nothing is enqueued.
-    void send(const Handle& owned, TrustedBufferActor sender) {
+    enum class Admission { Accepted, Closed, Full };
+
+    // Reserve mailbox credit BEFORE the irreversible ownership take.
+    // Rejections leave sender ownership and its generation unchanged.
+    // Forged/stale/borrowed handles still throw (host contract violation).
+    Admission try_send(const Handle& owned, TrustedBufferActor sender) {
         std::lock_guard<std::mutex> guard(mutex_);
-        if (closed_) throw std::logic_error("buffer mailbox closed");
-        if (count_ == entries_.size()) throw std::logic_error("buffer mailbox full");
+        // Invalid guest-derived handles must never masquerade as ordinary
+        // backpressure. This validation is read-only; the take below is the
+        // single irreversible ownership commit after slot admission.
+        pool_->require_transferable(owned, sender);
+        if (closed_) return Admission::Closed;
+        if (count_ == entries_.size()) return Admission::Full;
         Handle transferred = pool_->take(owned, sender, recipient_);
         entries_[tail_] = std::move(transferred); // noexcept
         tail_ = (tail_ + 1) % entries_.size();
         ++count_;
+        return Admission::Accepted;
+    }
+    void send(const Handle& owned, TrustedBufferActor sender) {
+        const Admission admission = try_send(owned, sender);
+        if (admission == Admission::Closed) throw std::logic_error("buffer mailbox closed");
+        if (admission == Admission::Full) throw std::logic_error("buffer mailbox full");
     }
 
     Handle receive(TrustedBufferActor reader) {
@@ -66,17 +78,41 @@ public:
     // but unread DATA as the receiver. The pool is retained by shared_ptr,
     // so a mailbox cannot dereference a destructed pool. If the pool was
     // already retired, its storage has already been revoked/zeroed.
-    void close() noexcept {
+    // Do not throw away the only queued owner handle when immutable loans
+    // still pin the tenant pool. The caller may retry after loan release.
+    // Caller must serialize guest loan admission with this close operation
+    // using the trusted scheduler gate; direct pool use is host-only.
+    bool close() noexcept {
         std::lock_guard<std::mutex> guard(mutex_);
-        if (closed_) return;
+        if (closed_) return true;
+        if (!pool_->is_retired()) {
+            // A successfully published, unread DATA slot must remain owned
+            // by this queue. Never strand its handle on a failed drop.
+            for (std::size_t i = 0; i < count_; ++i) {
+                const auto& h = entries_[(head_ + i) % entries_.size()];
+                try {
+                    if (pool_->has_active_loans_for_handle(h, recipient_))
+                        return false;
+                } catch (...) {
+                    if (!pool_->is_retired()) std::terminate();
+                    break;
+                }
+            }
+        }
         closed_ = true;
         while (count_) {
             Handle abandoned = std::move(entries_[head_]);
             head_ = (head_ + 1) % entries_.size();
             --count_;
             try { pool_->drop(abandoned, recipient_); }
-            catch (...) { /* pool retirement already revoked ownership */ }
+            catch (...) {
+                // A previously retired pool has already invalidated every
+                // handle. Any other unexpected loss of ownership is a
+                // fatal host invariant violation, never silently swallowed.
+                if (!pool_->is_retired()) std::terminate();
+            }
         }
+        return true;
     }
 
 private:

@@ -94,10 +94,63 @@ typedef enum {
     ORES_NATIVE_SEND_TERMINATED = 2,
     ORES_NATIVE_SEND_MAILBOX_FULL = 3,
     ORES_NATIVE_SEND_RESOURCE_EXHAUSTED = 4,
-    ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE = 5
+    ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE = 5,
+    ORES_NATIVE_SEND_OWNERSHIP_REJECTED = 6 /* trusted commit left sender unchanged */
 } OresNativeSendStatus;
 OresNativeSendStatus ores_native_actor_scheduler_try_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
+/*
+ * Trusted-host tagged DATA contract, deliberately distinct from scalar i64
+ * mailbox delivery. A ticket contains IDs and generations, never a pointer.
+ * The C++ owned-buffer pool remains the allocation authority.
+ * This API is NOT exposed to arbitrary Oreslang guest code.
+ *
+ * on_validate: checks exact current owner and generation, without mutation,
+ * before receiver existence, stop and capacity results are exposed. It must
+ * obey the same nonblocking, no-allocation and no-reentrancy constraints.
+ *
+ * on_commit: called synchronously under the scheduler admission lock ONLY
+ * after live receiver and capacity validation. It must be nonblocking,
+ * allocation-free, exception-free and must not call back into the scheduler.
+ * A success transfers exactly one owner and may update the ticket generation;
+ * failure MUST leave original sender ownership unchanged.
+ *
+ * on_discard: called outside the scheduler lock for accepted DATA abandoned
+ * by stop_sealed. It must reclaim exactly one receiver-owned ticket.
+ * on_delivery: called from the authenticated receiver worker turn; handler
+ * must consume or explicitly drop the ticket before it returns.
+ */
+typedef struct {
+    uint64_t tenant_epoch;
+    uint64_t type_schema;
+    uint64_t buffer_id;
+    uint64_t buffer_generation;
+} OresNativeOwnedBufferTicket;
+typedef int (*OresNativeBufferValidateFn)(
+    void* context, OresNativeActorRef sender, OresNativeOwnedBufferTicket ticket);
+typedef int (*OresNativeBufferCommitFn)(
+    void* context, OresNativeActorRef sender, OresNativeActorRef recipient,
+    OresNativeOwnedBufferTicket* inout_ticket);
+typedef void (*OresNativeBufferDeliverFn)(
+    void* context, OresNativeActorRef recipient, OresNativeOwnedBufferTicket ticket);
+typedef void (*OresNativeBufferDiscardFn)(
+    void* context, OresNativeActorRef recipient, OresNativeOwnedBufferTicket ticket);
+/* Bootstrap-only; reject configuration after worker or DATA admission. */
+int ores_native_actor_scheduler_configure_owned_buffer(
+    OresNativeActorScheduler* scheduler,
+    OresNativeBufferValidateFn on_validate,
+    OresNativeBufferCommitFn on_commit,
+    OresNativeBufferDeliverFn on_delivery,
+    OresNativeBufferDiscardFn on_discard);
+/* Actor-to-actor only: the calling thread must be executing the EXACT source
+ * actor's authenticated callback. A forged or external source is rejected.
+ * A failure never consumes the source ticket; accepted delivery is FIFO
+ * with scalar DATA on the same bounded mailbox. */
+OresNativeSendStatus ores_native_actor_scheduler_try_send_owned_buffer(
+    OresNativeActorScheduler* scheduler,
+    OresNativeActorRef sender, OresNativeActorRef recipient,
+    OresNativeOwnedBufferTicket ticket);
+
 /* Compatibility API: 1 iff accepted, 0 otherwise. Prefer typed try_send. */
 int ores_native_actor_scheduler_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
