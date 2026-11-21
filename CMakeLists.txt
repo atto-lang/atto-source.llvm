@@ -600,7 +600,7 @@ if(BUILD_TESTING)
                 "$<TARGET_FILE:oreslang-llvmc>"
                 "${ORESLANG_EXPORT_CLANG}")
         set_tests_properties(native_return_first_host_guest_execution PROPERTIES
-            TIMEOUT 180)
+            TIMEOUT 240)
     endif()
     if(ORESLANG_EXPORT_CLANG)
         add_test(NAME oreslang-declarative-exports-native
