@@ -1289,6 +1289,23 @@ if(BUILD_TESTING)
     # Borrowed class roots must not launder their scalar fields into Share.
     oreslang_contract_test(atto_share_borrowed_class_field_rejected
         atto-share-borrowed-class-field-reject.atto --diagnostic "E_SHARE_BORROW")
+
+    # The manifest mutation suite is independent of LLVM/Clang installation,
+    # and the 50-case matrix MUST run the actual native compiler and guest.
+    add_test(NAME native_ownership_place_mir_manifest_19_mutations
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ownership_compiler_fixture_matrix.py")
+    set_tests_properties(native_ownership_place_mir_manifest_19_mutations
+        PROPERTIES TIMEOUT 30)
+    if(ORE_CLANG)
+        add_test(NAME atto_ownership_place_mir_real_compiler_50
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/ownership_compiler_fixture_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}")
+        set_tests_properties(atto_ownership_place_mir_real_compiler_50
+            PROPERTIES TIMEOUT 1000)
+    endif()
     # Copy scalars retain parity with Java rt share Copy semantics.
     # Require real compiler IR, Clang link and native process exit.
     if(ORE_CLANG)

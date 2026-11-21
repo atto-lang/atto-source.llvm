@@ -40,6 +40,9 @@ bool expect(const char* description, const Expression& expression,
             (result && (result->origin != origin ||
                 result->fields.size() != expected_fields ||
                 result->lexical_slot != "owner" ||
+                result->binding_id.value != 1 ||
+                result->allocation_origin.value != 0 ||
+                result->has_proven_allocation() ||
                 result->owns_storage() != (origin == PlaceOrigin::OwnedSlot)))) {
         std::cerr << "native compiler-resolved place failure: " << description
                   << " case " << executed << '\n';
@@ -62,12 +65,62 @@ bool expect(const char* description, const Expression& expression,
 int main() {
     Locals owned, shared, exclusive;
     LocalOwnership value;
+    // Production IDs are minted from the current function's lexical table.
+    // Synthetic test fixtures must declare the binding explicitly as well.
+    value.binding_id.value = 1;
     value.mode = Mode::Value;
     owned.emplace("owner", value);
     value.mode = Mode::Borrow;
     shared.emplace("owner", value);
     value.mode = Mode::BorrowMut;
     exclusive.emplace("owner", value);
+    // An unminted lexical slot cannot acquire ownership authority just by
+    // being inserted in the map under a plausible name.
+    Locals unminted = owned;
+    unminted.at("owner").binding_id.value = 0;
+    if (resolve_compiler_place(projected("owner", 0), unminted)) {
+        std::cerr << "unminted AST name acquired compiler-owned provenance\n";
+        return 10;
+    }
+    // Borrowed roots cannot create allocation provenance from a different
+    // lexical binding identity; zero remains explicitly unproven.
+    if (resolve_compiler_place(projected("owner", 0), shared)
+            ->allocation_origin.value != 0)
+        return 11;
+    // Additional cross-clone and transfer invariants: a binding identity
+    // is not allocation identity, and CFG joins cannot silently merge
+    // different compiler declarations or allocation sources.
+    Locals new_class = owned;
+    new_class.at("owner").allocation_origin.value = 47;
+    const auto fresh = resolve_compiler_place(projected("owner", 1), new_class);
+    if (!fresh || !fresh->has_proven_allocation() ||
+            fresh->allocation_origin.value != 47 ||
+            fresh->binding_id.value != 1) return 12;
+
+    Locals borrowed_same = shared;
+    borrowed_same.at("owner").allocation_origin.value = 0;
+    const auto loan = resolve_compiler_place(projected("owner", 0), borrowed_same);
+    if (!loan || loan->owns_storage() || loan->has_proven_allocation()) return 13;
+
+    Locals distinct_binding = owned;
+    distinct_binding.at("owner").binding_id.value = 2;
+    if (oreslang::native_ownership::same_affine_state(owned, distinct_binding))
+        return 14;
+    Locals distinct_origin = owned;
+    distinct_origin.at("owner").allocation_origin.value = 47;
+    if (oreslang::native_ownership::same_affine_state(owned, distinct_origin))
+        return 15;
+
+    // A checked class move gives the destination a fresh binding identity
+    // but transfers the SAME known allocation origin from its source.
+    auto source = new_class.at("owner");
+    auto moved = source;
+    moved.binding_id.value = 3;
+    source.moved = true;
+    if (moved.allocation_origin.value != source.allocation_origin.value ||
+            moved.binding_id.value == source.binding_id.value ||
+            !moved.allocation_origin.value || !source.moved)
+        return 16;
     std::size_t count = 0;
 
     // 27 actual AST -> compiler Locals -> typed Place cases:
