@@ -107,6 +107,22 @@ out-of-range access is a Wasm trap, and actors of one tenant cannot read each ot
 removes them and relies on the cage alone. **It is a test tool, not a product option:** it exists so
 that tests can prove the second layer holds if the first has a bug. Both run the same attack matrix.
 
+**Lowering admission hardening (draft).** The CLI refuses `--mode guard` unless the caller also
+provides explicit `--test-only`; every such manifest carries
+`test_only: true` and `memory_confinement: "UNSAFE_GUARD_TEST_ONLY"`. The release-mode
+`mode: bounds` output carries `test_only: false` and `memory_confinement: "BOUNDS_CHECKED"`.
+The CLI also refuses all caller-defined clang macros except a small allowlist of
+`ORES_VM_TEST_*` fault-injection knobs, and those also require `--test-only`. In particular,
+`--test-define WASM_RT_MEMCHECK_BOUNDS_CHECK=0` and attempts to redefine guest memory
+sizes or module kinds must be rejected *before clang runs*. This closes a preprocessor
+override path that could disable checks while leaving the manifest labeled `mode: bounds`.
+
+**Evidence limitation:** the test-only manifest label is not a cryptographic attestation and
+the native `load_guest_library` ABI alone cannot distinguish trusted compiler output from
+arbitrary native code with a caller-supplied SHA. Until an independently enforced
+producer-to-loader admission chain exists and passes executed compiled-guest tests,
+do not expose this loader as an untrusted-tenant entry point.
+
 **WildAccess.** A fault outside any cage means the boundary has failed: lowered code broke the rule.
 It is counted in `HostStats::wild_accesses`, and `HostLimits::abort_on_wild_access` stops the process.
 No test on the enforced path has produced one. A service should alarm on any nonzero count.

@@ -43,6 +43,13 @@ find_program(WASM2C wasm2c)
 find_path(WASM_RT_INCLUDE wasm-rt.h)
 find_program(LOWER_CLANG NAMES clang clang-18 clang-19 clang-20)
 find_package(Python3 COMPONENTS Interpreter)
+# Independent fail-closed admission policy tests need only Python, not WABT.
+# They must run even on developer machines without a wasm2c toolchain.
+if(Python3_FOUND)
+    add_test(NAME tenant_vm_lowering_policy_test COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_LIST_DIR}/lowered/lowering_policy_test.py")
+    set_tests_properties(tenant_vm_lowering_policy_test PROPERTIES TIMEOUT 30)
+endif()
 # Optional, for .atto. The compiler may come from a different build.
 set(TENANT_VM_ATTO_COMPILER "" CACHE FILEPATH "oreslang-llvmc, to lower real .atto source")
 set(TENANT_VM_ATTO_IR_DIR "" CACHE PATH "IR already emitted by oreslang-llvmc --target=wasm32, one NAME.ll per fixture")
@@ -81,7 +88,7 @@ if(WAT2WASM AND WASM2C AND WASM_RT_INCLUDE AND LOWER_CLANG AND Python3_FOUND)
     endfunction()
     set(HOSTILE "${CMAKE_CURRENT_LIST_DIR}/lowered/hostile.wat")
     lower_guest(hostile_bounds "${HOSTILE}" --mode bounds)
-    lower_guest(hostile_guard "${HOSTILE}" --mode guard)
+    lower_guest(hostile_guard "${HOSTILE}" --mode guard --test-only)
 
     set(ATTO_DEFINITION "")
     if(TENANT_VM_WASM_LD AND (TENANT_VM_ATTO_COMPILER OR TENANT_VM_ATTO_IR_DIR))
@@ -101,15 +108,15 @@ if(WAT2WASM AND WASM2C AND WASM_RT_INCLUDE AND LOWER_CLANG AND Python3_FOUND)
             if(fixture STREQUAL "atomic")
                 lower_guest(atto_atomic_eager "${input}" ${compiler_args}
                     --wasm-clang "${TENANT_VM_WASM_CLANG}" --wasm-ld "${TENANT_VM_WASM_LD}"
-                    --test-define ORES_VM_TEST_EAGER_SEND=1)
+                    --test-only --test-define ORES_VM_TEST_EAGER_SEND=1)
             endif()
             if(fixture STREQUAL "pair")
                 lower_guest(atto_pair_fault "${input}" ${compiler_args}
                     --wasm-clang "${TENANT_VM_WASM_CLANG}" --wasm-ld "${TENANT_VM_WASM_LD}"
-                    --test-define ORES_VM_TEST_COMMIT_FAULT_ON=77)
+                    --test-only --test-define ORES_VM_TEST_COMMIT_FAULT_ON=77)
                 lower_guest(atto_pair_unsafe "${input}" ${compiler_args}
                     --wasm-clang "${TENANT_VM_WASM_CLANG}" --wasm-ld "${TENANT_VM_WASM_LD}"
-                    --test-define ORES_VM_TEST_COMMIT_FAULT_ON=77 --test-define ORES_VM_TEST_UNSAFE_COMMIT=1)
+                    --test-only --test-define ORES_VM_TEST_COMMIT_FAULT_ON=77 --test-define ORES_VM_TEST_UNSAFE_COMMIT=1)
             endif()
         endforeach()
     endif()

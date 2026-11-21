@@ -61,6 +61,13 @@ HOST_IMPORTS = {
     "oreslang_vm_send_on_commit": ((0x7E, 0x7E), ()),
 }
 
+# Only these exact test-injection macros may reach clang's -D arguments. In
+# particular, allowing arbitrary --test-define values after -D...BOUNDS_CHECK=1
+# lets a user silently redefine the Wasm memory-safety mode while the manifest
+# still says "bounds". Production must not accept any test injection at all.
+TEST_BOOLEAN_DEFINES = {"ORES_VM_TEST_EAGER_SEND", "ORES_VM_TEST_UNSAFE_COMMIT"}
+TEST_INTEGER_DEFINES = {"ORES_VM_TEST_COMMIT_FAULT_ON"}
+
 # The only proposals lowered code may use. Each wabt release turns more on by default (memory64,
 # multi-memory and tail calls among them), and some of those would break the addressing rule. So
 # everything else a given tool can disable is disabled, including features it adds later.
@@ -84,6 +91,42 @@ FEATURE_NAMES = {"exceptions", "mutable-globals", "saturating-float-to-int", "si
 
 class Refused(Exception):
     """The input is not something this pipeline will lower."""
+
+
+def checked_test_defines(defines):
+    """Validate the COMPLETE clang macro spelling, before assembling compiler args.
+
+    argv (rather than a shell) prevents command injection, but does NOT prevent
+    a caller from re-defining a safety-critical C preprocessor symbol. A very
+    small explicit allowlist preserves the existing fault-injection fixtures.
+    """
+    if len(defines) > len(TEST_BOOLEAN_DEFINES) + len(TEST_INTEGER_DEFINES):
+        raise Refused("too many test-only preprocessor definitions")
+    validated = []
+    seen = set()
+    for definition in defines:
+        match = re.fullmatch(r"(ORES_VM_TEST_[A-Z0-9_]+)=([1-9][0-9]*)", definition)
+        if not match:
+            raise Refused("unrecognized test-only preprocessor definition")
+        name, value = match.groups()
+        if name in seen:
+            raise Refused("duplicate test-only preprocessor definition")
+        seen.add(name)
+        if name in TEST_BOOLEAN_DEFINES:
+            if value != "1":
+                raise Refused("test switch must be exactly 1")
+        elif name in TEST_INTEGER_DEFINES:
+            # Limit the expanded C constant to a representable signed i32;
+            # never permit an expression, token paste, suffix or compiler flag.
+            if len(value) > 10 or int(value) > (1 << 31) - 1:
+                # Reject before int() on huge decimal strings: newer Python
+                # versions cap digit conversions and would otherwise report
+                # an internal ValueError instead of our typed refusal.
+                raise Refused("test fault value outside allowed range")
+        else:
+            raise Refused("unrecognized test-only preprocessor definition")
+        validated.append(definition)
+    return validated
 
 
 class Reader:
@@ -372,6 +415,14 @@ def writable_symbols(args, obj):
 
 
 def lower(args):
+    # Verify security policy BEFORE creating an output directory or invoking any
+    # compiler. Guard mode lacks actor bounds checks and exists solely to prove
+    # the cage-alone failure mode; it is never a production guest.
+    if args.mode != "bounds" and not args.test_only:
+        raise Refused("guard-page-only mode requires explicit --test-only consent")
+    if args.test_define and not args.test_only:
+        raise Refused("test preprocessor definitions require explicit --test-only consent")
+    safe_test_defines = checked_test_defines(args.test_define)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     source_size = Path(args.input).stat().st_size
@@ -425,7 +476,7 @@ def lower(args):
                  f"-I{args.include}", f"-I{work}", f"-I{args.wasm_rt_include}"]
         if platform.system() != "Darwin":  # Apple's linker and ABI probe large frames already
             flags.append("-fstack-clash-protection")
-        flags += defines + [f"-D{define}" for define in args.test_define]
+        flags += defines + [f"-D{define}" for define in safe_test_defines]
         objects = []
         for name, source in (("guest", work / "guest.c"), ("adapter", Path(args.adapter))):
             obj = work / f"{name}.o"
@@ -446,7 +497,12 @@ def lower(args):
             "input_sha256": hashlib.sha256(Path(args.input).read_bytes()).hexdigest(),
             "wasm_sha256": hashlib.sha256(data).hexdigest(),
             "mode": args.mode,
-            "test_defines": args.test_define,  # anything here makes this a test build, not for tenants
+            # The lowerer does not cryptographically certify its own output.
+            # These fail-closed metadata labels prevent accidental promotion of
+            # guard-page-only builds or fault-injection fixtures by CI/reporting.
+            "test_only": args.test_only,
+            "memory_confinement": "BOUNDS_CHECKED" if args.mode == "bounds" else "UNSAFE_GUARD_TEST_ONLY",
+            "test_defines": safe_test_defines,
             "memory_bytes": memory_bytes,
             "scratch_bytes": args.scratch_bytes,
             "admission": report,
@@ -464,7 +520,9 @@ def main():
     p.add_argument("input", help=".atto, .ores, .ll, .wat or .wasm")
     p.add_argument("--out", required=True)
     p.add_argument("--mode", choices=("bounds", "guard"), default="bounds",
-                   help="guard is for tests of the cage alone, not for production")
+                   help="bounds is required for untrusted tenants; guard is unsafe and test-only")
+    p.add_argument("--test-only", action="store_true",
+                   help="explicitly consent to unsafe guard mode or approved test fault-injection switches")
     p.add_argument("--memory-bytes", type=int, default=131072)
     p.add_argument("--scratch-bytes", type=int, default=4096)
     p.add_argument("--include", required=True, help="directory holding oreslang/runtime/TenantVmGuestAbi.h")
@@ -476,7 +534,8 @@ def main():
     p.add_argument("--wasm-ld", default="wasm-ld")
     p.add_argument("--wat2wasm", default="wat2wasm")
     p.add_argument("--wasm2c", default="wasm2c")
-    p.add_argument("--test-define", action="append", default=[], help="fault injection for tests only")
+    p.add_argument("--test-define", action="append", default=[],
+                   help="approved ORES_VM_TEST_* fault-injection macros only; requires --test-only")
     p.add_argument("--nm", default="nm")
     p.add_argument("--objdump", default="objdump")
     p.add_argument("--tool-seconds", type=int, default=120)
