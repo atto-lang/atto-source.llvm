@@ -32,7 +32,8 @@ compiler_aot_args=()
 case "$aot_admission" in
   off) ;;
   sealed-scalar-v1) compiler_aot_args=(--aot-profile=sealed-scalar-v1) ;;
-  *) echo 'ORESLANG_LLVM_AOT_PROFILE must be off or sealed-scalar-v1.' >&2; exit 64 ;;
+  sealed-class-fields-v1) compiler_aot_args=(--aot-profile=sealed-class-fields-v1) ;;
+  *) echo 'ORESLANG_LLVM_AOT_PROFILE must be off, sealed-scalar-v1 or sealed-class-fields-v1.' >&2; exit 64 ;;
 esac
 output_dir="$(cd "$(dirname "$2")" && pwd -P)"
 output_file="$output_dir/$(basename "$2")"
