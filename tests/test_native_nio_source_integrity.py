@@ -33,6 +33,8 @@ class NativeNioWorktreeTests(unittest.TestCase):
         (self.repo / 'scripts' / CHECKER.name).write_bytes(committed_checker)
         (self.repo / '.gitignore').write_text('/build/\n/cmake-build-*/\n/.cache/\n*.o\n')
         (self.repo / 'source.c').write_text('int source(void) { return 1; }\n')
+        (self.repo / 'nested').mkdir()
+        (self.repo / 'nested' / 'input.c').write_text('int nested(void) { return 2; }\n')
         for args in [('init', '-q'), ('config', 'user.name', 'Source Free Gate'),
                      ('config', 'user.email', 'fixture@example.invalid'),
                      ('add', '.'), ('commit', '-qm', 'initial fixture')]:
@@ -215,6 +217,18 @@ class NativeNioWorktreeTests(unittest.TestCase):
         self.assertEqual('', status.stdout, status.stderr)
         self.assertEqual(2, os.stat(self.repo / 'source.c').st_nlink)
         self.reject('multiply-linked tracked source')
+
+    def test_symlinked_tracked_parent_is_rejected(self):
+        # O_NOFOLLOW on only the final leaf is insufficient: a same-byte
+        # compiler input can be redirected outside the checkout through an
+        # intermediate directory symlink while Git still reports the tree.
+        outside = Path(self.tmp.name) / 'outside-nested'
+        outside.mkdir()
+        (outside / 'input.c').write_text('int nested(void) { return 2; }\n')
+        (self.repo / 'nested' / 'input.c').unlink()
+        (self.repo / 'nested').rmdir()
+        (self.repo / 'nested').symlink_to(outside, target_is_directory=True)
+        self.reject('symlinked/non-directory ancestor')
 
     def test_hardlink_removed_before_gate_is_admissible(self):
         # Normal uniquely linked worktree content remains legal. There must
