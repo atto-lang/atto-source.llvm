@@ -541,6 +541,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 !std::any_of(source.functions.begin(), source.functions.end(),
                     [](const Function& fn) { return fn.exported; }))
             throw std::runtime_error("checked result ABI requires at least one pub function");
+        // Account for source nodes in every callee, not just nodes in the
+        // current function. A shallow acyclic call graph can otherwise
+        // double its executed work at every level (2^31 calls at depth 32).
+        std::unordered_map<std::string, std::size_t> local_work;
         for (const auto& fn : source.functions) {
             if (fn.returns_void || !fn.result || fn.parameters.size() > 8 ||
                     !fn.generic_parameters.empty() || fn.scalar_while ||
@@ -560,6 +564,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             std::size_t remaining_nodes = 2048;
             if (!checked_pure_function_tree(*fn.result, parameters, remaining_nodes))
                 throw std::runtime_error("checked native function expression not pure or exceeds 2048-node/64-depth budget");
+            local_work.emplace(native_function_slot(fn.name, fn.parameters.size()),
+                               2048 - remaining_nodes);
             if (experimental_checked_result_functions && has_checked_named_call(*fn.result))
                 throw std::runtime_error("checked result ABI v2 requires positional-only calls");
         }
@@ -574,6 +580,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         // Fail before emitting IR if any call target is missing or a caller
         // can recurse indefinitely. Bound depth for predictable host stack.
         std::unordered_map<std::string, std::size_t> depths;
+        std::unordered_map<std::string, std::size_t> total_work;
+        constexpr std::size_t kMaxCheckedCallWork = 65536;
         std::unordered_set<std::string> visiting;
         std::function<std::size_t(const std::string&)> visit =
             [&](const std::string& key) -> std::size_t {
@@ -585,12 +593,23 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 if (!visiting.insert(key).second)
                     throw std::runtime_error("checked native recursive call graph unsupported");
                 std::size_t depth = 1;
-                for (const auto& callee : it->second)
+                std::size_t work = local_work.at(key);
+                for (const auto& callee : it->second) {
                     depth = std::max(depth, visit(callee) + 1);
+                    const std::size_t child_work = total_work.at(callee);
+                    // Check BEFORE adding: overflowing size_t would silently
+                    // defeat the admission budget for adversarial DAGs.
+                    if (work > kMaxCheckedCallWork ||
+                            child_work > kMaxCheckedCallWork - work)
+                        throw std::runtime_error(
+                            "checked native function evaluation work exceeds 65536-node call budget");
+                    work += child_work;
+                }
                 visiting.erase(key);
                 if (depth > 32)
                     throw std::runtime_error("checked native function call depth exceeds 32");
                 depths.emplace(key, depth);
+                total_work.emplace(key, work);
                 return depth;
             };
         for (const auto& edge : graph) (void)visit(edge.first);
