@@ -50,6 +50,99 @@ static void *write_pair_worker(void *raw) {
     }
     return NULL;
 }
+/* Reproducible model check of real native slot ownership. The PR host ABI is
+ * intentionally NOT a compiled Atto actor. Randomized operation order catches
+ * ABA, aliasing and stale/cross-domain successes that individual examples miss.
+ * A fixed seed keeps failures replayable across GCC and Clang sanitizers. */
+static uint64_t next_random(uint64_t *seed) {
+    uint64_t x = *seed;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    *seed = x;
+    return x;
+}
+static void test_randomized_control_lifetimes(void) {
+    enum { SLOTS = 32, STEPS = 50000 };
+    AttoControlPlaneArena32 *a = atto_control32_new(SLOTS);
+    AttoControlPlaneArena32 *foreign_arena = atto_control32_new(SLOTS);
+    CHECK(a && foreign_arena);
+    uint64_t foreign = 0;
+    CHECK(atto_control32_allocate(foreign_arena, &foreign));
+    uint64_t active[SLOTS] = {0};
+    uint64_t retired[SLOTS] = {0};
+    uint64_t expected_low[SLOTS] = {0};
+    uint64_t seed = UINT64_C(0x9e3779b97f4a7c15);
+    unsigned live = 0, allocations = 0, drops = 0;
+    for (unsigned step = 0; step < STEPS; ++step) {
+        uint64_t r = next_random(&seed);
+        if ((r & 3u) != 0u && live < SLOTS) {
+            uint64_t current = 0;
+            CHECK(atto_control32_allocate(a, &current));
+            uint32_t slot = ((uint32_t)current & ((1u << 20) - 1u)) - 1u;
+            CHECK(slot < SLOTS && active[slot] == 0);
+            CHECK(current != retired[slot]);
+            active[slot] = current;
+            ++live;
+            ++allocations;
+            expected_low[slot] = next_random(&seed);
+            CHECK(atto_control32_write_i128(a, current, expected_low[slot], ~expected_low[slot]));
+            uint64_t low = UINT64_MAX, high = UINT64_MAX;
+            CHECK(atto_control32_read_i128(a, current, &low, &high));
+            CHECK(low == expected_low[slot] && high == ~low);
+            CHECK(!atto_control32_read_i128(foreign_arena, current, &low, &high));
+            CHECK(low == 0 && high == 0);
+            CHECK(!atto_control32_write_i128(a, foreign, 1u, 2u));
+            if (retired[slot]) {
+                CHECK(!atto_control32_write_i128(a, retired[slot], 7u, 8u));
+                CHECK(!atto_control32_read_i128(a, retired[slot], &low, &high));
+                CHECK(low == 0 && high == 0);
+            }
+        } else if (live) {
+            uint32_t start = (uint32_t)(r % SLOTS);
+            for (uint32_t n = 0; n < SLOTS; ++n) {
+                uint32_t slot = (start + n) % SLOTS;
+                if (!active[slot]) continue;
+                uint64_t low = 0, high = 0;
+                CHECK(atto_control32_read_i128(a, active[slot], &low, &high));
+                CHECK(low == expected_low[slot] && high == ~expected_low[slot]);
+                uint64_t prior = active[slot];
+                CHECK(atto_control32_drop(a, prior));
+                CHECK(!atto_control32_drop(a, prior));
+                CHECK(!atto_control32_read_i128(a, prior, &low, &high));
+                CHECK(low == 0 && high == 0);
+                retired[slot] = prior;
+                active[slot] = 0;
+                --live;
+                ++drops;
+                break;
+            }
+        } else {
+            /* When fully occupied, no other slot may be silently admitted. */
+            uint64_t denied = UINT64_MAX;
+            CHECK(live == SLOTS);
+            CHECK(!atto_control32_allocate(a, &denied) && denied == 0);
+        }
+    }
+    for (uint32_t slot = 0; slot < SLOTS; ++slot) {
+        if (active[slot]) {
+            uint64_t low = 0, high = 0;
+            CHECK(atto_control32_read_i128(a, active[slot], &low, &high));
+            CHECK(low == expected_low[slot] && high == ~low);
+            CHECK(atto_control32_drop(a, active[slot]));
+            ++drops;
+            --live;
+        }
+    }
+    CHECK(!live && allocations == drops && allocations > 1000);
+    CHECK(atto_control32_drop(foreign_arena, foreign));
+    atto_control32_retire(a);
+    atto_control32_retire(foreign_arena);
+    atto_control32_destroy(a);
+    atto_control32_destroy(foreign_arena);
+    puts("PASS llvm control deterministic 50000-op native lifetime model (NOT compiled Atto)");
+}
+
 int main(void) {
     CHECK(strcmp(ATTO_CONTROL_REF32_ABI, "control_generation12_slot20_v1") == 0);
     CHECK(ATTO_CONTROL_RECORD_BYTES == 32u);
@@ -165,6 +258,7 @@ int main(void) {
     CHECK(!atto_control32_read_i128(pair_arena, pair_ref, &denied_low, &denied_high));
     CHECK(denied_low == 0 && denied_high == 0);
     atto_control32_destroy(pair_arena);
+    test_randomized_control_lifetimes();
     puts("PASS llvm control i128 coherent concurrent host (NOT compiled Atto)");
     puts("PASS control-plane-ref32 llvm C11 native host 12 guarded scenarios; NO compiled Atto guest or zero-GC proof");
     return 0;
