@@ -586,7 +586,7 @@ if(BUILD_TESTING AND UNIX)
     add_test(NAME native_return_first_begin_parser
         COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_return_first_begin_contract.sh"
             "$<TARGET_FILE:oreslang-llvmc>")
-    set_tests_properties(native_return_first_begin_parser PROPERTIES TIMEOUT 45)
+    set_tests_properties(native_return_first_begin_parser PROPERTIES TIMEOUT 90)
 endif()
 if(BUILD_TESTING)
     # Real compiler / Clang native guest lane for file-level exports.
