@@ -1,0 +1,2 @@
+import * as lib from "./import-private-producer.atto";
+pub fnc main() -> int { return lib.literal!(const 42); }

@@ -585,19 +585,105 @@ bool entry_builtin_name(std::string_view name) {
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
-                    bool experimental_rt_scalar_loop)
+                    bool experimental_rt_scalar_loop,
+                    const std::vector<NativeMacroBinding>& imported_macros = {})
         : source_(source), lexer_(source), token_(lexer_.next()),
+          imported_macros_(imported_macros),
           experimental_owned_int_(experimental_owned_int),
           experimental_rt_scalar_loop_(experimental_rt_scalar_loop) {}
+
+    // Lexer-backed, header-only discovery. This never interprets arbitrary
+    // guest text as a path or as a runtime macro body.
+    std::vector<NativeMacroImport> scan_macro_headers() {
+        std::vector<NativeMacroImport> result;
+        std::unordered_set<std::string> aliases;
+        while (token_.text == "import") {
+            advance();
+            if (token_.text != "*") {
+                if (!result.empty())
+                    fail("NATIVE_IMPORTED_MACRO_LINKER_REQUIRED: mixed macro/module imports unsupported");
+                return {}; // Ordinary native imports retain their existing path.
+            }
+            advance(); require("as");
+            NativeMacroImport imported;
+            imported.alias = identifier();
+            if (!aliases.insert(imported.alias).second)
+                fail("NATIVE_IMPORTED_MACRO_DUPLICATE: duplicate macro import alias");
+            require("from");
+            if (token_.kind != Kind::String)
+                fail("NATIVE_IMPORTED_MACRO_LINKER_REQUIRED: macro source path must be quoted");
+            imported.path = std::string(token_.text);
+            if (imported.path.empty() || imported.path.size() > 4096)
+                fail("NATIVE_IMPORTED_MACRO_LINKER_REQUIRED: macro path exceeds 4096 bytes");
+            for (unsigned char ch : imported.path)
+                if (ch < 32 || ch == 127 || ch == '\\')
+                    fail("NATIVE_IMPORTED_MACRO_LINKER_REQUIRED: malformed macro path");
+            advance(); require(";");
+            if (result.size() == 8)
+                fail("NATIVE_MACRO_BUDGET: macro import count exceeded");
+            result.push_back(std::move(imported));
+        }
+        return result;
+    }
+
+    // The exported producer grammar deliberately permits *only* validated
+    // public macro declarations. No executable functions or import edges are
+    // admitted into an exported macro artifact at M1.
+    std::vector<NativeMacroSignature> parse_public_macro_exports_only() {
+        std::vector<NativeMacroSignature> result;
+        while (token_.kind != Kind::End) {
+            bool exported = accept("pub");
+            require("define");
+            if (accept("pub")) {
+                if (exported)
+                    fail("NATIVE_IMPORTED_MACRO_DUPLICATE: duplicate pub modifier");
+                exported = true;
+            }
+            if (!exported || !accept("macro"))
+                fail("NATIVE_IMPORTED_MACRO_LINKER_REQUIRED: producer must contain only public typed macros");
+            const auto name = macro_declaration();
+            result.push_back(NativeMacroSignature{name, macros_.at(name)});
+        }
+        if (result.empty())
+            fail("NATIVE_IMPORTED_MACRO_LINKER_REQUIRED: producer has no public typed macros");
+        std::sort(result.begin(), result.end(),
+                  [](const auto& a, const auto& b) { return a.name < b.name; });
+        return result;
+    }
 
     Program parse() {
         Program program;
         while (token_.text == "import") {
             advance();
-            if (token_.text == "*")
-                fail("NATIVE_IMPORTED_MACRO_LINKER_REQUIRED: imported public compile-time "
-                     "macros require verified logical source-unit IDs and typed export "
-                     "provenance before LLVM IR; runtime fallback is forbidden");
+            if (token_.text == "*") {
+                advance(); require("as");
+                const auto alias = identifier();
+                require("from");
+                if (token_.kind != Kind::String)
+                    fail("NATIVE_IMPORTED_MACRO_LINKER_REQUIRED: imported macro path must be quoted");
+                const std::string path(token_.text);
+                advance(); require(";");
+                const auto matching = std::find_if(imported_macros_.begin(), imported_macros_.end(),
+                        [&](const auto& binding) {
+                            return binding.alias == alias && binding.path == path;
+                        });
+                if (matching == imported_macros_.end() ||
+                        matching->logical_owner.empty() ||
+                        matching->source_sha256.size() != 64 ||
+                        matching->exports.empty())
+                    fail("NATIVE_IMPORTED_MACRO_LINKER_REQUIRED: imported macro lacks descriptor-bound producer authority");
+                if (!module_names_.insert(alias).second)
+                    fail("NATIVE_IMPORTED_MACRO_DUPLICATE: imported alias conflicts with module binding");
+                program.compile_time_macro_imports.push_back(*matching);
+                for (const auto& signature : matching->exports) {
+                    if (macros_.size() >= kMaxNativeMacroDefinitions)
+                        fail("NATIVE_MACRO_BUDGET: aggregate imported macro declarations exceeded");
+                    if (!macros_.emplace(alias + "." + signature.name,
+                                         signature.kind).second)
+                        fail("NATIVE_IMPORTED_MACRO_DUPLICATE: macro export name is ambiguous");
+                }
+                continue;
+            }
             if (token_.text == "contract")
                 fail("native contract imports require a validated cross-unit linker");
             ModuleImport imported;
@@ -1225,7 +1311,7 @@ private:
         return next_lexer.next();
     }
 
-    enum class MacroKind { ConstIntQuote, SyntaxExprIdentity };
+    using MacroKind = NativeMacroKind;
     static constexpr std::size_t kMaxNativeMacroDefinitions = 8;
     static constexpr std::size_t kMaxNativeMacroExpansions = 128;
 
@@ -1237,7 +1323,7 @@ private:
 
     // Only two syntactically closed typed AST forms may cross this boundary.
     // Macro bodies are checked at declaration even when never invoked.
-    void macro_declaration() {
+    std::string macro_declaration() {
         if (macros_.size() >= kMaxNativeMacroDefinitions)
             fail("NATIVE_MACRO_BUDGET: declaration budget exceeded; runtime fallback is forbidden");
         const std::string name = identifier();
@@ -1271,6 +1357,7 @@ private:
         }
         require_macro(";"); require_macro("}");
         macros_.at(name) = kind;
+        return name;
     }
 
     // Constant evaluation visits the already parsed expression AST, never
@@ -5824,6 +5911,7 @@ private:
     std::unordered_set<std::string> module_names_;
     std::unordered_map<std::string, MacroKind> macros_;
     std::size_t macro_expansions_ = 0;
+    std::vector<NativeMacroBinding> imported_macros_;
     std::string method_scope_;
     std::unordered_set<std::string> class_receivers_;
     std::vector<Function> methods_;
@@ -5995,10 +6083,19 @@ void resolve_future_pipeline_contracts(Program& program) {
 
 } // namespace
 
+std::vector<NativeMacroImport> scan_native_macro_import_headers(std::string_view source) {
+    return Parser(source, false, false).scan_macro_headers();
+}
+
+std::vector<NativeMacroSignature> parse_native_public_macro_exports(std::string_view source) {
+    return Parser(source, false, false).parse_public_macro_exports_only();
+}
+
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int,
-                      bool experimental_rt_scalar_loop) {
+                      bool experimental_rt_scalar_loop,
+                      const std::vector<NativeMacroBinding>& imported_macros) {
     Program program = Parser(source, experimental_owned_int,
-                             experimental_rt_scalar_loop).parse();
+                             experimental_rt_scalar_loop, imported_macros).parse();
     if (experimental_rt_scalar_loop &&
             (program.functions.size() != 1 || !program.functions.front().scalar_while ||
              !program.classes.empty() || !program.actors.empty() ||

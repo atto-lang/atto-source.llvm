@@ -1,0 +1,2 @@
+import * as lib from "./import-producer.ores";
+pub fnc main() -> int { return 42; }

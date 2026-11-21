@@ -1,0 +1,3 @@
+import * as lib from "./import-producer.atto";
+import * as lib from "./import-producer.atto";
+pub fnc main() -> int { return 42; }

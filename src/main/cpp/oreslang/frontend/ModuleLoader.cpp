@@ -2,6 +2,8 @@
 #include "oreslang/frontend/HostLogicalSourceUnitIds.hpp"
 #include "oreslang/frontend/CoreLibrarySources.hpp"
 #include "oreslang/frontend/ProjectRootImport.hpp"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/SHA256.h"
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -81,6 +83,12 @@ public:
                 fail(unit, "native linked suspend functions require module continuation lowering");
             if (index && !unit.program.actors.empty())
                 fail(unit, "native imported actor declarations require typed module actor placement lowering");
+            // Preserve compile-time import authority in the linked AST
+            // without emitting any macro source or runtime callable into IR.
+            linked.compile_time_macro_imports.insert(
+                linked.compile_time_macro_imports.end(),
+                unit.program.compile_time_macro_imports.begin(),
+                unit.program.compile_time_macro_imports.end());
             for (const auto& type : unit.program.sum_types) {
                 bool found = false; for (const auto& existing : linked.sum_types) if (existing.name == type.name) found = true;
                 if (!found) linked.sum_types.push_back(type);
@@ -124,6 +132,81 @@ private:
         return left.valid && right.valid && (left.device != 0 || left.inode != 0) &&
                left.device == right.device && left.inode == right.inode;
     }
+    static std::string source_sha256(const std::string& bytes) {
+        llvm::SHA256 hash;
+        hash.update(llvm::StringRef(bytes));
+        const auto digest = hash.final();
+        static constexpr char hex[] = "0123456789abcdef";
+        std::string value;
+        value.reserve(digest.size() * 2);
+        for (std::uint8_t octet : digest) {
+            value.push_back(hex[(octet >> 4) & 0x0f]);
+            value.push_back(hex[octet & 0x0f]);
+        }
+        return value;
+    }
+
+    // M1: an imported compile-time macro is an authorized typed export from
+    // an already verified file, not an ambient path or a runtime function.
+    // Only same-directory explicit "./producer.atto" is admitted initially;
+    // nested/relative/root import policies will share the ordinary linker
+    // after #1336 is reconciled.
+    std::vector<NativeMacroBinding> verified_macro_imports(
+            const fs::path& importer, const std::string& source,
+            bool compiler_owned_library) {
+        const auto discovered = scan_native_macro_import_headers(source);
+        if (discovered.empty()) return {};
+        if (!host || compiler_owned_library)
+            throw std::runtime_error(
+                "NATIVE_IMPORTED_MACRO_LINKER_REQUIRED: hosted explicit source ownership required");
+        std::vector<NativeMacroBinding> bindings;
+        bindings.reserve(discovered.size());
+        for (const auto& imported : discovered) {
+            const std::string& raw = imported.path;
+            if (raw.rfind("./", 0) != 0 || raw.size() <= 7 ||
+                    raw.substr(raw.size() - 5) != ".atto" ||
+                    raw.find('/', 2) != std::string::npos ||
+                    raw.find('\\') != std::string::npos ||
+                    raw.find("..") != std::string::npos)
+                throw std::runtime_error(
+                    "NATIVE_IMPORTED_MACRO_LINKER_REQUIRED: imported macro needs explicit same-directory .atto source");
+            const auto lexical = (importer.parent_path() / fs::path(raw)).lexically_normal();
+            // Most important ordering guarantee: never open or read an
+            // unowned producer, even if parsing the consumer will fail later.
+            const auto logical = source_ids->preflight_path(lexical);
+            if (logical == source_ids->preflight_path(importer))
+                throw std::runtime_error(
+                    "NATIVE_IMPORTED_MACRO_LINKER_REQUIRED: macro producer cannot import itself");
+            if (read_bytes >= max_bytes)
+                throw std::runtime_error("native macro source read exceeds 8 MiB budget");
+            const auto path = lexical.string();
+            const auto expected = capture_source_identity(
+                path.c_str(), max_bytes - read_bytes,
+                "native macro source exceeds 8 MiB read budget");
+            SourceIdentity observed;
+            auto text = read_regular_source(
+                path.c_str(), max_bytes - read_bytes,
+                "native macro source exceeds 8 MiB read budget",
+                &observed, &expected);
+            read_bytes += text.size();
+            if (source_ids->admit(lexical, observed) != logical)
+                throw std::runtime_error(
+                    "NATIVE_IMPORTED_MACRO_LINKER_REQUIRED: macro producer owner changed during read");
+            require_valid_source_utf8(text);
+            if (text.find("// ores:") != std::string::npos)
+                throw std::runtime_error(
+                    "NATIVE_IMPORTED_MACRO_LINKER_REQUIRED: macro producer environment header unsupported");
+            const auto exports = parse_native_public_macro_exports(text);
+            if (exports.size() > 8)
+                throw std::runtime_error("NATIVE_MACRO_BUDGET: public macro export count exceeded");
+            bindings.push_back(NativeMacroBinding{
+                imported.alias, imported.path, logical,
+                source_sha256(text), exports
+            });
+        }
+        return bindings;
+    }
+
     std::size_t visit(fs::path path, std::string text, SourceIdentity identity,
                       std::size_t depth, bool compiler_owned_library,
                       frontend::CompilerLibraryTier compiler_library_tier,
@@ -144,7 +227,11 @@ private:
         unit->compiler_owned_library = compiler_owned_library;
         unit->compiler_library_tier = compiler_library_tier;
         unit->admitted_core_provider_bits = admitted_core_provider_bits;
-        try { unit->program = parse_unresolved_program(text, owned, scalar_loop); }
+        try {
+            const auto verified = verified_macro_imports(unit->path, text,
+                                                          compiler_owned_library);
+            unit->program = parse_unresolved_program(text, owned, scalar_loop, verified);
+        }
         catch (const std::exception& error) {
             // Preserve historical diagnostics for a standalone entry unit.
             if (!index) throw;

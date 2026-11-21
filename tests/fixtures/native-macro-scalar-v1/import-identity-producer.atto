@@ -1,0 +1,3 @@
+define pub macro identity(Syntax<Expr> value) -> Syntax<Expr> {
+    return value;
+}
