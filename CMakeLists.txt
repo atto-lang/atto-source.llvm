@@ -1704,6 +1704,47 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_execution_ledger_serialization
         PROPERTIES TIMEOUT 20)
 
+    # Deterministic host-only lifecycle stress and STOP/WAKE fencing.
+    # Separate from the real scheduler bridge and compiled .ores guest gate.
+    add_executable(oreslang-actor-execution-ledger-stress-test
+        tests/native_actor_execution_ledger_state_stress_test.cpp)
+    target_include_directories(oreslang-actor-execution-ledger-stress-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-execution-ledger-stress-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-actor-execution-ledger-stress-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_execution_ledger_deterministic_stress
+        COMMAND oreslang-actor-execution-ledger-stress-test)
+    set_tests_properties(native_actor_execution_ledger_deterministic_stress
+        PROPERTIES TIMEOUT 25)
+
+    add_executable(oreslang-actor-ledger-fencing-interleavings-test
+        tests/native_actor_ledger_fencing_interleavings_test.cpp)
+    target_include_directories(oreslang-actor-ledger-fencing-interleavings-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-ledger-fencing-interleavings-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-actor-ledger-fencing-interleavings-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_ledger_stop_wake_fencing_interleavings
+        COMMAND oreslang-actor-ledger-fencing-interleavings-test)
+    set_tests_properties(native_actor_ledger_stop_wake_fencing_interleavings
+        PROPERTIES TIMEOUT 25)
+
+    # Trusted actor lease adapter; synthetic authority oracle verifies
+    # fencing at the host boundary, NOT the real scheduler's thread isolation.
+    add_executable(oreslang-actor-ledger-lease-authority-test
+        tests/native_actor_ledger_lease_authority_test.cpp)
+    target_include_directories(oreslang-actor-ledger-lease-authority-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-ledger-lease-authority-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-actor-ledger-lease-authority-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-actor-ledger-lease-authority-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_ledger_lease_authority_boundary
+        COMMAND oreslang-actor-ledger-lease-authority-test)
+    set_tests_properties(native_actor_ledger_lease_authority_boundary
+        PROPERTIES TIMEOUT 30)
+
     # Lease-authenticated native scheduler DATA/WAKE callbacks interacting
     # with an actor-private ledger. Deliberately host-only: the legacy
     # scheduler's native "processed" receipt still precedes ledgered guest B.
@@ -1721,6 +1762,24 @@ if(BUILD_TESTING)
         COMMAND oreslang-actor-ledger-scheduler-bridge-test)
     set_tests_properties(native_actor_ledger_authenticated_scheduler_bridge
         PROPERTIES TIMEOUT 25)
+
+    # Real scheduler + ledger STOP integration: suspended A's retained DATA
+    # credit survives until an authenticated actor-owned cleanup turn finishes.
+    add_executable(oreslang-actor-ledger-scheduler-stop-cleanup-test
+        tests/native_actor_ledger_scheduler_stop_cleanup_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    target_include_directories(oreslang-actor-ledger-scheduler-stop-cleanup-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-ledger-scheduler-stop-cleanup-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-actor-ledger-scheduler-stop-cleanup-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-actor-ledger-scheduler-stop-cleanup-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_actor_ledger_scheduler_stop_retained_cleanup
+        COMMAND oreslang-actor-ledger-scheduler-stop-cleanup-test)
+    set_tests_properties(native_actor_ledger_scheduler_stop_retained_cleanup
+        PROPERTIES TIMEOUT 30)
 
     # A retained unfinished logical DATA turn must prevent later DATA
     # overtaking, while separately admitted WAKE and other actor lanes run.
