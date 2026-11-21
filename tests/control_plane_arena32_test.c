@@ -152,6 +152,7 @@ int main(void) {
     CHECK(!atto_control32_read_i128(pair_arena, pair_ref, &denied_low, &denied_high));
     CHECK(denied_low == 0 && denied_high == 0);
     atto_control32_destroy(pair_arena);
+    puts("PASS llvm control i128 coherent concurrent host (NOT compiled Atto)");
     puts("PASS control-plane-ref32 llvm C11 native host 12 guarded scenarios; NO compiled Atto guest or zero-GC proof");
     return 0;
 }
