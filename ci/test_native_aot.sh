@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export CARGO_NET_OFFLINE=true
 test "$(git hash-object frontend/src/check.rs)" = "fc8806e97d94f408fd145f48b73ab33324dae2fa"
-test "$(git hash-object frontend/src/parser.rs)" = "6231be661be9b7bb40bd9ed69d4cd60ccc5b9609"
+test "$(git hash-object frontend/src/parser.rs)" = "5c38eae45452aee597885a38af8903b54f1f4e37"
 test "$(git hash-object frontend/src/lexer.rs)" = "23f8fe950b47627110cf3265b771398bb46213e3"
 
 cargo test --offline
@@ -214,5 +214,10 @@ if find "$work" -type f -name '*.atto-stage-*.tmp' | grep -q .; then
   echo "FAIL: temporary compiler artifacts leaked" >&2; exit 1
 fi
 echo "PASS atomic output, failure preservation, and cleanup"
+
+# The head's guard parser is SHA-pinned above. Do not mistake the historical
+# 1255-case scalar inventory for evidence that the two guard block spellings
+# execute as actual native machine code. Run the independent guest gate.
+bash ci/test_guard_dual_form_native.sh
 
 echo "PASS LLVM_NATIVE_AOT_SCALAR_GUEST cases=$total toolchain=clang no_guest_vm=1 zero_gc_scalar=1"

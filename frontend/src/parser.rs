@@ -228,6 +228,66 @@ fn unsupported(pos: Pos, what: &str) -> Diagnostic {
     Diagnostic::new(pos, "E_UNSUPPORTED", format!("{what} is not supported by the browser compiler yet"))
 }
 
+/// Both guard spellings need a statically terminal failure continuation.
+/// Deliberately reject loops, non-exhaustive ifs and unproven match coverage.
+/// Guard commas are lazy AND and guard pipes are lazy OR. Native scalar
+/// binary And/Or lowering may be eager, so explicitly turn this guard's
+/// boolean chain into conditional expressions before typechecking/emission.
+/// This preserves exact-once, left-to-right evaluation and prevents effects
+/// in a later guard test when an earlier test already failed.
+fn lazy_guard_predicate(expr: Expr) -> Expr {
+    let pos = expr.pos;
+    match expr.kind {
+        ExprKind::Binary(BinOp::And, left, right) => Expr {
+            kind: ExprKind::Ternary(
+                Box::new(lazy_guard_predicate(*left)),
+                Box::new(lazy_guard_predicate(*right)),
+                Box::new(Expr { kind: ExprKind::Bool(false), pos })),
+            pos,
+        },
+        ExprKind::Binary(BinOp::Or, left, right) => Expr {
+            kind: ExprKind::Ternary(
+                Box::new(lazy_guard_predicate(*left)),
+                Box::new(Expr { kind: ExprKind::Bool(true), pos }),
+                Box::new(lazy_guard_predicate(*right))),
+            pos,
+        },
+        kind => Expr { kind, pos },
+    }
+}
+
+/// Conservative guard preflight: no path may escape through an explicit
+/// throw, break, or continue before the required function return. The typed
+/// checker still validates return types and exceptional effects separately.
+fn guard_has_nonreturn_control_exit(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(|stmt| match stmt {
+        Stmt::Throw(..) | Stmt::Break(..) | Stmt::Continue(..) => true,
+        Stmt::Block(body) => guard_has_nonreturn_control_exit(body),
+        Stmt::If { arms, otherwise, .. } =>
+            arms.iter().any(|(_, body)| guard_has_nonreturn_control_exit(body))
+                || otherwise.as_ref().is_some_and(|body| guard_has_nonreturn_control_exit(body)),
+        Stmt::Match { arms, .. } =>
+            arms.iter().any(|arm| guard_has_nonreturn_control_exit(&arm.body)),
+        Stmt::While { body, .. } | Stmt::Loop { body, .. }
+        | Stmt::For { body, .. } | Stmt::ForIn { body, .. } =>
+            guard_has_nonreturn_control_exit(body),
+        _ => false,
+    })
+}
+
+fn guard_failure_returns(stmts: &[Stmt]) -> bool {
+    match stmts.last() {
+        Some(Stmt::Return(..)) => true,
+        Some(Stmt::Block(body)) => guard_failure_returns(body),
+        Some(Stmt::If { arms, otherwise: Some(fallback), .. }) => {
+            !arms.is_empty()
+                && arms.iter().all(|(_, body)| guard_failure_returns(body))
+                && guard_failure_returns(fallback)
+        }
+        _ => false,
+    }
+}
+
 impl Parser {
     pub fn new(toks: Vec<Token>) -> Self {
         Parser {
@@ -1161,6 +1221,7 @@ impl Parser {
                 self.terminator()?;
                 Ok(Stmt::Throw(error, pos))
             }
+            Some("guard") => self.parse_guard(),
             Some("if") => self.parse_if(),
             Some("while") => {
                 self.advance();
@@ -1330,6 +1391,42 @@ impl Parser {
         self.advance();
         let init = self.parse_expr()?;
         Ok(Stmt::Bind { kind, name, ty, init, pos })
+    }
+
+    /// AttoLang dual-form early-exit guard. Both surface spellings lower
+    /// through the same checked negated If statement. Unsupported payload
+    /// narrowing remains checked elsewhere and must never be invented.
+    fn parse_guard(&mut self) -> R<Stmt> {
+        let pos = self.pos();
+        self.expect_word("guard")?;
+        let predicate = lazy_guard_predicate(self.parse_cond_head()?);
+        let failure = if *self.peek() == Tok::LBrace {
+            let block = self.parse_block()?;
+            if self.is_word("else") {
+                return Err(Diagnostic::new(self.pos(), "E_GUARD",
+                    "braced guard cannot have an additional else branch"));
+            }
+            block
+        } else if self.eat_word("else") {
+            let block = self.parse_stmts_until(&["end"])?;
+            self.expect_word("end")?;
+            block
+        } else {
+            return Err(Diagnostic::new(self.pos(), "E_GUARD",
+                "guard requires '{ ... }' or 'else ... end' failure block"));
+        };
+        if guard_has_nonreturn_control_exit(&failure) || !guard_failure_returns(&failure) {
+            return Err(Diagnostic::new(pos, "E_GUARD",
+                "guard failure block must explicitly return on all reachable paths"));
+        }
+        Ok(Stmt::If {
+            arms: vec![(
+                Expr { kind: ExprKind::Unary(UnOp::Not, Box::new(predicate)), pos },
+                failure,
+            )],
+            otherwise: None,
+            pos,
+        })
     }
 
     fn parse_if(&mut self) -> R<Stmt> {
