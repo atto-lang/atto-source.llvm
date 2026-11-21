@@ -25,3 +25,16 @@ Current main's 3,062-byte root CMakeLists.txt identifies itself as a temporary c
 ## Scope limitations
 
 This draft restores only the build definition; it is NOT evidence of successful CMake generation, native LLVM compilation, complete guest execution, CI admission, sanitizer coverage or authorized source mirroring. Keep DRAFT until independently reviewed full-tree CI evidence exists.
+
+## Static inventory test procedure (2026-11-20/21)
+
+The review-only build restoration contains a source-free checker and **10 positive/negative regression tests**, both verified locally from GitHub-blob-identical source:
+
+```sh
+python3 scripts/verify-production-cmake-inventory.py --root .
+python3 -m unittest discover -s scripts -p 'test_verify_production_cmake_inventory.py' -v
+```
+
+Local synthetic suite result: `Ran 10 tests ... OK`, with checker Git blob `99c54b01e402f19553f0dd2b68495c4beab9ed50` and test suite blob `e4086ff788d0b9960624c20e6028ce787d381c48`. The local Python tests exercise synthetic fixtures, **not a clone of private LLVM source**; the checker was matched byte-for-byte by Git SHA to the committed file. Source-tree readback separately found 620 `add_test` invocations, 183 direct CMake path references and 637 project-local referenced source/test paths, all regular non-symlink Git blobs at the reviewed head.
+
+This preflight checks structural completeness and fail-closed traversal. It cannot prove actual CMake configure/build, LLVM compiler behavior, host runtime, O0/O2 guest execution or sanitizer passes. Those production tests remain **NOT_EXECUTED** until an authorized source-side runner with nonzero steps is available. Exact PR head and independent reviewer approval are required before any merge.
