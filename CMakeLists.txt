@@ -977,6 +977,19 @@ if(BUILD_TESTING)
         COMMAND oreslang-actor-owned-heap-test)
     set_tests_properties(native_actor_owned_heap_quiescence PROPERTIES TIMEOUT 20)
 
+    # Critical state write grants: positive scoped mutation plus eleven
+    # fork-isolated abort cases. Uses the same runtime C translation unit.
+    add_executable(oreslang-native-state-write-grant-test
+        tests/native_actor_state_write_grant_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    target_include_directories(oreslang-native-state-write-grant-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-state-write-grant-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_state_write_grant_admission
+        COMMAND oreslang-native-state-write-grant-test)
+    set_tests_properties(native_actor_state_write_grant_admission PROPERTIES TIMEOUT 20)
+
     # Host-only deterministic actor arena: persistent slab + per-turn scratch.
     add_executable(oreslang-native-actor-arena-test
         tests/native_actor_arena_test.c

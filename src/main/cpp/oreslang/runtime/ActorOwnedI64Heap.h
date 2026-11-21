@@ -50,9 +50,23 @@ int64_t ores_actor_i64_heap_field_read(OresActorI64Heap* heap,
 void ores_actor_i64_heap_field_init_mutable(OresActorI64Heap* heap,
                                             uint64_t domain, uint64_t epoch,
                                             uint64_t index, int64_t initial);
+/* The bare legacy field-write ABI is fail-closed: a turn is not a
+ * critical state write grant. Trusted code must use the scoped ABI below.
+ * Only compiler-lowered, synchronous critical handle_state regions may
+ * request a grant; arbitrary C/FFI callers remain part of the trusted TCB.
+ * The nonce is NOT a cryptographic capability against malicious host code. */
 void ores_actor_i64_heap_field_write(OresActorI64Heap* heap,
                                      uint64_t domain, uint64_t epoch,
                                      uint64_t index, int64_t value);
+uint64_t ores_actor_i64_heap_state_write_begin(OresActorI64Heap* heap,
+                                               uint64_t domain, uint64_t epoch);
+void ores_actor_i64_heap_state_write_end(OresActorI64Heap* heap,
+                                        uint64_t domain, uint64_t epoch,
+                                        uint64_t grant_nonce);
+void ores_actor_i64_heap_field_write_granted(OresActorI64Heap* heap,
+                                            uint64_t domain, uint64_t epoch,
+                                            uint64_t grant_nonce,
+                                            uint64_t index, int64_t value);
 void ores_actor_i64_heap_retire(OresActorI64Heap* heap);
 /* Returns zero while a turn or loan is outstanding; returns one and frees
  * native memory after quiescence. Never call with an invalidated heap pointer.
