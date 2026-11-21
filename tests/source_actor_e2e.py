@@ -26,7 +26,8 @@ def expected_prefix_last(name, actor_index, processed):
         for n in range(1, processed + 1):
             value = 2 * (value + n)
         return value
-    if name == "source-actor-two-owned-heaps.ores":
+    if name in {"source-actor-two-owned-heaps.ores",
+                "source-actor-two-owned-heaps.atto"}:
         value = 0
         start = 1 if actor_index == 0 else 5
         for n in range(start, start + processed):
@@ -93,6 +94,8 @@ def main():
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
         ("source-actor-two-owned-heaps.ores", 2, 4, None),
+        # Canonical .atto extension must execute through the same real compiler.
+        ("source-actor-two-owned-heaps.atto", 2, 4, None),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
@@ -168,6 +171,7 @@ def main():
             flags = ["--experimental-owned-int"] if name in {
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
+                "source-actor-two-owned-heaps.atto",
             } else []
             guest = run([args.compiler, *flags, str(fixtures / name)])
             assert guest.returncode == 0, (name, guest.stderr)
@@ -182,6 +186,7 @@ def main():
             if name in {
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
+                "source-actor-two-owned-heaps.atto",
             }:
                 assert guest.stdout.count(
                     "call void @ores_actor_i64_heap_scoped_new(") == 2, name
@@ -275,7 +280,8 @@ def main():
                 assert observed_last == expected_prefix_last(
                     name, i, processed), (
                     name, i, processed, observed_last)
-            if name == "source-actor-two-owned-heaps.ores":
+            if name in {"source-actor-two-owned-heaps.ores",
+                "source-actor-two-owned-heaps.atto"}:
                 assert [r["last"] for r in receipts] == [
                     expected_prefix_last(name, i, r["processed"])
                     for i, r in enumerate(receipts)
