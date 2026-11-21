@@ -109,6 +109,7 @@ fn run() -> Result<(), String> {
         ("readonly-result", "int x = 7; return x + 1;", 8),
         ("bool-readonly", "bool flag = true; return 7;", 7),
         ("const-dependency", "const x = 7; const y = x + 1; return y;", 8),
+        ("runtime-const-from-readonly", "int x = 7; const y = x + 1; return y;", 8),
         ("let-rebinding-control", "let int x = 7; x = 8; return x;", 8),
     ];
     let negatives: &[(&str, &str)] = &[
@@ -121,6 +122,7 @@ fn run() -> Result<(), String> {
         ("missing-initializer", "int x; return 7;"),
         ("missing-bool-initializer", "bool ready; return 7;"),
         ("const-rebind", "const x = 7; x = 8; return x;"),
+        ("typed-const-rebind", "const int x = 7; x = 8; return x;"),
         ("bool-mismatch", "bool flag = 7; return 7;"),
     ];
     for (name, body, expected) in positives {
@@ -171,9 +173,9 @@ fn run() -> Result<(), String> {
         // two explicit rebinding cases, and a duplicate-name diagnostic for
         // the duplicate declaration rather than counting generic failures.
         let diagnostic = String::from_utf8_lossy(&result.stderr).to_ascii_lowercase();
-        if (name == &"rebind" || name == &"const-rebind") &&
-                !diagnostic.contains("assignment") {
-            return Err(format!("{name}: rejection did not diagnose assignment: {diagnostic}"));
+        if (name == &"rebind" || name == &"const-rebind" || name == &"typed-const-rebind") &&
+                !diagnostic.contains("cannot reassign immutable scalar local") {
+            return Err(format!("{name}: expected resolved readonly binding diagnostic, got: {diagnostic}"));
         }
         if (name == &"missing-initializer" || name == &"missing-bool-initializer")
                 && !diagnostic.contains("requires initializer") {
