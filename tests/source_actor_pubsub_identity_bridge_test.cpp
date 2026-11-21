@@ -214,6 +214,55 @@ int main() {
               pubsub, 1, "source-identity", subscriber_id, &value)
               == ORES_NATIVE_PUBSUB_OK && value == INT64_C(73),
           "native typed publication did not deliver to the subscribed actor");
+    // A valid scheduler-minted turn is necessary but NOT sufficient for a
+    // publication. Revoking group membership must deny the same live actor
+    // and refuse to create a typed receipt; rejoin restores only a fresh
+    // authorized membership, not old unguarded publication privileges.
+    check(ores_native_actor_pubsub_leave(
+              pubsub, 1, publisher_id) == ORES_NATIVE_PUBSUB_OK,
+          "publisher leave admission failed");
+    turn_publish_status.store(-1, std::memory_order_release);
+    turn_publish_tag.store(-1, std::memory_order_relaxed);
+    turn_publish_sequence.store(0, std::memory_order_relaxed);
+    oreslang_source_actor_send(publisher, INT64_C(703));
+    const auto revoked_deadline = std::chrono::steady_clock::now()
+            + std::chrono::seconds(5);
+    while (turn_publish_status.load(std::memory_order_acquire) == -1
+            && std::chrono::steady_clock::now() < revoked_deadline) {
+        sched_yield();
+    }
+    check(turn_publish_status.load(std::memory_order_acquire)
+                    == ORES_NATIVE_PUBSUB_DENIED_OR_STALE
+            && turn_publish_tag.load() == ORES_NATIVE_PUBSUB_TRY_INVALID
+            && turn_publish_sequence.load() == 0,
+          "revoked source actor turn must not publish or mint a receipt");
+    value = 0;
+    check(ores_native_actor_pubsub_try_read_i64(
+              pubsub, 1, "source-identity", subscriber_id, &value)
+              == ORES_NATIVE_PUBSUB_EMPTY,
+          "revoked publisher delivered unauthorized DATA");
+
+    check(ores_native_actor_pubsub_join(
+              pubsub, 1, publisher_id) == ORES_NATIVE_PUBSUB_OK,
+          "publisher rejoin admission failed");
+    turn_publish_status.store(-1, std::memory_order_release);
+    oreslang_source_actor_send(publisher, INT64_C(703));
+    const auto rejoined_deadline = std::chrono::steady_clock::now()
+            + std::chrono::seconds(5);
+    while (turn_publish_status.load(std::memory_order_acquire) == -1
+            && std::chrono::steady_clock::now() < rejoined_deadline) {
+        sched_yield();
+    }
+    check(turn_publish_status.load(std::memory_order_acquire)
+                    == ORES_NATIVE_PUBSUB_OK
+            && turn_publish_tag.load() == ORES_NATIVE_PUBSUB_TRY_OK
+            && turn_publish_sequence.load() == 3,
+          "rejoined source actor failed contiguous sequence publication");
+    value = 0;
+    check(ores_native_actor_pubsub_try_read_i64(
+              pubsub, 1, "source-identity", subscriber_id, &value)
+              == ORES_NATIVE_PUBSUB_OK && value == INT64_C(73),
+          "rejoined publisher was not delivered exactly once");
     live_pubsub.store(nullptr, std::memory_order_release);
 
     /*
