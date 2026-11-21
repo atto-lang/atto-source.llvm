@@ -68,6 +68,18 @@ if(BUILD_TESTING)
     add_test(NAME native_ownership_take_place_classification
         COMMAND oreslang-native-ownership-place-test)
 
+    # Test real native frontend AST mode and place categorization (no
+    # synthetic diagnostics). The checker invokes the same owner-authority
+    # predicate for named scalar and direct-field Share sources.
+    add_executable(oreslang-native-share-place-authority-test
+        tests/native_share_place_authority_test.cpp)
+    target_include_directories(oreslang-native-share-place-authority-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-share-place-authority-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ownership_share_place_authority
+        COMMAND oreslang-native-share-place-authority-test)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
@@ -1251,6 +1263,9 @@ if(BUILD_TESTING)
     # This is an actual source compiler negative, not a host-only model.
     oreslang_contract_test(atto_share_borrowed_parameter_rejected
         atto-share-borrowed-parameter-reject.atto --diagnostic "E_SHARE_BORROW")
+    # Borrowed class roots must not launder their scalar fields into Share.
+    oreslang_contract_test(atto_share_borrowed_class_field_rejected
+        atto-share-borrowed-class-field-reject.atto --diagnostic "E_SHARE_BORROW")
     # Copy scalars retain parity with Java rt share Copy semantics.
     # Require real compiler IR, Clang link and native process exit.
     if(ORE_CLANG)
