@@ -33,6 +33,8 @@ def main():
     parser.add_argument("--compiler", required=True)
     parser.add_argument("--clang")
     args = parser.parse_args()
+    if args.clang is not None and not args.clang.strip():
+        raise ValueError("native guest-link evidence requires a nonempty Clang command")
 
     source_root = Path(__file__).resolve().parents[1]
     runtime_c = (
@@ -117,6 +119,40 @@ def main():
             "alloc alias created a second compiler-owned unit identity",
         )
 
+        # New AttoLang source and canonical .atto alloc imports must share
+        # one compiler-owned module with legacy .ores aliases. Prove this by
+        # IR identity as well as by compiling and executing native code.
+        modern_source = root / "modern-alloc.atto"
+        modern_source.write_text(
+            'import module int_buffer as New from "alloc/int_buffer.atto"; '
+            'import module int_buffer as Old from "alloc/int_buffer.ores"; '
+            "pub fnc main():int{return New.sum_pair(10,11)"
+            "+Old.sum_pair(10,11);}\n",
+            encoding="utf-8",
+        )
+        modern = run([args.compiler, str(modern_source)])
+        require(modern.returncode == 0, modern.stderr)
+        require(
+            modern.stdout.count("define i64 @__ores_module_1.sum_pair") == 1
+            and "__ores_module_2.sum_pair" not in modern.stdout,
+            "canonical .atto and legacy .ores alloc imports created duplicates",
+        )
+        require("@oreslang_int_array_try_new" in modern.stdout,
+                "modern alloc alias lost the native allocator ABI")
+        if args.clang:
+            ll = root / "modern-alloc.ll"
+            exe = root / "modern-alloc"
+            ll.write_text(modern.stdout, encoding="utf-8")
+            linked = run([
+                args.clang, "-O2", "-Wno-override-module", "-std=c11",
+                "-x", "ir", str(ll), "-x", "c", str(runtime_c),
+                "-I", str(include), "-o", str(exe),
+            ])
+            require(linked.returncode == 0, linked.stderr)
+            executed = run([str(exe)])
+            require(executed.returncode == 42,
+                    "compiled .atto alloc aliases did not execute to 42")
+
         # The bundle's own body allocates nothing. Its dependency does, so the
         # linked artifact proves the loader followed and retained the transitive
         # provider-bearing closure.
@@ -140,6 +176,44 @@ def main():
             "@oreslang_int_array_try_new" in bundle.stdout,
             "transitive provider-bearing dependency lost allocator ABI",
         )
+
+        modern_bundle_source = root / "modern-bundle.atto"
+        modern_bundle_source.write_text(
+            'import module int_buffer_bundle as bundle '
+            'from "alloc/int_buffer_bundle.atto"; '
+            "pub fnc main():int{return bundle.marker();}\n",
+            encoding="utf-8",
+        )
+        modern_bundle = run([args.compiler, str(modern_bundle_source)])
+        require(modern_bundle.returncode == 0, modern_bundle.stderr)
+        require(
+            "define i64 @__ores_module_1.marker" in modern_bundle.stdout and
+            "define i64 @__ores_module_2.sum_pair" in modern_bundle.stdout,
+            "canonical .atto bundle lost its transitive allocator dependency",
+        )
+        require("@oreslang_int_array_try_new" in modern_bundle.stdout,
+                "canonical .atto transitive allocation lost provider gate")
+
+        if args.clang:
+            bundle_ll = root / "modern-bundle.ll"
+            bundle_exe = root / "modern-bundle"
+            bundle_ll.write_text(modern_bundle.stdout, encoding="utf-8")
+            linked = run([
+                args.clang, "-O2", "-Wno-override-module", "-std=c11",
+                "-x", "ir", str(bundle_ll), "-x", "c", str(runtime_c),
+                "-I", str(include), "-o", str(bundle_exe),
+            ])
+            require(linked.returncode == 0, linked.stderr)
+            executed = run([str(bundle_exe)])
+            require(executed.returncode == 42,
+                    "compiled .atto transitive alloc bundle did not execute to 42")
+
+        invalid_suffix = root / "invalid-alloc-suffix.atto"
+        invalid_suffix.write_text(
+            'import module int_buffer from "alloc/int_buffer.txt"; '
+            "pub fnc main():int{return 0;}\n", encoding="utf-8")
+        reject(run([args.compiler, str(invalid_suffix)]),
+               "unknown compiler-owned alloc module")
 
         unknown = root / "unknown.ores"
         unknown.write_text(
@@ -166,16 +240,17 @@ def main():
         # No freestanding allocator provider ABI exists yet. Fail before IR,
         # rather than silently binding to libc or an ambient runtime allocator.
         for target in ("wasm32-unknown-unknown", "thumbv7m-none-eabi"):
-            rejected = run([
-                args.compiler,
-                "--library-profile=core",
-                "--target=" + target,
-                str(main_source),
-            ])
-            reject(
-                rejected,
-                "freestanding alloc/* requires an explicit allocator provider",
-            )
+            for source in (main_source, modern_source, modern_bundle_source):
+                rejected = run([
+                    args.compiler,
+                    "--library-profile=core",
+                    "--target=" + target,
+                    str(source),
+                ])
+                reject(
+                    rejected,
+                    "freestanding alloc/* requires an explicit allocator provider",
+                )
 
     print(
         "compiler-owned alloc tier, allocator ABI, alias identity, "

@@ -171,7 +171,10 @@ private:
                 if (!library) {
                     if (frontend::is_reserved_core_import(raw))
                         fail(current,
-                            "unknown compiler-owned ores.core module '" + raw + "'");
+                            std::string("unknown compiler-owned ") +
+                                (raw.rfind("atto.core", 0) == 0
+                                    ? "atto.core" : "ores.core") +
+                                " module '" + raw + "'");
                     fail(current,
                         "unknown compiler-owned alloc module '" + raw + "'");
                 }

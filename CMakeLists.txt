@@ -3648,12 +3648,15 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_core_library_profile_artifact_boundary
         PROPERTIES TIMEOUT 120)
+    # Run the real AttoLang .atto / legacy compiler-owned source through
+    # LLVM codegen, host Clang linking and native execution, not just IR text.
     add_test(NAME native_core_library_import_resolution
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/core_library_imports.py"
-            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_RT_AOT_CLANG}")
     set_tests_properties(native_core_library_import_resolution
-        PROPERTIES TIMEOUT 120)
+        PROPERTIES TIMEOUT 180)
     add_test(NAME native_alloc_library_import_resolution
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/alloc_library_imports.py"

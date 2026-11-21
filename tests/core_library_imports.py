@@ -66,6 +66,8 @@ def main():
     parser.add_argument("--lld")
     parser.add_argument("--wasm-ld")
     args = parser.parse_args()
+    if args.clang is not None and not args.clang.strip():
+        raise ValueError("native guest-link evidence requires a nonempty Clang command")
 
     with tempfile.TemporaryDirectory(prefix="ores-core-registry-") as temp:
         root = Path(temp)
@@ -83,7 +85,7 @@ def main():
 
         main_source = root / "main.ores"
         main_source.write_text(
-            'import module numeric from "ores.core/numeric"; '
+            'import module numeric from "atto.core/numeric.atto"; '
             "pub fnc main():int{return numeric.clamp_int(50,0,42);}\n",
             encoding="utf-8",
         )
@@ -115,6 +117,75 @@ def main():
         alias = run([args.compiler, str(alias_source)])
         require(alias.returncode == 0, alias.stderr)
         require("__ores_module_2." not in alias.stdout, "core alias duplicated module")
+
+        # AttoLang public namespace and .atto source suffix are accepted
+        # only through the compiler-owned registry. All legacy spellings
+        # share the same source unit and its provider/effect closure.
+        (shadow / "numeric.atto").write_text(
+            "define module numeric as "
+            "pub fnc max_int(int x,int y):int{return 7;} end\n",
+            encoding="utf-8",
+        )
+        (root / "atto.core").mkdir()
+        (root / "atto.core" / "numeric.atto").write_text(
+            "define module numeric as "
+            "pub fnc max_int(int x,int y):int{return 7;} end\n",
+            encoding="utf-8",
+        )
+        modern_source = root / "modern-main.atto"
+        modern_source.write_text(
+            'import module numeric as New from "atto.core/numeric.atto"; '
+            'import module numeric as Old from "ores.core/numeric.ores"; '
+            'import module numeric as Unsuffixed from "atto.core/numeric"; '
+            "pub fnc main():int{return New.max_int(20,22)"
+            "+Old.min_int(20,21)+Unsuffixed.min_int(0,0); }\n",
+            encoding="utf-8",
+        )
+        modern = run([args.compiler, str(modern_source)])
+        require(modern.returncode == 0, modern.stderr)
+        require(
+            modern.stdout.count("define i64 @__ores_module_1.max_int") == 1,
+            "modern/legacy core aliases duplicated the public max_int definition",
+        )
+        require(
+            "__ores_module_2.max_int" not in modern.stdout and
+            "__ores_module_3.max_int" not in modern.stdout,
+            "core aliases admitted extra guest module identities",
+        )
+        if args.clang:
+            modern_ll = root / "modern-core.ll"
+            modern_exe = root / "modern-core"
+            modern_ll.write_text(modern.stdout, encoding="utf-8")
+            built = run([args.clang, str(modern_ll), "-O2", "-o", str(modern_exe)])
+            require(built.returncode == 0, built.stderr)
+            executed = run([str(modern_exe)], env={"PATH": "/nonexistent"})
+            require(executed.returncode == 42,
+                    "canonical .atto core alias did not execute to 42")
+
+        atto_unknown = root / "atto-unknown.atto"
+        atto_unknown.write_text(
+            'import module missing from "atto.core/missing.atto"; '
+            "pub fnc main():int{return 0;}\n", encoding="utf-8")
+        require_rejected(
+            run([args.compiler, str(atto_unknown)]),
+            "unknown compiler-owned atto.core module",
+        )
+        atto_traversal = root / "atto-traversal.atto"
+        atto_traversal.write_text(
+            'import module numeric from "atto.core/../numeric.atto"; '
+            "pub fnc main():int{return 0;}\n", encoding="utf-8")
+        require_rejected(
+            run([args.compiler, str(atto_traversal)]),
+            "unknown compiler-owned atto.core module",
+        )
+        atto_unknown_suffix = root / "atto-invalid-suffix.atto"
+        atto_unknown_suffix.write_text(
+            'import module numeric from "atto.core/numeric.txt"; '
+            "pub fnc main():int{return 0;}\n", encoding="utf-8")
+        require_rejected(
+            run([args.compiler, str(atto_unknown_suffix)]),
+            "unknown compiler-owned atto.core module",
+        )
 
         unknown_source = root / "unknown.ores"
         unknown_source.write_text(
@@ -170,9 +241,9 @@ def main():
             "freestanding native imports require compiler-owned ores.core/* modules",
         )
 
-        cortex_source = root / "cortex.ores"
+        cortex_source = root / "cortex.atto"
         cortex_source.write_text(
-            'import module numeric from "ores.core/numeric"; '
+            'import module numeric from "atto.core/numeric.atto"; '
             "pub fnc ores_embedded_probe(int x):int{"
             "return numeric.clamp_int(x,0,42);}\n",
             encoding="utf-8",
@@ -187,9 +258,9 @@ def main():
         require('target triple = "thumbv7m-none-eabi"' in cortex.stdout, "bad ARM triple")
         require("@__ores_module_1.clamp_int" in cortex.stdout, "ARM core import missing")
 
-        wasm_source = root / "wasm.ores"
+        wasm_source = root / "wasm.atto"
         wasm_source.write_text(
-            'import module numeric from "ores.core/numeric.ores"; '
+            'import module numeric from "atto.core/numeric.atto"; '
             "pub fnc main():int{return numeric.max_int(40,42);}\n",
             encoding="utf-8",
         )
@@ -204,7 +275,10 @@ def main():
         require("@__ores_module_1.max_int" in wasm.stdout, "wasm core import missing")
 
         artifact_tools = [args.clang, args.nm, args.lld, args.wasm_ld]
-        if any(artifact_tools):
+        # A host Clang alone is enough for host .atto executable evidence.
+        # Full ARM/Wasm artifact proofs additionally require the cross-linker
+        # and the nm/wasm-ld toolchain (no silently partial artifact claims).
+        if any((args.nm, args.lld, args.wasm_ld)):
             require(all(artifact_tools), "artifact proof requires clang, nm, lld, wasm-ld")
 
             cortex_ll = root / "cortex.ll"
