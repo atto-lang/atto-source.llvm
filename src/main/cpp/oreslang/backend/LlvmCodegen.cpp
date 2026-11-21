@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/NativeIrOwnershipCensus.hpp"
 #include "oreslang/backend/NativeFlatClasses.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
@@ -2932,6 +2933,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         errors.flush();
         throw std::runtime_error("invalid generated LLVM module: " + diagnostics);
     }
+    // Inspect real LLVM SSA operand/use lists and actual emitted stores.
+    // This census is NOT proof of complete source-level LoanId or MIR writes.
+    // Its raw IR pointers cannot outlive the Module.
+    const auto emitted_ir_census = native_ir::collect_native_ir_ssa_census(module);
+    (void)emitted_ir_census;
     std::string result;
     llvm::raw_string_ostream output(result);
     module.print(output, nullptr);

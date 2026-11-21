@@ -57,3 +57,14 @@ errors, skips or duplicate test names.
 All new cases are AUTHORING EVIDENCE ONLY / NOT_EXECUTED until a real
 source-organization runner executes nonzero steps. The adapter remains
 verified=false and compiler_backed=false; no guest lowering is enabled.
+
+
+## Actual LLVM instruction-derived SSA/store census (not a guest proof)
+
+`backend/NativeIrOwnershipCensus.hpp` walks actual emitted LLVM Module basic blocks after LLVM verification and before printing LLVM IR. Its StoreInst records bind the real instruction identity, destination pointer, stored LLVM SSA value and deterministic per-walk ordinal. It independently counts SSA operands and reverse use-list edges, LoadInst, CallBase, PHINode and phi inputs; cross-function SSA users fail closed. Cached store entries cannot authenticate changed operands. The result is compiled and invoked in the real `LlvmCodegen.cpp` output path (not caller-provided JSON).
+
+**Non-promoting scope:** no mapping from source LoanId/use-def to LLVM instruction ID is proven. No Reinitialize.write_id is yet bound to a particular emitted store. Every result remains ownership_complete=false and guest_verified=false; this cannot enable guest NLL. Raw LLVM pointers must not outlive their Module.
+
+30 new host C++ test assertions construct real in-memory LLVM IR, including mutated stores, stale evidence, calls, actual phi nodes, foreign-function SSA edge rejection and a no-store empty module. The test is registered as the thirteenth focused native CTest; the existing real 50-program LLVM/Clang guest matrix remains separately required.
+
+CI audit: the previously committed source-owned workflow had nine copies of the compiler-matrix/final-head sequence and broken injected inventory grep text. This version keeps one complete ordered sequence, repairs the inventory line, and requires the exact 13-case JUnit testcase-name set. All these tests remain NOT_EXECUTED pending actual source-organization runner admission.

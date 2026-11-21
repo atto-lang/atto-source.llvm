@@ -190,6 +190,19 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_ownership_mir_opaque_effects_18
         COMMAND oreslang-native-mir-opaque-effects-18-test)
+    # Actual LLVM instruction/SSA use-def and native store census.
+    # Not a typed-MIR loan completeness proof or AttoLang guest receipt.
+    add_executable(oreslang-native-ir-ssa-census-30-test
+        tests/native_ir_ssa_store_census_30_test.cpp)
+    target_include_directories(oreslang-native-ir-ssa-census-30-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_compile_options(oreslang-native-ir-ssa-census-30-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-ir-ssa-census-30-test PRIVATE
+        ${ORE_LLVM_LIBS})
+    add_test(NAME native_ownership_ir_ssa_store_census_30
+        COMMAND oreslang-native-ir-ssa-census-30-test)
 
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
