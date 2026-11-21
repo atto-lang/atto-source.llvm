@@ -36,6 +36,16 @@ POSITIVE = {
   return hit.unwrap_or(0) + miss.unwrap_or(0) + high.unwrap_or(0);
 }
 """, 42, 1),
+    "copy-signed-i64-range": ("""pub fnc main(): int {
+  let mut Array<int> values = new Array<int>();
+  values.add(0);
+  val Option<int> zero = values.get_copy(0);
+  val Option<int> below = values.get_copy(-9223372036854775808);
+  val Option<int> above = values.get_copy(9223372036854775807);
+  return zero.is_some() && zero.unwrap_or(99) == 0 &&
+         below.is_none() && above.is_none() ? 42 : 0;
+}
+""", 42, 1),
     "add-get-set-size": ("""pub fnc main(): int {
   let mut Array<int> numbers = new Array<int>();
   numbers.add(4);
@@ -104,6 +114,18 @@ NATIVE_ABORT = {
   return a.get(-1);
 }
 """,
+    "get-min-i64": """pub fnc main(): int {
+  let mut Array<int> a = new Array<int>();
+  a.add(7);
+  return a.get(-9223372036854775808);
+}
+""",
+    "get-max-i64": """pub fnc main(): int {
+  let mut Array<int> a = new Array<int>();
+  a.add(7);
+  return a.get(9223372036854775807);
+}
+""",
     "get-at-length": """pub fnc main(): int {
   let mut Array<int> a = new Array<int>();
   a.add(7);
@@ -124,6 +146,11 @@ NEGATIVE = {
     "get-copy-untyped": ("""pub fnc main(): int {
  let mut Array<int> values = new Array<int>();
  return values.get_copy(0);
+}
+""", "get_copy"),
+    "get-copy-untyped-miss": ("""pub fnc main(): int {
+ let mut Array<int> values = new Array<int>();
+ return values.get_copy(-1);
 }
 """, "get_copy"),
     "get-copy-wrong-option": ("""pub fnc main(): int {
