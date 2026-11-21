@@ -1,7 +1,12 @@
 #include "oreslang/runtime/MultiActorCarrier.hpp"
+#include "oreslang/runtime/ActorStacklessI64ABI.hpp"
 
+#include <array>
 #include <atomic>
+#include <cstdint>
+#include <limits>
 #include <cstdlib>
+#include <cstdio>
 #include <functional>
 #include <stdexcept>
 #include <utility>
@@ -13,6 +18,7 @@ struct ActiveGuestTurn {
     std::uint32_t slot = 0;
     std::uint64_t generation = 0;
     ActorGuestFrameStack::FrameToken generated_scalar{};
+    bool stackless_active = false;
 };
 thread_local ActiveGuestTurn active_guest_turn{};
 class ScopedGuestTurn final {
@@ -21,7 +27,7 @@ public:
     ScopedGuestTurn(ActorGuestFrameStack* stack, std::uint32_t slot,
                     std::uint64_t generation) noexcept
         : previous_(active_guest_turn) {
-        active_guest_turn = {stack, slot, generation, {}};
+        active_guest_turn = {stack, slot, generation, {}, false};
     }
     ~ScopedGuestTurn() noexcept { active_guest_turn = previous_; }
     ScopedGuestTurn(const ScopedGuestTurn&) = delete;
@@ -410,6 +416,190 @@ extern "C" void oreslang_actor_guest_frame_i64_leave() noexcept {
             !turn.stack->pop(turn.generated_scalar))
         std::abort();
     turn.generated_scalar = {};
+}
+
+
+// M3 frames store *all* operand and program-counter state inside the
+// authenticated actor-owned logical stack. Only 32 unforgeable stack handles,
+// one transient decoded frame, and a fixed step counter live on the carrier's
+// C stack; CALL never recursively calls C++ or LLVM-generated helper code.
+namespace {
+struct StacklessScalarFrame {
+    std::uint64_t pc = 0;
+    std::uint64_t sp = 0;
+    std::int64_t argument = 0;
+    std::int64_t operands[12]{};
+};
+static_assert(sizeof(StacklessScalarFrame) == 120, "M3 frame ABI changed");
+static_assert(sizeof(StacklessScalarFrame) *
+    ActorGuestFrameStack::max_depth + sizeof(std::int64_t) <=
+    ActorGuestFrameStack::capacity_bytes, "M3 frames do not fit actor stack");
+
+[[noreturn]] void bad_stackless_frame() noexcept { std::abort(); }
+[[noreturn]] void actor_stackless_depth_exceeded() noexcept {
+    // This fixed literal contains no guest data, pointer, or capability.
+    std::fputs("ATTO_LLVM_ACTOR_STACKLESS_DEPTH_EXCEEDED\n", stderr);
+    std::fflush(stderr);
+    std::abort();
+}
+std::uint64_t checked_target(std::int64_t operand, std::uint64_t count) noexcept {
+    if (operand < 0 || static_cast<std::uint64_t>(operand) >= count)
+        bad_stackless_frame();
+    return static_cast<std::uint64_t>(operand);
+}
+void push_operand(StacklessScalarFrame& frame, std::int64_t v) noexcept {
+    if (frame.sp >= 12) bad_stackless_frame();
+    frame.operands[frame.sp++] = v;
+}
+std::int64_t pop_operand(StacklessScalarFrame& frame) noexcept {
+    if (frame.sp == 0) bad_stackless_frame();
+    const auto index = --frame.sp;
+    const auto value = frame.operands[index];
+    frame.operands[index] = 0;
+    return value;
+}
+} // namespace
+
+extern "C" std::int64_t oreslang_actor_guest_stackless_i64_execute(
+    const std::uint64_t* code, std::uint64_t word_count,
+    std::uint64_t entry_instruction, std::int64_t argument) noexcept {
+    auto& turn = active_guest_turn;
+    if (!turn.stack || !turn.generation || !turn.generated_scalar.serial ||
+            turn.generated_scalar.actor_generation != turn.generation ||
+            turn.stackless_active || !code || word_count == 0 ||
+            word_count > actor_stackless_m3_max_words || (word_count & 1u) ||
+            entry_instruction >= word_count / 2 ||
+            turn.stack->depth() != 1)
+        bad_stackless_frame();
+    turn.stackless_active = true;
+
+    std::array<ActorGuestFrameStack::FrameToken,
+               ActorGuestFrameStack::max_depth> tokens{};
+    std::size_t depth = 0;
+    auto push_frame = [&](std::uint64_t pc, std::int64_t value) noexcept {
+        if (depth >= tokens.size() ||
+                turn.stack->depth() >= ActorGuestFrameStack::max_depth)
+            actor_stackless_depth_exceeded();
+        ActorGuestFrameStack::FrameToken token{};
+        if (!turn.stack->push(sizeof(StacklessScalarFrame), token) ||
+                token.actor_generation != turn.generation)
+            bad_stackless_frame();
+        StacklessScalarFrame frame{};
+        frame.pc = pc;
+        frame.argument = value;
+        if (!turn.stack->write(token, 0, &frame, sizeof(frame)))
+            bad_stackless_frame();
+        tokens[depth++] = token;
+    };
+    push_frame(entry_instruction, argument);
+    const auto instruction_count = word_count / 2;
+
+    for (std::uint64_t fuel = 0; fuel < actor_stackless_m3_max_steps; ++fuel) {
+        if (depth == 0 || !turn.stack ||
+                turn.stack->depth() != 1 + depth)
+            bad_stackless_frame();
+        const auto token = tokens[depth - 1];
+        StacklessScalarFrame frame{};
+        if (!turn.stack->read(token, 0, &frame, sizeof(frame)) ||
+                frame.pc >= instruction_count || frame.sp > 12)
+            bad_stackless_frame();
+        const auto op = static_cast<ActorScalarOp>(code[frame.pc * 2]);
+        const auto operand = static_cast<std::int64_t>(code[frame.pc * 2 + 1]);
+        ++frame.pc;
+
+        switch (op) {
+            case ActorScalarOp::Constant: push_operand(frame, operand); break;
+            case ActorScalarOp::Argument: push_operand(frame, frame.argument); break;
+            case ActorScalarOp::Negate: {
+                const auto value = pop_operand(frame);
+                if (value == std::numeric_limits<std::int64_t>::min())
+                    bad_stackless_frame();
+                push_operand(frame, -value);
+                break;
+            }
+            case ActorScalarOp::LogicalNot:
+                push_operand(frame, pop_operand(frame) == 0 ? 1 : 0);
+                break;
+            case ActorScalarOp::Add:
+            case ActorScalarOp::Subtract:
+            case ActorScalarOp::Multiply:
+            case ActorScalarOp::Equal:
+            case ActorScalarOp::NotEqual:
+            case ActorScalarOp::Less:
+            case ActorScalarOp::LessEqual:
+            case ActorScalarOp::Greater:
+            case ActorScalarOp::GreaterEqual:
+            case ActorScalarOp::LogicalXor: {
+                const auto right = pop_operand(frame);
+                const auto left = pop_operand(frame);
+                std::int64_t result = 0;
+                bool overflow = false;
+                switch (op) {
+                    case ActorScalarOp::Add:
+                        overflow = __builtin_add_overflow(left, right, &result); break;
+                    case ActorScalarOp::Subtract:
+                        overflow = __builtin_sub_overflow(left, right, &result); break;
+                    case ActorScalarOp::Multiply:
+                        overflow = __builtin_mul_overflow(left, right, &result); break;
+                    case ActorScalarOp::Equal: result = left == right; break;
+                    case ActorScalarOp::NotEqual: result = left != right; break;
+                    case ActorScalarOp::Less: result = left < right; break;
+                    case ActorScalarOp::LessEqual: result = left <= right; break;
+                    case ActorScalarOp::Greater: result = left > right; break;
+                    case ActorScalarOp::GreaterEqual: result = left >= right; break;
+                    case ActorScalarOp::LogicalXor:
+                        result = (left != 0) != (right != 0); break;
+                    default: bad_stackless_frame();
+                }
+                if (overflow) bad_stackless_frame();
+                push_operand(frame, result);
+                break;
+            }
+            case ActorScalarOp::JumpIfZero: {
+                const auto condition = pop_operand(frame);
+                if (condition == 0)
+                    frame.pc = checked_target(operand, instruction_count);
+                break;
+            }
+            case ActorScalarOp::Jump:
+                frame.pc = checked_target(operand, instruction_count);
+                break;
+            case ActorScalarOp::Call: {
+                const auto next = checked_target(operand, instruction_count);
+                const auto callee_argument = pop_operand(frame);
+                if (!turn.stack->write(token, 0, &frame, sizeof(frame)))
+                    bad_stackless_frame();
+                push_frame(next, callee_argument);
+                continue;
+            }
+            case ActorScalarOp::Return: {
+                if (frame.sp != 1) bad_stackless_frame();
+                const auto result = pop_operand(frame);
+                if (!turn.stack->pop(token)) bad_stackless_frame();
+                tokens[--depth] = {};
+                if (depth == 0) {
+                    if (turn.stack->depth() != 1)
+                        bad_stackless_frame();
+                    turn.stackless_active = false;
+                    return result;
+                }
+                const auto parent = tokens[depth - 1];
+                StacklessScalarFrame caller{};
+                if (!turn.stack->read(parent, 0, &caller, sizeof(caller)))
+                    bad_stackless_frame();
+                push_operand(caller, result);
+                if (!turn.stack->write(parent, 0, &caller, sizeof(caller)))
+                    bad_stackless_frame();
+                continue;
+            }
+            default: bad_stackless_frame();
+        }
+        if (!turn.stack->write(token, 0, &frame, sizeof(frame)))
+            bad_stackless_frame();
+    }
+    // Infinite recursion or unbounded execution fails closed. No actor-owned
+    // memory is released without first completing the native carrier turn.
+    bad_stackless_frame();
 }
 
 } // namespace oreslang::runtime

@@ -196,6 +196,7 @@ int main(int argc, char** argv) {
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
     bool experimental_actor_guest_frames = false;
+    bool experimental_actor_stackless_calls = false;
     bool wasm32_target = false;
     bool cortex_m_target = false;
     bool target_seen = false;
@@ -285,6 +286,11 @@ int main(int argc, char** argv) {
                 std::cerr << "duplicate rt scalar loop option\n"; return 2;
             }
             experimental_rt_scalar_loop = true;
+        } else if (arg == "--experimental-actor-guest-stackless") {
+            if (experimental_actor_stackless_calls) {
+                std::cerr << "duplicate actor stackless calls option\n"; return 2;
+            }
+            experimental_actor_stackless_calls = true;
         } else if (arg == "--experimental-actor-guest-frames") {
             if (experimental_actor_guest_frames) {
                 std::cerr << "duplicate actor guest frames option\n"; return 2;
@@ -365,7 +371,7 @@ int main(int argc, char** argv) {
             (tree_shake || !tree_shake_roots.empty() || native_hard_rt_profile ||
              rt_check_only || rt_entry_seen || rt_report_seen ||
              experimental_owned_int || experimental_rt_scalar_loop ||
-             experimental_actor_guest_frames ||
+             experimental_actor_guest_frames || experimental_actor_stackless_calls ||
              target_seen || allocator_provider_seen)) {
         std::cerr << "constraint-descriptors is a metadata-only mode and cannot be combined with execution/codegen options\n";
         return 2;
@@ -389,7 +395,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--experimental-actor-guest-frames] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--experimental-actor-guest-frames] [--experimental-actor-guest-stackless] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -416,10 +422,11 @@ int main(int argc, char** argv) {
         }
         if (experimental_rt_scalar_loop && (wasm32_target || experimental_owned_int))
             throw std::runtime_error("scalar-loop frame requires native host and no owned-int experiment");
-        if (experimental_actor_guest_frames &&
+        if ((experimental_actor_guest_frames || experimental_actor_stackless_calls) &&
                 (wasm32_target || cortex_m_target || experimental_owned_int ||
                  experimental_rt_scalar_loop || tree_shake || native_hard_rt_profile ||
-                 rt_report_seen || allocator_provider_seen))
+                 rt_report_seen || allocator_provider_seen ||
+                 (experimental_actor_stackless_calls && experimental_actor_guest_frames)))
             throw std::runtime_error("actor guest frames M2 requires native host actor-only source and no other experimental modes");
         if (cortex_m_target && text.size() > 128u * 1024u)
             throw std::runtime_error("cortex-m source exceeds 128 KiB limit");
@@ -750,7 +757,8 @@ int main(int argc, char** argv) {
             (void)oreslang::emit_verified_llvm_ir(
                 ast, wasm32_target, cortex_m_target,
                 bounded_allocator_provider,
-                experimental_actor_guest_frames);
+                experimental_actor_guest_frames || experimental_actor_stackless_calls,
+                experimental_actor_stackless_calls);
 
             // The shipped pass is deliberately function-only. Richer Program
             // owners have hidden semantic/ABI roots that are not represented
@@ -763,7 +771,8 @@ int main(int argc, char** argv) {
         std::cout << oreslang::emit_verified_llvm_ir(
                 ast, wasm32_target, cortex_m_target,
                 bounded_allocator_provider,
-                experimental_actor_guest_frames);
+                experimental_actor_guest_frames || experimental_actor_stackless_calls,
+                experimental_actor_stackless_calls);
         std::cout.flush();
         if (coreLog) coreLog->dump(stderr);
         return 0;

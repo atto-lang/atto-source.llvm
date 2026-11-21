@@ -1,0 +1,118 @@
+name: LLVM compiler-owned actor stackless scalar recursion M3 exact-head
+on:
+  pull_request:
+    paths:
+      - src/main/cpp/oreslang/main.cpp
+      - src/main/cpp/oreslang/backend/LlvmCodegen.cpp
+      - src/main/cpp/oreslang/backend/LlvmCodegen.hpp
+      - src/main/cpp/oreslang/backend/ActorStacklessI64Compiler.hpp
+      - src/main/cpp/oreslang/runtime/MultiActorCarrier.cpp
+      - src/main/cpp/oreslang/runtime/ActorGuestFrameStack.hpp
+      - src/main/cpp/oreslang/runtime/ActorStacklessI64ABI.hpp
+      - tests/native_actor_guest_stackless_m3_test.cpp
+      - tests/native_actor_guest_stackless_m3.sh
+      - tests/fixtures/actor-guest-stackless-fib-m3.atto
+      - CMakeLists.txt
+      - .github/workflows/actor-guest-stackless-m3-exact-head.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compiled-actor-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout original private repository exact head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Assert exact head tree and source blobs
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          git rev-parse 'HEAD^{tree}'
+          for source in src/main/cpp/oreslang/main.cpp src/main/cpp/oreslang/backend/LlvmCodegen.cpp src/main/cpp/oreslang/backend/LlvmCodegen.hpp src/main/cpp/oreslang/backend/ActorStacklessI64Compiler.hpp src/main/cpp/oreslang/runtime/MultiActorCarrier.cpp src/main/cpp/oreslang/runtime/MultiActorCarrier.hpp src/main/cpp/oreslang/runtime/ActorGuestFrameStack.hpp src/main/cpp/oreslang/runtime/ActorStacklessI64ABI.hpp src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h tests/native_actor_guest_stackless_m3_test.cpp tests/native_actor_guest_stackless_m3.sh tests/fixtures/actor-guest-stackless-fib-m3.atto CMakeLists.txt; do
+            test "$(git hash-object "$source")" = "$(git rev-parse "HEAD:$source")"
+            printf '%s %s\n' "$(git hash-object "$source")" "$source"
+          done
+      - name: Install LLVM compiler toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang llvm-dev
+      - name: Build actual native LLVM source compiler
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --target oreslang-llvmc --parallel 2
+      - name: Execute compiled AttoLang handlers O0 O2 ASan UBSan
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1
+        run: |
+          set -euo pipefail
+          bash tests/native_actor_guest_stackless_m3.sh "$PWD/build/oreslang-llvmc" "$PWD" --sanitized | tee "$RUNNER_TEMP/actor-m3-guest.log"
+          test "$(grep -Fc 'ATTO_LLVM_COMPILED_STACKLESS_ACTOR_M3_PASS' "$RUNNER_TEMP/actor-m3-guest.log")" -eq 3
+          grep -Fx ATTO_LLVM_COMPILER_STACKLESS_M3_O0_O2_PASS "$RUNNER_TEMP/actor-m3-guest.log"
+          grep -Fx ATTO_LLVM_COMPILER_STACKLESS_M3_ASAN_UBSAN_PASS "$RUNNER_TEMP/actor-m3-guest.log"
+      - name: Record exact-tree guest evidence
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python3 -I - <<'PY'
+          import json, os, pathlib, subprocess
+          def git(*args):
+              return subprocess.check_output(["git", *args], text=True).strip()
+          root = pathlib.Path(os.environ["RUNNER_TEMP"])
+          log = (root / "actor-m3-guest.log").read_text()
+          if log.count("ATTO_LLVM_COMPILED_STACKLESS_ACTOR_M3_PASS") != 3:
+              raise SystemExit("compiled-guest receipts missing or duplicated")
+          if git("rev-parse", "HEAD") != os.environ["EXPECTED_HEAD"]:
+              raise SystemExit("head changed during execution")
+          files = [
+              "src/main/cpp/oreslang/main.cpp",
+              "src/main/cpp/oreslang/backend/LlvmCodegen.cpp",
+              "src/main/cpp/oreslang/backend/LlvmCodegen.hpp",
+              "src/main/cpp/oreslang/backend/ActorStacklessI64Compiler.hpp",
+              "src/main/cpp/oreslang/runtime/MultiActorCarrier.cpp",
+              "src/main/cpp/oreslang/runtime/MultiActorCarrier.hpp",
+              "src/main/cpp/oreslang/runtime/ActorGuestFrameStack.hpp",
+              "src/main/cpp/oreslang/runtime/ActorStacklessI64ABI.hpp",
+              "src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c",
+              "src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h",
+              "tests/native_actor_guest_stackless_m3_test.cpp",
+              "tests/native_actor_guest_stackless_m3.sh",
+              "tests/fixtures/actor-guest-stackless-fib-m3.atto",
+              "CMakeLists.txt",
+          ]
+          receipt = dict(
+              schema="atto.llvm.actor_stackless_m3_v1",
+              head_sha=git("rev-parse", "HEAD"),
+              tree_sha=git("rev-parse", "HEAD^{tree}"),
+              run_id=int(os.environ["GITHUB_RUN_ID"]),
+              run_attempt=int(os.environ["GITHUB_RUN_ATTEMPT"]),
+              source_blobs={p: git("hash-object", p) for p in files},
+              compiled_atto_actor_handler_executed=True,
+              bounded_recursive_guest_calls_executed=True,
+              two_heaps_and_stackless_recursion_executed=True,
+              clang_o0_o2_asan_ubsan_executed=True,
+              source_spawn_await_select_executed=False,
+              independent_native_physical_actor_stacks=False)
+          (root / "actor-stackless-m3-receipt.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+          PY
+      - name: Upload same-run proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: actor-stackless-m3-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/actor-m3-guest.log
+            ${{ runner.temp }}/actor-stackless-m3-receipt.json
+          if-no-files-found: error
+          retention-days: 7
