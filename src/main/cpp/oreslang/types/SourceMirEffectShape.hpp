@@ -27,15 +27,25 @@ public:
         }
     }
     void str(std::string_view value) {
+        // Source identity is a bounded in-process sanity fence, never a
+        // truncated or cryptographic proof.
+        if (!bounded_ || value.size() > remaining_text_bytes_) {
+            bounded_ = false;
+            return;
+        }
+        remaining_text_bytes_ -= value.size();
         u64(value.size());
         for (unsigned char ch : value) {
             state_ ^= ch;
             state_ *= UINT64_C(1099511628211);
         }
     }
+    bool bounded() const { return bounded_; }
     std::uint64_t value() const { return state_ ? state_ : 1; }
 private:
     std::uint64_t state_ = UINT64_C(1469598103934665603);
+    std::size_t remaining_text_bytes_ = 1024 * 1024;
+    bool bounded_ = true;
 };
 
 inline std::optional<std::uint64_t> straight_line_effect_shape(
@@ -45,11 +55,17 @@ inline std::optional<std::uint64_t> straight_line_effect_shape(
     // claiming straight-line completeness.
     if (!function.result || function.locals.empty() ||
             function.locals.size() > 64 || function.statements.size() > 128 ||
+            function.generic_parameters.size() > 64 ||
             program.classes.size() > 64)
         return std::nullopt;
     bool has_class = false;
-    for (const auto& local : function.locals)
+    for (const auto& local : function.locals) {
+        // Parameters to a constructor are unsupported by this source-MIR
+        // subset. Bound their inventory before hashing or traversal.
+        if (local.constructor_arguments.size() > 64)
+            return std::nullopt;
         has_class = has_class || !local.class_name.empty();
+    }
     if (!has_class)
         return std::nullopt;
 
@@ -66,6 +82,19 @@ inline std::optional<std::uint64_t> straight_line_effect_shape(
             return std::nullopt;
     }
 
+    // All class metadata is sealed, including classes not used by this
+    // function; bound its total traversal before attempting to hash it.
+    std::size_t fields = 0;
+    std::size_t methods = 0;
+    for (const auto& cls : program.classes) {
+        if (cls.fields.size() > 1024 - fields ||
+                cls.methods.size() > 1024 - methods ||
+                cls.constructor_parameters.size() > 64 ||
+                cls.constructor_parameter_types.size() > 64)
+            return std::nullopt;
+        fields += cls.fields.size();
+        methods += cls.methods.size();
+    }
     SourceEffectShape hash;
     hash.str("atto/straight-line/source-effect-shape/v1");
     std::size_t total_nodes = 0;
@@ -79,6 +108,8 @@ inline std::optional<std::uint64_t> straight_line_effect_shape(
             hash.u64(0);
             return;
         }
+        if (!valid || !hash.bounded())
+            return;
         if (++total_nodes > kMaxNodes || depth > kMaxDepth) {
             valid = false;
             return;
@@ -117,8 +148,11 @@ inline std::optional<std::uint64_t> straight_line_effect_shape(
                 expr->condition_rhs || expr->when_true || expr->when_false ||
                 !expr->arguments.empty() || !expr->argument_names.empty() ||
                 expr->type_arguments_present || !expr->type_arguments.empty() ||
-                !expr->resolved_class.empty() || !expr->sum_type.empty())
+                !expr->resolved_class.empty() || !expr->sum_type.empty() ||
+                expr->resolved_type == ScalarType::String) {
             valid = false;
+            return;
+        }
         hash.u64(static_cast<std::uint64_t>(expr->kind));
         hash.u64(expr->offset);
         hash.u64(static_cast<std::uint64_t>(expr->integer));
@@ -156,6 +190,7 @@ inline std::optional<std::uint64_t> straight_line_effect_shape(
         hash.str(cls.name);
         hash.u64(cls.exported ? 1 : 0);
         hash.u64(cls.explicit_constructor ? 1 : 0);
+        hash.u64(cls.constructor_exported ? 1 : 0);
         hash.u64(cls.fields.size());
         for (const auto& field : cls.fields) {
             hash.str(field.name);
@@ -187,6 +222,11 @@ inline std::optional<std::uint64_t> straight_line_effect_shape(
     }
 
     hash.str(function.name);
+    hash.u64(function.offset);
+    hash.u64(function.exported ? 1 : 0);
+    hash.str(function.method_owner);
+    hash.str(function.pending_return_type_alias);
+    hash.u64(function.parameters.size());
     hash.u64(function.generic_parameters.size());
     for (const auto& param : function.generic_parameters) {
         hash.str(param.name);
@@ -259,7 +299,7 @@ inline std::optional<std::uint64_t> straight_line_effect_shape(
     hash.str(function.ready_future_actor);
     hash.u64(function.async_source_i64 ? 1 : 0);
 
-    if (!valid)
+    if (!valid || !hash.bounded())
         return std::nullopt;
     return hash.value();
 }
