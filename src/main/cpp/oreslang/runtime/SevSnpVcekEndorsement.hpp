@@ -30,6 +30,8 @@ struct OfflineEndorsements {
     std::vector<std::uint8_t> ask_der;
     std::vector<std::uint8_t> vcek_der;
     std::vector<std::uint8_t> issuer_crl_der;
+    // Separate ARK-issued CRL for ASK revocation (leaf CRL alone is NOT enough).
+    std::vector<std::uint8_t> root_issuer_crl_der;
     // SHA256 of canonical AMD-published ARK DER, pinned and provisioned by a
     // trusted deployment authority, NEVER supplied by a guest/report.
     std::array<std::uint8_t, 32> expected_ark_der_sha256{};
@@ -146,13 +148,16 @@ inline EndorsementStatus verify_vcek_offline(
     if (!root || !ask || !vek || X509_check_ca(root.get()) <= 0 ||
         X509_check_ca(ask.get()) <= 0) return EndorsementStatus::InvalidCertificates;
     auto crl = parse_crl(endorsements.issuer_crl_der);
-    if (!crl) return EndorsementStatus::MissingRevocationEvidence;
+    auto root_crl = parse_crl(endorsements.root_issuer_crl_der);
+    if (!crl || !root_crl) return EndorsementStatus::MissingRevocationEvidence;
     StorePtr store(X509_STORE_new());
     StoreContextPtr ctx(X509_STORE_CTX_new());
     if (!store || !ctx ||
         X509_STORE_add_cert(store.get(), root.get()) != 1 ||
         X509_STORE_add_crl(store.get(), crl.get()) != 1 ||
-        X509_STORE_set_flags(store.get(), X509_V_FLAG_CRL_CHECK) != 1)
+        X509_STORE_add_crl(store.get(), root_crl.get()) != 1 ||
+        X509_STORE_set_flags(store.get(), X509_V_FLAG_CRL_CHECK |
+                                         X509_V_FLAG_CRL_CHECK_ALL) != 1)
         return EndorsementStatus::CertificateChainRejected;
     STACK_OF(X509)* chain = sk_X509_new_null();
     if (!chain) return EndorsementStatus::CertificateChainRejected;
