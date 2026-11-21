@@ -179,6 +179,46 @@ failure, and prove one real `.ores` program through LLVM and native execution.
 Existing unsupported source-select fixtures remain fail-closed until that
 vertical proof exists.
 
+## October 26 — first executable source try-select slice
+
+LLVM now has one deliberately closed source/compiler vertical slice over the
+same scheduler-native select authority:
+
+```ores
+try select {
+  when worker.send_async(1): -> {
+    chosen = 43;
+  }
+  default -> {
+    chosen = 42;
+  }
+}
+```
+
+This form is nonblocking and accepts exactly one `ActorRef.send_async(i64)`
+operation plus one explicit default arm in trusted zero-argument `main`.
+Both arms are synchronous scalar assignments in this first slice. The compiler
+builds an explicit `NativeTrySelectSite`, type/ownership checks both branches,
+and lowers one checked runtime call plus real LLVM winner/default CFG.
+
+The runtime uses the existing scheduler async-send descriptor and the same
+`OresNativeSelectArbiter`; there is no source-only mailbox queue or shadow
+credit state. If mailbox credit is immediately admissible, the send arm must
+win before message publication. If the send remains pending, default wins,
+the losing descriptor is cancelled/released, and no payload may later appear.
+Terminal send failure remains an operation event rather than silently falling
+through to default.
+
+Selection generations never wrap or recycle. Even this stack-local try-select
+fails closed at generation exhaustion so later suspension/general-select work
+cannot inherit an ABA exception.
+
+This does **not** implement blocking `select`, `nb select`, Channel
+read/write, Future completion arms, Observable/Stream arms, dynamic
+`select from`, arbitrary branch bodies, or source-level use of the common
+generation wake. Those remain fail-closed until their compiler/runtime
+continuation and ownership contracts are executable.
+
 ## Native implementation acceptance requirements
 
 1. Typed channel cases (read/write/default), copy/ownership rules, and

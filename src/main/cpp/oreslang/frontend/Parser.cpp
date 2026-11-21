@@ -2182,6 +2182,7 @@ private:
         };
         bool return_guards_started = false;
         bool terminal_try_finally = false;
+        bool try_select_seen = false;
         std::size_t branch_count = 0;
         while (token_.text != "return") {
             if ((token_.text == "const" || token_.text == "val")
@@ -2237,6 +2238,63 @@ private:
                     token_.text == "loop") {
                 fail("native realtime source loop requires verified LLVM continuation lowering");
             }
+            if (token_.text == "try" && peek_next().text == "select") {
+                if (try_select_seen || value.try_select)
+                    fail("native source supports only one try-select site");
+                if (terminal_try_finally || return_guards_started
+                        || !value.await_sites.empty()
+                        || !value.actor_actions.empty()
+                        || value.name != "main" || !value.parameters.empty())
+                    fail("native try-select send/default requires trusted synchronous main before actor effects");
+
+                auto site = std::make_unique<NativeTrySelectSite>();
+                site->offset = token_.offset;
+                require("try");
+                require("select");
+                require("{");
+                require("when");
+                site->actor = identifier();
+                require(".");
+                if (identifier() != "send_async")
+                    fail("native try-select supports only ActorRef.send_async(i64)");
+                require("(");
+                site->payload = expression();
+                require(")");
+                require(":");
+                require("->");
+                require("{");
+                site->send_branch = branch_arm(false, false);
+                require("}");
+                require("default");
+                require("->");
+                require("{");
+                site->default_branch = branch_arm(false, false);
+                require("}");
+                require("}");
+
+                auto scalar_only = [&](const std::vector<Statement>& arm) {
+                    return std::all_of(
+                        arm.begin(), arm.end(),
+                        [](const Statement& statement) {
+                            return statement.kind == Statement::Kind::ScalarWrite;
+                        });
+                };
+                if (site->send_branch.empty() || site->default_branch.empty()
+                        || !scalar_only(site->send_branch)
+                        || !scalar_only(site->default_branch))
+                    fail("native try-select branches require nonempty scalar assignments only");
+                /*
+                 * Keep lexical placement explicit in this first vertical
+                 * slice. Normal statements are lowered before the selection;
+                 * only actor STOP and the final return may follow it.
+                 */
+                if (token_.text != "stop")
+                    fail("native try-select must be followed immediately by actor stop");
+                value.try_select = std::move(site);
+                try_select_seen = true;
+                continue;
+            }
+
             if (token_.text == "try") {
                 if (terminal_try_finally || return_guards_started)
                     fail("native terminal try/finally must be a single return-only scope");
@@ -4392,6 +4450,21 @@ private:
             };
             for (const auto& stmt : fn.statements)
                 check_statement_names(stmt, params);
+            if (fn.try_select) {
+                if (!references.count(fn.try_select->actor)
+                        || !live_actors.count(fn.try_select->actor))
+                    throw std::runtime_error(
+                        "unknown or stopped actor try-select receiver '" +
+                        fn.try_select->actor + "'");
+                validate_expression(
+                    *fn.try_select->payload, params, functions);
+                NameSet send_names = params;
+                NameSet default_names = params;
+                for (const auto& statement : fn.try_select->send_branch)
+                    check_statement_names(statement, send_names);
+                for (const auto& statement : fn.try_select->default_branch)
+                    check_statement_names(statement, default_names);
+            }
             // Validate effects in lexical order. In particular, a send after
             // stop must not pass by consulting the all-spawns reference map.
             for (std::size_t action_position = 0;
@@ -4565,6 +4638,19 @@ private:
             };
             for (const auto& stmt : fn.statements)
                 check_statement_types(stmt, scalar_types);
+            if (fn.try_select) {
+                require_scalar(
+                    *fn.try_select->payload,
+                    ScalarType::I64,
+                    "native try-select actor message payload",
+                    scalar_types);
+                TypeMap send_types = scalar_types;
+                TypeMap default_types = scalar_types;
+                for (const auto& statement : fn.try_select->send_branch)
+                    check_statement_types(statement, send_types);
+                for (const auto& statement : fn.try_select->default_branch)
+                    check_statement_types(statement, default_types);
+            }
 
             for (const auto& action : fn.actor_actions) {
                 if (action.kind == ActorAction::Kind::Send)

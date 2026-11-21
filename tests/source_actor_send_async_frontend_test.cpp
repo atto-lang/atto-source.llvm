@@ -187,6 +187,50 @@ int main() {
       const worker = spawn Worker(); worker.send(1); stop worker; return 43;
     })", "native send_async direct await requires trusted zero-argument main");
 
+    auto try_select = oreslang::parse_program(program(
+        "let chosen: int = 0; "
+        "try select { "
+        "when worker.send_async(1): -> { chosen = 43; } "
+        "default -> { chosen = 42; } "
+        "} "
+        "stop worker; return chosen;"));
+    CHECK(try_select.functions.size() == 1);
+    const auto& select_main = try_select.functions.front();
+    CHECK(select_main.try_select != nullptr);
+    CHECK(select_main.try_select->actor == "worker");
+    CHECK(select_main.try_select->payload != nullptr);
+    CHECK(select_main.try_select->send_branch.size() == 1);
+    CHECK(select_main.try_select->default_branch.size() == 1);
+    CHECK(select_main.try_select->send_branch[0].kind
+        == oreslang::Statement::Kind::ScalarWrite);
+    CHECK(select_main.try_select->default_branch[0].kind
+        == oreslang::Statement::Kind::ScalarWrite);
+    CHECK(select_main.actor_actions.size() == 1);
+    CHECK(select_main.actor_actions[0].kind
+        == oreslang::ActorAction::Kind::Stop);
+
+    rejects(program(
+        "let chosen: int = 0; "
+        "try select { "
+        "when worker.send_async(true): -> { chosen = 43; } "
+        "default -> { chosen = 42; } "
+        "} stop worker; return chosen;"),
+        "native try-select actor message payload");
+    rejects(program(
+        "let chosen: int = 0; "
+        "try select { "
+        "when worker.send_async(1): -> { chosen = 43; } "
+        "default -> { chosen = 42; } "
+        "} chosen = 7; stop worker; return chosen;"),
+        "native try-select must be followed immediately by actor stop");
+    rejects(program(
+        "let chosen: int = 0; "
+        "try select { "
+        "when worker.send_async(1): -> { stdio.println(1); } "
+        "default -> { chosen = 42; } "
+        "} stop worker; return chosen;"),
+        "native try-select branches require nonempty scalar assignments only");
+
     // These checks intentionally establish rejection, not Channel/Select
     // execution parity. A real compiler positive control above must pass.
     for (const auto* boundary : {
@@ -194,5 +238,5 @@ int main() {
         rejects(program(std::string(boundary) + " stop worker; return 43;"),
                 "native async/channel/select boundary unsupported");
 
-    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=5 negative=22 detached_scalar_capture=1 stored_scalar_capture=1 multi_pc=2 frame_words=16 ownership_handles_rejected=1\n";
+    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=6 negative=25 detached_scalar_capture=1 stored_scalar_capture=1 multi_pc=2 try_select=1 frame_words=16 ownership_handles_rejected=1\n";
 }

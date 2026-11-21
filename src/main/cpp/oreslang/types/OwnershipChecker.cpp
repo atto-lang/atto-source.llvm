@@ -1095,6 +1095,25 @@ void validate_i64_ownership(const Program& program) {
                     break;
             }
         }
+        if (function.try_select) {
+            /*
+             * The selectable-send payload is an actor ownership boundary even
+             * though this first source slice currently admits only i64. Keep
+             * it in the checker now so widening payload types cannot bypass
+             * submit-time ownership later. Both branches must rejoin with the
+             * same affine state.
+             */
+            check_value(*function.try_select->payload, locals, functions);
+            Locals send_state = locals;
+            Locals default_state = locals;
+            scoped_effects(function.try_select->send_branch, send_state);
+            scoped_effects(function.try_select->default_branch, default_state);
+            if (!same_affine_state(send_state, default_state))
+                throw std::runtime_error(
+                    "ownership violation: try-select branch ownership mismatch");
+            locals = std::move(send_state);
+        }
+
         auto check_deferred_exit = [&](Locals& path) {
             for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it) {
                 const Statement& cleanup = **it;

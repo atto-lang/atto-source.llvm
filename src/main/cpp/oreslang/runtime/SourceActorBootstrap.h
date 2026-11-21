@@ -72,6 +72,23 @@ int oreslang_source_actor_try_send_checked(void* actor, int64_t payload);
 void oreslang_source_actor_send(void* actor, int64_t payload);
 
 /*
+ * First source-level try-select vertical slice:
+ *
+ *   try select {
+ *     when actor.send_async(i64): -> { ... }
+ *     default -> { ... }
+ *   }
+ *
+ * This operation never waits. It uses the scheduler-native selectable-send
+ * descriptor as the sole mailbox-credit authority. selected_arm is 0 for an
+ * immediately committed send and 1 when default wins. A terminal send error is
+ * returned as its exact ORES_SOURCE_SEND_ASYNC_* status and no branch is
+ * selected. Broader blocking select/Future/Channel forms remain unsupported.
+ */
+int oreslang_source_actor_try_select_send_default_checked(
+    void* actor, int64_t payload, int* selected_arm);
+
+/*
  * First source send_async vertical slice.
  *
  * The checked form is trusted host/runtime glue for a direct

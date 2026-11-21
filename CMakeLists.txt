@@ -1386,6 +1386,20 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_source_actor_send_async_future_stop_before_await
         source-actor-send-async-future-stop-before-await-reject.ores
         --diagnostic "send_async Future target stopped before await")
+    # First real source-level native select slice. Only nonblocking try-select
+    # between one selectable mailbox send and explicit default is admitted.
+    oreslang_contract_test(source_actor_try_select_send_default_ir
+        source-actor-try-select-send-default.ores
+        --ir "oreslang_source_actor_try_select_send_default_checked")
+    oreslang_contract_test(reject_source_actor_try_select_bool_payload
+        source-actor-try-select-send-default-bool-reject.ores
+        --diagnostic "native try-select actor message payload")
+    oreslang_contract_test(reject_source_actor_try_select_post_effect
+        source-actor-try-select-send-default-post-effect-reject.ores
+        --diagnostic "native try-select must be followed immediately by actor stop")
+    oreslang_contract_test(reject_source_actor_try_select_branch_call
+        source-actor-try-select-send-default-call-reject.ores
+        --diagnostic "native try-select branches require nonempty scalar assignments only")
     oreslang_contract_test(reject_source_actor_await_suspended_local
         source-actor-spawn-unavailable-await.ores
         --diagnostic "await get_ready requires one source actor without suspended locals")

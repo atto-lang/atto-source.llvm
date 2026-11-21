@@ -237,6 +237,20 @@ struct Statement {
     std::vector<Statement> else_statements;
 };
 
+/*
+ * First compiled native source selection slice. This is deliberately the
+ * nonblocking `try select` form with exactly one ActorRef.send_async(i64)
+ * operation and one default arm. The branch bodies are checked synchronous
+ * scalar effects; no suspension or arm-local ownership may escape.
+ */
+struct NativeTrySelectSite {
+    std::size_t offset = 0;
+    std::string actor;
+    std::unique_ptr<Expression> payload;
+    std::vector<Statement> send_branch;
+    std::vector<Statement> default_branch;
+};
+
 // Side-effect-free equality guard with return-only taken branch.
 // All locals and ordinary statements precede guards; branch-local objects
 // and suspension remain unsupported until path-sensitive cleanup is proven.
@@ -292,6 +306,7 @@ struct Function {
     std::size_t send_future_await_offset = 0;
     std::size_t send_future_await_action_index = 0;
     std::vector<NativeAwaitSite> await_sites;
+    std::unique_ptr<NativeTrySelectSite> try_select;
     std::vector<ActorSend> actor_sends;
     std::vector<std::string> actor_stops;
     std::vector<ActorAction> actor_actions; // source order of send/stop
