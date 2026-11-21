@@ -1,0 +1,71 @@
+{
+  "schema": "attolang.gpu-actor-opencl-provider-evidence/2",
+  "recordedAt": "2026-11-10",
+  "sourceRepo": "ores-truffle-oreslang/oreslang-source.llvm",
+  "branch": "feat/gpu-actor-opencl-provider-v2-20261110",
+  "stackedOn": "ores-truffle-oreslang/oreslang-source.llvm#1652",
+  "scope": "native OpenCL actor-provider adapter over production OpenClProvider/SystemApi, not compiled AttoLang guest; physical device absent in carrier",
+  "sourceBlobs": {
+    "src/main/cpp/oreslang/runtime/GpuActorOpenClProviderV2.hpp": "d0103a9727a13cbd661c4095383f6e79570af7cc",
+    "tests/gpu_actor_opencl_provider_v2_test.cpp": "d4c062a0d29cf2bdb4b3107ee9a5067c66e72069",
+    "tests/gpu_actor_opencl_v2_physical_probe.cpp": "965c20f494cfc4fac2acf9590cc3e0130708d979",
+    "src/main/cpp/oreslang/runtime/GpuActorProviderBridgeV1.hpp": "67ba38101d602e63ea8c126bc023f51d146daaa4",
+    "src/main/cpp/oreslang/runtime/OpenClProvider.hpp": "8eab84e42d3c57130656664728cb8c4ef9df6c7b",
+    "src/main/cpp/oreslang/runtime/OpenClSystemApi.hpp": "36792e75a02cc3d1c7e9a9be17e6d5a75cfea269",
+    "tests/opencl_provider_g3_test.cpp": "5d0a53429c5a92a3461e5f8db5abb03d12191535"
+  },
+  "carrier": {
+    "repo": "scintilla-run/scintilla-run-e2e",
+    "branch": "carrier/gpu-actor-opencl-v2-20261110",
+    "head": "e8eb8e6e82370789eae2f7b2eb58df5adc8a812c",
+    "runId": 42949702555,
+    "jobId": 130290869708,
+    "url": "https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42949702555",
+    "exactSourceBlobs": true,
+    "gccAsanUbsan": "passed",
+    "clangStrict": "passed",
+    "assertionsPerCompiler": 65,
+    "physicalNativeProbeCompiled": true,
+    "hardwareGateInvoked": true,
+    "preexistingOpenClProviderG3Test": "passed GCC ASan UBSan"
+  },
+  "physicalResult": {
+    "openClCompatibleGpuAvailable": false,
+    "probeExitCode": 77,
+    "log": "GPU_ACTOR_V2_NO_GPU_RUNTIME no-compatible-GPU; no CPU fallback",
+    "gpuExecution": "NOT_EXECUTED",
+    "cpuFallback": false
+  },
+  "provenHostSemantics": [
+    "real_OpenClProvider_class_compiled_and_mocked",
+    "upload_kernel_download_sequence",
+    "no_state_commit_before_download_event",
+    "local_event_identity_and_no_replay_after_close",
+    "f32_numerical_oracle_mock",
+    "native_event_and_buffer_cleanup_mock",
+    "actor_supervisor_CONTROL_mock",
+    "device_loss_requires_native_queue_quiescence_mock",
+    "ambiguous_enqueue_retained",
+    "gpu_only_runtime_selector_compiled",
+    "failed-native-OpenCL-event-info-query-not-terminal",
+    "preexisting_OpenClProvider_G3_suite_compiled_executed_ASan_UBSan"
+  ],
+  "remainingBlockers": [
+    "actual physical GPU provider run",
+    "ambiguous OpenCL begin lacks recoverable native receipt; indefinitely quarantined",
+    "legacy V0 trusted Boolean completion entrypoints accessible to native host",
+    "process crash-durable quarantine and device reset proof",
+    "compiled AttoLang actor ownership/effect MIR and guest kernel lowering",
+    "full repository CTest and independent five-backend parity",
+    "device event query failure must remain pending until explicit physical recovery"
+  ],
+  "deviceGuestStatus": {
+    "java": "NOT_EXECUTED",
+    "llvm": "NOT_EXECUTED",
+    "wasm": "NOT_EXECUTED",
+    "net": "NOT_EXECUTED",
+    "forge": "NOT_EXECUTED"
+  },
+  "productionReady": false,
+  "reviewRequired": true
+}
