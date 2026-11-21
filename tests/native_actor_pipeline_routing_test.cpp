@@ -645,7 +645,53 @@ int main() {
     }
 
 
+
 #if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS)
+    // A failed promotion creates a free buffer slot, but a waiting writer
+    // retains FIFO precedence. A newer producer must remain pending rather
+    // than entering the gap and overtaking the older writer.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 2, 4, 64, 8);
+        pipe.write_to_async("Producer", "ConsumerA", "first").get();
+        pipe.write_to_async("Producer", "ConsumerA", "second").get();
+        auto failed = pipe.write_to_async("Producer", "ConsumerA", "third");
+        auto older = pipe.write_to_async("Producer", "ConsumerA", "fourth");
+        check(older.wait_for(0ms) == std::future_status::timeout,
+              "promotion FIFO precondition: older writer not pending");
+        pipe.fail_next_writer_promotion_for_test();
+        check(pipe.read_async(0).get() == "first",
+              "promotion failure consumed wrong buffered message");
+        bool injected = false;
+        try { failed.get(); }
+        catch (const std::bad_alloc&) { injected = true; }
+        check(injected, "pending writer promotion fault did not surface");
+
+        auto newer = pipe.write_to_async("Producer", "ConsumerA", "fifth");
+        check(newer.wait_for(0ms) == std::future_status::timeout,
+              "new write bypassed an older pending writer after promotion OOM");
+
+        // The gap cannot be used to admit writers beyond the per-edge quota.
+        bool capped = false;
+        try { pipe.write_to_async("Producer", "ConsumerA", "sixth").get(); }
+        catch (const std::logic_error&) { capped = true; }
+        check(capped, "writer gap bypassed the bounded pending-write quota");
+
+        check(pipe.read_async(0).get() == "second",
+              "FIFO lost second buffered message");
+        older.get();
+        check(pipe.read_async(0).get() == "fourth",
+              "FIFO let newer writer overtake older pending admission");
+        newer.get();
+        check(pipe.read_async(0).get() == "fifth",
+              "FIFO lost newer pending admission");
+        check(pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0 &&
+              pipe.pending_reader_count() == 0,
+              "promotion queue gap leaked resource credits");
+        pipe.close();
+    }
+
     // A receives a zero-buffer handoff, B fails an allocated enqueue,
     // and C still accepts. All receipts must be stable and independently
     // resolved, including the failure in the middle.
