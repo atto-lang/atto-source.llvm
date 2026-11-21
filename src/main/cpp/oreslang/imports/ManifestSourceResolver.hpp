@@ -129,7 +129,14 @@ inline std::map<std::string,std::string> restricted_manifest_fields(const fs::pa
     std::size_t count=0;
     while(std::getline(input,line)){
         if(++count>8192||line.size()>4096)throw std::invalid_argument("manifest line limit exceeded");
-        if(!line.empty()&&line.back()=='\r')line.pop_back();
+        const auto carriage=line.find('\r');
+        // Reject bare CR, including at EOF. Otherwise a trailing comment
+        // can conceal root authority or a malformed final TOML line.
+        if(carriage!=std::string::npos){
+            if(carriage!=line.size()-1 || input.eof())
+                throw std::invalid_argument("bare carriage return in project manifest");
+            line.pop_back(); // legal CRLF
+        }
         reject_control_bytes(line,"TOML line");
         const std::string stripped=without_toml_comment(line);
         if(stripped.empty())continue;
@@ -167,25 +174,35 @@ inline std::optional<fs::path> find_manifest(const fs::path& start,
     // error, not an instruction to discover the boundary's manifest instead.
     if(!physical_boundary.empty()&&!beneath(physical_boundary,cursor))
         throw std::invalid_argument("source outside package discovery boundary");
-    std::optional<fs::path> legacy;
+    // The nearest directory declaring a manifest owns source discovery.
+    // Modern beats legacy only *within that same directory*, never across
+    // ancestor levels: a closer legacy package is not owned by a parent
+    // modern package.
     while(!cursor.empty() && (physical_boundary.empty()||beneath(physical_boundary,cursor))){
         auto pkg=cursor/".ores.pkg.toml", old=cursor/".oreslangc.cfg.toml";
-        if(fs::is_regular_file(pkg)){
-            // A manifest symlink may not inherit authority from a different tree.
+        // The presence of a higher-priority modern marker shadows legacy
+        // discovery even when malformed. Never walk to a parent package or
+        // fall through to legacy because the modern marker is a dangling
+        // symlink, directory, nonregular file, or intra-directory symlink.
+        if(fs::symlink_status(pkg).type()!=fs::file_type::not_found){
+            if(fs::is_symlink(pkg)||!fs::is_regular_file(pkg))
+                throw std::invalid_argument("invalid package manifest marker");
             if(!beneath(cursor,fs::canonical(pkg)))
                 throw std::invalid_argument("package manifest escapes discovery directory");
             return pkg;
         }
-        if(!legacy && fs::is_regular_file(old)){
+        if(fs::symlink_status(old).type()!=fs::file_type::not_found){
+            if(fs::is_symlink(old)||!fs::is_regular_file(old))
+                throw std::invalid_argument("invalid legacy manifest marker");
             if(!beneath(cursor,fs::canonical(old)))
                 throw std::invalid_argument("legacy manifest escapes discovery directory");
-            legacy=old;
+            return old;
         }
         auto parent=cursor.parent_path();
         if(parent==cursor)break;
         cursor=parent;
     }
-    return legacy;
+    return std::nullopt;
 }
 inline SourceConfig read_project(const fs::path& source,
                                  const fs::path& boundary={}) {
@@ -215,10 +232,36 @@ inline SourceConfig read_project(const fs::path& source,
     for(const auto& name:{"package.name","package.version","project.name","project.version"})
         (void)one(name);
     if(auto explicit_root=one("project.root")){
-        if(result.package_manifest && *explicit_root!=".")
-            throw std::invalid_argument("package project.root cannot override manifest root");
-        if(!result.package_manifest){
-            auto p=fs::path(*explicit_root);
+        auto p=fs::path(*explicit_root);
+        if(result.package_manifest){
+            // Canonical +/ anchors to [project].root, even for modern
+            // manifests. Do not treat the manifest directory as authority
+            // when it explicitly selects an app/source subdirectory.
+            if(explicit_root->empty() || explicit_root->size()>1024 ||
+               p.is_absolute() || explicit_root->find('\\')!=std::string::npos ||
+               explicit_root->find(':')!=std::string::npos)
+                throw std::invalid_argument("invalid package project.root");
+            for(const auto& component:p)
+                if(component==".." || component.empty() ||
+                   (component=="." && *explicit_root!="."))
+                    throw std::invalid_argument("noncanonical package project.root");
+            const auto manifest_root=result.root;
+            auto selected=normalized_absolute(manifest_root/p);
+            if(!beneath(manifest_root,selected) || !fs::is_directory(selected))
+                throw std::invalid_argument("package project.root outside existing manifest directory");
+            // Intervening nested package manifests own their own authority.
+            for(auto cursor=selected;cursor!=manifest_root;cursor=cursor.parent_path()){
+                if(cursor.empty() || cursor==cursor.root_path() ||
+                   !beneath(manifest_root,cursor))
+                    throw std::invalid_argument("package project.root crosses manifest boundary");
+                for(const auto* name:{".ores.pkg.toml",".oreslangc.cfg.toml"})
+                    if(fs::symlink_status(cursor/name).type()!=fs::file_type::not_found)
+                        throw std::invalid_argument("package project.root crosses nested manifest");
+            }
+            if(!beneath(fs::canonical(manifest_root),fs::canonical(selected)))
+                throw std::invalid_argument("package project.root escapes through symlink");
+            result.root=selected;
+        } else {
             result.root=normalized_absolute(p.is_absolute()?p:result.root/p);
         }
     }

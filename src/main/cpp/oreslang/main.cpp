@@ -184,6 +184,45 @@ int main(int argc, char** argv) {
                     throw std::runtime_error("native scalar imported source cannot define main");
             }
         }
+        if (import_closure && !import_closure->named_imports.empty()) {
+            // Unlike legacy 'import "path";' source concatenation, a canonical
+            // 'import fnc name from "path";' must actually bind to that file's
+            // exported function. Do not claim namespace parity: this narrow
+            // mode rejects undeclared extra functions in named source units.
+            std::unordered_map<std::string, std::unordered_set<std::string>> declared;
+            const auto source_for = [&](std::size_t offset) -> const oreslang::imports::ScalarImportUnit& {
+                const auto& units = import_closure->units;
+                const auto found = std::find_if(units.begin(), units.end(),
+                    [&](const oreslang::imports::ScalarImportUnit& unit) {
+                        return unit.begin <= offset && offset < unit.end;
+                    });
+                if (found == units.end())
+                    throw std::runtime_error("native named import function lost source provenance");
+                return *found;
+            };
+            for (const auto& requested : import_closure->named_imports)
+                declared[requested.source_file.string()].insert(requested.name);
+            for (const auto& fn : ast.functions) {
+                const auto& unit = source_for(fn.offset);
+                const auto selectors = declared.find(unit.file.string());
+                if (selectors != declared.end() && !selectors->second.count(fn.name))
+                    throw std::runtime_error(
+                        "native named import source contains unrequested function: " + fn.name);
+            }
+            for (const auto& requested : import_closure->named_imports) {
+                bool found = false;
+                for (const auto& fn : ast.functions) {
+                    if (fn.name == requested.name && fn.exported &&
+                            source_for(fn.offset).file == requested.source_file) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                    throw std::runtime_error(
+                        "native named import does not export requested fnc: " + requested.name);
+            }
+        }
         if (cortex_m_target) {
             // Deliberately small freestanding ABI: i64 scalar functions only.
             // Never lower native actors, heap regions or unverified host calls

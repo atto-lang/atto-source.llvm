@@ -40,6 +40,108 @@ math = { zed = "acme/math" }
         write(nested/".ores.pkg.toml","schema_version=\"1\"\n[source]\nroots=[\"src\"]\n");
         write(nested/"src/leaf.ores","leaf");
         write(shared/"util.ores","ambient");
+        // In the shared project-root contract +/ is relative to [project].root,
+        // including when the package manifest is physically above that root.
+        const auto configured=tmp/"configured";
+        fs::create_directories(configured/"app/src");
+        write(configured/".ores.pkg.toml",
+              "schema_version=\"1\"\n[project]\nroot=\"app\"\n[source]\nroots=[\"src\"]\n");
+        write(configured/"app/src/main.ores","main");
+        write(configured/"app/src/helper.ores","helper");
+        write(configured/"outside.ores","wrong owner");
+        auto configured_project=read_project(configured/"app/src/main.ores");
+        require(configured_project.root==configured/"app",
+                "package project.root did not move +/ anchor");
+        require(resolve_source(configured_project,configured/"app/src/main.ores",
+                               "+/src/helper")==
+                fs::canonical(configured/"app/src/helper.ores"),
+                "configured root import did not resolve source");
+        require(!resolve_source(configured_project,configured/"app/src/main.ores",
+                                "+/outside"),"root import escaped configured project root");
+        // Invalid standalone CR must not be mistaken for a legal TOML
+        // line ending, even when hidden under a # comment or at EOF.
+        write(configured/".ores.pkg.toml",
+              "schema_version=\"1\" # hidden\r[project]\rroot=\"../ambient\"\n");
+        rejects([&]{(void)read_project(configured/"app/src/main.ores");},
+                "bare-CR comment concealed unsafe project.root");
+        write(configured/".ores.pkg.toml","schema_version=\"1\"\r");
+        rejects([&]{(void)read_project(configured/"app/src/main.ores");},
+                "bare CR at EOF was admitted");
+        write(configured/".ores.pkg.toml",
+              "schema_version=\"1\"\r\n[project]\r\nroot=\"app\"\r\n");
+        require(read_project(configured/"app/src/main.ores").root==configured/"app",
+                "legal CRLF configured root was rejected");
+
+        write(configured/".ores.pkg.toml",
+              "schema_version=\"1\"\n[project]\nroot=\"../ambient\"\n");
+        rejects([&]{(void)read_project(configured/"app/src/main.ores");},
+                "package project.root traversal admitted");
+        write(configured/".ores.pkg.toml",
+              "schema_version=\"1\"\n[project]\nroot=\"app/../ambient\"\n");
+        rejects([&]{(void)read_project(configured/"app/src/main.ores");},
+                "package project.root dot normalization admitted");
+        fs::create_directories(configured/"app/child");
+        write(configured/"app/child/.ores.pkg.toml","schema_version=\"1\"\n");
+        write(configured/".ores.pkg.toml",
+              "schema_version=\"1\"\n[project]\nroot=\"app/child\"\n");
+        rejects([&]{(void)read_project(configured/"app/src/main.ores");},
+                "package project.root crossed nested package authority");
+        write(configured/".ores.pkg.toml",
+              "schema_version=\"1\"\n[project]\nroot=\"app\"\n");
+        // Nearest-manifest policy is cross-backend: a modern parent cannot
+        // steal a nested directory that explicitly declares legacy package
+        // ownership. Modern only wins when both markers share a directory.
+        const auto near=tmp/"nearest";
+        fs::create_directories(near/"child/src");
+        write(near/".ores.pkg.toml","schema_version = \"1\"\n");
+        write(near/"child/.oreslangc.cfg.toml",
+              "schema_version = \"1\"\n");
+        write(near/"child/src/main.ores","main");
+        const auto near_source=near/"child/src/main.ores";
+        require(read_project(near_source).manifest ==
+                near/"child/.oreslangc.cfg.toml",
+                "ancestor modern manifest stole nearer legacy package");
+        require(!read_project(near_source).package_manifest,
+                "nearest legacy package kind was changed by ancestor");
+        write(near/"child/.ores.pkg.toml","schema_version = \"1\"\n");
+        require(read_project(near_source).manifest == near/"child/.ores.pkg.toml",
+                "same-directory modern marker failed precedence over legacy");
+        fs::remove(near/"child/.ores.pkg.toml");
+        fs::remove(near/"child/.oreslangc.cfg.toml");
+        fs::create_directory(near/"child/.oreslangc.cfg.toml");
+        rejects([&]{(void)read_project(near_source);},
+                "malformed nearer legacy marker incorrectly used parent modern");
+
+        // Existing but malformed modern marker must shadow a valid legacy
+        // manifest in the same directory. Falling back changes +/ ownership.
+        const auto priority=tmp/"manifest-priority";
+        fs::create_directories(priority/"src");
+        write(priority/"src/main.ores","main");
+        write(priority/".oreslangc.cfg.toml","schema_version=\"1\"\n");
+        require(read_project(priority/"src/main.ores").manifest ==
+                priority/".oreslangc.cfg.toml", "valid legacy marker ignored");
+        fs::create_directory(priority/".ores.pkg.toml");
+        rejects([&]{(void)read_project(priority/"src/main.ores");},
+                "directory modern marker fell through to legacy");
+        fs::remove(priority/".ores.pkg.toml");
+        std::error_code malformed_link_error;
+        fs::create_symlink(priority/"missing-modern.toml",
+                           priority/".ores.pkg.toml",malformed_link_error);
+        if(!malformed_link_error)
+            rejects([&]{(void)read_project(priority/"src/main.ores");},
+                    "dangling modern symlink fell through to legacy");
+        fs::remove(priority/".ores.pkg.toml");
+        fs::create_symlink(priority/".oreslangc.cfg.toml",
+                           priority/".ores.pkg.toml",malformed_link_error);
+        if(!malformed_link_error)
+            rejects([&]{(void)read_project(priority/"src/main.ores");},
+                    "intra-directory modern symlink admitted as package manifest");
+        fs::remove(priority/".ores.pkg.toml");
+        fs::remove(priority/".oreslangc.cfg.toml");
+        fs::create_directory(priority/".oreslangc.cfg.toml");
+        rejects([&]{(void)read_project(priority/"src/main.ores");},
+                "malformed legacy manifest silently became manifestless");
+
         auto config=read_project(app/"src/main.ores");
         require(config.package_manifest,"not package manifest");
         require(config.root==app,"bad package root");
@@ -90,6 +192,8 @@ math = { zed = "acme/math" }
         require(resolve_source(config,app/"src/main.ores","+/src/util")==fs::canonical(app/"src/util.ores"),"+ root");
         // The search root may be *exactly* the nested package directory.
         // Checking only descendants of that root would skip its own marker.
+        std::error_code nested_alias_error;
+        fs::create_symlink(app/"src/util.ores",nested/"parent-alias.ores",nested_alias_error);
         auto configured_child_root=config;
         configured_child_root.import_paths={nested};
         rejects([&]{(void)resolve_source(configured_child_root,app/"src/main.ores",
@@ -122,8 +226,6 @@ math = { zed = "acme/math" }
         // Canonical physical identity by itself misses this: a symlink
         // spelled through the child package points to a parent-owned file.
         // Lexical traversal must retain the child's package boundary.
-        std::error_code nested_alias_error;
-        fs::create_symlink(app/"src/util.ores",nested/"parent-alias.ores",nested_alias_error);
         if(!nested_alias_error)
             rejects([&]{(void)resolve_source(config,app/"src/main.ores","+/packages/child/parent-alias");},
                     "child package symlink laundered parent +/ authority");
