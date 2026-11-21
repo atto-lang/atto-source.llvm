@@ -712,7 +712,7 @@ public:
                 if (program.inverted_structs.size() != 1 || wrapped_module ||
                         !program.functions.empty() || !program.classes.empty() ||
                         !program.actors.empty() || !program.generators.empty())
-                    fail("production inverted i64 requires one standalone schema and main");
+                    fail("production inverted scalar pair requires one standalone schema and main");
                 program.inverted_main = inverted_source_main(program.inverted_structs.front());
                 continue;
             }
@@ -855,11 +855,25 @@ private:
         return static_cast<std::size_t>(n);
     }
 
+    std::int64_t inverted_scalar_literal(InvertedScalarKind kind) {
+        if (kind == InvertedScalarKind::Bool) {
+            if (accept("true")) return 1;
+            if (accept("false")) return 0;
+            fail("production inverted bool field requires true or false literal");
+        }
+        if (kind == InvertedScalarKind::I64) return signed_integer_literal();
+        fail("production inverted f64 literal lowering is not implemented");
+    }
+
     InvertedSourceMain inverted_source_main(const InvertedStructDecl& decl) {
-        if (decl.fields.size() != 2 ||
-                decl.fields[0].type != InvertedScalarKind::I64 ||
-                decl.fields[1].type != InvertedScalarKind::I64)
-            fail("production inverted main requires precisely two i64 fields");
+        const bool two_i64 = decl.fields.size() == 2 &&
+            decl.fields[0].type == InvertedScalarKind::I64 &&
+            decl.fields[1].type == InvertedScalarKind::I64;
+        const bool bool_i64 = decl.fields.size() == 2 &&
+            decl.fields[0].type == InvertedScalarKind::Bool &&
+            decl.fields[1].type == InvertedScalarKind::I64;
+        if (!two_i64 && !bool_i64)
+            fail("production inverted main requires precisely two i64 fields or bool/i64 fields");
         InvertedSourceMain result;
         result.schema_name = decl.name;
         require("fnc"); require("main"); require("("); require(")");
@@ -898,15 +912,20 @@ private:
             if (accept("push")) {
                 op.kind = InvertedSourceOperation::Kind::Push;
                 require("(");
-                op.values[0] = signed_integer_literal();
+                op.values[0] = inverted_scalar_literal(decl.fields[0].type);
                 require(",");
-                op.values[1] = signed_integer_literal();
+                op.values[1] = inverted_scalar_literal(decl.fields[1].type);
                 require(")");
             } else if (accept("set")) {
                 op.kind = InvertedSourceOperation::Kind::WriteField;
                 require("("); op.index = inverted_source_index();
                 require(","); op.field = identifier(); require(",");
-                op.value = signed_integer_literal(); require(")");
+                if (op.field == decl.fields[0].name)
+                    op.value = inverted_scalar_literal(decl.fields[0].type);
+                else if (op.field == decl.fields[1].name)
+                    op.value = inverted_scalar_literal(decl.fields[1].type);
+                else fail("unknown production inverted field");
+                require(")");
             } else if (accept("erase_swap")) {
                 op.kind = InvertedSourceOperation::Kind::EraseSwap;
                 require("("); op.index = inverted_source_index(); require(")");
@@ -6102,7 +6121,7 @@ Program parse_unresolved_program(std::string_view source, bool experimental_owne
 
 void resolve_and_validate_program(Program& program) {
     // A parsed schema alone never authorizes guest codegen. Only a complete
-    // bounded, local two-i64 source main can cross checked typed HIR/MIR;
+    // bounded, local i64/i64 or bool/i64 source main can cross typed HIR/MIR;
     // broader inverted structs/classes and all escaped owners fail closed.
     if (!program.inverted_structs.empty()) {
         // The schema preflight checks only a synthetic allocate/close probe;
@@ -6114,7 +6133,13 @@ void resolve_and_validate_program(Program& program) {
         if (program.inverted_main) {
             // Production source is admitted only after full independent MIR
             // verification. The emitter re-verifies by consuming that MIR.
-            (void)dop::mir::verify_production_inverted_i64(program);
+            const auto& decl = program.inverted_structs.front();
+            if (decl.fields.size() == 2 &&
+                    decl.fields[0].type == InvertedScalarKind::Bool &&
+                    decl.fields[1].type == InvertedScalarKind::I64)
+                (void)dop::mir::verify_production_inverted_bool_i64(program);
+            else
+                (void)dop::mir::verify_production_inverted_i64(program);
             return;
         }
         throw std::runtime_error(

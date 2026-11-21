@@ -365,6 +365,15 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit"
             "${CMAKE_CURRENT_SOURCE_DIR}/contracts/dop-inverted-v1")
     set_tests_properties(native_inverted_production_source_to_native PROPERTIES TIMEOUT 180)
+    # New mixed-width source-to-native gate. This must execute a real
+    # production compiler, source-built no-GC auditor and Clang guest;
+    # it is NOT a host-only geometry reference.
+    add_test(NAME native_inverted_bool_i64_source_to_native
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_inverted_bool_i64_guest.sh"
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_INVERTED_PRODUCTION_CLANG}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/inverted-bool-i64"
+            "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit")
+    set_tests_properties(native_inverted_bool_i64_source_to_native PROPERTIES TIMEOUT 150)
     add_test(NAME native_type_constraint_descriptor_v1
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_constraint_descriptors.py"
@@ -2063,6 +2072,18 @@ if(BUILD_TESTING)
     add_test(NAME native_dop_checked_region_addressing
         COMMAND oreslang-dop-checked-region-test)
     set_tests_properties(native_dop_checked_region_addressing PROPERTIES TIMEOUT 20)
+
+    add_executable(oreslang-inverted-bool-i64-mir-test
+        tests/native_inverted_bool_i64_mir_test.cpp)
+    target_include_directories(oreslang-inverted-bool-i64-mir-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-inverted-bool-i64-mir-test PROPERTIES
+        CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    target_compile_options(oreslang-inverted-bool-i64-mir-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME inverted_bool_i64_mir_cpp17
+        COMMAND oreslang-inverted-bool-i64-mir-test)
+    set_tests_properties(inverted_bool_i64_mir_cpp17 PROPERTIES TIMEOUT 30)
 
     add_executable(oreslang-inverted-production-mir-test
         tests/native_inverted_production_mir_test.cpp)

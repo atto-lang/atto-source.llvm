@@ -1,0 +1,13 @@
+define inverted struct Counter as
+    let active: bool;
+    let count: i64;
+end
+
+fnc main(): int {
+    let rows = InvertedArray<Counter>.with_capacity(4);
+    rows.push(true, 11);
+    rows.push(false, 42);
+    rows.set(1, active, true);
+    rows.erase_swap(0);
+    return rows.get(0, count);
+}
