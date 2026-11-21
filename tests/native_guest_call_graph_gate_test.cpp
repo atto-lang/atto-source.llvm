@@ -51,6 +51,8 @@ int main() {
     assert(Probe::inspect(arithmetic.get()).direct_return_sites == 0);
     auto conditional = std::make_unique<oreslang::Expression>();
     conditional->kind = oreslang::Expression::Kind::Conditional;
+    conditional->condition = std::make_unique<oreslang::Expression>();
+    conditional->condition->kind = oreslang::Expression::Kind::Boolean;
     conditional->when_true = call("true_branch", 0);
     conditional->when_false = std::make_unique<oreslang::Expression>();
     conditional->when_false->kind = oreslang::Expression::Kind::Integer;
@@ -60,6 +62,25 @@ int main() {
     auto outer = call("outer", 1);
     outer->arguments[0] = call("inner", 0);
     assert(Probe::inspect(outer.get()).direct_return_sites == 1);
+    // No tail-transfer classification for unproven named/type-argument
+    // lowering or unresolved direct targets. These are valid possibilities
+    // in source syntax but remain outside this narrow native ABI proof.
+    auto unresolved = call("", 0);
+    assert(Probe::inspect(unresolved.get()).direct_return_sites == 0);
+    auto labeled = call("named", 1);
+    labeled->argument_names.emplace_back("value");
+    assert(Probe::inspect(labeled.get()).direct_return_sites == 0);
+    auto type_instantiated = call("generic", 1);
+    type_instantiated->type_arguments_present = true;
+    assert(Probe::inspect(type_instantiated.get()).direct_return_sites == 0);
+    auto bad_predicate = std::make_unique<oreslang::Expression>();
+    bad_predicate->kind = oreslang::Expression::Kind::Conditional;
+    bad_predicate->when_true = call("true_branch", 0);
+    bad_predicate->when_false = call("false_branch", 0);
+    bool missing_predicate_denied = false;
+    try { (void)Probe::inspect(bad_predicate.get()); }
+    catch (const std::runtime_error&) { missing_predicate_denied = true; }
+    assert(missing_predicate_denied);
     auto malformed = std::make_unique<oreslang::Expression>();
     malformed->kind = oreslang::Expression::Kind::Conditional;
     bool malformed_rejected = false;
