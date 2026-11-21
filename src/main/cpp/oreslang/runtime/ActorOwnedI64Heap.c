@@ -168,14 +168,37 @@ void ores_actor_i64_heap_drop(OresActorI64Heap* heap,
     unlock_heap(heap);
 }
 
+int ores_actor_i64_heap_scoped_try_new(OresActorI64Heap* heap,
+        uint64_t domain, uint64_t epoch, int64_t value, uint64_t token[3]) {
+    if (!token || token[0] || token[1] || token[2]) rejected();
+    lock_heap(heap);
+    /* Invalid turn authority is never a recoverable allocation failure. */
+    OresActorTurn turn = {domain, epoch};
+    require_turn(heap, turn);
+    for (uint64_t i = 0; i < heap->capacity; ++i) {
+        ActorSlot* slot = &heap->slots[i];
+        if (slot->live || slot->generation == UINT64_MAX) continue;
+        /* The slot cannot hold an outstanding loan after a prior drop;
+         * reject corrupt slot bookkeeping rather than reusing it. */
+        if (slot->loans != 0) rejected();
+        slot->value = value;
+        slot->field_mutable = 0;
+        slot->fixed_field = 0;
+        slot->live = 1;
+        token[0] = heap->domain;
+        token[1] = i;
+        token[2] = slot->generation;
+        unlock_heap(heap);
+        return 1;
+    }
+    /* No partial token or slot write on normal capacity exhaustion. */
+    unlock_heap(heap);
+    return 0;
+}
 void ores_actor_i64_heap_scoped_new(OresActorI64Heap* heap,
         uint64_t domain, uint64_t epoch, int64_t value, uint64_t token[3]) {
-    if (!token) rejected();
-    OresActorTurn turn = {domain, epoch};
-    OresActorSlot slot = ores_actor_i64_heap_new(heap, turn, value);
-    token[0] = slot.domain;
-    token[1] = slot.index;
-    token[2] = slot.generation;
+    if (!ores_actor_i64_heap_scoped_try_new(
+            heap, domain, epoch, value, token)) rejected();
 }
 void ores_actor_i64_heap_scoped_drop(OresActorI64Heap* heap,
         uint64_t domain, uint64_t epoch, uint64_t token[3]) {

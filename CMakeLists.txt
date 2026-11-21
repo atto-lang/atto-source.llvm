@@ -1155,6 +1155,23 @@ if(BUILD_TESTING)
         endforeach()
     endif()
 
+    # Runtime-level quota failure atomicity and generation fencing for the
+    # compiler-owned synchronous native actor temporary ABI. The real
+    # compiled-source gate above separately verifies emitted LLVM cleanup.
+    add_executable(oreslang-native-actor-scoped-allocation-test
+        tests/native_actor_scoped_alloc_status_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    target_include_directories(oreslang-native-actor-scoped-allocation-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-actor-scoped-allocation-test
+        PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(oreslang-native-actor-scoped-allocation-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_actor_scoped_owned_allocation_status
+        COMMAND oreslang-native-actor-scoped-allocation-test)
+    set_tests_properties(native_actor_scoped_owned_allocation_status
+        PROPERTIES TIMEOUT 30)
+
     # Trusted host resource reclamation: close in reverse acquisition order only
     # after active turns, outstanding loans and native callbacks quiesce.
     add_executable(oreslang-actor-resource-registry-test

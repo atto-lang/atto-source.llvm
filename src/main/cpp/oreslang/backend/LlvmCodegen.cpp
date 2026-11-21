@@ -573,7 +573,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     // No actor imports appear in ordinary scalar/class compilation.
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceAwaitReady;
-    llvm::FunctionCallee actorScopedNew, actorScopedDrop;
+    llvm::FunctionCallee actorScopedTryNew, actorScopedDrop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
     if (!source.actors.empty() && !wasm32_target) {
         auto* voidTy = llvm::Type::getVoidTy(context);
@@ -585,8 +585,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             llvm::FunctionType::get(i64, {native_ptr, i64, i64, i64}, false));
         fieldWrite = module.getOrInsertFunction("ores_actor_i64_heap_field_write",
             llvm::FunctionType::get(voidTy, {native_ptr, i64, i64, i64, i64}, false));
-        actorScopedNew = module.getOrInsertFunction("ores_actor_i64_heap_scoped_new",
-            llvm::FunctionType::get(voidTy,
+        actorScopedTryNew = module.getOrInsertFunction("ores_actor_i64_heap_scoped_try_new",
+            llvm::FunctionType::get(llvm::Type::getInt32Ty(context),
                 {native_ptr, i64, i64, i64, native_ptr}, false));
         actorScopedDrop = module.getOrInsertFunction("ores_actor_i64_heap_scoped_drop",
             llvm::FunctionType::get(voidTy,
@@ -1607,11 +1607,34 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 throw std::runtime_error("unexpected actor handler owned-local kind");
             llvm::Value* initial = lower(*local.initializer, builder, i64,
                 values, emptyFields, declarations);
-            llvm::Value* token = builder.CreateAlloca(
-                llvm::ArrayType::get(i64, 3), nullptr,
+            auto* tokenType = llvm::ArrayType::get(i64, 3);
+            llvm::Value* token = builder.CreateAlloca(tokenType, nullptr,
                 local.name + ".actor.owned.token");
-            builder.CreateCall(actorScopedNew,
-                {actorHeap, currentDomain, currentEpoch, initial, token});
+            // A zero token is the sole unpublished state. Never hand a stale
+            // or uninitialized destination to the checked allocation ABI.
+            builder.CreateStore(llvm::ConstantAggregateZero::get(tokenType), token);
+            llvm::Value* acquired = builder.CreateCall(actorScopedTryNew,
+                {actorHeap, currentDomain, currentEpoch, initial, token},
+                local.name + ".actor.owned.allocation.status");
+            auto* admitted = llvm::BasicBlock::Create(
+                context, local.name + ".actor.owned.allocated", handler);
+            auto* exhausted = llvm::BasicBlock::Create(
+                context, local.name + ".actor.owned.exhausted", handler);
+            builder.CreateCondBr(builder.CreateICmpEQ(acquired,
+                llvm::ConstantInt::get(acquired->getType(), 1)), admitted, exhausted);
+            builder.SetInsertPoint(exhausted);
+            // This handler ABI still has a scalar-only return. Until its
+            // raise/Result effect is lowered, quota exhaustion is a
+            // fail-stop event, but all previously initialized native
+            // temporaries MUST be dropped before trapping.
+            for (auto it = actor_owned_tokens.rbegin();
+                 it != actor_owned_tokens.rend(); ++it)
+                builder.CreateCall(actorScopedDrop,
+                    {actorHeap, currentDomain, currentEpoch, *it});
+            builder.CreateCall(llvm::Intrinsic::getDeclaration(
+                &module, llvm::Intrinsic::trap));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(admitted);
             // Pure reads of an immutable scalar agree with the native payload.
             llvm::Value* slot = builder.CreateAlloca(i64, nullptr,
                 local.name + ".actor.owned.cached");

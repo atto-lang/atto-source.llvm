@@ -33,6 +33,12 @@ void ores_actor_i64_heap_drop(OresActorI64Heap* heap,
 /* Compiler-owned actor-handler temporary ABI: the compiler allocates a
  * three-word token on the native stack and drops it before handler exit.
  * Tokens may not escape across await, FFI, or an actor turn boundary. */
+/* Return 1 after publishing a new token, 0 on capacity or generation
+ * exhaustion with no allocation performed. Invalid turn/loan authority and
+ * nonempty destination tokens remain hard errors. This status is internal to
+ * the compiler, NOT yet a source-visible Result or raise effect. */
+int ores_actor_i64_heap_scoped_try_new(OresActorI64Heap* heap,
+    uint64_t domain, uint64_t epoch, int64_t value, uint64_t token[3]);
 void ores_actor_i64_heap_scoped_new(OresActorI64Heap* heap,
     uint64_t domain, uint64_t epoch, int64_t value, uint64_t token[3]);
 void ores_actor_i64_heap_scoped_drop(OresActorI64Heap* heap,
