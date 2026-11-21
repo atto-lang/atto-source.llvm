@@ -1,0 +1,31 @@
+// Compiler-owned M2 source-executed scalar bodies (not indirect user closures).
+import module M2 from "ores.std/testing/m2";
+import class RegisteredCase from "ores.std/testing/m2.atto";
+import class TestSuite from "ores.std/testing/m1";
+import class RunSummary from "ores.std/testing/m1.ores";
+
+pub routine main(): int {
+  let mut TestSuite suite = new TestSuite();
+  let mut RegisteredCase first = new RegisteredCase();
+  first.id = 1;
+  first.body_kind = 1;
+  first.actual = 20 + 22;
+  first.expected = 42;
+  let mut RegisteredCase second = new RegisteredCase();
+  second.id = 2;
+  second.body_kind = 3;
+  second.actual = 41;
+  second.expected = 42;
+  let mut RunSummary summary = new RunSummary();
+  val int status = M2.run_pair(rt mut borrow suite, rt mut borrow first, rt mut borrow second, rt mut borrow summary);
+  if status != 0 || summary.total != 2 || summary.passed != 2 ||
+    summary.failed != 0 || summary.skipped != 0 || summary.filtered != 0 ||
+    first.invocations != 1 || second.invocations != 1 ||
+    first.visited != 1 || second.visited != 1 || first.outcome != 0 || second.outcome != 0; then
+    return 3;
+  fi
+  stdio.println("ORES_TEST|PASS|llvm-m2/dispatch/equality|");
+  stdio.println("ORES_TEST|PASS|llvm-m2/dispatch/less|");
+  stdio.println("ORES_TEST|SUMMARY|total=2|passed=2|failed=0|skipped=0|filtered=0");
+  return status;
+}

@@ -1,0 +1,2 @@
+import module TinyTest from "./scalar-assert-lib";
+pub fnc main(): int { return TinyTest.equal_int(41, 42); }

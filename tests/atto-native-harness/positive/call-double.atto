@@ -1,0 +1,2 @@
+fnc increment(int x): int { return x + 1; }
+pub fnc main(): int { return increment(increment(40)); }

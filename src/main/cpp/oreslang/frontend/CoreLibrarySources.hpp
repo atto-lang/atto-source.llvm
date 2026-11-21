@@ -16,7 +16,8 @@ enum class CoreProviderRequirement : std::uint32_t {
 
 enum class CompilerLibraryTier : std::uint8_t {
     Core,
-    Alloc
+    Alloc,
+    Std // Hosted scalar assertions, not full TestSuite
 };
 
 constexpr std::uint32_t core_provider_bit(CoreProviderRequirement requirement) noexcept {
@@ -67,14 +68,27 @@ inline bool is_reserved_alloc_import(std::string_view raw) noexcept {
 }
 
 inline bool is_reserved_compiler_library_import(std::string_view raw) noexcept {
-    return is_reserved_core_import(raw) || is_reserved_alloc_import(raw);
+    // Admit only hosted scalar helpers and bounded M1/M2 test-ledger modules.
+    // The full ores.std/testing callable TestSuite remains fail-closed.
+    return is_reserved_core_import(raw) || is_reserved_alloc_import(raw) ||
+        raw == "ores.std/testing/scalar" ||
+        raw == "ores.std/testing/scalar.atto" ||
+        raw == "ores.std/testing/scalar.ores" ||
+        raw == "ores.std/testing/m1" ||
+        raw == "ores.std/testing/m1.atto" ||
+        raw == "ores.std/testing/m1.ores" ||
+        raw == "ores.std/testing/m2" ||
+        raw == "ores.std/testing/m2.atto" ||
+        raw == "ores.std/testing/m2.ores";
 }
 
 inline bool compiler_library_dependency_allowed(
         CompilerLibraryTier importer,
         CompilerLibraryTier dependency) noexcept {
-    return importer == CompilerLibraryTier::Alloc ||
-        dependency == CompilerLibraryTier::Core;
+    if (importer == CompilerLibraryTier::Std) return true;
+    if (importer == CompilerLibraryTier::Alloc)
+        return dependency != CompilerLibraryTier::Std;
+    return dependency == CompilerLibraryTier::Core;
 }
 
 inline const CoreLibrarySource* find_compiler_library_source(std::string_view raw) noexcept {
@@ -174,6 +188,328 @@ end
         core_provider_bit(CoreProviderRequirement::Allocator)
     };
 
+    static constexpr std::string_view kScalarTestingSource =
+R"ATTO_STD(// Compiler-owned pure scalar-test helpers for hosted LLVM.
+// Return 0 for a satisfied assertion, 1 otherwise. No IO, alloc or reflection.
+define module testing_scalar as
+  pub fnc expect_equal_int(int actual, int expected): int { return (actual == expected) ? 0 : 1; }
+  pub fnc expect_not_equal_int(int actual, int expected): int { return (actual != expected) ? 0 : 1; }
+  pub fnc expect_true(bool actual): int { return (actual) ? 0 : 1; }
+  pub fnc expect_false(bool actual): int { return (!actual) ? 0 : 1; }
+  pub fnc expect_less_int(int actual, int limit): int { return (actual < limit) ? 0 : 1; }
+  pub fnc expect_greater_int(int actual, int limit): int { return (actual > limit) ? 0 : 1; }
+  pub fnc expect_equal_bool(bool actual, bool expected): int { return (actual == expected) ? 0 : 1; }
+  pub fnc expect_range_int(int actual, int lower, int upper): int { return (actual >= lower && actual <= upper) ? 0 : 1; }
+end
+)ATTO_STD";
+    static constexpr CoreLibrarySource kScalarTesting{
+        CompilerLibraryTier::Std,
+        "ores.std/testing/scalar",
+        "testing_scalar",
+        "@ores.std/testing/scalar.atto",
+        kScalarTestingSource,
+        0u
+    };
+    static constexpr std::string_view kTestingM1Source =
+R"ATTO_M1(// AttoLang LLVM M1 bounded hosted scalar ledger; no closures or host test bodies.
+// Canonical compiler-owned source identity: ores.std/testing/m1.atto.
+// A TestCase is a VALUE DESCRIPTION: the caller must evaluate its body only if
+// should_run() returns true, then set outcome 0=PASS or 1=FAIL.
+// This is NOT the full ore.std/testing TestBody or nested TestSuite API.
+define module testing_m1 as
+  pub define class TestCase as
+    pub let int id = 0;
+    pub let int outcome = 0;
+    pub let bool selected = true;
+    pub let bool skipped = false;
+  end
+
+  pub define class TestSuite as
+    pub let int total = 0;
+    pub let int passed = 0;
+    pub let int failed = 0;
+    pub let int skipped = 0;
+    pub let int filtered = 0;
+    pub let int halted = 0;
+    // Highest admitted case ID, including skipped or filtered descriptors.
+    // Strictly ascending IDs prohibit replay across distinct TestCase objects.
+    pub let int last_id = 0;
+    pub let bool fail_fast = false;
+  end
+
+  pub define class RunSummary as
+    pub let int total = 0;
+    pub let int passed = 0;
+    pub let int failed = 0;
+    pub let int skipped = 0;
+    pub let int filtered = 0;
+  end
+
+  // Guard all public counters before a test body executes or a summary
+  // is published. Bounds precede additions to prevent signed overflow.
+  pub fnc valid_state(borrow TestSuite suite): bool {
+    if suite.total < 0 || suite.total > 1024 ||
+      suite.filtered < 0 || suite.filtered > 1024 ||
+      suite.passed < 0 || suite.passed > 1024 ||
+      suite.failed < 0 || suite.failed > 1024 ||
+      suite.skipped < 0 || suite.skipped > 1024 ||
+      suite.last_id < 0 || suite.halted < 0 || suite.halted > 1; then
+      return false;
+    fi
+    if suite.total != suite.passed + suite.failed + suite.skipped; then
+      return false;
+    fi
+    if suite.total + suite.filtered == 0 && suite.last_id != 0; then
+      return false;
+    fi
+    if suite.total + suite.filtered > 0 && suite.last_id <= 0; then
+      return false;
+    fi
+    if suite.halted != 0 && (!suite.fail_fast || suite.failed != 1); then
+      return false;
+    fi
+    if suite.fail_fast && suite.failed > 0 && suite.halted == 0; then
+      return false;
+    fi
+    return true;
+  }
+
+  pub fnc should_run(borrow TestSuite suite, borrow TestCase candidate): bool {
+    return valid_state(rt borrow suite) &&
+      suite.halted == 0 && candidate.selected && !candidate.skipped &&
+      candidate.id > 0 && candidate.id > suite.last_id &&
+      suite.total < 1024;
+  }
+
+  // 0 PASS, 1 FAIL, 2 SKIP, 3 FILTER, 4 NOT_RUN after fail-fast;
+  // -1 invalid descriptor, -2 quota exceeded, -4 replayed/out-of-order ID.
+  // Rejections are atomic, including the last admitted identity.
+  pub fnc record(borrow mut TestSuite suite, borrow TestCase candidate): int {
+    if suite.halted != 0; then
+      return 4;
+    fi
+    if candidate.id <= 0 || candidate.outcome < 0 || candidate.outcome > 1; then
+      return -1;
+    fi
+    if candidate.id <= suite.last_id; then
+      return -4;
+    fi
+    // Quota failures take precedence for synthetic capacity tests; otherwise
+    // never normalize corrupt counters into a plausible accepted state.
+    if !candidate.selected && suite.filtered >= 1024; then
+      return -2;
+    fi
+    if candidate.selected && suite.total >= 1024; then
+      return -2;
+    fi
+    if !valid_state(rt borrow suite); then
+      return -1;
+    fi
+    if !candidate.selected; then
+      suite.filtered = suite.filtered + 1;
+      suite.last_id = candidate.id;
+      return 3;
+    fi
+    suite.total = suite.total + 1;
+    suite.last_id = candidate.id;
+    if candidate.skipped; then
+      suite.skipped = suite.skipped + 1;
+      return 2;
+    fi
+    if candidate.outcome == 0; then
+      suite.passed = suite.passed + 1;
+      return 0;
+    fi
+    suite.failed = suite.failed + 1;
+    if suite.fail_fast; then
+      suite.halted = 1;
+    fi
+    return 1;
+  }
+
+  // Returns 2 on structurally corrupt ledgers, without touching result.
+  // Returns 1 on empty/skipped/filtered-only suites or any failure.
+  // A positive suite result is NOT a cryptographic or untrusted-run receipt:
+  // guests currently own these public counters.
+  pub fnc finish(borrow TestSuite suite, borrow mut RunSummary result): int {
+    // Invalid suites leave the previously published result untouched.
+    if !valid_state(rt borrow suite); then
+      return 2;
+    fi
+    result.total = suite.total;
+    result.passed = suite.passed;
+    result.failed = suite.failed;
+    result.skipped = suite.skipped;
+    result.filtered = suite.filtered;
+    if result.passed + result.failed == 0; then
+      return 1;
+    fi
+    if result.failed > 0; then
+      return 1;
+    fi
+    return 0;
+  }
+end
+)ATTO_M1";
+    static constexpr CoreLibrarySource kTestingM1{
+        CompilerLibraryTier::Std,
+        "ores.std/testing/m1",
+        "testing_m1",
+        "@ores.std/testing/m1.atto",
+        kTestingM1Source,
+        0u
+    };
+    static constexpr std::string_view kTestingM2Source =
+R"ATTO_M2(// LLVM M2: deterministic, bounded, guest-owned registered scalar test bodies.
+// This is NOT a general function value, closure, or full std/testing TestBody.
+// Body opcodes are registry-local pure scalar operations, NOT user functions.
+// No actor messages, reflection, host dispatch, indirect function calls, or I/O.
+import module Ledger from "ores.std/testing/m1";
+import module Scalar from "ores.std/testing/scalar";
+import class TestSuite from "ores.std/testing/m1.atto";
+import class RunSummary from "ores.std/testing/m1.ores";
+import class TestCase from "ores.std/testing/m1";
+
+define module testing_m2 as
+  pub define class RegisteredCase as
+    pub let int id = 0;
+    pub let int body_kind = 0;
+    pub let int actual = 0;
+    pub let int expected = 0;
+    pub let bool selected = true;
+    pub let bool skipped = false;
+    pub let int invocations = 0;
+    pub let int visited = 0;
+    pub let int outcome = 0;
+  end
+
+  // Stable first M2 scalar operation IDs: 1 equality, 2 inequality,
+  // 3 strictly less, 4 strictly greater. Unknown opcodes fail closed.
+  // A body can be reached only after the caller's selection/skip gates.
+  pub fnc invoke_scalar_body(borrow RegisteredCase candidate): int {
+    if candidate.body_kind == 1; then
+      return Scalar.expect_equal_int(candidate.actual, candidate.expected);
+    fi
+    if candidate.body_kind == 2; then
+      return Scalar.expect_not_equal_int(candidate.actual, candidate.expected);
+    fi
+    if candidate.body_kind == 3; then
+      return Scalar.expect_less_int(candidate.actual, candidate.expected);
+    fi
+    if candidate.body_kind == 4; then
+      return Scalar.expect_greater_int(candidate.actual, candidate.expected);
+    fi
+    return -3;
+  }
+
+  // Returns 0 PASS, 1 FAIL, 2 SKIP, 3 FILTER, 4 NOT_RUN;
+  // -1 malformed ID, -2 capacity, -3 unknown body, -4 duplicate admission.
+  // Skipped/filtered cases never call invoke_scalar_body.
+  pub fnc run_one(borrow mut TestSuite suite, borrow mut RegisteredCase candidate): int {
+    // Native LLVM requires an owning class local before structured branches.
+    let mut TestCase snapshot = new TestCase();
+    if suite.halted != 0; then
+      return 4;
+    fi
+    if candidate.visited != 0; then
+      return -4;
+    fi
+    if candidate.id <= 0 || candidate.invocations != 0; then
+      return -1;
+    fi
+    // Reject identity replay BEFORE evaluating an otherwise eligible body.
+    // The M1 ledger also enforces this at commit to catch mixed M1/M2 use.
+    if candidate.id <= suite.last_id; then
+      return -4;
+    fi
+    // Public suite fields can be corrupted by a guest. Never run an
+    // executable body against an inconsistent/overflowing ledger.
+    if !Ledger.valid_state(rt borrow suite); then
+      return -1;
+    fi
+
+    snapshot.id = candidate.id;
+    snapshot.selected = candidate.selected;
+    snapshot.skipped = candidate.skipped;
+    if !candidate.selected || candidate.skipped; then
+      val int ignored = Ledger.record(rt mut borrow suite, rt borrow snapshot);
+      if ignored == 2 || ignored == 3; then
+        candidate.visited = 1;
+      fi
+      return ignored;
+    fi
+
+    // Do not execute the body when the ledger would reject quota.
+    if suite.total >= 1024; then
+      return -2;
+    fi
+    val int outcome = invoke_scalar_body(rt borrow candidate);
+    if outcome != 0 && outcome != 1; then
+      return -3;
+    fi
+    snapshot.outcome = outcome;
+    val int status = Ledger.record(rt mut borrow suite, rt borrow snapshot);
+    if status == 0 || status == 1; then
+      candidate.outcome = outcome;
+      candidate.invocations = 1;
+      candidate.visited = 1;
+    fi
+    return status;
+  }
+
+  // Two is an explicit bounded v1 capacity. Reject duplicate IDs before
+  // either callback; stop after fail-fast or an admission error.
+  // The return is the final guest OS result; callers own receipt formatting.
+  pub fnc run_pair(
+    borrow mut TestSuite suite,
+    borrow mut RegisteredCase first,
+    borrow mut RegisteredCase second,
+    borrow mut RunSummary result
+  ): int {
+    // Preflight both identities and visited flags before any body executes.
+    // A later invalid pair must not consume the first case irreversibly.
+    if first.id <= 0 || second.id <= 0 || first.id >= second.id ||
+      first.id <= suite.last_id || second.id <= suite.last_id; then
+      return -5;
+    fi
+    if first.visited != 0 || second.visited != 0 ||
+      first.invocations != 0 || second.invocations != 0; then
+      return -4;
+    fi
+    val int first_status = run_one(rt mut borrow suite, rt mut borrow first);
+    if first_status < 0; then
+      return first_status;
+    fi
+    val int second_status = run_one(rt mut borrow suite, rt mut borrow second);
+    if second_status < 0; then
+      return second_status;
+    fi
+    return Ledger.finish(rt borrow suite, rt mut borrow result);
+  }
+end
+)ATTO_M2";
+    static constexpr CoreLibrarySource kTestingM2{
+        CompilerLibraryTier::Std,
+        "ores.std/testing/m2",
+        "testing_m2",
+        "@ores.std/testing/m2.atto",
+        kTestingM2Source,
+        0u
+    };
+    if (raw == "ores.std/testing/m2" ||
+        raw == "ores.std/testing/m2.atto" ||
+        raw == "ores.std/testing/m2.ores")
+        return &kTestingM2;
+
+    if (raw == "ores.std/testing/m1" ||
+        raw == "ores.std/testing/m1.atto" ||
+        raw == "ores.std/testing/m1.ores")
+        return &kTestingM1;
+
+    if (raw == "ores.std/testing/scalar" ||
+        raw == "ores.std/testing/scalar.atto" ||
+        raw == "ores.std/testing/scalar.ores")
+        return &kScalarTesting;
     if (raw == "ores.core/numeric" || raw == "ores.core/numeric.ores")
         return &kNumeric;
     if (raw == "alloc/int_buffer" || raw == "alloc/int_buffer.ores")
@@ -194,6 +530,12 @@ inline const CoreLibrarySource* find_alloc_library_source(
         std::string_view raw) noexcept {
     const auto* source = find_compiler_library_source(raw);
     return source && source->tier == CompilerLibraryTier::Alloc ? source : nullptr;
+}
+
+inline const CoreLibrarySource* find_std_library_source(
+        std::string_view raw) noexcept {
+    const auto* source = find_compiler_library_source(raw);
+    return source && source->tier == CompilerLibraryTier::Std ? source : nullptr;
 }
 
 inline CoreClosureRequirements infer_core_closure_requirements(

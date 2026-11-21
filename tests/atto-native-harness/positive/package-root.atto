@@ -1,0 +1,2 @@
+import module Lib from "+/module-helper";
+pub fnc main(): int { return Lib.answer(); }

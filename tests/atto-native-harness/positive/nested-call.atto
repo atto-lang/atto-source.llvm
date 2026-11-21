@@ -1,0 +1,2 @@
+fnc sum(int left, int right): int { return left + right; }
+pub fnc main(): int { return sum(sum(10, 11), 21); }

@@ -1,0 +1,13 @@
+// Compiler-backed guest receipt smoke, not yet std/testing TestSuite parity.
+// The guest itself (not the shell verifier) decides PASS/FAIL and summary.
+pub routine main(): int {
+  val int actual = 20 + 22;
+  if actual != 42; then
+    stdio.println("ORES_TEST|FAIL|llvm-native/arith-add|expected=42");
+    stdio.println("ORES_TEST|SUMMARY|total=1|passed=0|failed=1|skipped=0|filtered=0");
+    return 1;
+  fi
+  stdio.println("ORES_TEST|PASS|llvm-native/arith-add|");
+  stdio.println("ORES_TEST|SUMMARY|total=1|passed=1|failed=0|skipped=0|filtered=0");
+  return 0;
+}

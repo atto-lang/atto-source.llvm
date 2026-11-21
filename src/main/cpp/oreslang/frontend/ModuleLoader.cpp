@@ -169,12 +169,21 @@ private:
                 const auto* library =
                     frontend::find_compiler_library_source(raw);
                 if (!library) {
+                    if (frontend::is_reserved_std_import(raw))
+                        fail(current,
+                            "native ores.std package resolution remains unsupported");
                     if (frontend::is_reserved_core_import(raw))
                         fail(current,
                             "unknown compiler-owned ores.core module '" + raw + "'");
                     fail(current,
                         "unknown compiler-owned alloc module '" + raw + "'");
                 }
+                // Do not permit std on freestanding targets just because its
+                // current scalar helpers happen to be pure.
+                if (library->tier == frontend::CompilerLibraryTier::Std &&
+                        !host)
+                    fail(current,
+                        "native ores.std testing scalar requires hosted target");
                 if (current.compiler_owned_library &&
                         !frontend::compiler_library_dependency_allowed(
                             current.compiler_library_tier, library->tier))
@@ -260,7 +269,8 @@ private:
                     if (raw.rfind("./", 0) != 0 && raw.rfind("../", 0) != 0)
                         fail(current, "native imports require relative ./ or ../, project-root +/, or compiler-owned ores.core/* source paths");
                     dependency = project_root_import_detail::resolve_native_source_suffix(
-                        current.path.parent_path() / fs::path(raw));
+                        current.path.parent_path() / fs::path(raw),
+                        project_root_import_detail::canonical_atto_importer(current.path));
                     std::error_code error;
                     dependency = fs::canonical(dependency, error);
                     if (error) fail(current, "cannot resolve native import '" + raw + "'");

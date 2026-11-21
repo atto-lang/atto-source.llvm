@@ -1,0 +1,20 @@
+// Two independently evaluated native .atto cases and one ordered summary.
+// Scoped receipt smoke only: not std/testing.TestSuite implementation.
+pub routine main(): int {
+  val int first = 20 + 22;
+  if first != 42; then
+    stdio.println("ORES_TEST|FAIL|llvm-native/multi/add|expected=42");
+    stdio.println("ORES_TEST|SUMMARY|total=1|passed=0|failed=1|skipped=0|filtered=0");
+    return 1;
+  fi
+  stdio.println("ORES_TEST|PASS|llvm-native/multi/add|");
+  val int second = 100 - 58;
+  if second != 42; then
+    stdio.println("ORES_TEST|FAIL|llvm-native/multi/subtract|expected=42");
+    stdio.println("ORES_TEST|SUMMARY|total=2|passed=1|failed=1|skipped=0|filtered=0");
+    return 1;
+  fi
+  stdio.println("ORES_TEST|PASS|llvm-native/multi/subtract|");
+  stdio.println("ORES_TEST|SUMMARY|total=2|passed=2|failed=0|skipped=0|filtered=0");
+  return 0;
+}

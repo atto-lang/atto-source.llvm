@@ -1,0 +1,13 @@
+// Intentional assertion failure. Failure is emitted by the native guest,
+// and must be accompanied by a truthful summary and native nonzero exit.
+pub routine main(): int {
+  val int actual = 41;
+  if actual != 42; then
+    stdio.println("ORES_TEST|FAIL|llvm-native/arith-failure|expected=42");
+    stdio.println("ORES_TEST|SUMMARY|total=1|passed=0|failed=1|skipped=0|filtered=0");
+    return 1;
+  fi
+  stdio.println("ORES_TEST|PASS|llvm-native/arith-failure|");
+  stdio.println("ORES_TEST|SUMMARY|total=1|passed=1|failed=0|skipped=0|filtered=0");
+  return 0;
+}

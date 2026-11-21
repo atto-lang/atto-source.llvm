@@ -1,0 +1,2 @@
+import module Missing from "./not-present";
+pub fnc main(): int { return 42; }

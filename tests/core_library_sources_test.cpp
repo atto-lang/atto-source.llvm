@@ -1,4 +1,9 @@
 #include "oreslang/frontend/CoreLibrarySources.hpp"
+// The production CI builds Release (NDEBUG); these admission checks must
+// remain executable instead of silently turning into no-op assertions.
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <cassert>
 #include <cstdint>
 
@@ -32,6 +37,12 @@ int main() {
     assert(is_reserved_compiler_library_import("alloc/int_buffer"));
     assert(!is_reserved_alloc_import("./alloc/int_buffer"));
     assert(!is_reserved_compiler_library_import("ores.std/testing"));
+    assert(is_reserved_compiler_library_import("ores.std/testing/scalar"));
+    assert(is_reserved_compiler_library_import("ores.std/testing/scalar.atto"));
+    assert(is_reserved_compiler_library_import("ores.std/testing/scalar.ores"));
+    assert(!is_reserved_compiler_library_import("ores.std/testing/scalar/../scalar"));
+    assert(!is_reserved_compiler_library_import("std/testing/scalar"));
+    assert(!is_reserved_compiler_library_import("ores.std/testing/scalar.js"));
     assert(compiler_library_dependency_allowed(
         CompilerLibraryTier::Core, CompilerLibraryTier::Core));
     assert(!compiler_library_dependency_allowed(
@@ -40,6 +51,85 @@ int main() {
         CompilerLibraryTier::Alloc, CompilerLibraryTier::Core));
     assert(compiler_library_dependency_allowed(
         CompilerLibraryTier::Alloc, CompilerLibraryTier::Alloc));
+    assert(!compiler_library_dependency_allowed(
+        CompilerLibraryTier::Core, CompilerLibraryTier::Std));
+    assert(!compiler_library_dependency_allowed(
+        CompilerLibraryTier::Alloc, CompilerLibraryTier::Std));
+    assert(compiler_library_dependency_allowed(
+        CompilerLibraryTier::Std, CompilerLibraryTier::Core));
+
+    const auto* scalar = find_std_library_source("ores.std/testing/scalar");
+    assert(scalar != nullptr);
+    assert(scalar == find_std_library_source("ores.std/testing/scalar.atto"));
+    assert(scalar == find_std_library_source("ores.std/testing/scalar.ores"));
+    assert(scalar->tier == CompilerLibraryTier::Std);
+    assert(scalar->unit_id == "@ores.std/testing/scalar.atto");
+    assert(scalar->module_name == "testing_scalar");
+    assert(scalar->admitted_provider_bits == 0u);
+    assert(scalar->source.find("expect_equal_int") != std::string_view::npos);
+    assert(scalar->source.find("expect_range_int") != std::string_view::npos);
+    assert(scalar->source.find("stdio.") == std::string_view::npos);
+    const auto* m1 = find_std_library_source("ores.std/testing/m1");
+    assert(m1 != nullptr);
+    assert(m1 == find_std_library_source("ores.std/testing/m1.atto"));
+    assert(m1 == find_std_library_source("ores.std/testing/m1.ores"));
+    assert(m1->tier == CompilerLibraryTier::Std);
+    assert(m1->admitted_provider_bits == 0u);
+    assert(m1->module_name == "testing_m1");
+    assert(m1->unit_id == "@ores.std/testing/m1.atto");
+    assert(m1->source.find("pub define class TestCase") != std::string_view::npos);
+    assert(m1->source.find("pub define class TestSuite") != std::string_view::npos);
+    assert(m1->source.find("pub define class RunSummary") != std::string_view::npos);
+    assert(m1->source.find("fnc should_run") != std::string_view::npos);
+    assert(m1->source.find("fnc record") != std::string_view::npos);
+    assert(m1->source.find("fnc finish") != std::string_view::npos);
+    assert(m1->source.find("pub fnc valid_state") != std::string_view::npos);
+    assert(m1->source.find("suite.passed > 1024") != std::string_view::npos);
+    assert(m1->source.find("suite.failed > 1024") != std::string_view::npos);
+    assert(m1->source.find("suite.skipped > 1024") != std::string_view::npos);
+    assert(m1->source.find("pub let int last_id = 0;") != std::string_view::npos);
+    assert(m1->source.find("candidate.id <= suite.last_id") != std::string_view::npos);
+    assert(m1->source.find("suite.last_id = candidate.id;") != std::string_view::npos);
+    assert(m1->source.find("stdio.") == std::string_view::npos);
+    assert(find_std_library_source("ores.std/testing/m1/../m1") == nullptr);
+    assert(find_std_library_source("std/testing/m1") == nullptr);
+    assert(find_std_library_source("ores.std/testing/m1.js") == nullptr);
+    assert(find_core_library_source("ores.std/testing/m1") == nullptr);
+    assert(is_reserved_compiler_library_import("ores.std/testing/m1"));
+    assert(is_reserved_compiler_library_import("ores.std/testing/m1.atto"));
+    assert(is_reserved_compiler_library_import("ores.std/testing/m1.ores"));
+    assert(!is_reserved_compiler_library_import("ores.std/testing/m1/../m1"));
+    const auto* m2 = find_std_library_source("ores.std/testing/m2");
+    assert(m2 != nullptr);
+    assert(m2 == find_std_library_source("ores.std/testing/m2.atto"));
+    assert(m2 == find_std_library_source("ores.std/testing/m2.ores"));
+    assert(m2 != m1);
+    assert(m2->tier == CompilerLibraryTier::Std);
+    assert(m2->admitted_provider_bits == 0u);
+    assert(m2->module_name == "testing_m2");
+    assert(m2->unit_id == "@ores.std/testing/m2.atto");
+    assert(m2->source.find("pub define class RegisteredCase") != std::string_view::npos);
+    assert(m2->source.find("fnc invoke_scalar_body") != std::string_view::npos);
+    assert(m2->source.find("fnc run_one") != std::string_view::npos);
+    assert(m2->source.find("fnc run_pair") != std::string_view::npos);
+    assert(m2->source.find("if !Ledger.valid_state(rt borrow suite)") != std::string_view::npos);
+    assert(m2->source.find("candidate.id <= suite.last_id") != std::string_view::npos);
+    assert(m2->source.find("first.id >= second.id") != std::string_view::npos);
+    assert(m2->source.find("second.visited != 0") != std::string_view::npos);
+    assert(m2->source.find("stdio.") == std::string_view::npos);
+    assert(m2->source.find("import module Ledger from \"ores.std/testing/m1\";") != std::string_view::npos);
+    assert(is_reserved_compiler_library_import("ores.std/testing/m2"));
+    assert(is_reserved_compiler_library_import("ores.std/testing/m2.atto"));
+    assert(is_reserved_compiler_library_import("ores.std/testing/m2.ores"));
+    assert(!is_reserved_compiler_library_import("ores.std/testing/m2/../m2"));
+    assert(find_std_library_source("ores.std/testing/m2/../m2") == nullptr);
+    assert(find_std_library_source("std/testing/m2") == nullptr);
+    assert(find_std_library_source("ores.std/testing/m2.js") == nullptr);
+    assert(find_core_library_source("ores.std/testing/m2") == nullptr);
+    assert(find_std_library_source("ores.std/testing") == nullptr);
+    assert(find_std_library_source("std/testing/scalar") == nullptr);
+    assert(find_std_library_source("ores.std/testing/scalar.js") == nullptr);
+    assert(find_core_library_source("ores.std/testing/scalar") == nullptr);
 
     const auto* numeric = find_core_library_source("ores.core/numeric");
     assert(numeric != nullptr);

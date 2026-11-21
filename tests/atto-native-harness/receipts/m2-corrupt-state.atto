@@ -1,0 +1,47 @@
+// Malformed public suite state must reject M2 admission before scalar body.
+import module M2 from "ores.std/testing/m2";
+import module Ledger from "ores.std/testing/m1";
+import class RegisteredCase from "ores.std/testing/m2";
+import class TestSuite from "ores.std/testing/m1";
+import class RunSummary from "ores.std/testing/m1";
+
+pub routine main(): int {
+  let mut TestSuite suite = new TestSuite();
+  let mut RegisteredCase candidate = new RegisteredCase();
+  let mut RunSummary summary = new RunSummary();
+  candidate.id = 1;
+  candidate.body_kind = 1;
+  candidate.actual = 42;
+  candidate.expected = 42;
+
+  suite.total = -1;
+  if M2.run_one(rt mut borrow suite, rt mut borrow candidate) != -1; then return 3; fi
+  if candidate.visited != 0 || candidate.invocations != 0 ||
+     suite.total != -1 || suite.last_id != 0; then return 3; fi
+
+  suite.total = 0;
+  suite.filtered = -1;
+  if M2.run_one(rt mut borrow suite, rt mut borrow candidate) != -1; then return 3; fi
+  if candidate.visited != 0 || candidate.invocations != 0 ||
+     suite.filtered != -1 || suite.total != 0; then return 3; fi
+
+  suite.filtered = 0;
+  suite.passed = 1025;
+  if M2.run_one(rt mut borrow suite, rt mut borrow candidate) != -1; then return 3; fi
+  if candidate.visited != 0 || candidate.invocations != 0 ||
+     suite.passed != 1025 || suite.last_id != 0; then return 3; fi
+
+  suite.passed = 0;
+  val int accepted = M2.run_one(rt mut borrow suite, rt mut borrow candidate);
+  val int status = Ledger.finish(rt borrow suite, rt mut borrow summary);
+  if accepted != 0 || status != 0 || suite.last_id != 1 ||
+     candidate.visited != 1 || candidate.invocations != 1 ||
+     candidate.outcome != 0 || summary.total != 1 ||
+     summary.passed != 1 || summary.failed != 0 ||
+     summary.skipped != 0 || summary.filtered != 0; then
+    return 3;
+  fi
+  stdio.println("ORES_TEST|PASS|llvm-m2/state/corrupt-preflight|");
+  stdio.println("ORES_TEST|SUMMARY|total=1|passed=1|failed=0|skipped=0|filtered=0");
+  return status;
+}

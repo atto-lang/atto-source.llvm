@@ -1,0 +1,35 @@
+import module Run from "ores.std/testing/m1";
+import module Scalar from "ores.std/testing/scalar";
+import class TestCase from "ores.std/testing/m1.atto";
+import class TestSuite from "ores.std/testing/m1";
+import class RunSummary from "ores.std/testing/m1.ores";
+
+// A filtered case is excluded from total; a skipped selected case is included.
+pub routine main(): int {
+  let mut TestSuite suite = new TestSuite();
+  let mut TestCase filter = new TestCase();
+  filter.id = 1;
+  filter.selected = false;
+  if Run.should_run(rt borrow suite, rt borrow filter); then return 3; fi
+  if Run.record(rt mut borrow suite, rt borrow filter) != 3; then return 3; fi
+  let mut TestCase skip = new TestCase();
+  skip.id = 2;
+  skip.skipped = true;
+  if Run.should_run(rt borrow suite, rt borrow skip); then return 3; fi
+  if Run.record(rt mut borrow suite, rt borrow skip) != 2; then return 3; fi
+  stdio.println("ORES_TEST|SKIP|llvm-m1/select/skip|maintenance");
+  let mut TestCase active = new TestCase();
+  active.id = 3;
+  active.outcome = Scalar.expect_equal_int(6 * 7, 42);
+  if !Run.should_run(rt borrow suite, rt borrow active); then return 3; fi
+  if Run.record(rt mut borrow suite, rt borrow active) != 0; then return 3; fi
+  stdio.println("ORES_TEST|PASS|llvm-m1/select/pass|");
+  let mut RunSummary summary = new RunSummary();
+  val int status = Run.finish(rt borrow suite, rt mut borrow summary);
+  if status != 0 || summary.total != 2 || summary.passed != 1 ||
+     summary.failed != 0 || summary.skipped != 1 || summary.filtered != 1; then
+    return 3;
+  fi
+  stdio.println("ORES_TEST|SUMMARY|total=2|passed=1|failed=0|skipped=1|filtered=1");
+  return status;
+}

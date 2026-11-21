@@ -1,0 +1,32 @@
+// Reject unordered pair IDs before either body, then allow corrected order.
+import module M2 from "ores.std/testing/m2";
+import class RegisteredCase from "ores.std/testing/m2.atto";
+import class TestSuite from "ores.std/testing/m1";
+import class RunSummary from "ores.std/testing/m1";
+pub routine main(): int {
+  let mut TestSuite suite = new TestSuite();
+  let mut RegisteredCase first = new RegisteredCase();
+  let mut RegisteredCase second = new RegisteredCase();
+  let mut RunSummary summary = new RunSummary();
+  first.id = 3;
+  first.body_kind = 1;
+  first.actual = 42;
+  first.expected = 42;
+  second.id = 2;
+  second.body_kind = 99;
+  val int rejected = M2.run_pair(rt mut borrow suite, rt mut borrow first, rt mut borrow second, rt mut borrow summary);
+  if rejected != -5 || suite.total != 0 || suite.last_id != 0 ||
+    first.visited != 0 || second.visited != 0 ||
+    first.invocations != 0 || second.invocations != 0; then return 3; fi
+  second.id = 4;
+  second.body_kind = 4;
+  second.actual = 42;
+  second.expected = 41;
+  val int status = M2.run_pair(rt mut borrow suite, rt mut borrow first, rt mut borrow second, rt mut borrow summary);
+  if status != 0 || summary.total != 2 || summary.passed != 2 ||
+    suite.last_id != 4 || first.invocations != 1 || second.invocations != 1; then return 3; fi
+  stdio.println("ORES_TEST|PASS|llvm-m2/order/first|");
+  stdio.println("ORES_TEST|PASS|llvm-m2/order/second|");
+  stdio.println("ORES_TEST|SUMMARY|total=2|passed=2|failed=0|skipped=0|filtered=0");
+  return status;
+}

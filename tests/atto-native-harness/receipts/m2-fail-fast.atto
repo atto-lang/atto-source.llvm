@@ -1,0 +1,29 @@
+// Compiler-owned M2 source-executed scalar bodies (not indirect user closures).
+import module M2 from "ores.std/testing/m2";
+import class RegisteredCase from "ores.std/testing/m2.atto";
+import class TestSuite from "ores.std/testing/m1";
+import class RunSummary from "ores.std/testing/m1.ores";
+
+pub routine main(): int {
+  let mut TestSuite suite = new TestSuite();
+  suite.fail_fast = true;
+  let mut RegisteredCase failing = new RegisteredCase();
+  failing.id = 1;
+  failing.body_kind = 1;
+  failing.actual = 41;
+  failing.expected = 42;
+  let mut RegisteredCase never_run = new RegisteredCase();
+  never_run.id = 2;
+  never_run.body_kind = 99;
+  let mut RunSummary summary = new RunSummary();
+  val int status = M2.run_pair(rt mut borrow suite, rt mut borrow failing, rt mut borrow never_run, rt mut borrow summary);
+  if status != 1 || summary.total != 1 || summary.failed != 1 ||
+    summary.passed != 0 || summary.skipped != 0 || summary.filtered != 0 ||
+    failing.invocations != 1 || failing.outcome != 1 || failing.visited != 1 ||
+    never_run.invocations != 0 || never_run.visited != 0 || suite.halted != 1; then
+    return 3;
+  fi
+  stdio.println("ORES_TEST|FAIL|llvm-m2/fast/failing|expected=42");
+  stdio.println("ORES_TEST|SUMMARY|total=1|passed=0|failed=1|skipped=0|filtered=0");
+  return status;
+}

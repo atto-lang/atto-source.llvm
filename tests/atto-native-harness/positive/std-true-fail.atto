@@ -1,0 +1,3 @@
+// Compiler-backed native AttoLang scalar helper: expected OS exit 1.
+import module Test from "ores.std/testing/scalar";
+pub fnc main(): int { return Test.expect_true(false); }
