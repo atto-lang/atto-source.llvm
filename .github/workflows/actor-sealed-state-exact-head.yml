@@ -1,0 +1,156 @@
+name: Native sealed-state admission exact-head
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      - 'src/main/cpp/oreslang/types/CriticalHandleStateContract.hpp'
+      - 'src/main/cpp/oreslang/types/FunctionEffects.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorStateScope.h'
+      - 'src/main/cpp/oreslang/runtime/CriticalStateLoan.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp'
+      - 'tests/actor_state_scope_test.c'
+      - 'tests/critical_handle_state_contract_test.cpp'
+      - 'tests/critical_state_loan_bridge_test.cpp'
+      - 'tests/native_actor_execution_ledger_test.cpp'
+      - 'tests/fixtures/source-isolated-actor-*'
+      - 'CMakeLists.txt'
+      - '.github/workflows/actor-sealed-state-exact-head.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-state-host-contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout private source at exact PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Assert exact Git HEAD and tested source blobs
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          echo "EXACT_ACTOR_STATE_HEAD=$EXPECTED_HEAD"
+          echo "EXACT_ACTOR_STATE_TREE=$(git rev-parse 'HEAD^{tree}')"
+          for path in \
+            src/main/cpp/oreslang/types/FunctionEffects.hpp \
+            src/main/cpp/oreslang/types/CriticalHandleStateContract.hpp \
+            src/main/cpp/oreslang/runtime/CriticalStateLoan.hpp \
+            src/main/cpp/oreslang/runtime/ActorStateScope.h \
+            src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp \
+            tests/actor_state_scope_test.c \
+            tests/critical_handle_state_contract_test.cpp \
+            tests/critical_state_loan_bridge_test.cpp \
+            tests/native_actor_execution_ledger_test.cpp; do
+            test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"
+          done
+      - name: GCC and Clang native contract execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/actor-state-proof
+          for tool in g++ clang++; do
+            for fixture in critical_handle_state_contract_test critical_state_loan_bridge_test native_actor_execution_ledger_test; do
+              "$tool" -std=c++17 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+                -Isrc/main/cpp "tests/$fixture.cpp" \
+                -o "build/actor-state-proof/$fixture-${tool//+/p}"
+              timeout 30 "build/actor-state-proof/$fixture-${tool//+/p}"
+            done
+          done
+          for tool in gcc clang; do
+            "$tool" -std=c11 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              tests/actor_state_scope_test.c -o "build/actor-state-proof/scope-$tool"
+            timeout 30 "build/actor-state-proof/scope-$tool"
+          done
+          echo "ACTOR_STATE_HOST_GCC_CLANG=PASS"
+      - name: Clang ASan and UBSan real execution
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          for fixture in critical_handle_state_contract_test critical_state_loan_bridge_test native_actor_execution_ledger_test; do
+            clang++ -std=c++17 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              -fsanitize=address,undefined -fno-omit-frame-pointer -Isrc/main/cpp \
+              "tests/$fixture.cpp" -o "build/actor-state-proof/$fixture-sanitized"
+            timeout 30 "build/actor-state-proof/$fixture-sanitized"
+          done
+          clang -std=c11 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/actor_state_scope_test.c -o build/actor-state-proof/scope-sanitized
+          timeout 30 build/actor-state-proof/scope-sanitized
+          echo "ACTOR_STATE_HOST_SANITIZERS=PASS"
+
+  native-source-schema-admission:
+    # Genuine compiler diagnostics only. Successful rejection is NOT
+    # executable handle_state lowering or five-backend actor parity.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact private source head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Assert provenance before compiler setup
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          echo "EXACT_ACTOR_SCHEMA_HEAD=$EXPECTED_HEAD"
+          echo "EXACT_ACTOR_SCHEMA_TREE=$(git rev-parse 'HEAD^{tree}')"
+          for path in CMakeLists.txt src/main/cpp/oreslang/frontend/Parser.cpp \
+            tests/contract.py tests/fixtures/source-isolated-actor-state-empty-reject.ores \
+            tests/fixtures/source-isolated-actor-state-negative-overflow-reject.ores; do
+            test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"
+          done
+      - name: Build genuine LLVM Oreslang compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          llvm_cmake="$(find /usr/lib/llvm-* -path '*/lib/cmake/llvm/LLVMConfig.cmake' \
+            -print 2>/dev/null | sort -V | tail -n 1)"
+          if [[ -z "$llvm_cmake" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y llvm-dev
+            llvm_cmake="$(find /usr/lib/llvm-* -path '*/lib/cmake/llvm/LLVMConfig.cmake' \
+              -print 2>/dev/null | sort -V | tail -n 1)"
+          fi
+          test -f "$llvm_cmake"
+          cmake -S . -B build/actor-state-schema -G Ninja \
+            -DBUILD_TESTING=OFF -DLLVM_DIR="$(dirname "$llvm_cmake")"
+          cmake --build build/actor-state-schema --target oreslang-llvmc -j 2
+      - name: Run real source-schema negative and fail-closed boundary tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          compiler="$PWD/build/actor-state-schema/oreslang-llvmc"
+          python3 tests/contract.py --compiler "$compiler" \
+            --fixture tests/fixtures/source-isolated-actor-state-schema-boundary.ores \
+            --diagnostic 'native actor state schema parsed; sealed handle_state plus generation-fenced logical-turn lowering is not executable yet'
+          python3 tests/contract.py --compiler "$compiler" \
+            --fixture tests/fixtures/source-isolated-actor-state-duplicate-reject.ores \
+            --diagnostic "duplicate actor state field 'count'"
+          python3 tests/contract.py --compiler "$compiler" \
+            --fixture tests/fixtures/source-isolated-actor-state-empty-reject.ores \
+            --diagnostic 'native actor state schema requires at least one field'
+          python3 tests/contract.py --compiler "$compiler" \
+            --fixture tests/fixtures/source-isolated-actor-state-negative-overflow-reject.ores \
+            --diagnostic 'integer literal overflows signed 64-bit result'
+          python3 tests/contract.py --compiler "$compiler" \
+            --fixture tests/fixtures/source-isolated-actor-state-i64-min-boundary.ores \
+            --diagnostic 'native actor state schema parsed; sealed handle_state plus generation-fenced logical-turn lowering is not executable yet'
+          echo "ACTOR_STATE_COMPILER_ADMISSION=PASS_NOT_LOWERED"

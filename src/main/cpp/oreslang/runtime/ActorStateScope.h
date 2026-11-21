@@ -83,11 +83,13 @@ ores_actor_state_leave_continuation(ores_actor_state_scope *scope,
 }
 
 /*
- * A yielding actor may release its scheduler lane ONLY when there are
- * zero live state-backed access loans. Every loan token has already been
- * revoked by leave_continuation. The scheduler must separately prove that
- * no other actor/FFI resource loan spans the suspension and that re-entry
- * uses a valid actor-incarnation/continuation ticket.
+ * A yielding actor may release its PHYSICAL EXECUTION CARRIER only after
+ * every state-backed access loan has been retired. This is NOT permission
+ * to release the actor's logical user lane: the suspended handler owns that
+ * lane until completion/cancellation. A later user callback must queue.
+ * The scheduler separately proves no other actor/FFI loans span suspension,
+ * keeps the same logical turn, and validates the actor-incarnation/
+ * continuation-generation ticket before resuming the original handler.
  *
  * This is a gate for a trusted scheduler, not permission for arbitrary guest
  * calls to release actor admission or install forged identities.
@@ -102,8 +104,9 @@ ores_actor_state_ready_to_suspend(const ores_actor_state_scope *scope,
     return ORES_ACTOR_STATE_OK;
 }
 
-/* Legacy synchronous ABI: only safe if scheduler already proved the actor
- * itself is the unique current continuation. Do not use in async lowering. */
+/* Legacy synchronous ABI: only safe if the scheduler independently proved
+ * the actor is the unique current logical continuation. NEVER use this
+ * actor-id-as-continuation shortcut in async or sealed-state lowering. */
 static inline ores_actor_state_result
 ores_actor_state_enter(ores_actor_state_scope *scope, uint64_t actor_id,
                        uint64_t *loan_token) {

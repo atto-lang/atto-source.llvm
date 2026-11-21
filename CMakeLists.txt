@@ -1122,6 +1122,13 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_isolated_actor_requires_state
         source-isolated-actor-missing-state-reject.ores
         --diagnostic "native isolated actor requires sealed state { ... } before methods")
+    oreslang_contract_test(native_isolated_actor_state_empty_rejected
+        source-isolated-actor-state-empty-reject.ores
+        --diagnostic "native actor state schema requires at least one field")
+    oreslang_contract_test(native_isolated_actor_state_negative_overflow_rejected
+        source-isolated-actor-state-negative-overflow-reject.ores
+        --diagnostic "integer literal overflows signed 64-bit result")
+
 
     # Native OS ABI is i32 even though Oreslang int is represented as i64.
     oreslang_contract_test(native_exit_reject_main_arguments exit-invalid-main-args.ores
