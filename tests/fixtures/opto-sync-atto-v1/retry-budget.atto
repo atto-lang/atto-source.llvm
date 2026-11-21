@@ -1,0 +1,13 @@
+// Retry budget is one monotonic interval; attempts never reset the deadline.
+pub fnc retry_ok(int started_ms, int deadline_ms, int now_ms): int {
+  if (started_ms < 0) { return 0; } fi
+  if (deadline_ms < started_ms) { return 0; } fi
+  if (now_ms < started_ms) { return 0; } fi
+  if (now_ms >= deadline_ms) { return 0; } fi
+  return 1;
+}
+pub fnc main(): int {
+  return 40 + retry_ok(100,200,100) + retry_ok(100,200,199)
+    + 10 * retry_ok(100,200,200) + 10 * retry_ok(100,200,99)
+    + 10 * retry_ok(100,99,100) + 10 * retry_ok(-1,200,100);
+}

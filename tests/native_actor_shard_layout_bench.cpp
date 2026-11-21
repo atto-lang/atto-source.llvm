@@ -48,9 +48,18 @@ static void on_message(void* ctx, std::size_t actor, std::uint64_t iterations) {
         }
         auto finish = std::chrono::steady_clock::now();
         run.nanoseconds = std::chrono::duration<double, std::nano>(finish - begin).count();
-        if (shard.read(run.rows - 1, 0)
-            != static_cast<double>(run.rows - 1 + 2 * (10 + iterations))) {
-            run.failed = true;
+        // Verify every logical row and untouched column OUTSIDE the timed
+        // kernel. A last-row-only assertion misses alias/stride/tail bugs.
+        // Also verify AoSoA's partial final tile via nonmultiple row counts.
+        for (std::size_t i = 0; i < run.rows; ++i) {
+            const double expected = static_cast<double>(i)
+                + 2.0 * static_cast<double>(10 + iterations);
+            if (shard.read(i, 0) != expected
+                    || shard.read(i, 1) != 2.0
+                    || shard.read(i, 2) != 0.0) {
+                run.failed = true;
+                break;
+            }
         }
     } catch (...) {
         run.failed = true;
@@ -82,8 +91,9 @@ int main(int argc, char** argv) {
             || std::strcmp(argv[3], "--rows") != 0
             || std::strcmp(argv[5], "--iterations") != 0
             || !decimal(argv[4], 100000, &requested_rows)
-            || !decimal(argv[6], 100000, &iterations)) {
-            std::fputs("usage: native_actor_shard_layout_bench [--layout aos|soa|aosoa --rows 1..100000 --iterations 1..100000]\n", stderr);
+            || !decimal(argv[6], 100000, &iterations)
+            || iterations > UINT64_C(50000000) / requested_rows) {
+            std::fputs("usage: native_actor_shard_layout_bench [--layout aos|soa|aosoa --rows 1..100000 --iterations 1..100000 (rows*iterations <= 50m)]\n", stderr);
             return 2;
         }
         Layout selected;

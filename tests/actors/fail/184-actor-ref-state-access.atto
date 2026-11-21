@@ -1,0 +1,13 @@
+// Must fail E_PRIVATE: state is never readable via a remote actor ref.
+define actor Hidden as
+    let int secret = 0;
+    receive(ActorMail<int> mail): void {
+        self.secret = self.secret + mail.value;
+        return;
+    }
+end
+pub fnc main(): int {
+    val ref = spawn Hidden();
+    val stolen = ref.secret;
+    return 0;
+}

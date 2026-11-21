@@ -1,4 +1,5 @@
 #include "oreslang/types/OwnershipChecker.hpp"
+#include "oreslang/types/PointerIntOwnership.hpp"
 #include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/types/OwnershipCfg.hpp"
@@ -355,8 +356,6 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
         case Expression::Kind::ShiftLeft:
         case Expression::Kind::ShiftRight:
         case Expression::Kind::ShiftUnsignedRight:
-        case Expression::Kind::Modulo:
-        case Expression::Kind::BitXor:
         case Expression::Kind::Equal:
         case Expression::Kind::NotEqual:
         case Expression::Kind::Less:
@@ -446,8 +445,6 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
         case Expression::Kind::ShiftLeft:
         case Expression::Kind::ShiftRight:
         case Expression::Kind::ShiftUnsignedRight:
-        case Expression::Kind::Modulo:
-        case Expression::Kind::BitXor:
         case Expression::Kind::Equal:
         case Expression::Kind::NotEqual:
         case Expression::Kind::Less:
@@ -523,8 +520,6 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
         case Expression::Kind::ShiftLeft:
         case Expression::Kind::ShiftRight:
         case Expression::Kind::ShiftUnsignedRight:
-        case Expression::Kind::Modulo:
-        case Expression::Kind::BitXor:
         case Expression::Kind::Equal:
         case Expression::Kind::NotEqual:
         case Expression::Kind::Less:
@@ -555,6 +550,16 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
 } // namespace
 
 void validate_i64_ownership(Program& program) {
+    if (program.pointer_int_plan) {
+        // Pointer<int> cannot be smuggled through an i64 scalar, class or
+        // actor plan: only a dedicated nominal pointer HIR is admitted.
+        if (!program.functions.empty() || !program.classes.empty() ||
+                !program.actors.empty() || !program.imports.empty() ||
+                !program.cooperative_loops.empty())
+            throw std::runtime_error("Pointer<int> ownership cannot mix scalar or actor IR");
+        pointer_int_aot::validate_ownership(*program.pointer_int_plan);
+        return;
+    }
     // A re-validation attempt must revoke every stale lowering authorization
     // before checking anything. Failed ownership admission therefore cannot
     // leave executable Future-pipeline authority from an earlier pass.
@@ -924,17 +929,6 @@ void validate_i64_ownership(Program& program) {
                 state.at(stmt.receiver).moved = false;
                 return;
             }
-            if (stmt.kind == Statement::Kind::UsingTelemetrySpan) {
-                // Token is compiler-owned and unrepresentable in Locals.
-                // Do not permit a borrowed/moved owner to cross this
-                // unverified non-suspending cleanup boundary.
-                Locals inside = state;
-                scoped_effects(stmt.then_statements, inside);
-                if (!same_affine_state(state, inside))
-                    throw std::runtime_error(
-                        "native telemetry scope requires unchanged affine ownership at exit");
-                return;
-            }
             if (stmt.kind == Statement::Kind::Conditional) {
                 if (stmt.condition) check_value(*stmt.condition, state, functions);
                 else { check_pure_guard(*stmt.condition_lhs, state, functions); check_pure_guard(*stmt.condition_rhs, state, functions); }
@@ -1077,9 +1071,6 @@ void validate_i64_ownership(Program& program) {
                 } else if (call.kind == Expression::Kind::Call) {
                     check_call(call, state, functions);
                 } else if (call.kind == Expression::Kind::Console) {
-                    check_value(call, state, functions);
-                } else if (call.kind == Expression::Kind::SumAccess && (call.name == "expect" || call.name == "unwrap")) {
-                    // Discarded panic-on-absent extraction, e.g. `failure.expect("msg");`.
                     check_value(call, state, functions);
                 } else {
                     throw std::runtime_error("invalid native call statement");

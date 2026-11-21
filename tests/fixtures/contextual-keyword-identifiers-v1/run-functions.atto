@@ -1,0 +1,13 @@
+fnc borrow(int n): int { return n + 1; }
+fnc critical(int n): int { return n + 1; }
+fnc enum(int n): int { return n + 1; }
+fnc gen(int n): int { return n + 1; }
+fnc pure(int n): int { return n + 1; }
+fnc requires(int n): int { return n + 1; }
+fnc serial(int n): int { return n + 1; }
+fnc structural(int n): int { return n + 1; }
+fnc suspend(int n): int { return n + 1; }
+fnc using(int n): int { return n + 1; }
+pub fnc main(): int {
+  return borrow(0) + critical(0) + enum(0) + gen(0) + pure(0) + requires(0) + serial(0) + structural(0) + suspend(0) + using(32);
+}

@@ -71,8 +71,16 @@ inline std::optional<RefLayoutPlan> plan_managed_reference(
         case ReferenceDomain::ActorPrivate:
             if (!evidence.actor_heap_bound || !evidence.owner_proven
                     || !evidence.lifetime_proven || !evidence.maximum_arena_span
-                    || !native64 || evidence.minimum_alignment < 8
+                    || evidence.minimum_alignment < 8
                     || (evidence.minimum_alignment & (evidence.minimum_alignment - 1)))
+                return std::nullopt;
+            // 32-bit hosts use the SAME ref32 word as 64-bit hosts
+            // (offset/8 + 1, 8-byte quantum), so actor object layouts and the
+            // cross-backend golden vectors are identical on both widths. An
+            // arena larger than the 32-bit address space cannot exist there:
+            // a descriptor claiming one is corrupt, not a native64 candidate.
+            if (native32 && evidence.maximum_arena_span >
+                    static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()))
                 return std::nullopt;
             if (!evidence.force_native64
                     && evidence.maximum_arena_span <=
@@ -80,7 +88,10 @@ inline std::optional<RefLayoutPlan> plan_managed_reference(
                 return RefLayoutPlan{PhysicalRefStorage::ActorOffset32, 4, 8, true};
             }
             // Only a separately proven actor-owned native64 reference may
-            // bypass the compressed arena span/alignment limitation.
+            // bypass the compressed arena span/alignment limitation. On a
+            // 32-bit target this is reachable only through force_native64
+            // (layout parity with a native64 build); it stores the 32-bit
+            // address zero-extended in an 8-byte field.
             return RefLayoutPlan{PhysicalRefStorage::ActorAddress64, 8, 8, false};
     }
     return std::nullopt;

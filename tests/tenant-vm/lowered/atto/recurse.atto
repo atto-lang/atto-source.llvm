@@ -1,0 +1,13 @@
+// Tenant code that runs the carrier out of stack.
+fnc deeper(int n): int {
+  return deeper(n + 1) + 1;
+}
+define actor Recursive as {
+  let turns: int = 0;
+  pub fnc on_message(int n): int {
+    return deeper(n);
+  }
+}
+pub fnc main(): int {
+  return 0;
+}

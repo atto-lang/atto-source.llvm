@@ -102,6 +102,11 @@ int main() {
                 "overlong UTF-8 admitted");
         rejects([&] { require_valid_source_utf8(std::string("ab\0cd", 5)); },
                 "binary NUL admitted");
+        rejects([&] { require_valid_source_utf8(std::string("/*\x1b*/", 5)); },
+                "ESC inside comment was admitted");
+        rejects([&] { require_valid_source_utf8(std::string("\"\x7f\"", 3)); },
+                "DEL inside literal was admitted");
+        require_valid_source_utf8("\t\r\nordinary ASCII");
         // A regular-file size check must apply to both the exact buffer edge
         // and growth past that edge, not merely small fixture files.
         const auto large = dir / "buffer-boundary.ores";

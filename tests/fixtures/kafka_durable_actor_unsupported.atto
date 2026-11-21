@@ -1,0 +1,18 @@
+// Deliberate current LLVM fail-closed boundary: durable Kafka guest
+// needs real actor mailboxes, async stdin and task scheduling.
+// Rejection with zero LLVM IR is a *negative* test, never backend parity.
+define actor KafkaPartition as
+  let int next_offset = 0;
+  receive(ActorMail<string> mail): void {
+    self.next_offset = self.next_offset + 1;
+    return;
+  }
+end
+
+pub async routine main(): void {
+  val partition = spawn KafkaPartition();
+  await partition.get_ready();
+  partition.send("APPEND");
+  await partition.get_done();
+  return;
+}

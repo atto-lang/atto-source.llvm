@@ -1,0 +1,2 @@
+// Live ActorRef connection requires generation-checked typed DATA authority.
+pub fnc main(): int { return Actor.connect(reader_ref, writer_ref); }

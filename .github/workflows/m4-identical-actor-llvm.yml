@@ -1,0 +1,45 @@
+name: M4 identical Atto source LLVM compiler-to-native actor semantics
+on:
+  push:
+    branches: [test/m4-identical-actor-counter-20261106]
+  pull_request:
+    paths:
+      - 'fixtures/m4/**'
+      - 'ci/m4/**'
+      - '.github/workflows/m4-identical-actor-llvm.yml'
+permissions:
+  contents: read
+jobs:
+  llvm-same-source-actor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 80
+    env:
+      ATTO_BUILD_JOBS: "2"
+      LLVM_DIR: /usr/lib/llvm-18/lib/cmake/llvm
+      ATTO_E2E_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      EXPECTED_CARRIER_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact source commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify all 57 exact original compiler/runtime Git blobs
+        run: python3 ci/verify-source-subset.py
+      - name: Install LLVM18 wasm32 and native WABT lowering
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang-18 lld-18 llvm-18-dev libzstd-dev wabt cmake python3 file
+          sudo ln -sf /usr/bin/clang-18 /usr/local/bin/clang
+          sudo ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++
+          sudo ln -sf /usr/bin/wasm-ld-18 /usr/local/bin/wasm-ld
+      - name: Rebuild real LLVM compiler and original source tenant guest suite
+        run: bash tools/tenant-vm/verify-atto-e2e.sh
+      - name: Compile identical M4 Atto actor program and observe native guest semantics
+        run: bash ci/m4/verify-shared-counter.sh
+      - name: Evidence limits
+        run: |
+          echo 'ACTUAL_ATTO_SOURCE_NATIVE_TENANT_GUEST_EXECUTED'
+          echo 'Message transcript observed in separate native host calls; tenant main return independently executed'
+          echo 'No full language or production hostile native security guarantee'
