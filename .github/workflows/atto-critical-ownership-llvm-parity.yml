@@ -10,12 +10,14 @@ on:
       - 'audit/llvm-rt-take-tracked-source-*'
       - 'audit/llvm-share-borrow-provenance-*'
       - 'audit/llvm-ownership-moveplace-corpus-*'
+      - 'audit/llvm-share-place-negative-v2-*'
   pull_request:
     paths:
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
       - 'src/main/cpp/oreslang/types/OwnershipChecker.cpp'
       - 'src/main/cpp/oreslang/types/NativeOwnershipPlace.hpp'
       - 'tests/native_share_place_authority_test.cpp'
+      - 'tests/native_share_projection_root_test.cpp'
       - 'src/main/cpp/oreslang/types/NativeOwnershipJoin.hpp'
       - 'tests/native_ownership_join_test.cpp'
       - 'src/main/cpp/oreslang/types/NativeOwnershipPlace.hpp'
@@ -74,23 +76,24 @@ jobs:
           test -s /tmp/atto-ownership-join.xml
           echo "ATTO_LLVM_JOIN_PROOF=HOST_CPP17_EXECUTED"
 
-      - name: Execute native tracked take and borrowed share authority classification
+      - name: Execute native take, borrowed share and projection-root classification
         shell: bash
         run: |
           set -euo pipefail
-          cmake --build build --parallel 2 --target oreslang-native-ownership-place-test oreslang-native-share-place-authority-test
-          ctest --test-dir build -N -R '^native_ownership_(take_place_classification|share_place_authority)$' > /tmp/atto-place-inventory.txt
+          cmake --build build --parallel 2 --target oreslang-native-ownership-place-test oreslang-native-share-place-authority-test oreslang-native-share-projection-root-test
+          ctest --test-dir build -N -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root)$' > /tmp/atto-place-inventory.txt
           grep -Eq 'Test +#[0-9]+: native_ownership_take_place_classification$' /tmp/atto-place-inventory.txt
           grep -Eq 'Test +#[0-9]+: native_ownership_share_place_authority$' /tmp/atto-place-inventory.txt
-          ctest --test-dir build -R '^native_ownership_(take_place_classification|share_place_authority)$' --output-on-failure --timeout 60 --output-junit /tmp/atto-ownership-place.xml
+          grep -Eq 'Test +#[0-9]+: native_ownership_share_projection_root$' /tmp/atto-place-inventory.txt
+          ctest --test-dir build -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root)$' --output-on-failure --timeout 60 --output-junit /tmp/atto-ownership-place.xml
           test -s /tmp/atto-ownership-place.xml
           python3 - <<'PY'
           from xml.etree import ElementTree
           root = ElementTree.parse('/tmp/atto-ownership-place.xml').getroot()
-          if int(root.get('tests', '-1')) != 2 or int(root.get('failures', '1')) or int(root.get('skipped', '1')):
+          if int(root.get('tests', '-1')) != 3 or int(root.get('failures', '1')) or int(root.get('skipped', '1')):
               raise SystemExit('native place/Share CTest evidence missing, failed or skipped')
           PY
-          echo "ATTO_LLVM_TAKE_AND_SHARE_PLACE=HOST_CPP17_EXECUTED"
+          echo "ATTO_LLVM_TAKE_AND_SHARE_PLACE_PROVENANCE=HOST_CPP17_EXECUTED"
 
       - name: Prove twenty scoped compiler CTest cases are registered
         shell: bash

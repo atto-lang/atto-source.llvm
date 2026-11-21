@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/frontend/Parser.hpp"
+#include <cstddef>
 
 // Native stage-one ownership transfer only admits addressable, compiler-
 // tracked source places. Computed temporaries, nested/indirect projections
@@ -22,6 +23,25 @@ inline TakeSourceKind take_source_kind(const Expression& source) noexcept {
             !source.left->name.empty())
         return TakeSourceKind::NamedField;
     return TakeSourceKind::Untracked;
+}
+
+// A projected Share value must remain tied to a statically named root.
+// Unlike taking a field, read-only scalar projections may be nested, but
+// they cannot launder the authority of an incoming borrowed root.
+// Restrict to a bounded chain of named fields: no call, index, computed
+// expression or synthetic/cyclic AST can manufacture an owner identity.
+inline const Expression* tracked_share_projection_root(
+        const Expression& value) noexcept {
+    const Expression* node = &value;
+    for (std::size_t depth = 0; depth <= 8; ++depth) {
+        if (node->kind == Expression::Kind::Variable)
+            return node->name.empty() ? nullptr : node;
+        if (node->kind != Expression::Kind::Field ||
+                node->name.empty() || !node->left)
+            return nullptr;
+        node = node->left.get();
+    }
+    return nullptr;
 }
 
 // Sharing a named local or a named class field must originate in an owned
