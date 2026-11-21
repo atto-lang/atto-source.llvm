@@ -39,6 +39,37 @@ NEGATIVE_CASES = {
     "trailing_macro_after_valid_program": BASE + "macro_rules! x { () => { 42 }; }\n",
 }
 
+# Candidate AttoLang v2 target inventory: every unsupported target remains a
+# compiler-level rejection until typed AST/HIR retention, a resolved schema,
+# and native AOT lowering are independently proved. These are negative
+# admission fixtures, not a claim that their source grammars are implemented.
+TARGET_ANNOTATION_CASES = {
+    "module_target": "@deprecated\ndefine module demo as end\n",
+    "class_target": "@deprecated\ndefine class Item as end\n" + BASE,
+    "struct_target": "@derive(Eq)\ndefine struct Item as id: int; end\n" + BASE,
+    "enum_target": "@serde(tag=kind)\ndefine enum Status as Ready; end\n" + BASE,
+    "enum_variant_target": "define enum Status as @serde(name=ready) Ready; end\n" + BASE,
+    "actor_target": "@actor_policy(serial=true)\ndefine actor Worker as end\n" + BASE,
+    "isoactor_target": "@supervision(strategy=restart)\ndefine isoactor Worker as end\n" + BASE,
+    "interface_target": "@deprecated\ndefine interface Readable as end\n" + BASE,
+    "trait_target": "@deprecated\ndefine trait Readable as end\n" + BASE,
+    "type_alias_target": "@deprecated\ndefine type Count = int;\n" + BASE,
+    "fnc_target": "@must_use\n" + BASE,
+    "routine_target": "@pure\nroutine answer(): int { return 42; }\n" + BASE,
+    "method_target": "define class Item as @inline(always) read(): int { return 42; } end\n" + BASE,
+    "constructor_target": "define class Item as @requires(Capability.Read) constructor() {} end\n" + BASE,
+    "field_target": "define class Item as @serde(name=id) id: int; end\n" + BASE,
+    "actor_state_target": "define actor Worker as @refine(min=0) private count: int; end\n" + BASE,
+    "parameter_target": "pub fnc value(@borrow int x): int { return x; }\n" + BASE,
+    "return_type_target": "pub fnc answer(): @refine(min=0) int { return 42; }\n" + BASE,
+    "generic_parameter_target": "pub fnc id<@refine(min=0) T>(T x): T { return x; }\n" + BASE,
+    "local_binding_target": "pub fnc main(): int { @refine(min=0) const int x = 42; return x; }\n",
+    "type_use_target": "pub fnc value(@align(16) int x): int { return x; }\n" + BASE,
+    "lambda_target": "pub fnc main(): int { const f = @pure |int x| -> x; return 42; }\n",
+    "macro_target": "@derive_macro\nmacro_rules! make { () => { 42 }; }\n" + BASE,
+    "import_target": "@cfg(feature=network)\nimport module network;\n" + BASE,
+}
+
 
 def shared_annotation_cases():
     """Schema-checked byte-identical corpus; expected index 2 is LLVM."""
@@ -181,6 +212,23 @@ def main():
                     if result.returncode or any(sig not in result.stdout for sig in main_signatures) or emitted:
                         failures.append("annotation parity positive failed: " + label
                                         + "/" + target + " stderr=" + result.stderr[:250])
+            # V2 candidate placement matrix: both native host and wasm32
+            # must reject before emitting IR or a sidecar artifact.
+            for label, source in TARGET_ANNOTATION_CASES.items():
+                result, emitted = invoke(args.compiler, directory,
+                                         "v2_" + label + "_" + target, source, target)
+                if result.returncode == 0:
+                    failures.append("v2/" + label + "/" + target
+                                    + " accepted an unimplemented annotation")
+                if result.stdout.strip():
+                    failures.append("v2/" + label + "/" + target
+                                    + " emitted partial IR on rejected annotation")
+                if emitted:
+                    failures.append("v2/" + label + "/" + target
+                                    + " wrote rejected sidecar artifacts: " + ", ".join(emitted))
+                if not result.stderr.strip():
+                    failures.append("v2/" + label + "/" + target
+                                    + " has no compiler diagnostic")
             for label, source in NEGATIVE_CASES.items():
                 result, emitted = invoke(args.compiler, directory, label + "_" + target, source, target)
                 if result.returncode == 0:
