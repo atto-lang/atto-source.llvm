@@ -3410,7 +3410,11 @@ private:
         // Java parity: a free/module callable may omit '::' only if the first
         // body token begins on a later physical source line than its complete
         // return type; the body is then the same expression sequence.
-        const bool explicit_end_body = token_.text == "::" || return_first;
+        // Return-first callables accept exactly the same three explicit-body
+        // spellings as the Java parser: braces, begin/end, or bare return/end.
+        // Do not interpret a brace as a compact expression sequence.
+        const bool explicit_end_body = token_.text == "::" ||
+            (return_first && token_.text != "{");
         const bool newline_end_body = !return_first && owner.empty() && arrow_return_type &&
             token_.text != "{" && last_token_end_ <= token_.offset &&
             source_.substr(last_token_end_, token_.offset - last_token_end_)
@@ -3419,26 +3423,30 @@ private:
             if (!arrow_return_type && !return_first)
                 fail("native '::' body requires '->' return syntax");
             if (return_first) {
-                if (token_.text != "begin")
-                    fail("return-first callable requires standalone begin");
-                const auto begin_start = token_.offset;
-                if (last_token_end_ > begin_start ||
-                        source_.substr(last_token_end_, begin_start - last_token_end_)
-                            .find_first_of("\r\n") == std::string_view::npos)
-                    fail("return-first begin must start on line after signature");
-                require("begin");
-                if (last_token_end_ > token_.offset ||
-                        source_.substr(last_token_end_, token_.offset - last_token_end_)
-                            .find_first_of("\r\n") == std::string_view::npos)
-                    fail("return-first begin must be alone on its line");
+                if (token_.text == "::")
+                    fail("return-first callable does not take a second '::' body marker");
+                // Effects need an unambiguous boundary. A pure body can use
+                // 'begin' on the same line, a later line, or bare return/end.
+                if (value.has_declared_effects && token_.text != "begin")
+                    fail("return-first using-effects callable requires begin");
+                accept("begin");
+                // No implicit final-expression returns for named Atto functions.
+                if (token_.text != "return" && token_.text != "end" &&
+                        token_.text != "int" && token_.text != "bool" &&
+                        token_.text != "string" && token_.text != "String" &&
+                        token_.text != "const" && token_.text != "val" &&
+                        token_.text != "let")
+                    fail("return-first body requires an explicit return or checked local");
             } else if (explicit_end_body) require("::");
             bool terminal = false;
+            bool explicit_return = false;
             while (token_.text != "end") {
                 if (token_.kind == Kind::End)
                     fail("unterminated native comma expression body");
                 if (token_.text == ",")
                     fail("native comma expression body contains an empty item");
                 if (accept("return")) {
+                    explicit_return = true;
                     if (value.returns_void) {
                         if (token_.text != "end") require(";");
                     } else {
@@ -3496,8 +3504,8 @@ private:
                 if (token_.text != "end")
                     fail("native comma expression body requires a single terminal result");
             }
-            if (!value.returns_void && !terminal)
-                fail("native non-void comma expression body requires a result");
+            if (!value.returns_void && (!terminal || (return_first && !explicit_return)))
+                fail("RETURN_EXPLICIT_REQUIRED: non-void return-first callable needs explicit return");
             require("end");
             if (return_first && !accept(".")) accept(";");
             return value;
