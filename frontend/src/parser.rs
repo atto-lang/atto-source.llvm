@@ -707,7 +707,7 @@ impl Parser {
                     }
                     m.fields.push(f.field);
                 }
-                Some("fnc" | "method") => {
+                Some("fnc" | "method" | "mtd") => {
                     self.advance();
                     let method = self.parse_method(public, false)?;
                     m.methods.push(method);
