@@ -371,3 +371,59 @@ fixtures, the dedicated reinitialization native guests, and tree-shake
 guest remain unchanged. A successful CTest source-slice model is not
 evidence of optimized guest ownership correctness. Until source-org
 runner admission executes actual steps, all new cases are NOT_EXECUTED.
+
+## 2026-11-07 audit: source-shape and mutability fence
+
+The first restricted linear-MIR implementation sealed Statement indices and
+structural paths but did NOT seal the ownership-relevant `Function.locals`,
+`Function.result`, or `ClassDecl.fields` and their scalar initializer
+expressions. A post-validation rewrite of those inputs could reuse a valid
+SourceUnitId and receive an unwarranted restricted-source completeness
+result. New `SourceMirEffectShape.hpp` creates a bounded in-process
+fingerprint across the relevant source/function/class expression tree,
+scalar types, mutability, class layout and source-effect shape. A candidate
+function is fingerprinted during validated-source identity sealing and
+checked again before codegen. Ordinary compiler tree shaking validates the
+prior shape and reissues fingerprints and IDs on its approved transformation.
+An unsupported source cannot become an authenticated candidate merely by
+being mutated after sealing. FNV is explicitly NOT a cryptographic capability
+or protection against arbitrary native memory corruption.
+
+The MIR builder now requires that scoped evidence was actually fingerprinted,
+refuses String scalar/field/return handles and final class fields, and
+requires mutable class owners for direct field writes and explicitly
+assignable scalar locals for direct scalar writes. Normal immutable reads
+can still be modeled when all other restrictions hold.
+
+The host fixture is expanded from 32 to 58 authored assertions: 16 new
+post-seal source-shape mutation denials, six unsupported type/mutability
+controls, and four valid/reseal/nonpromoting controls. Existing unsupported
+cases are now constructed before sealing: a post-seal alteration is a stale
+source identity error, not a silent unsupported-case result. The focused
+exact-name CTest/JUnit suite still requires 17 distinct tests; 50
+compiler-backed AttoLang/Clang fixtures and dedicated reinit/tree-shake
+guest gates remain separate and required.
+
+This is a *restricted normal-flow source operation* check, not a proof
+of LoanId use-def closure, exception/overflow exit paths, optimized binary
+behavior, or actor lifetime. All broad proof flags remain false. The
+new assertions have been AUTHORED but not executed while Actions reports
+steps=null. Do not merge on source/host declaration-only evidence.
+
+### Additional fail-closed effect qualification
+
+The bounded source-MIR whitelist now additionally excludes generic functions,
+pending actor ready/future tokens, sum-value returns, declared effect
+contracts, explicit/parameterized class constructors, local class-move
+origins, sum types and record-array fields. These are not silently
+treated as ordinary scalar effects. The source effect fingerprint includes
+generic parameter identities, ready-future tokens, return-sum/effect
+metadata and native-internal source attributes, so post-validation
+changes cannot convert previously unsupported functions into admitted
+restricted-source traces without invalidating the source seal.
+
+Host suite increased 58 to 74 authored assertions (4 post-seal metadata
+mutation rejections plus 12 unsupported-source controls). CTest count
+remains 17 with unchanged exact-name JUnit gate; 50 compiler-backed
+fixtures and separate real native guests are still required. All
+additional checks remain NOT_EXECUTED pending runner admission.
