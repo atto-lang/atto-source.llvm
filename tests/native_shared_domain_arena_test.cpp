@@ -31,6 +31,13 @@ template<typename F> void reject(F&& f) {
 }
 int main() {
     static_assert(!std::is_move_constructible_v<SharedDomainArena::Lease>);
+    static_assert(!std::is_aggregate_v<SharedDomainArena::Grant>);
+    static_assert(!std::is_default_constructible_v<SharedDomainArena::Grant>);
+    static_assert(!std::is_constructible_v<SharedDomainArena::Grant,
+        std::uint64_t, std::uint64_t, std::size_t>);
+    static_assert(!std::is_aggregate_v<SharedDomainArena::Handle>);
+    static_assert(!std::is_constructible_v<SharedDomainArena::Handle,
+        std::uint64_t, std::uint64_t, std::size_t>);
     // Domain IDs must remain unique across concurrent arena construction.
     // This exercises the real header allocator, not a synthetic copy.
     {
@@ -44,7 +51,7 @@ int main() {
                 for (std::size_t i = 0; i < PerThread; ++i) {
                     SharedDomainArena domain;
                     auto grant = domain.grant(1000 + t, 1, true, false);
-                    issued[t][i] = grant.domain;
+                    issued[t][i] = grant.domain_id();
                     require(domain.try_retire());
                 }
             });
@@ -63,6 +70,14 @@ int main() {
     SharedDomainArena a;
     auto writerGrant=a.grant(101, 1, true, true);
     auto readerGrant=a.grant(102, 1, true, false);
+    // A default invalid handle can exist for delayed assignment, but raw live
+    // authority coordinates cannot be constructed outside the arena/lease.
+    SharedDomainArena::Handle invalidHandle{};
+    {
+        auto writer = a.write(101, 1, writerGrant);
+        std::uint64_t probe = 0;
+        reject([&] { writer.read(invalidHandle, &probe, sizeof(probe)); });
+    }
     auto other=SharedDomainArena{};
     auto foreignGrant=other.grant(104, 1, true,false);
     reject([&] { (void)a.read(104, 1, foreignGrant); });

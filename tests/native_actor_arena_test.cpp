@@ -4,6 +4,11 @@
 #include <stdint.h>
 #include <string.h>
 #include <thread>
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <limits>
+#include <vector>
 #if defined(__unix__) || defined(__APPLE__)
 #include <signal.h>
 #include <sys/resource.h>
@@ -11,7 +16,7 @@
 #include <unistd.h>
 #endif
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "native actor arena failed:%d\n", __LINE__); return 1; } } while (0)
-enum Misuse { STALE_TURN, FOREIGN_OWNER, OVERLAP, SCRATCH_AFTER_LEAVE, WRITE_LOANED, DROP_LOANED, DOUBLE_RELEASE, OUT_OF_BOUNDS, SCRATCH_OVERFLOW, BAD_ALIGNMENT, OVERSIZED_ACTOR_BUDGET, FOREIGN_CARRIER_TURN, NESTED_ACTOR_TURN, FOREIGN_ARENA_HANDLE };
+enum Misuse { STALE_TURN, FOREIGN_OWNER, OVERLAP, SCRATCH_AFTER_LEAVE, WRITE_LOANED, DROP_LOANED, DOUBLE_RELEASE, OUT_OF_BOUNDS, SCRATCH_OVERFLOW, BAD_ALIGNMENT, OVERSIZED_ACTOR_BUDGET, FOREIGN_CARRIER_TURN, NESTED_ACTOR_TURN, FOREIGN_ARENA_HANDLE, FORGED_SCRATCH_SUBRANGE, FORGED_SCRATCH_SHORTENED };
 typedef struct { OresActorArena* arena; OresArenaTurn turn; OresArenaHandle handle; } WrongCarrier;
 static int different_carrier_with_stolen_turn(void* opaque) {
     WrongCarrier* x = (WrongCarrier*) opaque;
@@ -70,6 +75,19 @@ static void invalid(enum Misuse m) {
         OresArenaTurn other_turn = ores_actor_arena_enter(other, 23, 2);
         int v = 0;
         ores_actor_arena_read(other, other_turn, h, 0, &v, sizeof(v));
+    } else if (m == FORGED_SCRATCH_SUBRANGE) {
+        /* In-bounds coordinates are not scratch authority. */
+        OresArenaScratch forged = s;
+        ++forged.offset;
+        --forged.length;
+        int v = 0;
+        ores_actor_arena_scratch_read(a, t, forged, 0, &v, sizeof(v));
+    } else if (m == FORGED_SCRATCH_SHORTENED) {
+        /* Exact issued length is part of the capability. */
+        OresArenaScratch forged = s;
+        forged.length = 8;
+        int v = 0;
+        ores_actor_arena_scratch_read(a, t, forged, 0, &v, sizeof(v));
     }
 }
 #if defined(__unix__) || defined(__APPLE__)
@@ -99,6 +117,38 @@ static int other_carrier(void* p) {
     return 0;
 }
 int main(void) {
+    /* Real production domain allocation must remain unique under concurrent
+     * construction. This cannot practically reach UINT64_MAX, but exercises
+     * the saturating CAS allocator rather than a synthetic copy. */
+    {
+        constexpr size_t Threads = 8, PerThread = 128;
+        std::array<std::array<uint64_t, PerThread>, Threads> issued{};
+        std::array<std::thread, Threads> workers;
+        std::atomic<bool> ok{true};
+        for (size_t t = 0; t < Threads; ++t) {
+            workers[t] = std::thread([&, t] {
+                for (size_t i = 0; i < PerThread; ++i) {
+                    OresActorArena* domain = ores_actor_arena_open(1000 + t, 1, 1, 8, 8);
+                    OresArenaTurn turn = ores_actor_arena_enter(domain, 1000 + t, 1);
+                    issued[t][i] = turn.domain;
+                    ores_actor_arena_leave(domain, turn);
+                    ores_actor_arena_retire(domain);
+                    if (ores_actor_arena_try_destroy(domain) != 1) ok.store(false);
+                }
+            });
+        }
+        for (auto& worker : workers) worker.join();
+        CHECK(ok.load());
+        std::vector<uint64_t> domains;
+        domains.reserve(Threads * PerThread);
+        for (const auto& row : issued) for (uint64_t domain : row) {
+            CHECK(domain != 0 && domain != std::numeric_limits<uint64_t>::max());
+            domains.push_back(domain);
+        }
+        std::sort(domains.begin(), domains.end());
+        CHECK(std::adjacent_find(domains.begin(), domains.end()) == domains.end());
+    }
+
     OresActorArena* a = ores_actor_arena_open(23, 2, 2, 64, 128);
     OresArenaTurn first = ores_actor_arena_enter(a, 23, 2);
     OresArenaHandle h = ores_actor_arena_alloc(a, first, 16);
@@ -141,7 +191,8 @@ int main(void) {
     ores_actor_arena_leave(a, unwinding);
     CHECK(ores_actor_arena_try_destroy(a) == 1);
 #if defined(__unix__) || defined(__APPLE__)
-    for (int n = STALE_TURN; n <= FOREIGN_ARENA_HANDLE; ++n) CHECK(rejects((enum Misuse) n));
+    for (int n = STALE_TURN; n <= FORGED_SCRATCH_SHORTENED; ++n)
+        CHECK(rejects((enum Misuse) n));
 #endif
     return 0;
 }

@@ -19,8 +19,36 @@ public:
     static constexpr std::size_t Slots = 16;
     static constexpr std::size_t SlotBytes = 64;
     static constexpr std::size_t Members = 16;
-    struct Grant { std::uint64_t domain, generation; std::size_t member; };
-    struct Handle { std::uint64_t domain, generation; std::size_t slot; };
+    class Lease;
+    // Grants and handles are capabilities, not serializable coordinates.
+    // Raw aggregate fields previously let trusted-but-unprivileged host code
+    // fabricate another member's predictable (domain,generation,index) token.
+    class Grant final {
+        friend class SharedDomainArena;
+        friend class Lease;
+        std::uint64_t domain_ = 0, generation_ = 0;
+        std::size_t member_ = 0;
+        Grant(std::uint64_t domain, std::uint64_t generation, std::size_t member)
+            : domain_(domain), generation_(generation), member_(member) {}
+    public:
+        Grant(const Grant&) = default;
+        Grant& operator=(const Grant&) = default;
+        std::uint64_t domain_id() const noexcept { return domain_; }
+    };
+    class Handle final {
+        friend class SharedDomainArena;
+        friend class Lease;
+        std::uint64_t domain_ = 0, generation_ = 0;
+        std::size_t slot_ = 0;
+        Handle(std::uint64_t domain, std::uint64_t generation, std::size_t slot)
+            : domain_(domain), generation_(generation), slot_(slot) {}
+    public:
+        // An invalid zero handle is useful for delayed assignment, but callers
+        // cannot manufacture a live handle because the authority fields remain private.
+        Handle() = default;
+        Handle(const Handle&) = default;
+        Handle& operator=(const Handle&) = default;
+    };
 
     class Lease final {
         friend class SharedDomainArena;
@@ -53,10 +81,10 @@ public:
         }
         auto& slot(Handle h) const {
             require_live();
-            if (h.domain != arena_->identity_ || h.slot >= Slots)
+            if (h.domain_ != arena_->identity_ || h.slot_ >= Slots)
                 throw std::logic_error("foreign shared region handle");
-            auto& s = arena_->slots_[h.slot];
-            if (!s.live || s.generation != h.generation)
+            auto& s = arena_->slots_[h.slot_];
+            if (!s.live || s.generation != h.generation_)
                 throw std::logic_error("stale shared region handle");
             return s;
         }
@@ -79,7 +107,7 @@ public:
                     s.live = true;
                     s.length = bytes;
                     s.data.fill(std::byte{0});
-                    return {arena_->identity_, s.generation, i};
+                    return Handle(arena_->identity_, s.generation, i);
                 }
             }
             throw std::out_of_range("shared region slot quota");
@@ -134,7 +162,7 @@ public:
                 m.incarnation = incarnation;
                 m.read = allow_read || allow_write;
                 m.write = allow_write;
-                return {identity_, m.generation, i};
+                return Grant(identity_, m.generation, i);
             }
         }
         throw std::out_of_range("shared region membership quota");
@@ -145,7 +173,7 @@ public:
         std::unique_lock lock(mutex_, std::try_to_lock);
         if (!lock.owns_lock()) return false;
         validate_grant(grant, 0, 0, false);
-        auto& m = members_[grant.member];
+        auto& m = members_[grant.member_];
         m.active = false;
         m.actor = 0;
         m.incarnation = 0;
@@ -215,10 +243,10 @@ private:
     }
     void validate_grant(Grant grant, std::uint64_t actor, std::uint64_t incarnation, bool writer) const {
         if (closing_.load(std::memory_order_acquire) ||
-            grant.domain != identity_ || grant.member >= Members)
+            grant.domain_ != identity_ || grant.member_ >= Members)
             throw std::logic_error("foreign or retired shared region grant");
-        const auto& m = members_[grant.member];
-        if (!m.active || m.generation != grant.generation || !m.actor ||
+        const auto& m = members_[grant.member_];
+        if (!m.active || m.generation != grant.generation_ || !m.actor ||
             !m.read || (actor != 0 && (m.actor != actor || m.incarnation != incarnation)) || (writer && !m.write))
             throw std::logic_error("stale or insufficient shared region grant");
     }
