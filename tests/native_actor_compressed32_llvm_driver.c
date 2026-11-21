@@ -18,6 +18,12 @@ extern uint32_t checked_actor_publish_write(
     OresActorArena*, uint64_t actor_domain, uint64_t actor_epoch,
     uint64_t allocation_index, uint64_t allocation_generation, uint64_t value);
 
+extern uint32_t checked_actor_edge_read(
+    OresActorArena*, uint64_t domain, uint64_t epoch, uint32_t root);
+extern void checked_actor_edge_write(
+    OresActorArena*, uint64_t domain, uint64_t epoch,
+    uint32_t root, uint32_t child);
+
 static void check(int ok, const char* diagnostic) {
     if (!ok) {
         fprintf(stderr, "compressed32 LLVM native AOT: %s\n", diagnostic);
@@ -50,7 +56,7 @@ static void require_compiled_read_abort(
 #endif
 
 int main(void) {
-    OresActorArena* first = ores_actor_arena_open(202, 1, 2, 64, 64);
+    OresActorArena* first = ores_actor_arena_open(202, 1, 3, 64, 64);
     OresActorArena* second = ores_actor_arena_open(203, 1, 2, 64, 64);
     check(first != NULL && second != NULL, "could not open distinct actor arenas");
 
@@ -61,6 +67,15 @@ int main(void) {
         first, t1.domain, t1.epoch, h1.index, h1.generation, x);
     check(ref1 == 1u && checked_actor_read(first, t1.domain, t1.epoch, ref1) == x,
           "compiled actor-private compressed32 round trip failed");
+    OresArenaHandle child1 = ores_actor_arena_alloc(first, t1, 16);
+    const uint64_t child_value1 = UINT64_C(0x1111222233334444);
+    const uint32_t child_ref1 = checked_actor_publish_write(
+        first, t1.domain, t1.epoch, child1.index, child1.generation, child_value1);
+    checked_actor_edge_write(first, t1.domain, t1.epoch, ref1, child_ref1);
+    check(child_ref1 == 9u &&
+          checked_actor_edge_read(first, t1.domain, t1.epoch, ref1) == child_ref1 &&
+          checked_actor_read(first, t1.domain, t1.epoch, child_ref1) == child_value1,
+          "compiled actor-private four-byte graph edge round trip failed");
 #if defined(__unix__) || defined(__APPLE__)
     require_compiled_read_abort(first, t1, ref1, BAD_DOMAIN);
     require_compiled_read_abort(first, t1, ref1, BAD_EPOCH);
@@ -87,6 +102,23 @@ int main(void) {
     t1 = ores_actor_arena_enter(first, 202, 1);
     check(checked_actor_read(first, t1.domain, t1.epoch, ref1) == x,
           "persisted compact reference failed a new actor turn");
+    ores_actor_arena_drop(first, t1, child1);
+#if defined(__unix__) || defined(__APPLE__)
+    {
+        pid_t child = fork();
+        check(child >= 0, "could not fork stale graph-edge verifier");
+        if (child == 0) {
+            struct rlimit core = {0, 0};
+            (void)setrlimit(RLIMIT_CORE, &core);
+            (void)checked_actor_edge_read(first, t1.domain, t1.epoch, ref1);
+            _exit(95);
+        }
+        int status = 0;
+        check(waitpid(child, &status, 0) == child &&
+              WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT,
+              "compiled graph edge did not reject dropped target");
+    }
+#endif
     ores_actor_arena_drop(first, t1, h1);
 #if defined(__unix__) || defined(__APPLE__)
     require_compiled_read_abort(first, t1, ref1, STALE_DROPPED);

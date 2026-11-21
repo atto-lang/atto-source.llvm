@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <stdexcept>
+#include <vector>
 
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/DataLayout.h"
@@ -132,6 +133,111 @@ inline void lower_actor_compact_i64_write(
     ir.CreateCall(callee, {context.actor_arena, context.actor_domain,
                            context.actor_epoch, stored_ref32,
                            llvm::ConstantInt::get(i64, byte_offset), new_value});
+}
+
+} // namespace oreslang::backend
+
+/* Actor-local graph edges are stored in exactly four bytes. Caller-provided
+ * heap/turn identities are supplied by the trusted scheduler; the checked C
+ * runtime resolves both source and non-null target while holding one lock.
+ * Source language must NEVER construct these i32 values by integer cast. */
+namespace oreslang::backend {
+
+/* Compiler-owned physical layout proof. Numeric byte offsets are insufficient:
+ * an i32 at offset 4 overlaps an i64 scalar occupying bytes 0..7. */
+struct ActorObjectFieldSpan final {
+    std::uint64_t offset = 0;
+    std::uint64_t bytes = 0;
+    bool compressed_ref = false;
+};
+struct ActorObjectFieldLayout final {
+    std::uint64_t object_bytes = 0;
+    std::vector<ActorObjectFieldSpan> fields;
+};
+class VerifiedCompressedRefField final {
+    std::uint64_t offset_;
+    explicit VerifiedCompressedRefField(std::uint64_t offset) : offset_(offset) {}
+    friend VerifiedCompressedRefField verify_actor_compressed_ref_field(
+        const ActorObjectFieldLayout&, std::size_t);
+public:
+    std::uint64_t offset() const noexcept { return offset_; }
+};
+inline VerifiedCompressedRefField verify_actor_compressed_ref_field(
+        const ActorObjectFieldLayout& layout, std::size_t field_index) {
+    if (!layout.object_bytes || field_index >= layout.fields.size())
+        throw std::invalid_argument("invalid actor object layout or field index");
+    for (std::size_t i = 0; i < layout.fields.size(); ++i) {
+        const auto& field = layout.fields[i];
+        if (!field.bytes || field.offset > layout.object_bytes ||
+                field.bytes > layout.object_bytes - field.offset)
+            throw std::invalid_argument("actor object field outside allocation");
+        if (field.compressed_ref &&
+                (field.bytes != sizeof(std::uint32_t) || (field.offset & 3u)))
+            throw std::invalid_argument("compressed actor edge must be aligned i32");
+        for (std::size_t j = 0; j < i; ++j) {
+            const auto& other = layout.fields[j];
+            if (other.offset <= field.offset) {
+                if (field.offset - other.offset < other.bytes)
+                    throw std::invalid_argument("overlapping actor object fields");
+            } else if (other.offset - field.offset < field.bytes) {
+                throw std::invalid_argument("overlapping actor object fields");
+            }
+        }
+    }
+    if (!layout.fields[field_index].compressed_ref)
+        throw std::invalid_argument("actor graph lowering requires reference field");
+    return VerifiedCompressedRefField(layout.fields[field_index].offset);
+}
+
+inline llvm::Value* lower_actor_compact_ref_i32_read(
+        llvm::IRBuilder<>& ir, VerifiedActorCompressed32 /*verified*/,
+        const ActorCompactRuntimeContext& context,
+        llvm::Value* source_ref32, VerifiedCompressedRefField field) {
+    const std::uint64_t field_offset = field.offset();
+    auto* module = validate_actor_compact_context(ir, context);
+    auto* i64 = llvm::Type::getInt64Ty(ir.getContext());
+    auto* i32 = llvm::Type::getInt32Ty(ir.getContext());
+    if (!source_ref32 || source_ref32->getType() != i32)
+        throw std::invalid_argument("graph edge read requires verified i32 source reference");
+    if (field_offset > UINT64_MAX - sizeof(std::uint32_t))
+        throw std::invalid_argument("graph edge read overflows uint64 range");
+    if ((field_offset & 3u) != 0)
+        throw std::invalid_argument("graph edge field must be 4-byte-aligned");
+    const auto callee = actor_checked_runtime_decl(
+        module, "ores_actor_arena_compact_load_ref_i32",
+        llvm::FunctionType::get(i32,
+            {context.actor_arena->getType(), i64, i64, i32, i64}, false));
+    return ir.CreateCall(callee,
+        {context.actor_arena, context.actor_domain, context.actor_epoch,
+         source_ref32, llvm::ConstantInt::get(i64, field_offset)},
+        "actor.compact32.edge");
+}
+
+inline void lower_actor_compact_ref_i32_write(
+        llvm::IRBuilder<>& ir, VerifiedActorCompressed32 verified,
+        const ActorCompactRuntimeContext& context,
+        llvm::Value* source_ref32, VerifiedCompressedRefField field,
+        llvm::Value* target_ref32) {
+    const std::uint64_t field_offset = field.offset();
+    if (verified.access() != ManagedRefAccess::Write)
+        throw std::invalid_argument("graph edge mutation requires mutable critical loan");
+    auto* module = validate_actor_compact_context(ir, context);
+    auto* i64 = llvm::Type::getInt64Ty(ir.getContext());
+    auto* i32 = llvm::Type::getInt32Ty(ir.getContext());
+    if (!source_ref32 || source_ref32->getType() != i32 ||
+            !target_ref32 || target_ref32->getType() != i32)
+        throw std::invalid_argument("graph edge write requires verified i32 references");
+    if (field_offset > UINT64_MAX - sizeof(std::uint32_t))
+        throw std::invalid_argument("graph edge write overflows uint64 range");
+    if ((field_offset & 3u) != 0)
+        throw std::invalid_argument("graph edge field must be 4-byte-aligned");
+    const auto callee = actor_checked_runtime_decl(
+        module, "ores_actor_arena_compact_store_ref_i32",
+        llvm::FunctionType::get(llvm::Type::getVoidTy(ir.getContext()),
+            {context.actor_arena->getType(), i64, i64, i32, i64, i32}, false));
+    ir.CreateCall(callee,
+        {context.actor_arena, context.actor_domain, context.actor_epoch,
+         source_ref32, llvm::ConstantInt::get(i64, field_offset), target_ref32});
 }
 
 } // namespace oreslang::backend
