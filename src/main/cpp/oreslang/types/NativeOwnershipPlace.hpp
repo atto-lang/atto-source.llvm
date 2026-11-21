@@ -1,7 +1,13 @@
 #pragma once
 
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/types/NativeOwnershipJoin.hpp"
+#include <algorithm>
 #include <cstddef>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 // Native stage-one ownership transfer only admits addressable, compiler-
 // tracked source places. Computed temporaries, nested/indirect projections
@@ -42,6 +48,67 @@ inline const Expression* tracked_share_projection_root(
         node = node->left.get();
     }
     return nullptr;
+}
+
+// Compiler-resolved, stage-one place identity. This is an HIR/CFG bridge
+// rather than a complete typed MIR. The root MUST resolve in the current
+// compiler Locals map; a caller-supplied identifier string alone is not
+// ownership evidence, and this record never proves heap alias separation.
+enum class PlaceOrigin {
+    OwnedSlot,
+    IncomingSharedLoan,
+    IncomingExclusiveLoan
+};
+
+struct ResolvedPlace {
+    std::string lexical_slot;
+    std::vector<std::string> fields; // source order, outermost to innermost
+    PlaceOrigin origin = PlaceOrigin::OwnedSlot;
+
+    bool owns_storage() const noexcept { return origin == PlaceOrigin::OwnedSlot; }
+    bool has_direct_field() const noexcept { return fields.size() == 1; }
+    bool is_named_slot() const noexcept { return fields.empty(); }
+};
+
+// A fixed bound prevents recursively forged AST paths or overly deep field
+// expressions from escaping the same untracked-projection safety gate.
+inline std::optional<ResolvedPlace> resolve_compiler_place(
+        const Expression& value, const Locals& locals) {
+    const Expression* node = &value;
+    std::vector<std::string> fields;
+    for (std::size_t depth = 0; depth <= 8; ++depth) {
+        if (node->kind == Expression::Kind::Variable) {
+            if (node->name.empty() || node->name.find('.') != std::string::npos)
+                return std::nullopt;
+            const auto found = locals.find(node->name);
+            if (found == locals.end()) return std::nullopt;
+            std::reverse(fields.begin(), fields.end());
+            PlaceOrigin provenance = PlaceOrigin::OwnedSlot;
+            if (found->second.mode == Parameter::Mode::Borrow)
+                provenance = PlaceOrigin::IncomingSharedLoan;
+            else if (found->second.mode == Parameter::Mode::BorrowMut)
+                provenance = PlaceOrigin::IncomingExclusiveLoan;
+            return ResolvedPlace{found->first, std::move(fields), provenance};
+        }
+        if (node->kind != Expression::Kind::Field || node->name.empty() ||
+                node->name.find('.') != std::string::npos || !node->left)
+            return std::nullopt;
+        fields.push_back(node->name);
+        node = node->left.get();
+    }
+    return std::nullopt;
+}
+
+// The flat CFG is keyed by compiler-generated canonical source slots and
+// validated field paths. Centralize serialization so the checker and graph
+// builder cannot silently disagree on which storage is invalidated.
+inline std::string compiler_place_key(const ResolvedPlace& place) {
+    std::string key = place.lexical_slot;
+    for (const auto& field : place.fields) {
+        key.push_back('.');
+        key += field;
+    }
+    return key;
 }
 
 // Sharing a named local or a named class field must originate in an owned

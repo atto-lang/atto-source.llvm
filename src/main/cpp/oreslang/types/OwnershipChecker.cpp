@@ -284,37 +284,32 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             // second mutable owner by lowering Share as a scalar no-op.
             if (!expr.left)
                 reject(expr, "E_SHARE_BORROW: rt share requires a value operand");
-            if (expr.left->kind == Expression::Kind::Variable) {
-                const auto& source = local(*expr.left, locals);
-                // A named borrowed parameter is a loan, not a transferable
-                // owner. Even a primitive i64's copyability does not confer
-                // Share authority on the borrowed capability. Explicitly
-                // snapshot the scalar into an owned binding first.
-                if (!native_ownership::share_place_has_owner_authority(source.mode))
-                    reject(expr, "E_SHARE_BORROW: rt share cannot upgrade a "
-                                 "borrowed parameter to shared ownership");
-                if (source.int_array || !source.class_name.empty())
-                    reject(expr, "E_SHARE_MOVE_ONLY: rt share cannot alias a non-Copy array or class owner");
-            } else if (expr.left->kind == Expression::Kind::Field) {
-                // Direct and nested field reads may look like Copy scalar
-                // values, but the original receiver still determines
-                // whether sharing is permitted. Never let a computed or
-                // unnamed projection manufacture ownership authority.
-                const Expression* root =
-                    native_ownership::tracked_share_projection_root(*expr.left);
-                if (!root)
+            if (expr.left->kind == Expression::Kind::Variable ||
+                    expr.left->kind == Expression::Kind::Field) {
+                // Build the place from THIS compiler frame's tracked locals;
+                // an arbitrary root string or Copy-valued field read cannot
+                // assert its own origin. This is a bounded HIR/CFG bridge:
+                // it does not grant cross-owner alias or lifetime proof.
+                const auto place = native_ownership::resolve_compiler_place(
+                    *expr.left, locals);
+                if (!place)
                     reject(expr, "E_SHARE_UNTRACKED_PROJECTION: rt share requires "
-                                 "a named compiler-tracked field root");
-                const auto found = locals.find(root->name);
-                if (found != locals.end() &&
-                    !native_ownership::share_place_has_owner_authority(found->second.mode))
-                    reject(expr, "E_SHARE_BORROW: rt share cannot upgrade a borrowed class field");
-                if (expr.left->left &&
-                        expr.left->left->kind == Expression::Kind::Variable) {
-                    const auto place = native_place(*expr.left);
-                    if (found != locals.end() &&
-                        (found->second.class_array_fields.count(place.second) ||
-                         found->second.subobjects.count(place.second)))
+                                 "a named compiler-resolved source place");
+                if (!place->owns_storage())
+                    reject(expr, "E_SHARE_BORROW: rt share cannot upgrade a "
+                                 "borrowed root to independent shared ownership");
+                const auto found = locals.find(place->lexical_slot);
+                // A resolved place must remain in the SAME lexical map.
+                if (found == locals.end())
+                    reject(expr, "E_SHARE_UNTRACKED_PROJECTION: owner slot disappeared");
+                if (place->is_named_slot()) {
+                    if (found->second.int_array || !found->second.class_name.empty())
+                        reject(expr, "E_SHARE_MOVE_ONLY: rt share cannot alias a "
+                                     "non-Copy array or class owner");
+                } else if (place->has_direct_field()) {
+                    const std::string& field = place->fields.front();
+                    if (found->second.class_array_fields.count(field) ||
+                            found->second.subobjects.count(field))
                         reject(expr, "E_SHARE_MOVE_ONLY: rt share cannot alias a non-Copy owned field");
                 }
             }
@@ -341,10 +336,14 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             // source-place invalidation in the stage-one native checker.
             // Check before evaluating the expression; a later read cannot
             // turn an untracked rvalue into an ownership move.
-            if (native_ownership::take_source_kind(*expr.left) ==
-                    native_ownership::TakeSourceKind::Untracked)
+            const auto take_place = native_ownership::resolve_compiler_place(
+                *expr.left, locals);
+            if (!take_place || (!take_place->is_named_slot() &&
+                    !take_place->has_direct_field()) ||
+                    native_ownership::take_source_kind(*expr.left) ==
+                        native_ownership::TakeSourceKind::Untracked)
                 reject(expr, "E_TAKE_UNTRACKED_PLACE: rt take requires a "
-                             "tracked named owner or direct class field");
+                             "compiler-resolved named owner or direct class field");
             // The bounded class subset has only trivially destructible i64
             // fields. Lowering a field take as a load is valid only because
             // checker state invalidates that place until an explicit write.
@@ -1299,9 +1298,14 @@ void validate_i64_ownership(Program& program) {
         std::function<void(const Expression&, Ops&)> add_effects;
         add_effects = [&](const Expression& expr, Ops& operations) {
             if (expr.kind == Expression::Kind::Variable) {
-                const auto found = cfg_entry.find(expr.name);
+                const auto place = native_ownership::resolve_compiler_place(
+                    expr, cfg_entry);
+                if (!place)
+                    reject(expr, "E_CFG_UNTRACKED_PLACE: variable lacks compiler-local origin");
+                const auto found = cfg_entry.find(place->lexical_slot);
                 const bool object = found != cfg_entry.end() && !found->second.class_name.empty();
-                operations.push_back({object ? OpKind::ReadObject : OpKind::Read, expr.name});
+                operations.push_back({object ? OpKind::ReadObject : OpKind::Read,
+                    native_ownership::compiler_place_key(*place)});
                 return;
             }
             if (expr.kind == Expression::Kind::ArrayCall) {
@@ -1312,29 +1316,43 @@ void validate_i64_ownership(Program& program) {
                 return;
             }
             if (expr.kind == Expression::Kind::Field) {
-                if (expr.left && expr.left->kind == Expression::Kind::Field && expr.name == "size") {
-                    operations.push_back({OpKind::Read, native_place_key(*expr.left)}); return;
+                const auto place = native_ownership::resolve_compiler_place(
+                    expr, cfg_entry);
+                if (!place)
+                    reject(expr, "E_CFG_UNTRACKED_PLACE: field read lacks compiler-local root");
+                const auto owner = cfg_entry.find(place->lexical_slot);
+                if (expr.left && expr.left->kind == Expression::Kind::Field &&
+                        expr.name == "size") {
+                    const auto array = native_ownership::resolve_compiler_place(
+                        *expr.left, cfg_entry);
+                    if (!array)
+                        reject(expr, "E_CFG_UNTRACKED_PLACE: array size receiver untracked");
+                    operations.push_back({OpKind::Read,
+                        native_ownership::compiler_place_key(*array)});
+                    return;
                 }
-                const auto place = native_place(expr);
-                const auto owner = cfg_entry.find(place.first);
-                if (owner != cfg_entry.end() && owner->second.int_array) operations.push_back({OpKind::Read, place.first});
-                else operations.push_back({owner != cfg_entry.end() && owner->second.subobjects.count(place.second)
-                    ? OpKind::ReadObject : OpKind::Read, native_place_key(expr)});
+                const auto legacy = native_place(expr);
+                if (owner != cfg_entry.end() && owner->second.int_array)
+                    operations.push_back({OpKind::Read, place->lexical_slot});
+                else
+                    operations.push_back({owner != cfg_entry.end() &&
+                        owner->second.subobjects.count(legacy.second)
+                            ? OpKind::ReadObject : OpKind::Read,
+                        native_ownership::compiler_place_key(*place)});
                 return;
             }
-            if (expr.kind == Expression::Kind::Take && expr.left) {
-                if (expr.left->kind == Expression::Kind::Variable) {
-                    operations.push_back({OpKind::Move, expr.left->name});
-                    return;
-                }
-                if (expr.left->kind == Expression::Kind::Field) {
-                    if (!expr.left->left ||
-                            expr.left->left->kind != Expression::Kind::Variable)
-                        reject(expr, "native CFG requires named class field take");
-                    operations.push_back({OpKind::Move,
-                        expr.left->left->name + "." + expr.left->name});
-                    return;
-                }
+            if (expr.kind == Expression::Kind::Take && expr.left &&
+                    (expr.left->kind == Expression::Kind::Variable ||
+                     expr.left->kind == Expression::Kind::Field)) {
+                const auto place = native_ownership::resolve_compiler_place(
+                    *expr.left, cfg_entry);
+                if (!place || !place->owns_storage() ||
+                        (!place->is_named_slot() && !place->has_direct_field()))
+                    reject(expr, "E_CFG_UNTRACKED_PLACE: take lacks owned, "
+                                 "compiler-resolved source storage");
+                operations.push_back({OpKind::Move,
+                    native_ownership::compiler_place_key(*place)});
+                return;
             }
             if (expr.left) add_effects(*expr.left, operations);
             if (expr.right) add_effects(*expr.right, operations);
